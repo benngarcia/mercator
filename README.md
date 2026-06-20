@@ -48,5 +48,17 @@ builds without cgo.
 MERCATOR_SQLITE_DSN='file:/tmp/mercator.db' go run ./cmd/mercator
 ```
 
-The server listens on `:8080` by default. Set `MERCATOR_ADDR` to override it.
-For local fake-adapter smoke testing, set `MERCATOR_FAKE_OFFER=1`.
+The server listens on `127.0.0.1:8080` by default. Set `MERCATOR_ADDR` to
+override it. The executable API is bearer-token protected; set
+`MERCATOR_API_TOKEN` explicitly, or read the generated one from the startup log.
+Use the same token for CLI calls:
+
+```sh
+MERCATOR_API_URL=http://127.0.0.1:8080 \
+MERCATOR_API_TOKEN='<token>' \
+go run ./cmd/mercator run list --workspace-id ws_1
+```
+
+For local fake-adapter smoke testing, set `MERCATOR_FAKE_OFFER=1`. To run
+through the Docker host adapter, set `MERCATOR_ADAPTER=docker`; Docker workloads
+must still use digest-pinned images accepted by the V1 workload validator.

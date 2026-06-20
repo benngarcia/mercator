@@ -1,5 +1,6 @@
 const state = {
   workspace: "ws_1",
+  apiToken: localStorage.getItem("mercator.apiToken") || "",
   selectedRunID: "",
   runs: [],
   events: [],
@@ -12,6 +13,7 @@ const state = {
 
 const el = {
   workspace: document.querySelector("#workspace"),
+  apiToken: document.querySelector("#api-token"),
   summary: document.querySelector("#summary"),
   runs: document.querySelector("#runs"),
   runCount: document.querySelector("#run-count"),
@@ -26,7 +28,11 @@ function workspaceQuery() {
 }
 
 async function fetchJSON(path, options = {}) {
-  const response = await fetch(path, options);
+  const headers = new Headers(options.headers || {});
+  if (state.apiToken) {
+    headers.set("Authorization", `Bearer ${state.apiToken}`);
+  }
+  const response = await fetch(path, { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
   if (!response.ok) {
@@ -39,6 +45,8 @@ async function fetchJSON(path, options = {}) {
 
 async function load() {
   state.workspace = el.workspace.value.trim() || "ws_1";
+  state.apiToken = el.apiToken.value.trim();
+  localStorage.setItem("mercator.apiToken", state.apiToken);
   state.errors = {};
   try {
     const runs = await fetchJSON(`/v1/runs?${workspaceQuery()}`);
@@ -226,6 +234,8 @@ function escapeHTML(value) {
 
 el.refresh.addEventListener("click", load);
 el.cancel.addEventListener("click", cancelSelected);
+el.apiToken.value = state.apiToken;
+el.apiToken.addEventListener("change", load);
 el.workspace.addEventListener("change", () => {
   state.selectedRunID = "";
   load();

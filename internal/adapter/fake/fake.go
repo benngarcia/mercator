@@ -120,6 +120,12 @@ func (a *Adapter) Observe(_ context.Context, req adapter.ObserveRequest) (adapte
 	if !ok {
 		return adapter.ExternalObservation{LaunchKey: req.LaunchKey, Phase: adapter.ExternalPhaseReleased, ObservedAt: a.now().UTC()}, nil
 	}
+	if req.OwnershipToken != "" && object.OwnershipToken != req.OwnershipToken {
+		return adapter.ExternalObservation{}, adapter.ErrIdempotencyConflict
+	}
+	if req.RequestHash != "" && object.RequestHash != req.RequestHash {
+		return adapter.ExternalObservation{}, adapter.ErrIdempotencyConflict
+	}
 	observation := adapter.ExternalObservation{
 		ExternalID: object.ExternalID,
 		LaunchKey:  object.LaunchKey,
@@ -170,6 +176,14 @@ func (a *Adapter) Release(_ context.Context, req adapter.ReleaseRequest) (adapte
 		receipt := existing.receipt.(adapter.ReleaseReceipt)
 		receipt.Duplicate = true
 		return receipt, nil
+	}
+	if object, ok := a.objects[req.LaunchKey]; ok {
+		if req.OwnershipToken != "" && object.OwnershipToken != req.OwnershipToken {
+			return adapter.ReleaseReceipt{}, adapter.ErrIdempotencyConflict
+		}
+		if req.LaunchRequestHash != "" && object.RequestHash != req.LaunchRequestHash {
+			return adapter.ReleaseReceipt{}, adapter.ErrIdempotencyConflict
+		}
 	}
 	delete(a.objects, req.LaunchKey)
 	receipt := adapter.ReleaseReceipt{Released: true}

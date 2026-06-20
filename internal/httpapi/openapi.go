@@ -6,6 +6,7 @@ const OpenAPIJSON = `{
     "title": "Mercator OCI Run Broker API",
     "version": "0.1.0"
   },
+  "security": [{"bearerAuth": []}],
   "paths": {
     "/health/live": {
       "get": {
@@ -142,6 +143,87 @@ const OpenAPIJSON = `{
         }
       }
     },
+    "/v1/workloads": {
+      "post": {
+        "operationId": "createWorkload",
+        "parameters": [
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateWorkloadRequest"}}}},
+        "responses": {
+          "202": {"description": "Workload created"},
+          "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
+    "/v1/workloads/{workload_id}/revisions": {
+      "get": {
+        "operationId": "listWorkloadRevisions",
+        "parameters": [
+          {"name": "workload_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "Workload revisions", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkloadRevisionListResponse"}}}}}
+      },
+      "post": {
+        "operationId": "createWorkloadRevision",
+        "parameters": [
+          {"name": "workload_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateRevisionRequest"}}}},
+        "responses": {"202": {"description": "Workload revision created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkloadRevisionResponse"}}}}}
+      }
+    },
+    "/v1/workloads/{workload_id}/revisions/{revision_id}": {
+      "get": {
+        "operationId": "getWorkloadRevision",
+        "parameters": [
+          {"name": "workload_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "revision_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "Workload revision", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkloadRevisionResponse"}}}}}
+      }
+    },
+    "/v1/images:resolve": {
+      "post": {
+        "operationId": "resolveImage",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResolveImageRequest"}}}},
+        "responses": {"200": {"description": "Resolved image", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResolveImageResponse"}}}}}
+      }
+    },
+    "/v1/secrets": {
+      "get": {
+        "operationId": "listSecrets",
+        "parameters": [
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "Secret metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SecretMetadataListResponse"}}}}}
+      }
+    },
+    "/v1/secrets/{secret_id}/versions": {
+      "post": {
+        "operationId": "createSecretVersion",
+        "parameters": [
+          {"name": "secret_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateSecretVersionRequest"}}}},
+        "responses": {"202": {"description": "Secret version metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateSecretVersionResponse"}}}}}
+      }
+    },
+    "/v1/secrets/{secret_id}/grants": {
+      "post": {
+        "operationId": "grantSecret",
+        "parameters": [
+          {"name": "secret_id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GrantSecretRequest"}}}},
+        "responses": {"202": {"description": "Secret grant", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SecretGrantResponse"}}}}}
+      }
+    },
     "/v1/sinks/{sink_id}": {
       "get": {
         "operationId": "getSinkStatus",
@@ -181,9 +263,23 @@ const OpenAPIJSON = `{
     }
   },
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {"type": "http", "scheme": "bearer"}
+    },
     "schemas": {
-      "CreateRunRequest": {"type": "object", "required": ["run_id", "workload"], "properties": {"workspace_id": {"type": "string"}, "run_id": {"type": "string"}, "workload": {"type": "object"}}},
+      "CreateRunRequest": {"type": "object", "required": ["run_id"], "properties": {"workspace_id": {"type": "string"}, "run_id": {"type": "string"}, "workload_id": {"type": "string"}, "workload_revision_id": {"type": "string"}, "workload": {"type": "object"}}},
       "CreateRunResponse": {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}, "duplicate": {"type": "boolean"}}},
+      "CreateWorkloadRequest": {"type": "object", "required": ["workspace_id", "workload_id", "name"], "properties": {"workspace_id": {"type": "string"}, "workload_id": {"type": "string"}, "name": {"type": "string"}}},
+      "CreateRevisionRequest": {"type": "object", "required": ["revision"], "properties": {"revision": {"type": "object"}}},
+      "WorkloadRevisionResponse": {"type": "object", "required": ["revision"], "properties": {"revision": {"type": "object"}}},
+      "WorkloadRevisionListResponse": {"type": "object", "required": ["revisions"], "properties": {"revisions": {"type": "array", "items": {"type": "object"}}}},
+      "ResolveImageRequest": {"type": "object", "required": ["image", "platform"], "properties": {"image": {"type": "string"}, "platform": {"type": "string"}}},
+      "ResolveImageResponse": {"type": "object", "required": ["image"], "properties": {"image": {"type": "object"}}},
+      "CreateSecretVersionRequest": {"type": "object", "required": ["workspace_id", "value"], "properties": {"workspace_id": {"type": "string"}, "secret_id": {"type": "string"}, "value": {"type": "string", "writeOnly": true}}},
+      "CreateSecretVersionResponse": {"type": "object", "required": ["secret_id", "version"], "properties": {"secret_id": {"type": "string"}, "version": {"type": "integer"}}},
+      "SecretMetadataListResponse": {"type": "object", "required": ["secrets"], "properties": {"secrets": {"type": "array", "items": {"type": "object", "required": ["secret_id", "version"], "properties": {"secret_id": {"type": "string"}, "version": {"type": "integer"}}}}}},
+      "GrantSecretRequest": {"type": "object", "required": ["workspace_id", "version", "scope_type", "scope_id"], "properties": {"workspace_id": {"type": "string"}, "secret_id": {"type": "string"}, "version": {"type": "integer"}, "scope_type": {"type": "string"}, "scope_id": {"type": "string"}}},
+      "SecretGrantResponse": {"type": "object", "required": ["grant"], "properties": {"grant": {"type": "object"}}},
       "RunResponse": {"type": "object", "required": ["run"], "properties": {"run": {"type": "object"}, "links": {"type": "object", "additionalProperties": {"type": "string"}}}},
       "RunListResponse": {"type": "object", "required": ["runs"], "properties": {"runs": {"type": "array", "items": {"type": "object"}}}},
       "EventListResponse": {"type": "object", "required": ["events"], "properties": {"events": {"type": "array", "items": {"type": "object"}}}},

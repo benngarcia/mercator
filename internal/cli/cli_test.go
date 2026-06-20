@@ -90,6 +90,26 @@ func TestIdempotencyConflictIsReportedAsJSON(t *testing.T) {
 	}
 }
 
+func TestRunAcceptsGlobalAPIURLFlag(t *testing.T) {
+	handler := newCLITestServer(t)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), Config{
+		Args:   []string{"--api-url", server.URL, "run", "list", "--workspace-id", "ws_1"},
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("global api url flag failed with code %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+		t.Fatalf("stdout was not json: %q: %v", stdout.String(), err)
+	}
+}
+
 func newCLITestServer(t *testing.T) http.Handler {
 	t.Helper()
 	handler, closeFn, err := httpapi.HandlerForSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared", []domain.OfferSnapshot{cliOffer()})

@@ -21,6 +21,12 @@ type Sink interface {
 	Deliver(context.Context, eventlog.StoredEvent) error
 }
 
+type DiscardSink struct{}
+
+func (DiscardSink) Deliver(context.Context, eventlog.StoredEvent) error {
+	return nil
+}
+
 type Manager struct {
 	log       EventLog
 	sinks     map[string]Sink

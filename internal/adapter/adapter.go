@@ -79,7 +79,9 @@ type LaunchReceipt struct {
 }
 
 type ObserveRequest struct {
-	LaunchKey string
+	LaunchKey      string
+	OwnershipToken string
+	RequestHash    string
 }
 
 type ExternalObservation struct {
@@ -103,9 +105,11 @@ type CancelReceipt struct {
 }
 
 type ReleaseRequest struct {
-	OperationKey string
-	RequestHash  string
-	LaunchKey    string
+	OperationKey      string
+	RequestHash       string
+	LaunchKey         string
+	OwnershipToken    string
+	LaunchRequestHash string
 }
 
 type ReleaseReceipt struct {

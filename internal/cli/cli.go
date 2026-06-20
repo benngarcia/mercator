@@ -14,6 +14,7 @@ import (
 
 type Config struct {
 	BaseURL string
+	Token   string
 	Args    []string
 	Stdin   io.Reader
 	Stdout  io.Writer
@@ -31,18 +32,26 @@ func Run(ctx context.Context, cfg Config) int {
 	if cfg.Client == nil {
 		cfg.Client = http.DefaultClient
 	}
-	if cfg.BaseURL == "" {
-		writeCLIError(cfg.Stderr, "BASE_URL_REQUIRED", "MERCATOR_API_URL or --api-url is required")
-		return 2
-	}
-	if len(cfg.Args) == 0 {
-		writeCLIError(cfg.Stderr, "COMMAND_REQUIRED", "command is required")
-		return 2
-	}
-	req, err := buildRequest(ctx, cfg.BaseURL, cfg.Args)
+	baseURL, args, err := parseGlobalFlags(cfg.BaseURL, cfg.Args)
 	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
 		return 2
+	}
+	if baseURL == "" {
+		writeCLIError(cfg.Stderr, "BASE_URL_REQUIRED", "MERCATOR_API_URL or --api-url is required")
+		return 2
+	}
+	if len(args) == 0 {
+		writeCLIError(cfg.Stderr, "COMMAND_REQUIRED", "command is required")
+		return 2
+	}
+	req, err := buildRequest(ctx, baseURL, args)
+	if err != nil {
+		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
+		return 2
+	}
+	if cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	}
 	resp, err := cfg.Client.Do(req)
 	if err != nil {
@@ -71,6 +80,16 @@ func Run(ctx context.Context, cfg Config) int {
 	_, _ = output.Write(bytes.TrimSpace(data))
 	_, _ = output.Write([]byte("\n"))
 	return exit
+}
+
+func parseGlobalFlags(baseURL string, args []string) (string, []string, error) {
+	fs := flag.NewFlagSet("mercator", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	apiURL := fs.String("api-url", baseURL, "Mercator API URL")
+	if err := fs.Parse(args); err != nil {
+		return "", nil, err
+	}
+	return *apiURL, fs.Args(), nil
 }
 
 func buildRequest(ctx context.Context, baseURL string, args []string) (*http.Request, error) {

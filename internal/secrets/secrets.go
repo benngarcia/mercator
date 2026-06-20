@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -29,9 +31,10 @@ type Vault struct {
 }
 
 type CreateVersionRequest struct {
-	WorkspaceID string
-	SecretID    string
-	Plaintext   []byte
+	WorkspaceID    string
+	SecretID       string
+	Plaintext      []byte
+	IdempotencyKey string
 }
 
 type SecretVersion struct {
@@ -105,19 +108,23 @@ func (v *Vault) CreateVersion(ctx context.Context, req CreateVersionRequest) (Se
 	if err != nil {
 		return SecretVersion{}, err
 	}
-	hash, err := domain.CanonicalHash(versionPublicData{SecretID: req.SecretID, Version: version})
+	hash, err := v.secretCreateRequestHash(req)
 	if err != nil {
 		return SecretVersion{}, err
 	}
-	_, err = v.log.Append(ctx, eventlog.AppendRequest{
+	commandKey := req.IdempotencyKey
+	if commandKey == "" {
+		commandKey = fmt.Sprintf("secret:version:%s:%d", req.SecretID, version)
+	}
+	result, err := v.log.Append(ctx, eventlog.AppendRequest{
 		Stream:                secretStream(req.WorkspaceID, req.SecretID),
 		ExpectedStreamVersion: uint64(len(existing)),
-		CommandKey:            fmt.Sprintf("secret:version:%s:%d", req.SecretID, version),
+		CommandKey:            commandKey,
 		RequestHash:           hash,
 		CorrelationID:         req.SecretID,
-		CausationID:           fmt.Sprintf("secret:version:%s:%d", req.SecretID, version),
+		CausationID:           commandKey,
 		Events: []eventlog.NewEvent{{
-			ID:            fmt.Sprintf("evt_secret_%s_v%d_created", req.SecretID, version),
+			ID:            fmt.Sprintf("evt_%s_secret_%s_v%d_created", req.WorkspaceID, req.SecretID, version),
 			Type:          EventSecretVersionCreated,
 			SchemaVersion: 1,
 			OccurredAt:    v.now().UTC(),
@@ -128,6 +135,9 @@ func (v *Vault) CreateVersion(ctx context.Context, req CreateVersionRequest) (Se
 	})
 	if err != nil {
 		return SecretVersion{}, err
+	}
+	if result.Duplicate && len(result.Events) > 0 {
+		return secretVersionFromEvent(result.Events[0])
 	}
 	return secretVersion, nil
 }
@@ -158,6 +168,9 @@ func (v *Vault) ListMetadata(ctx context.Context, workspaceID string) ([]SecretM
 func (v *Vault) Grant(ctx context.Context, req GrantRequest) (Grant, error) {
 	if req.WorkspaceID == "" || req.SecretID == "" || req.Version <= 0 || req.ScopeType == "" || req.ScopeID == "" {
 		return Grant{}, fmt.Errorf("secrets: workspace, secret, version, and scope are required")
+	}
+	if err := v.validateGrantTarget(ctx, req); err != nil {
+		return Grant{}, err
 	}
 	grant := Grant{ID: grantID(req), SecretID: req.SecretID, Version: req.Version, ScopeType: req.ScopeType, ScopeID: req.ScopeID}
 	return grant, v.appendGrantEvent(ctx, req.WorkspaceID, grant, EventSecretGrantCreated)
@@ -198,6 +211,20 @@ func (v *Vault) ListGrants(ctx context.Context, workspaceID string) ([]Grant, er
 	return out, nil
 }
 
+func (v *Vault) HasActiveGrant(ctx context.Context, req GrantRequest) (bool, error) {
+	grants, err := v.ListGrants(ctx, req.WorkspaceID)
+	if err != nil {
+		return false, err
+	}
+	id := grantID(req)
+	for _, grant := range grants {
+		if grant.ID == id && !grant.Revoked {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (v *Vault) appendGrantEvent(ctx context.Context, workspaceID string, grant Grant, eventType string) error {
 	data, err := json.Marshal(grant)
 	if err != nil {
@@ -220,7 +247,7 @@ func (v *Vault) appendGrantEvent(ctx context.Context, workspaceID string, grant 
 		CorrelationID:         grant.SecretID,
 		CausationID:           "secret:grant:" + grant.ID,
 		Events: []eventlog.NewEvent{{
-			ID:            fmt.Sprintf("evt_secret_grant_%s_%d", grant.ID, len(existing)+1),
+			ID:            fmt.Sprintf("evt_%s_secret_grant_%s_%d", workspaceID, grant.ID, len(existing)+1),
 			Type:          eventType,
 			SchemaVersion: 1,
 			OccurredAt:    v.now().UTC(),
@@ -229,6 +256,88 @@ func (v *Vault) appendGrantEvent(ctx context.Context, workspaceID string, grant 
 		}},
 	})
 	return err
+}
+
+func (v *Vault) validateGrantTarget(ctx context.Context, req GrantRequest) error {
+	if ok, err := v.secretVersionExists(ctx, req.WorkspaceID, req.SecretID, req.Version); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("secrets: version %d for secret %s not found", req.Version, req.SecretID)
+	}
+	streamType, err := scopeStreamType(req.ScopeType)
+	if err != nil {
+		return err
+	}
+	if streamType == "run" {
+		return nil
+	}
+	events, err := v.log.ReadStream(ctx, eventlog.StreamKey{WorkspaceID: req.WorkspaceID, Type: streamType, ID: req.ScopeID}, 0, 1)
+	if err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		return fmt.Errorf("secrets: %s scope %s not found", req.ScopeType, req.ScopeID)
+	}
+	return nil
+}
+
+func (v *Vault) secretVersionExists(ctx context.Context, workspaceID, secretID string, version int) (bool, error) {
+	events, err := v.log.ReadStream(ctx, secretStream(workspaceID, secretID), 0, 1000)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range events {
+		if event.Type != EventSecretVersionCreated {
+			continue
+		}
+		var data versionPublicData
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return false, err
+		}
+		if data.Version == version {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (v *Vault) secretCreateRequestHash(req CreateVersionRequest) (string, error) {
+	mac := hmac.New(sha256.New, v.key)
+	_, _ = mac.Write([]byte(req.WorkspaceID))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write([]byte(req.SecretID))
+	_, _ = mac.Write([]byte{0})
+	_, _ = mac.Write(req.Plaintext)
+	return domain.CanonicalHash(struct {
+		WorkspaceID          string `json:"workspace_id"`
+		SecretID             string `json:"secret_id"`
+		KeyedPlaintextDigest string `json:"keyed_plaintext_digest"`
+	}{
+		WorkspaceID:          req.WorkspaceID,
+		SecretID:             req.SecretID,
+		KeyedPlaintextDigest: "hmac-sha256:" + hex.EncodeToString(mac.Sum(nil)),
+	})
+}
+
+func secretVersionFromEvent(event eventlog.StoredEvent) (SecretVersion, error) {
+	payload := event.PrivateData
+	if len(payload) == 0 {
+		return SecretVersion{}, fmt.Errorf("secrets: duplicate version event is missing private metadata")
+	}
+	var version SecretVersion
+	if err := json.Unmarshal(payload, &version); err != nil {
+		return SecretVersion{}, err
+	}
+	return version, nil
+}
+
+func scopeStreamType(scopeType string) (string, error) {
+	switch scopeType {
+	case "run", "workload", "connection":
+		return scopeType, nil
+	default:
+		return "", fmt.Errorf("secrets: unsupported scope type %q", scopeType)
+	}
 }
 
 func secretStream(workspaceID, secretID string) eventlog.StreamKey {

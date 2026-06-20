@@ -141,6 +141,33 @@ func TestRunEndpointsRequireExplicitWorkspace(t *testing.T) {
 	}
 }
 
+func TestBearerAuthEnforcesWorkspaceScope(t *testing.T) {
+	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("test-token", []string{"ws_1"}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token expected 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authorized workspace expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_2", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("forbidden workspace expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateRunIdempotencyConflictReturns409(t *testing.T) {
 	handler := newHTTPTestServer(t)
 	body := mustMarshal(t, createRunBody{RunID: "run_conflict", Workload: httpRevision()})
@@ -171,14 +198,17 @@ func TestRunEventsRedactEnvironmentBindings(t *testing.T) {
 	handler := newHTTPTestServer(t)
 	literal := "literal-api-token-that-must-not-leak"
 	rev := httpRevision()
+	secretName := "provider-secret-ref-that-must-not-leak"
 	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
 		"LOG_LEVEL": {Value: ptr("debug")},
 		"API_TOKEN": {SecretRef: &domain.SecretReference{
-			Name:    "provider-secret-ref-that-must-not-leak",
-			Version: 3,
+			Name:    secretName,
+			Version: 1,
 		}},
 		"SECRET_LITERAL": {Value: &literal},
 	}
+	createSecretVersionForHTTPTest(t, handler, secretName, "idem_redacted_secret")
+	grantSecretForHTTPTest(t, handler, secretName, 1, "run_redacted_events")
 	body := mustMarshal(t, createRunBody{RunID: "run_redacted_events", Workload: rev})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_redacted_events")
@@ -195,10 +225,26 @@ func TestRunEventsRedactEnvironmentBindings(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	for _, forbidden := range []string{literal, "provider-secret-ref-that-must-not-leak", `"value":"debug"`} {
+	for _, forbidden := range []string{literal, secretName, `"value":"debug"`} {
 		if strings.Contains(rec.Body.String(), forbidden) {
 			t.Fatalf("events response exposed %q in %s", forbidden, rec.Body.String())
 		}
+	}
+}
+
+func TestCreateRunRejectsSecretRefWithoutGrant(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	rev := httpRevision()
+	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
+		"API_TOKEN": {SecretRef: &domain.SecretReference{Name: "sec_api", Version: 1}},
+	}
+	body := mustMarshal(t, createRunBody{RunID: "run_without_secret_grant", Workload: rev})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_no_secret_grant")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "SECRET_GRANT_REQUIRED") {
+		t.Fatalf("expected missing grant 403, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -227,8 +273,60 @@ func TestCreateRunValidationErrorDoesNotEchoEnvironmentValues(t *testing.T) {
 	}
 }
 
+func TestRefreshRejectsStoredSecretRefWithoutGrant(t *testing.T) {
+	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	ad := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", time.Now().UTC())}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	)
+	sched := scheduler.New()
+	orch := orchestrator.New(log, sched, ad)
+	handler := NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), ociresolver.NewStaticResolver(nil))
+	rev := httpRevision()
+	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
+		"API_TOKEN": {SecretRef: &domain.SecretReference{Name: "sec_api", Version: 1}},
+	}
+	if _, err := orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{WorkspaceID: "ws_1", RunID: "run_refresh_secret", IdempotencyKey: "idem_seed_refresh_secret", Workload: rev}); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_refresh_secret:refresh?workspace_id=ws_1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "SECRET_GRANT_REQUIRED") {
+		t.Fatalf("expected refresh missing grant 403, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func ptr(value string) *string {
 	return &value
+}
+
+func createSecretVersionForHTTPTest(t *testing.T, handler http.Handler, secretID, idempotencyKey string) {
+	t.Helper()
+	body := mustMarshal(t, createSecretVersionBody{WorkspaceID: "ws_1", SecretID: secretID, Value: "plaintext-secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/secrets/"+secretID+"/versions", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", idempotencyKey)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create secret %s expected 202, got %d body=%s", secretID, rec.Code, rec.Body.String())
+	}
+}
+
+func grantSecretForHTTPTest(t *testing.T, handler http.Handler, secretID string, version int, runID string) {
+	t.Helper()
+	body := mustMarshal(t, grantSecretBody{WorkspaceID: "ws_1", SecretID: secretID, Version: version, ScopeType: "run", ScopeID: runID})
+	req := httptest.NewRequest(http.MethodPost, "/v1/secrets/"+secretID+"/grants", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("grant secret %s expected 202, got %d body=%s", secretID, rec.Code, rec.Body.String())
+	}
 }
 
 func TestCreateRunRejectsWorkspaceMismatch(t *testing.T) {
@@ -273,12 +371,18 @@ func TestPlacementPreviewAndOpenAPI(t *testing.T) {
 			t.Fatalf("%s expected 200, got %d body=%s", path, rec.Code, rec.Body.String())
 		}
 		if path == "/openapi.json" {
-			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "IdempotencyConflict", `"409"`} {
+			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "/v1/workloads", "/v1/images:resolve", "/v1/secrets", "IdempotencyConflict", `"409"`} {
 				if !strings.Contains(rec.Body.String(), required) {
 					t.Fatalf("OpenAPI missing %s: %s", required, rec.Body.String())
 				}
 			}
 		}
+	}
+}
+
+func TestOpenAPIDocumentIsValidJSON(t *testing.T) {
+	if !json.Valid([]byte(OpenAPIJSON)) {
+		t.Fatalf("OpenAPIJSON is not valid JSON")
 	}
 }
 
@@ -382,12 +486,28 @@ func TestSecretMetadataAndGrantEndpointsDoNotExposePlaintext(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "plaintext-secret") {
 		t.Fatalf("secret create leaked plaintext: %s", rec.Body.String())
 	}
+	req = httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_api/versions", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"version":1`) {
+		t.Fatalf("secret version idempotent replay expected version 1, got %d body=%s", rec.Code, rec.Body.String())
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/v1/secrets?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "plaintext-secret") {
 		t.Fatalf("metadata expected 200 without plaintext, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	runBody := mustMarshal(t, createRunBody{RunID: "run_1", Workload: httpRevision()})
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(runBody))
+	req.Header.Set("Idempotency-Key", "idem_secret_grant_run")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create grant target run expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	grantBody := mustMarshal(t, grantSecretBody{WorkspaceID: "ws_1", SecretID: "sec_api", Version: 1, ScopeType: "run", ScopeID: "run_1"})
@@ -400,7 +520,32 @@ func TestSecretMetadataAndGrantEndpointsDoNotExposePlaintext(t *testing.T) {
 	}
 }
 
+func TestSecretEndpointsRejectPathBodyMismatch(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	body := mustMarshal(t, createSecretVersionBody{WorkspaceID: "ws_1", SecretID: "sec_body", Value: "plaintext-secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_path/versions", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_secret_mismatch")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "SECRET_ID_MISMATCH") {
+		t.Fatalf("secret mismatch expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	grantBody := mustMarshal(t, grantSecretBody{WorkspaceID: "ws_1", SecretID: "sec_body", Version: 1, ScopeType: "run", ScopeID: "run_1"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_path/grants", bytes.NewReader(grantBody))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "SECRET_ID_MISMATCH") {
+		t.Fatalf("grant mismatch expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func newHTTPTestServer(t *testing.T) http.Handler {
+	t.Helper()
+	return newHTTPTestServerWithOptions(t)
+}
+
+func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -425,7 +570,7 @@ func newHTTPTestServer(t *testing.T) http.Handler {
 			Platform: "linux/amd64",
 		},
 	})
-	return NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), resolver)
+	return NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), resolver, options...)
 }
 
 func httpRevision() domain.WorkloadRevision {

@@ -222,6 +222,125 @@ func TestCancelRunAfterLaunchRecordsCancelledOutcomeAndCleansUp(t *testing.T) {
 	}
 }
 
+func TestAdvanceRunCommandKeysAreScopedPerRun(t *testing.T) {
+	ctx := context.Background()
+	offer := orchOffer("offer_command_scope", time.Now().UTC())
+	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
+	orch := newTestOrchestrator(t, ad)
+	for _, runID := range []string{"run_scope_a", "run_scope_b"} {
+		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
+			t.Fatalf("create %s: %v", runID, err)
+		}
+		if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
+			t.Fatalf("advance %s: %v", runID, err)
+		}
+		record, err := orch.GetRun(ctx, "ws_1", runID)
+		if err != nil {
+			t.Fatalf("get %s: %v", runID, err)
+		}
+		if !record.Closed || record.Cleanup != domain.CleanupConfirmed {
+			t.Fatalf("run %s did not close cleanly: %+v", runID, record)
+		}
+	}
+}
+
+func TestRunEventIDsAreScopedAcrossWorkspaces(t *testing.T) {
+	ctx := context.Background()
+	offerA := orchOffer("offer_workspace_a", time.Now().UTC())
+	offerB := orchOffer("offer_workspace_b", time.Now().UTC())
+	offerB.ID = "offer_workspace_b"
+	offerB.ConnectionID = "conn_2"
+	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{offerA, offerB}), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded)))
+	for _, workspaceID := range []string{"ws_1", "ws_2"} {
+		rev := orchRevision()
+		rev.WorkspaceID = workspaceID
+		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: workspaceID, RunID: "run_same", IdempotencyKey: "idem_" + workspaceID, Workload: rev}); err != nil {
+			t.Fatalf("create %s: %v", workspaceID, err)
+		}
+		events, err := orch.GetRunEvents(ctx, workspaceID, "run_same")
+		if err != nil {
+			t.Fatalf("events %s: %v", workspaceID, err)
+		}
+		if len(events) != 1 || events[0].WorkspaceID != workspaceID {
+			t.Fatalf("unexpected events for %s: %+v", workspaceID, events)
+		}
+		if err := orch.AdvanceRun(ctx, workspaceID, "run_same"); err != nil {
+			t.Fatalf("advance %s: %v", workspaceID, err)
+		}
+		record, err := orch.GetRun(ctx, workspaceID, "run_same")
+		if err != nil {
+			t.Fatalf("get %s: %v", workspaceID, err)
+		}
+		if !record.Closed || record.Cleanup != domain.CleanupConfirmed {
+			t.Fatalf("unexpected record for %s: %+v", workspaceID, record)
+		}
+	}
+}
+
+func TestCancelRunResumesAfterCancelAcceptedEvents(t *testing.T) {
+	ctx := context.Background()
+	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("offer_cancel_resume", time.Now().UTC())}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
+	orch := newTestOrchestrator(t, ad)
+	runID := "run_cancel_resume"
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
+		t.Fatalf("advance run: %v", err)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", runID)
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	state, err := reduceRun(events)
+	if err != nil {
+		t.Fatalf("reduce run: %v", err)
+	}
+	if _, err := ad.Cancel(ctx, adapter.CancelRequest{OperationKey: "cancel_" + state.launchIntent.AttemptID, RequestHash: mustHash(t, adapter.CancelRequest{OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}), LaunchKey: state.launchIntent.LaunchKey}); err != nil {
+		t.Fatalf("seed adapter cancel: %v", err)
+	}
+	if err := orch.appendEvents(ctx, "ws_1", runID, uint64(len(events)), "cancel:accepted", []eventlog.NewEvent{
+		mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, time.Now()),
+		mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, time.Now()),
+	}); err != nil {
+		t.Fatalf("seed cancel events: %v", err)
+	}
+
+	record, err := orch.CancelRun(ctx, "ws_1", runID)
+	if err != nil {
+		t.Fatalf("resume cancel: %v", err)
+	}
+	if !record.Closed || record.Outcome != domain.RunOutcomeCancelled || record.Cleanup != domain.CleanupConfirmed {
+		t.Fatalf("unexpected resumed cancel record: %+v", record)
+	}
+}
+
+func TestCancelRunRecordsIntentBeforeAdapterFailure(t *testing.T) {
+	ctx := context.Background()
+	ad := &cancelFailsAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("offer_cancel_fail", time.Now().UTC())}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))}
+	orch := newTestOrchestrator(t, ad)
+	runID := "run_cancel_fail"
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
+		t.Fatalf("advance run: %v", err)
+	}
+	if _, err := orch.CancelRun(ctx, "ws_1", runID); !errors.Is(err, adapter.ErrRetryableFailure) {
+		t.Fatalf("expected retryable cancel failure, got %v", err)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", runID)
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	if !hasEvent(events, EventCancelRequested) {
+		t.Fatalf("cancel intent should be durable before adapter failure: %s", eventTypes(events))
+	}
+	if hasEvent(events, EventCancelAccepted) {
+		t.Fatalf("cancel accepted should not be recorded after adapter failure: %s", eventTypes(events))
+	}
+}
+
 func TestAdvanceRunDoesNotRelaunchAfterNonterminalObservation(t *testing.T) {
 	ctx := context.Background()
 	ad := &countingAdapter{
@@ -323,6 +442,55 @@ func TestAdvanceRunReconcilesIndeterminateLaunchBeforeRetry(t *testing.T) {
 	}
 	if ad.observeCalls == 0 && ad.listOwnedCalls == 0 {
 		t.Fatalf("expected observe or list-owned reconciliation before retry")
+	}
+}
+
+func TestAdvanceRunClosesMissingIndeterminateLaunchAsFailed(t *testing.T) {
+	ctx := context.Background()
+	ad := &missingIndeterminateLaunchAdapter{
+		Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})),
+	}
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("expected indeterminate launch error, got %v", err)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("second advance should close missing launch: %v", err)
+	}
+	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if !record.Closed || record.Outcome != domain.RunOutcomeFailed || record.Cleanup != domain.CleanupConfirmed {
+		t.Fatalf("missing indeterminate launch should close failed, got %+v", record)
+	}
+}
+
+func TestAdvanceRunUsesListOwnedForIndeterminateLaunchRecovery(t *testing.T) {
+	ctx := context.Background()
+	ad := &ownedIndeterminateLaunchAdapter{
+		Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})),
+	}
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("expected indeterminate launch error, got %v", err)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("second advance should reconcile owned launch: %v", err)
+	}
+	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if record.Closed || record.Phase != "running" {
+		t.Fatalf("owned indeterminate launch should remain running, got %+v", record)
+	}
+	if ad.listOwnedCalls == 0 {
+		t.Fatalf("expected ListOwned recovery")
 	}
 }
 
@@ -441,6 +609,14 @@ func (r *releaseFailsOnceAdapter) Release(ctx context.Context, req adapter.Relea
 	return r.Adapter.Release(ctx, req)
 }
 
+type cancelFailsAdapter struct {
+	*fake.Adapter
+}
+
+func (c *cancelFailsAdapter) Cancel(context.Context, adapter.CancelRequest) (adapter.CancelReceipt, error) {
+	return adapter.CancelReceipt{}, adapter.ErrRetryableFailure
+}
+
 type indeterminateLaunchAdapter struct {
 	*fake.Adapter
 	launchCalls    int
@@ -463,6 +639,50 @@ func (i *indeterminateLaunchAdapter) Observe(_ context.Context, req adapter.Obse
 func (i *indeterminateLaunchAdapter) ListOwned(context.Context, adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
 	i.listOwnedCalls++
 	return []adapter.OwnedExternalObject{{ExternalID: "ambiguous", WorkspaceID: "ws_1", RunID: "run_1", AttemptID: "att_1", OwnershipToken: "own_1", LaunchKey: i.launchKey, Phase: adapter.ExternalPhaseRunning}}, nil
+}
+
+type missingIndeterminateLaunchAdapter struct {
+	*fake.Adapter
+	launchCalls int
+}
+
+func (m *missingIndeterminateLaunchAdapter) Launch(context.Context, adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	m.launchCalls++
+	return adapter.LaunchReceipt{}, adapter.ErrLaunchIndeterminate
+}
+
+func (m *missingIndeterminateLaunchAdapter) Observe(_ context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	return adapter.ExternalObservation{LaunchKey: req.LaunchKey, Phase: adapter.ExternalPhaseReleased, ObservedAt: time.Now().UTC()}, nil
+}
+
+type ownedIndeterminateLaunchAdapter struct {
+	*fake.Adapter
+	launchReq      adapter.LaunchRequest
+	listOwnedCalls int
+}
+
+func (o *ownedIndeterminateLaunchAdapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	o.launchReq = req
+	return adapter.LaunchReceipt{}, adapter.ErrLaunchIndeterminate
+}
+
+func (o *ownedIndeterminateLaunchAdapter) Observe(_ context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	return adapter.ExternalObservation{LaunchKey: req.LaunchKey, Phase: adapter.ExternalPhaseReleased, ObservedAt: time.Now().UTC()}, nil
+}
+
+func (o *ownedIndeterminateLaunchAdapter) ListOwned(context.Context, adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+	o.listOwnedCalls++
+	return []adapter.OwnedExternalObject{{
+		ExternalID:     "owned-" + o.launchReq.AttemptID,
+		WorkspaceID:    o.launchReq.WorkspaceID,
+		RunID:          o.launchReq.RunID,
+		AttemptID:      o.launchReq.AttemptID,
+		OwnershipToken: o.launchReq.OwnershipToken,
+		LaunchKey:      o.launchReq.LaunchKey,
+		CleanupLocator: o.launchReq.CleanupLocator,
+		RequestHash:    o.launchReq.RequestHash,
+		Phase:          adapter.ExternalPhaseRunning,
+	}}, nil
 }
 
 type captureLaunchAdapter struct {
@@ -589,6 +809,15 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 		t.Fatalf("marshal: %v", err)
 	}
 	return data
+}
+
+func mustHash(t *testing.T, v any) string {
+	t.Helper()
+	hash, err := domain.CanonicalHash(v)
+	if err != nil {
+		t.Fatalf("canonical hash: %v", err)
+	}
+	return hash
 }
 
 func expectErrorIs(t *testing.T, err error, target error) {

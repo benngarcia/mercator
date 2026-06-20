@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -150,7 +152,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 		CorrelationID:         req.RunID,
 		CausationID:           req.CommandKey,
 		Events: []eventlog.NewEvent{{
-			ID:            eventID(req.RunID, "requested"),
+			ID:            eventID(req.WorkspaceID, req.RunID, "requested"),
 			Type:          EventRunRequested,
 			SchemaVersion: 1,
 			OccurredAt:    o.now().UTC(),
@@ -184,7 +186,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 	}
 
 	if state.launchIntent == nil {
-		decision, attempt, selectedOffer, err := o.decide(ctx, *state.requested, runID)
+		decision, attempt, selectedOffer, err := o.decide(ctx, workspaceID, *state.requested, runID)
 		if err != nil {
 			return err
 		}
@@ -209,12 +211,12 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		if err != nil {
 			if errors.Is(err, adapter.ErrLaunchIndeterminate) || errors.Is(err, adapter.ErrLaunchTimeout) {
 				_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_indeterminate", []eventlog.NewEvent{
-					mustEvent(runID, "launch_indeterminate", EventLaunchIndeterminate, map[string]any{"error": err.Error(), "launch_key": state.launchIntent.LaunchKey}, o.now()),
+					mustEvent(runID, "launch_indeterminate", EventLaunchIndeterminate, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
 				})
 				return err
 			}
 			_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
-				mustEvent(runID, "launch_failed", EventLaunchFailed, map[string]any{"error": err.Error(), "retryable": !errors.Is(err, adapter.ErrIdempotencyConflict)}, o.now()),
+				mustEvent(runID, "launch_failed", EventLaunchFailed, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
 			})
 			return err
 		}
@@ -227,7 +229,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		state.launchAccepted = true
 	}
 
-	observation, err := o.adapter.Observe(ctx, adapter.ObserveRequest{LaunchKey: state.launchIntent.LaunchKey})
+	observation, err := o.observeLaunch(ctx, workspaceID, state)
 	if err != nil {
 		return err
 	}
@@ -325,29 +327,40 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string)
 		}
 		return o.GetRun(ctx, workspaceID, runID)
 	}
-	cancelReq := adapter.CancelRequest{OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
-	hash, err := domain.CanonicalHash(cancelReq)
-	if err != nil {
-		return domain.RunRecord{}, err
+	if !state.cancelRequested {
+		if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:requested", []eventlog.NewEvent{
+			mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+		}); err != nil {
+			return domain.RunRecord{}, err
+		}
+		version++
+		state.cancelRequested = true
 	}
-	cancelReq.RequestHash = hash
-	if _, err := o.adapter.Cancel(ctx, cancelReq); err != nil {
-		return domain.RunRecord{}, err
+	if !state.cancelAccepted {
+		cancelReq := adapter.CancelRequest{OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
+		hash, err := domain.CanonicalHash(cancelReq)
+		if err != nil {
+			return domain.RunRecord{}, err
+		}
+		cancelReq.RequestHash = hash
+		if _, err := o.adapter.Cancel(ctx, cancelReq); err != nil {
+			return domain.RunRecord{}, err
+		}
+		if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:accepted", []eventlog.NewEvent{
+			mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+		}); err != nil {
+			return domain.RunRecord{}, err
+		}
+		version++
+		state.cancelAccepted = true
 	}
-	if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:accepted", []eventlog.NewEvent{
-		mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
-		mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
-	}); err != nil {
-		return domain.RunRecord{}, err
-	}
-	version += 2
 	if err := o.recordObservation(ctx, workspaceID, runID, version, state, adapter.ExternalObservation{LaunchKey: state.launchIntent.LaunchKey, Phase: adapter.ExternalPhaseCancelled, ObservedAt: o.now().UTC()}); err != nil {
 		return domain.RunRecord{}, err
 	}
 	return o.GetRun(ctx, workspaceID, runID)
 }
 
-func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
+func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
 	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: requested.Workload.WorkspaceID})
 	if err != nil {
 		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
@@ -369,7 +382,7 @@ func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, r
 	if !ok {
 		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: selected offer %s not found", decision.SelectedOfferSnapshotID)
 	}
-	attemptID := "att_" + strings.TrimPrefix(runID, "run_")
+	attemptID := "att_" + externalIDPart(workspaceID) + "_" + externalIDPart(strings.TrimPrefix(runID, "run_")) + "_" + shortExternalHash(workspaceID, runID)
 	attempt := attemptData{
 		AttemptID:      attemptID,
 		LaunchKey:      "launch_" + attemptID,
@@ -431,11 +444,44 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 	return nil
 }
 
+func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, state runState) (adapter.ExternalObservation, error) {
+	observation, err := o.adapter.Observe(ctx, adapter.ObserveRequest{
+		LaunchKey:      state.launchIntent.LaunchKey,
+		OwnershipToken: state.launchIntent.OwnershipToken,
+		RequestHash:    state.launchIntent.RequestHash,
+	})
+	if err != nil {
+		return adapter.ExternalObservation{}, err
+	}
+	if observation.Phase != adapter.ExternalPhaseReleased || !state.launchIndeterminate {
+		return observation, nil
+	}
+	owned, err := o.adapter.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: workspaceID})
+	if err != nil {
+		return adapter.ExternalObservation{}, err
+	}
+	for _, object := range owned {
+		if object.RunID == state.launchIntent.RunID &&
+			object.AttemptID == state.launchIntent.AttemptID &&
+			object.OwnershipToken == state.launchIntent.OwnershipToken &&
+			object.RequestHash == state.launchIntent.RequestHash {
+			return adapter.ExternalObservation{
+				ExternalID: object.ExternalID,
+				LaunchKey:  object.LaunchKey,
+				Phase:      object.Phase,
+				ObservedAt: o.now().UTC(),
+				NativeJSON: `{"source":"list_owned"}`,
+			}, nil
+		}
+	}
+	return observation, nil
+}
+
 func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID string, version uint64, launchReq *adapter.LaunchRequest) error {
 	if launchReq == nil {
 		return fmt.Errorf("orchestrator: cleanup requested without launch intent")
 	}
-	releaseReq := adapter.ReleaseRequest{OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey}
+	releaseReq := adapter.ReleaseRequest{OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
 	hash, err := domain.CanonicalHash(releaseReq)
 	if err != nil {
 		return err
@@ -451,6 +497,7 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 }
 
 func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
+	events = scopeEventIDs(workspaceID, runID, events)
 	requestHash, err := domain.CanonicalHash(events)
 	if err != nil {
 		return err
@@ -458,7 +505,7 @@ func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID stri
 	_, err = o.log.Append(ctx, eventlog.AppendRequest{
 		Stream:                runStream(workspaceID, runID),
 		ExpectedStreamVersion: expectedVersion,
-		CommandKey:            commandKey,
+		CommandKey:            runID + ":" + commandKey,
 		RequestHash:           requestHash,
 		CorrelationID:         runID,
 		CausationID:           commandKey,
@@ -473,6 +520,8 @@ type runState struct {
 	launchIntent        *adapter.LaunchRequest
 	launchAccepted      bool
 	launchIndeterminate bool
+	cancelRequested     bool
+	cancelAccepted      bool
 	outcomeRecorded     bool
 	outcome             domain.RunOutcome
 	cleanupRequested    bool
@@ -514,6 +563,10 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 			state.launchAccepted = true
 		case EventLaunchIndeterminate:
 			state.launchIndeterminate = true
+		case EventCancelRequested:
+			state.cancelRequested = true
+		case EventCancelAccepted:
+			state.cancelAccepted = true
 		case EventRunOutcomeRecorded:
 			state.outcomeRecorded = true
 			var data struct {
@@ -597,7 +650,7 @@ func mustEvent(runID, suffix, eventType string, data any, now time.Time) eventlo
 		panic(err)
 	}
 	return eventlog.NewEvent{
-		ID:            eventID(runID, suffix),
+		ID:            "evt_" + runID + "_" + suffix,
 		Type:          eventType,
 		SchemaVersion: 1,
 		OccurredAt:    now.UTC(),
@@ -616,8 +669,50 @@ func mustPrivateEvent(runID, suffix, eventType string, publicData any, privateDa
 	return event
 }
 
-func eventID(runID, suffix string) string {
-	return "evt_" + runID + "_" + suffix
+func scopeEventIDs(workspaceID, runID string, events []eventlog.NewEvent) []eventlog.NewEvent {
+	scoped := make([]eventlog.NewEvent, len(events))
+	copy(scoped, events)
+	unscopedPrefix := "evt_" + runID + "_"
+	scopedPrefix := "evt_" + workspaceID + "_" + runID + "_"
+	for i := range scoped {
+		if strings.HasPrefix(scoped[i].ID, scopedPrefix) {
+			continue
+		}
+		if strings.HasPrefix(scoped[i].ID, unscopedPrefix) {
+			scoped[i].ID = scopedPrefix + strings.TrimPrefix(scoped[i].ID, unscopedPrefix)
+			continue
+		}
+		scoped[i].ID = workspaceID + "_" + scoped[i].ID
+	}
+	return scoped
+}
+
+func eventID(workspaceID, runID, suffix string) string {
+	return "evt_" + workspaceID + "_" + runID + "_" + suffix
+}
+
+func externalIDPart(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	if b.Len() == 0 {
+		return "id"
+	}
+	return b.String()
+}
+
+func shortExternalHash(parts ...string) string {
+	hash := sha256.New()
+	for _, part := range parts {
+		_, _ = hash.Write([]byte(part))
+		_, _ = hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil))[:12]
 }
 
 func runStream(workspaceID, runID string) eventlog.StreamKey {
@@ -634,7 +729,7 @@ func hasEvent(events []eventlog.StoredEvent, eventType string) bool {
 }
 
 func isTerminal(phase adapter.ExternalPhase) bool {
-	return phase == adapter.ExternalPhaseSucceeded || phase == adapter.ExternalPhaseFailed || phase == adapter.ExternalPhaseCancelled
+	return phase == adapter.ExternalPhaseSucceeded || phase == adapter.ExternalPhaseFailed || phase == adapter.ExternalPhaseCancelled || phase == adapter.ExternalPhaseReleased
 }
 
 func outcomeForPhase(phase adapter.ExternalPhase) string {
@@ -646,6 +741,23 @@ func outcomeForPhase(phase adapter.ExternalPhase) string {
 	default:
 		return string(domain.RunOutcomeFailed)
 	}
+}
+
+func publicAdapterError(err error, launchKey string) map[string]any {
+	code := "ADAPTER_ERROR"
+	retryable := true
+	switch {
+	case errors.Is(err, adapter.ErrIdempotencyConflict):
+		code = "ADAPTER_IDEMPOTENCY_CONFLICT"
+		retryable = false
+	case errors.Is(err, adapter.ErrLaunchTimeout):
+		code = "ADAPTER_LAUNCH_TIMEOUT"
+	case errors.Is(err, adapter.ErrLaunchIndeterminate):
+		code = "ADAPTER_LAUNCH_INDETERMINATE"
+	case errors.Is(err, adapter.ErrRetryableFailure):
+		code = "ADAPTER_RETRYABLE_FAILURE"
+	}
+	return map[string]any{"code": code, "message": "Adapter operation failed.", "retryable": retryable, "launch_key": launchKey}
 }
 
 func publicWorkload(rev domain.WorkloadRevision) publicWorkloadRevision {

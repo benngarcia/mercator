@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -29,11 +30,14 @@ func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {
 	if created.Labels["mercator.launch_key"] != req.LaunchKey || created.Labels["mercator.ownership_token"] != req.OwnershipToken {
 		t.Fatalf("launch did not set ownership labels: %+v", created.Labels)
 	}
-	if created.Env["LOG_LEVEL"] != "info" || created.Env["API_TOKEN"] != "secret:api-token:2" {
+	if len(client.started) != 1 || client.started[0] != req.LaunchKey {
+		t.Fatalf("launch did not start created container: %+v", client.started)
+	}
+	if created.Env["LOG_LEVEL"] != "info" {
 		t.Fatalf("unexpected env mapping: %+v", created.Env)
 	}
 
-	observation, err := ad.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: req.LaunchKey})
+	observation, err := ad.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, RequestHash: req.RequestHash})
 	if err != nil {
 		t.Fatalf("observe: %v", err)
 	}
@@ -47,7 +51,7 @@ func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {
 	if len(owned) != 1 || owned[0].LaunchKey != req.LaunchKey {
 		t.Fatalf("unexpected owned objects: %+v", owned)
 	}
-	released, err := ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_1", RequestHash: "sha256:release", LaunchKey: req.LaunchKey})
+	released, err := ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_1", RequestHash: "sha256:release", LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, LaunchRequestHash: req.RequestHash})
 	if err != nil {
 		t.Fatalf("release: %v", err)
 	}
@@ -70,9 +74,11 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	req.LaunchKey = "mercator-integration-" + time.Now().UTC().Format("20060102150405")
 	req.OperationKey = req.LaunchKey
 	req.CleanupLocator = req.LaunchKey
+	req.Entrypoint = nil
+	req.Args = []string{"sleep", "5"}
 	ad := New(NewCLIClient(""))
 	t.Cleanup(func() {
-		_, _ = ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "cleanup_" + req.LaunchKey, RequestHash: "sha256:cleanup", LaunchKey: req.LaunchKey})
+		_, _ = ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "cleanup_" + req.LaunchKey, RequestHash: "sha256:cleanup", LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, LaunchRequestHash: req.RequestHash})
 	})
 	receipt, err := ad.Launch(context.Background(), req)
 	if err != nil {
@@ -81,6 +87,13 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	if receipt.ExternalID == "" {
 		t.Fatalf("launch missing external id: %+v", receipt)
 	}
+	observation, err := ad.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, RequestHash: req.RequestHash})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observation.Phase != adapter.ExternalPhaseRunning {
+		t.Fatalf("expected running live container after launch, got %+v", observation)
+	}
 	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: req.WorkspaceID})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
@@ -88,7 +101,7 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	if len(owned) == 0 {
 		t.Fatalf("expected owned integration container")
 	}
-	released, err := ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_" + req.LaunchKey, RequestHash: "sha256:release", LaunchKey: req.LaunchKey})
+	released, err := ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_" + req.LaunchKey, RequestHash: "sha256:release", LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, LaunchRequestHash: req.RequestHash})
 	if err != nil {
 		t.Fatalf("release: %v", err)
 	}
@@ -112,6 +125,103 @@ func TestAdapterLaunchIsIdempotentByDeterministicName(t *testing.T) {
 	if first.ExternalID != second.ExternalID || !second.Duplicate || len(client.created) != 1 {
 		t.Fatalf("expected idempotent launch, first=%+v second=%+v creates=%d", first, second, len(client.created))
 	}
+	if len(client.started) != 1 {
+		t.Fatalf("duplicate launch should not restart running container: %+v", client.started)
+	}
+}
+
+func TestAdapterLaunchRejectsForeignContainerWithSameName(t *testing.T) {
+	client := newFakeClient()
+	ad := New(client)
+	req := launchRequest()
+	client.objects[req.LaunchKey] = Container{
+		ID:     "docker-foreign",
+		Name:   req.LaunchKey,
+		Labels: map[string]string{"mercator.workspace_id": "ws_other"},
+		State:  "running",
+	}
+
+	_, err := ad.Launch(context.Background(), req)
+	if !errors.Is(err, adapter.ErrIdempotencyConflict) {
+		t.Fatalf("expected idempotency conflict for foreign duplicate, got %v", err)
+	}
+}
+
+func TestAdapterLaunchRejectsSecretEnvironmentWithoutMaterializer(t *testing.T) {
+	ad := New(newFakeClient())
+	req := launchRequest()
+	req.Environment = append(req.Environment, adapter.EnvironmentBinding{Name: "API_TOKEN", SecretRef: &domain.SecretReference{Name: "api-token", Version: 1}})
+
+	if _, err := ad.Launch(context.Background(), req); err == nil {
+		t.Fatalf("expected secret environment launch to fail")
+	}
+}
+
+func TestAdapterObserveAndReleaseRejectForeignContainerWithSameName(t *testing.T) {
+	client := newFakeClient()
+	ad := New(client)
+	req := launchRequest()
+	client.objects[req.LaunchKey] = Container{
+		ID:     "docker-foreign",
+		Name:   req.LaunchKey,
+		Labels: map[string]string{"mercator.ownership_token": "other", "mercator.request_hash": "sha256:other"},
+		State:  "running",
+	}
+
+	_, err := ad.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, RequestHash: req.RequestHash})
+	if !errors.Is(err, adapter.ErrIdempotencyConflict) {
+		t.Fatalf("expected observe ownership conflict, got %v", err)
+	}
+	_, err = ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_foreign", RequestHash: "sha256:release", LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, LaunchRequestHash: req.RequestHash})
+	if !errors.Is(err, adapter.ErrIdempotencyConflict) {
+		t.Fatalf("expected release ownership conflict, got %v", err)
+	}
+	if _, ok := client.objects[req.LaunchKey]; !ok {
+		t.Fatalf("foreign container should not be removed")
+	}
+}
+
+func TestAdapterObserveAndReleaseRequireOwnershipMaterial(t *testing.T) {
+	client := newFakeClient()
+	ad := New(client)
+	req := launchRequest()
+	if _, err := ad.Launch(context.Background(), req); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	if _, err := ad.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: req.LaunchKey}); !errors.Is(err, adapter.ErrIdempotencyConflict) {
+		t.Fatalf("expected observe ownership material conflict, got %v", err)
+	}
+	if _, err := ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_no_owner", RequestHash: "sha256:release", LaunchKey: req.LaunchKey}); !errors.Is(err, adapter.ErrIdempotencyConflict) {
+		t.Fatalf("expected release ownership material conflict, got %v", err)
+	}
+}
+
+func TestAdapterReleaseIsIdempotentWhenContainerAlreadyRemoved(t *testing.T) {
+	ad := New(newFakeClient())
+
+	released, err := ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_missing", RequestHash: "sha256:release", LaunchKey: "missing"})
+	if err != nil {
+		t.Fatalf("release missing container: %v", err)
+	}
+	if !released.Released {
+		t.Fatalf("expected idempotent release receipt, got %+v", released)
+	}
+}
+
+func TestPhaseFromStateDoesNotMarkCreatedContainerRunning(t *testing.T) {
+	if phase := phaseFromState("created", nil); phase != adapter.ExternalPhaseQueued {
+		t.Fatalf("created container should be queued, got %s", phase)
+	}
+}
+
+func TestPhaseFromStateUsesExitCode(t *testing.T) {
+	if phase := phaseFromState("exited", intPtr(0)); phase != adapter.ExternalPhaseSucceeded {
+		t.Fatalf("exit 0 should succeed, got %s", phase)
+	}
+	if phase := phaseFromState("exited", intPtr(42)); phase != adapter.ExternalPhaseFailed {
+		t.Fatalf("nonzero exit should fail, got %s", phase)
+	}
 }
 
 func launchRequest() adapter.LaunchRequest {
@@ -132,7 +242,7 @@ func launchRequest() adapter.LaunchRequest {
 		Platform:                  domain.Platform{OS: "linux", Architecture: "amd64"},
 		Entrypoint:                &entrypoint,
 		Args:                      []string{"--serve"},
-		Environment:               []adapter.EnvironmentBinding{{Name: "LOG_LEVEL", Value: &literal}, {Name: "API_TOKEN", SecretRef: &domain.SecretReference{Name: "api-token", Version: 2}}},
+		Environment:               []adapter.EnvironmentBinding{{Name: "LOG_LEVEL", Value: &literal}},
 		Ports:                     []domain.PortSpec{{Name: "http", ContainerPort: 8080, Protocol: "tcp", Exposure: domain.PortExposurePublic}},
 		Resources:                 domain.ResourceRequirements{CPU: domain.CPURequirement{MinMillis: 500}, Memory: domain.MemoryRequirement{MinBytes: 256 << 20}},
 		SelectedOfferSnapshotID:   "offer_1",
@@ -144,6 +254,7 @@ func launchRequest() adapter.LaunchRequest {
 
 type fakeClient struct {
 	created []CreateContainerRequest
+	started []string
 	objects map[string]Container
 }
 
@@ -155,10 +266,21 @@ func (f *fakeClient) CreateContainer(_ context.Context, req CreateContainerReque
 	if existing, ok := f.objects[req.Name]; ok {
 		return existing, ErrAlreadyExists
 	}
-	container := Container{ID: "docker-" + req.Name, Name: req.Name, Labels: req.Labels, State: "running", CreatedAt: time.Now().UTC()}
+	container := Container{ID: "docker-" + req.Name, Name: req.Name, Labels: req.Labels, State: "created", CreatedAt: time.Now().UTC()}
 	f.objects[req.Name] = container
 	f.created = append(f.created, req)
 	return container, nil
+}
+
+func (f *fakeClient) StartContainer(_ context.Context, name string) error {
+	container, ok := f.objects[name]
+	if !ok {
+		return ErrNotFound
+	}
+	container.State = "running"
+	f.objects[name] = container
+	f.started = append(f.started, name)
+	return nil
 }
 
 func (f *fakeClient) InspectContainer(_ context.Context, name string) (Container, error) {
@@ -170,6 +292,9 @@ func (f *fakeClient) InspectContainer(_ context.Context, name string) (Container
 }
 
 func (f *fakeClient) RemoveContainer(_ context.Context, name string) error {
+	if _, ok := f.objects[name]; !ok {
+		return ErrNotFound
+	}
 	delete(f.objects, name)
 	return nil
 }
@@ -189,4 +314,8 @@ func (f *fakeClient) ListContainers(_ context.Context, labels map[string]string)
 		}
 	}
 	return containers, nil
+}
+
+func intPtr(value int) *int {
+	return &value
 }

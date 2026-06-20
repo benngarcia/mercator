@@ -34,9 +34,12 @@ func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequ
 		args = append(args, "--env", key+"="+req.Env[key])
 	}
 	if len(req.Entrypoint) > 0 {
-		args = append(args, "--entrypoint", strings.Join(req.Entrypoint, " "))
+		args = append(args, "--entrypoint", req.Entrypoint[0])
 	}
 	args = append(args, req.Image)
+	if len(req.Entrypoint) > 1 {
+		args = append(args, req.Entrypoint[1:]...)
+	}
 	args = append(args, req.Args...)
 	output, err := c.run(ctx, args...)
 	if err != nil {
@@ -51,6 +54,17 @@ func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequ
 		return Container{ID: id, Name: req.Name, Labels: req.Labels, State: "created", CreatedAt: time.Now().UTC()}, nil
 	}
 	return container, nil
+}
+
+func (c *CLIClient) StartContainer(ctx context.Context, name string) error {
+	output, err := c.run(ctx, "start", name)
+	if err != nil {
+		if strings.Contains(output, "No such container") {
+			return ErrNotFound
+		}
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(output))
+	}
+	return nil
 }
 
 func (c *CLIClient) InspectContainer(ctx context.Context, name string) (Container, error) {
@@ -69,7 +83,8 @@ func (c *CLIClient) InspectContainer(ctx context.Context, name string) (Containe
 			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
 		State struct {
-			Status string `json:"Status"`
+			Status   string `json:"Status"`
+			ExitCode int    `json:"ExitCode"`
 		} `json:"State"`
 	}
 	if err := json.Unmarshal([]byte(output), &raw); err != nil {
@@ -79,7 +94,8 @@ func (c *CLIClient) InspectContainer(ctx context.Context, name string) (Containe
 		return Container{}, ErrNotFound
 	}
 	created, _ := time.Parse(time.RFC3339Nano, raw[0].Created)
-	return Container{ID: raw[0].ID, Name: strings.TrimPrefix(raw[0].Name, "/"), Labels: raw[0].Config.Labels, State: raw[0].State.Status, CreatedAt: created}, nil
+	exitCode := raw[0].State.ExitCode
+	return Container{ID: raw[0].ID, Name: strings.TrimPrefix(raw[0].Name, "/"), Labels: raw[0].Config.Labels, State: raw[0].State.Status, ExitCode: &exitCode, CreatedAt: created}, nil
 }
 
 func (c *CLIClient) RemoveContainer(ctx context.Context, name string) error {

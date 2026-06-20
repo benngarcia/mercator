@@ -2,16 +2,19 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bengarcia/mercator/internal/adapter"
 	"github.com/bengarcia/mercator/internal/adapter/fake"
+	"github.com/bengarcia/mercator/internal/authz"
 	"github.com/bengarcia/mercator/internal/connection"
 	"github.com/bengarcia/mercator/internal/domain"
 	"github.com/bengarcia/mercator/internal/eventlog"
@@ -38,7 +41,23 @@ type Server struct {
 	resolver  interface {
 		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 	}
+	security securityConfig
 }
+
+type securityConfig struct {
+	Token      string
+	Workspaces []string
+}
+
+type Option func(*Server)
+
+func WithBearerAuth(token string, workspaces []string) Option {
+	return func(s *Server) {
+		s.security = securityConfig{Token: token, Workspaces: append([]string(nil), workspaces...)}
+	}
+}
+
+type principalContextKey struct{}
 
 type createRunBody struct {
 	WorkspaceID        string                  `json:"workspace_id,omitempty"`
@@ -149,27 +168,47 @@ type errorResponse struct {
 	Details []domain.Violation `json:"details,omitempty"`
 }
 
-func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter) http.Handler {
+func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, options ...Option) http.Handler {
 	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad}
+	for _, option := range options {
+		option(s)
+	}
 	s.routes()
 	return s
 }
 
 func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, resolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
-}) http.Handler {
-	return NewWithAllServices(orch, sched, ad, workloads, secretVault, nil, nil, nil, resolver)
+}, options ...Option) http.Handler {
+	return NewWithAllServices(orch, sched, ad, workloads, secretVault, nil, nil, nil, resolver, options...)
 }
 
 func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, sinkManager *sinkspkg.Manager, conns *connection.Service, offerService *offers.Service, resolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
-}) http.Handler {
+}, options ...Option) http.Handler {
 	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, secrets: secretVault, sinks: sinkManager, conns: conns, offers: offerService, resolver: resolver}
+	for _, option := range options {
+		option(s)
+	}
 	s.routes()
 	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.security.Token != "" && strings.HasPrefix(r.URL.Path, "/v1/") {
+		authHeader := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token is required.")
+			return
+		}
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if token == "" || token != s.security.Token {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token is required.")
+			return
+		}
+		principal := authz.Principal{Subject: "bearer", WorkspaceIDs: append([]string(nil), s.security.Workspaces...)}
+		r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal))
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -253,6 +292,9 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	if workspaceID == "" {
 		workspaceID = body.Workload.WorkspaceID
 	}
+	if !authorizeRequestWorkspace(w, r, workspaceID) {
+		return
+	}
 	workloadRevision := body.Workload
 	if body.WorkloadRevisionID != "" {
 		if s.workloads == nil {
@@ -265,6 +307,9 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		workloadRevision = revision
+	}
+	if !s.authorizeSecretRefs(w, r, workspaceID, body.RunID, workloadRevision) {
+		return
 	}
 	result, err := s.orch.CreateRun(r.Context(), orchestrator.CreateRunRequest{
 		WorkspaceID:    workspaceID,
@@ -281,7 +326,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.orch.AdvanceRun(r.Context(), workspaceID, body.RunID); err != nil {
-		writeError(w, http.StatusBadGateway, "ADVANCE_RUN_FAILED", err.Error())
+		writeError(w, http.StatusBadGateway, "ADVANCE_RUN_FAILED", "Run advancement failed; inspect public run events for the stable failure code.")
 		return
 	}
 	writeJSON(w, http.StatusAccepted, createRunResponse{RunID: result.RunID, Duplicate: result.Duplicate})
@@ -310,7 +355,40 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getRunOrWait(w http.ResponseWriter, r *http.Request) {
 	runID := strings.TrimSuffix(r.PathValue("run_ref"), ":wait")
+	if strings.HasSuffix(r.PathValue("run_ref"), ":wait") {
+		s.waitRun(w, r, runID)
+		return
+	}
 	s.writeRun(w, r, runID)
+}
+
+func (s *Server) waitRun(w http.ResponseWriter, r *http.Request, runID string) {
+	workspaceID, ok := requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		record, err := s.orch.GetRun(r.Context(), workspaceID, runID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
+			return
+		}
+		if record.Closed {
+			writeJSON(w, http.StatusOK, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
+			return
+		}
+		if time.Now().After(deadline) {
+			writeJSON(w, http.StatusAccepted, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			writeError(w, http.StatusRequestTimeout, "WAIT_CANCELLED", "Wait request was cancelled.")
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func (s *Server) writeRun(w http.ResponseWriter, r *http.Request, runID string) {
@@ -359,7 +437,7 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, runID string)
 	}
 	record, err := s.orch.CancelRun(r.Context(), workspaceID, runID)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "CANCEL_RUN_FAILED", err.Error())
+		writeError(w, http.StatusBadGateway, "CANCEL_RUN_FAILED", "Run cancellation failed.")
 		return
 	}
 	writeJSON(w, http.StatusOK, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
@@ -370,9 +448,12 @@ func (s *Server) refreshRun(w http.ResponseWriter, r *http.Request, runID string
 	if !ok {
 		return
 	}
+	if !s.authorizeStoredRunSecretRefs(w, r, workspaceID, runID) {
+		return
+	}
 	record, err := s.orch.RefreshRun(r.Context(), workspaceID, runID)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "REFRESH_RUN_FAILED", err.Error())
+		writeError(w, http.StatusBadGateway, "REFRESH_RUN_FAILED", "Run refresh failed.")
 		return
 	}
 	writeJSON(w, http.StatusOK, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
@@ -400,6 +481,9 @@ func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 	workspaceID := body.WorkspaceID
 	if workspaceID == "" {
 		workspaceID = body.Workload.WorkspaceID
+	}
+	if !authorizeRequestWorkspace(w, r, workspaceID) {
+		return
 	}
 	if violations := domain.ValidateWorkloadRevision(body.Workload); len(violations) > 0 {
 		writeError(w, http.StatusBadRequest, violations[0].Code, violations[0].Message)
@@ -429,9 +513,16 @@ func (s *Server) createWorkload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
 		return
 	}
+	if r.Header.Get("Idempotency-Key") == "" {
+		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
+		return
+	}
 	var body createWorkloadBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	if !authorizeRequestWorkspace(w, r, body.WorkspaceID) {
 		return
 	}
 	if err := s.workloads.CreateWorkload(r.Context(), workload.CreateWorkloadRequest{WorkspaceID: body.WorkspaceID, WorkloadID: body.WorkloadID, Name: body.Name}); err != nil {
@@ -441,9 +532,85 @@ func (s *Server) createWorkload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"workload_id": body.WorkloadID})
 }
 
+func (s *Server) authorizeSecretRefs(w http.ResponseWriter, r *http.Request, workspaceID, runID string, revision domain.WorkloadRevision) bool {
+	refs := workloadSecretRefs(revision)
+	if len(refs) == 0 {
+		return true
+	}
+	if s.secrets == nil {
+		writeError(w, http.StatusForbidden, "SECRET_GRANT_REQUIRED", "Secret references require an active run-scoped grant.")
+		return false
+	}
+	for _, ref := range refs {
+		ok, err := s.secrets.HasActiveGrant(r.Context(), secrets.GrantRequest{WorkspaceID: workspaceID, SecretID: ref.Name, Version: ref.Version, ScopeType: "run", ScopeID: runID})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "SECRET_GRANT_CHECK_FAILED", "Secret grant check failed.")
+			return false
+		}
+		if !ok {
+			writeError(w, http.StatusForbidden, "SECRET_GRANT_REQUIRED", "Secret references require an active run-scoped grant.")
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) authorizeStoredRunSecretRefs(w http.ResponseWriter, r *http.Request, workspaceID, runID string) bool {
+	record, err := s.orch.GetRun(r.Context(), workspaceID, runID)
+	if err == nil && record.Phase != "requested" && record.Phase != "launching" {
+		return true
+	}
+	events, err := s.orch.GetRunEvents(r.Context(), workspaceID, runID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
+		return false
+	}
+	for _, event := range events {
+		if event.Type != orchestrator.EventRunRequested {
+			continue
+		}
+		var data struct {
+			Workload domain.WorkloadRevision `json:"workload_revision"`
+		}
+		payload := event.PrivateData
+		if len(payload) == 0 {
+			payload = event.Data
+		}
+		if err := json.Unmarshal(payload, &data); err != nil {
+			writeError(w, http.StatusInternalServerError, "RUN_SECRET_CHECK_FAILED", "Run secret grant check failed.")
+			return false
+		}
+		return s.authorizeSecretRefs(w, r, workspaceID, runID, data.Workload)
+	}
+	writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", "Run request event not found.")
+	return false
+}
+
+func workloadSecretRefs(revision domain.WorkloadRevision) []domain.SecretReference {
+	seen := map[string]domain.SecretReference{}
+	for _, container := range revision.Spec.Containers {
+		for _, binding := range container.Env {
+			if binding.SecretRef == nil {
+				continue
+			}
+			key := binding.SecretRef.Name + ":" + strconv.Itoa(binding.SecretRef.Version)
+			seen[key] = *binding.SecretRef
+		}
+	}
+	refs := make([]domain.SecretReference, 0, len(seen))
+	for _, ref := range seen {
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
 func (s *Server) createRevision(w http.ResponseWriter, r *http.Request) {
 	if s.workloads == nil {
 		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
+		return
+	}
+	if r.Header.Get("Idempotency-Key") == "" {
+		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
 		return
 	}
 	workspaceID, ok := requiredWorkspace(w, r)
@@ -561,16 +728,30 @@ func (s *Server) createSecretVersion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
 		return
 	}
+	idempotencyKey := r.Header.Get("Idempotency-Key")
+	if idempotencyKey == "" {
+		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
+		return
+	}
 	var body createSecretVersionBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
 		return
 	}
-	if body.SecretID == "" {
-		body.SecretID = r.PathValue("secret_id")
+	if !authorizeRequestWorkspace(w, r, body.WorkspaceID) {
+		return
 	}
-	version, err := s.secrets.CreateVersion(r.Context(), secrets.CreateVersionRequest{WorkspaceID: body.WorkspaceID, SecretID: body.SecretID, Plaintext: []byte(body.Value)})
+	secretID, ok := pathSecretID(w, r, body.SecretID)
+	if !ok {
+		return
+	}
+	body.SecretID = secretID
+	version, err := s.secrets.CreateVersion(r.Context(), secrets.CreateVersionRequest{WorkspaceID: body.WorkspaceID, SecretID: body.SecretID, Plaintext: []byte(body.Value), IdempotencyKey: idempotencyKey})
 	if err != nil {
+		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
+			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "CREATE_SECRET_VERSION_FAILED", err.Error())
 		return
 	}
@@ -604,8 +785,13 @@ func (s *Server) grantSecret(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
 		return
 	}
-	if body.SecretID == "" {
-		body.SecretID = r.PathValue("secret_id")
+	secretID, ok := pathSecretID(w, r, body.SecretID)
+	if !ok {
+		return
+	}
+	body.SecretID = secretID
+	if !authorizeRequestWorkspace(w, r, body.WorkspaceID) {
+		return
 	}
 	grant, err := s.secrets.Grant(r.Context(), secrets.GrantRequest{WorkspaceID: body.WorkspaceID, SecretID: body.SecretID, Version: body.Version, ScopeType: body.ScopeType, ScopeID: body.ScopeID})
 	if err != nil {
@@ -688,7 +874,36 @@ func requiredWorkspace(w http.ResponseWriter, r *http.Request) (string, bool) {
 		writeError(w, http.StatusBadRequest, "WORKSPACE_ID_REQUIRED", "workspace_id query parameter is required.")
 		return "", false
 	}
+	if !authorizeRequestWorkspace(w, r, workspaceID) {
+		return "", false
+	}
 	return workspaceID, true
+}
+
+func authorizeRequestWorkspace(w http.ResponseWriter, r *http.Request, workspaceID string) bool {
+	principal, ok := r.Context().Value(principalContextKey{}).(authz.Principal)
+	if !ok {
+		return true
+	}
+	for _, allowed := range principal.WorkspaceIDs {
+		if allowed == "*" {
+			return true
+		}
+	}
+	if err := authz.New().Authorize(principal, authz.ActionRead, authz.ResourceRun, workspaceID); err != nil {
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "Principal is not authorized for this workspace.")
+		return false
+	}
+	return true
+}
+
+func pathSecretID(w http.ResponseWriter, r *http.Request, bodySecretID string) (string, bool) {
+	pathSecretID := r.PathValue("secret_id")
+	if bodySecretID != "" && bodySecretID != pathSecretID {
+		writeError(w, http.StatusBadRequest, "SECRET_ID_MISMATCH", "secret_id in the request body must match the URL path.")
+		return "", false
+	}
+	return pathSecretID, true
 }
 
 func runLinks(workspaceID, runID string) map[string]string {
@@ -712,15 +927,47 @@ func errorCode(err error, fallback string) string {
 	return fallback
 }
 
-func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot) (http.Handler, func() error, error) {
+func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot, secretKey ...[]byte) (http.Handler, func() error, error) {
+	var key []byte
+	if len(secretKey) > 0 {
+		key = secretKey[0]
+	}
+	return HandlerForSQLiteWithOptions(ctx, dsn, offer, key)
+}
+
+func HandlerForSQLiteWithOptions(ctx context.Context, dsn string, offer []domain.OfferSnapshot, secretKey []byte, options ...Option) (http.Handler, func() error, error) {
+	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
+	return HandlerForSQLiteWithAdapter(ctx, dsn, ad, secretKey, options...)
+}
+
+func HandlerForSQLiteWithAdapter(ctx context.Context, dsn string, ad adapter.Adapter, secretKey []byte, options ...Option) (http.Handler, func() error, error) {
 	log, err := eventlog.OpenSQLite(ctx, dsn)
 	if err != nil {
 		return nil, nil, err
 	}
-	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
+	key, err := handlerSecretKey(secretKey)
+	if err != nil {
+		_ = log.Close()
+		return nil, nil, err
+	}
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	return NewWithAllServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), nil, connection.New(log), offers.New(log), ociresolver.NewStaticResolver(nil)), log.Close, nil
+	return NewWithAllServices(orch, sched, ad, workload.New(log), secrets.New(log, key), sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}), connection.New(log), offers.New(log), ociresolver.NewStaticResolver(nil), options...), log.Close, nil
+}
+
+func handlerSecretKey(configured []byte) ([]byte, error) {
+	if len(configured) > 0 {
+		key := append([]byte(nil), configured...)
+		if len(key) != 32 {
+			return nil, errors.New("httpapi: secret key must be 32 bytes")
+		}
+		return key, nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 var _ fs.FS = web.Static()
