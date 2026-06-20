@@ -512,6 +512,48 @@ Handoff:
 
 - Start M8 by adding the Docker host adapter and adapter registry wiring.
 
+### M8 - Docker Host Adapter
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:23 PDT`
+Completed: `2026-06-20 01:25 PDT`
+Plan reference: `Plan.md#milestone-8-docker-host-adapter`
+Prompt requirements covered: `Docker adapter contract, deterministic labels/names, list-owned reconciliation, adapter registry`
+
+Scope:
+
+- Added `internal/adapter/docker` adapter over a narrow Docker client interface with fake-client unit coverage.
+- Added launch, observe, release, list-owned, deterministic container names, labels, environment mapping, ports, platform, entrypoint, args, resources, ownership token, launch key, and cleanup locator behavior.
+- Added idempotent Docker launch behavior through deterministic container names and inspect-on-existing.
+- Added `internal/adapter/registry` for adapter type lookup.
+
+Acceptance criteria:
+
+- Docker adapter implements the common adapter contract.
+- `ListOwned` can discover owned resources by workspace label.
+- Launch labels include workspace, run, attempt, launch key, ownership token, cleanup locator, request hash, workload ID, and revision ID.
+- Unsupported Docker flags do not enter the workload contract.
+
+Implementation notes:
+
+- The current Docker adapter is unit-tested against a fake client interface; no live Docker integration test has been added yet.
+- `docker version` was available locally, so a future guarded live integration can be added without changing the unit boundary.
+
+Verification:
+
+- `go test ./internal/adapter/docker -count=1` - `passed`.
+- `go test ./internal/adapter/... -count=1` - `passed`.
+- `docker version` - `passed` - Docker Engine reachable via Orbstack.
+- `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run Integration -count=1` - `not run` - no live integration test exists yet.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M8 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M9 by adding encrypted event-backed secret versions and scoped grants, then ensure adapter contracts carry descriptors without plaintext.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -574,6 +616,13 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:23 PDT | M7 validation | `go test ./...` | passed | Full suite green after M7 |
 | 2026-06-20 01:23 PDT | M7 validation | `go build ./...` | passed | Build green after M7 |
 | 2026-06-20 01:23 PDT | M7 validation | `git status --short --branch` | observed | M7 source/test/docs changes only |
+| 2026-06-20 01:25 PDT | M8 focused | `go test ./internal/adapter/docker -count=1` | passed | Fake-client Docker adapter tests green |
+| 2026-06-20 01:25 PDT | M8 focused | `go test ./internal/adapter/registry -count=1` | passed | Registry tests green |
+| 2026-06-20 01:25 PDT | M8 validation | `go test ./internal/adapter/... -count=1` | passed | Adapter package tests green |
+| 2026-06-20 01:25 PDT | M8 validation | `docker version` | passed | Docker Engine reachable via Orbstack |
+| 2026-06-20 01:25 PDT | M8 validation | `go test ./...` | passed | Full suite green after M8 |
+| 2026-06-20 01:25 PDT | M8 validation | `go build ./...` | passed | Build green after M8 |
+| 2026-06-20 01:25 PDT | M8 validation | `git status --short --branch` | observed | M8 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -589,15 +638,15 @@ Required verification cadence:
 
 Blocking V1 correctness issues:
 
-- Docker, secret vault, durable sinks, projection runner, CLI, and UI remain missing.
+- Secret vault, durable sinks, projection runner, CLI, and UI remain missing.
+- Docker adapter live integration remains missing; unit fake-client contract is implemented.
 - Cancellation is endpoint-present but not yet a full adapter-backed lifecycle command.
 - OpenAPI is expanded for repaired run/workload paths but is not yet complete for all future V1 service areas.
 
 Known missing feature areas from original V1:
 
 - Secret vault with encrypted event-backed secret versions and grants.
-- Adapter registry and runtime adapters.
-- Docker host adapter.
+- Live Docker integration test.
 - Reconciler and lease janitor.
 - Projection runner.
 - Event sinks with replay and durable cursors.
@@ -607,7 +656,6 @@ Known missing feature areas from original V1:
 
 Known scaffold gaps:
 
-- Docker host adapter is not implemented.
 - Secret encryption and service credentials are not implemented.
 - Webhook/Kafka/Postgres sinks are not implemented.
 - Embedded UI is not implemented.
@@ -615,6 +663,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start `Plan.md` Milestone 8: Docker host adapter.
+Start `Plan.md` Milestone 9: secret vault and grants.
 
 Do not edit production code outside the active milestone. Docker, secrets, sinks, and UI remain gated behind their owner milestones.
