@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Task 2: Domain Contracts.
+Task 3: Scheduler.
 
 ## Completed
 
@@ -11,6 +11,7 @@ Task 2: Domain Contracts.
 - Confirmed initial baseline has no Go packages to test yet.
 - Created durable long-horizon artifacts: spec, plan, runbook, status.
 - Implemented Task 1 event core with SQLite append/read/idempotency/concurrency/subscription behavior.
+- Implemented Task 2 domain contracts and workload validation for the V1 OCI boundary.
 
 ## Decisions
 
@@ -26,6 +27,9 @@ Task 2: Domain Contracts.
 - Task 1 red test: `go test ./internal/eventlog -run TestSQLiteEventLog -count=1` failed on missing eventlog API/types.
 - Task 1 focused green: `go test ./internal/eventlog -run TestSQLiteEventLog -count=1` passed.
 - Task 1 full green: `go test ./...` passed for `internal/eventlog`.
+- Task 2 red test: `go test ./internal/domain -count=1` failed on missing domain API/types.
+- Task 2 focused green: `go test ./internal/domain -count=1` passed.
+- Task 2 full green: `go test ./...` passed for `internal/domain` and `internal/eventlog`.
 
 ## Known Gaps
 
