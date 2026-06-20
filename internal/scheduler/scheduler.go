@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/bengarcia/mercator/internal/domain"
@@ -54,11 +55,15 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		EvaluatedAt:            input.EvaluatedAt.UTC(),
 		ModelVersion:           input.ModelVersion,
 		Policy:                 input.Workload.Spec.Placement,
-		Candidates:             make([]domain.CandidateDecision, 0, len(input.Offers)),
+		CollectionReport: domain.CollectionReport{
+			ConnectionsQueried: connectionIDs(input.Offers),
+		},
+		Candidates: make([]domain.CandidateDecision, 0, len(input.Offers)),
 	}
 
 	bestIndex := -1
-	for _, offer := range input.Offers {
+	offers := sortedOffers(input.Offers)
+	for _, offer := range offers {
 		candidate := evaluateOffer(input, offer)
 		decision.Candidates = append(decision.Candidates, candidate)
 		if !candidate.Feasible {
@@ -98,12 +103,18 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 	estimates := estimateCandidate(input, offer)
 	score := estimates.CostUSD.Expected +
 		input.Weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
-		input.Weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds)
+		input.Weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
+		input.Weights.StartFailurePenaltyUSD*offer.Reliability.StartFailureRate +
+		input.Weights.InterruptionPenaltyUSD*offer.Reliability.InterruptionRate +
+		input.Weights.UncertaintyPenaltyUSD*uncertaintyPenalty(offer)
 	if len(rejections) > 0 {
 		score = 0
 	}
 	return domain.CandidateDecision{
 		OfferSnapshotID: offer.ID,
+		ConnectionID:    offer.ConnectionID,
+		AdapterType:     offer.AdapterType,
+		NativeRef:       offer.NativeRef,
 		Feasible:        len(rejections) == 0,
 		Rejections:      rejections,
 		Estimates:       estimates,
@@ -121,8 +132,14 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	if offer.Platform != container.Platform {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "platform", Required: container.Platform.String(), Offered: offer.Platform.String(), Message: "Offer platform does not match the workload platform."})
 	}
+	if offer.Capabilities.Container.MaxContainers == 0 {
+		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "container.max_containers", Required: len(workload.Spec.Containers), Offered: 0, Message: "Offer lacks a trustworthy container capacity limit."})
+	}
 	if offer.Capabilities.Container.MaxContainers > 0 && offer.Capabilities.Container.MaxContainers < len(workload.Spec.Containers) {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.max_containers", Required: len(workload.Spec.Containers), Offered: offer.Capabilities.Container.MaxContainers, Message: "Offer cannot run the required number of containers."})
+	}
+	if !offer.Capacity.Available {
+		violations = append(violations, domain.Violation{Code: "CAPACITY_UNAVAILABLE", Path: "capacity.available", Required: true, Offered: false, Message: "Offer capacity evidence says the capacity is not currently available."})
 	}
 	if !offer.Capabilities.Container.SupportsDigestRefs {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})
@@ -136,8 +153,14 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	if offer.Resources.EphemeralDiskBytes < workload.Spec.Resources.EphemeralDisk.MinBytes {
 		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.ephemeral_disk", Required: workload.Spec.Resources.EphemeralDisk.MinBytes, Offered: offer.Resources.EphemeralDiskBytes, Message: "Offer has insufficient ephemeral disk."})
 	}
+	if !acceleratorRequirementsSatisfied(workload.Spec.Resources.Accelerators, offer) {
+		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.accelerators", Required: workload.Spec.Resources.Accelerators, Offered: offer.Resources.Accelerators, Message: "Offer has insufficient accelerator inventory."})
+	}
 	if requiresPublicInbound(container) && offer.Capabilities.Network.Inbound != domain.InboundNetworkPublicPort {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "network.inbound", Required: domain.InboundNetworkPublicPort, Offered: offer.Capabilities.Network.Inbound, Message: "Offer cannot expose inbound public ports."})
+	}
+	if !offer.ImageCache.Known {
+		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "image_cache", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown image cache facts."})
 	}
 	if req := workload.Spec.Network.Download; req != nil {
 		if !downloadRequirementSatisfied(input.EvaluatedAt, *req, offer.Network.Download) {
@@ -154,6 +177,9 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	estimates := estimateCandidate(input, offer)
 	if workload.Spec.Placement.MaxP90StartSeconds > 0 && estimates.StartSeconds.P90 > workload.Spec.Placement.MaxP90StartSeconds {
 		violations = append(violations, domain.Violation{Code: "LATENCY_SLO_EXCEEDED", Path: "placement.max_p90_start_seconds", Required: workload.Spec.Placement.MaxP90StartSeconds, Offered: estimates.StartSeconds.P90, Message: "Offer exceeds the requested p90 start latency."})
+	}
+	if workload.Spec.Placement.MaxExpectedCostUSD != nil && estimates.CostUSD.Expected > *workload.Spec.Placement.MaxExpectedCostUSD {
+		violations = append(violations, domain.Violation{Code: "COST_LIMIT_EXCEEDED", Path: "placement.max_expected_cost_usd", Required: *workload.Spec.Placement.MaxExpectedCostUSD, Offered: estimates.CostUSD.Expected, Message: "Offer exceeds the requested maximum expected cost."})
 	}
 	return violations
 }
@@ -231,6 +257,75 @@ func requiresPublicInbound(container domain.ContainerSpec) bool {
 	return slices.ContainsFunc(container.Ports, func(port domain.PortSpec) bool {
 		return port.Exposure == domain.PortExposurePublic
 	})
+}
+
+func acceleratorRequirementsSatisfied(requirements []domain.AcceleratorRequirement, offer domain.OfferSnapshot) bool {
+	for _, req := range requirements {
+		if req.Count <= 0 {
+			continue
+		}
+		matched := 0
+		for _, inventory := range offer.Resources.Accelerators {
+			if req.Vendor != "" && inventory.Vendor != req.Vendor {
+				continue
+			}
+			if len(req.ModelAnyOf) > 0 && !slices.Contains(req.ModelAnyOf, inventory.Model) {
+				continue
+			}
+			if req.MemoryMinBytes > 0 && inventory.MemoryBytes < req.MemoryMinBytes {
+				continue
+			}
+			matched += inventory.Count
+		}
+		if matched < req.Count {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedOffers(offers []domain.OfferSnapshot) []domain.OfferSnapshot {
+	out := append([]domain.OfferSnapshot(nil), offers...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ConnectionID != out[j].ConnectionID {
+			return out[i].ConnectionID < out[j].ConnectionID
+		}
+		if out[i].AdapterType != out[j].AdapterType {
+			return out[i].AdapterType < out[j].AdapterType
+		}
+		if out[i].NativeRef != out[j].NativeRef {
+			return out[i].NativeRef < out[j].NativeRef
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func connectionIDs(offers []domain.OfferSnapshot) []string {
+	seen := map[string]struct{}{}
+	for _, offer := range offers {
+		if offer.ConnectionID == "" {
+			continue
+		}
+		seen[offer.ConnectionID] = struct{}{}
+	}
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func uncertaintyPenalty(offer domain.OfferSnapshot) float64 {
+	penalty := 0.0
+	if offer.Capacity.Confidence > 0 && offer.Capacity.Confidence < 1 {
+		penalty += 1 - offer.Capacity.Confidence
+	}
+	if offer.Reliability.Confidence > 0 && offer.Reliability.Confidence < 1 {
+		penalty += 1 - offer.Reliability.Confidence
+	}
+	return penalty
 }
 
 func round(v float64, places int) float64 {

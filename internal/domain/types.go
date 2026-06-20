@@ -160,22 +160,23 @@ const (
 )
 
 type OfferSnapshot struct {
-	ID           string             `json:"id"`
-	ConnectionID string             `json:"connection_id"`
-	AdapterType  string             `json:"adapter_type"`
-	Kind         OfferKind          `json:"kind"`
-	NativeRef    string             `json:"native_ref"`
-	ObservedAt   time.Time          `json:"observed_at"`
-	ExpiresAt    time.Time          `json:"expires_at"`
-	Platform     Platform           `json:"platform"`
-	Resources    ResourceInventory  `json:"resources"`
-	Capabilities CapabilityProfile  `json:"capabilities"`
-	Network      NetworkFacts       `json:"network"`
-	Pricing      PriceModel         `json:"pricing"`
-	Queue        *QueueSnapshot     `json:"queue,omitempty"`
-	Provisioning *Estimate          `json:"provisioning,omitempty"`
-	ImageCache   ImageCacheEvidence `json:"image_cache"`
-	Capacity     CapacityEvidence   `json:"capacity"`
+	ID           string              `json:"id"`
+	ConnectionID string              `json:"connection_id"`
+	AdapterType  string              `json:"adapter_type"`
+	Kind         OfferKind           `json:"kind"`
+	NativeRef    string              `json:"native_ref"`
+	ObservedAt   time.Time           `json:"observed_at"`
+	ExpiresAt    time.Time           `json:"expires_at"`
+	Platform     Platform            `json:"platform"`
+	Resources    ResourceInventory   `json:"resources"`
+	Capabilities CapabilityProfile   `json:"capabilities"`
+	Network      NetworkFacts        `json:"network"`
+	Pricing      PriceModel          `json:"pricing"`
+	Queue        *QueueSnapshot      `json:"queue,omitempty"`
+	Provisioning *Estimate           `json:"provisioning,omitempty"`
+	ImageCache   ImageCacheEvidence  `json:"image_cache"`
+	Capacity     CapacityEvidence    `json:"capacity"`
+	Reliability  ReliabilityEvidence `json:"reliability,omitempty"`
 }
 
 type ResourceInventory struct {
@@ -292,6 +293,12 @@ type CapacityEvidence struct {
 	Confidence float64 `json:"confidence"`
 }
 
+type ReliabilityEvidence struct {
+	StartFailureRate float64 `json:"start_failure_rate,omitempty"`
+	InterruptionRate float64 `json:"interruption_rate,omitempty"`
+	Confidence       float64 `json:"confidence,omitempty"`
+}
+
 type PlacementDecision struct {
 	ID                      string              `json:"id"`
 	RunID                   string              `json:"run_id,omitempty"`
@@ -313,6 +320,9 @@ type CollectionReport struct {
 
 type CandidateDecision struct {
 	OfferSnapshotID string             `json:"offer_snapshot_id"`
+	ConnectionID    string             `json:"connection_id,omitempty"`
+	AdapterType     string             `json:"adapter_type,omitempty"`
+	NativeRef       string             `json:"native_ref,omitempty"`
 	Feasible        bool               `json:"feasible"`
 	Rejections      []Violation        `json:"rejections,omitempty"`
 	Estimates       CandidateEstimates `json:"estimates"`

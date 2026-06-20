@@ -80,16 +80,16 @@ High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker
 | Open | High | Launch timeout and indeterminate behavior collapse into `LaunchFailed` | M4 |
 | Open | High | Adapter launch contract does not carry the full OCI workload or placement metadata | M3 |
 | Fixed in M1 | High | Public events and event APIs can expose literal environment values | M1 |
-| Open | High | Scheduler ignores accelerator/GPU requirements | M2 |
+| Fixed in M2 | High | Scheduler ignores accelerator/GPU requirements | M2 |
 | Open | High | Fake adapter idempotency is incomplete for `LaunchKey` reuse | M3 |
-| Open | High | Placement determinism depends on input offer order | M2 |
+| Fixed in M2 | High | Placement determinism depends on input offer order | M2 |
 | Open | High | Required V1 run endpoints are missing | M5 |
 | Open | High | API idempotency conflicts are not machine-readable 409 responses | M5 |
 | Open | Medium | Cleanup retry/no-orphan behavior is not robust | M4 |
-| Open | Medium | Unknown or dishonest capability facts can pass feasibility checks | M2 |
-| Open | Medium | Price constraints and scheduler policy penalties are incomplete | M2 |
+| Fixed in M2 | Medium | Unknown or dishonest capability facts can pass feasibility checks | M2 |
+| Fixed in M2 | Medium | Price constraints and scheduler policy penalties are incomplete | M2 |
 | Open | Medium | Placement preview bypasses workload validation and can panic on empty containers | M5 |
-| Open | Medium | Decision audit contents are incomplete | M2 |
+| Fixed in M2 | Medium | Decision audit contents are incomplete | M2 |
 | Open | Medium | OpenAPI is materially incomplete | M5 |
 | Open | Medium | Workspace isolation at the HTTP boundary is weak | M5 |
 | Open | Medium | Subscription offsets are written but not used by `Subscribe` | M10 |
@@ -254,6 +254,50 @@ Handoff:
 - Start M2 by fixing scheduler determinism, accelerator requirements, conservative unknown facts, cost caps, penalties, and candidate audit contents.
 - Do not treat full-suite red as new unless failures differ from the documented M2-M4 audit-lock tests.
 
+### M2 - Deterministic Scheduler And Conservative Facts
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 00:59 PDT`
+Completed: `2026-06-20 01:02 PDT`
+Plan reference: `Plan.md#milestone-2-deterministic-scheduler-and-conservative-facts`
+Prompt requirements covered: `deterministic placement, conservative unknown facts, accelerator enforcement, cost caps, candidate audit`
+
+Scope:
+
+- Sorted offer snapshots before evaluation so identical offer sets produce stable candidate order and decision IDs independent of input order.
+- Enforced accelerator inventory, unavailable capacity, missing max-container facts, unknown image-cache facts, and max expected cost.
+- Applied configured start-failure, interruption, and uncertainty penalties to candidate scores.
+- Added deterministic collection report data and candidate audit fields for connection, adapter type, and native ref.
+
+Acceptance criteria:
+
+- Unknown facts fail hard requirements unless explicitly allowed by existing workload policy fields.
+- Accelerator requirements, cost caps, capacity evidence, and risk penalties affect feasibility/scoring.
+- Candidate ordering and decision identity are stable for identical logical inputs.
+- M3/M4 audit-lock tests remain expected red and are not claimed fixed.
+
+Implementation notes:
+
+- Added `ReliabilityEvidence` to offer snapshots for scheduler risk penalties.
+- Added candidate audit fields to `CandidateDecision`.
+- Updated fake offer fixtures to provide known image-cache evidence after M2 made missing image-cache facts conservative.
+
+Verification:
+
+- `go test ./internal/scheduler -count=1` - `passed`.
+- `go test ./internal/domain -count=1` - `passed`.
+- `go test ./internal/httpapi -count=1` - `passed`.
+- `go test ./internal/orchestrator -count=1 || true` - `expected red` - only M4 replay/recovery audit-lock tests fail.
+- `go test ./... || true` - `expected red` - M3 fake adapter launch-key conflict and M4 replay/recovery remain.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M2 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M3 by expanding the adapter launch contract and fixing fake adapter launch-key idempotency.
+- Preserve M4 replay/recovery failures until the event-log authoritative orchestrator/reconciler milestone.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -279,6 +323,13 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 00:59 PDT | M1 validation | `go test ./... || true` | expected red | Remaining documented audit-lock failures are M2 scheduler order, M3 fake launch-key conflict, and M4 replay/recovery |
 | 2026-06-20 00:59 PDT | M1 validation | `go build ./...` | passed | Build green after M1 |
 | 2026-06-20 00:59 PDT | M1 validation | `git status --short --branch` | observed | M1 source/test/docs changes only |
+| 2026-06-20 01:02 PDT | M2 focused | `go test ./internal/scheduler -count=1` | passed | Determinism, accelerator, conservative facts, cost cap, penalties, and audit tests green |
+| 2026-06-20 01:02 PDT | M2 focused | `go test ./internal/domain -count=1` | passed | Domain model changes compile with validation tests |
+| 2026-06-20 01:02 PDT | M2 focused | `go test ./internal/httpapi -count=1` | passed | HTTP fixtures updated with known image-cache evidence |
+| 2026-06-20 01:02 PDT | M2 focused | `go test ./internal/orchestrator -count=1 || true` | expected red | Only M4 replay/recovery audit-lock tests fail |
+| 2026-06-20 01:02 PDT | M2 validation | `go test ./... || true` | expected red | Remaining documented failures are M3 fake launch-key conflict and M4 replay/recovery |
+| 2026-06-20 01:02 PDT | M2 validation | `go build ./...` | passed | Build green after M2 |
+| 2026-06-20 01:02 PDT | M2 validation | `git status --short --branch` | observed | M2 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -333,6 +384,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start `Plan.md` Milestone 2: deterministic scheduler and conservative facts.
+Start `Plan.md` Milestone 3: complete adapter contract and fake adapter idempotency.
 
 The remaining M0 audit-lock tests are expected to fail until their owner milestones fix them. Do not edit production code outside the active milestone, and do not start Docker, secrets, sinks, or UI work before M5 passes.

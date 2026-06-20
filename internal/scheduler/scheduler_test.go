@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,48 @@ func TestSchedulerReportsHardRejections(t *testing.T) {
 	assertCandidateRejected(t, decision, "off_unknown_network", "UNKNOWN_FACT", "network.download")
 }
 
+func TestSchedulerRejectsConservativeFactAndResourceGaps(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	rev := schedulerRevision()
+	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{
+		Vendor: "nvidia", ModelAnyOf: []string{"a10"}, Count: 1, MemoryMinBytes: 16 << 30,
+	}}
+	maxCost := 0.05
+	rev.Spec.Placement.MaxExpectedCostUSD = &maxCost
+
+	noGPU := schedulerOffer("off_no_gpu", now, 0.00001, 1)
+	zeroMaxContainers := schedulerOffer("off_zero_containers", now, 0.00001, 1)
+	zeroMaxContainers.Capabilities.Container.MaxContainers = 0
+	unavailable := schedulerOffer("off_unavailable", now, 0.00001, 1)
+	unavailable.Capacity.Available = false
+	unknownImageCache := schedulerOffer("off_unknown_image_cache", now, 0.00001, 1)
+	unknownImageCache.ImageCache.Known = false
+	tooExpensive := schedulerOffer("off_too_expensive", now, 0.001, 1)
+	tooExpensive.Resources.Accelerators = []domain.AcceleratorInventory{{Vendor: "nvidia", Model: "a10", Count: 1, MemoryBytes: 24 << 30}}
+	tooExpensive.Capabilities.Resources.GPUVendors = []string{"nvidia"}
+	tooExpensive.ImageCache.Known = true
+	tooExpensive.ImageCache.MissingBytes = 0
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     rev,
+		Offers:       []domain.OfferSnapshot{noGPU, zeroMaxContainers, unavailable, unknownImageCache, tooExpensive},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != "" {
+		t.Fatalf("expected no selected offer, got %+v", decision)
+	}
+	assertCandidateRejected(t, decision, "off_no_gpu", "RESOURCE_INSUFFICIENT", "resources.accelerators")
+	assertCandidateRejected(t, decision, "off_zero_containers", "UNKNOWN_FACT", "container.max_containers")
+	assertCandidateRejected(t, decision, "off_unavailable", "CAPACITY_UNAVAILABLE", "capacity.available")
+	assertCandidateRejected(t, decision, "off_unknown_image_cache", "UNKNOWN_FACT", "image_cache")
+	assertCandidateRejected(t, decision, "off_too_expensive", "COST_LIMIT_EXCEEDED", "placement.max_expected_cost_usd")
+}
+
 func TestSchedulerAllowsUnknownNetworkWhenPolicyAllowsIt(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	rev := schedulerRevision()
@@ -90,6 +133,46 @@ func TestSchedulerAllowsUnknownNetworkWhenPolicyAllowsIt(t *testing.T) {
 	}
 	if decision.SelectedOfferSnapshotID != "off_unknown_network" {
 		t.Fatalf("expected unknown network offer to be selected, got %+v", decision)
+	}
+}
+
+func TestSchedulerAppliesRiskAndUncertaintyPenalties(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	stable := schedulerOffer("off_stable", now, 0.00012, 5)
+	stable.Capacity.Confidence = 0.99
+	stable.Reliability = domain.ReliabilityEvidence{
+		StartFailureRate: 0.01,
+		InterruptionRate: 0.01,
+		Confidence:       0.99,
+	}
+	risky := schedulerOffer("off_risky", now, 0.00010, 5)
+	risky.Capacity.Confidence = 0.4
+	risky.Reliability = domain.ReliabilityEvidence{
+		StartFailureRate: 0.35,
+		InterruptionRate: 0.25,
+		Confidence:       0.5,
+	}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     schedulerRevision(),
+		Offers:       []domain.OfferSnapshot{risky, stable},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+		Weights: ScoreWeights{
+			StartFailurePenaltyUSD: 1,
+			InterruptionPenaltyUSD: 1,
+			UncertaintyPenaltyUSD:  1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != "off_stable" {
+		t.Fatalf("expected lower-risk offer to win, got %+v", decision)
+	}
+	if findCandidate(t, decision, "off_risky").ScoreUSD <= findCandidate(t, decision, "off_stable").ScoreUSD {
+		t.Fatalf("expected risk penalties to increase risky score, got %+v", decision.Candidates)
 	}
 }
 
@@ -130,6 +213,34 @@ func TestSchedulerDecisionStableAcrossOfferOrder(t *testing.T) {
 	}
 	if got, want := candidateIDs(reversed), candidateIDs(forward); got != want {
 		t.Fatalf("same offer set should produce stable candidate order: forward=%s reversed=%s", want, got)
+	}
+}
+
+func TestSchedulerPopulatesDeterministicCollectionAndCandidateAuditData(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	offB := schedulerOffer("off_b", now, 0.00010, 10)
+	offB.ConnectionID = "conn_b"
+	offB.NativeRef = "native_b"
+	offA := schedulerOffer("off_a", now, 0.00010, 10)
+	offA.ConnectionID = "conn_a"
+	offA.NativeRef = "native_a"
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     schedulerRevision(),
+		Offers:       []domain.OfferSnapshot{offB, offA},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if got := strings.Join(decision.CollectionReport.ConnectionsQueried, ","); got != "conn_a,conn_b" {
+		t.Fatalf("expected deterministic collection report, got %+v", decision.CollectionReport)
+	}
+	first := decision.Candidates[0]
+	if first.OfferSnapshotID != "off_a" || first.ConnectionID != "conn_a" || first.AdapterType != "fake" || first.NativeRef != "native_a" {
+		t.Fatalf("candidate audit data missing or unstable: %+v", decision.Candidates)
 	}
 }
 
@@ -199,6 +310,16 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 		Pricing:  domain.PriceModel{Currency: "USD", RatePerSecondUSD: ratePerSecondUSD, Known: true, GranularitySeconds: 1},
 		Queue:    &domain.QueueSnapshot{QueuedWorkSeconds: startSeconds},
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+		ImageCache: domain.ImageCacheEvidence{
+			ManifestCached: true,
+			MissingBytes:   0,
+			Known:          true,
+		},
+		Reliability: domain.ReliabilityEvidence{
+			StartFailureRate: 0.01,
+			InterruptionRate: 0.01,
+			Confidence:       1,
+		},
 	}
 }
 
@@ -227,4 +348,15 @@ func assertCandidateRejected(t *testing.T, decision domain.PlacementDecision, of
 		t.Fatalf("candidate %s missing rejection code=%s path=%s: %+v", offerID, code, path, candidate)
 	}
 	t.Fatalf("candidate %s not found in %+v", offerID, decision.Candidates)
+}
+
+func findCandidate(t *testing.T, decision domain.PlacementDecision, offerID string) domain.CandidateDecision {
+	t.Helper()
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == offerID {
+			return candidate
+		}
+	}
+	t.Fatalf("candidate %s not found in %+v", offerID, decision.Candidates)
+	return domain.CandidateDecision{}
 }

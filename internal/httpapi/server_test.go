@@ -239,6 +239,11 @@ func httpOffer(id string, now time.Time) domain.OfferSnapshot {
 		Pricing:  domain.PriceModel{Currency: "USD", RatePerSecondUSD: 0.0001, Known: true},
 		Queue:    &domain.QueueSnapshot{},
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+		ImageCache: domain.ImageCacheEvidence{
+			ManifestCached: true,
+			MissingBytes:   0,
+			Known:          true,
+		},
 	}
 }
 
