@@ -176,6 +176,28 @@ func TestSchedulerAppliesRiskAndUncertaintyPenalties(t *testing.T) {
 	}
 }
 
+func TestSchedulerUsesLatencyEstimateOverrides(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	offer := schedulerOffer("off_latency", now, 0.00010, 40)
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     schedulerRevision(),
+		Offers:       []domain.OfferSnapshot{offer},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+		LatencyEstimates: map[string]domain.Estimate{
+			"off_latency": {Expected: 3, P50: 2, P90: 5, Source: "latency_estimator", SampleCount: 2, ModelVersion: "latency-v1"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	candidate := findCandidate(t, decision, "off_latency")
+	if candidate.Estimates.StartSeconds.Expected != 3 || candidate.Estimates.StartSeconds.Source != "latency_estimator" {
+		t.Fatalf("expected latency override to feed scheduler, got %+v", candidate.Estimates.StartSeconds)
+	}
+}
+
 func TestSchedulerDecisionStableAcrossOfferOrder(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	offers := []domain.OfferSnapshot{

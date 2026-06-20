@@ -469,6 +469,49 @@ Handoff:
 
 - Start M7 by adding connection, offer, authorization, and latency service boundaries, then wire scheduler input from offer snapshots.
 
+### M7 - Connections, Offers, Authorization, And Latency Estimation
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:18 PDT`
+Completed: `2026-06-20 01:23 PDT`
+Plan reference: `Plan.md#milestone-7-connections-offers-authorization-and-latency-estimation`
+Prompt requirements covered: `connection records, offer cache from events, workspace authorization boundary, latency estimates feeding scheduler`
+
+Scope:
+
+- Added event-backed `internal/connection` service with create/get/list/update-authorization behavior and adapter authorization schema metadata.
+- Added event-backed `internal/offers` service that ingests offer snapshots and rebuilds a disposable cache from event history.
+- Added `internal/authz` workspace-scoped authorizer covering run, workload, connection, and secret resources.
+- Added `internal/latency` in-process estimator and scheduler latency-estimate input path.
+
+Acceptance criteria:
+
+- Offer cache can be rebuilt from event-log history and filters expired offers.
+- Authorization rejects cross-workspace operations.
+- Scheduler decisions can use latency estimates supplied by the estimator path.
+- Candidate collection provenance from M2 remains available.
+
+Implementation notes:
+
+- HTTP wiring for connection/offer endpoints is deferred; M7 establishes tested service boundaries and scheduler input.
+- Offer service remains event-log authoritative; no table-backed read model is introduced.
+
+Verification:
+
+- `go test ./internal/connection/... -count=1` - `passed`.
+- `go test ./internal/offers/... -count=1` - `passed`.
+- `go test ./internal/authz/... -count=1` - `passed`.
+- `go test ./internal/latency/... -count=1` - `passed`.
+- `go test ./internal/scheduler -count=1` - `passed`.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M7 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M8 by adding the Docker host adapter and adapter registry wiring.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -523,6 +566,14 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:18 PDT | M6 validation | `go test ./...` | passed | Full suite green after M6 |
 | 2026-06-20 01:18 PDT | M6 validation | `go build ./...` | passed | Build green after M6 |
 | 2026-06-20 01:18 PDT | M6 validation | `git status --short --branch` | observed | M6 source/test/docs changes only |
+| 2026-06-20 01:23 PDT | M7 focused | `go test ./internal/connection/... -count=1` | passed | Connection CRUD and authorization-schema metadata tests green |
+| 2026-06-20 01:23 PDT | M7 focused | `go test ./internal/offers/... -count=1` | passed | Offer ingest/cache/rebuild/expiry tests green |
+| 2026-06-20 01:23 PDT | M7 focused | `go test ./internal/authz/... -count=1` | passed | Workspace authz tests green |
+| 2026-06-20 01:23 PDT | M7 focused | `go test ./internal/latency/... -count=1` | passed | Latency estimator tests green |
+| 2026-06-20 01:23 PDT | M7 focused | `go test ./internal/scheduler -count=1` | passed | Latency estimate input path tests green |
+| 2026-06-20 01:23 PDT | M7 validation | `go test ./...` | passed | Full suite green after M7 |
+| 2026-06-20 01:23 PDT | M7 validation | `go build ./...` | passed | Build green after M7 |
+| 2026-06-20 01:23 PDT | M7 validation | `git status --short --branch` | observed | M7 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -538,17 +589,13 @@ Required verification cadence:
 
 Blocking V1 correctness issues:
 
-- Connection, offer, authorization, and latency services are not implemented.
 - Docker, secret vault, durable sinks, projection runner, CLI, and UI remain missing.
 - Cancellation is endpoint-present but not yet a full adapter-backed lifecycle command.
 - OpenAPI is expanded for repaired run/workload paths but is not yet complete for all future V1 service areas.
 
 Known missing feature areas from original V1:
 
-- Connection service and adapter-defined authorization schemas.
 - Secret vault with encrypted event-backed secret versions and grants.
-- Offer service and cached offer snapshots.
-- Latency estimator.
 - Adapter registry and runtime adapters.
 - Docker host adapter.
 - Reconciler and lease janitor.
@@ -568,6 +615,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start `Plan.md` Milestone 7: connections, offers, authorization, and latency estimation.
+Start `Plan.md` Milestone 8: Docker host adapter.
 
 Do not edit production code outside the active milestone. Docker, secrets, sinks, and UI remain gated behind their owner milestones.
