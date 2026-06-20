@@ -78,10 +78,10 @@ High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker
 | Open | High | `AdvanceRun` is not replay-safe after partial progress | M4 |
 | Open | High | Durable `LaunchIntentRecorded` recovery is not event-log authoritative | M4 |
 | Open | High | Launch timeout and indeterminate behavior collapse into `LaunchFailed` | M4 |
-| Open | High | Adapter launch contract does not carry the full OCI workload or placement metadata | M3 |
+| Fixed in M3 | High | Adapter launch contract does not carry the full OCI workload or placement metadata | M3 |
 | Fixed in M1 | High | Public events and event APIs can expose literal environment values | M1 |
 | Fixed in M2 | High | Scheduler ignores accelerator/GPU requirements | M2 |
-| Open | High | Fake adapter idempotency is incomplete for `LaunchKey` reuse | M3 |
+| Fixed in M3 | High | Fake adapter idempotency is incomplete for `LaunchKey` reuse | M3 |
 | Fixed in M2 | High | Placement determinism depends on input offer order | M2 |
 | Open | High | Required V1 run endpoints are missing | M5 |
 | Open | High | API idempotency conflicts are not machine-readable 409 responses | M5 |
@@ -298,6 +298,48 @@ Handoff:
 - Start M3 by expanding the adapter launch contract and fixing fake adapter launch-key idempotency.
 - Preserve M4 replay/recovery failures until the event-log authoritative orchestrator/reconciler milestone.
 
+### M3 - Complete Adapter Contract And Fake Adapter Idempotency
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:02 PDT`
+Completed: `2026-06-20 01:06 PDT`
+Plan reference: `Plan.md#milestone-3-complete-adapter-contract-and-fake-adapter-idempotency`
+Prompt requirements covered: `complete launch side-effect contract, deterministic launch key, cleanup locator, fake adapter idempotency`
+
+Scope:
+
+- Expanded `adapter.LaunchRequest` with workload identity, OCI platform/command/ports/resources, environment binding descriptors, selected offer context, ownership token, launch key, request hash, and cleanup locator.
+- Expanded fake adapter receipts and owned-object records with cleanup locators and request hashes.
+- Fixed fake adapter conflicts for different operation keys reusing an existing launch key/ownership token with a different request hash.
+- Added explicit adapter error classes for timeout, indeterminate, not found, and retryable failures.
+
+Acceptance criteria:
+
+- Orchestrator passes full workload and selected-offer context to adapter `Launch`.
+- Secret environment bindings are descriptor-only in the launch request; no secret value is passed.
+- Fake adapter cannot overwrite an existing launch-key object with a conflicting request hash.
+- M4 replay/recovery tests remain expected red and are not claimed fixed.
+
+Implementation notes:
+
+- Launch request hashing now covers the full side-effect-bearing request structure before the adapter call.
+- Fake adapter treats launch key, ownership token, and request hash as the external object identity boundary.
+
+Verification:
+
+- `go test ./internal/adapter/... -count=1` - `passed`.
+- `go test ./internal/orchestrator -run TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter -count=1` - `passed`.
+- `go test ./internal/orchestrator -run TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter -count=1` - `passed`.
+- `go test ./... || true` - `expected red` - only M4 replay/recovery audit-lock tests fail.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M3 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M4 by replacing `AdvanceRun`'s linear happy path with event-stream state recovery that observes existing launches and resumes cleanup from durable events.
+- Keep side effects behind recorded durable intents.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -330,6 +372,12 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:02 PDT | M2 validation | `go test ./... || true` | expected red | Remaining documented failures are M3 fake launch-key conflict and M4 replay/recovery |
 | 2026-06-20 01:02 PDT | M2 validation | `go build ./...` | passed | Build green after M2 |
 | 2026-06-20 01:02 PDT | M2 validation | `git status --short --branch` | observed | M2 source/test/docs changes only |
+| 2026-06-20 01:06 PDT | M3 focused | `go test ./internal/adapter/... -count=1` | passed | Fake adapter launch-key conflict and receipt identity tests green |
+| 2026-06-20 01:06 PDT | M3 focused | `go test ./internal/orchestrator -run TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter -count=1` | passed | Launch request carries full workload and placement context |
+| 2026-06-20 01:06 PDT | M3 focused | `go test ./internal/orchestrator -run TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter -count=1` | passed | Durable intent still precedes launch side effect |
+| 2026-06-20 01:06 PDT | M3 validation | `go test ./... || true` | expected red | Only M4 replay/recovery audit-lock tests fail |
+| 2026-06-20 01:06 PDT | M3 validation | `go build ./...` | passed | Build green after M3 |
+| 2026-06-20 01:06 PDT | M3 validation | `git status --short --branch` | observed | M3 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -384,6 +432,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start `Plan.md` Milestone 3: complete adapter contract and fake adapter idempotency.
+Start `Plan.md` Milestone 4: event-log authoritative orchestrator and reconciler core.
 
 The remaining M0 audit-lock tests are expected to fail until their owner milestones fix them. Do not edit production code outside the active milestone, and do not start Docker, secrets, sinks, or UI work before M5 passes.

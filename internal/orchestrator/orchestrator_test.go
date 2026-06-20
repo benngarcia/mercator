@@ -115,6 +115,68 @@ func TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter(t *testing.T) {
 	}
 }
 
+func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
+	ctx := context.Background()
+	entrypoint := []string{"/bin/worker"}
+	literal := "safe-literal"
+	rev := orchRevision()
+	rev.Spec.Containers[0].Entrypoint = &entrypoint
+	rev.Spec.Containers[0].Args = []string{"--batch", "64"}
+	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
+		"LOG_LEVEL": {Value: &literal},
+		"API_TOKEN": {SecretRef: &domain.SecretReference{Name: "api-token", Version: 2}},
+	}
+	rev.Spec.Containers[0].Ports = []domain.PortSpec{{Name: "metrics", ContainerPort: 9090, Protocol: "tcp", Exposure: domain.PortExposurePrivate}}
+	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{Vendor: "nvidia", ModelAnyOf: []string{"a10"}, Count: 1, MemoryMinBytes: 16 << 30}}
+	offer := orchOffer("off_1", time.Now().UTC())
+	offer.NativeRef = "native-offer-1"
+	offer.Resources.Accelerators = []domain.AcceleratorInventory{{Vendor: "nvidia", Model: "a10", Count: 1, MemoryBytes: 24 << 30}}
+	offer.Capabilities.Resources.GPUVendors = []string{"nvidia"}
+	ad := &captureLaunchAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}))}
+	orch := newTestOrchestrator(t, ad)
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{
+		WorkspaceID:    "ws_1",
+		RunID:          "run_contract",
+		CommandKey:     "cmd_create_contract",
+		IdempotencyKey: "idem_create_contract",
+		Workload:       rev,
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_contract"); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	req := ad.launchRequest
+	if req.WorkloadRevisionID != rev.ID || req.WorkloadID != rev.WorkloadID {
+		t.Fatalf("launch request missing workload identity: %+v", req)
+	}
+	if req.Image != rev.Spec.Containers[0].Image || req.Platform != rev.Spec.Containers[0].Platform {
+		t.Fatalf("launch request missing OCI image/platform: %+v", req)
+	}
+	if req.Entrypoint == nil || strings.Join(*req.Entrypoint, " ") != "/bin/worker" || strings.Join(req.Args, " ") != "--batch 64" {
+		t.Fatalf("launch request missing command: %+v", req)
+	}
+	if len(req.Ports) != 1 || req.Ports[0].ContainerPort != 9090 {
+		t.Fatalf("launch request missing ports: %+v", req)
+	}
+	if req.Resources.CPU.MinMillis == 0 || len(req.Resources.Accelerators) != 1 {
+		t.Fatalf("launch request missing resources: %+v", req)
+	}
+	if req.SelectedOfferSnapshotID != "off_1" || req.SelectedOfferNativeRef != "native-offer-1" {
+		t.Fatalf("launch request missing selected offer context: %+v", req)
+	}
+	if req.CleanupLocator == "" || req.OwnershipToken == "" || req.LaunchKey == "" || req.RequestHash == "" {
+		t.Fatalf("launch request missing side-effect identity fields: %+v", req)
+	}
+	if binding := findLaunchEnv(t, req.Environment, "API_TOKEN"); binding.Value != nil || binding.SecretRef == nil {
+		t.Fatalf("secret binding should be descriptor-only: %+v", binding)
+	}
+	if binding := findLaunchEnv(t, req.Environment, "LOG_LEVEL"); binding.Value == nil || *binding.Value != literal {
+		t.Fatalf("literal env binding missing from launch request: %+v", binding)
+	}
+}
+
 func TestAdvanceRunDoesNotRelaunchAfterNonterminalObservation(t *testing.T) {
 	ctx := context.Background()
 	ad := &countingAdapter{
@@ -254,6 +316,16 @@ func (m *mutableOfferAdapter) Launch(ctx context.Context, req adapter.LaunchRequ
 	return m.Adapter.Launch(ctx, req)
 }
 
+type captureLaunchAdapter struct {
+	*fake.Adapter
+	launchRequest adapter.LaunchRequest
+}
+
+func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	c.launchRequest = req
+	return c.Adapter.Launch(ctx, req)
+}
+
 func newTestOrchestrator(t *testing.T, ad adapter.Adapter) *Orchestrator {
 	t.Helper()
 	return New(openOrchestratorLog(t), scheduler.New(), ad)
@@ -379,4 +451,15 @@ func expectErrorIs(t *testing.T, err error, target error) {
 
 func ptr(value string) *string {
 	return &value
+}
+
+func findLaunchEnv(t *testing.T, bindings []adapter.EnvironmentBinding, name string) adapter.EnvironmentBinding {
+	t.Helper()
+	for _, binding := range bindings {
+		if binding.Name == name {
+			return binding
+		}
+	}
+	t.Fatalf("environment binding %s not found in %+v", name, bindings)
+	return adapter.EnvironmentBinding{}
 }

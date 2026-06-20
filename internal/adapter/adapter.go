@@ -9,6 +9,10 @@ import (
 )
 
 var ErrIdempotencyConflict = errors.New("adapter: idempotency conflict")
+var ErrLaunchTimeout = errors.New("adapter: launch timeout")
+var ErrLaunchIndeterminate = errors.New("adapter: launch indeterminate")
+var ErrNotFound = errors.New("adapter: not found")
+var ErrRetryableFailure = errors.New("adapter: retryable failure")
 
 type ExternalPhase string
 
@@ -35,21 +39,40 @@ type OfferRequest struct {
 }
 
 type LaunchRequest struct {
-	OperationKey   string
-	RequestHash    string
-	WorkspaceID    string
-	RunID          string
-	AttemptID      string
-	OwnershipToken string
-	LaunchKey      string
-	Image          string
-	Environment    map[string]string
+	OperationKey              string
+	RequestHash               string
+	WorkspaceID               string
+	RunID                     string
+	AttemptID                 string
+	WorkloadID                string
+	WorkloadRevisionID        string
+	OwnershipToken            string
+	LaunchKey                 string
+	CleanupLocator            string
+	Image                     string
+	Platform                  domain.Platform
+	Entrypoint                *[]string
+	Args                      []string
+	Environment               []EnvironmentBinding
+	Ports                     []domain.PortSpec
+	Resources                 domain.ResourceRequirements
+	SelectedOfferSnapshotID   string
+	SelectedOfferConnectionID string
+	SelectedOfferAdapterType  string
+	SelectedOfferNativeRef    string
+}
+
+type EnvironmentBinding struct {
+	Name      string
+	Value     *string
+	SecretRef *domain.SecretReference
 }
 
 type LaunchReceipt struct {
 	ExternalID     string
 	LaunchKey      string
 	OwnershipToken string
+	CleanupLocator string
 	Phase          ExternalPhase
 	AcceptedAt     time.Time
 	Duplicate      bool
@@ -101,5 +124,7 @@ type OwnedExternalObject struct {
 	AttemptID      string
 	OwnershipToken string
 	LaunchKey      string
+	CleanupLocator string
+	RequestHash    string
 	Phase          ExternalPhase
 }

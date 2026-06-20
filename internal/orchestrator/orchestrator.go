@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -103,6 +104,7 @@ type attemptData struct {
 	AttemptID      string `json:"attempt_id"`
 	LaunchKey      string `json:"launch_key"`
 	OwnershipToken string `json:"ownership_token"`
+	CleanupLocator string `json:"cleanup_locator"`
 }
 
 func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
@@ -173,18 +175,32 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		return err
 	}
 	version := uint64(len(events))
-	decision, attempt, err := o.decide(ctx, requested, runID)
+	decision, attempt, selectedOffer, err := o.decide(ctx, requested, runID)
 	if err != nil {
 		return err
 	}
+	container := requested.Workload.Spec.Containers[0]
 	launchReq := adapter.LaunchRequest{
-		OperationKey:   attempt.LaunchKey,
-		WorkspaceID:    workspaceID,
-		RunID:          runID,
-		AttemptID:      attempt.AttemptID,
-		OwnershipToken: attempt.OwnershipToken,
-		LaunchKey:      attempt.LaunchKey,
-		Image:          requested.Workload.Spec.Containers[0].Image,
+		OperationKey:              attempt.LaunchKey,
+		WorkspaceID:               workspaceID,
+		RunID:                     runID,
+		AttemptID:                 attempt.AttemptID,
+		WorkloadID:                requested.Workload.WorkloadID,
+		WorkloadRevisionID:        requested.Workload.ID,
+		OwnershipToken:            attempt.OwnershipToken,
+		LaunchKey:                 attempt.LaunchKey,
+		CleanupLocator:            attempt.CleanupLocator,
+		Image:                     container.Image,
+		Platform:                  container.Platform,
+		Entrypoint:                container.Entrypoint,
+		Args:                      append([]string(nil), container.Args...),
+		Environment:               launchEnvironment(container.Env),
+		Ports:                     append([]domain.PortSpec(nil), container.Ports...),
+		Resources:                 requested.Workload.Spec.Resources,
+		SelectedOfferSnapshotID:   selectedOffer.ID,
+		SelectedOfferConnectionID: selectedOffer.ConnectionID,
+		SelectedOfferAdapterType:  selectedOffer.AdapterType,
+		SelectedOfferNativeRef:    selectedOffer.NativeRef,
 	}
 	launchReq.RequestHash, err = domain.CanonicalHash(launchReq)
 	if err != nil {
@@ -255,10 +271,10 @@ func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID stri
 	return o.log.ReadStream(ctx, runStream(workspaceID, runID), 0, 1000)
 }
 
-func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, error) {
+func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
 	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: requested.Workload.WorkspaceID})
 	if err != nil {
-		return domain.PlacementDecision{}, attemptData{}, err
+		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
 	}
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
 		RunID:        runID,
@@ -268,18 +284,23 @@ func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, r
 		EvaluatedAt:  o.now().UTC(),
 	})
 	if err != nil {
-		return domain.PlacementDecision{}, attemptData{}, err
+		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
 	}
 	if decision.SelectedOfferSnapshotID == "" {
-		return domain.PlacementDecision{}, attemptData{}, fmt.Errorf("orchestrator: no feasible offers")
+		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: no feasible offers")
+	}
+	selectedOffer, ok := selectedOfferByID(offers, decision.SelectedOfferSnapshotID)
+	if !ok {
+		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: selected offer %s not found", decision.SelectedOfferSnapshotID)
 	}
 	attemptID := "att_" + strings.TrimPrefix(runID, "run_")
 	attempt := attemptData{
 		AttemptID:      attemptID,
 		LaunchKey:      "launch_" + attemptID,
 		OwnershipToken: "own_" + attemptID,
+		CleanupLocator: "cleanup_" + attemptID,
 	}
-	return decision, attempt, nil
+	return decision, attempt, selectedOffer, nil
 }
 
 func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
@@ -404,4 +425,50 @@ func publicWorkload(rev domain.WorkloadRevision) publicWorkloadRevision {
 		out.Spec.Containers = append(out.Spec.Containers, publicContainer)
 	}
 	return out
+}
+
+func selectedOfferByID(offers []domain.OfferSnapshot, id string) (domain.OfferSnapshot, bool) {
+	for _, offer := range offers {
+		if offer.ID == id {
+			return offer, true
+		}
+	}
+	return domain.OfferSnapshot{}, false
+}
+
+func launchEnvironment(env map[string]domain.EnvBinding) []adapter.EnvironmentBinding {
+	if len(env) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	bindings := make([]adapter.EnvironmentBinding, 0, len(names))
+	for _, name := range names {
+		binding := env[name]
+		bindings = append(bindings, adapter.EnvironmentBinding{
+			Name:      name,
+			Value:     cloneStringPtr(binding.Value),
+			SecretRef: cloneSecretRef(binding.SecretRef),
+		})
+	}
+	return bindings
+}
+
+func cloneStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneSecretRef(ref *domain.SecretReference) *domain.SecretReference {
+	if ref == nil {
+		return nil
+	}
+	cloned := *ref
+	return &cloned
 }

@@ -19,6 +19,7 @@ func TestFakeAdapterLaunchIsIdempotentAndDetectsConflicts(t *testing.T) {
 		AttemptID:      "att_1",
 		OwnershipToken: "own_1",
 		LaunchKey:      "launch_key_1",
+		CleanupLocator: "cleanup_key_1",
 		Image:          "ghcr.io/acme/inference@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 	}
 
@@ -32,6 +33,9 @@ func TestFakeAdapterLaunchIsIdempotentAndDetectsConflicts(t *testing.T) {
 	}
 	if first.ExternalID != replay.ExternalID || !replay.Duplicate {
 		t.Fatalf("expected duplicate receipt for same launch, first=%+v replay=%+v", first, replay)
+	}
+	if first.CleanupLocator != "cleanup_key_1" || first.OwnershipToken != "own_1" {
+		t.Fatalf("launch receipt missing cleanup locator or ownership token: %+v", first)
 	}
 
 	conflict := req
@@ -61,6 +65,7 @@ func TestFakeAdapterObserveReleaseAndListOwned(t *testing.T) {
 		AttemptID:      "att_1",
 		OwnershipToken: "own_1",
 		LaunchKey:      "launch_key_1",
+		CleanupLocator: "cleanup_key_1",
 		Image:          "ghcr.io/acme/inference@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 	}
 	receipt, err := ad.Launch(ctx, req)

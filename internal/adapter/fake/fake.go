@@ -71,8 +71,21 @@ func (a *Adapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.
 		receipt.Duplicate = true
 		return receipt, nil
 	}
-	if existing, ok := a.objects[req.LaunchKey]; ok && existing.OwnershipToken != req.OwnershipToken {
-		return adapter.LaunchReceipt{}, adapter.ErrIdempotencyConflict
+	if existing, ok := a.objects[req.LaunchKey]; ok {
+		if existing.OwnershipToken != req.OwnershipToken || existing.RequestHash != req.RequestHash {
+			return adapter.LaunchReceipt{}, adapter.ErrIdempotencyConflict
+		}
+		receipt := adapter.LaunchReceipt{
+			ExternalID:     existing.ExternalID,
+			LaunchKey:      existing.LaunchKey,
+			OwnershipToken: existing.OwnershipToken,
+			CleanupLocator: existing.CleanupLocator,
+			Phase:          existing.Phase,
+			AcceptedAt:     a.now().UTC(),
+			Duplicate:      true,
+		}
+		a.ops[req.OperationKey] = operationRecord{hash: req.RequestHash, receipt: receipt}
+		return receipt, nil
 	}
 	externalID := "fake-" + req.AttemptID
 	phase := a.launchOutcome
@@ -83,6 +96,8 @@ func (a *Adapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.
 		AttemptID:      req.AttemptID,
 		OwnershipToken: req.OwnershipToken,
 		LaunchKey:      req.LaunchKey,
+		CleanupLocator: req.CleanupLocator,
+		RequestHash:    req.RequestHash,
 		Phase:          phase,
 	}
 	a.objects[req.LaunchKey] = object
@@ -90,6 +105,7 @@ func (a *Adapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.
 		ExternalID:     externalID,
 		LaunchKey:      req.LaunchKey,
 		OwnershipToken: req.OwnershipToken,
+		CleanupLocator: req.CleanupLocator,
 		Phase:          phase,
 		AcceptedAt:     a.now().UTC(),
 	}
