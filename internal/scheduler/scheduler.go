@@ -1,0 +1,239 @@
+package scheduler
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"slices"
+	"time"
+
+	"github.com/bengarcia/mercator/internal/domain"
+)
+
+type Scheduler interface {
+	Evaluate(ctx context.Context, input SchedulingInput) (domain.PlacementDecision, error)
+}
+
+type SchedulingInput struct {
+	RunID        string
+	Workload     domain.WorkloadRevision
+	Offers       []domain.OfferSnapshot
+	ModelVersion string
+	EvaluatedAt  time.Time
+	Weights      ScoreWeights
+}
+
+type ScoreWeights struct {
+	StartLatencyUSDPerSecond      float64
+	CompletionLatencyUSDPerSecond float64
+	StartFailurePenaltyUSD        float64
+	InterruptionPenaltyUSD        float64
+	UncertaintyPenaltyUSD         float64
+}
+
+type deterministicScheduler struct{}
+
+func New() Scheduler {
+	return deterministicScheduler{}
+}
+
+func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput) (domain.PlacementDecision, error) {
+	if input.EvaluatedAt.IsZero() {
+		return domain.PlacementDecision{}, fmt.Errorf("scheduler: evaluated_at is required")
+	}
+	if input.ModelVersion == "" {
+		input.ModelVersion = "latency-v1"
+	}
+	if input.Weights.StartLatencyUSDPerSecond == 0 && input.Workload.Spec.Placement.Objective == domain.ObjectiveBalanced {
+		input.Weights.StartLatencyUSDPerSecond = 0.0005
+	}
+
+	decision := domain.PlacementDecision{
+		RunID:                  input.RunID,
+		WorkloadRevisionDigest: input.Workload.Digest,
+		EvaluatedAt:            input.EvaluatedAt.UTC(),
+		ModelVersion:           input.ModelVersion,
+		Policy:                 input.Workload.Spec.Placement,
+		Candidates:             make([]domain.CandidateDecision, 0, len(input.Offers)),
+	}
+
+	bestIndex := -1
+	for _, offer := range input.Offers {
+		candidate := evaluateOffer(input, offer)
+		decision.Candidates = append(decision.Candidates, candidate)
+		if !candidate.Feasible {
+			continue
+		}
+		if bestIndex == -1 || candidate.ScoreUSD < decision.Candidates[bestIndex].ScoreUSD ||
+			(candidate.ScoreUSD == decision.Candidates[bestIndex].ScoreUSD && candidate.OfferSnapshotID < decision.Candidates[bestIndex].OfferSnapshotID) {
+			bestIndex = len(decision.Candidates) - 1
+		}
+	}
+	if bestIndex >= 0 {
+		decision.SelectedOfferSnapshotID = decision.Candidates[bestIndex].OfferSnapshotID
+		decision.SelectionReasonCodes = []string{"FEASIBLE", "LOWEST_SCORE"}
+		if input.Workload.Spec.Placement.MaxP90StartSeconds > 0 {
+			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, "WITHIN_START_SLO")
+		}
+	} else {
+		decision.SelectionReasonCodes = []string{"NO_FEASIBLE_OFFERS"}
+	}
+	id, err := domain.CanonicalHash(struct {
+		RunID       string
+		Revision    string
+		EvaluatedAt time.Time
+		Model       string
+		Candidates  []domain.CandidateDecision
+		SelectedID  string
+	}{input.RunID, input.Workload.Digest, input.EvaluatedAt.UTC(), input.ModelVersion, decision.Candidates, decision.SelectedOfferSnapshotID})
+	if err != nil {
+		return domain.PlacementDecision{}, err
+	}
+	decision.ID = "dec_" + id[len("sha256:"):24]
+	return decision, nil
+}
+
+func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
+	rejections := feasibilityViolations(input, offer)
+	estimates := estimateCandidate(input, offer)
+	score := estimates.CostUSD.Expected +
+		input.Weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
+		input.Weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds)
+	if len(rejections) > 0 {
+		score = 0
+	}
+	return domain.CandidateDecision{
+		OfferSnapshotID: offer.ID,
+		Feasible:        len(rejections) == 0,
+		Rejections:      rejections,
+		Estimates:       estimates,
+		ScoreUSD:        round(score, 6),
+	}
+}
+
+func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []domain.Violation {
+	var violations []domain.Violation
+	workload := input.Workload
+	container := workload.Spec.Containers[0]
+	if !offer.ExpiresAt.IsZero() && !offer.ExpiresAt.After(input.EvaluatedAt) {
+		violations = append(violations, domain.Violation{Code: "OFFER_EXPIRED", Path: "expires_at", Required: "future", Offered: offer.ExpiresAt, Message: "Offer is expired and cannot be selected."})
+	}
+	if offer.Platform != container.Platform {
+		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "platform", Required: container.Platform.String(), Offered: offer.Platform.String(), Message: "Offer platform does not match the workload platform."})
+	}
+	if offer.Capabilities.Container.MaxContainers > 0 && offer.Capabilities.Container.MaxContainers < len(workload.Spec.Containers) {
+		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.max_containers", Required: len(workload.Spec.Containers), Offered: offer.Capabilities.Container.MaxContainers, Message: "Offer cannot run the required number of containers."})
+	}
+	if !offer.Capabilities.Container.SupportsDigestRefs {
+		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})
+	}
+	if offer.Resources.CPUMillis < workload.Spec.Resources.CPU.MinMillis {
+		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.cpu", Required: workload.Spec.Resources.CPU.MinMillis, Offered: offer.Resources.CPUMillis, Message: "Offer has insufficient CPU."})
+	}
+	if offer.Resources.MemoryBytes < workload.Spec.Resources.Memory.MinBytes {
+		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.memory", Required: workload.Spec.Resources.Memory.MinBytes, Offered: offer.Resources.MemoryBytes, Message: "Offer has insufficient memory."})
+	}
+	if offer.Resources.EphemeralDiskBytes < workload.Spec.Resources.EphemeralDisk.MinBytes {
+		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.ephemeral_disk", Required: workload.Spec.Resources.EphemeralDisk.MinBytes, Offered: offer.Resources.EphemeralDiskBytes, Message: "Offer has insufficient ephemeral disk."})
+	}
+	if requiresPublicInbound(container) && offer.Capabilities.Network.Inbound != domain.InboundNetworkPublicPort {
+		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "network.inbound", Required: domain.InboundNetworkPublicPort, Offered: offer.Capabilities.Network.Inbound, Message: "Offer cannot expose inbound public ports."})
+	}
+	if req := workload.Spec.Network.Download; req != nil {
+		if !downloadRequirementSatisfied(input.EvaluatedAt, *req, offer.Network.Download) {
+			code := "NETWORK_FACT_UNSATISFIED"
+			if len(offer.Network.Download) == 0 && !req.AllowUnknown {
+				code = "UNKNOWN_FACT"
+			}
+			violations = append(violations, domain.Violation{Code: code, Path: "network.download", Required: req.MinP10Mbps, Offered: "unknown_or_insufficient", Message: "Offer lacks a compatible registry download p10 fact."})
+		}
+	}
+	if !offer.Pricing.Known && !workload.Spec.Placement.AllowUnknownPricing {
+		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "pricing", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown pricing."})
+	}
+	estimates := estimateCandidate(input, offer)
+	if workload.Spec.Placement.MaxP90StartSeconds > 0 && estimates.StartSeconds.P90 > workload.Spec.Placement.MaxP90StartSeconds {
+		violations = append(violations, domain.Violation{Code: "LATENCY_SLO_EXCEEDED", Path: "placement.max_p90_start_seconds", Required: workload.Spec.Placement.MaxP90StartSeconds, Offered: estimates.StartSeconds.P90, Message: "Offer exceeds the requested p90 start latency."})
+	}
+	return violations
+}
+
+func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
+	queue := 0.0
+	if offer.Queue != nil {
+		queue = offer.Queue.QueuedWorkSeconds
+	}
+	provision := 0.0
+	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
+		provision = offer.Provisioning.Expected
+	}
+	pull := estimatePullSeconds(offer)
+	start := queue + provision + pull + 1
+	costSeconds := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
+	if costSeconds <= 0 {
+		costSeconds = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
+	}
+	if costSeconds <= 0 {
+		costSeconds = 1
+	}
+	minSeconds := float64(offer.Pricing.MinimumChargeSeconds)
+	billedSeconds := math.Max(costSeconds, minSeconds)
+	cost := offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billedSeconds
+	return domain.CandidateEstimates{
+		QueueSeconds:     domain.Estimate{Expected: queue, P50: queue, P90: queue, Source: "offer", ModelVersion: input.ModelVersion},
+		ProvisionSeconds: domain.Estimate{Expected: provision, P50: provision, P90: provision, Source: "offer", ModelVersion: input.ModelVersion},
+		PullSeconds:      domain.Estimate{Expected: pull, P50: pull, P90: pull * 1.5, Source: "image_cache", ModelVersion: input.ModelVersion},
+		StartSeconds:     domain.Estimate{Expected: start, P50: start, P90: start * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion},
+		CostUSD:          domain.Estimate{Expected: cost, Source: "price_model", ModelVersion: input.ModelVersion},
+	}
+}
+
+func estimatePullSeconds(offer domain.OfferSnapshot) float64 {
+	if offer.ImageCache.Known && offer.ImageCache.MissingBytes == 0 {
+		return 0
+	}
+	if offer.ImageCache.MissingBytes <= 0 {
+		return 0
+	}
+	mbits := float64(offer.ImageCache.MissingBytes*8) / 1_000_000
+	speed := 500.0
+	for _, fact := range offer.Network.Download {
+		if fact.Scope == domain.NetworkScopeRegistry && fact.Statistic == "p10" && fact.ValueMbps > 0 {
+			speed = fact.ValueMbps
+			break
+		}
+	}
+	return mbits/speed + 0.5
+}
+
+func downloadRequirementSatisfied(now time.Time, req domain.NetworkDownloadRequirement, facts []domain.NetworkFact) bool {
+	if len(facts) == 0 {
+		return req.AllowUnknown
+	}
+	for _, fact := range facts {
+		if fact.Scope != req.Scope || fact.Statistic != "p10" {
+			continue
+		}
+		if !fact.ValidUntil.IsZero() && !fact.ValidUntil.After(now) {
+			continue
+		}
+		if req.MaxMeasurementAgeSeconds > 0 && now.Sub(fact.ObservedAt) > time.Duration(req.MaxMeasurementAgeSeconds)*time.Second {
+			continue
+		}
+		if fact.ValueMbps >= req.MinP10Mbps {
+			return true
+		}
+	}
+	return false
+}
+
+func requiresPublicInbound(container domain.ContainerSpec) bool {
+	return slices.ContainsFunc(container.Ports, func(port domain.PortSpec) bool {
+		return port.Exposure == domain.PortExposurePublic
+	})
+}
+
+func round(v float64, places int) float64 {
+	factor := math.Pow10(places)
+	return math.Round(v*factor) / factor
+}

@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Task 3: Scheduler.
+Task 4: Fake Adapter.
 
 ## Completed
 
@@ -12,6 +12,7 @@ Task 3: Scheduler.
 - Created durable long-horizon artifacts: spec, plan, runbook, status.
 - Implemented Task 1 event core with SQLite append/read/idempotency/concurrency/subscription behavior.
 - Implemented Task 2 domain contracts and workload validation for the V1 OCI boundary.
+- Implemented Task 3 pure deterministic scheduler with structured hard rejections and score-based selection.
 
 ## Decisions
 
@@ -30,6 +31,9 @@ Task 3: Scheduler.
 - Task 2 red test: `go test ./internal/domain -count=1` failed on missing domain API/types.
 - Task 2 focused green: `go test ./internal/domain -count=1` passed.
 - Task 2 full green: `go test ./...` passed for `internal/domain` and `internal/eventlog`.
+- Task 3 red test: `go test ./internal/scheduler -count=1` failed on missing scheduler API/types.
+- Task 3 focused green: `go test ./internal/scheduler -count=1` passed.
+- Task 3 full green: `go test ./...` passed for `internal/domain`, `internal/eventlog`, and `internal/scheduler`.
 
 ## Known Gaps
 
