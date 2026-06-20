@@ -79,7 +79,7 @@ High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker
 | Open | High | Durable `LaunchIntentRecorded` recovery is not event-log authoritative | M4 |
 | Open | High | Launch timeout and indeterminate behavior collapse into `LaunchFailed` | M4 |
 | Open | High | Adapter launch contract does not carry the full OCI workload or placement metadata | M3 |
-| Open | High | Public events and event APIs can expose literal environment values | M1 |
+| Fixed in M1 | High | Public events and event APIs can expose literal environment values | M1 |
 | Open | High | Scheduler ignores accelerator/GPU requirements | M2 |
 | Open | High | Fake adapter idempotency is incomplete for `LaunchKey` reuse | M3 |
 | Open | High | Placement determinism depends on input offer order | M2 |
@@ -93,7 +93,7 @@ High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker
 | Open | Medium | OpenAPI is materially incomplete | M5 |
 | Open | Medium | Workspace isolation at the HTTP boundary is weak | M5 |
 | Open | Medium | Subscription offsets are written but not used by `Subscribe` | M10 |
-| Open | Medium | OCI-only validation is not hardened enough | M1 |
+| Fixed in M1 | Medium | OCI-only validation is not hardened enough | M1 |
 | Open | Medium | Known gaps under-report required V1 service areas | M0/M5/M13 |
 
 ## Milestone 0 Regression Lock
@@ -211,6 +211,49 @@ Handoff:
 - Start M1 by making public events/API redaction-safe and hardening OCI validation.
 - Do not start Docker, secrets, sinks, or UI work before M5 passes.
 
+### M1 - Public Event Redaction And Workload Boundary Hardening
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 00:47 PDT`
+Completed: `2026-06-20 00:59 PDT`
+Plan reference: `Plan.md#milestone-1-public-event-redaction-and-workload-boundary-hardening`
+Prompt requirements covered: `secret non-observability, public event safety, OCI-only workload validation, workspace boundary`
+
+Scope:
+
+- Split run-request event payloads into public-safe CloudEvent data and private internal data for replay.
+- Hardened workload validation for raw extensions, empty env bindings, invalid env names, oversized env literals, invalid ports, and workspace mismatch.
+- Sanitized HTTP validation errors to return stable machine-readable codes without echoing literal env values.
+- Did not change scheduler, adapter idempotency, or replay/reconciler behavior owned by M2-M4.
+
+Acceptance criteria:
+
+- Literal env values and secret reference names are absent from public run-request events and event-list API responses.
+- V1 rejects unsupported raw workload extensions and malformed env/port inputs.
+- Workspace mismatch is rejected before run creation.
+- M2-M4 audit-lock tests remain expected red and are not claimed fixed.
+
+Implementation notes:
+
+- `RunRequested` events now store public data with env binding kinds only, plus private data containing the internal workload revision for command replay.
+- `decodeRunRequested` prefers private event data and falls back to public data for older scaffold events.
+- HTTP create-run errors derive response codes from stable validation/workspace error prefixes.
+
+Verification:
+
+- `go test ./internal/domain -count=1` - `passed`.
+- `go test ./internal/orchestrator -run 'Redaction|Redacts|Workload|Secret|Workspace' -count=1` - `passed`.
+- `go test ./internal/httpapi -run 'Redaction|Workspace|Validation|Events' -count=1` - `passed`.
+- `go test ./... || true` - `expected red` - remaining audit-lock tests fail in adapter/fake, orchestrator replay/recovery, and scheduler determinism.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M1 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M2 by fixing scheduler determinism, accelerator requirements, conservative unknown facts, cost caps, penalties, and candidate audit contents.
+- Do not treat full-suite red as new unless failures differ from the documented M2-M4 audit-lock tests.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -230,6 +273,12 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 00:47 PDT | M0 validation | `go test ./... || true` | expected red | Audit-lock tests fail in adapter/fake, orchestrator, and scheduler |
 | 2026-06-20 00:47 PDT | M0 validation | `go build ./...` | passed | Build green after M0 audit-lock tests |
 | 2026-06-20 00:47 PDT | M0 validation | `git status --short --branch` | observed | Test and documentation changes only |
+| 2026-06-20 00:59 PDT | M1 focused | `go test ./internal/domain -count=1` | passed | Workload validation hardening tests green |
+| 2026-06-20 00:59 PDT | M1 focused | `go test ./internal/orchestrator -run 'Redaction\|Redacts\|Workload\|Secret\|Workspace' -count=1` | passed | Public event redaction and workspace mismatch tests green |
+| 2026-06-20 00:59 PDT | M1 focused | `go test ./internal/httpapi -run 'Redaction\|Workspace\|Validation\|Events' -count=1` | passed | API event/error redaction and workspace tests green |
+| 2026-06-20 00:59 PDT | M1 validation | `go test ./... || true` | expected red | Remaining documented audit-lock failures are M2 scheduler order, M3 fake launch-key conflict, and M4 replay/recovery |
+| 2026-06-20 00:59 PDT | M1 validation | `go build ./...` | passed | Build green after M1 |
+| 2026-06-20 00:59 PDT | M1 validation | `git status --short --branch` | observed | M1 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -284,6 +333,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start `Plan.md` Milestone 1: public event redaction and workload boundary hardening.
+Start `Plan.md` Milestone 2: deterministic scheduler and conservative facts.
 
-The M0 audit-lock tests are expected to fail until their owner milestones fix them. Do not edit production code outside the active milestone, and do not start Docker, secrets, sinks, or UI work before M5 passes.
+The remaining M0 audit-lock tests are expected to fail until their owner milestones fix them. Do not edit production code outside the active milestone, and do not start Docker, secrets, sinks, or UI work before M5 passes.

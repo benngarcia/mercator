@@ -1,6 +1,10 @@
 package domain
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestValidateWorkloadRevisionEnforcesV1OCIContract(t *testing.T) {
 	tests := []struct {
@@ -51,6 +55,49 @@ func TestValidateWorkloadRevisionEnforcesV1OCIContract(t *testing.T) {
 			},
 			code: "ENV_BINDING_AMBIGUOUS",
 			path: "spec.containers[0].env.LOG_LEVEL",
+		},
+		{
+			name: "rejects raw extension payloads",
+			edit: func(rev *WorkloadRevision) {
+				rev.Spec.Raw = mustRawMap(t, map[string]string{"docker": "--privileged"})
+			},
+			code: "UNSUPPORTED_RAW_EXTENSION",
+			path: "spec.raw",
+		},
+		{
+			name: "rejects empty env bindings",
+			edit: func(rev *WorkloadRevision) {
+				rev.Spec.Containers[0].Env["EMPTY_BINDING"] = EnvBinding{}
+			},
+			code: "ENV_BINDING_EMPTY",
+			path: "spec.containers[0].env.EMPTY_BINDING",
+		},
+		{
+			name: "rejects invalid env names",
+			edit: func(rev *WorkloadRevision) {
+				rev.Spec.Containers[0].Env["invalid-name"] = EnvBinding{Value: ptr("not-public")}
+			},
+			code: "ENV_NAME_INVALID",
+			path: "spec.containers[0].env.invalid-name",
+		},
+		{
+			name: "rejects oversized env data",
+			edit: func(rev *WorkloadRevision) {
+				huge := strings.Repeat("x", 33*1024)
+				rev.Spec.Containers[0].Env["HUGE_VALUE"] = EnvBinding{Value: &huge}
+			},
+			code: "ENV_VALUE_TOO_LARGE",
+			path: "spec.containers[0].env.HUGE_VALUE",
+		},
+		{
+			name: "rejects invalid container ports",
+			edit: func(rev *WorkloadRevision) {
+				rev.Spec.Containers[0].Ports = []PortSpec{{
+					Name: "bad", ContainerPort: 0, Protocol: "tcp", Exposure: PortExposurePublic,
+				}}
+			},
+			code: "PORT_INVALID",
+			path: "spec.containers[0].ports[0].container_port",
 		},
 		{
 			name: "public ports require public inbound network",
@@ -151,4 +198,17 @@ func hasViolation(violations []Violation, code, path string) bool {
 
 func ptr(value string) *string {
 	return &value
+}
+
+func mustRawMap(t *testing.T, value map[string]string) map[string]json.RawMessage {
+	t.Helper()
+	out := make(map[string]json.RawMessage, len(value))
+	for key, raw := range value {
+		data, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("marshal raw value: %v", err)
+		}
+		out[key] = data
+	}
+	return out
 }

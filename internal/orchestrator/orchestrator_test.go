@@ -85,6 +85,21 @@ func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
 	}
 }
 
+func TestCreateRunRejectsWorkspaceMismatch(t *testing.T) {
+	ctx := context.Background()
+	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
+	_, err := orch.CreateRun(ctx, CreateRunRequest{
+		WorkspaceID:    "ws_other",
+		RunID:          "run_workspace_mismatch",
+		CommandKey:     "cmd_create_workspace_mismatch",
+		IdempotencyKey: "idem_create_workspace_mismatch",
+		Workload:       orchRevision(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "WORKSPACE_MISMATCH") {
+		t.Fatalf("expected WORKSPACE_MISMATCH, got %v", err)
+	}
+}
+
 func TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter(t *testing.T) {
 	ctx := context.Background()
 	log := openOrchestratorLog(t)

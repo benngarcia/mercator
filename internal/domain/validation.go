@@ -7,9 +7,18 @@ import (
 )
 
 var digestImagePattern = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
+var envNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+const maxEnvValueBytes = 32 * 1024
 
 func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 	var violations []Violation
+	if len(rev.Spec.Raw) > 0 {
+		violations = append(violations, Violation{
+			Code: "UNSUPPORTED_RAW_EXTENSION", Path: "spec.raw",
+			Message: "V1 rejects raw extension payloads; all workload fields must be validated explicitly.",
+		})
+	}
 	if len(rev.Spec.Containers) != 1 {
 		violations = append(violations, Violation{
 			Code: "V1_ONE_CONTAINER", Path: "spec.containers", Required: 1, Offered: len(rev.Spec.Containers),
@@ -37,10 +46,29 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 		})
 	}
 	for key, binding := range container.Env {
+		if !envNamePattern.MatchString(key) {
+			violations = append(violations, Violation{
+				Code: "ENV_NAME_INVALID", Path: "spec.containers[0].env." + key,
+				Required: "^[A-Z_][A-Z0-9_]*$", Message: "Environment variable names must be portable uppercase identifiers.",
+			})
+		}
+		if binding.Value == nil && binding.SecretRef == nil {
+			violations = append(violations, Violation{
+				Code: "ENV_BINDING_EMPTY", Path: "spec.containers[0].env." + key,
+				Message: "Environment bindings must provide exactly one literal value or secret reference.",
+			})
+		}
 		if binding.Value != nil && binding.SecretRef != nil {
 			violations = append(violations, Violation{
 				Code: "ENV_BINDING_AMBIGUOUS", Path: "spec.containers[0].env." + key,
 				Message: "An environment key may have either a literal value or a secret reference, not both.",
+			})
+		}
+		if binding.Value != nil && len([]byte(*binding.Value)) > maxEnvValueBytes {
+			violations = append(violations, Violation{
+				Code: "ENV_VALUE_TOO_LARGE", Path: "spec.containers[0].env." + key,
+				Required: maxEnvValueBytes, Offered: len([]byte(*binding.Value)),
+				Message: "Literal environment values exceed the V1 size limit.",
 			})
 		}
 		if binding.SecretRef != nil && (binding.SecretRef.Name == "" || binding.SecretRef.Version <= 0) {
@@ -51,6 +79,12 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 		}
 	}
 	for i, port := range container.Ports {
+		if port.ContainerPort <= 0 || port.ContainerPort > 65535 {
+			violations = append(violations, Violation{
+				Code: "PORT_INVALID", Path: fmt.Sprintf("spec.containers[0].ports[%d].container_port", i),
+				Required: "1-65535", Offered: port.ContainerPort, Message: "Container ports must be in the TCP/UDP port range.",
+			})
+		}
 		if port.Protocol != "" && strings.ToLower(port.Protocol) != "tcp" {
 			violations = append(violations, Violation{
 				Code: "UNSUPPORTED_PORT_PROTOCOL", Path: fmt.Sprintf("spec.containers[0].ports[%d].protocol", i),

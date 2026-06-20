@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +62,87 @@ func TestCreateRunAndListEvents(t *testing.T) {
 	}
 	if len(listed.Events) != 1 || listed.Events[0].Type != orchestrator.EventRunRequested {
 		t.Fatalf("unexpected events response: %+v", listed)
+	}
+}
+
+func TestRunEventsRedactEnvironmentBindings(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	literal := "literal-api-token-that-must-not-leak"
+	rev := httpRevision()
+	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
+		"LOG_LEVEL": {Value: ptr("debug")},
+		"API_TOKEN": {SecretRef: &domain.SecretReference{
+			Name:    "provider-secret-ref-that-must-not-leak",
+			Version: 3,
+		}},
+		"SECRET_LITERAL": {Value: &literal},
+	}
+	body := mustMarshal(t, createRunBody{RunID: "run_redacted_events", Workload: rev})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_redacted_events")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_redacted_events/events?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, forbidden := range []string{literal, "provider-secret-ref-that-must-not-leak", `"value":"debug"`} {
+		if strings.Contains(rec.Body.String(), forbidden) {
+			t.Fatalf("events response exposed %q in %s", forbidden, rec.Body.String())
+		}
+	}
+}
+
+func TestCreateRunValidationErrorDoesNotEchoEnvironmentValues(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	rev := httpRevision()
+	secret := "literal-secret-that-must-not-echo"
+	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
+		"bad-name": {Value: &secret},
+	}
+	body := mustMarshal(t, createRunBody{RunID: "run_invalid_env", Workload: rev})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_invalid_env")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), secret) {
+		t.Fatalf("validation error echoed env value: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "ENV_NAME_INVALID") {
+		t.Fatalf("validation error should include stable code, got %s", rec.Body.String())
+	}
+}
+
+func ptr(value string) *string {
+	return &value
+}
+
+func TestCreateRunRejectsWorkspaceMismatch(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	body := mustMarshal(t, createRunBody{WorkspaceID: "ws_other", RunID: "run_workspace_mismatch", Workload: httpRevision()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_workspace_mismatch")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "WORKSPACE_MISMATCH") {
+		t.Fatalf("workspace mismatch should include stable code, got %s", rec.Body.String())
 	}
 }
 

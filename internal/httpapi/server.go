@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -47,8 +48,9 @@ type placementPreviewResponse struct {
 }
 
 type errorResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string             `json:"code"`
+	Message string             `json:"message"`
+	Details []domain.Violation `json:"details,omitempty"`
 }
 
 func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter) http.Handler {
@@ -99,7 +101,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		Workload:       body.Workload,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "CREATE_RUN_FAILED", err.Error())
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_RUN_FAILED"), err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, createRunResponse{RunID: result.RunID, Duplicate: result.Duplicate})
@@ -163,6 +165,16 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, errorResponse{Code: code, Message: strings.TrimSpace(message)})
+}
+
+var codedErrorPattern = regexp.MustCompile(`^([A-Z0-9_]+):\s*(.*)$`)
+
+func errorCode(err error, fallback string) string {
+	match := codedErrorPattern.FindStringSubmatch(err.Error())
+	if len(match) == 3 {
+		return match[1]
+	}
+	return fallback
 }
 
 func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot) (http.Handler, func() error, error) {

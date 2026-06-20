@@ -58,6 +58,43 @@ type runRequestedData struct {
 	Workload domain.WorkloadRevision `json:"workload_revision"`
 }
 
+type publicRunRequestedData struct {
+	RunID    string                 `json:"run_id"`
+	Workload publicWorkloadRevision `json:"workload_revision"`
+}
+
+type publicWorkloadRevision struct {
+	ID          string             `json:"id"`
+	WorkspaceID string             `json:"workspace_id"`
+	WorkloadID  string             `json:"workload_id"`
+	Digest      string             `json:"digest"`
+	Spec        publicWorkloadSpec `json:"spec"`
+}
+
+type publicWorkloadSpec struct {
+	Containers []publicContainerSpec       `json:"containers"`
+	Resources  domain.ResourceRequirements `json:"resources"`
+	Network    domain.NetworkRequirements  `json:"network"`
+	Placement  domain.PlacementPolicy      `json:"placement"`
+	Execution  domain.ExecutionPolicy      `json:"execution"`
+	Metadata   map[string]string           `json:"metadata,omitempty"`
+	Raw        map[string]json.RawMessage  `json:"raw,omitempty"`
+}
+
+type publicContainerSpec struct {
+	Name       string                      `json:"name"`
+	Image      string                      `json:"image"`
+	Platform   domain.Platform             `json:"platform"`
+	Entrypoint *[]string                   `json:"entrypoint,omitempty"`
+	Args       []string                    `json:"args,omitempty"`
+	Env        map[string]publicEnvBinding `json:"env,omitempty"`
+	Ports      []domain.PortSpec           `json:"ports,omitempty"`
+}
+
+type publicEnvBinding struct {
+	Kind string `json:"kind"`
+}
+
 type placementData struct {
 	Decision domain.PlacementDecision `json:"decision"`
 }
@@ -78,8 +115,11 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if req.CommandKey == "" {
 		return CreateRunResult{}, fmt.Errorf("orchestrator: idempotency key is required")
 	}
+	if req.Workload.WorkspaceID != "" && req.WorkspaceID != req.Workload.WorkspaceID {
+		return CreateRunResult{}, fmt.Errorf("WORKSPACE_MISMATCH: request workspace_id must match workload workspace_id")
+	}
 	if violations := domain.ValidateWorkloadRevision(req.Workload); len(violations) > 0 {
-		return CreateRunResult{}, fmt.Errorf("orchestrator: invalid workload: %s", violations[0].Message)
+		return CreateRunResult{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
 	}
 	requestHash, err := domain.CanonicalHash(struct {
 		RunID    string                  `json:"run_id"`
@@ -88,7 +128,11 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	data, err := json.Marshal(runRequestedData{RunID: req.RunID, Workload: req.Workload})
+	privateData, err := json.Marshal(runRequestedData{RunID: req.RunID, Workload: req.Workload})
+	if err != nil {
+		return CreateRunResult{}, err
+	}
+	data, err := json.Marshal(publicRunRequestedData{RunID: req.RunID, Workload: publicWorkload(req.Workload)})
 	if err != nil {
 		return CreateRunResult{}, err
 	}
@@ -107,6 +151,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 			OccurredAt:    o.now().UTC(),
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          data,
+			PrivateData:   privateData,
 		}},
 	})
 	if err != nil {
@@ -258,7 +303,11 @@ func decodeRunRequested(events []eventlog.StoredEvent) (runRequestedData, error)
 	for _, event := range events {
 		if event.Type == EventRunRequested {
 			var data runRequestedData
-			if err := json.Unmarshal(event.Data, &data); err != nil {
+			payload := event.PrivateData
+			if len(payload) == 0 {
+				payload = event.Data
+			}
+			if err := json.Unmarshal(payload, &data); err != nil {
 				return runRequestedData{}, err
 			}
 			return data, nil
@@ -312,4 +361,47 @@ func outcomeForPhase(phase adapter.ExternalPhase) string {
 	default:
 		return string(domain.RunOutcomeFailed)
 	}
+}
+
+func publicWorkload(rev domain.WorkloadRevision) publicWorkloadRevision {
+	out := publicWorkloadRevision{
+		ID:          rev.ID,
+		WorkspaceID: rev.WorkspaceID,
+		WorkloadID:  rev.WorkloadID,
+		Digest:      rev.Digest,
+		Spec: publicWorkloadSpec{
+			Resources: rev.Spec.Resources,
+			Network:   rev.Spec.Network,
+			Placement: rev.Spec.Placement,
+			Execution: rev.Spec.Execution,
+			Metadata:  rev.Spec.Metadata,
+			Raw:       rev.Spec.Raw,
+		},
+	}
+	out.Spec.Containers = make([]publicContainerSpec, 0, len(rev.Spec.Containers))
+	for _, container := range rev.Spec.Containers {
+		publicContainer := publicContainerSpec{
+			Name:       container.Name,
+			Image:      container.Image,
+			Platform:   container.Platform,
+			Entrypoint: container.Entrypoint,
+			Args:       container.Args,
+			Ports:      container.Ports,
+		}
+		if len(container.Env) > 0 {
+			publicContainer.Env = make(map[string]publicEnvBinding, len(container.Env))
+			for key, binding := range container.Env {
+				kind := "empty"
+				if binding.Value != nil {
+					kind = "literal"
+				}
+				if binding.SecretRef != nil {
+					kind = "secret"
+				}
+				publicContainer.Env[key] = publicEnvBinding{Kind: kind}
+			}
+		}
+		out.Spec.Containers = append(out.Spec.Containers, publicContainer)
+	}
+	return out
 }
