@@ -1,0 +1,158 @@
+package eventlog
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestSQLiteEventLogAppendReadAndSubscribe(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := openTestLog(t)
+
+	sub, err := log.Subscribe(ctx, SubscriptionRequest{
+		SubscriptionID: "sub-runs",
+		After:          0,
+		Filter: EventFilter{
+			StreamTypes: []string{"run"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	result, err := log.Append(ctx, AppendRequest{
+		Stream:                StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"},
+		ExpectedStreamVersion: 0,
+		CommandKey:            "cmd-create-run",
+		RequestHash:           "sha256:request",
+		Actor:                 json.RawMessage(`{"principal":"user_1"}`),
+		CorrelationID:         "run_1",
+		CausationID:           "cmd_1",
+		Events: []NewEvent{
+			{
+				ID:            "evt_1",
+				Type:          "compute.run.requested.v1",
+				SchemaVersion: 1,
+				OccurredAt:    time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC),
+				Visibility:    VisibilityPublic,
+				Data:          json.RawMessage(`{"run_id":"run_1"}`),
+			},
+			{
+				ID:            "evt_2",
+				Type:          "compute.run.launch_intent_recorded.v1",
+				SchemaVersion: 1,
+				OccurredAt:    time.Date(2026, 6, 20, 18, 31, 23, 0, time.UTC),
+				Visibility:    VisibilityPublic,
+				Data:          json.RawMessage(`{"attempt_id":"att_1"}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if result.FirstPosition != 1 || result.LastPosition != 2 || result.NextStreamVersion != 2 {
+		t.Fatalf("unexpected append result: %+v", result)
+	}
+
+	stream, err := log.ReadStream(ctx, StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"}, 0, 10)
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	if len(stream) != 2 {
+		t.Fatalf("expected 2 stream events, got %d", len(stream))
+	}
+	if stream[0].StreamVersion != 1 || stream[1].StreamVersion != 2 {
+		t.Fatalf("unexpected stream versions: %+v", stream)
+	}
+	if stream[0].CloudEvent().Source != "compute-control-plane/workspaces/ws_1" {
+		t.Fatalf("unexpected cloudevent source: %+v", stream[0].CloudEvent())
+	}
+
+	all, err := log.ReadAll(ctx, 0, 10, EventFilter{})
+	if err != nil {
+		t.Fatalf("read all: %v", err)
+	}
+	if len(all) != 2 || all[1].GlobalPosition != 2 {
+		t.Fatalf("unexpected global read: %+v", all)
+	}
+
+	select {
+	case delivery := <-sub:
+		if delivery.Event.ID != "evt_1" {
+			t.Fatalf("unexpected first delivery: %+v", delivery)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscription did not wake after append")
+	}
+}
+
+func TestSQLiteEventLogIdempotencyAndConcurrency(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := openTestLog(t)
+	req := AppendRequest{
+		Stream:                StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"},
+		ExpectedStreamVersion: 0,
+		CommandKey:            "cmd-create-run",
+		RequestHash:           "sha256:same",
+		Actor:                 json.RawMessage(`{"principal":"user_1"}`),
+		CorrelationID:         "run_1",
+		CausationID:           "cmd_1",
+		Events: []NewEvent{{
+			ID:            "evt_1",
+			Type:          "compute.run.requested.v1",
+			SchemaVersion: 1,
+			OccurredAt:    time.Now().UTC(),
+			Visibility:    VisibilityPublic,
+			Data:          json.RawMessage(`{"run_id":"run_1"}`),
+		}},
+	}
+
+	first, err := log.Append(ctx, req)
+	if err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	replay, err := log.Append(ctx, req)
+	if err != nil {
+		t.Fatalf("idempotent append: %v", err)
+	}
+	if replay.LastPosition != first.LastPosition || !replay.Duplicate {
+		t.Fatalf("expected duplicate result matching first append, got first=%+v replay=%+v", first, replay)
+	}
+
+	conflictReq := req
+	conflictReq.RequestHash = "sha256:different"
+	conflictReq.Events[0].ID = "evt_2"
+	_, err = log.Append(ctx, conflictReq)
+	if !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("expected idempotency conflict, got %v", err)
+	}
+
+	wrongVersion := req
+	wrongVersion.CommandKey = "cmd-wrong-version"
+	wrongVersion.RequestHash = "sha256:wrong-version"
+	wrongVersion.Events[0].ID = "evt_3"
+	wrongVersion.ExpectedStreamVersion = 0
+	_, err = log.Append(ctx, wrongVersion)
+	if !errors.Is(err, ErrConcurrencyConflict) {
+		t.Fatalf("expected concurrency conflict, got %v", err)
+	}
+}
+
+func openTestLog(t *testing.T) *SQLiteEventLog {
+	t.Helper()
+	log, err := OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open sqlite log: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := log.Close(); err != nil {
+			t.Fatalf("close sqlite log: %v", err)
+		}
+	})
+	return log
+}

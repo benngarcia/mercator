@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Task 1: Event Core.
+Task 2: Domain Contracts.
 
 ## Completed
 
@@ -10,6 +10,7 @@ Task 1: Event Core.
 - Trusted the worktree `mise.toml`.
 - Confirmed initial baseline has no Go packages to test yet.
 - Created durable long-horizon artifacts: spec, plan, runbook, status.
+- Implemented Task 1 event core with SQLite append/read/idempotency/concurrency/subscription behavior.
 
 ## Decisions
 
@@ -22,6 +23,9 @@ Task 1: Event Core.
 
 - `go mod download`: no module dependencies to download.
 - `go test ./...`: exited 1 because there are no packages yet (`"./..." matched no packages`).
+- Task 1 red test: `go test ./internal/eventlog -run TestSQLiteEventLog -count=1` failed on missing eventlog API/types.
+- Task 1 focused green: `go test ./internal/eventlog -run TestSQLiteEventLog -count=1` passed.
+- Task 1 full green: `go test ./...` passed for `internal/eventlog`.
 
 ## Known Gaps
 
