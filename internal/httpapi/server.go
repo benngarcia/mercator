@@ -13,8 +13,10 @@ import (
 	"github.com/bengarcia/mercator/internal/adapter/fake"
 	"github.com/bengarcia/mercator/internal/domain"
 	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/bengarcia/mercator/internal/ociresolver"
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
+	"github.com/bengarcia/mercator/internal/workload"
 )
 
 type Server struct {
@@ -22,12 +24,45 @@ type Server struct {
 	orch      *orchestrator.Orchestrator
 	scheduler scheduler.Scheduler
 	adapter   adapter.Adapter
+	workloads *workload.Service
+	resolver  interface {
+		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
+	}
 }
 
 type createRunBody struct {
-	WorkspaceID string                  `json:"workspace_id,omitempty"`
-	RunID       string                  `json:"run_id"`
-	Workload    domain.WorkloadRevision `json:"workload"`
+	WorkspaceID        string                  `json:"workspace_id,omitempty"`
+	RunID              string                  `json:"run_id"`
+	WorkloadID         string                  `json:"workload_id,omitempty"`
+	WorkloadRevisionID string                  `json:"workload_revision_id,omitempty"`
+	Workload           domain.WorkloadRevision `json:"workload"`
+}
+
+type createWorkloadBody struct {
+	WorkspaceID string `json:"workspace_id"`
+	WorkloadID  string `json:"workload_id"`
+	Name        string `json:"name"`
+}
+
+type createRevisionBody struct {
+	Revision domain.WorkloadRevision `json:"revision"`
+}
+
+type workloadRevisionResponse struct {
+	Revision domain.WorkloadRevision `json:"revision"`
+}
+
+type workloadRevisionListResponse struct {
+	Revisions []domain.WorkloadRevision `json:"revisions"`
+}
+
+type resolveImageBody struct {
+	Image    string `json:"image"`
+	Platform string `json:"platform"`
+}
+
+type resolveImageResponse struct {
+	Image ociresolver.ResolvedImage `json:"image"`
 }
 
 type createRunResponse struct {
@@ -74,6 +109,14 @@ func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.
 	return s
 }
 
+func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, resolver interface {
+	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
+}) http.Handler {
+	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, resolver: resolver}
+	s.routes()
+	return s
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
@@ -95,6 +138,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/runs/{run_id}/decision", s.runDecision)
 	s.mux.HandleFunc("GET /v1/runs/{run_ref}", s.getRunOrWait)
 	s.mux.HandleFunc("POST /v1/runs/{run_action}", s.runAction)
+	s.mux.HandleFunc("POST /v1/workloads", s.createWorkload)
+	s.mux.HandleFunc("POST /v1/workloads/{workload_id}/revisions", s.createRevision)
+	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions", s.listRevisions)
+	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions/{revision_id}", s.getRevision)
+	s.mux.HandleFunc("POST /v1/images:resolve", s.resolveImage)
 	s.mux.HandleFunc("POST /v1/placements:preview", s.previewPlacement)
 }
 
@@ -113,11 +161,24 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	if workspaceID == "" {
 		workspaceID = body.Workload.WorkspaceID
 	}
+	workloadRevision := body.Workload
+	if body.WorkloadRevisionID != "" {
+		if s.workloads == nil {
+			writeError(w, http.StatusBadRequest, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
+			return
+		}
+		revision, err := s.workloads.GetRevision(r.Context(), workspaceID, body.WorkloadID, body.WorkloadRevisionID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "WORKLOAD_REVISION_NOT_FOUND", err.Error())
+			return
+		}
+		workloadRevision = revision
+	}
 	result, err := s.orch.CreateRun(r.Context(), orchestrator.CreateRunRequest{
 		WorkspaceID:    workspaceID,
 		RunID:          body.RunID,
 		IdempotencyKey: idempotencyKey,
-		Workload:       body.Workload,
+		Workload:       workloadRevision,
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
@@ -258,6 +319,97 @@ func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, placementPreviewResponse{Decision: decision})
 }
 
+func (s *Server) createWorkload(w http.ResponseWriter, r *http.Request) {
+	if s.workloads == nil {
+		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
+		return
+	}
+	var body createWorkloadBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	if err := s.workloads.CreateWorkload(r.Context(), workload.CreateWorkloadRequest{WorkspaceID: body.WorkspaceID, WorkloadID: body.WorkloadID, Name: body.Name}); err != nil {
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_WORKLOAD_FAILED"), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"workload_id": body.WorkloadID})
+}
+
+func (s *Server) createRevision(w http.ResponseWriter, r *http.Request) {
+	if s.workloads == nil {
+		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
+		return
+	}
+	workspaceID, ok := requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	var body createRevisionBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	revision, err := s.workloads.CreateRevision(r.Context(), workload.CreateRevisionRequest{WorkspaceID: workspaceID, WorkloadID: r.PathValue("workload_id"), Revision: body.Revision})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_REVISION_FAILED"), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, workloadRevisionResponse{Revision: revision})
+}
+
+func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
+	if s.workloads == nil {
+		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
+		return
+	}
+	workspaceID, ok := requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	revisions, err := s.workloads.ListRevisions(r.Context(), workspaceID, r.PathValue("workload_id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LIST_REVISIONS_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, workloadRevisionListResponse{Revisions: revisions})
+}
+
+func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
+	if s.workloads == nil {
+		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
+		return
+	}
+	workspaceID, ok := requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	revision, err := s.workloads.GetRevision(r.Context(), workspaceID, r.PathValue("workload_id"), r.PathValue("revision_id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "REVISION_NOT_FOUND", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, workloadRevisionResponse{Revision: revision})
+}
+
+func (s *Server) resolveImage(w http.ResponseWriter, r *http.Request) {
+	if s.resolver == nil {
+		writeError(w, http.StatusNotImplemented, "IMAGE_RESOLVER_DISABLED", "Image resolver is not configured.")
+		return
+	}
+	var body resolveImageBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	resolved, err := s.resolver.Resolve(r.Context(), ociresolver.ResolveRequest{Image: body.Image, Platform: body.Platform})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "IMAGE_RESOLUTION_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resolveImageResponse{Image: resolved})
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -306,5 +458,5 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	return New(orch, sched, ad), log.Close, nil
+	return NewWithServices(orch, sched, ad, workload.New(log), ociresolver.NewStaticResolver(nil)), log.Close, nil
 }

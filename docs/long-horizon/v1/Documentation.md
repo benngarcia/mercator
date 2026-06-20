@@ -428,6 +428,47 @@ Handoff:
 - Start M6 by adding event-backed workload revisions and an OCI image resolver.
 - Do not start Docker, secrets, sinks, or UI work before the post-M5 repair state remains green.
 
+### M6 - Workload Service And OCI Image Resolver
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:14 PDT`
+Completed: `2026-06-20 01:18 PDT`
+Plan reference: `Plan.md#milestone-6-workload-service-and-oci-image-resolver`
+Prompt requirements covered: `event-backed workload revisions, immutable digest-pinned revisions, image tag resolver boundary, run-by-revision create path`
+
+Scope:
+
+- Added `internal/workload` event-backed workload and immutable revision service.
+- Added `internal/ociresolver` static resolver for digest no-op and configured tag-to-digest resolution by platform.
+- Added HTTP workload create, revision create/list/get, and image resolve endpoints.
+- Added create-run path that loads a stored workload revision by `workload_id` and `workload_revision_id`.
+
+Acceptance criteria:
+
+- Workload revisions are validated and event-backed.
+- Mutable tags are rejected at revision creation unless resolved before revision storage.
+- Resolver can return digest-pinned metadata for tags and no-op digest references.
+- HTTP create-run can reference exact stored revisions.
+
+Implementation notes:
+
+- The resolver is a deterministic static implementation suitable for tests and future registry-backed replacement.
+- Workload revision immutability is enforced by rejecting duplicate revision IDs in the workload stream.
+
+Verification:
+
+- `go test ./internal/workload/... -count=1` - `passed`.
+- `go test ./internal/ociresolver/... -count=1` - `passed`.
+- `go test ./internal/httpapi -run 'Workload|Image|StoredWorkloadRevision' -count=1` - `passed`.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M6 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M7 by adding connection, offer, authorization, and latency service boundaries, then wire scheduler input from offer snapshots.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -476,6 +517,12 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:14 PDT | M5 validation | `go test ./...` | passed | Full suite green after M5 |
 | 2026-06-20 01:14 PDT | M5 validation | `go build ./...` | passed | Build green after M5 |
 | 2026-06-20 01:14 PDT | M5 validation | `git status --short --branch` | observed | M5 source/test/docs changes only |
+| 2026-06-20 01:18 PDT | M6 focused | `go test ./internal/workload/... -count=1` | passed | Event-backed workload revision tests green |
+| 2026-06-20 01:18 PDT | M6 focused | `go test ./internal/ociresolver/... -count=1` | passed | Digest no-op, tag resolution, and missing tag tests green |
+| 2026-06-20 01:18 PDT | M6 focused | `go test ./internal/httpapi -run 'Workload\|Image\|StoredWorkloadRevision' -count=1` | passed | Workload/revision/image endpoints and run-by-revision path green |
+| 2026-06-20 01:18 PDT | M6 validation | `go test ./...` | passed | Full suite green after M6 |
+| 2026-06-20 01:18 PDT | M6 validation | `go build ./...` | passed | Build green after M6 |
+| 2026-06-20 01:18 PDT | M6 validation | `git status --short --branch` | observed | M6 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -491,24 +538,15 @@ Required verification cadence:
 
 Blocking V1 correctness issues:
 
-- Event-log authority and replay safety are incomplete.
-- Launch intent recovery is not authoritative after durable intent.
-- Indeterminate launch reconciliation is missing.
-- Public event redaction is unsafe for literal env values.
-- Adapter launch does not carry full OCI workload/placement contract.
-- Scheduler hard-requirement handling is incomplete for accelerators and unknown facts.
-- Placement determinism is sensitive to offer input order.
-- Required run APIs are missing.
-- OpenAPI does not represent the real V1 contract.
-- API idempotency conflicts need proper conflict semantics.
+- Connection, offer, authorization, and latency services are not implemented.
+- Docker, secret vault, durable sinks, projection runner, CLI, and UI remain missing.
+- Cancellation is endpoint-present but not yet a full adapter-backed lifecycle command.
+- OpenAPI is expanded for repaired run/workload paths but is not yet complete for all future V1 service areas.
 
 Known missing feature areas from original V1:
 
-- Workload service and immutable revisions.
-- Run service complete endpoint set.
 - Connection service and adapter-defined authorization schemas.
 - Secret vault with encrypted event-backed secret versions and grants.
-- OCI image resolver for tag-to-digest and artifact metadata.
 - Offer service and cached offer snapshots.
 - Latency estimator.
 - Adapter registry and runtime adapters.
@@ -526,10 +564,10 @@ Known scaffold gaps:
 - Secret encryption and service credentials are not implemented.
 - Webhook/Kafka/Postgres sinks are not implemented.
 - Embedded UI is not implemented.
-- Registry tag resolution is not implemented; workloads must already be digest-pinned.
+- Registry-backed tag resolution is not implemented; the M6 resolver is deterministic/static.
 
 ## Next Action
 
-Start `Plan.md` Milestone 6: workload service and OCI image resolver.
+Start `Plan.md` Milestone 7: connections, offers, authorization, and latency estimation.
 
-The remaining M0 audit-lock tests are expected to fail until their owner milestones fix them. Do not edit production code outside the active milestone, and do not start Docker, secrets, sinks, or UI work before M5 passes.
+Do not edit production code outside the active milestone. Docker, secrets, sinks, and UI remain gated behind their owner milestones.

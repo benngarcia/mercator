@@ -14,8 +14,10 @@ import (
 	"github.com/bengarcia/mercator/internal/adapter/fake"
 	"github.com/bengarcia/mercator/internal/domain"
 	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/bengarcia/mercator/internal/ociresolver"
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
+	"github.com/bengarcia/mercator/internal/workload"
 )
 
 func TestCreateRunRequiresIdempotencyKey(t *testing.T) {
@@ -297,6 +299,75 @@ func TestPlacementPreviewValidatesWorkload(t *testing.T) {
 	}
 }
 
+func TestWorkloadRevisionAndImageResolverEndpoints(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	createBody := mustMarshal(t, createWorkloadBody{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(createBody))
+	req.Header.Set("Idempotency-Key", "idem_workload")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create workload expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rev := httpRevision()
+	body := mustMarshal(t, createRevisionBody{Revision: rev})
+	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions?workspace_id=ws_1", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_revision")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create revision expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, target := range []string{
+		"/v1/workloads/wrk_1/revisions?workspace_id=ws_1",
+		"/v1/workloads/wrk_1/revisions/wrev_1?workspace_id=ws_1",
+	} {
+		req = httptest.NewRequest(http.MethodGet, target, nil)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s expected 200, got %d body=%s", target, rec.Code, rec.Body.String())
+		}
+	}
+
+	body = mustMarshal(t, resolveImageBody{Image: "ghcr.io/acme/trainer:latest", Platform: "linux/amd64"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/images:resolve", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "@sha256:") {
+		t.Fatalf("resolve expected digest response, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateRunCanReferenceStoredWorkloadRevision(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, createWorkloadBody{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"})))
+	req.Header.Set("Idempotency-Key", "idem_workload_ref")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create workload expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions?workspace_id=ws_1", bytes.NewReader(mustMarshal(t, createRevisionBody{Revision: httpRevision()})))
+	req.Header.Set("Idempotency-Key", "idem_revision_ref")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create revision expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := mustMarshal(t, createRunBody{WorkspaceID: "ws_1", RunID: "run_from_revision", WorkloadID: "wrk_1", WorkloadRevisionID: "wrev_1"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_run_from_revision")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create run from revision expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func newHTTPTestServer(t *testing.T) http.Handler {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
@@ -315,7 +386,14 @@ func newHTTPTestServer(t *testing.T) http.Handler {
 	)
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	return New(orch, sched, ad)
+	resolver := ociresolver.NewStaticResolver(map[string]ociresolver.ResolvedImage{
+		"ghcr.io/acme/trainer:latest|linux/amd64": {
+			Image:    "ghcr.io/acme/trainer@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			Digest:   "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			Platform: "linux/amd64",
+		},
+	})
+	return NewWithServices(orch, sched, ad, workload.New(log), resolver)
 }
 
 func httpRevision() domain.WorkloadRevision {
