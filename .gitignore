@@ -1,0 +1,21 @@
+# Binaries
+/bin/
+*.exe
+*.test
+*.out
+
+# Data / runtime
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Go
+/vendor/
+coverage.txt
