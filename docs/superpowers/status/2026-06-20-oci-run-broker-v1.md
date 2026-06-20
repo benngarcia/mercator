@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Task 7: Final Verification.
+Complete for the implemented foundation slice.
 
 ## Completed
 
@@ -16,6 +16,7 @@ Task 7: Final Verification.
 - Implemented Task 4 adapter contract and deterministic fake adapter with idempotent lifecycle methods.
 - Implemented Task 5 run orchestrator fast path with event-first placement/launch, fake-adapter observation, cleanup confirmation, and run closure.
 - Implemented Task 6 minimal REST API, OpenAPI document, and `cmd/mercator` entrypoint.
+- Completed final verification for the implemented foundation slice.
 
 ## Decisions
 
@@ -47,6 +48,9 @@ Task 7: Final Verification.
 - Task 6 focused green: `go test ./internal/httpapi -count=1` passed.
 - Task 6 full green: `go test ./...` passed for all packages.
 - Task 6 build green: `go build ./...` passed.
+- Final verification: `go test ./...` passed for all packages.
+- Final verification: `go build ./...` passed.
+- Final verification: `git status --short --branch` reported only `## beng/v1-run-broker` before this status-log update.
 
 ## Known Gaps
 
@@ -54,3 +58,4 @@ Task 7: Final Verification.
 - Secret encryption and service credentials are not implemented in this slice.
 - Webhook/Kafka/Postgres sinks are not implemented in this slice.
 - Embedded UI is not implemented in this slice.
+- Registry tag resolution to OCI digest is not implemented in this slice; workloads must already be digest-pinned.
