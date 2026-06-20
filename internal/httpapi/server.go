@@ -17,6 +17,7 @@ import (
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
 	"github.com/bengarcia/mercator/internal/secrets"
+	sinkspkg "github.com/bengarcia/mercator/internal/sinks"
 	"github.com/bengarcia/mercator/internal/workload"
 )
 
@@ -27,6 +28,7 @@ type Server struct {
 	adapter   adapter.Adapter
 	workloads *workload.Service
 	secrets   *secrets.Vault
+	sinks     *sinkspkg.Manager
 	resolver  interface {
 		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 	}
@@ -89,6 +91,12 @@ type secretGrantResponse struct {
 	Grant secrets.Grant `json:"grant"`
 }
 
+type replaySinkBody struct {
+	FromExclusive eventlog.GlobalPosition `json:"from_exclusive"`
+	Limit         int                     `json:"limit"`
+	ReplayID      string                  `json:"replay_id"`
+}
+
 type createRunResponse struct {
 	RunID     string `json:"run_id"`
 	Duplicate bool   `json:"duplicate,omitempty"`
@@ -136,7 +144,13 @@ func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.
 func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, resolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }) http.Handler {
-	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, secrets: secretVault, resolver: resolver}
+	return NewWithAllServices(orch, sched, ad, workloads, secretVault, nil, resolver)
+}
+
+func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, sinkManager *sinkspkg.Manager, resolver interface {
+	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
+}) http.Handler {
+	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, secrets: secretVault, sinks: sinkManager, resolver: resolver}
 	s.routes()
 	return s
 }
@@ -170,6 +184,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/secrets", s.listSecrets)
 	s.mux.HandleFunc("POST /v1/secrets/{secret_id}/versions", s.createSecretVersion)
 	s.mux.HandleFunc("POST /v1/secrets/{secret_id}/grants", s.grantSecret)
+	s.mux.HandleFunc("GET /v1/sinks/{sink_id}", s.sinkStatus)
+	s.mux.HandleFunc("POST /v1/sinks/{sink_action}", s.sinkAction)
 	s.mux.HandleFunc("POST /v1/placements:preview", s.previewPlacement)
 }
 
@@ -494,6 +510,63 @@ func (s *Server) grantSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, secretGrantResponse{Grant: grant})
+}
+
+func (s *Server) sinkStatus(w http.ResponseWriter, r *http.Request) {
+	if s.sinks == nil {
+		writeError(w, http.StatusNotImplemented, "SINKS_DISABLED", "Sink manager is not configured.")
+		return
+	}
+	status, err := s.sinks.Status(r.Context(), r.PathValue("sink_id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "SINK_NOT_FOUND", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) sinkAction(w http.ResponseWriter, r *http.Request) {
+	sinkAction := r.PathValue("sink_action")
+	if strings.HasSuffix(sinkAction, ":deliver") {
+		s.deliverSink(w, r, strings.TrimSuffix(sinkAction, ":deliver"))
+		return
+	}
+	if strings.HasSuffix(sinkAction, ":replay") {
+		s.replaySink(w, r, strings.TrimSuffix(sinkAction, ":replay"))
+		return
+	}
+	writeError(w, http.StatusNotFound, "SINK_ACTION_NOT_FOUND", "Unknown sink action.")
+}
+
+func (s *Server) deliverSink(w http.ResponseWriter, r *http.Request, sinkID string) {
+	if s.sinks == nil {
+		writeError(w, http.StatusNotImplemented, "SINKS_DISABLED", "Sink manager is not configured.")
+		return
+	}
+	result, err := s.sinks.DeliverOnce(r.Context(), sinkID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "SINK_DELIVERY_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
+}
+
+func (s *Server) replaySink(w http.ResponseWriter, r *http.Request, sinkID string) {
+	if s.sinks == nil {
+		writeError(w, http.StatusNotImplemented, "SINKS_DISABLED", "Sink manager is not configured.")
+		return
+	}
+	var body replaySinkBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	result, err := s.sinks.Replay(r.Context(), sinkspkg.ReplayRequest{SinkID: sinkID, FromExclusive: body.FromExclusive, Limit: body.Limit, ReplayID: body.ReplayID})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "SINK_REPLAY_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

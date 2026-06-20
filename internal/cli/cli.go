@@ -39,15 +39,7 @@ func Run(ctx context.Context, cfg Config) int {
 		writeCLIError(cfg.Stderr, "COMMAND_REQUIRED", "command is required")
 		return 2
 	}
-	if cfg.Args[0] != "run" {
-		writeCLIError(cfg.Stderr, "UNKNOWN_COMMAND", "only run commands are implemented")
-		return 2
-	}
-	if len(cfg.Args) < 2 {
-		writeCLIError(cfg.Stderr, "RUN_COMMAND_REQUIRED", "run subcommand is required")
-		return 2
-	}
-	req, err := buildRunRequest(ctx, cfg.BaseURL, cfg.Args[1:])
+	req, err := buildRequest(ctx, cfg.BaseURL, cfg.Args)
 	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
 		return 2
@@ -79,6 +71,20 @@ func Run(ctx context.Context, cfg Config) int {
 	_, _ = output.Write(bytes.TrimSpace(data))
 	_, _ = output.Write([]byte("\n"))
 	return exit
+}
+
+func buildRequest(ctx context.Context, baseURL string, args []string) (*http.Request, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("%s subcommand is required", args[0])
+	}
+	switch args[0] {
+	case "run":
+		return buildRunRequest(ctx, baseURL, args[1:])
+	case "sink":
+		return buildSinkRequest(ctx, baseURL, args[1:])
+	default:
+		return nil, fmt.Errorf("unknown command %q", args[0])
+	}
 }
 
 func buildRunRequest(ctx context.Context, baseURL string, args []string) (*http.Request, error) {
@@ -141,6 +147,45 @@ func buildRunRequest(ctx context.Context, baseURL string, args []string) (*http.
 		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
 	default:
 		return nil, fmt.Errorf("unknown run command %q", command)
+	}
+}
+
+func buildSinkRequest(ctx context.Context, baseURL string, args []string) (*http.Request, error) {
+	command := args[0]
+	fs := flag.NewFlagSet("sink "+command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	sinkID := fs.String("sink-id", "", "sink id")
+	from := fs.Uint64("from", 0, "exclusive global position to replay after")
+	limit := fs.Int("limit", 100, "maximum events")
+	replayID := fs.String("replay-id", "", "replay id")
+	if err := fs.Parse(args[1:]); err != nil {
+		return nil, err
+	}
+	if *sinkID == "" {
+		return nil, fmt.Errorf("%s requires --sink-id", command)
+	}
+	switch command {
+	case "status":
+		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/sinks/"+url.PathEscape(*sinkID), nil), nil)
+	case "deliver":
+		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, "/v1/sinks/"+url.PathEscape(*sinkID)+":deliver", nil), nil)
+	case "replay":
+		body, err := json.Marshal(map[string]any{
+			"from_exclusive": *from,
+			"limit":          *limit,
+			"replay_id":      *replayID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, "/v1/sinks/"+url.PathEscape(*sinkID)+":replay", nil), bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	default:
+		return nil, fmt.Errorf("unknown sink command %q", command)
 	}
 }
 

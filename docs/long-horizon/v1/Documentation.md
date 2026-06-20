@@ -637,6 +637,51 @@ Handoff:
 
 - Start M11 by adding event sinks, replay APIs, and durable sink cursors.
 
+### M11 - Event Sinks, Replay, And Durable Cursors
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:33 PDT`
+Completed: `2026-06-20 01:35 PDT`
+Plan reference: `Plan.md#milestone-11-event-sinks-replay-and-durable-cursors`
+Prompt requirements covered: `webhook sink, Kafka sink boundary, Postgres sink boundary, durable sink cursors, bounded replay, failure isolation`
+
+Scope:
+
+- Added `internal/sinks` manager with durable per-sink cursors, retry-after-failure behavior, bounded replay, and status reads.
+- Added webhook sink delivery over CloudEvents JSON.
+- Added Kafka and Postgres sink boundaries behind configured producer/writer interfaces.
+- Added HTTP sink status, deliver, replay, and OpenAPI endpoint descriptions plus JSON CLI sink replay support.
+- Added failure-isolation coverage proving sink failure does not block run creation/lifecycle progress.
+
+Acceptance criteria:
+
+- Sink failures are isolated to sink operations and do not fail placement or run lifecycle commands.
+- Sink cursors are durable per sink using event-log offsets.
+- Replay is bounded by request limit, observable in the result, and does not move the durable cursor.
+- Webhook/Kafka/Postgres sink boundaries preserve event payloads behind the common sink contract.
+
+Implementation notes:
+
+- Sink cursor IDs use `sink:<sink_id>` in the event log's `subscription_offsets` table.
+- Sink delivery skips private events while advancing the cursor, preserving secret non-observability.
+- Kafka and Postgres implementations are deliberately interface-backed in this milestone; production client configuration remains future wiring.
+
+Verification:
+
+- `go test ./internal/sinks/... -count=1` - `passed`.
+- `go test ./internal/httpapi -run Sink -count=1` - `passed`.
+- `go test ./internal/cli -run Sink -count=1` - `passed`.
+- `go test ./internal/eventlog -run 'Subscribe|Ack|Cursor' -count=1` - `passed`.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- `git diff --check` - `passed`.
+- `git status --short --branch` - `observed` - M11 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M12 by adding the embedded static UI and browser-verifying run/events/decision/sink views.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -720,6 +765,14 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:32 PDT | M10 validation | `go test ./...` | passed | Full suite green after M10 |
 | 2026-06-20 01:32 PDT | M10 validation | `go build ./...` | passed | Build green after M10 |
 | 2026-06-20 01:32 PDT | M10 validation | `git status --short --branch` | observed | M10 source/test/docs changes only |
+| 2026-06-20 01:34 PDT | M11 focused | `go test ./internal/sinks/... -count=1` | passed | Cursor delivery, retry, restart, replay, webhook, Kafka, and Postgres boundary tests green |
+| 2026-06-20 01:34 PDT | M11 focused | `go test ./internal/httpapi -run Sink -count=1` | passed | Sink replay API and failure isolation tests green |
+| 2026-06-20 01:34 PDT | M11 focused | `go test ./internal/cli -run Sink -count=1` | passed | Sink replay CLI emits parseable JSON |
+| 2026-06-20 01:35 PDT | M11 validation | `go test ./internal/eventlog -run 'Subscribe\|Ack\|Cursor' -count=1` | passed | Event-log cursor tests green |
+| 2026-06-20 01:35 PDT | M11 validation | `go test ./...` | passed | Full suite green after M11 |
+| 2026-06-20 01:35 PDT | M11 validation | `go build ./...` | passed | Build green after M11 |
+| 2026-06-20 01:35 PDT | M11 validation | `git diff --check` | passed | No whitespace errors |
+| 2026-06-20 01:35 PDT | M11 validation | `git status --short --branch` | observed | M11 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -735,7 +788,7 @@ Required verification cadence:
 
 Blocking V1 correctness issues:
 
-- Durable sinks and UI remain missing.
+- Embedded UI remains missing.
 - Docker adapter live integration remains missing; unit fake-client contract is implemented.
 - Cancellation is endpoint-present but not yet a full adapter-backed lifecycle command.
 - OpenAPI is expanded for repaired run/workload paths but is not yet complete for all future V1 service areas.
@@ -744,19 +797,18 @@ Known missing feature areas from original V1:
 
 - Live Docker integration test.
 - Reconciler and lease janitor.
-- Event sinks with replay and durable cursors.
 - Authorization service.
 - Embedded static UI.
 
 Known scaffold gaps:
 
 - Production key management and service credential storage remain basic.
-- Webhook/Kafka/Postgres sinks are not implemented.
+- Kafka/Postgres sinks use configured backend interfaces; production client wiring remains future work.
 - Embedded UI is not implemented.
 - Registry-backed tag resolution is not implemented; the M6 resolver is deterministic/static.
 
 ## Next Action
 
-Start `Plan.md` Milestone 11: event sinks, replay, and durable cursors.
+Start `Plan.md` Milestone 12: embedded static UI.
 
 Do not edit production code outside the active milestone. Docker, secrets, sinks, and UI remain gated behind their owner milestones.
