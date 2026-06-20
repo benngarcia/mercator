@@ -23,6 +23,8 @@ const (
 	EventLaunchAccepted        = "compute.run.launch_accepted.v1"
 	EventLaunchIndeterminate   = "compute.run.launch_indeterminate.v1"
 	EventLaunchFailed          = "compute.run.launch_failed.v1"
+	EventCancelRequested       = "compute.run.cancel_requested.v1"
+	EventCancelAccepted        = "compute.run.cancel_accepted.v1"
 	EventExternalStateObserved = "compute.run.external_state_observed.v1"
 	EventRunOutcomeRecorded    = "compute.run.outcome_recorded.v1"
 	EventCleanupRequested      = "compute.run.cleanup_requested.v1"
@@ -297,6 +299,54 @@ func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string
 	return o.GetRun(ctx, workspaceID, runID)
 }
 
+func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
+	events, err := o.GetRunEvents(ctx, workspaceID, runID)
+	if err != nil {
+		return domain.RunRecord{}, err
+	}
+	if len(events) == 0 {
+		return domain.RunRecord{}, fmt.Errorf("orchestrator: run not found")
+	}
+	state, err := reduceRun(events)
+	if err != nil {
+		return domain.RunRecord{}, err
+	}
+	if state.closed {
+		return runRecordFromState(workspaceID, runID, state), nil
+	}
+	version := uint64(len(events))
+	if state.launchIntent == nil {
+		if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:close_before_launch", []eventlog.NewEvent{
+			mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"reason": "user"}, o.now()),
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": string(domain.RunOutcomeCancelled)}, o.now()),
+			mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+		}); err != nil {
+			return domain.RunRecord{}, err
+		}
+		return o.GetRun(ctx, workspaceID, runID)
+	}
+	cancelReq := adapter.CancelRequest{OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
+	hash, err := domain.CanonicalHash(cancelReq)
+	if err != nil {
+		return domain.RunRecord{}, err
+	}
+	cancelReq.RequestHash = hash
+	if _, err := o.adapter.Cancel(ctx, cancelReq); err != nil {
+		return domain.RunRecord{}, err
+	}
+	if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:accepted", []eventlog.NewEvent{
+		mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+		mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+	}); err != nil {
+		return domain.RunRecord{}, err
+	}
+	version += 2
+	if err := o.recordObservation(ctx, workspaceID, runID, version, state, adapter.ExternalObservation{LaunchKey: state.launchIntent.LaunchKey, Phase: adapter.ExternalPhaseCancelled, ObservedAt: o.now().UTC()}); err != nil {
+		return domain.RunRecord{}, err
+	}
+	return o.GetRun(ctx, workspaceID, runID)
+}
+
 func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
 	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: requested.Workload.WorkspaceID})
 	if err != nil {
@@ -424,6 +474,7 @@ type runState struct {
 	launchAccepted      bool
 	launchIndeterminate bool
 	outcomeRecorded     bool
+	outcome             domain.RunOutcome
 	cleanupRequested    bool
 	cleanupConfirmed    bool
 	closed              bool
@@ -465,6 +516,12 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 			state.launchIndeterminate = true
 		case EventRunOutcomeRecorded:
 			state.outcomeRecorded = true
+			var data struct {
+				Outcome domain.RunOutcome `json:"outcome"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err == nil {
+				state.outcome = data.Outcome
+			}
 		case EventCleanupRequested:
 			state.cleanupRequested = true
 		case EventCleanupConfirmed:
@@ -508,7 +565,10 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 		record.Phase = "closed"
 		record.Closed = true
 		if state.outcomeRecorded {
-			record.Outcome = domain.RunOutcomeSucceeded
+			record.Outcome = state.outcome
+			if record.Outcome == "" {
+				record.Outcome = domain.RunOutcomeSucceeded
+			}
 		}
 	}
 	return record

@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -52,6 +53,47 @@ func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {
 	}
 	if !released.Released {
 		t.Fatalf("expected release receipt, got %+v", released)
+	}
+}
+
+func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
+	if os.Getenv("MERCATOR_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set MERCATOR_DOCKER_INTEGRATION=1 to run live Docker adapter integration")
+	}
+	image := os.Getenv("MERCATOR_DOCKER_IMAGE")
+	if image == "" {
+		image = "alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+	}
+	req := launchRequest()
+	req.Image = image
+	req.Platform = domain.Platform{OS: "linux", Architecture: "arm64"}
+	req.LaunchKey = "mercator-integration-" + time.Now().UTC().Format("20060102150405")
+	req.OperationKey = req.LaunchKey
+	req.CleanupLocator = req.LaunchKey
+	ad := New(NewCLIClient(""))
+	t.Cleanup(func() {
+		_, _ = ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "cleanup_" + req.LaunchKey, RequestHash: "sha256:cleanup", LaunchKey: req.LaunchKey})
+	})
+	receipt, err := ad.Launch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("live launch: %v", err)
+	}
+	if receipt.ExternalID == "" {
+		t.Fatalf("launch missing external id: %+v", receipt)
+	}
+	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: req.WorkspaceID})
+	if err != nil {
+		t.Fatalf("list owned: %v", err)
+	}
+	if len(owned) == 0 {
+		t.Fatalf("expected owned integration container")
+	}
+	released, err := ad.Release(context.Background(), adapter.ReleaseRequest{OperationKey: "release_" + req.LaunchKey, RequestHash: "sha256:release", LaunchKey: req.LaunchKey})
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if !released.Released {
+		t.Fatalf("expected release receipt: %+v", released)
 	}
 }
 

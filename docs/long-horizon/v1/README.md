@@ -10,7 +10,8 @@ It follows the OpenAI long-horizon Codex pattern:
 3. `Implement.md` tells agents how to operate the loop.
 4. `Documentation.md` records live status, decisions, verification, and gaps.
 
-The current branch is a foundation scaffold, not a complete V1. Future work
-must use these files as the source of truth before editing production code.
+The branch has progressed through the M13 release gate. Future work must use
+`Documentation.md` as the source of truth for verified behavior, remaining
+limitations, and follow-up hardening before editing production code.
 
 Reference: https://developers.openai.com/blog/run-long-horizon-tasks-with-codex

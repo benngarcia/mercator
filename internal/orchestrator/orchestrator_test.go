@@ -177,6 +177,51 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	}
 }
 
+func TestCancelRunAfterLaunchRecordsCancelledOutcomeAndCleansUp(t *testing.T) {
+	ctx := context.Background()
+	offer := orchOffer("offer_cancel", time.Now().UTC())
+	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
+	orch := newTestOrchestrator(t, ad)
+	rev := orchRevision()
+
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: "run_cancel", IdempotencyKey: "idem_cancel_create", Workload: rev}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_cancel"); err != nil {
+		t.Fatalf("advance run: %v", err)
+	}
+	record, err := orch.CancelRun(ctx, "ws_1", "run_cancel")
+	if err != nil {
+		t.Fatalf("cancel run: %v", err)
+	}
+	if !record.Closed || record.Outcome != domain.RunOutcomeCancelled || record.Cleanup != domain.CleanupConfirmed {
+		t.Fatalf("unexpected cancelled record: %+v", record)
+	}
+	again, err := orch.CancelRun(ctx, "ws_1", "run_cancel")
+	if err != nil {
+		t.Fatalf("idempotent cancel: %v", err)
+	}
+	if again.Outcome != domain.RunOutcomeCancelled {
+		t.Fatalf("cancel replay changed outcome: %+v", again)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_cancel")
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	for _, eventType := range []string{EventCancelRequested, EventCancelAccepted, EventRunOutcomeRecorded, EventCleanupRequested, EventCleanupConfirmed, EventRunClosed} {
+		if !hasEvent(events, eventType) {
+			t.Fatalf("expected %s in %s", eventType, eventTypes(events))
+		}
+	}
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list owned: %v", err)
+	}
+	if len(owned) != 0 {
+		t.Fatalf("cancel cleanup should release owned objects: %+v", owned)
+	}
+}
+
 func TestAdvanceRunDoesNotRelaunchAfterNonterminalObservation(t *testing.T) {
 	ctx := context.Background()
 	ad := &countingAdapter{

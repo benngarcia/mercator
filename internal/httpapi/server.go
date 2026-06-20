@@ -346,10 +346,23 @@ func (s *Server) runAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasSuffix(runAction, ":cancel") {
-		s.writeRun(w, r, strings.TrimSuffix(runAction, ":cancel"))
+		s.cancelRun(w, r, strings.TrimSuffix(runAction, ":cancel"))
 		return
 	}
 	writeError(w, http.StatusNotFound, "RUN_ACTION_NOT_FOUND", "Unknown run action.")
+}
+
+func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, runID string) {
+	workspaceID, ok := requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	record, err := s.orch.CancelRun(r.Context(), workspaceID, runID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "CANCEL_RUN_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
 }
 
 func (s *Server) refreshRun(w http.ResponseWriter, r *http.Request, runID string) {
