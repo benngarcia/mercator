@@ -220,6 +220,67 @@ func TestAdvanceRunRecoversRecordedLaunchIntentWhenOffersChange(t *testing.T) {
 	}
 }
 
+func TestAdvanceRunRetriesCleanupWithoutRelaunch(t *testing.T) {
+	ctx := context.Background()
+	ad := &releaseFailsOnceAdapter{
+		Adapter: fake.New(
+			fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
+			fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+		),
+	}
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err == nil {
+		t.Fatal("first advance should report release failure after recording cleanup request")
+	}
+	if ad.launchCalls != 1 || ad.releaseCalls != 1 {
+		t.Fatalf("unexpected first side effects: launches=%d releases=%d", ad.launchCalls, ad.releaseCalls)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("second advance should resume cleanup: %v", err)
+	}
+	if ad.launchCalls != 1 || ad.releaseCalls != 2 {
+		t.Fatalf("cleanup retry should not relaunch: launches=%d releases=%d", ad.launchCalls, ad.releaseCalls)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	if countEvents(events, EventRunClosed) != 1 {
+		t.Fatalf("expected cleanup retry to close run, got %s", eventTypes(events))
+	}
+}
+
+func TestAdvanceRunReconcilesIndeterminateLaunchBeforeRetry(t *testing.T) {
+	ctx := context.Background()
+	ad := &indeterminateLaunchAdapter{
+		Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})),
+	}
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("expected indeterminate launch error, got %v", err)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	if countEvents(events, EventLaunchFailed) != 0 {
+		t.Fatalf("indeterminate launch must not be recorded as simple failure: %s", eventTypes(events))
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("second advance should reconcile existing launch before retry: %v", err)
+	}
+	if ad.launchCalls != 1 {
+		t.Fatalf("expected no blind relaunch after indeterminate result, got %d launches", ad.launchCalls)
+	}
+	if ad.observeCalls == 0 && ad.listOwnedCalls == 0 {
+		t.Fatalf("expected observe or list-owned reconciliation before retry")
+	}
+}
+
 func TestAdvanceRunRecordsLaunchConflict(t *testing.T) {
 	ctx := context.Background()
 	orch := newTestOrchestrator(t, conflictAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}))})
@@ -314,6 +375,49 @@ func (m *mutableOfferAdapter) ListOffers(context.Context, adapter.OfferRequest) 
 func (m *mutableOfferAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	m.launchCalls++
 	return m.Adapter.Launch(ctx, req)
+}
+
+type releaseFailsOnceAdapter struct {
+	*fake.Adapter
+	launchCalls  int
+	releaseCalls int
+}
+
+func (r *releaseFailsOnceAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	r.launchCalls++
+	return r.Adapter.Launch(ctx, req)
+}
+
+func (r *releaseFailsOnceAdapter) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
+	r.releaseCalls++
+	if r.releaseCalls == 1 {
+		return adapter.ReleaseReceipt{}, adapter.ErrRetryableFailure
+	}
+	return r.Adapter.Release(ctx, req)
+}
+
+type indeterminateLaunchAdapter struct {
+	*fake.Adapter
+	launchCalls    int
+	observeCalls   int
+	listOwnedCalls int
+	launchKey      string
+}
+
+func (i *indeterminateLaunchAdapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	i.launchCalls++
+	i.launchKey = req.LaunchKey
+	return adapter.LaunchReceipt{}, adapter.ErrLaunchIndeterminate
+}
+
+func (i *indeterminateLaunchAdapter) Observe(_ context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	i.observeCalls++
+	return adapter.ExternalObservation{ExternalID: "ambiguous", LaunchKey: req.LaunchKey, Phase: adapter.ExternalPhaseRunning, ObservedAt: time.Now().UTC()}, nil
+}
+
+func (i *indeterminateLaunchAdapter) ListOwned(context.Context, adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+	i.listOwnedCalls++
+	return []adapter.OwnedExternalObject{{ExternalID: "ambiguous", WorkspaceID: "ws_1", RunID: "run_1", AttemptID: "att_1", OwnershipToken: "own_1", LaunchKey: i.launchKey, Phase: adapter.ExternalPhaseRunning}}, nil
 }
 
 type captureLaunchAdapter struct {

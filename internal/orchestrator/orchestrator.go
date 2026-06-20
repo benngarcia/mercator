@@ -21,6 +21,7 @@ const (
 	EventAttemptCreated        = "compute.run.attempt_created.v1"
 	EventLaunchIntentRecorded  = "compute.run.launch_intent_recorded.v1"
 	EventLaunchAccepted        = "compute.run.launch_accepted.v1"
+	EventLaunchIndeterminate   = "compute.run.launch_indeterminate.v1"
 	EventLaunchFailed          = "compute.run.launch_failed.v1"
 	EventExternalStateObserved = "compute.run.external_state_observed.v1"
 	EventRunOutcomeRecorded    = "compute.run.outcome_recorded.v1"
@@ -167,46 +168,28 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 	if err != nil {
 		return err
 	}
-	if hasEvent(events, EventRunClosed) {
+	state, err := reduceRun(events)
+	if err != nil {
+		return err
+	}
+	if state.closed {
 		return nil
 	}
-	requested, err := decodeRunRequested(events)
-	if err != nil {
-		return err
-	}
 	version := uint64(len(events))
-	decision, attempt, selectedOffer, err := o.decide(ctx, requested, runID)
-	if err != nil {
-		return err
+
+	if state.cleanupRequested && !state.cleanupConfirmed {
+		return o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
 	}
-	container := requested.Workload.Spec.Containers[0]
-	launchReq := adapter.LaunchRequest{
-		OperationKey:              attempt.LaunchKey,
-		WorkspaceID:               workspaceID,
-		RunID:                     runID,
-		AttemptID:                 attempt.AttemptID,
-		WorkloadID:                requested.Workload.WorkloadID,
-		WorkloadRevisionID:        requested.Workload.ID,
-		OwnershipToken:            attempt.OwnershipToken,
-		LaunchKey:                 attempt.LaunchKey,
-		CleanupLocator:            attempt.CleanupLocator,
-		Image:                     container.Image,
-		Platform:                  container.Platform,
-		Entrypoint:                container.Entrypoint,
-		Args:                      append([]string(nil), container.Args...),
-		Environment:               launchEnvironment(container.Env),
-		Ports:                     append([]domain.PortSpec(nil), container.Ports...),
-		Resources:                 requested.Workload.Spec.Resources,
-		SelectedOfferSnapshotID:   selectedOffer.ID,
-		SelectedOfferConnectionID: selectedOffer.ConnectionID,
-		SelectedOfferAdapterType:  selectedOffer.AdapterType,
-		SelectedOfferNativeRef:    selectedOffer.NativeRef,
-	}
-	launchReq.RequestHash, err = domain.CanonicalHash(launchReq)
-	if err != nil {
-		return err
-	}
-	if !hasEvent(events, EventLaunchIntentRecorded) {
+
+	if state.launchIntent == nil {
+		decision, attempt, selectedOffer, err := o.decide(ctx, *state.requested, runID)
+		if err != nil {
+			return err
+		}
+		launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer)
+		if err != nil {
+			return err
+		}
 		if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:placement", []eventlog.NewEvent{
 			mustEvent(runID, "placement_decided", EventPlacementDecided, placementData{Decision: decision}, o.now()),
 			mustEvent(runID, "attempt_created", EventAttemptCreated, attempt, o.now()),
@@ -215,56 +198,38 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 			return err
 		}
 		version += 3
+		state.attempt = &attempt
+		state.launchIntent = &launchReq
 	}
-	receipt, err := o.adapter.Launch(ctx, launchReq)
-	if err != nil {
-		_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
-			mustEvent(runID, "launch_failed", EventLaunchFailed, map[string]any{"error": err.Error(), "retryable": !errors.Is(err, adapter.ErrIdempotencyConflict)}, o.now()),
-		})
-		return err
-	}
-	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted", []eventlog.NewEvent{
-		mustEvent(runID, "launch_accepted", EventLaunchAccepted, receipt, o.now()),
-	}); err != nil {
-		return err
-	}
-	version++
 
-	observation, err := o.adapter.Observe(ctx, adapter.ObserveRequest{LaunchKey: attempt.LaunchKey})
-	if err != nil {
-		return err
-	}
-	toAppend := []eventlog.NewEvent{
-		mustEvent(runID, "external_state_observed", EventExternalStateObserved, observation, o.now()),
-	}
-	if isTerminal(observation.Phase) {
-		toAppend = append(toAppend,
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": outcomeForPhase(observation.Phase)}, o.now()),
-			mustEvent(runID, "cleanup_requested", EventCleanupRequested, map[string]any{"launch_key": attempt.LaunchKey}, o.now()),
-		)
-	}
-	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:observe", toAppend); err != nil {
-		return err
-	}
-	version += uint64(len(toAppend))
-
-	if isTerminal(observation.Phase) {
-		releaseReq := adapter.ReleaseRequest{OperationKey: "release_" + attempt.AttemptID, LaunchKey: attempt.LaunchKey}
-		releaseReq.RequestHash, err = domain.CanonicalHash(releaseReq)
+	if !state.launchAccepted && !state.launchIndeterminate {
+		receipt, err := o.adapter.Launch(ctx, *state.launchIntent)
 		if err != nil {
+			if errors.Is(err, adapter.ErrLaunchIndeterminate) || errors.Is(err, adapter.ErrLaunchTimeout) {
+				_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_indeterminate", []eventlog.NewEvent{
+					mustEvent(runID, "launch_indeterminate", EventLaunchIndeterminate, map[string]any{"error": err.Error(), "launch_key": state.launchIntent.LaunchKey}, o.now()),
+				})
+				return err
+			}
+			_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
+				mustEvent(runID, "launch_failed", EventLaunchFailed, map[string]any{"error": err.Error(), "retryable": !errors.Is(err, adapter.ErrIdempotencyConflict)}, o.now()),
+			})
 			return err
 		}
-		if _, err := o.adapter.Release(ctx, releaseReq); err != nil {
-			return err
-		}
-		if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:cleanup", []eventlog.NewEvent{
-			mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, map[string]any{"launch_key": attempt.LaunchKey}, o.now()),
-			mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+		if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted", []eventlog.NewEvent{
+			mustEvent(runID, "launch_accepted", EventLaunchAccepted, receipt, o.now()),
 		}); err != nil {
 			return err
 		}
+		version++
+		state.launchAccepted = true
 	}
-	return nil
+
+	observation, err := o.adapter.Observe(ctx, adapter.ObserveRequest{LaunchKey: state.launchIntent.LaunchKey})
+	if err != nil {
+		return err
+	}
+	return o.recordObservation(ctx, workspaceID, runID, version, state, observation)
 }
 
 func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID string) ([]eventlog.StoredEvent, error) {
@@ -303,6 +268,77 @@ func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, r
 	return decision, attempt, selectedOffer, nil
 }
 
+func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot) (adapter.LaunchRequest, error) {
+	container := requested.Workload.Spec.Containers[0]
+	launchReq := adapter.LaunchRequest{
+		OperationKey:              attempt.LaunchKey,
+		WorkspaceID:               workspaceID,
+		RunID:                     runID,
+		AttemptID:                 attempt.AttemptID,
+		WorkloadID:                requested.Workload.WorkloadID,
+		WorkloadRevisionID:        requested.Workload.ID,
+		OwnershipToken:            attempt.OwnershipToken,
+		LaunchKey:                 attempt.LaunchKey,
+		CleanupLocator:            attempt.CleanupLocator,
+		Image:                     container.Image,
+		Platform:                  container.Platform,
+		Entrypoint:                container.Entrypoint,
+		Args:                      append([]string(nil), container.Args...),
+		Environment:               launchEnvironment(container.Env),
+		Ports:                     append([]domain.PortSpec(nil), container.Ports...),
+		Resources:                 requested.Workload.Spec.Resources,
+		SelectedOfferSnapshotID:   selectedOffer.ID,
+		SelectedOfferConnectionID: selectedOffer.ConnectionID,
+		SelectedOfferAdapterType:  selectedOffer.AdapterType,
+		SelectedOfferNativeRef:    selectedOffer.NativeRef,
+	}
+	hash, err := domain.CanonicalHash(launchReq)
+	if err != nil {
+		return adapter.LaunchRequest{}, err
+	}
+	launchReq.RequestHash = hash
+	return launchReq, nil
+}
+
+func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID string, version uint64, state runState, observation adapter.ExternalObservation) error {
+	toAppend := []eventlog.NewEvent{
+		mustEvent(runID, fmt.Sprintf("external_state_observed_%d", version+1), EventExternalStateObserved, observation, o.now()),
+	}
+	if isTerminal(observation.Phase) && !state.outcomeRecorded {
+		toAppend = append(toAppend,
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": outcomeForPhase(observation.Phase)}, o.now()),
+			mustEvent(runID, "cleanup_requested", EventCleanupRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+		)
+	}
+	if err := o.appendEvents(ctx, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), toAppend); err != nil {
+		return err
+	}
+	version += uint64(len(toAppend))
+	if isTerminal(observation.Phase) {
+		return o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
+	}
+	return nil
+}
+
+func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID string, version uint64, launchReq *adapter.LaunchRequest) error {
+	if launchReq == nil {
+		return fmt.Errorf("orchestrator: cleanup requested without launch intent")
+	}
+	releaseReq := adapter.ReleaseRequest{OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey}
+	hash, err := domain.CanonicalHash(releaseReq)
+	if err != nil {
+		return err
+	}
+	releaseReq.RequestHash = hash
+	if _, err := o.adapter.Release(ctx, releaseReq); err != nil {
+		return err
+	}
+	return o.appendEvents(ctx, workspaceID, runID, version, "advance:cleanup", []eventlog.NewEvent{
+		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, map[string]any{"launch_key": launchReq.LaunchKey}, o.now()),
+		mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+	})
+}
+
 func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
 	requestHash, err := domain.CanonicalHash(events)
 	if err != nil {
@@ -318,6 +354,67 @@ func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID stri
 		Events:                events,
 	})
 	return err
+}
+
+type runState struct {
+	requested           *runRequestedData
+	attempt             *attemptData
+	launchIntent        *adapter.LaunchRequest
+	launchAccepted      bool
+	launchIndeterminate bool
+	outcomeRecorded     bool
+	cleanupRequested    bool
+	cleanupConfirmed    bool
+	closed              bool
+}
+
+func reduceRun(events []eventlog.StoredEvent) (runState, error) {
+	var state runState
+	for _, event := range events {
+		switch event.Type {
+		case EventRunRequested:
+			var data runRequestedData
+			payload := event.PrivateData
+			if len(payload) == 0 {
+				payload = event.Data
+			}
+			if err := json.Unmarshal(payload, &data); err != nil {
+				return runState{}, err
+			}
+			state.requested = &data
+		case EventAttemptCreated:
+			var data attemptData
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return runState{}, err
+			}
+			state.attempt = &data
+		case EventLaunchIntentRecorded:
+			var data adapter.LaunchRequest
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				return runState{}, err
+			}
+			state.launchIntent = &data
+		case EventLaunchAccepted:
+			state.launchAccepted = true
+		case EventLaunchIndeterminate:
+			state.launchIndeterminate = true
+		case EventRunOutcomeRecorded:
+			state.outcomeRecorded = true
+		case EventCleanupRequested:
+			state.cleanupRequested = true
+		case EventCleanupConfirmed:
+			state.cleanupConfirmed = true
+		case EventRunClosed:
+			state.closed = true
+		}
+	}
+	if state.requested == nil {
+		return runState{}, fmt.Errorf("orchestrator: run requested event not found")
+	}
+	if state.launchIntent == nil && state.attempt != nil {
+		return runState{}, fmt.Errorf("orchestrator: attempt exists without launch intent")
+	}
+	return state, nil
 }
 
 func decodeRunRequested(events []eventlog.StoredEvent) (runRequestedData, error) {

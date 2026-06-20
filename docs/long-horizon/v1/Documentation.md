@@ -75,9 +75,9 @@ High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker
 | Status | Severity | Finding | Owner milestone |
 | --- | --- | --- | --- |
 | Open | High | Executable server cannot run the advertised broker fast path | M5 |
-| Open | High | `AdvanceRun` is not replay-safe after partial progress | M4 |
-| Open | High | Durable `LaunchIntentRecorded` recovery is not event-log authoritative | M4 |
-| Open | High | Launch timeout and indeterminate behavior collapse into `LaunchFailed` | M4 |
+| Fixed in M4 | High | `AdvanceRun` is not replay-safe after partial progress | M4 |
+| Fixed in M4 | High | Durable `LaunchIntentRecorded` recovery is not event-log authoritative | M4 |
+| Fixed in M4 | High | Launch timeout and indeterminate behavior collapse into `LaunchFailed` | M4 |
 | Fixed in M3 | High | Adapter launch contract does not carry the full OCI workload or placement metadata | M3 |
 | Fixed in M1 | High | Public events and event APIs can expose literal environment values | M1 |
 | Fixed in M2 | High | Scheduler ignores accelerator/GPU requirements | M2 |
@@ -85,7 +85,7 @@ High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker
 | Fixed in M2 | High | Placement determinism depends on input offer order | M2 |
 | Open | High | Required V1 run endpoints are missing | M5 |
 | Open | High | API idempotency conflicts are not machine-readable 409 responses | M5 |
-| Open | Medium | Cleanup retry/no-orphan behavior is not robust | M4 |
+| Fixed in M4 | Medium | Cleanup retry/no-orphan behavior is not robust | M4 |
 | Fixed in M2 | Medium | Unknown or dishonest capability facts can pass feasibility checks | M2 |
 | Fixed in M2 | Medium | Price constraints and scheduler policy penalties are incomplete | M2 |
 | Open | Medium | Placement preview bypasses workload validation and can panic on empty containers | M5 |
@@ -340,6 +340,50 @@ Handoff:
 - Start M4 by replacing `AdvanceRun`'s linear happy path with event-stream state recovery that observes existing launches and resumes cleanup from durable events.
 - Keep side effects behind recorded durable intents.
 
+### M4 - Event-Log Authoritative Orchestrator And Reconciler Core
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:06 PDT`
+Completed: `2026-06-20 01:10 PDT`
+Plan reference: `Plan.md#milestone-4-event-log-authoritative-orchestrator-and-reconciler-core`
+Prompt requirements covered: `event-log authority, replay-safe lifecycle, launch-intent recovery, indeterminate launch reconciliation, cleanup-before-close`
+
+Scope:
+
+- Reworked `AdvanceRun` around an event-stream reducer so recorded launch intents and cleanup requests are authoritative.
+- Added replay-safe observation recording with unique command keys.
+- Added indeterminate launch recording/reconciliation before retry and prevented indeterminate results from becoming simple launch failures.
+- Added cleanup retry behavior that resumes from durable cleanup request without relaunching.
+- Added a small `internal/reconciler` entry point that delegates lifecycle advancement through the repaired orchestrator boundary.
+
+Acceptance criteria:
+
+- Replaying `AdvanceRun` after nonterminal observation does not perform a second launch.
+- Existing `LaunchIntentRecorded` is recovered even if current offers disappear.
+- Cleanup retry proceeds from cleanup state, not placement/launch.
+- Indeterminate launch outcomes are reconciled by observation/list-owned behavior before retry.
+- Runs still close only after cleanup confirmation.
+
+Implementation notes:
+
+- `reduceRun` reconstructs run lifecycle state from stored events.
+- `LaunchIntentRecorded` stores the full adapter launch request, so replay can continue without re-querying offers.
+- Reconciler package is intentionally thin at this checkpoint; the behavioral reducer lives with the orchestrator and is covered by orchestrator tests.
+
+Verification:
+
+- `go test ./internal/orchestrator -count=1` - `passed`.
+- `go test ./internal/reconciler -count=1` - `passed`.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M4 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M5 by wiring the runnable HTTP fake-adapter fast path and adding required run endpoints, projections, explicit workspace scoping, idempotency conflicts, and OpenAPI schemas.
+- M0-M4 audit-lock failures are now repaired; full suite should stay green unless M5 intentionally adds new red tests first.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -378,6 +422,11 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:06 PDT | M3 validation | `go test ./... || true` | expected red | Only M4 replay/recovery audit-lock tests fail |
 | 2026-06-20 01:06 PDT | M3 validation | `go build ./...` | passed | Build green after M3 |
 | 2026-06-20 01:06 PDT | M3 validation | `git status --short --branch` | observed | M3 source/test/docs changes only |
+| 2026-06-20 01:10 PDT | M4 focused | `go test ./internal/orchestrator -count=1` | passed | Replay, launch-intent recovery, indeterminate launch, cleanup retry tests green |
+| 2026-06-20 01:10 PDT | M4 focused | `go test ./internal/reconciler -count=1` | passed | Reconciler entry point tests green |
+| 2026-06-20 01:10 PDT | M4 validation | `go test ./...` | passed | Full suite green after M4 |
+| 2026-06-20 01:10 PDT | M4 validation | `go build ./...` | passed | Build green after M4 |
+| 2026-06-20 01:10 PDT | M4 validation | `git status --short --branch` | observed | M4 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -432,6 +481,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start `Plan.md` Milestone 4: event-log authoritative orchestrator and reconciler core.
+Start `Plan.md` Milestone 5: runnable fast path, API repair, and OpenAPI completeness.
 
 The remaining M0 audit-lock tests are expected to fail until their owner milestones fix them. Do not edit production code outside the active milestone, and do not start Docker, secrets, sinks, or UI work before M5 passes.
