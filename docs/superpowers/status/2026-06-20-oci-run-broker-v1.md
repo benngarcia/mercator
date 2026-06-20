@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Task 6: HTTP API And OpenAPI.
+Task 7: Final Verification.
 
 ## Completed
 
@@ -15,6 +15,7 @@ Task 6: HTTP API And OpenAPI.
 - Implemented Task 3 pure deterministic scheduler with structured hard rejections and score-based selection.
 - Implemented Task 4 adapter contract and deterministic fake adapter with idempotent lifecycle methods.
 - Implemented Task 5 run orchestrator fast path with event-first placement/launch, fake-adapter observation, cleanup confirmation, and run closure.
+- Implemented Task 6 minimal REST API, OpenAPI document, and `cmd/mercator` entrypoint.
 
 ## Decisions
 
@@ -42,6 +43,10 @@ Task 6: HTTP API And OpenAPI.
 - Task 5 red test: `go test ./internal/orchestrator -count=1` failed on missing orchestrator API/events.
 - Task 5 focused green: `go test ./internal/orchestrator -count=1` passed.
 - Task 5 full green: `go test ./...` passed for adapter, domain, eventlog, orchestrator, and scheduler packages.
+- Task 6 red test: `go test ./internal/httpapi -count=1` failed on missing HTTP API types/server.
+- Task 6 focused green: `go test ./internal/httpapi -count=1` passed.
+- Task 6 full green: `go test ./...` passed for all packages.
+- Task 6 build green: `go build ./...` passed.
 
 ## Known Gaps
 

@@ -22,6 +22,10 @@ Early V1 foundation. The current implementation covers the load-bearing core:
    failures, and indeterminate launches.
 4. **Scheduler** — pure capability filtering plus a money-equivalent cost/latency
    placement model that emits an audited decision.
+5. **Run fast path** — event-first orchestration through placement, launch intent,
+   fake-adapter launch, observation, cleanup confirmation, and run closure.
+6. **HTTP API** — minimal REST surface for run creation, run events, placement
+   preview, health, and OpenAPI discovery.
 
 See the design notes for the full V1 ontology, invariants, and roadmap.
 
@@ -34,3 +38,11 @@ go test ./...
 
 The project uses a pure-Go SQLite driver (`modernc.org/sqlite`) so the binary
 builds without cgo.
+
+## Run
+
+```sh
+MERCATOR_SQLITE_DSN='file:/tmp/mercator.db' go run ./cmd/mercator
+```
+
+The server listens on `:8080` by default. Set `MERCATOR_ADDR` to override it.
