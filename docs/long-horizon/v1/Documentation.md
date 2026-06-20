@@ -74,7 +74,7 @@ High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker
 
 | Status | Severity | Finding | Owner milestone |
 | --- | --- | --- | --- |
-| Open | High | Executable server cannot run the advertised broker fast path | M5 |
+| Fixed in M5 | High | Executable server cannot run the advertised broker fast path | M5 |
 | Fixed in M4 | High | `AdvanceRun` is not replay-safe after partial progress | M4 |
 | Fixed in M4 | High | Durable `LaunchIntentRecorded` recovery is not event-log authoritative | M4 |
 | Fixed in M4 | High | Launch timeout and indeterminate behavior collapse into `LaunchFailed` | M4 |
@@ -83,15 +83,15 @@ High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker
 | Fixed in M2 | High | Scheduler ignores accelerator/GPU requirements | M2 |
 | Fixed in M3 | High | Fake adapter idempotency is incomplete for `LaunchKey` reuse | M3 |
 | Fixed in M2 | High | Placement determinism depends on input offer order | M2 |
-| Open | High | Required V1 run endpoints are missing | M5 |
-| Open | High | API idempotency conflicts are not machine-readable 409 responses | M5 |
+| Fixed in M5 | High | Required V1 run endpoints are missing | M5 |
+| Fixed in M5 | High | API idempotency conflicts are not machine-readable 409 responses | M5 |
 | Fixed in M4 | Medium | Cleanup retry/no-orphan behavior is not robust | M4 |
 | Fixed in M2 | Medium | Unknown or dishonest capability facts can pass feasibility checks | M2 |
 | Fixed in M2 | Medium | Price constraints and scheduler policy penalties are incomplete | M2 |
-| Open | Medium | Placement preview bypasses workload validation and can panic on empty containers | M5 |
+| Fixed in M5 | Medium | Placement preview bypasses workload validation and can panic on empty containers | M5 |
 | Fixed in M2 | Medium | Decision audit contents are incomplete | M2 |
-| Open | Medium | OpenAPI is materially incomplete | M5 |
-| Open | Medium | Workspace isolation at the HTTP boundary is weak | M5 |
+| Fixed in M5 | Medium | OpenAPI is materially incomplete | M5 |
+| Fixed in M5 | Medium | Workspace isolation at the HTTP boundary is weak | M5 |
 | Open | Medium | Subscription offsets are written but not used by `Subscribe` | M10 |
 | Fixed in M1 | Medium | OCI-only validation is not hardened enough | M1 |
 | Open | Medium | Known gaps under-report required V1 service areas | M0/M5/M13 |
@@ -384,6 +384,50 @@ Handoff:
 - Start M5 by wiring the runnable HTTP fake-adapter fast path and adding required run endpoints, projections, explicit workspace scoping, idempotency conflicts, and OpenAPI schemas.
 - M0-M4 audit-lock failures are now repaired; full suite should stay green unless M5 intentionally adds new red tests first.
 
+### M5 - Runnable Fast Path, API Repair, And OpenAPI Completeness
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:10 PDT`
+Completed: `2026-06-20 01:14 PDT`
+Plan reference: `Plan.md#milestone-5-runnable-fast-path-api-repair-and-openapi-completeness`
+Prompt requirements covered: `HTTP fake fast path, run read/list/wait/events/decision/refresh links, explicit workspace scoping, idempotency conflicts, OpenAPI truthfulness`
+
+Scope:
+
+- `POST /v1/runs` now drives create plus `AdvanceRun`, so fake-adapter runs can progress through placement, launch intent, launch, observation, cleanup, and closure.
+- Added event-derived run get/list/wait/decision/refresh endpoints and link responses.
+- Made run read/event endpoints require explicit `workspace_id`.
+- Returned machine-readable HTTP 409 for idempotency-key reuse with a different request hash.
+- Expanded OpenAPI paths, request body, response schemas, error schema, event list shape, decision shape, and conflict response.
+- Validated placement preview workloads before scheduling to prevent validation bypass/panic.
+
+Acceptance criteria:
+
+- Advertised fake-adapter broker fast path is runnable through HTTP.
+- Required V1 run endpoints exist and are covered by HTTP tests.
+- OpenAPI describes the implemented run request/response/error shapes.
+- Workspace isolation is explicit for run read/list/event/decision/refresh boundaries.
+- High and medium audit findings from the repair set are now fixed or have later owner milestones.
+
+Implementation notes:
+
+- Event-derived projections currently live on the orchestrator; disposable projection tables are deferred to later projection-runner work.
+- Cancel endpoint exists as a read-oriented placeholder at this checkpoint; full cancellation semantics remain future lifecycle work.
+
+Verification:
+
+- `go test ./internal/httpapi -count=1` - `passed`.
+- `go test ./internal/orchestrator -count=1` - `passed`.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M5 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M6 by adding event-backed workload revisions and an OCI image resolver.
+- Do not start Docker, secrets, sinks, or UI work before the post-M5 repair state remains green.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -427,6 +471,11 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:10 PDT | M4 validation | `go test ./...` | passed | Full suite green after M4 |
 | 2026-06-20 01:10 PDT | M4 validation | `go build ./...` | passed | Build green after M4 |
 | 2026-06-20 01:10 PDT | M4 validation | `git status --short --branch` | observed | M4 source/test/docs changes only |
+| 2026-06-20 01:14 PDT | M5 focused | `go test ./internal/httpapi -count=1` | passed | Fast path, run endpoints, workspace scoping, 409 conflict, OpenAPI, and preview validation tests green |
+| 2026-06-20 01:14 PDT | M5 focused | `go test ./internal/orchestrator -count=1` | passed | Event-derived projection helpers still green |
+| 2026-06-20 01:14 PDT | M5 validation | `go test ./...` | passed | Full suite green after M5 |
+| 2026-06-20 01:14 PDT | M5 validation | `go build ./...` | passed | Build green after M5 |
+| 2026-06-20 01:14 PDT | M5 validation | `git status --short --branch` | observed | M5 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -481,6 +530,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start `Plan.md` Milestone 5: runnable fast path, API repair, and OpenAPI completeness.
+Start `Plan.md` Milestone 6: workload service and OCI image resolver.
 
 The remaining M0 audit-lock tests are expected to fail until their owner milestones fix them. Do not edit production code outside the active milestone, and do not start Docker, secrets, sinks, or UI work before M5 passes.

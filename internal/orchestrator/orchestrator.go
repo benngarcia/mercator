@@ -193,7 +193,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:placement", []eventlog.NewEvent{
 			mustEvent(runID, "placement_decided", EventPlacementDecided, placementData{Decision: decision}, o.now()),
 			mustEvent(runID, "attempt_created", EventAttemptCreated, attempt, o.now()),
-			mustEvent(runID, "launch_intent_recorded", EventLaunchIntentRecorded, launchReq, o.now()),
+			mustPrivateEvent(runID, "launch_intent_recorded", EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
 		}); err != nil {
 			return err
 		}
@@ -234,6 +234,67 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 
 func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID string) ([]eventlog.StoredEvent, error) {
 	return o.log.ReadStream(ctx, runStream(workspaceID, runID), 0, 1000)
+}
+
+func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
+	events, err := o.GetRunEvents(ctx, workspaceID, runID)
+	if err != nil {
+		return domain.RunRecord{}, err
+	}
+	if len(events) == 0 {
+		return domain.RunRecord{}, fmt.Errorf("orchestrator: run not found")
+	}
+	state, err := reduceRun(events)
+	if err != nil {
+		return domain.RunRecord{}, err
+	}
+	return runRecordFromState(workspaceID, runID, state), nil
+}
+
+func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
+	events, err := o.log.ReadAll(ctx, 0, 1000, eventlog.EventFilter{
+		WorkspaceID: workspaceID,
+		StreamTypes: []string{"run"},
+		EventTypes:  []string{EventRunRequested},
+	})
+	if err != nil {
+		return nil, err
+	}
+	records := make([]domain.RunRecord, 0, len(events))
+	for _, event := range events {
+		record, err := o.GetRun(ctx, workspaceID, event.StreamID)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
+	return records, nil
+}
+
+func (o *Orchestrator) GetPlacementDecision(ctx context.Context, workspaceID, runID string) (domain.PlacementDecision, error) {
+	events, err := o.GetRunEvents(ctx, workspaceID, runID)
+	if err != nil {
+		return domain.PlacementDecision{}, err
+	}
+	for _, event := range events {
+		if event.Type != EventPlacementDecided {
+			continue
+		}
+		var data placementData
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return domain.PlacementDecision{}, err
+		}
+		return data.Decision, nil
+	}
+	return domain.PlacementDecision{}, fmt.Errorf("orchestrator: placement decision not found")
+}
+
+func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
+	if err := o.AdvanceRun(ctx, workspaceID, runID); err != nil {
+		return domain.RunRecord{}, err
+	}
+	return o.GetRun(ctx, workspaceID, runID)
 }
 
 func (o *Orchestrator) decide(ctx context.Context, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
@@ -390,7 +451,11 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 			state.attempt = &data
 		case EventLaunchIntentRecorded:
 			var data adapter.LaunchRequest
-			if err := json.Unmarshal(event.Data, &data); err != nil {
+			payload := event.PrivateData
+			if len(payload) == 0 {
+				payload = event.Data
+			}
+			if err := json.Unmarshal(payload, &data); err != nil {
 				return runState{}, err
 			}
 			state.launchIntent = &data
@@ -415,6 +480,38 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 		return runState{}, fmt.Errorf("orchestrator: attempt exists without launch intent")
 	}
 	return state, nil
+}
+
+func runRecordFromState(workspaceID, runID string, state runState) domain.RunRecord {
+	record := domain.RunRecord{
+		ID:                 runID,
+		WorkspaceID:        workspaceID,
+		WorkloadRevisionID: state.requested.Workload.ID,
+		Phase:              "requested",
+		Cleanup:            domain.CleanupNotRequired,
+	}
+	if state.launchIntent != nil {
+		record.Phase = "launching"
+	}
+	if state.launchAccepted || state.launchIndeterminate {
+		record.Phase = "running"
+		record.Cleanup = domain.CleanupPending
+	}
+	if state.cleanupRequested {
+		record.Phase = "cleaning_up"
+		record.Cleanup = domain.CleanupPending
+	}
+	if state.cleanupConfirmed {
+		record.Cleanup = domain.CleanupConfirmed
+	}
+	if state.closed {
+		record.Phase = "closed"
+		record.Closed = true
+		if state.outcomeRecorded {
+			record.Outcome = domain.RunOutcomeSucceeded
+		}
+	}
+	return record
 }
 
 func decodeRunRequested(events []eventlog.StoredEvent) (runRequestedData, error) {
@@ -447,6 +544,16 @@ func mustEvent(runID, suffix, eventType string, data any, now time.Time) eventlo
 		Visibility:    eventlog.VisibilityPublic,
 		Data:          encoded,
 	}
+}
+
+func mustPrivateEvent(runID, suffix, eventType string, publicData any, privateData any, now time.Time) eventlog.NewEvent {
+	event := mustEvent(runID, suffix, eventType, publicData, now)
+	encoded, err := json.Marshal(privateData)
+	if err != nil {
+		panic(err)
+	}
+	event.PrivateData = encoded
+	return event
 }
 
 func eventID(runID, suffix string) string {
@@ -552,6 +659,22 @@ func launchEnvironment(env map[string]domain.EnvBinding) []adapter.EnvironmentBi
 		})
 	}
 	return bindings
+}
+
+func publicLaunchRequest(req adapter.LaunchRequest) adapter.LaunchRequest {
+	public := req
+	public.Environment = make([]adapter.EnvironmentBinding, 0, len(req.Environment))
+	for _, binding := range req.Environment {
+		kind := "empty"
+		if binding.Value != nil {
+			kind = "literal"
+		}
+		if binding.SecretRef != nil {
+			kind = "secret"
+		}
+		public.Environment = append(public.Environment, adapter.EnvironmentBinding{Name: binding.Name, Value: &kind})
+	}
+	return public
 }
 
 func cloneStringPtr(value *string) *string {

@@ -26,15 +26,70 @@ const OpenAPIJSON = `{
       }
     },
     "/v1/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "parameters": [
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Run list", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunListResponse"}}}},
+          "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      },
       "post": {
         "operationId": "createRun",
         "parameters": [
           {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string"}}
         ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateRunRequest"}}}},
         "responses": {
-          "202": {"description": "Run request accepted"},
-          "400": {"description": "Invalid request"}
+          "202": {"description": "Run request accepted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateRunResponse"}}}},
+          "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "409": {"description": "IdempotencyConflict", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
         }
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "operationId": "getRun",
+        "parameters": [
+          {"name": "run_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Run", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunResponse"}}}},
+          "404": {"description": "Run not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
+    "/v1/runs/{run_id}:wait": {
+      "get": {
+        "operationId": "waitRun",
+        "parameters": [
+          {"name": "run_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "Run", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunResponse"}}}}}
+      }
+    },
+    "/v1/runs/{run_id}:refresh": {
+      "post": {
+        "operationId": "refreshRun",
+        "parameters": [
+          {"name": "run_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "Run", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunResponse"}}}}}
+      }
+    },
+    "/v1/runs/{run_id}:cancel": {
+      "post": {
+        "operationId": "cancelRun",
+        "parameters": [
+          {"name": "run_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "Run", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunResponse"}}}}}
       }
     },
     "/v1/runs/{run_id}/events": {
@@ -42,9 +97,19 @@ const OpenAPIJSON = `{
         "operationId": "listRunEvents",
         "parameters": [
           {"name": "run_id", "in": "path", "required": true, "schema": {"type": "string"}},
-          {"name": "workspace_id", "in": "query", "required": false, "schema": {"type": "string"}}
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
         ],
-        "responses": {"200": {"description": "Run events"}}
+        "responses": {"200": {"description": "Run events", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EventListResponse"}}}}}
+      }
+    },
+    "/v1/runs/{run_id}/decision": {
+      "get": {
+        "operationId": "getRunDecision",
+        "parameters": [
+          {"name": "run_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "Placement decision", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlacementDecisionResponse"}}}}}
       }
     },
     "/v1/placements:preview": {
@@ -52,6 +117,17 @@ const OpenAPIJSON = `{
         "operationId": "previewPlacement",
         "responses": {"200": {"description": "Placement decision preview"}}
       }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateRunRequest": {"type": "object", "required": ["run_id", "workload"], "properties": {"workspace_id": {"type": "string"}, "run_id": {"type": "string"}, "workload": {"type": "object"}}},
+      "CreateRunResponse": {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}, "duplicate": {"type": "boolean"}}},
+      "RunResponse": {"type": "object", "required": ["run"], "properties": {"run": {"type": "object"}, "links": {"type": "object", "additionalProperties": {"type": "string"}}}},
+      "RunListResponse": {"type": "object", "required": ["runs"], "properties": {"runs": {"type": "array", "items": {"type": "object"}}}},
+      "EventListResponse": {"type": "object", "required": ["events"], "properties": {"events": {"type": "array", "items": {"type": "object"}}}},
+      "PlacementDecisionResponse": {"type": "object", "required": ["decision"], "properties": {"decision": {"type": "object"}}},
+      "ErrorResponse": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}}
     }
   }
 }`

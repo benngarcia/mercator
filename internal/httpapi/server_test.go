@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bengarcia/mercator/internal/adapter"
 	"github.com/bengarcia/mercator/internal/adapter/fake"
 	"github.com/bengarcia/mercator/internal/domain"
 	"github.com/bengarcia/mercator/internal/eventlog"
@@ -60,8 +61,106 @@ func TestCreateRunAndListEvents(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode events: %v", err)
 	}
-	if len(listed.Events) != 1 || listed.Events[0].Type != orchestrator.EventRunRequested {
+	if len(listed.Events) == 0 || listed.Events[0].Type != orchestrator.EventRunRequested {
 		t.Fatalf("unexpected events response: %+v", listed)
+	}
+}
+
+func TestCreateRunDrivesFakeAdapterFastPath(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	body := mustMarshal(t, createRunBody{RunID: "run_fast", Workload: httpRevision()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_fast")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_fast/events?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listed eventListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode events: %v", err)
+	}
+	if !hasEventType(listed.Events, orchestrator.EventLaunchIntentRecorded) || !hasEventType(listed.Events, orchestrator.EventRunClosed) {
+		t.Fatalf("create run should drive fake fast path through closure, got %+v", listed.Events)
+	}
+}
+
+func TestRunReadListWaitDecisionAndRefreshEndpoints(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	body := mustMarshal(t, createRunBody{RunID: "run_read", Workload: httpRevision()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_read")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	for _, target := range []string{
+		"/v1/runs/run_read?workspace_id=ws_1",
+		"/v1/runs?workspace_id=ws_1",
+		"/v1/runs/run_read:wait?workspace_id=ws_1",
+		"/v1/runs/run_read/decision?workspace_id=ws_1",
+	} {
+		req = httptest.NewRequest(http.MethodGet, target, nil)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s expected 200, got %d body=%s", target, rec.Code, rec.Body.String())
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs/run_read:refresh?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunEndpointsRequireExplicitWorkspace(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs/run_1/events", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected explicit workspace 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateRunIdempotencyConflictReturns409(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	body := mustMarshal(t, createRunBody{RunID: "run_conflict", Workload: httpRevision()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_conflict")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected first 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	other := httpRevision()
+	other.ID = "wrev_other"
+	body = mustMarshal(t, createRunBody{RunID: "run_conflict", Workload: other})
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_conflict")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "IDEMPOTENCY_CONFLICT") {
+		t.Fatalf("expected machine-readable conflict, got %s", rec.Body.String())
 	}
 }
 
@@ -170,6 +269,31 @@ func TestPlacementPreviewAndOpenAPI(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s expected 200, got %d body=%s", path, rec.Code, rec.Body.String())
 		}
+		if path == "/openapi.json" {
+			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "IdempotencyConflict", `"409"`} {
+				if !strings.Contains(rec.Body.String(), required) {
+					t.Fatalf("OpenAPI missing %s: %s", required, rec.Body.String())
+				}
+			}
+		}
+	}
+}
+
+func TestPlacementPreviewValidatesWorkload(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	rev := httpRevision()
+	rev.Spec.Containers = nil
+	body := mustMarshal(t, placementPreviewBody{RunID: "run_preview_invalid", Workload: rev})
+	req := httptest.NewRequest(http.MethodPost, "/v1/placements:preview", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "V1_ONE_CONTAINER") {
+		t.Fatalf("expected validation code, got %s", rec.Body.String())
 	}
 }
 
@@ -185,7 +309,10 @@ func newHTTPTestServer(t *testing.T) http.Handler {
 		}
 	})
 	now := time.Now().UTC()
-	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", now)}))
+	ad := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", now)}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	)
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
 	return New(orch, sched, ad)
@@ -254,4 +381,13 @@ func mustMarshal(t *testing.T, v any) []byte {
 		t.Fatalf("marshal: %v", err)
 	}
 	return data
+}
+
+func hasEventType(events []eventlog.CloudEvent, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
 }
