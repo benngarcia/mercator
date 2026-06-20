@@ -68,35 +68,45 @@ Medium severity findings from the verification pass:
 - OCI-only validation is not hardened enough.
 - Known gaps under-report major missing V1 areas.
 
-## Audit Finding Ownership
+## Audit Finding Ownership Checklist
 
-| Finding | Owner milestone |
-| --- | --- |
-| Public env/secret values can leak through public events/API | M1 |
-| OCI boundary validation can be bypassed or is incomplete | M1 |
-| Scheduler ignores GPU/accelerators | M2 |
-| Unknown and dishonest facts pass feasibility | M2 |
-| Placement determinism depends on input order | M2 |
-| Price caps and penalties are incomplete | M2 |
-| Adapter launch does not carry OCI workload | M3 |
-| Fake adapter launch-key idempotency is incomplete | M3 |
-| `AdvanceRun` is not replay-safe | M4 |
-| Launch-intent recovery is not event-log authoritative | M4 |
-| Indeterminate launch handling is absent | M4 |
-| Cleanup retry/no-orphan behavior is weak | M4 |
-| HTTP fast path is not runnable | M5 |
-| Required run endpoints are missing | M5 |
-| API idempotency conflicts are not 409 machine-readable responses | M5 |
-| OpenAPI is incomplete | M5 |
-| Workspace scoping is weak | M5 |
-| Workload service and immutable revision store are missing | M6 |
-| OCI tag-to-digest resolver is missing | M6 |
-| Connection, offer, authz, latency services are missing | M7 |
-| Docker host adapter is missing | M8 |
-| Secret vault and grants are missing | M9 |
-| Projection runner and CLI are missing | M10 |
-| Event sinks and durable cursor/replay are missing | M11 |
-| Embedded UI is missing | M12 |
+High and medium findings from `docs/superpowers/status/2026-06-20-oci-run-broker-v1-agent-verification.md` are locked here so later milestones have explicit repair owners.
+
+| Status | Severity | Finding | Owner milestone |
+| --- | --- | --- | --- |
+| Open | High | Executable server cannot run the advertised broker fast path | M5 |
+| Open | High | `AdvanceRun` is not replay-safe after partial progress | M4 |
+| Open | High | Durable `LaunchIntentRecorded` recovery is not event-log authoritative | M4 |
+| Open | High | Launch timeout and indeterminate behavior collapse into `LaunchFailed` | M4 |
+| Open | High | Adapter launch contract does not carry the full OCI workload or placement metadata | M3 |
+| Open | High | Public events and event APIs can expose literal environment values | M1 |
+| Open | High | Scheduler ignores accelerator/GPU requirements | M2 |
+| Open | High | Fake adapter idempotency is incomplete for `LaunchKey` reuse | M3 |
+| Open | High | Placement determinism depends on input offer order | M2 |
+| Open | High | Required V1 run endpoints are missing | M5 |
+| Open | High | API idempotency conflicts are not machine-readable 409 responses | M5 |
+| Open | Medium | Cleanup retry/no-orphan behavior is not robust | M4 |
+| Open | Medium | Unknown or dishonest capability facts can pass feasibility checks | M2 |
+| Open | Medium | Price constraints and scheduler policy penalties are incomplete | M2 |
+| Open | Medium | Placement preview bypasses workload validation and can panic on empty containers | M5 |
+| Open | Medium | Decision audit contents are incomplete | M2 |
+| Open | Medium | OpenAPI is materially incomplete | M5 |
+| Open | Medium | Workspace isolation at the HTTP boundary is weak | M5 |
+| Open | Medium | Subscription offsets are written but not used by `Subscribe` | M10 |
+| Open | Medium | OCI-only validation is not hardened enough | M1 |
+| Open | Medium | Known gaps under-report required V1 service areas | M0/M5/M13 |
+
+## Milestone 0 Regression Lock
+
+These tests intentionally fail at Milestone 0 and must not be treated as unexpected regressions until their owner milestones repair the behavior.
+
+| Test command | Owner milestone | Locked invariant | Current failure |
+| --- | --- | --- | --- |
+| `go test ./internal/orchestrator -run TestCreateRunPublicEventRedactsEnvironmentBindings -count=1` | M1 | Public `RunRequested` CloudEvents must not expose literal env values or secret reference metadata | Fails because public event data contains literal env values and secret reference name |
+| `go test ./internal/orchestrator -run TestAdvanceRunDoesNotRelaunchAfterNonterminalObservation -count=1` | M4 | Replaying `AdvanceRun` after a nonterminal observation must observe existing launch state, not relaunch | Fails with `eventlog: idempotency conflict` on second advance |
+| `go test ./internal/orchestrator -run TestAdvanceRunRecoversRecordedLaunchIntentWhenOffersChange -count=1` | M4 | Recorded launch intent must remain authoritative if current offers disappear | Fails with `orchestrator: no feasible offers` after offer cache changes |
+| `go test ./internal/adapter/fake -run TestFakeAdapterLaunchIsIdempotentAndDetectsConflicts -count=1` | M3 | Fake adapter must reject different operation keys reusing the same launch key/ownership token with a different request hash | Fails because launch succeeds instead of returning `adapter.ErrIdempotencyConflict` |
+| `go test ./internal/scheduler -run TestSchedulerDecisionStableAcrossOfferOrder -count=1` | M2 | Identical offer sets must produce stable candidate order and decision identity regardless of input order | Fails because candidate order and decision ID follow input order |
 
 ## Decision Log
 
@@ -159,6 +169,48 @@ Handoff:
 - `<what the next agent should inspect first>`
 - `<known risks or incomplete edges>`
 
+### M0 - Baseline And Audit Lock
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 00:47 PDT`
+Completed: `2026-06-20 00:47 PDT`
+Plan reference: `Plan.md#milestone-0-baseline-and-audit-lock`
+Prompt requirements covered: `audit ownership, executable regression lock, no V1 expansion`
+
+Scope:
+
+- Added executable audit-lock tests for public event redaction, replay-safe `AdvanceRun`, launch-intent recovery, fake adapter launch-key conflicts, and scheduler order determinism.
+- Updated audit ownership documentation for every high/medium finding from the 2026-06-20 verification report.
+- Did not change production behavior, add V1 expansion work, or mark any audit finding fixed.
+
+Acceptance criteria:
+
+- Each high/medium audit finding has an owner milestone.
+- Known failing regression tests are documented with exact commands.
+- Build remains green despite expected failing tests.
+
+Implementation notes:
+
+- Changed tests only under `internal/adapter/fake`, `internal/orchestrator`, and `internal/scheduler`.
+- Added `Milestone 0 Regression Lock` so later agents can distinguish expected audit failures from new regressions.
+
+Verification:
+
+- `go test ./internal/orchestrator -run TestCreateRunPublicEventRedactsEnvironmentBindings -count=1` - `failed as expected` - public `RunRequested` data contains literal env and secret reference metadata.
+- `go test ./internal/orchestrator -run TestAdvanceRunDoesNotRelaunchAfterNonterminalObservation -count=1` - `failed as expected` - second advance returns `eventlog: idempotency conflict`.
+- `go test ./internal/orchestrator -run TestAdvanceRunRecoversRecordedLaunchIntentWhenOffersChange -count=1` - `failed as expected` - offer loss after recorded intent returns `orchestrator: no feasible offers`.
+- `go test ./internal/adapter/fake -run TestFakeAdapterLaunchIsIdempotentAndDetectsConflicts -count=1` - `failed as expected` - launch-key reuse with a different operation key succeeds.
+- `go test ./internal/scheduler -run TestSchedulerDecisionStableAcrossOfferOrder -count=1` - `failed as expected` - input order changes candidate order and decision ID.
+- `go test ./... || true` - `expected red` - fails only on audit-lock tests in adapter/fake, orchestrator, and scheduler.
+- `go build ./...` - `passed` - executable build remains green.
+- `git status --short --branch` - `observed` - test and documentation changes only.
+
+Handoff:
+
+- Start M1 by making public events/API redaction-safe and hardening OCI validation.
+- Do not start Docker, secrets, sinks, or UI work before M5 passes.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -167,6 +219,17 @@ Use this format for every command or manual check. Do not summarize failures wit
 | --- | --- | --- | --- | --- |
 | 2026-06-20 | branch state | `git status --short --branch` | observed | `## beng/v1-run-broker`; `?? docs/long-horizon/` |
 | 2026-06-20 | branch state | `git rev-parse HEAD` | observed | `f73665c9dead1cc9ba20ee7e200dcd4e206d54ee` |
+| 2026-06-20 00:47 PDT | baseline | `git status --short --branch` | observed | `## beng/v1-run-broker` |
+| 2026-06-20 00:47 PDT | baseline | `go test ./... || true` | passed | All existing tests passed before M0 audit-lock regressions were added |
+| 2026-06-20 00:47 PDT | baseline | `go build ./...` | passed | Build green before M0 edits |
+| 2026-06-20 00:47 PDT | M0 red | `go test ./internal/orchestrator -run TestCreateRunPublicEventRedactsEnvironmentBindings -count=1` | failed as expected | Public event exposed literal env value and secret reference name |
+| 2026-06-20 00:47 PDT | M0 red | `go test ./internal/orchestrator -run TestAdvanceRunDoesNotRelaunchAfterNonterminalObservation -count=1` | failed as expected | Second advance returned `eventlog: idempotency conflict` |
+| 2026-06-20 00:47 PDT | M0 red | `go test ./internal/orchestrator -run TestAdvanceRunRecoversRecordedLaunchIntentWhenOffersChange -count=1` | failed as expected | Second advance returned `orchestrator: no feasible offers` after offers disappeared |
+| 2026-06-20 00:47 PDT | M0 red | `go test ./internal/adapter/fake -run TestFakeAdapterLaunchIsIdempotentAndDetectsConflicts -count=1` | failed as expected | Different operation key reused launch key/ownership token without conflict |
+| 2026-06-20 00:47 PDT | M0 red | `go test ./internal/scheduler -run TestSchedulerDecisionStableAcrossOfferOrder -count=1` | failed as expected | Reversed offer order changed candidate order and decision ID |
+| 2026-06-20 00:47 PDT | M0 validation | `go test ./... || true` | expected red | Audit-lock tests fail in adapter/fake, orchestrator, and scheduler |
+| 2026-06-20 00:47 PDT | M0 validation | `go build ./...` | passed | Build green after M0 audit-lock tests |
+| 2026-06-20 00:47 PDT | M0 validation | `git status --short --branch` | observed | Test and documentation changes only |
 
 Required verification cadence:
 
@@ -221,6 +284,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start at `Plan.md` Milestone 0. Do not edit production code until the baseline/audit lock is complete and current failing regression tests are documented.
+Start `Plan.md` Milestone 1: public event redaction and workload boundary hardening.
 
-Recommended first implementation milestone after M0: reconcile documentation and claims so README/status/API language clearly says the current branch is a foundation scaffold, not complete V1. After that, begin the first correctness milestone around event-log authority, replay-safe lifecycle behavior, and public event redaction.
+The M0 audit-lock tests are expected to fail until their owner milestones fix them. Do not edit production code outside the active milestone, and do not start Docker, secrets, sinks, or UI work before M5 passes.

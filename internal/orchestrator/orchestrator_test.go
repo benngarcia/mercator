@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,45 @@ func TestCreateRunIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
+	ctx := context.Background()
+	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
+	literal := "literal-token-that-must-not-be-public"
+	rev := orchRevision()
+	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
+		"LOG_LEVEL": {Value: ptr("info")},
+		"API_TOKEN": {SecretRef: &domain.SecretReference{
+			Name:    "provider-secret-name-that-must-not-be-public",
+			Version: 7,
+		}},
+		"SERVICE_PASSWORD": {Value: &literal},
+	}
+
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{
+		WorkspaceID:    "ws_1",
+		RunID:          "run_redaction",
+		CommandKey:     "cmd_create_redaction",
+		IdempotencyKey: "idem_create_redaction",
+		Workload:       rev,
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_redaction")
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	publicData := string(events[0].CloudEvent().Data)
+	for _, forbidden := range []string{
+		"literal-token-that-must-not-be-public",
+		"provider-secret-name-that-must-not-be-public",
+		`"value":"info"`,
+	} {
+		if strings.Contains(publicData, forbidden) {
+			t.Fatalf("public RunRequested event exposed %q in %s", forbidden, publicData)
+		}
+	}
+}
+
 func TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter(t *testing.T) {
 	ctx := context.Background()
 	log := openOrchestratorLog(t)
@@ -57,6 +97,49 @@ func TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter(t *testing.T) {
 	}
 	if !spy.sawLaunchIntentBeforeLaunch {
 		t.Fatal("adapter launch happened before LaunchIntentRecorded was visible in the event log")
+	}
+}
+
+func TestAdvanceRunDoesNotRelaunchAfterNonterminalObservation(t *testing.T) {
+	ctx := context.Background()
+	ad := &countingAdapter{
+		Adapter: fake.New(
+			fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
+			fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
+		),
+	}
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("first advance: %v", err)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("second advance should observe recorded launch intent, not relaunch: %v", err)
+	}
+	if ad.launchCalls != 1 {
+		t.Fatalf("expected one adapter launch call across replay, got %d", ad.launchCalls)
+	}
+}
+
+func TestAdvanceRunRecoversRecordedLaunchIntentWhenOffersChange(t *testing.T) {
+	ctx := context.Background()
+	ad := &mutableOfferAdapter{
+		Adapter: fake.New(fake.WithLaunchOutcome(adapter.ExternalPhaseRunning)),
+		offers:  []domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())},
+	}
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("first advance: %v", err)
+	}
+	ad.offers = nil
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("advance should recover from recorded launch intent after offers disappear: %v", err)
+	}
+	if ad.launchCalls != 1 {
+		t.Fatalf("expected recovery to avoid a second launch, got %d launch calls", ad.launchCalls)
 	}
 }
 
@@ -129,6 +212,31 @@ type conflictAdapter struct {
 
 func (c conflictAdapter) Launch(context.Context, adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	return adapter.LaunchReceipt{}, adapter.ErrIdempotencyConflict
+}
+
+type countingAdapter struct {
+	*fake.Adapter
+	launchCalls int
+}
+
+func (c *countingAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	c.launchCalls++
+	return c.Adapter.Launch(ctx, req)
+}
+
+type mutableOfferAdapter struct {
+	*fake.Adapter
+	offers      []domain.OfferSnapshot
+	launchCalls int
+}
+
+func (m *mutableOfferAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	return append([]domain.OfferSnapshot(nil), m.offers...), nil
+}
+
+func (m *mutableOfferAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	m.launchCalls++
+	return m.Adapter.Launch(ctx, req)
 }
 
 func newTestOrchestrator(t *testing.T, ad adapter.Adapter) *Orchestrator {
@@ -247,4 +355,8 @@ func expectErrorIs(t *testing.T, err error, target error) {
 	if !errors.Is(err, target) {
 		t.Fatalf("expected %v, got %v", target, err)
 	}
+}
+
+func ptr(value string) *string {
+	return &value
 }

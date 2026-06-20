@@ -93,6 +93,46 @@ func TestSchedulerAllowsUnknownNetworkWhenPolicyAllowsIt(t *testing.T) {
 	}
 }
 
+func TestSchedulerDecisionStableAcrossOfferOrder(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	offers := []domain.OfferSnapshot{
+		schedulerOffer("off_slow", now, 0.00010, 40),
+		schedulerOffer("off_fast", now, 0.00012, 5),
+	}
+	forward, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     schedulerRevision(),
+		Offers:       offers,
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+		Weights: ScoreWeights{
+			StartLatencyUSDPerSecond: 0.001,
+		},
+	})
+	if err != nil {
+		t.Fatalf("evaluate forward: %v", err)
+	}
+	reversed, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     schedulerRevision(),
+		Offers:       []domain.OfferSnapshot{offers[1], offers[0]},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+		Weights: ScoreWeights{
+			StartLatencyUSDPerSecond: 0.001,
+		},
+	})
+	if err != nil {
+		t.Fatalf("evaluate reversed: %v", err)
+	}
+	if forward.ID != reversed.ID || forward.SelectedOfferSnapshotID != reversed.SelectedOfferSnapshotID {
+		t.Fatalf("same offer set should produce same decision identity and selection:\nforward=%+v\nreversed=%+v", forward, reversed)
+	}
+	if got, want := candidateIDs(reversed), candidateIDs(forward); got != want {
+		t.Fatalf("same offer set should produce stable candidate order: forward=%s reversed=%s", want, got)
+	}
+}
+
 func schedulerRevision() domain.WorkloadRevision {
 	return domain.WorkloadRevision{
 		ID:          "wrev_1",
@@ -160,6 +200,17 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 		Queue:    &domain.QueueSnapshot{QueuedWorkSeconds: startSeconds},
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
+}
+
+func candidateIDs(decision domain.PlacementDecision) string {
+	ids := ""
+	for _, candidate := range decision.Candidates {
+		if ids != "" {
+			ids += ","
+		}
+		ids += candidate.OfferSnapshotID
+	}
+	return ids
 }
 
 func assertCandidateRejected(t *testing.T, decision domain.PlacementDecision, offerID, code, path string) {

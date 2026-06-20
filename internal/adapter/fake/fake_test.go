@@ -40,6 +40,14 @@ func TestFakeAdapterLaunchIsIdempotentAndDetectsConflicts(t *testing.T) {
 	if !errors.Is(err, adapter.ErrIdempotencyConflict) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
 	}
+
+	sameLaunchDifferentOperation := req
+	sameLaunchDifferentOperation.OperationKey = "launch_run_1_retry"
+	sameLaunchDifferentOperation.RequestHash = "sha256:different-operation"
+	_, err = ad.Launch(ctx, sameLaunchDifferentOperation)
+	if !errors.Is(err, adapter.ErrIdempotencyConflict) {
+		t.Fatalf("expected launch-key conflict for different operation key, got %v", err)
+	}
 }
 
 func TestFakeAdapterObserveReleaseAndListOwned(t *testing.T) {
