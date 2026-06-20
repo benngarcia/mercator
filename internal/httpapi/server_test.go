@@ -17,6 +17,7 @@ import (
 	"github.com/bengarcia/mercator/internal/ociresolver"
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
+	"github.com/bengarcia/mercator/internal/secrets"
 	"github.com/bengarcia/mercator/internal/workload"
 )
 
@@ -368,6 +369,37 @@ func TestCreateRunCanReferenceStoredWorkloadRevision(t *testing.T) {
 	}
 }
 
+func TestSecretMetadataAndGrantEndpointsDoNotExposePlaintext(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	body := mustMarshal(t, createSecretVersionBody{WorkspaceID: "ws_1", SecretID: "sec_api", Value: "plaintext-secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_api/versions", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create secret version expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "plaintext-secret") {
+		t.Fatalf("secret create leaked plaintext: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/secrets?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "plaintext-secret") {
+		t.Fatalf("metadata expected 200 without plaintext, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	grantBody := mustMarshal(t, grantSecretBody{WorkspaceID: "ws_1", SecretID: "sec_api", Version: 1, ScopeType: "run", ScopeID: "run_1"})
+	req = httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_api/grants", bytes.NewReader(grantBody))
+	req.Header.Set("Idempotency-Key", "idem_grant")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("grant expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func newHTTPTestServer(t *testing.T) http.Handler {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
@@ -393,7 +425,7 @@ func newHTTPTestServer(t *testing.T) http.Handler {
 			Platform: "linux/amd64",
 		},
 	})
-	return NewWithServices(orch, sched, ad, workload.New(log), resolver)
+	return NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), resolver)
 }
 
 func httpRevision() domain.WorkloadRevision {

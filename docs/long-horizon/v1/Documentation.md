@@ -554,6 +554,46 @@ Handoff:
 
 - Start M9 by adding encrypted event-backed secret versions and scoped grants, then ensure adapter contracts carry descriptors without plaintext.
 
+### M9 - Secret Vault And Grants
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:25 PDT`
+Completed: `2026-06-20 01:27 PDT`
+Plan reference: `Plan.md#milestone-9-secret-vault-and-grants`
+Prompt requirements covered: `encrypted event-backed secret versions, metadata-only reads, scoped grants, revocation, plaintext non-observability`
+
+Scope:
+
+- Added `internal/secrets` AES-GCM encrypted secret version events, metadata reads, grant creation, grant revocation, and grant listing.
+- Added HTTP secret version, metadata list, and grant endpoints that never return plaintext.
+- Verified secret plaintext does not appear in non-test implementation files.
+
+Acceptance criteria:
+
+- Secret versions are encrypted in private event data and public event data contains only metadata.
+- Public API responses expose metadata and grants only, not plaintext.
+- Grants can be revoked and replayed from event history.
+
+Implementation notes:
+
+- Key management is currently a configured byte slice for the in-process vault; production key management remains a future hardening area.
+- Adapter contracts already carry descriptors without plaintext; secret materialization at launch remains deliberately narrow.
+
+Verification:
+
+- `go test ./internal/secrets/... -count=1` - `passed`.
+- `go test ./internal/httpapi -run Secret -count=1` - `passed`.
+- `go test ./internal/adapter/... -run Secret -count=1` - `passed`.
+- `rg -n "super-secret-value|plaintext-secret|plaintext-secret" internal --glob '!**/*_test.go' || true` - `passed` - no implementation/plain output hits.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M9 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M10 by adding projection runner replay/rebuild behavior and JSON-first CLI commands.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -623,6 +663,13 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:25 PDT | M8 validation | `go test ./...` | passed | Full suite green after M8 |
 | 2026-06-20 01:25 PDT | M8 validation | `go build ./...` | passed | Build green after M8 |
 | 2026-06-20 01:25 PDT | M8 validation | `git status --short --branch` | observed | M8 source/test/docs changes only |
+| 2026-06-20 01:27 PDT | M9 focused | `go test ./internal/secrets/... -count=1` | passed | Secret encryption, metadata, grant, revoke tests green |
+| 2026-06-20 01:27 PDT | M9 focused | `go test ./internal/httpapi -run Secret -count=1` | passed | Secret metadata/grant API tests green |
+| 2026-06-20 01:27 PDT | M9 focused | `go test ./internal/adapter/... -run Secret -count=1` | passed | Adapter packages have no secret-specific failures |
+| 2026-06-20 01:27 PDT | M9 check | `rg -n "super-secret-value\|plaintext-secret\|plaintext-secret" internal --glob '!**/*_test.go' || true` | passed | No non-test plaintext hits |
+| 2026-06-20 01:27 PDT | M9 validation | `go test ./...` | passed | Full suite green after M9 |
+| 2026-06-20 01:27 PDT | M9 validation | `go build ./...` | passed | Build green after M9 |
+| 2026-06-20 01:27 PDT | M9 validation | `git status --short --branch` | observed | M9 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -645,7 +692,6 @@ Blocking V1 correctness issues:
 
 Known missing feature areas from original V1:
 
-- Secret vault with encrypted event-backed secret versions and grants.
 - Live Docker integration test.
 - Reconciler and lease janitor.
 - Projection runner.
@@ -656,13 +702,13 @@ Known missing feature areas from original V1:
 
 Known scaffold gaps:
 
-- Secret encryption and service credentials are not implemented.
+- Production key management and service credential storage remain basic.
 - Webhook/Kafka/Postgres sinks are not implemented.
 - Embedded UI is not implemented.
 - Registry-backed tag resolution is not implemented; the M6 resolver is deterministic/static.
 
 ## Next Action
 
-Start `Plan.md` Milestone 9: secret vault and grants.
+Start `Plan.md` Milestone 10: projection runner and CLI.
 
 Do not edit production code outside the active milestone. Docker, secrets, sinks, and UI remain gated behind their owner milestones.

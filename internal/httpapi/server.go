@@ -16,6 +16,7 @@ import (
 	"github.com/bengarcia/mercator/internal/ociresolver"
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
+	"github.com/bengarcia/mercator/internal/secrets"
 	"github.com/bengarcia/mercator/internal/workload"
 )
 
@@ -25,6 +26,7 @@ type Server struct {
 	scheduler scheduler.Scheduler
 	adapter   adapter.Adapter
 	workloads *workload.Service
+	secrets   *secrets.Vault
 	resolver  interface {
 		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 	}
@@ -63,6 +65,28 @@ type resolveImageBody struct {
 
 type resolveImageResponse struct {
 	Image ociresolver.ResolvedImage `json:"image"`
+}
+
+type createSecretVersionBody struct {
+	WorkspaceID string `json:"workspace_id"`
+	SecretID    string `json:"secret_id"`
+	Value       string `json:"value"`
+}
+
+type secretMetadataListResponse struct {
+	Secrets []secrets.SecretMetadata `json:"secrets"`
+}
+
+type grantSecretBody struct {
+	WorkspaceID string `json:"workspace_id"`
+	SecretID    string `json:"secret_id"`
+	Version     int    `json:"version"`
+	ScopeType   string `json:"scope_type"`
+	ScopeID     string `json:"scope_id"`
+}
+
+type secretGrantResponse struct {
+	Grant secrets.Grant `json:"grant"`
 }
 
 type createRunResponse struct {
@@ -109,10 +133,10 @@ func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.
 	return s
 }
 
-func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, resolver interface {
+func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, resolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }) http.Handler {
-	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, resolver: resolver}
+	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, secrets: secretVault, resolver: resolver}
 	s.routes()
 	return s
 }
@@ -143,6 +167,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions", s.listRevisions)
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions/{revision_id}", s.getRevision)
 	s.mux.HandleFunc("POST /v1/images:resolve", s.resolveImage)
+	s.mux.HandleFunc("GET /v1/secrets", s.listSecrets)
+	s.mux.HandleFunc("POST /v1/secrets/{secret_id}/versions", s.createSecretVersion)
+	s.mux.HandleFunc("POST /v1/secrets/{secret_id}/grants", s.grantSecret)
 	s.mux.HandleFunc("POST /v1/placements:preview", s.previewPlacement)
 }
 
@@ -410,6 +437,65 @@ func (s *Server) resolveImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resolveImageResponse{Image: resolved})
 }
 
+func (s *Server) createSecretVersion(w http.ResponseWriter, r *http.Request) {
+	if s.secrets == nil {
+		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
+		return
+	}
+	var body createSecretVersionBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	if body.SecretID == "" {
+		body.SecretID = r.PathValue("secret_id")
+	}
+	version, err := s.secrets.CreateVersion(r.Context(), secrets.CreateVersionRequest{WorkspaceID: body.WorkspaceID, SecretID: body.SecretID, Plaintext: []byte(body.Value)})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "CREATE_SECRET_VERSION_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"secret_id": version.SecretID, "version": version.Version})
+}
+
+func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
+	if s.secrets == nil {
+		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
+		return
+	}
+	workspaceID, ok := requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	metadata, err := s.secrets.ListMetadata(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LIST_SECRETS_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, secretMetadataListResponse{Secrets: metadata})
+}
+
+func (s *Server) grantSecret(w http.ResponseWriter, r *http.Request) {
+	if s.secrets == nil {
+		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
+		return
+	}
+	var body grantSecretBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	if body.SecretID == "" {
+		body.SecretID = r.PathValue("secret_id")
+	}
+	grant, err := s.secrets.Grant(r.Context(), secrets.GrantRequest{WorkspaceID: body.WorkspaceID, SecretID: body.SecretID, Version: body.Version, ScopeType: body.ScopeType, ScopeID: body.ScopeID})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "GRANT_SECRET_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, secretGrantResponse{Grant: grant})
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -458,5 +544,5 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	return NewWithServices(orch, sched, ad, workload.New(log), ociresolver.NewStaticResolver(nil)), log.Close, nil
+	return NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), ociresolver.NewStaticResolver(nil)), log.Close, nil
 }
