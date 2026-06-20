@@ -36,7 +36,7 @@ func TestSinkReplayAPIAndFailureIsolation(t *testing.T) {
 	sched := scheduler.New()
 	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{httpOffer("offer_sink_api", time.Now().UTC())}), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	orch := orchestrator.New(log, sched, ad)
-	handler := NewWithAllServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), sinks.NewManager(log, map[string]sinks.Sink{"audit": failingSink{}}), ociresolver.NewStaticResolver(nil))
+	handler := NewWithAllServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), sinks.NewManager(log, map[string]sinks.Sink{"audit": failingSink{}}), nil, nil, ociresolver.NewStaticResolver(nil))
 
 	body := mustMarshal(t, createRunBody{RunID: "run_sink_api", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))

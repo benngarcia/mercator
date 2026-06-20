@@ -118,6 +118,30 @@ const OpenAPIJSON = `{
         "responses": {"200": {"description": "Placement decision preview"}}
       }
     },
+    "/v1/connections": {
+      "get": {
+        "operationId": "listConnections",
+        "parameters": [
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Connection list", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectionListResponse"}}}},
+          "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
+    "/v1/offers": {
+      "get": {
+        "operationId": "listOffers",
+        "parameters": [
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Offer list", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OfferListResponse"}}}},
+          "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
     "/v1/sinks/{sink_id}": {
       "get": {
         "operationId": "getSinkStatus",
@@ -164,6 +188,8 @@ const OpenAPIJSON = `{
       "RunListResponse": {"type": "object", "required": ["runs"], "properties": {"runs": {"type": "array", "items": {"type": "object"}}}},
       "EventListResponse": {"type": "object", "required": ["events"], "properties": {"events": {"type": "array", "items": {"type": "object"}}}},
       "PlacementDecisionResponse": {"type": "object", "required": ["decision"], "properties": {"decision": {"type": "object"}}},
+      "ConnectionListResponse": {"type": "object", "required": ["connections"], "properties": {"connections": {"type": "array", "items": {"type": "object"}}}},
+      "OfferListResponse": {"type": "object", "required": ["offers"], "properties": {"offers": {"type": "array", "items": {"type": "object"}}}},
       "ReplaySinkRequest": {"type": "object", "properties": {"from_exclusive": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1}, "replay_id": {"type": "string"}}},
       "SinkResult": {"type": "object", "required": ["sink_id", "delivered", "last_position"], "properties": {"sink_id": {"type": "string"}, "delivered": {"type": "integer"}, "last_position": {"type": "integer"}, "failed_event_id": {"type": "string"}, "replay_id": {"type": "string"}}},
       "SinkStatus": {"type": "object", "required": ["sink_id", "cursor", "has_cursor"], "properties": {"sink_id": {"type": "string"}, "cursor": {"type": "integer"}, "has_cursor": {"type": "boolean"}}},

@@ -31,3 +31,13 @@ func TestRunDelegatesJSONCLICommands(t *testing.T) {
 		t.Fatalf("stdout was not json: %q: %v", stdout.String(), err)
 	}
 }
+
+func TestFakeOffersAreOptIn(t *testing.T) {
+	if got := fakeOffers(map[string]string{}); got != nil {
+		t.Fatalf("expected no fake offers by default, got %+v", got)
+	}
+	got := fakeOffers(map[string]string{"MERCATOR_FAKE_OFFER": "1"})
+	if len(got) != 1 || got[0].AdapterType != "fake" || got[0].ConnectionID == "" {
+		t.Fatalf("unexpected fake offers: %+v", got)
+	}
+}

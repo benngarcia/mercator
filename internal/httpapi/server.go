@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"regexp"
 	"strings"
@@ -11,14 +12,17 @@ import (
 
 	"github.com/bengarcia/mercator/internal/adapter"
 	"github.com/bengarcia/mercator/internal/adapter/fake"
+	"github.com/bengarcia/mercator/internal/connection"
 	"github.com/bengarcia/mercator/internal/domain"
 	"github.com/bengarcia/mercator/internal/eventlog"
 	"github.com/bengarcia/mercator/internal/ociresolver"
+	"github.com/bengarcia/mercator/internal/offers"
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
 	"github.com/bengarcia/mercator/internal/secrets"
 	sinkspkg "github.com/bengarcia/mercator/internal/sinks"
 	"github.com/bengarcia/mercator/internal/workload"
+	"github.com/bengarcia/mercator/web"
 )
 
 type Server struct {
@@ -29,6 +33,8 @@ type Server struct {
 	workloads *workload.Service
 	secrets   *secrets.Vault
 	sinks     *sinkspkg.Manager
+	conns     *connection.Service
+	offers    *offers.Service
 	resolver  interface {
 		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 	}
@@ -91,6 +97,14 @@ type secretGrantResponse struct {
 	Grant secrets.Grant `json:"grant"`
 }
 
+type connectionListResponse struct {
+	Connections []connection.Record `json:"connections"`
+}
+
+type offerListResponse struct {
+	Offers []domain.OfferSnapshot `json:"offers"`
+}
+
 type replaySinkBody struct {
 	FromExclusive eventlog.GlobalPosition `json:"from_exclusive"`
 	Limit         int                     `json:"limit"`
@@ -144,13 +158,13 @@ func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.
 func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, resolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }) http.Handler {
-	return NewWithAllServices(orch, sched, ad, workloads, secretVault, nil, resolver)
+	return NewWithAllServices(orch, sched, ad, workloads, secretVault, nil, nil, nil, resolver)
 }
 
-func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, sinkManager *sinkspkg.Manager, resolver interface {
+func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, sinkManager *sinkspkg.Manager, conns *connection.Service, offerService *offers.Service, resolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }) http.Handler {
-	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, secrets: secretVault, sinks: sinkManager, resolver: resolver}
+	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, secrets: secretVault, sinks: sinkManager, conns: conns, offers: offerService, resolver: resolver}
 	s.routes()
 	return s
 }
@@ -160,6 +174,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
+	staticFS := http.FS(web.Static())
+	s.mux.HandleFunc("GET /", s.serveUI)
+	s.mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	s.mux.Handle("GET /ui/", http.StripPrefix("/ui/", http.FileServer(staticFS)))
 	s.mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -181,12 +201,41 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions", s.listRevisions)
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions/{revision_id}", s.getRevision)
 	s.mux.HandleFunc("POST /v1/images:resolve", s.resolveImage)
+	s.mux.HandleFunc("GET /v1/connections", s.listConnections)
+	s.mux.HandleFunc("GET /v1/offers", s.listOffers)
 	s.mux.HandleFunc("GET /v1/secrets", s.listSecrets)
 	s.mux.HandleFunc("POST /v1/secrets/{secret_id}/versions", s.createSecretVersion)
 	s.mux.HandleFunc("POST /v1/secrets/{secret_id}/grants", s.grantSecret)
 	s.mux.HandleFunc("GET /v1/sinks/{sink_id}", s.sinkStatus)
 	s.mux.HandleFunc("POST /v1/sinks/{sink_action}", s.sinkAction)
 	s.mux.HandleFunc("POST /v1/placements:preview", s.previewPlacement)
+}
+
+func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	file, err := web.Static().Open("index.html")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "UI_NOT_AVAILABLE", err.Error())
+		return
+	}
+	defer file.Close()
+	stat, err := file.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "UI_NOT_AVAILABLE", err.Error())
+		return
+	}
+	reader, ok := file.(interface {
+		Read([]byte) (int, error)
+		Seek(int64, int) (int64, error)
+	})
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "UI_NOT_AVAILABLE", "embedded UI file is not seekable")
+		return
+	}
+	http.ServeContent(w, r, "index.html", stat.ModTime(), reader)
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
@@ -453,6 +502,47 @@ func (s *Server) resolveImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resolveImageResponse{Image: resolved})
 }
 
+func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if s.conns == nil {
+		writeJSON(w, http.StatusOK, connectionListResponse{Connections: []connection.Record{}})
+		return
+	}
+	records, err := s.conns.List(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, connectionListResponse{Connections: records})
+}
+
+func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
+	workspaceID, ok := requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if s.offers != nil {
+		records, err := s.offers.ListCached(r.Context(), workspaceID, time.Now().UTC())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "LIST_OFFERS_FAILED", err.Error())
+			return
+		}
+		if len(records) > 0 {
+			writeJSON(w, http.StatusOK, offerListResponse{Offers: records})
+			return
+		}
+	}
+	records, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "LIST_OFFERS_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, offerListResponse{Offers: records})
+}
+
 func (s *Server) createSecretVersion(w http.ResponseWriter, r *http.Request) {
 	if s.secrets == nil {
 		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
@@ -617,5 +707,7 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	return NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), ociresolver.NewStaticResolver(nil)), log.Close, nil
+	return NewWithAllServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), nil, connection.New(log), offers.New(log), ociresolver.NewStaticResolver(nil)), log.Close, nil
 }
+
+var _ fs.FS = web.Static()

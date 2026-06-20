@@ -682,6 +682,50 @@ Handoff:
 
 - Start M12 by adding the embedded static UI and browser-verifying run/events/decision/sink views.
 
+### M12 - Embedded Static UI
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:36 PDT`
+Completed: `2026-06-20 01:43 PDT`
+Plan reference: `Plan.md#milestone-12-embedded-static-ui`
+Prompt requirements covered: `embedded single-process UI, public API backed views, no secret values, read-oriented operations UI`
+
+Scope:
+
+- Added top-level `web` package with embedded static assets for a compact Mercator operations UI.
+- Added UI views for run list, selected run detail, public event timeline, placement decision, connections, offers, and sink status.
+- Added public read endpoints for connections and offers, plus OpenAPI descriptions for those endpoints.
+- Added an opt-in `MERCATOR_FAKE_OFFER=1` executable seed path for local fake-adapter smoke testing.
+- Kept the UI read-oriented except refresh and cancel controls.
+
+Acceptance criteria:
+
+- UI is embedded and served by the single Go process at `/` with assets under `/ui/`.
+- UI reads only public REST APIs and does not use private event data or secret values.
+- Empty state, populated fake-adapter run state, event/decision/offer panels, sink error state, and mobile layout render without overlap.
+
+Implementation notes:
+
+- The UI intentionally shows sink configuration errors as an operator-visible panel state.
+- `GET /v1/offers` falls back to adapter offers when the disposable offer cache is empty, so the local fake-adapter server can expose the active offer.
+- Browser plugin was unavailable for QA (`Browser is not available: iab`); Playwright fallback used system Chrome because the bundled Playwright Chromium binary was not installed.
+
+Verification:
+
+- `go test ./internal/httpapi -run UI -count=1` - `passed`.
+- `go test ./cmd/mercator -count=1` - `passed`.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- Browser smoke via Playwright system Chrome at `http://127.0.0.1:18082/` - `passed` - empty state, populated `run_browser`, event timeline, decision panel, `offer_local_fake`, sink error state, and mobile layout verified.
+- Screenshots inspected with `view_image`: `/tmp/mercator-ui-empty.png`, `/tmp/mercator-ui-populated.png`, `/tmp/mercator-ui-mobile.png`.
+- Console health - `expected warning` - only expected 501 sink-status fetches for the intentional unconfigured sink error state.
+- `git status --short --branch` - `observed` - M12 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M13 final release gate with end-to-end CLI/API/UI checks, race subset, Docker status, docs audit, and final known-gap tightening.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -773,6 +817,14 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:35 PDT | M11 validation | `go build ./...` | passed | Build green after M11 |
 | 2026-06-20 01:35 PDT | M11 validation | `git diff --check` | passed | No whitespace errors |
 | 2026-06-20 01:35 PDT | M11 validation | `git status --short --branch` | observed | M11 source/test/docs changes only |
+| 2026-06-20 01:39 PDT | M12 focused | `go test ./internal/httpapi -run UI -count=1` | passed | Embedded UI assets and UI-backed read APIs green |
+| 2026-06-20 01:40 PDT | M12 focused | `go test ./cmd/mercator -count=1` | passed | Opt-in fake-offer executable seed tests green |
+| 2026-06-20 01:40 PDT | M12 validation | `go test ./...` | passed | Full suite green after M12 code |
+| 2026-06-20 01:40 PDT | M12 validation | `go build ./...` | passed | Build green after M12 code |
+| 2026-06-20 01:41 PDT | M12 browser | Browser plugin bootstrap | blocked | In-app browser reported `Browser is not available: iab` |
+| 2026-06-20 01:42 PDT | M12 browser | Playwright bundled Chromium launch | blocked | Bundled Chromium binary was not installed |
+| 2026-06-20 01:43 PDT | M12 browser | Playwright system Chrome smoke at `http://127.0.0.1:18082/` | passed | Empty, populated run, events, decision, offers, sink error, and mobile states verified |
+| 2026-06-20 01:43 PDT | M12 visual | `view_image` on `/tmp/mercator-ui-empty.png`, `/tmp/mercator-ui-populated.png`, `/tmp/mercator-ui-mobile.png` | passed | Desktop and mobile layouts inspected; no overlap/clipping observed |
 
 Required verification cadence:
 
@@ -788,7 +840,6 @@ Required verification cadence:
 
 Blocking V1 correctness issues:
 
-- Embedded UI remains missing.
 - Docker adapter live integration remains missing; unit fake-client contract is implemented.
 - Cancellation is endpoint-present but not yet a full adapter-backed lifecycle command.
 - OpenAPI is expanded for repaired run/workload paths but is not yet complete for all future V1 service areas.
@@ -798,17 +849,16 @@ Known missing feature areas from original V1:
 - Live Docker integration test.
 - Reconciler and lease janitor.
 - Authorization service.
-- Embedded static UI.
 
 Known scaffold gaps:
 
 - Production key management and service credential storage remain basic.
 - Kafka/Postgres sinks use configured backend interfaces; production client wiring remains future work.
-- Embedded UI is not implemented.
+- Embedded UI is intentionally compact and operational; deeper connection/offer management workflows remain future work.
 - Registry-backed tag resolution is not implemented; the M6 resolver is deterministic/static.
 
 ## Next Action
 
-Start `Plan.md` Milestone 12: embedded static UI.
+Start `Plan.md` Milestone 13: V1 end-to-end release gate.
 
 Do not edit production code outside the active milestone. Docker, secrets, sinks, and UI remain gated behind their owner milestones.

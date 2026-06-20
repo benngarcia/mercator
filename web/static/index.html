@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mercator Operations</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <nav class="sidebar" aria-label="Primary">
+        <div class="brand">
+          <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M6 22 16 4l10 18-10 6-10-6Z"/><path d="M16 4v24"/></svg>
+          <span>Mercator</span>
+        </div>
+        <button class="nav-item active" data-view="runs">Runs</button>
+        <button class="nav-item" data-view="events">Events</button>
+        <button class="nav-item" data-view="decisions">Decisions</button>
+        <button class="nav-item" data-view="connections">Connections</button>
+        <button class="nav-item" data-view="offers">Offers</button>
+        <button class="nav-item" data-view="sinks">Sinks</button>
+      </nav>
+      <main class="shell">
+        <header class="toolbar">
+          <div>
+            <h1>Run Broker</h1>
+            <p id="summary">Loading broker state</p>
+          </div>
+          <label class="workspace">
+            <span>Workspace</span>
+            <input id="workspace" value="ws_1" />
+          </label>
+          <button id="refresh" class="icon-button" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M18.5 9A7 7 0 0 0 6.8 6.2L4 9"/><path d="M5.5 15a7 7 0 0 0 11.7 2.8L20 15"/></svg>
+          </button>
+          <button id="cancel" class="icon-button danger" title="Cancel selected run" aria-label="Cancel selected run">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10"/><path d="M17 7 7 17"/></svg>
+          </button>
+        </header>
+        <section class="content">
+          <section class="runs-pane" aria-label="Runs">
+            <div class="section-head">
+              <h2>Runs</h2>
+              <span id="run-count">0</span>
+            </div>
+            <div id="runs" class="run-list"></div>
+          </section>
+          <section class="detail-pane" aria-live="polite">
+            <div id="detail" class="detail-grid"></div>
+          </section>
+        </section>
+      </main>
+    </div>
+    <script src="/ui/app.js" defer></script>
+  </body>
+</html>
