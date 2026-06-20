@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Task 5: Orchestrator Fast Path.
+Task 6: HTTP API And OpenAPI.
 
 ## Completed
 
@@ -14,6 +14,7 @@ Task 5: Orchestrator Fast Path.
 - Implemented Task 2 domain contracts and workload validation for the V1 OCI boundary.
 - Implemented Task 3 pure deterministic scheduler with structured hard rejections and score-based selection.
 - Implemented Task 4 adapter contract and deterministic fake adapter with idempotent lifecycle methods.
+- Implemented Task 5 run orchestrator fast path with event-first placement/launch, fake-adapter observation, cleanup confirmation, and run closure.
 
 ## Decisions
 
@@ -38,6 +39,9 @@ Task 5: Orchestrator Fast Path.
 - Task 4 red test: `go test ./internal/adapter/... -count=1` failed on missing adapter package.
 - Task 4 focused green: `go test ./internal/adapter/... -count=1` passed.
 - Task 4 full green: `go test ./...` passed for adapter, domain, eventlog, and scheduler packages.
+- Task 5 red test: `go test ./internal/orchestrator -count=1` failed on missing orchestrator API/events.
+- Task 5 focused green: `go test ./internal/orchestrator -count=1` passed.
+- Task 5 full green: `go test ./...` passed for adapter, domain, eventlog, orchestrator, and scheduler packages.
 
 ## Known Gaps
 
