@@ -594,6 +594,49 @@ Handoff:
 
 - Start M10 by adding projection runner replay/rebuild behavior and JSON-first CLI commands.
 
+### M10 - Projection Runner And CLI
+
+Status: `complete`
+Owner/session: `Codex`
+Started: `2026-06-20 01:28 PDT`
+Completed: `2026-06-20 01:32 PDT`
+Plan reference: `Plan.md#milestone-10-projection-runner-and-cli`
+Prompt requirements covered: `durable projection offsets, disposable projection rebuilds, Subscribe offset resume, JSON-first run CLI`
+
+Scope:
+
+- Fixed SQLite event-log subscriptions to resume from stored subscription offsets when they are ahead of the requested position.
+- Added `internal/projection` runner support for durable resume from global position and disposable rebuild from the beginning.
+- Added `internal/cli` JSON-first run commands for create, cancel, get, list, wait, events, decision, refresh, and machine-readable conflict reporting.
+- Refactored `cmd/mercator` so no-arg or `serve` keeps the HTTP server path, while CLI subcommands delegate to `internal/cli`.
+
+Acceptance criteria:
+
+- Stored subscription offsets are used by `Subscribe`.
+- Durable projections resume from the last acknowledged global position.
+- Disposable projections can rebuild from global position zero without overwriting durable offsets.
+- CLI stdout and stderr payloads are parseable JSON for success and conflict paths.
+
+Implementation notes:
+
+- Projection offsets reuse the event log's `subscription_offsets` table through `Offset` and `Ack`.
+- The CLI is intentionally HTTP-backed so command behavior stays aligned with the REST API.
+- `run wait` currently uses the HTTP wait/read endpoint; deeper streaming wait semantics remain tied to future API lifecycle improvements.
+
+Verification:
+
+- `go test ./internal/eventlog -run TestSQLiteSubscribeResumesFromStoredOffset -count=1` - `passed`.
+- `go test ./internal/projection/... -count=1` - `passed`.
+- `go test ./internal/cli/... -count=1` - `passed`.
+- `go test ./cmd/mercator/... -count=1` - `passed`.
+- `go test ./...` - `passed`.
+- `go build ./...` - `passed`.
+- `git status --short --branch` - `observed` - M10 source/test/docs changes only before commit.
+
+Handoff:
+
+- Start M11 by adding event sinks, replay APIs, and durable sink cursors.
+
 ## Verification Log
 
 Use this format for every command or manual check. Do not summarize failures without preserving the command and result.
@@ -670,6 +713,13 @@ Use this format for every command or manual check. Do not summarize failures wit
 | 2026-06-20 01:27 PDT | M9 validation | `go test ./...` | passed | Full suite green after M9 |
 | 2026-06-20 01:27 PDT | M9 validation | `go build ./...` | passed | Build green after M9 |
 | 2026-06-20 01:27 PDT | M9 validation | `git status --short --branch` | observed | M9 source/test/docs changes only |
+| 2026-06-20 01:30 PDT | M10 focused | `go test ./internal/eventlog -run TestSQLiteSubscribeResumesFromStoredOffset -count=1` | passed | Subscribe resumes from stored offset |
+| 2026-06-20 01:30 PDT | M10 focused | `go test ./internal/projection/... -count=1` | passed | Projection durable resume and disposable rebuild tests green |
+| 2026-06-20 01:30 PDT | M10 focused | `go test ./internal/cli/... -count=1` | passed | Run create/cancel/get/list/wait/events/decision/refresh JSON tests green |
+| 2026-06-20 01:31 PDT | M10 focused | `go test ./cmd/mercator/... -count=1` | passed | Command package delegates JSON CLI subcommands |
+| 2026-06-20 01:32 PDT | M10 validation | `go test ./...` | passed | Full suite green after M10 |
+| 2026-06-20 01:32 PDT | M10 validation | `go build ./...` | passed | Build green after M10 |
+| 2026-06-20 01:32 PDT | M10 validation | `git status --short --branch` | observed | M10 source/test/docs changes only |
 
 Required verification cadence:
 
@@ -685,7 +735,7 @@ Required verification cadence:
 
 Blocking V1 correctness issues:
 
-- Secret vault, durable sinks, projection runner, CLI, and UI remain missing.
+- Durable sinks and UI remain missing.
 - Docker adapter live integration remains missing; unit fake-client contract is implemented.
 - Cancellation is endpoint-present but not yet a full adapter-backed lifecycle command.
 - OpenAPI is expanded for repaired run/workload paths but is not yet complete for all future V1 service areas.
@@ -694,11 +744,9 @@ Known missing feature areas from original V1:
 
 - Live Docker integration test.
 - Reconciler and lease janitor.
-- Projection runner.
 - Event sinks with replay and durable cursors.
 - Authorization service.
 - Embedded static UI.
-- JSON-first CLI behavior.
 
 Known scaffold gaps:
 
@@ -709,6 +757,6 @@ Known scaffold gaps:
 
 ## Next Action
 
-Start `Plan.md` Milestone 10: projection runner and CLI.
+Start `Plan.md` Milestone 11: event sinks, replay, and durable cursors.
 
 Do not edit production code outside the active milestone. Docker, secrets, sinks, and UI remain gated behind their owner milestones.

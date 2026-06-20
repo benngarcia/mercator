@@ -143,6 +143,36 @@ func TestSQLiteEventLogIdempotencyAndConcurrency(t *testing.T) {
 	}
 }
 
+func TestSQLiteSubscribeResumesFromStoredOffset(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := openTestLog(t)
+	appendTestEvents(t, log, "run_offset", "cmd-offset", []string{"evt_offset_1", "evt_offset_2"})
+	if err := log.Ack(ctx, "sub-runs", 1); err != nil {
+		t.Fatalf("ack offset: %v", err)
+	}
+
+	sub, err := log.Subscribe(ctx, SubscriptionRequest{
+		SubscriptionID: "sub-runs",
+		After:          0,
+		Filter: EventFilter{
+			StreamTypes: []string{"run"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	select {
+	case delivery := <-sub:
+		if delivery.Event.ID != "evt_offset_2" {
+			t.Fatalf("expected delivery after stored offset, got %+v", delivery.Event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscription did not replay from stored offset")
+	}
+}
+
 func openTestLog(t *testing.T) *SQLiteEventLog {
 	t.Helper()
 	log, err := OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
@@ -155,4 +185,28 @@ func openTestLog(t *testing.T) *SQLiteEventLog {
 		}
 	})
 	return log
+}
+
+func appendTestEvents(t *testing.T, log *SQLiteEventLog, runID, commandKey string, eventIDs []string) {
+	t.Helper()
+	events := make([]NewEvent, 0, len(eventIDs))
+	for _, eventID := range eventIDs {
+		events = append(events, NewEvent{
+			ID:            eventID,
+			Type:          "compute.run.requested.v1",
+			SchemaVersion: 1,
+			OccurredAt:    time.Now().UTC(),
+			Visibility:    VisibilityPublic,
+			Data:          json.RawMessage(`{"run_id":"` + runID + `"}`),
+		})
+	}
+	if _, err := log.Append(context.Background(), AppendRequest{
+		Stream:                StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		ExpectedStreamVersion: 0,
+		CommandKey:            commandKey,
+		RequestHash:           "sha256:" + commandKey,
+		Events:                events,
+	}); err != nil {
+		t.Fatalf("append test events: %v", err)
+	}
 }

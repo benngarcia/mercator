@@ -141,6 +141,7 @@ type EventLog interface {
 	Append(ctx context.Context, req AppendRequest) (AppendResult, error)
 	ReadStream(ctx context.Context, stream StreamKey, afterVersion uint64, limit int) ([]StoredEvent, error)
 	ReadAll(ctx context.Context, after GlobalPosition, limit int, filter EventFilter) ([]StoredEvent, error)
+	Offset(ctx context.Context, subscriptionID string) (GlobalPosition, bool, error)
 	Subscribe(ctx context.Context, req SubscriptionRequest) (<-chan Delivery, error)
 	Ack(ctx context.Context, subscriptionID string, position GlobalPosition) error
 }

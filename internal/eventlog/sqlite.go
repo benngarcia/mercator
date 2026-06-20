@@ -265,9 +265,17 @@ func (l *SQLiteEventLog) Subscribe(ctx context.Context, req SubscriptionRequest)
 	if req.SubscriptionID == "" {
 		return nil, fmt.Errorf("eventlog: subscription_id is required")
 	}
+	after := req.After
+	stored, ok, err := l.Offset(ctx, req.SubscriptionID)
+	if err != nil {
+		return nil, err
+	}
+	if ok && stored > after {
+		after = stored
+	}
 	sub := &subscription{
 		id:     req.SubscriptionID,
-		after:  req.After,
+		after:  after,
 		filter: req.Filter,
 		ch:     make(chan Delivery, 64),
 		wake:   make(chan struct{}, 1),
@@ -279,6 +287,21 @@ func (l *SQLiteEventLog) Subscribe(ctx context.Context, req SubscriptionRequest)
 	go l.runSubscription(ctx, sub)
 	sub.signal()
 	return sub.ch, nil
+}
+
+func (l *SQLiteEventLog) Offset(ctx context.Context, subscriptionID string) (GlobalPosition, bool, error) {
+	if subscriptionID == "" {
+		return 0, false, fmt.Errorf("eventlog: subscription_id is required")
+	}
+	var position uint64
+	err := l.db.QueryRowContext(ctx, `SELECT global_position FROM subscription_offsets WHERE subscription_id = ?`, subscriptionID).Scan(&position)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return GlobalPosition(position), true, nil
 }
 
 func (l *SQLiteEventLog) Ack(ctx context.Context, subscriptionID string, position GlobalPosition) error {
