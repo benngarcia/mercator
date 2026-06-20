@@ -2,7 +2,7 @@
 
 ## Current Milestone
 
-Task 4: Fake Adapter.
+Task 5: Orchestrator Fast Path.
 
 ## Completed
 
@@ -13,6 +13,7 @@ Task 4: Fake Adapter.
 - Implemented Task 1 event core with SQLite append/read/idempotency/concurrency/subscription behavior.
 - Implemented Task 2 domain contracts and workload validation for the V1 OCI boundary.
 - Implemented Task 3 pure deterministic scheduler with structured hard rejections and score-based selection.
+- Implemented Task 4 adapter contract and deterministic fake adapter with idempotent lifecycle methods.
 
 ## Decisions
 
@@ -34,6 +35,9 @@ Task 4: Fake Adapter.
 - Task 3 red test: `go test ./internal/scheduler -count=1` failed on missing scheduler API/types.
 - Task 3 focused green: `go test ./internal/scheduler -count=1` passed.
 - Task 3 full green: `go test ./...` passed for `internal/domain`, `internal/eventlog`, and `internal/scheduler`.
+- Task 4 red test: `go test ./internal/adapter/... -count=1` failed on missing adapter package.
+- Task 4 focused green: `go test ./internal/adapter/... -count=1` passed.
+- Task 4 full green: `go test ./...` passed for adapter, domain, eventlog, and scheduler packages.
 
 ## Known Gaps
 
