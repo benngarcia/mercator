@@ -62,3 +62,7 @@ go run ./cmd/mercator run list --workspace-id ws_1
 For local fake-adapter smoke testing, set `MERCATOR_FAKE_OFFER=1`. To run
 through the Docker host adapter, set `MERCATOR_ADAPTER=docker`; Docker workloads
 must still use digest-pinned images accepted by the V1 workload validator.
+
+## SDKs
+
+- Python: `sdk/python` contains a dependency-free SDK for the V1 HTTP API.
