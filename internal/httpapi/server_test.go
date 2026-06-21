@@ -371,7 +371,7 @@ func TestPlacementPreviewAndOpenAPI(t *testing.T) {
 			t.Fatalf("%s expected 200, got %d body=%s", path, rec.Code, rec.Body.String())
 		}
 		if path == "/openapi.json" {
-			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "/v1/workloads", "/v1/images:resolve", "/v1/secrets", "IdempotencyConflict", `"409"`} {
+			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "/v1/workloads", "/v1/images:resolve", "/v1/secrets", "PlacementPreviewRequest", "PlacementPreviewResponse", "IdempotencyConflict", `"409"`} {
 				if !strings.Contains(rec.Body.String(), required) {
 					t.Fatalf("OpenAPI missing %s: %s", required, rec.Body.String())
 				}

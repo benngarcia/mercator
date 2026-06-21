@@ -165,14 +165,14 @@ func mustJSON(t *testing.T, value any) string {
 }
 
 func cliOffer() domain.OfferSnapshot {
-	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	return domain.OfferSnapshot{
 		ID:           "offer_cli",
 		ConnectionID: "conn_cli",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,
 		NativeRef:    "fake://cli",
-		ObservedAt:   now,
+		ObservedAt:   now.Add(-time.Minute),
 		ExpiresAt:    now.Add(time.Hour),
 		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
 		Resources: domain.ResourceInventory{

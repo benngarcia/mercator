@@ -116,7 +116,14 @@ const OpenAPIJSON = `{
     "/v1/placements:preview": {
       "post": {
         "operationId": "previewPlacement",
-        "responses": {"200": {"description": "Placement decision preview"}}
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlacementPreviewRequest"}}}},
+        "responses": {
+          "200": {"description": "Placement decision preview", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PlacementPreviewResponse"}}}},
+          "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "401": {"description": "Unauthorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "403": {"description": "Forbidden", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "502": {"description": "Offer query failed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
       }
     },
     "/v1/connections": {
@@ -283,6 +290,8 @@ const OpenAPIJSON = `{
       "RunResponse": {"type": "object", "required": ["run"], "properties": {"run": {"type": "object"}, "links": {"type": "object", "additionalProperties": {"type": "string"}}}},
       "RunListResponse": {"type": "object", "required": ["runs"], "properties": {"runs": {"type": "array", "items": {"type": "object"}}}},
       "EventListResponse": {"type": "object", "required": ["events"], "properties": {"events": {"type": "array", "items": {"type": "object"}}}},
+      "PlacementPreviewRequest": {"type": "object", "required": ["workload"], "properties": {"run_id": {"type": "string"}, "workspace_id": {"type": "string"}, "workload": {"type": "object"}}},
+      "PlacementPreviewResponse": {"type": "object", "required": ["decision"], "properties": {"decision": {"type": "object"}}},
       "PlacementDecisionResponse": {"type": "object", "required": ["decision"], "properties": {"decision": {"type": "object"}}},
       "ConnectionListResponse": {"type": "object", "required": ["connections"], "properties": {"connections": {"type": "array", "items": {"type": "object"}}}},
       "OfferListResponse": {"type": "object", "required": ["offers"], "properties": {"offers": {"type": "array", "items": {"type": "object"}}}},

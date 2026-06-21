@@ -32,6 +32,9 @@ Remaining limitations are tracked in `docs/long-horizon/v1/Documentation.md`;
 notably production key management, registry-backed tag resolution, and concrete
 Kafka/Postgres client wiring are still basic.
 
+For operator-facing V1 evaluation and production-hardening runbooks, start at
+`docs/production/README.md`.
+
 ## Build
 
 ```sh
@@ -65,4 +68,7 @@ must still use digest-pinned images accepted by the V1 workload validator.
 
 ## SDKs
 
-- Python: `sdk/python` contains a dependency-free SDK for the V1 HTTP API.
+Hand-written SDKs for the V1 HTTP API:
+
+- TypeScript: [`sdk/typescript`](sdk/typescript/README.md)
+- Python: [`sdk/python`](sdk/python/README.md)
