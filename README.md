@@ -73,3 +73,4 @@ Hand-written SDKs for the V1 HTTP API:
 
 - TypeScript: [`sdk/typescript`](sdk/typescript/README.md)
 - Python: [`sdk/python`](sdk/python/README.md)
+- Ruby: [`sdk/ruby`](sdk/ruby/README.md)
