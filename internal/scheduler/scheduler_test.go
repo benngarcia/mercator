@@ -318,7 +318,6 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},
 			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkPublicPort, Protocols: []string{"tcp"}, PublicIPv4: true},
 			Pricing:   domain.PricingCapabilities{Known: true},
-			Secrets:   domain.SecretDeliveryCapabilities{Delivery: "direct_env", CleanupSupported: true},
 			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "deterministic_name", ListOwned: true, CancelQueued: true},
 		},
 		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{

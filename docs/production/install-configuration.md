@@ -15,13 +15,13 @@ The binary is cgo-free because the project uses `modernc.org/sqlite`.
 
 ## Required Runtime Configuration
 
-Set explicit secrets for any evaluation you want to reproduce after restart:
+Set explicit process configuration for any evaluation you want to reproduce
+after restart:
 
 ```sh
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/var/lib/mercator/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
-export MERCATOR_SECRET_KEY_HEX="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
 ```
 
@@ -42,7 +42,6 @@ server path.
 | `MERCATOR_SQLITE_DSN` | `file:/data/mercator.db` | SQLite event-log DSN. |
 | `MERCATOR_API_TOKEN` | generated at startup | Bearer token for `/v1/*`. Set explicitly for operations. |
 | `MERCATOR_AUTH_WORKSPACES` | `*` | Comma-separated workspace allow list for the bearer principal. |
-| `MERCATOR_SECRET_KEY_HEX` | generated in process | 32-byte hex key for AES-GCM secret events. Set explicitly before using secrets. |
 | `MERCATOR_FAKE_OFFER` | unset | Any non-empty value seeds one fake offer. |
 | `MERCATOR_ADAPTER` | unset | Set to `docker` for the Docker host adapter. |
 | `MERCATOR_DOCKER_BIN` | `docker` lookup behavior in CLI client | Docker executable path. |
@@ -73,5 +72,6 @@ prints it to the startup log.
   open connections to one inside the process.
 - If `MERCATOR_API_TOKEN` is omitted, the generated token is printed to the
   startup log and changes across restarts.
-- If `MERCATOR_SECRET_KEY_HEX` is omitted, secret encryption uses an ephemeral
-  process key. That is acceptable only for throwaway evaluation.
+- Mercator does not expose a secret vault. Put stable non-sensitive defaults in
+  workload env and pass per-run overrides through `create_run`; workloads that
+  need secrets should call their own secret-management backend.

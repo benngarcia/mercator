@@ -5,8 +5,8 @@ unqualified GA operation. Treat this directory as the operator entry point for
 running, testing, and auditing the current single-process OCI run broker.
 
 Mercator runs as one Go process with an embedded SQLite event log, REST/OpenAPI
-API, JSON-first CLI, embedded UI, fake and Docker adapters, a secret vault, sink
-cursor/replay support, and disposable projections. SQLite events are the source
+API, JSON-first CLI, embedded UI, fake and Docker adapters, env-based workload
+configuration, sink cursor/replay support, and disposable projections. SQLite events are the source
 of truth; read models, offer caches, projections, and sink cursors can be
 rebuilt from the event log.
 
@@ -31,8 +31,8 @@ rebuilt from the event log.
 - [fake-eval-path.md](fake-eval-path.md): local deterministic evaluation flow.
 - [workload-run-lifecycle.md](workload-run-lifecycle.md): workload JSON, run
   create/list/get/wait/events/decision/refresh/cancel commands.
-- [secrets-grants.md](secrets-grants.md): encrypted secret versions, metadata,
-  run-scoped grants, and current Docker secret limitations.
+- [environment-configuration.md](environment-configuration.md): workload env,
+  create-run overrides, and the no-secret-vault boundary.
 - [sinks-replay.md](sinks-replay.md): sink status, delivery, replay, and cursor
   behavior.
 - [backup-recovery.md](backup-recovery.md): SQLite WAL backups and restore
@@ -54,7 +54,6 @@ go test ./...
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
-export MERCATOR_SECRET_KEY_HEX="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
 export MERCATOR_FAKE_OFFER=1
 

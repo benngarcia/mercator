@@ -195,10 +195,6 @@ func dockerEnv(bindings []adapter.EnvironmentBinding) (map[string]string, error)
 	for _, binding := range bindings {
 		if binding.Value != nil {
 			env[binding.Name] = *binding.Value
-			continue
-		}
-		if binding.SecretRef != nil {
-			return nil, fmt.Errorf("docker: secret environment materialization is not configured")
 		}
 	}
 	return env, nil

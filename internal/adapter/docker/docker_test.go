@@ -147,16 +147,6 @@ func TestAdapterLaunchRejectsForeignContainerWithSameName(t *testing.T) {
 	}
 }
 
-func TestAdapterLaunchRejectsSecretEnvironmentWithoutMaterializer(t *testing.T) {
-	ad := New(newFakeClient())
-	req := launchRequest()
-	req.Environment = append(req.Environment, adapter.EnvironmentBinding{Name: "API_TOKEN", SecretRef: &domain.SecretReference{Name: "api-token", Version: 1}})
-
-	if _, err := ad.Launch(context.Background(), req); err == nil {
-		t.Fatalf("expected secret environment launch to fail")
-	}
-}
-
 func TestAdapterObserveAndReleaseRejectForeignContainerWithSameName(t *testing.T) {
 	client := newFakeClient()
 	ad := New(client)

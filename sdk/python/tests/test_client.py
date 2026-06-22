@@ -161,9 +161,6 @@ class ClientServerTestCase(unittest.TestCase):
         client.create_workload_revision("workload_1", "ws_1", {"id": "rev_1"}, idempotency_key="revision-key")
         client.get_workload_revision("workload_1", "rev_1", "ws_1")
         client.resolve_image("repo/image:tag", "linux/amd64")
-        client.list_secrets("ws_1")
-        client.create_secret_version("secret_1", "ws_1", "plaintext", idempotency_key="secret-key")
-        client.grant_secret("secret_1", "ws_1", 1, "run", "run_1")
         client.get_sink_status("audit")
         client.deliver_sink("audit")
         client.replay_sink("audit", from_exclusive=10, limit=50, replay_id="replay_1")
@@ -185,9 +182,6 @@ class ClientServerTestCase(unittest.TestCase):
                 ("POST", "/v1/workloads/workload_1/revisions?workspace_id=ws_1"),
                 ("GET", "/v1/workloads/workload_1/revisions/rev_1?workspace_id=ws_1"),
                 ("POST", "/v1/images:resolve"),
-                ("GET", "/v1/secrets?workspace_id=ws_1"),
-                ("POST", "/v1/secrets/secret_1/versions"),
-                ("POST", "/v1/secrets/secret_1/grants"),
                 ("GET", "/v1/sinks/audit"),
                 ("POST", "/v1/sinks/audit:deliver"),
                 ("POST", "/v1/sinks/audit:replay"),
@@ -195,8 +189,7 @@ class ClientServerTestCase(unittest.TestCase):
         )
         self.assertEqual(RecordingHandler.requests[9]["headers"]["Idempotency-Key"], "workload-key")
         self.assertEqual(RecordingHandler.requests[11]["headers"]["Idempotency-Key"], "revision-key")
-        self.assertEqual(RecordingHandler.requests[15]["headers"]["Idempotency-Key"], "secret-key")
-        self.assertEqual(RecordingHandler.requests[19]["body"], {"from_exclusive": 10, "limit": 50, "replay_id": "replay_1"})
+        self.assertEqual(RecordingHandler.requests[16]["body"], {"from_exclusive": 10, "limit": 50, "replay_id": "replay_1"})
 
     def test_client_scoped_workspace_id_applies_and_is_overridable(self):
         client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")

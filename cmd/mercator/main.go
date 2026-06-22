@@ -35,10 +35,6 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	addr := envValue(env, "MERCATOR_ADDR", "127.0.0.1:8080")
 	dsn := envValue(env, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
-	secretKey, err := secretKeyFromEnv(env)
-	if err != nil {
-		log.Fatalf("load secret key: %v", err)
-	}
 	apiToken, generatedToken, err := apiTokenFromEnv(env)
 	if err != nil {
 		log.Fatalf("load api token: %v", err)
@@ -49,9 +45,9 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	var handler http.Handler
 	var closeFn func() error
 	if ad := runtimeAdapter(env); ad != nil {
-		handler, closeFn, err = httpapi.HandlerForSQLiteWithAdapter(context.Background(), dsn, ad, secretKey, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
+		handler, closeFn, err = httpapi.HandlerForSQLiteWithAdapter(context.Background(), dsn, ad, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
 	} else {
-		handler, closeFn, err = httpapi.HandlerForSQLiteWithOptions(context.Background(), dsn, fakeOffers(env), secretKey, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
+		handler, closeFn, err = httpapi.HandlerForSQLiteWithOptions(context.Background(), dsn, fakeOffers(env), httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
 	}
 	if err != nil {
 		log.Fatalf("start mercator: %v", err)
@@ -113,18 +109,6 @@ func authWorkspaces(values map[string]string) []string {
 		return []string{"*"}
 	}
 	return workspaces
-}
-
-func secretKeyFromEnv(values map[string]string) ([]byte, error) {
-	encoded := values["MERCATOR_SECRET_KEY_HEX"]
-	if encoded == "" {
-		return nil, nil
-	}
-	key, err := hex.DecodeString(encoded)
-	if err != nil {
-		return nil, err
-	}
-	return key, nil
 }
 
 func dockerOffer(values map[string]string) domain.OfferSnapshot {

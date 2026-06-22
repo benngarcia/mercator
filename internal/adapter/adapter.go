@@ -82,9 +82,8 @@ type LaunchRequest struct {
 }
 
 type EnvironmentBinding struct {
-	Name      string                  `json:"name"`
-	Value     *string                 `json:"value,omitempty"`
-	SecretRef *domain.SecretReference `json:"secret_ref,omitempty"`
+	Name  string  `json:"name"`
+	Value *string `json:"value,omitempty"`
 }
 
 type LaunchReceipt struct {

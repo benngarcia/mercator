@@ -13,7 +13,6 @@ rm -f /tmp/mercator-fake.db /tmp/mercator-fake.db-wal /tmp/mercator-fake.db-shm
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-fake.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
-export MERCATOR_SECRET_KEY_HEX="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
 export MERCATOR_FAKE_OFFER=1
 

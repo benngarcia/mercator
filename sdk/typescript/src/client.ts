@@ -3,14 +3,11 @@ import type {
   ConnectionListResponse,
   CreateRunRequest,
   CreateRunResponse,
-  CreateSecretVersionRequest,
-  CreateSecretVersionResponse,
   CreateWorkloadRequest,
   CreateWorkloadResponse,
   EnvBinding,
   EventListResponse,
   FetchFunction,
-  GrantSecretRequest,
   MutationRequestOptions,
   OfferListResponse,
   PlacementDecisionResponse,
@@ -22,8 +19,6 @@ import type {
   ResolveImageResponse,
   RunListResponse,
   RunResponse,
-  SecretGrantResponse,
-  SecretMetadataListResponse,
   SinkResult,
   SinkStatus,
   WorkloadRevisionListResponse,
@@ -297,18 +292,6 @@ export class MercatorClient {
 
   listOffers(params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<OfferListResponse> {
     return this.request<OfferListResponse>("GET", "/v1/offers", { ...options, query: this.workspaceQuery(params, options.query) });
-  }
-
-  listSecrets(params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<SecretMetadataListResponse> {
-    return this.request<SecretMetadataListResponse>("GET", "/v1/secrets", { ...options, query: this.workspaceQuery(params, options.query) });
-  }
-
-  createSecretVersion(secretId: string, body: CreateSecretVersionRequest, options: MutationRequestOptions): Promise<CreateSecretVersionResponse> {
-    return this.request<CreateSecretVersionResponse>("POST", `/v1/secrets/${pathSegment(secretId)}/versions`, { ...options, body });
-  }
-
-  grantSecret(secretId: string, body: GrantSecretRequest, options: RequestOptions = {}): Promise<SecretGrantResponse> {
-    return this.request<SecretGrantResponse>("POST", `/v1/secrets/${pathSegment(secretId)}/grants`, { ...options, body });
   }
 
   getSinkStatus(sinkId: string, options: RequestOptions = {}): Promise<SinkStatus> {

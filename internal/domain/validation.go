@@ -51,16 +51,10 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 				Required: "^[A-Z_][A-Z0-9_]*$", Message: "Environment variable names must be portable uppercase identifiers.",
 			})
 		}
-		if binding.Value == nil && binding.SecretRef == nil {
+		if binding.Value == nil {
 			violations = append(violations, Violation{
-				Code: "ENV_BINDING_EMPTY", Path: "spec.containers[0].env." + key,
-				Message: "Environment bindings must provide exactly one literal value or secret reference.",
-			})
-		}
-		if binding.Value != nil && binding.SecretRef != nil {
-			violations = append(violations, Violation{
-				Code: "ENV_BINDING_AMBIGUOUS", Path: "spec.containers[0].env." + key,
-				Message: "An environment key may have either a literal value or a secret reference, not both.",
+				Code: "ENV_VALUE_REQUIRED", Path: "spec.containers[0].env." + key,
+				Message: "Environment bindings must provide a literal value.",
 			})
 		}
 		if binding.Value != nil && len([]byte(*binding.Value)) > maxEnvValueBytes {
@@ -68,12 +62,6 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 				Code: "ENV_VALUE_TOO_LARGE", Path: "spec.containers[0].env." + key,
 				Required: maxEnvValueBytes, Offered: len([]byte(*binding.Value)),
 				Message: "Literal environment values exceed the V1 size limit.",
-			})
-		}
-		if binding.SecretRef != nil && (binding.SecretRef.Name == "" || binding.SecretRef.Version <= 0) {
-			violations = append(violations, Violation{
-				Code: "SECRET_VERSION_REQUIRED", Path: "spec.containers[0].env." + key,
-				Message: "Secret environment bindings must reference an exact positive secret version.",
 			})
 		}
 	}

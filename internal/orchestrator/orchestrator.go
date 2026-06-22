@@ -891,9 +891,6 @@ func publicWorkload(rev domain.WorkloadRevision) publicWorkloadRevision {
 				if binding.Value != nil {
 					kind = "literal"
 				}
-				if binding.SecretRef != nil {
-					kind = "secret"
-				}
 				publicContainer.Env[key] = publicEnvBinding{Kind: kind}
 			}
 		}
@@ -924,9 +921,8 @@ func launchEnvironment(env map[string]domain.EnvBinding) []adapter.EnvironmentBi
 	for _, name := range names {
 		binding := env[name]
 		bindings = append(bindings, adapter.EnvironmentBinding{
-			Name:      name,
-			Value:     cloneStringPtr(binding.Value),
-			SecretRef: cloneSecretRef(binding.SecretRef),
+			Name:  name,
+			Value: cloneStringPtr(binding.Value),
 		})
 	}
 	return bindings
@@ -940,9 +936,6 @@ func publicLaunchRequest(req adapter.LaunchRequest) adapter.LaunchRequest {
 		if binding.Value != nil {
 			kind = "literal"
 		}
-		if binding.SecretRef != nil {
-			kind = "secret"
-		}
 		public.Environment = append(public.Environment, adapter.EnvironmentBinding{Name: binding.Name, Value: &kind})
 	}
 	return public
@@ -953,13 +946,5 @@ func cloneStringPtr(value *string) *string {
 		return nil
 	}
 	cloned := *value
-	return &cloned
-}
-
-func cloneSecretRef(ref *domain.SecretReference) *domain.SecretReference {
-	if ref == nil {
-		return nil
-	}
-	cloned := *ref
 	return &cloned
 }

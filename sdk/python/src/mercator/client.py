@@ -267,29 +267,6 @@ class MercatorClient:
     def resolve_image(self, image: str, platform: str) -> Any:
         return self.request("POST", "/v1/images:resolve", json_body={"image": image, "platform": platform})
 
-    def list_secrets(self, workspace_id: str | None = None) -> Any:
-        return self.request("GET", "/v1/secrets", query=self._workspace_query(workspace_id))
-
-    def create_secret_version(self, secret_id: str, workspace_id: str, value: str, *, idempotency_key: str) -> Any:
-        return self.request(
-            "POST",
-            f"/v1/secrets/{self._path(secret_id)}/versions",
-            json_body={"workspace_id": workspace_id, "value": value},
-            idempotency_key=idempotency_key,
-        )
-
-    def grant_secret(self, secret_id: str, workspace_id: str, version: int, scope_type: str, scope_id: str) -> Any:
-        return self.request(
-            "POST",
-            f"/v1/secrets/{self._path(secret_id)}/grants",
-            json_body={
-                "workspace_id": workspace_id,
-                "version": version,
-                "scope_type": scope_type,
-                "scope_id": scope_id,
-            },
-        )
-
     def get_sink_status(self, sink_id: str) -> Any:
         return self.request("GET", f"/v1/sinks/{self._path(sink_id)}")
 

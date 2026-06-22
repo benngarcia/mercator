@@ -52,11 +52,8 @@ func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
 	literal := "literal-token-that-must-not-be-public"
 	rev := orchRevision()
 	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
-		"LOG_LEVEL": {Value: ptr("info")},
-		"API_TOKEN": {SecretRef: &domain.SecretReference{
-			Name:    "provider-secret-name-that-must-not-be-public",
-			Version: 7,
-		}},
+		"LOG_LEVEL":        {Value: ptr("info")},
+		"PROVIDER_API_KEY": {Value: ptr("provider-token-that-must-not-be-public")},
 		"SERVICE_PASSWORD": {Value: &literal},
 	}
 
@@ -76,7 +73,7 @@ func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
 	publicData := string(events[0].CloudEvent().Data)
 	for _, forbidden := range []string{
 		"literal-token-that-must-not-be-public",
-		"provider-secret-name-that-must-not-be-public",
+		"provider-token-that-must-not-be-public",
 		`"value":"info"`,
 	} {
 		if strings.Contains(publicData, forbidden) {
@@ -124,7 +121,7 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	rev.Spec.Containers[0].Args = []string{"--batch", "64"}
 	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
 		"LOG_LEVEL": {Value: &literal},
-		"API_TOKEN": {SecretRef: &domain.SecretReference{Name: "api-token", Version: 2}},
+		"API_TOKEN": {Value: ptr("runtime-managed-token")},
 	}
 	rev.Spec.Containers[0].Ports = []domain.PortSpec{{Name: "metrics", ContainerPort: 9090, Protocol: "tcp", Exposure: domain.PortExposurePrivate}}
 	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{Vendor: "nvidia", ModelAnyOf: []string{"a10"}, Count: 1, MemoryMinBytes: 16 << 30}}
@@ -169,8 +166,8 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	if req.CleanupLocator == "" || req.OwnershipToken == "" || req.LaunchKey == "" || req.RequestHash == "" {
 		t.Fatalf("launch request missing side-effect identity fields: %+v", req)
 	}
-	if binding := findLaunchEnv(t, req.Environment, "API_TOKEN"); binding.Value != nil || binding.SecretRef == nil {
-		t.Fatalf("secret binding should be descriptor-only: %+v", binding)
+	if binding := findLaunchEnv(t, req.Environment, "API_TOKEN"); binding.Value == nil || *binding.Value != "runtime-managed-token" {
+		t.Fatalf("literal env binding missing from launch request: %+v", binding)
 	}
 	if binding := findLaunchEnv(t, req.Environment, "LOG_LEVEL"); binding.Value == nil || *binding.Value != literal {
 		t.Fatalf("literal env binding missing from launch request: %+v", binding)
@@ -795,7 +792,6 @@ func orchOffer(id string, now time.Time) domain.OfferSnapshot {
 			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone, Protocols: []string{"tcp"}},
 			Pricing:   domain.PricingCapabilities{Known: true},
 			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "deterministic_name", ListOwned: true},
-			Secrets:   domain.SecretDeliveryCapabilities{Delivery: "direct_env", CleanupSupported: true},
 		},
 		Pricing:  domain.PriceModel{Currency: "USD", RatePerSecondUSD: 0.0001, Known: true},
 		Queue:    &domain.QueueSnapshot{},

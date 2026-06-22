@@ -17,7 +17,6 @@ import (
 	"github.com/bengarcia/mercator/internal/ociresolver"
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
-	"github.com/bengarcia/mercator/internal/secrets"
 	"github.com/bengarcia/mercator/internal/workload"
 )
 
@@ -175,5 +174,5 @@ func newMinimalCreateServer(t *testing.T, outcome adapter.ExternalPhase, extra .
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
 	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
-	return NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), resolver)
+	return NewWithServices(orch, sched, ad, workload.New(log), resolver)
 }

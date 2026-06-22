@@ -236,7 +236,7 @@ test("list and action methods build encoded paths and query strings", async () =
   assert.equal(requests[4]?.url, "https://mercator.example/v1/runs/run%2Fa:cancel?workspace_id=ws+1");
 });
 
-test("workloads, images, connections, offers, secrets, placements, and sinks use v1 routes", async () => {
+test("workloads, images, connections, offers, placements, and sinks use v1 routes", async () => {
   const { fetch, requests } = createMockFetch((request) => {
     if (request.url.endsWith("/v1/workloads")) return { status: 202, body: { workload_id: "wl_1" } };
     if (request.url.includes("/v1/workloads/wl_1/revisions?")) return { body: { revisions: [] } };
@@ -245,9 +245,6 @@ test("workloads, images, connections, offers, secrets, placements, and sinks use
     if (request.url.endsWith("/v1/images:resolve")) return { body: { image: { image: "repo/app:latest", digest: "sha256:abc", platform: "linux/amd64" } } };
     if (request.url.endsWith("/v1/connections?workspace_id=ws_1")) return { body: { connections: [{ id: "conn_1", workspace_id: "ws_1", adapter_type: "fake", authorized: true }] } };
     if (request.url.endsWith("/v1/offers?workspace_id=ws_1")) return { body: { offers: [] } };
-    if (request.url.endsWith("/v1/secrets?workspace_id=ws_1")) return { body: { secrets: [{ secret_id: "db", version: 1 }] } };
-    if (request.url.endsWith("/v1/secrets/db/versions")) return { status: 202, body: { secret_id: "db", version: 2 } };
-    if (request.url.endsWith("/v1/secrets/db/grants")) return { status: 202, body: { grant: { id: "grant_1", secret_id: "db", version: 2, scope_type: "run", scope_id: "run_1", revoked: false } } };
     if (request.url.endsWith("/v1/placements:preview")) return { body: { decision: { id: "decision_1", workload_revision_digest: "sha256:x", evaluated_at: "2026-06-20T00:00:00Z", model_version: "latency-v1", policy: { objective: "balanced" }, collection_report: {}, candidates: [], selection_reason_codes: [] } } };
     if (request.url.endsWith("/v1/sinks/audit")) return { body: { sink_id: "audit", cursor: 1, has_cursor: true } };
     if (request.url.endsWith("/v1/sinks/audit:deliver")) return { status: 202, body: { sink_id: "audit", delivered: 1, last_position: 2 } };
@@ -264,9 +261,6 @@ test("workloads, images, connections, offers, secrets, placements, and sinks use
   await client.resolveImage({ image: "repo/app:latest", platform: "linux/amd64" });
   await client.listConnections({ workspaceId: "ws_1" });
   await client.listOffers({ workspaceId: "ws_1" });
-  await client.listSecrets({ workspaceId: "ws_1" });
-  await client.createSecretVersion("db", { workspace_id: "ws_1", value: "secret" }, { idempotencyKey: "idem-secret" });
-  await client.grantSecret("db", { workspace_id: "ws_1", version: 2, scope_type: "run", scope_id: "run_1" });
   await client.previewPlacement({ workspace_id: "ws_1", workload: revision });
   await client.getSinkStatus("audit");
   await client.deliverSink("audit");
@@ -274,7 +268,6 @@ test("workloads, images, connections, offers, secrets, placements, and sinks use
 
   assert.equal(headersOf(requests[0]!).get("idempotency-key"), "idem-workload");
   assert.equal(headersOf(requests[1]!).get("idempotency-key"), "idem-revision");
-  assert.equal(headersOf(requests[8]!).get("idempotency-key"), "idem-secret");
   assert.deepEqual(requests.at(-1)?.body, { from_exclusive: 1, limit: 10, replay_id: "replay_1" });
 });
 

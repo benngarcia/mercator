@@ -2,13 +2,11 @@ package httpapi
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,7 +22,6 @@ import (
 	"github.com/bengarcia/mercator/internal/offers"
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
-	"github.com/bengarcia/mercator/internal/secrets"
 	sinkspkg "github.com/bengarcia/mercator/internal/sinks"
 	"github.com/bengarcia/mercator/internal/workload"
 	"github.com/bengarcia/mercator/web"
@@ -36,7 +33,6 @@ type Server struct {
 	scheduler scheduler.Scheduler
 	adapter   adapter.Adapter
 	workloads *workload.Service
-	secrets   *secrets.Vault
 	sinks     *sinkspkg.Manager
 	conns     *connection.Service
 	offers    *offers.Service
@@ -106,28 +102,6 @@ type resolveImageBody struct {
 
 type resolveImageResponse struct {
 	Image ociresolver.ResolvedImage `json:"image"`
-}
-
-type createSecretVersionBody struct {
-	WorkspaceID string `json:"workspace_id"`
-	SecretID    string `json:"secret_id"`
-	Value       string `json:"value"`
-}
-
-type secretMetadataListResponse struct {
-	Secrets []secrets.SecretMetadata `json:"secrets"`
-}
-
-type grantSecretBody struct {
-	WorkspaceID string `json:"workspace_id"`
-	SecretID    string `json:"secret_id"`
-	Version     int    `json:"version"`
-	ScopeType   string `json:"scope_type"`
-	ScopeID     string `json:"scope_id"`
-}
-
-type secretGrantResponse struct {
-	Grant secrets.Grant `json:"grant"`
 }
 
 type connectionListResponse struct {
@@ -203,16 +177,16 @@ func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.
 	return s
 }
 
-func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, resolver interface {
+func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, resolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }, options ...Option) http.Handler {
-	return NewWithAllServices(orch, sched, ad, workloads, secretVault, nil, nil, nil, resolver, options...)
+	return NewWithAllServices(orch, sched, ad, workloads, nil, nil, nil, resolver, options...)
 }
 
-func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, secretVault *secrets.Vault, sinkManager *sinkspkg.Manager, conns *connection.Service, offerService *offers.Service, resolver interface {
+func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, sinkManager *sinkspkg.Manager, conns *connection.Service, offerService *offers.Service, resolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }, options ...Option) http.Handler {
-	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, secrets: secretVault, sinks: sinkManager, conns: conns, offers: offerService, resolver: resolver}
+	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, sinks: sinkManager, conns: conns, offers: offerService, resolver: resolver}
 	for _, option := range options {
 		option(s)
 	}
@@ -268,9 +242,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/images:resolve", s.resolveImage)
 	s.mux.HandleFunc("GET /v1/connections", s.listConnections)
 	s.mux.HandleFunc("GET /v1/offers", s.listOffers)
-	s.mux.HandleFunc("GET /v1/secrets", s.listSecrets)
-	s.mux.HandleFunc("POST /v1/secrets/{secret_id}/versions", s.createSecretVersion)
-	s.mux.HandleFunc("POST /v1/secrets/{secret_id}/grants", s.grantSecret)
 	s.mux.HandleFunc("GET /v1/sinks/{sink_id}", s.sinkStatus)
 	s.mux.HandleFunc("POST /v1/sinks/{sink_action}", s.sinkAction)
 	s.mux.HandleFunc("POST /v1/placements:preview", s.previewPlacement)
@@ -366,9 +337,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		runID = newRunID()
 	}
 
-	if !s.authorizeSecretRefs(w, r, workspaceID, runID, workloadRevision) {
-		return
-	}
+	workloadRevision = applyRunEnvOverrides(workloadRevision, body.Env)
 	result, err := s.orch.CreateRun(r.Context(), orchestrator.CreateRunRequest{
 		WorkspaceID:    workspaceID,
 		RunID:          runID,
@@ -397,6 +366,22 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, newRunResponse(workspaceID, record, result.Duplicate))
+}
+
+func applyRunEnvOverrides(revision domain.WorkloadRevision, runEnv map[string]domain.EnvBinding) domain.WorkloadRevision {
+	if len(runEnv) == 0 || len(revision.Spec.Containers) == 0 {
+		return revision
+	}
+	container := &revision.Spec.Containers[0]
+	merged := make(map[string]domain.EnvBinding, len(container.Env)+len(runEnv))
+	for key, binding := range container.Env {
+		merged[key] = binding
+	}
+	for key, binding := range runEnv {
+		merged[key] = binding
+	}
+	container.Env = merged
+	return revision
 }
 
 func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
@@ -539,9 +524,6 @@ func (s *Server) refreshRun(w http.ResponseWriter, r *http.Request, runID string
 	if !ok {
 		return
 	}
-	if !s.authorizeStoredRunSecretRefs(w, r, workspaceID, runID) {
-		return
-	}
 	record, err := s.orch.RefreshRun(r.Context(), workspaceID, runID)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "REFRESH_RUN_FAILED", "Run refresh failed.")
@@ -621,78 +603,6 @@ func (s *Server) createWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"workload_id": body.WorkloadID})
-}
-
-func (s *Server) authorizeSecretRefs(w http.ResponseWriter, r *http.Request, workspaceID, runID string, revision domain.WorkloadRevision) bool {
-	refs := workloadSecretRefs(revision)
-	if len(refs) == 0 {
-		return true
-	}
-	if s.secrets == nil {
-		writeError(w, http.StatusForbidden, "SECRET_GRANT_REQUIRED", "Secret references require an active run-scoped grant.")
-		return false
-	}
-	for _, ref := range refs {
-		ok, err := s.secrets.HasActiveGrant(r.Context(), secrets.GrantRequest{WorkspaceID: workspaceID, SecretID: ref.Name, Version: ref.Version, ScopeType: "run", ScopeID: runID})
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "SECRET_GRANT_CHECK_FAILED", "Secret grant check failed.")
-			return false
-		}
-		if !ok {
-			writeError(w, http.StatusForbidden, "SECRET_GRANT_REQUIRED", "Secret references require an active run-scoped grant.")
-			return false
-		}
-	}
-	return true
-}
-
-func (s *Server) authorizeStoredRunSecretRefs(w http.ResponseWriter, r *http.Request, workspaceID, runID string) bool {
-	record, err := s.orch.GetRun(r.Context(), workspaceID, runID)
-	if err == nil && record.Phase != "requested" && record.Phase != "launching" {
-		return true
-	}
-	events, err := s.orch.GetRunEvents(r.Context(), workspaceID, runID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
-		return false
-	}
-	for _, event := range events {
-		if event.Type != orchestrator.EventRunRequested {
-			continue
-		}
-		var data struct {
-			Workload domain.WorkloadRevision `json:"workload_revision"`
-		}
-		payload := event.PrivateData
-		if len(payload) == 0 {
-			payload = event.Data
-		}
-		if err := json.Unmarshal(payload, &data); err != nil {
-			writeError(w, http.StatusInternalServerError, "RUN_SECRET_CHECK_FAILED", "Run secret grant check failed.")
-			return false
-		}
-		return s.authorizeSecretRefs(w, r, workspaceID, runID, data.Workload)
-	}
-	writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", "Run request event not found.")
-	return false
-}
-
-func workloadSecretRefs(revision domain.WorkloadRevision) []domain.SecretReference {
-	seen := map[string]domain.SecretReference{}
-	for _, container := range revision.Spec.Containers {
-		for _, binding := range container.Env {
-			if binding.SecretRef == nil {
-				continue
-			}
-			key := binding.SecretRef.Name + ":" + strconv.Itoa(binding.SecretRef.Version)
-			seen[key] = *binding.SecretRef
-		}
-	}
-	refs := make([]domain.SecretReference, 0, len(seen))
-	for _, ref := range seen {
-		refs = append(refs, ref)
-	}
-	return refs
 }
 
 func (s *Server) createRevision(w http.ResponseWriter, r *http.Request) {
@@ -814,84 +724,6 @@ func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, offerListResponse{Offers: records})
 }
 
-func (s *Server) createSecretVersion(w http.ResponseWriter, r *http.Request) {
-	if s.secrets == nil {
-		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
-		return
-	}
-	idempotencyKey := r.Header.Get("Idempotency-Key")
-	if idempotencyKey == "" {
-		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
-		return
-	}
-	var body createSecretVersionBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
-		return
-	}
-	if !authorizeRequestWorkspace(w, r, body.WorkspaceID) {
-		return
-	}
-	secretID, ok := pathSecretID(w, r, body.SecretID)
-	if !ok {
-		return
-	}
-	body.SecretID = secretID
-	version, err := s.secrets.CreateVersion(r.Context(), secrets.CreateVersionRequest{WorkspaceID: body.WorkspaceID, SecretID: body.SecretID, Plaintext: []byte(body.Value), IdempotencyKey: idempotencyKey})
-	if err != nil {
-		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
-			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "CREATE_SECRET_VERSION_FAILED", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"secret_id": version.SecretID, "version": version.Version})
-}
-
-func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
-	if s.secrets == nil {
-		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
-		return
-	}
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
-	}
-	metadata, err := s.secrets.ListMetadata(r.Context(), workspaceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "LIST_SECRETS_FAILED", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, secretMetadataListResponse{Secrets: metadata})
-}
-
-func (s *Server) grantSecret(w http.ResponseWriter, r *http.Request) {
-	if s.secrets == nil {
-		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
-		return
-	}
-	var body grantSecretBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
-		return
-	}
-	secretID, ok := pathSecretID(w, r, body.SecretID)
-	if !ok {
-		return
-	}
-	body.SecretID = secretID
-	if !authorizeRequestWorkspace(w, r, body.WorkspaceID) {
-		return
-	}
-	grant, err := s.secrets.Grant(r.Context(), secrets.GrantRequest{WorkspaceID: body.WorkspaceID, SecretID: body.SecretID, Version: body.Version, ScopeType: body.ScopeType, ScopeID: body.ScopeID})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "GRANT_SECRET_FAILED", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusAccepted, secretGrantResponse{Grant: grant})
-}
-
 func (s *Server) sinkStatus(w http.ResponseWriter, r *http.Request) {
 	if s.sinks == nil {
 		writeError(w, http.StatusNotImplemented, "SINKS_DISABLED", "Sink manager is not configured.")
@@ -1009,15 +841,6 @@ func authorizeRequestWorkspace(w http.ResponseWriter, r *http.Request, workspace
 	return true
 }
 
-func pathSecretID(w http.ResponseWriter, r *http.Request, bodySecretID string) (string, bool) {
-	pathSecretID := r.PathValue("secret_id")
-	if bodySecretID != "" && bodySecretID != pathSecretID {
-		writeError(w, http.StatusBadRequest, "SECRET_ID_MISMATCH", "secret_id in the request body must match the URL path.")
-		return "", false
-	}
-	return pathSecretID, true
-}
-
 // newRunID mints a server-generated run identifier from a uuidv7 (time-ordered,
 // collision-resistant). Used when a caller omits run_id on create.
 func newRunID() string {
@@ -1069,27 +892,18 @@ func errorCode(err error, fallback string) string {
 	return fallback
 }
 
-func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot, secretKey ...[]byte) (http.Handler, func() error, error) {
-	var key []byte
-	if len(secretKey) > 0 {
-		key = secretKey[0]
-	}
-	return HandlerForSQLiteWithOptions(ctx, dsn, offer, key)
+func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot) (http.Handler, func() error, error) {
+	return HandlerForSQLiteWithOptions(ctx, dsn, offer)
 }
 
-func HandlerForSQLiteWithOptions(ctx context.Context, dsn string, offer []domain.OfferSnapshot, secretKey []byte, options ...Option) (http.Handler, func() error, error) {
+func HandlerForSQLiteWithOptions(ctx context.Context, dsn string, offer []domain.OfferSnapshot, options ...Option) (http.Handler, func() error, error) {
 	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
-	return HandlerForSQLiteWithAdapter(ctx, dsn, ad, secretKey, options...)
+	return HandlerForSQLiteWithAdapter(ctx, dsn, ad, options...)
 }
 
-func HandlerForSQLiteWithAdapter(ctx context.Context, dsn string, ad adapter.Adapter, secretKey []byte, options ...Option) (http.Handler, func() error, error) {
+func HandlerForSQLiteWithAdapter(ctx context.Context, dsn string, ad adapter.Adapter, options ...Option) (http.Handler, func() error, error) {
 	log, err := eventlog.OpenSQLite(ctx, dsn)
 	if err != nil {
-		return nil, nil, err
-	}
-	key, err := handlerSecretKey(secretKey)
-	if err != nil {
-		_ = log.Close()
 		return nil, nil, err
 	}
 	sched := scheduler.New()
@@ -1099,22 +913,7 @@ func HandlerForSQLiteWithAdapter(ctx context.Context, dsn string, ad adapter.Ada
 	// deterministic digest with no network, keeping fake mode end-to-end
 	// exercisable without a pre-pinned image.
 	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
-	return NewWithAllServices(orch, sched, ad, workload.New(log), secrets.New(log, key), sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}), connection.New(log), offers.New(log), resolver, options...), log.Close, nil
-}
-
-func handlerSecretKey(configured []byte) ([]byte, error) {
-	if len(configured) > 0 {
-		key := append([]byte(nil), configured...)
-		if len(key) != 32 {
-			return nil, errors.New("httpapi: secret key must be 32 bytes")
-		}
-		return key, nil
-	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
-	return key, nil
+	return NewWithAllServices(orch, sched, ad, workload.New(log), sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}), connection.New(log), offers.New(log), resolver, options...), log.Close, nil
 }
 
 var _ fs.FS = web.Static()
