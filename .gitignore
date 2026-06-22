@@ -24,3 +24,6 @@ coverage.txt
 # Python
 __pycache__/
 *.py[cod]
+
+# Local verification artifacts (screenshots, traces)
+/output/

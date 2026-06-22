@@ -1,2 +1,18 @@
 [tools]
 go = "1.25.11"
+bun = "1.3"
+
+# Build the embedded operator console. MUST run before `go build ./cmd/mercator`
+# so //go:embed picks up fresh, content-hashed assets into web/static. The Go
+# binary then serves them at /assets/* (immutable) with index.html as the SPA
+# fallback. Safe to run repeatedly; it cleans and repopulates web/static.
+[tasks.ui]
+description = "Build the Mercator console frontend into web/static (run before go build)"
+dir = "web/app"
+run = ["bun install", "bun run build"]
+
+# Build the UI then the Go binary, in the required order.
+[tasks.build]
+description = "Build the UI then the mercator binary"
+depends = ["ui"]
+run = "go build ./cmd/mercator"

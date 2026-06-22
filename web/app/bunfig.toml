@@ -1,0 +1,9 @@
+# Bun configuration for the Mercator console frontend.
+#
+# Register bun-plugin-tailwind so both the HTML dev server (`bun dev`) and any
+# `bun build` invocation process Tailwind v4 in CSS imports. The "@/" -> src
+# alias is declared in tsconfig.json (compilerOptions.paths); Bun honours those
+# tsconfig paths for resolution, so no duplicate alias config is needed here.
+
+[serve.static]
+plugins = ["bun-plugin-tailwind"]

@@ -213,12 +213,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
-	staticFS := http.FS(web.Static())
+	// SPA fallback: any unmatched non-API GET serves index.html. The more
+	// specific patterns below (/v1/, /health/, /openapi.json, /assets/) win
+	// under the Go 1.22+ ServeMux precedence rules, so this only catches
+	// client-side routes like /runs, /runs/{id}, /offers, etc.
 	s.mux.HandleFunc("GET /", s.serveUI)
 	s.mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	s.mux.Handle("GET /ui/", http.StripPrefix("/ui/", http.FileServer(staticFS)))
+	// Content-hashed, immutable build artifacts. Hashing in the filename makes
+	// them safe to cache forever.
+	assetServer := http.StripPrefix("/assets/", http.FileServer(http.FS(web.AssetsFS())))
+	s.mux.Handle("GET /assets/", immutableCache(assetServer))
 	s.mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -247,14 +253,22 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/placements:preview", s.previewPlacement)
 }
 
+// serveUI is the single-page-app fallback. It serves the embedded index.html
+// (with a no-cache header so clients always re-validate the entry document and
+// pick up new hashed asset references after a deploy) for the root and for any
+// unmatched non-API GET path, letting the client-side router own routes like
+// /runs, /runs/{id}, /preview, /offers, etc. The /v1, /health, /openapi.json
+// and /assets/ patterns are registered more specifically and take precedence.
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	// Only non-API paths fall back to the SPA. An unmatched /v1, /health,
+	// /openapi.json or /assets request is a genuine 404, not a client route.
+	if isAPIPath(r.URL.Path) {
 		http.NotFound(w, r)
 		return
 	}
 	file, err := web.Static().Open("index.html")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "UI_NOT_AVAILABLE", err.Error())
+		writeError(w, http.StatusInternalServerError, "UI_NOT_AVAILABLE", "UI assets are not built; run the `ui` task (bun run build) before building the binary.")
 		return
 	}
 	defer file.Close()
@@ -271,7 +285,42 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "UI_NOT_AVAILABLE", "embedded UI file is not seekable")
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeContent(w, r, "index.html", stat.ModTime(), reader)
+}
+
+// immutableCache wraps the embedded asset file server with a long-lived
+// immutable Cache-Control header. The build emits content-hashed filenames, so
+// any change produces a new URL and stale caching is impossible. The header is
+// injected via a ResponseWriter wrapper at WriteHeader time so it survives even
+// when the wrapped http.FileServer takes its 404 path (which rewrites parts of
+// the header map).
+func immutableCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&immutableCacheWriter{ResponseWriter: w}, r)
+	})
+}
+
+type immutableCacheWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *immutableCacheWriter) WriteHeader(status int) {
+	if !w.wrote {
+		w.wrote = true
+		if status == http.StatusOK {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *immutableCacheWriter) Write(b []byte) (int, error) {
+	if !w.wrote {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
@@ -779,6 +828,16 @@ func (s *Server) replaySink(w http.ResponseWriter, r *http.Request, sinkID strin
 		return
 	}
 	writeJSON(w, http.StatusAccepted, result)
+}
+
+// isAPIPath reports whether a path belongs to the server's API/operational
+// surface rather than the client-side SPA. Used to keep the SPA fallback from
+// masking genuine 404s on unmatched API routes.
+func isAPIPath(path string) bool {
+	return strings.HasPrefix(path, "/v1/") ||
+		strings.HasPrefix(path, "/health") ||
+		strings.HasPrefix(path, "/assets/") ||
+		path == "/openapi.json"
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
