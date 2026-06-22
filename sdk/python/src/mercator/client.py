@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -135,42 +136,22 @@ class MercatorClient:
     ) -> Any:
         """Create a run from just an image (the server shorthand form).
 
-        Only ``image`` is required. ``run_id`` is optional: omit it and the
-        server generates one, which you read from the convenience top-level
-        ``result["run_id"]`` (equal to ``result["run"]["id"]``). The
-        server applies all other defaults (container name=main,
+        Only ``image`` is required. ``run_id`` is optional: omit it and the SDK
+        generates one, then derives a retry-safe ``Idempotency-Key`` as
+        ``f"{run_id}:create"`` unless you pass ``idempotency_key`` explicitly.
+        The server applies all other defaults (container name=main,
         platform=linux/amd64, resources, network, placement, execution). Returns
         the same envelope as :meth:`create_run`.
-
-        ``idempotency_key`` is required by the server; when omitted and a
-        ``run_id`` is supplied this derives a stable, retry-safe key as
-        ``f"{run_id}:create"``. When neither is supplied there is no stable
-        identifier to derive a retry-safe key from -- silently minting a fresh
-        random key per call would break the server's at-most-once guarantee (a
-        transport retry would create a SECOND run instead of replaying the
-        first), so this raises ``ValueError`` instead. Pass an explicit
-        ``idempotency_key`` (reused verbatim across retries of the same logical
-        operation) or a ``run_id`` to get retry-safe behavior on the
-        server-generated-run_id path.
         """
 
+        effective_run_id = run_id or self._new_run_id()
         payload: dict[str, Any] = {"image": image}
         if args:
             payload["args"] = list(args)
         if env:
             payload["env"] = dict(env)
-        if run_id is not None:
-            payload["run_id"] = run_id
-        key = idempotency_key
-        if key is None:
-            if run_id is None:
-                raise ValueError(
-                    "run_image requires an explicit idempotency_key when run_id is omitted: "
-                    "an auto-generated random key is per-attempt, not per-logical-operation, "
-                    "so a transport retry would create a second run instead of replaying the "
-                    "first. Pass idempotency_key=... (reused across retries) or supply run_id."
-                )
-            key = f"{run_id}:create"
+        payload["run_id"] = effective_run_id
+        key = idempotency_key or f"{effective_run_id}:create"
         return self.create_run(payload, idempotency_key=key, workspace_id=workspace_id)
 
     def get_run(self, run_id: str, workspace_id: str | None = None) -> Any:
@@ -351,3 +332,6 @@ class MercatorClient:
 
     def _compact(self, payload: Mapping[str, Any]) -> JSONObject:
         return {key: value for key, value in payload.items() if value is not None}
+
+    def _new_run_id(self) -> str:
+        return f"run_{uuid.uuid4()}"

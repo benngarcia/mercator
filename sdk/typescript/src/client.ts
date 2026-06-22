@@ -45,16 +45,14 @@ export type RunImageOptions = RequestOptions & {
   /** Container env bindings for the image. */
   env?: Record<string, EnvBinding>;
   /**
-   * Optional run id. Omit it and the server generates one, returned at
-   * `response.run.id`.
+   * Optional run id. Omit it and the SDK generates one before dispatch.
    */
   runId?: string;
   /** Workspace for this run; overrides the client default. */
   workspaceId?: string;
   /**
-   * Idempotency key. Required by the server; when omitted a stable key is
-   * derived from `runId` (retry-safe) or a random one is minted for a
-   * generated run.
+   * Idempotency key. When omitted a stable key is derived from the effective
+   * run id as `${runId}:create`.
    */
   idempotencyKey?: string;
 };
@@ -155,23 +153,16 @@ export class MercatorClient {
 
   /**
    * Create a run from just an image (the server shorthand form). Only `image`
-   * is required. `runId` is optional: omit it and the server generates one,
-   * which you read from `response.run.id`. The server applies all other
-   * defaults (container name=main, platform=linux/amd64, resources, network,
-   * placement, execution). Returns the same envelope as {@link createRun}.
-   *
-   * `idempotencyKey` is required by the server; when omitted and a `runId` is
-   * supplied this derives a stable, retry-safe key as `` `${runId}:create` ``.
-   * When neither is supplied there is no stable identifier to derive a
-   * retry-safe key from -- silently minting a fresh random key per call would
-   * break the server's at-most-once guarantee (a transport retry would create
-   * a SECOND run instead of replaying the first), so this throws instead. Pass
-   * an explicit `idempotencyKey` (reused verbatim across retries of the same
-   * logical operation) or a `runId` to get retry-safe behavior on the
-   * server-generated-run_id path.
+   * is required. `runId` is optional: omit it and the SDK generates one before
+   * dispatch, then derives a retry-safe `Idempotency-Key` as
+   * `` `${runId}:create` `` unless you pass `idempotencyKey` explicitly. The
+   * server applies all other defaults (container name=main, platform=linux/amd64,
+   * resources, network, placement, execution). Returns the same envelope as
+   * {@link createRun}.
    */
   runImage(image: string, options: RunImageOptions = {}): Promise<CreateRunResponse> {
     const { args, env, runId, workspaceId, idempotencyKey, ...requestOptions } = options;
+    const effectiveRunId = runId ?? newRunId();
     const body: CreateRunRequest = { image };
     if (args !== undefined) {
       body.args = args;
@@ -179,23 +170,8 @@ export class MercatorClient {
     if (env !== undefined) {
       body.env = env;
     }
-    if (runId !== undefined) {
-      body.run_id = runId;
-    }
-    let key = idempotencyKey;
-    if (key === undefined) {
-      if (runId === undefined) {
-        return Promise.reject(
-          new Error(
-            "runImage requires an explicit idempotencyKey when runId is omitted: an " +
-              "auto-generated random key is per-attempt, not per-logical-operation, so a " +
-              "transport retry would create a second run instead of replaying the first. " +
-              "Pass idempotencyKey (reused across retries) or supply runId.",
-          ),
-        );
-      }
-      key = `${runId}:create`;
-    }
+    body.run_id = effectiveRunId;
+    const key = idempotencyKey ?? `${effectiveRunId}:create`;
     return this.createRun(body, { ...requestOptions, idempotencyKey: key, workspaceId });
   }
 
@@ -348,6 +324,14 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 function pathSegment(value: string): string {
   return encodeURIComponent(value);
+}
+
+function newRunId(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return `run_${globalThis.crypto.randomUUID()}`;
+  }
+  const fallback = Math.random().toString(16).slice(2).padEnd(32, "0").slice(0, 32);
+  return `run_${fallback.slice(0, 8)}-${fallback.slice(8, 12)}-4${fallback.slice(13, 16)}-8${fallback.slice(17, 20)}-${fallback.slice(20, 32)}`;
 }
 
 async function parseResponseBody(response: Response): Promise<unknown> {

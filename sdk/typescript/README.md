@@ -34,7 +34,6 @@ const mercator = new MercatorClient({
 
 const created = await mercator.runImage("busybox", {
   args: ["echo", "hi"],
-  idempotencyKey: "echo-hi:create", // reuse verbatim on retry
 });
 const runId = created.run.id; // server-generated id
 
@@ -42,12 +41,10 @@ const result = await mercator.waitRunUntilTerminal(runId);
 console.log(result.run.outcome, result.run.exit_code); // => succeeded 0
 ```
 
-`runImage` derives a stable `Idempotency-Key` from `runId` (`` `${runId}:create` ``)
-when you pass one. If you omit `runId` (so the server generates the id) you MUST
-pass an explicit `idempotencyKey` and reuse it verbatim across retries of the
-same logical call -- `runImage` will not silently mint a random key, because a
-per-attempt key would create a second run instead of replaying the first on a
-transport retry. Pass `{ env: { K: { value: "v" } } }` for environment.
+`runImage` generates a `runId` when you omit one and derives a stable
+`Idempotency-Key` from it (`` `${runId}:create` ``). Pass `idempotencyKey` only
+when you need to coordinate retries with an external caller. Pass
+`{ env: { K: { value: "v" } } }` for environment.
 
 ## Create, wait, and read the exit code in one round trip
 
