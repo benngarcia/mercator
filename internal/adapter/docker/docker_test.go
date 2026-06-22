@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/adapter"
-	"github.com/bengarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {

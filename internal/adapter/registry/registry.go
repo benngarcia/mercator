@@ -1,6 +1,6 @@
 package registry
 
-import "github.com/bengarcia/mercator/internal/adapter"
+import "github.com/benngarcia/mercator/internal/adapter"
 
 type Registry struct {
 	adapters map[string]adapter.Adapter

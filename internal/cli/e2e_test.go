@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bengarcia/mercator/internal/domain"
-	"github.com/bengarcia/mercator/internal/httpapi"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/httpapi"
 )
 
 func TestE2EFakeAdapterHTTPAndCLI(t *testing.T) {

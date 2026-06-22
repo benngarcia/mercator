@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
 func TestManagerDurableCursorRetryAndRestart(t *testing.T) {

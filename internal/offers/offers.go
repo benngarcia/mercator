@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/domain"
-	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
 const EventOfferSnapshotsIngested = "compute.offers.snapshots_ingested.v1"

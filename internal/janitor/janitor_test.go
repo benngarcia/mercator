@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/adapter"
-	"github.com/bengarcia/mercator/internal/adapter/fake"
-	"github.com/bengarcia/mercator/internal/domain"
-	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
 func TestJanitorReleasesOwnedResources(t *testing.T) {

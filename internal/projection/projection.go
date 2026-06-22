@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
 type EventLog interface {

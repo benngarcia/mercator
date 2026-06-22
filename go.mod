@@ -1,4 +1,4 @@
-module github.com/bengarcia/mercator
+module github.com/benngarcia/mercator
 
 go 1.25.0
 

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/adapter"
-	"github.com/bengarcia/mercator/internal/adapter/fake"
-	"github.com/bengarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 // A standing offer must record disposition=release on the launch intent and the

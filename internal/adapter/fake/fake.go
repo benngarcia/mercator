@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/adapter"
-	"github.com/bengarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 type Adapter struct {

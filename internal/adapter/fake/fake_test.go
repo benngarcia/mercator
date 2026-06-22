@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/bengarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter"
 )
 
 func TestFakeAdapterLaunchIsIdempotentAndDetectsConflicts(t *testing.T) {

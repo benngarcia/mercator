@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
 type EventLog interface {

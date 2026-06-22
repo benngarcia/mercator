@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bengarcia/mercator/internal/domain"
-	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
 func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {

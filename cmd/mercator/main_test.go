@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bengarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter"
 )
 
 func TestRunDelegatesJSONCLICommands(t *testing.T) {

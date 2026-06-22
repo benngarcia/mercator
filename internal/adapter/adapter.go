@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 var ErrIdempotencyConflict = errors.New("adapter: idempotency conflict")

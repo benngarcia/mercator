@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/adapter"
-	"github.com/bengarcia/mercator/internal/adapter/fake"
-	"github.com/bengarcia/mercator/internal/domain"
-	"github.com/bengarcia/mercator/internal/eventlog"
-	"github.com/bengarcia/mercator/internal/scheduler"
+	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
 func TestCreateRunIsIdempotent(t *testing.T) {

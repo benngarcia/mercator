@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 type Observation struct {

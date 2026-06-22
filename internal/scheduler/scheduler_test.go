@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 func TestSchedulerSelectsLowestDeterministicScore(t *testing.T) {

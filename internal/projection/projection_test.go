@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
 func TestRunnerResumesFromDurableGlobalPosition(t *testing.T) {

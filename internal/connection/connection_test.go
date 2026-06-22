@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bengarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
 func TestServiceCreatesGetsListsAndUpdatesConnectionAuthorization(t *testing.T) {

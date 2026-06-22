@@ -12,19 +12,19 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/bengarcia/mercator/internal/adapter"
-	"github.com/bengarcia/mercator/internal/adapter/fake"
-	"github.com/bengarcia/mercator/internal/authz"
-	"github.com/bengarcia/mercator/internal/connection"
-	"github.com/bengarcia/mercator/internal/domain"
-	"github.com/bengarcia/mercator/internal/eventlog"
-	"github.com/bengarcia/mercator/internal/ociresolver"
-	"github.com/bengarcia/mercator/internal/offers"
-	"github.com/bengarcia/mercator/internal/orchestrator"
-	"github.com/bengarcia/mercator/internal/scheduler"
-	sinkspkg "github.com/bengarcia/mercator/internal/sinks"
-	"github.com/bengarcia/mercator/internal/workload"
-	"github.com/bengarcia/mercator/web"
+	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/authz"
+	"github.com/benngarcia/mercator/internal/connection"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/ociresolver"
+	"github.com/benngarcia/mercator/internal/offers"
+	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/scheduler"
+	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
+	"github.com/benngarcia/mercator/internal/workload"
+	"github.com/benngarcia/mercator/web"
 )
 
 type Server struct {
