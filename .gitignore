@@ -20,3 +20,7 @@
 # Go
 /vendor/
 coverage.txt
+
+# Python
+__pycache__/
+*.py[cod]
