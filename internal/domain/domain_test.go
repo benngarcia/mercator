@@ -46,17 +46,6 @@ func TestValidateWorkloadRevisionEnforcesV1OCIContract(t *testing.T) {
 			path: "spec.containers[0].platform",
 		},
 		{
-			name: "rejects duplicate env keys across literal and secret bindings",
-			edit: func(rev *WorkloadRevision) {
-				rev.Spec.Containers[0].Env["LOG_LEVEL"] = EnvBinding{
-					Value:     ptr("info"),
-					SecretRef: &SecretReference{Name: "log-level", Version: 1},
-				}
-			},
-			code: "ENV_BINDING_AMBIGUOUS",
-			path: "spec.containers[0].env.LOG_LEVEL",
-		},
-		{
 			name: "rejects raw extension payloads",
 			edit: func(rev *WorkloadRevision) {
 				rev.Spec.Raw = mustRawMap(t, map[string]string{"docker": "--privileged"})
@@ -69,7 +58,7 @@ func TestValidateWorkloadRevisionEnforcesV1OCIContract(t *testing.T) {
 			edit: func(rev *WorkloadRevision) {
 				rev.Spec.Containers[0].Env["EMPTY_BINDING"] = EnvBinding{}
 			},
-			code: "ENV_BINDING_EMPTY",
+			code: "ENV_VALUE_REQUIRED",
 			path: "spec.containers[0].env.EMPTY_BINDING",
 		},
 		{
@@ -165,7 +154,7 @@ func validRevision() WorkloadRevision {
 				Args:     []string{"--batch-size", "128"},
 				Env: map[string]EnvBinding{
 					"LOG_LEVEL": {Value: ptr("info")},
-					"API_TOKEN": {SecretRef: &SecretReference{Name: "inference-api-token", Version: 7}},
+					"API_TOKEN": {Value: ptr("env-or-provider-managed-token")},
 				},
 			}},
 			Resources: ResourceRequirements{

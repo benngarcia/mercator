@@ -49,14 +49,8 @@ export type Platform = {
   architecture: string;
 };
 
-export type SecretReference = {
-  name: string;
-  version: number;
-};
-
 export type EnvBinding = {
-  value?: string;
-  secret_ref?: SecretReference;
+  value: string;
 };
 
 export type PortExposure = "none" | "public" | "private" | string;
@@ -378,7 +372,6 @@ export type CapabilityProfile = {
   resources?: Record<string, unknown>;
   network?: Record<string, unknown>;
   pricing?: Record<string, unknown>;
-  secrets?: Record<string, unknown>;
   observability?: Record<string, unknown>;
 };
 
@@ -450,47 +443,6 @@ export type OfferSnapshot = {
 
 export type OfferListResponse = {
   offers: OfferSnapshot[];
-};
-
-export type SecretMetadata = {
-  secret_id: string;
-  version: number;
-};
-
-export type SecretMetadataListResponse = {
-  secrets: SecretMetadata[];
-};
-
-export type CreateSecretVersionRequest = {
-  workspace_id: string;
-  secret_id?: string;
-  value: string;
-};
-
-export type CreateSecretVersionResponse = {
-  secret_id: string;
-  version: number;
-};
-
-export type GrantSecretRequest = {
-  workspace_id: string;
-  secret_id?: string;
-  version: number;
-  scope_type: string;
-  scope_id: string;
-};
-
-export type SecretGrant = {
-  id: string;
-  secret_id: string;
-  version: number;
-  scope_type: string;
-  scope_id: string;
-  revoked: boolean;
-};
-
-export type SecretGrantResponse = {
-  grant: SecretGrant;
 };
 
 export type SinkStatus = {

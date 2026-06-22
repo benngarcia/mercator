@@ -17,7 +17,6 @@ import (
 	"github.com/bengarcia/mercator/internal/ociresolver"
 	"github.com/bengarcia/mercator/internal/orchestrator"
 	"github.com/bengarcia/mercator/internal/scheduler"
-	"github.com/bengarcia/mercator/internal/secrets"
 	"github.com/bengarcia/mercator/internal/workload"
 )
 
@@ -201,17 +200,10 @@ func TestRunEventsRedactEnvironmentBindings(t *testing.T) {
 	handler := newHTTPTestServer(t)
 	literal := "literal-api-token-that-must-not-leak"
 	rev := httpRevision()
-	secretName := "provider-secret-ref-that-must-not-leak"
 	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
-		"LOG_LEVEL": {Value: ptr("debug")},
-		"API_TOKEN": {SecretRef: &domain.SecretReference{
-			Name:    secretName,
-			Version: 1,
-		}},
+		"LOG_LEVEL":      {Value: ptr("debug")},
 		"SECRET_LITERAL": {Value: &literal},
 	}
-	createSecretVersionForHTTPTest(t, handler, secretName, "idem_redacted_secret")
-	grantSecretForHTTPTest(t, handler, secretName, 1, "run_redacted_events")
 	body := mustMarshal(t, createRunBody{RunID: "run_redacted_events", Workload: rev})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_redacted_events")
@@ -228,26 +220,42 @@ func TestRunEventsRedactEnvironmentBindings(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	for _, forbidden := range []string{literal, secretName, `"value":"debug"`} {
+	for _, forbidden := range []string{literal, `"value":"debug"`} {
 		if strings.Contains(rec.Body.String(), forbidden) {
 			t.Fatalf("events response exposed %q in %s", forbidden, rec.Body.String())
 		}
 	}
 }
 
-func TestCreateRunRejectsSecretRefWithoutGrant(t *testing.T) {
+func TestCreateRunRejectsSecretRefEnvironmentBinding(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	rev := httpRevision()
-	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
-		"API_TOKEN": {SecretRef: &domain.SecretReference{Name: "sec_api", Version: 1}},
-	}
-	body := mustMarshal(t, createRunBody{RunID: "run_without_secret_grant", Workload: rev})
+	body := []byte(`{
+		"run_id":"run_secret_ref_rejected",
+		"workload":{
+			"id":"wrev_1",
+			"workspace_id":"ws_1",
+			"workload_id":"wrk_1",
+			"digest":"sha256:revision",
+			"spec":{
+				"containers":[{
+					"name":"main",
+					"image":"ghcr.io/acme/inference@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+					"platform":{"os":"linux","architecture":"amd64"},
+					"env":{"API_TOKEN":{"secret_ref":{"name":"sec_api","version":1}}}
+				}],
+				"resources":{"cpu":{"min_millis":1000},"memory":{"min_bytes":1073741824},"ephemeral_disk":{"min_bytes":1073741824}},
+				"network":{"inbound":"none"},
+				"placement":{"objective":"balanced","expected_runtime_seconds":60},
+				"execution":{"max_runtime_seconds":120,"max_pre_start_attempts":3}
+			}
+		}
+	}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "idem_no_secret_grant")
+	req.Header.Set("Idempotency-Key", "idem_secret_ref_rejected")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "SECRET_GRANT_REQUIRED") {
-		t.Fatalf("expected missing grant 403, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "ENV_VALUE_REQUIRED") {
+		t.Fatalf("expected secret_ref binding to be rejected as invalid env input, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -276,60 +284,8 @@ func TestCreateRunValidationErrorDoesNotEchoEnvironmentValues(t *testing.T) {
 	}
 }
 
-func TestRefreshRejectsStoredSecretRefWithoutGrant(t *testing.T) {
-	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
-	if err != nil {
-		t.Fatalf("open event log: %v", err)
-	}
-	t.Cleanup(func() { _ = log.Close() })
-	ad := fake.New(
-		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", time.Now().UTC())}),
-		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
-	)
-	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad)
-	handler := NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), ociresolver.NewStaticResolver(nil))
-	rev := httpRevision()
-	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
-		"API_TOKEN": {SecretRef: &domain.SecretReference{Name: "sec_api", Version: 1}},
-	}
-	if _, err := orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{WorkspaceID: "ws_1", RunID: "run_refresh_secret", IdempotencyKey: "idem_seed_refresh_secret", Workload: rev}); err != nil {
-		t.Fatalf("seed run: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_refresh_secret:refresh?workspace_id=ws_1", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "SECRET_GRANT_REQUIRED") {
-		t.Fatalf("expected refresh missing grant 403, got %d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
 func ptr(value string) *string {
 	return &value
-}
-
-func createSecretVersionForHTTPTest(t *testing.T, handler http.Handler, secretID, idempotencyKey string) {
-	t.Helper()
-	body := mustMarshal(t, createSecretVersionBody{WorkspaceID: "ws_1", SecretID: secretID, Value: "plaintext-secret"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/secrets/"+secretID+"/versions", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", idempotencyKey)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("create secret %s expected 202, got %d body=%s", secretID, rec.Code, rec.Body.String())
-	}
-}
-
-func grantSecretForHTTPTest(t *testing.T, handler http.Handler, secretID string, version int, runID string) {
-	t.Helper()
-	body := mustMarshal(t, grantSecretBody{WorkspaceID: "ws_1", SecretID: secretID, Version: version, ScopeType: "run", ScopeID: runID})
-	req := httptest.NewRequest(http.MethodPost, "/v1/secrets/"+secretID+"/grants", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("grant secret %s expected 202, got %d body=%s", secretID, rec.Code, rec.Body.String())
-	}
 }
 
 func TestCreateRunRejectsWorkspaceMismatch(t *testing.T) {
@@ -374,10 +330,13 @@ func TestPlacementPreviewAndOpenAPI(t *testing.T) {
 			t.Fatalf("%s expected 200, got %d body=%s", path, rec.Code, rec.Body.String())
 		}
 		if path == "/openapi.json" {
-			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "/v1/workloads", "/v1/images:resolve", "/v1/secrets", "PlacementPreviewRequest", "PlacementPreviewResponse", "IdempotencyConflict", `"409"`, "exit_code"} {
+			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "/v1/workloads", "/v1/images:resolve", "PlacementPreviewRequest", "PlacementPreviewResponse", "IdempotencyConflict", `"409"`, "exit_code"} {
 				if !strings.Contains(rec.Body.String(), required) {
 					t.Fatalf("OpenAPI missing %s: %s", required, rec.Body.String())
 				}
+			}
+			if strings.Contains(rec.Body.String(), "/v1/secrets") || strings.Contains(rec.Body.String(), "secret_ref") {
+				t.Fatalf("OpenAPI still exposes secret vault surface: %s", rec.Body.String())
 			}
 		}
 	}
@@ -476,71 +435,103 @@ func TestCreateRunCanReferenceStoredWorkloadRevision(t *testing.T) {
 	}
 }
 
-func TestSecretMetadataAndGrantEndpointsDoNotExposePlaintext(t *testing.T) {
+func TestSecretVaultRoutesAreNotRegistered(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	body := mustMarshal(t, createSecretVersionBody{WorkspaceID: "ws_1", SecretID: "sec_api", Value: "plaintext-secret"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_api/versions", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "idem_secret")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("create secret version expected 202, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "plaintext-secret") {
-		t.Fatalf("secret create leaked plaintext: %s", rec.Body.String())
-	}
-	req = httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_api/versions", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "idem_secret")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"version":1`) {
-		t.Fatalf("secret version idempotent replay expected version 1, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/v1/secrets?workspace_id=ws_1", nil)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "plaintext-secret") {
-		t.Fatalf("metadata expected 200 without plaintext, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	runBody := mustMarshal(t, createRunBody{RunID: "run_1", Workload: httpRevision()})
-	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(runBody))
-	req.Header.Set("Idempotency-Key", "idem_secret_grant_run")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("create grant target run expected 202, got %d body=%s", rec.Code, rec.Body.String())
-	}
-
-	grantBody := mustMarshal(t, grantSecretBody{WorkspaceID: "ws_1", SecretID: "sec_api", Version: 1, ScopeType: "run", ScopeID: "run_1"})
-	req = httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_api/grants", bytes.NewReader(grantBody))
-	req.Header.Set("Idempotency-Key", "idem_grant")
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("grant expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	for _, target := range []string{"/v1/secrets?workspace_id=ws_1", "/v1/secrets/sec_path/versions", "/v1/secrets/sec_path/grants"} {
+		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{}`))
+		if strings.Contains(target, "?") {
+			req = httptest.NewRequest(http.MethodGet, target, nil)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s expected unavailable secret vault route, got %d body=%s", target, rec.Code, rec.Body.String())
+		}
 	}
 }
 
-func TestSecretEndpointsRejectPathBodyMismatch(t *testing.T) {
-	handler := newHTTPTestServer(t)
-	body := mustMarshal(t, createSecretVersionBody{WorkspaceID: "ws_1", SecretID: "sec_body", Value: "plaintext-secret"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_path/versions", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "idem_secret_mismatch")
+func TestCreateRunEnvOverridesStoredWorkloadRevision(t *testing.T) {
+	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	now := time.Now().UTC()
+	ad := &captureHTTPLaunchAdapter{Adapter: fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", now)}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	)}
+	sched := scheduler.New()
+	orch := orchestrator.New(log, sched, ad)
+	handler := NewWithServices(orch, sched, ad, workload.New(log), ociresolver.NewStaticResolver(nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, createWorkloadBody{WorkspaceID: "ws_1", WorkloadID: "wrk_env", Name: "env"})))
+	req.Header.Set("Idempotency-Key", "idem_workload_env")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "SECRET_ID_MISMATCH") {
-		t.Fatalf("secret mismatch expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create workload expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-
-	grantBody := mustMarshal(t, grantSecretBody{WorkspaceID: "ws_1", SecretID: "sec_body", Version: 1, ScopeType: "run", ScopeID: "run_1"})
-	req = httptest.NewRequest(http.MethodPost, "/v1/secrets/sec_path/grants", bytes.NewReader(grantBody))
+	rev := httpRevision()
+	rev.WorkloadID = "wrk_env"
+	rev.Spec.Containers[0].Env = map[string]domain.EnvBinding{
+		"LOG_LEVEL": {Value: ptr("info")},
+		"KEEP":      {Value: ptr("base")},
+	}
+	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_env/revisions?workspace_id=ws_1", bytes.NewReader(mustMarshal(t, createRevisionBody{Revision: rev})))
+	req.Header.Set("Idempotency-Key", "idem_revision_env")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "SECRET_ID_MISMATCH") {
-		t.Fatalf("grant mismatch expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create revision expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
+
+	runEnv := map[string]domain.EnvBinding{
+		"LOG_LEVEL": {Value: ptr("debug")},
+		"RUN_INPUT": {Value: ptr("s3://bucket/object")},
+	}
+	body := mustMarshal(t, createRunBody{WorkspaceID: "ws_1", RunID: "run_env_override", WorkloadID: "wrk_env", WorkloadRevisionID: "wrev_1", Env: runEnv})
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_run_env_override")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create run expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if got := mustLaunchEnvValue(t, ad.launchRequest.Environment, "LOG_LEVEL"); got != "debug" {
+		t.Fatalf("LOG_LEVEL = %q, want override debug", got)
+	}
+	if got := mustLaunchEnvValue(t, ad.launchRequest.Environment, "KEEP"); got != "base" {
+		t.Fatalf("KEEP = %q, want base", got)
+	}
+	if got := mustLaunchEnvValue(t, ad.launchRequest.Environment, "RUN_INPUT"); got != "s3://bucket/object" {
+		t.Fatalf("RUN_INPUT = %q, want run override addition", got)
+	}
+}
+
+type captureHTTPLaunchAdapter struct {
+	*fake.Adapter
+	launchRequest adapter.LaunchRequest
+}
+
+func (c *captureHTTPLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	c.launchRequest = req
+	return c.Adapter.Launch(ctx, req)
+}
+
+func mustLaunchEnvValue(t *testing.T, bindings []adapter.EnvironmentBinding, name string) string {
+	t.Helper()
+	for _, binding := range bindings {
+		if binding.Name == name {
+			if binding.Value == nil {
+				t.Fatalf("%s binding has nil value: %+v", name, binding)
+			}
+			return *binding.Value
+		}
+	}
+	t.Fatalf("environment binding %s not found in %+v", name, bindings)
+	return ""
 }
 
 func newHTTPTestServer(t *testing.T) http.Handler {
@@ -573,7 +564,7 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 			Platform: "linux/amd64",
 		},
 	})
-	return NewWithServices(orch, sched, ad, workload.New(log), secrets.New(log, []byte("01234567890123456789012345678901")), resolver, options...)
+	return NewWithServices(orch, sched, ad, workload.New(log), resolver, options...)
 }
 
 func httpRevision() domain.WorkloadRevision {
@@ -619,7 +610,6 @@ func httpOffer(id string, now time.Time) domain.OfferSnapshot {
 			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone, Protocols: []string{"tcp"}},
 			Pricing:   domain.PricingCapabilities{Known: true},
 			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "deterministic_name", ListOwned: true},
-			Secrets:   domain.SecretDeliveryCapabilities{Delivery: "direct_env", CleanupSupported: true},
 		},
 		Pricing:  domain.PriceModel{Currency: "USD", RatePerSecondUSD: 0.0001, Known: true},
 		Queue:    &domain.QueueSnapshot{},

@@ -16,14 +16,14 @@ limits.
 
 - One bearer token principal with workspace allow-list, not per-user auth.
 - No built-in TLS.
-- `MERCATOR_SECRET_KEY_HEX` is raw process configuration; no KMS or key rotation
-  flow is implemented.
+- No Mercator-managed secret vault, grant API, KMS integration, or key rotation
+  flow exists. Workloads/runtimes own their secret-management backend.
 - Health, OpenAPI, and UI shell are public on the listen interface.
 
 ## Adapters And Workloads
 
 - Docker adapter is local-host oriented and intentionally narrow.
-- Docker secret environment materialization is not configured.
+- Docker receives literal env bindings only.
 - Workloads must be digest-pinned before run creation.
 - Registry-backed tag resolution is not implemented; current resolver is
   deterministic/static.
@@ -41,8 +41,8 @@ limits.
 ## UI And Operator Workflows
 
 - Embedded UI is compact and read-oriented.
-- Deeper connection, offer, secret, and sink management workflows are not built
-  into the UI.
+- Deeper connection, offer, and sink management workflows are not built into the
+  UI.
 
 ## GA Documentation Gaps
 

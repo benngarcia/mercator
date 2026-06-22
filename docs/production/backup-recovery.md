@@ -38,7 +38,6 @@ cp /var/backups/mercator/mercator-YYYYMMDDTHHMMSSZ.db /tmp/mercator-restore.db
 
 MERCATOR_SQLITE_DSN='file:/tmp/mercator-restore.db' \
 MERCATOR_API_TOKEN='restore-eval-token' \
-MERCATOR_SECRET_KEY_HEX="$MERCATOR_SECRET_KEY_HEX" \
 MERCATOR_FAKE_OFFER=1 \
 go run ./cmd/mercator serve
 ```
@@ -57,8 +56,6 @@ go run ./cmd/mercator run list --workspace-id ws_eval | jq .
   SQLite.
 - Public broker state is recoverable from the event history.
 - Offer caches and projections are disposable.
-- Secret metadata remains readable after restore, but secret operations require
-  the same `MERCATOR_SECRET_KEY_HEX` used to encrypt secret events.
 
 ## Gaps Before GA
 

@@ -124,9 +124,6 @@ of those schemas intentionally open.
 - `create_workload_revision(workload_id, workspace_id, revision, idempotency_key=...)`
 - `get_workload_revision(workload_id, revision_id, workspace_id=None)`
 - `resolve_image(image, platform)`
-- `list_secrets(workspace_id=None)`
-- `create_secret_version(secret_id, workspace_id, value, idempotency_key=...)`
-- `grant_secret(secret_id, workspace_id, version, scope_type, scope_id)`
 - `get_sink_status(sink_id)`, `deliver_sink(sink_id)`
 - `replay_sink(sink_id, from_exclusive=None, limit=None, replay_id=None)`
 

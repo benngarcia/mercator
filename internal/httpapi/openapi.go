@@ -201,36 +201,6 @@ const OpenAPIJSON = `{
         "responses": {"200": {"description": "Resolved image", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResolveImageResponse"}}}}}
       }
     },
-    "/v1/secrets": {
-      "get": {
-        "operationId": "listSecrets",
-        "parameters": [
-          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
-        ],
-        "responses": {"200": {"description": "Secret metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SecretMetadataListResponse"}}}}}
-      }
-    },
-    "/v1/secrets/{secret_id}/versions": {
-      "post": {
-        "operationId": "createSecretVersion",
-        "parameters": [
-          {"name": "secret_id", "in": "path", "required": true, "schema": {"type": "string"}},
-          {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string"}}
-        ],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateSecretVersionRequest"}}}},
-        "responses": {"202": {"description": "Secret version metadata", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateSecretVersionResponse"}}}}}
-      }
-    },
-    "/v1/secrets/{secret_id}/grants": {
-      "post": {
-        "operationId": "grantSecret",
-        "parameters": [
-          {"name": "secret_id", "in": "path", "required": true, "schema": {"type": "string"}}
-        ],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/GrantSecretRequest"}}}},
-        "responses": {"202": {"description": "Secret grant", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SecretGrantResponse"}}}}}
-      }
-    },
     "/v1/sinks/{sink_id}": {
       "get": {
         "operationId": "getSinkStatus",
@@ -274,7 +244,7 @@ const OpenAPIJSON = `{
       "bearerAuth": {"type": "http", "scheme": "bearer"}
     },
     "schemas": {
-      "CreateRunRequest": {"type": "object", "description": "Create a run. The only required input is an image (top-level shorthand) or a full workload spec. run_id is optional and server-generated (uuidv7) when omitted; an Idempotency-Key header is required for retry-safe replay.", "properties": {"workspace_id": {"type": "string"}, "run_id": {"type": "string", "description": "Optional. When omitted the server generates a uuidv7-based run id and returns it."}, "workload_id": {"type": "string"}, "workload_revision_id": {"type": "string"}, "image": {"type": "string", "description": "Top-level image shorthand. Synthesizes the single container when no full workload spec is supplied. Ignored when an explicit workload spec is present."}, "args": {"type": "array", "items": {"type": "string"}, "description": "Container args for the image shorthand."}, "env": {"type": "object", "description": "Container env bindings for the image shorthand.", "additionalProperties": {"type": "object"}}, "workload": {"type": "object", "description": "Full workload revision spec. Takes precedence over the image shorthand when both are supplied."}}},
+      "CreateRunRequest": {"type": "object", "description": "Create a run. The only required input is an image (top-level shorthand) or a full workload spec. run_id is optional and server-generated (uuidv7) when omitted; an Idempotency-Key header is required for retry-safe replay.", "properties": {"workspace_id": {"type": "string"}, "run_id": {"type": "string", "description": "Optional. When omitted the server generates a uuidv7-based run id and returns it."}, "workload_id": {"type": "string"}, "workload_revision_id": {"type": "string"}, "image": {"type": "string", "description": "Top-level image shorthand. Synthesizes the single container when no full workload spec is supplied. Ignored when an explicit workload spec is present."}, "args": {"type": "array", "items": {"type": "string"}, "description": "Container args for the image shorthand."}, "env": {"type": "object", "description": "Run-level literal env bindings. For stored or explicit workload specs, these override or add to the workload container env for this run only. For image shorthand, these become the synthesized container env.", "additionalProperties": {"$ref": "#/components/schemas/EnvBinding"}}, "workload": {"type": "object", "description": "Full workload revision spec. Takes precedence over the image shorthand when both are supplied."}}},
       "Run": {"type": "object", "required": ["id", "workspace_id", "phase", "cleanup", "closed"], "properties": {"id": {"type": "string"}, "workspace_id": {"type": "string"}, "workload_revision_id": {"type": "string"}, "phase": {"type": "string"}, "outcome": {"type": "string", "enum": ["succeeded", "failed", "cancelled"]}, "exit_code": {"type": "integer", "description": "Container exit code, surfaced once observed. Absent until a terminal observation is recorded."}, "cleanup": {"type": "string", "enum": ["not_required", "pending", "confirmed", "blocked"]}, "disposition": {"type": "string", "enum": ["release", "terminate"], "description": "Recorded cleanup disposition. terminate: the run provisioned a host we own that is destroyed on cleanup. release: the run borrowed a slot in a standing pool we do not own; cleanup removes only our job. Recorded at launch time and dispatched on the recorded value, never re-inferred at cleanup time. Absent until a launch intent is recorded."}, "closed": {"type": "boolean"}}},
       "CreateWorkloadRequest": {"type": "object", "required": ["workspace_id", "workload_id", "name"], "properties": {"workspace_id": {"type": "string"}, "workload_id": {"type": "string"}, "name": {"type": "string"}}},
       "CreateRevisionRequest": {"type": "object", "required": ["revision"], "properties": {"revision": {"type": "object"}}},
@@ -282,11 +252,7 @@ const OpenAPIJSON = `{
       "WorkloadRevisionListResponse": {"type": "object", "required": ["revisions"], "properties": {"revisions": {"type": "array", "items": {"type": "object"}}}},
       "ResolveImageRequest": {"type": "object", "required": ["image", "platform"], "properties": {"image": {"type": "string"}, "platform": {"type": "string"}}},
       "ResolveImageResponse": {"type": "object", "required": ["image"], "properties": {"image": {"type": "object"}}},
-      "CreateSecretVersionRequest": {"type": "object", "required": ["workspace_id", "value"], "properties": {"workspace_id": {"type": "string"}, "secret_id": {"type": "string"}, "value": {"type": "string", "writeOnly": true}}},
-      "CreateSecretVersionResponse": {"type": "object", "required": ["secret_id", "version"], "properties": {"secret_id": {"type": "string"}, "version": {"type": "integer"}}},
-      "SecretMetadataListResponse": {"type": "object", "required": ["secrets"], "properties": {"secrets": {"type": "array", "items": {"type": "object", "required": ["secret_id", "version"], "properties": {"secret_id": {"type": "string"}, "version": {"type": "integer"}}}}}},
-      "GrantSecretRequest": {"type": "object", "required": ["workspace_id", "version", "scope_type", "scope_id"], "properties": {"workspace_id": {"type": "string"}, "secret_id": {"type": "string"}, "version": {"type": "integer"}, "scope_type": {"type": "string"}, "scope_id": {"type": "string"}}},
-      "SecretGrantResponse": {"type": "object", "required": ["grant"], "properties": {"grant": {"type": "object"}}},
+      "EnvBinding": {"type": "object", "required": ["value"], "properties": {"value": {"type": "string"}}},
       "RunResponse": {"type": "object", "required": ["run_id", "run"], "properties": {"run_id": {"type": "string", "description": "Convenience top-level run identifier, equal to run.id. Returned on every run response alongside the full run record."}, "run": {"$ref": "#/components/schemas/Run"}, "metadata": {"type": "object", "description": "Reserved for per-response metadata.", "additionalProperties": true}, "links": {"type": "object", "additionalProperties": {"type": "string"}}, "duplicate": {"type": "boolean", "description": "True when this create was a safe idempotent replay of an existing run."}}},
       "RunListResponse": {"type": "object", "required": ["runs"], "properties": {"runs": {"type": "array", "items": {"$ref": "#/components/schemas/Run"}}}},
       "EventListResponse": {"type": "object", "required": ["events"], "properties": {"events": {"type": "array", "items": {"type": "object"}}}},

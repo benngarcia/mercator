@@ -8,7 +8,6 @@ environment.
 - [ ] `go test ./...` passes.
 - [ ] `go build ./...` passes.
 - [ ] Server starts with explicit `MERCATOR_API_TOKEN`.
-- [ ] Server starts with explicit `MERCATOR_SECRET_KEY_HEX`.
 - [ ] `/health/live`, `/health/ready`, and `/openapi.json` return expected JSON.
 - [ ] UI loads at `/` on the intended bind address.
 
@@ -41,13 +40,14 @@ environment.
 - [ ] Public run events show placement, launch intent, launch/observation,
   cleanup, and closure.
 - [ ] Placement decision explains selected and rejected candidates.
-- [ ] Public events do not expose secret plaintext.
+- [ ] Public events do not expose workload env values.
 - [ ] Sink `audit` status and replay work.
 - [ ] Backup and restore drill recovers run list from a copied SQLite database.
 
 ## Production-Hardening Review
 
-- [ ] Key management risk is accepted or replaced with environment-specific KMS.
+- [ ] Secret-management ownership is accepted: workloads/runtimes fetch secrets
+  from their own backend, not from Mercator.
 - [ ] Registry digest resolution and credential handling are addressed.
 - [ ] External sink wiring requirements are decided.
 - [ ] TLS/reverse-proxy boundary is documented.

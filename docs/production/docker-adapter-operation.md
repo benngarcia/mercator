@@ -20,7 +20,6 @@ The live integration test is guarded by `MERCATOR_DOCKER_INTEGRATION=1`.
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-docker.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
-export MERCATOR_SECRET_KEY_HEX="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
 export MERCATOR_ADAPTER=docker
 export MERCATOR_DOCKER_ARCH=amd64
@@ -46,12 +45,8 @@ Docker workloads must satisfy the same V1 workload contract:
 - `linux/amd64` or `linux/arm64` platform;
 - no mounts, workdir, stdin, TTY, host networking, sidecars, setup commands, or
   raw extension payloads;
-- literal env values only for Docker evaluation.
-
-Current Docker secret behavior: if a workload env binding references
-`secret_ref`, Docker launch returns `docker: secret environment materialization
-is not configured`. Use literal non-sensitive env values for Docker adapter
-evaluation until launch-time secret materialization is implemented.
+- literal env values only. If the workload needs secrets, pass the non-secret
+  configuration it needs to call its own secret-management backend.
 
 ## Inspect Docker-Owned Objects
 

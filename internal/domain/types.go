@@ -46,13 +46,7 @@ type ContainerSpec struct {
 }
 
 type EnvBinding struct {
-	Value     *string          `json:"value,omitempty"`
-	SecretRef *SecretReference `json:"secret_ref,omitempty"`
-}
-
-type SecretReference struct {
-	Name    string `json:"name"`
-	Version int    `json:"version"`
+	Value *string `json:"value,omitempty"`
 }
 
 type PortExposure string
@@ -194,14 +188,13 @@ type AcceleratorInventory struct {
 }
 
 type CapabilityProfile struct {
-	OfferKinds    []OfferKind                `json:"offer_kinds,omitempty"`
-	Container     ContainerCapabilities      `json:"container"`
-	Lifecycle     LifecycleCapabilities      `json:"lifecycle"`
-	Resources     ResourceCapabilities       `json:"resources"`
-	Network       NetworkCapabilities        `json:"network"`
-	Pricing       PricingCapabilities        `json:"pricing"`
-	Secrets       SecretDeliveryCapabilities `json:"secrets"`
-	Observability ObservabilityCapabilities  `json:"observability"`
+	OfferKinds    []OfferKind               `json:"offer_kinds,omitempty"`
+	Container     ContainerCapabilities     `json:"container"`
+	Lifecycle     LifecycleCapabilities     `json:"lifecycle"`
+	Resources     ResourceCapabilities      `json:"resources"`
+	Network       NetworkCapabilities       `json:"network"`
+	Pricing       PricingCapabilities       `json:"pricing"`
+	Observability ObservabilityCapabilities `json:"observability"`
 }
 
 type ContainerCapabilities struct {
@@ -229,12 +222,6 @@ type NetworkCapabilities struct {
 
 type PricingCapabilities struct {
 	Known bool `json:"known"`
-}
-
-type SecretDeliveryCapabilities struct {
-	Delivery               string `json:"delivery"`
-	ProviderPersistsValues bool   `json:"provider_persists_values"`
-	CleanupSupported       bool   `json:"cleanup_supported"`
 }
 
 type ObservabilityCapabilities struct {

@@ -165,7 +165,6 @@ try {
 - workloads and workload revisions
 - image resolution
 - connections and offers
-- secrets, versions, and grants
 - sink status, delivery, and replay
 
 The nested workload, offer, placement, event, and run shapes are pragmatic DTO
