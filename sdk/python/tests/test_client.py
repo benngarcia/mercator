@@ -210,19 +210,18 @@ class ClientServerTestCase(unittest.TestCase):
 
         self.assertEqual(RecordingHandler.requests[0]["body"]["workspace_id"], "ws_explicit")
 
-    def test_run_image_shorthand_omits_run_id_and_returns_generated_id(self):
+    def test_run_image_shorthand_generates_run_id_and_idempotency_key(self):
         client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
 
-        result = client.run_image("busybox", args=["echo", "hi"], idempotency_key="idem-shorthand")
+        result = client.run_image("busybox", args=["echo", "hi"])
 
         body = RecordingHandler.requests[0]["body"]
         self.assertEqual(body["image"], "busybox")
         self.assertEqual(body["args"], ["echo", "hi"])
-        self.assertNotIn("run_id", body)  # omitted -> server generates it
+        self.assertRegex(body["run_id"], r"^run_[0-9a-f-]{36}$")
         self.assertEqual(body["workspace_id"], "ws_default")
-        self.assertEqual(RecordingHandler.requests[0]["headers"]["Idempotency-Key"], "idem-shorthand")
-        # The SDK surfaces the server-generated id directly.
-        self.assertEqual(result["run"]["id"], "run_generated_1")
+        self.assertEqual(RecordingHandler.requests[0]["headers"]["Idempotency-Key"], f"{body['run_id']}:create")
+        self.assertEqual(result["run"]["id"], body["run_id"])
 
     def test_run_image_shorthand_honors_explicit_run_id_and_env(self):
         client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
@@ -248,16 +247,14 @@ class ClientServerTestCase(unittest.TestCase):
             RecordingHandler.requests[0]["headers"]["Idempotency-Key"], "run_explicit:create"
         )
 
-    def test_run_image_requires_idempotency_key_when_run_id_omitted(self):
-        # Retry-safety regression guard: minting a fresh random key per call
-        # silently breaks at-most-once for the generated-run_id path. The SDK
-        # must refuse rather than create a second run on transport retry.
+    def test_run_image_allows_explicit_idempotency_key_without_run_id(self):
         client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
 
-        with self.assertRaises(ValueError):
-            client.run_image("busybox")
+        client.run_image("busybox", idempotency_key="idem-shorthand")
 
-        self.assertEqual(RecordingHandler.requests, [])
+        body = RecordingHandler.requests[0]["body"]
+        self.assertRegex(body["run_id"], r"^run_[0-9a-f-]{36}$")
+        self.assertEqual(RecordingHandler.requests[0]["headers"]["Idempotency-Key"], "idem-shorthand")
 
 
 class WaitHandler(BaseHTTPRequestHandler):

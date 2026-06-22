@@ -84,28 +84,26 @@ test("createRun returns the unified run envelope with exit_code and duplicate", 
   assert.equal(response.duplicate, true);
 });
 
-test("runImage shorthand omits run_id and returns the server-generated id", async () => {
+test("runImage shorthand generates run_id and idempotency key by default", async () => {
   const { fetch, requests } = createMockFetch([
     {
       status: 202,
       body: {
-        run: { id: "run_generated_1", workspace_id: "ws_1", phase: "requested", cleanup: "not_required", closed: false },
+        run: { id: "run_placeholder", workspace_id: "ws_1", phase: "requested", cleanup: "not_required", closed: false },
         duplicate: false,
       },
     },
   ]);
   const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_1" });
 
-  const response = await client.runImage("busybox", {
-    args: ["echo", "hi"],
-    idempotencyKey: "idem-shorthand",
-  });
+  await client.runImage("busybox", { args: ["echo", "hi"] });
 
-  assert.equal(response.run.id, "run_generated_1");
-  assert.deepEqual(requests[0]?.body, { image: "busybox", args: ["echo", "hi"], workspace_id: "ws_1" });
   const body = requests[0]?.body as Record<string, unknown>;
-  assert.equal("run_id" in body, false); // omitted -> server generates it
-  assert.equal(headersOf(requests[0]!).get("idempotency-key"), "idem-shorthand");
+  assert.equal(body.image, "busybox");
+  assert.deepEqual(body.args, ["echo", "hi"]);
+  assert.equal(body.workspace_id, "ws_1");
+  assert.match(String(body.run_id), /^run_[0-9a-f-]{36}$/);
+  assert.equal(headersOf(requests[0]!).get("idempotency-key"), `${body.run_id}:create`);
 });
 
 test("runImage shorthand honors explicit run_id, env, and mints an idempotency key", async () => {
@@ -123,12 +121,17 @@ test("runImage shorthand honors explicit run_id, env, and mints an idempotency k
   assert.equal(headersOf(requests[0]!).get("idempotency-key"), "run_explicit:create");
 });
 
-test("runImage requires an explicit idempotencyKey when runId is omitted", async () => {
-  const { fetch, requests } = createMockFetch([]);
+test("runImage allows explicit idempotencyKey while still generating runId", async () => {
+  const { fetch, requests } = createMockFetch([
+    { status: 202, body: { run: { id: "run_placeholder", workspace_id: "ws_1", phase: "requested", cleanup: "not_required", closed: false } } },
+  ]);
   const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_1" });
 
-  await assert.rejects(() => client.runImage("busybox"), /idempotencyKey/);
-  assert.equal(requests.length, 0);
+  await client.runImage("busybox", { idempotencyKey: "idem-shorthand" });
+
+  const body = requests[0]?.body as Record<string, unknown>;
+  assert.match(String(body.run_id), /^run_[0-9a-f-]{36}$/);
+  assert.equal(headersOf(requests[0]!).get("idempotency-key"), "idem-shorthand");
 });
 
 test("client-scoped workspaceId is applied to calls and overridable per-call", async () => {

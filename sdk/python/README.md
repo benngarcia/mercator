@@ -14,7 +14,7 @@ from mercator import MercatorClient
 
 client = MercatorClient("http://127.0.0.1:8080", token="dev-token", workspace_id="ws_1")
 
-created = client.run_image("busybox", args=["echo", "hi"], idempotency_key="echo-hi:create")
+created = client.run_image("busybox", args=["echo", "hi"])
 run_id = created["run_id"]                           # == created["run"]["id"]
 
 result = client.wait_run_until_terminal(run_id)
@@ -27,13 +27,10 @@ Every run response carries a convenience top-level `run_id` (equal to
 The run record exposes `run["disposition"]` (`release` or `terminate`), the
 recorded cleanup intent.
 
-`run_image` derives a stable `Idempotency-Key` from `run_id`
-(`f"{run_id}:create"`) when you pass one. If you omit `run_id` (so the server
-generates the id) you MUST pass an explicit `idempotency_key` and reuse it
-verbatim across retries of the same logical call -- `run_image` will not
-silently mint a random key, because a per-attempt key would create a second run
-instead of replaying the first on a transport retry. Pass
-`env={"K": {"value": "v"}}` for environment.
+`run_image` generates a `run_id` when you omit one and derives a stable
+`Idempotency-Key` from it (`f"{run_id}:create"`). Pass
+`idempotency_key=...` only when you need to coordinate retries with an external
+caller. Pass `env={"K": {"value": "v"}}` for environment.
 
 ## Full workload form
 

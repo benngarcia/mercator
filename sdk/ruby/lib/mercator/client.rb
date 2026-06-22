@@ -1,6 +1,7 @@
 require "json"
 require "net/http"
 require "cgi"
+require "securerandom"
 require "time"
 require "uri"
 
@@ -77,17 +78,13 @@ module Mercator
     end
 
     def run_image(image, args: nil, env: nil, run_id: nil, workspace_id: nil, idempotency_key: nil)
+      effective_run_id = run_id || new_run_id
       body = { "image" => image }
       body["args"] = args unless args.nil? || args.empty?
       body["env"] = stringify_keys(env) unless env.nil? || env.empty?
-      body["run_id"] = run_id unless run_id.nil?
+      body["run_id"] = effective_run_id
 
-      key = idempotency_key
-      if key.nil?
-        raise ArgumentError, "run_image requires an explicit idempotency_key when run_id is omitted" if run_id.nil?
-
-        key = "#{run_id}:create"
-      end
+      key = idempotency_key || "#{effective_run_id}:create"
       create_run(body, idempotency_key: key, workspace_id: workspace_id)
     end
 
@@ -273,6 +270,10 @@ module Mercator
 
     def monotonic_time
       Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
+
+    def new_run_id
+      "run_#{SecureRandom.uuid}"
     end
   end
 end

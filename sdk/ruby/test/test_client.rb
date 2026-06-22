@@ -208,18 +208,18 @@ class ClientTest < Minitest::Test
     assert_equal "ws_explicit", RecordingServlet.requests[0].fetch(:body).fetch("workspace_id")
   end
 
-  def test_run_image_shorthand_omits_run_id_and_returns_generated_id
+  def test_run_image_shorthand_generates_run_id_and_idempotency_key
     client = Mercator::Client.new(@base_url, token: "secret-token", workspace_id: "ws_default")
 
-    result = client.run_image("busybox", args: ["echo", "hi"], idempotency_key: "idem-shorthand")
+    result = client.run_image("busybox", args: ["echo", "hi"])
 
     body = RecordingServlet.requests[0].fetch(:body)
     assert_equal "busybox", body.fetch("image")
     assert_equal ["echo", "hi"], body.fetch("args")
-    refute body.key?("run_id")
+    assert_match(/\Arun_[0-9a-f-]{36}\z/, body.fetch("run_id"))
     assert_equal "ws_default", body.fetch("workspace_id")
-    assert_equal "idem-shorthand", RecordingServlet.requests[0].fetch(:headers).fetch("idempotency-key")
-    assert_equal "run_generated_1", result.fetch("run").fetch("id")
+    assert_equal "#{body.fetch("run_id")}:create", RecordingServlet.requests[0].fetch(:headers).fetch("idempotency-key")
+    assert_equal body.fetch("run_id"), result.fetch("run").fetch("id")
   end
 
   def test_run_image_shorthand_honors_explicit_run_id_and_env
@@ -246,14 +246,14 @@ class ClientTest < Minitest::Test
     assert_equal "run_explicit:create", RecordingServlet.requests[0].fetch(:headers).fetch("idempotency-key")
   end
 
-  def test_run_image_requires_idempotency_key_when_run_id_omitted
+  def test_run_image_allows_explicit_idempotency_key_without_run_id
     client = Mercator::Client.new(@base_url, token: "secret-token", workspace_id: "ws_default")
 
-    assert_raises(ArgumentError) do
-      client.run_image("busybox")
-    end
+    client.run_image("busybox", idempotency_key: "idem-shorthand")
 
-    assert_empty RecordingServlet.requests
+    body = RecordingServlet.requests[0].fetch(:body)
+    assert_match(/\Arun_[0-9a-f-]{36}\z/, body.fetch("run_id"))
+    assert_equal "idem-shorthand", RecordingServlet.requests[0].fetch(:headers).fetch("idempotency-key")
   end
 end
 

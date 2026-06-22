@@ -15,8 +15,7 @@ client = Mercator::Client.new(
 
 created = client.run_image(
   "busybox",
-  args: ["echo", "hi"],
-  idempotency_key: "echo-hi:create"
+  args: ["echo", "hi"]
 )
 run_id = created.fetch("run_id") # == created.fetch("run").fetch("id")
 
@@ -25,9 +24,9 @@ run = result.fetch("run")
 puts "#{run.fetch('outcome')} #{run.fetch('exit_code')}" # => succeeded 0
 ```
 
-`run_image` derives a stable `Idempotency-Key` from `run_id` when you pass one.
-If you omit `run_id`, pass an explicit `idempotency_key` and reuse it verbatim
-when retrying the same logical call.
+`run_image` generates a `run_id` when you omit one and derives a stable
+`Idempotency-Key` from it (`"#{run_id}:create"`). Pass `idempotency_key:` only
+when you need to coordinate retries with an external caller.
 
 ## Local development
 
