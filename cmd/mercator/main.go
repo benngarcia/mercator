@@ -25,11 +25,12 @@ func main() {
 func run(ctx context.Context, args []string, env map[string]string, stdout, stderr io.Writer) int {
 	if len(args) > 1 && args[1] != "serve" {
 		return cli.Run(ctx, cli.Config{
-			BaseURL: envValue(env, "MERCATOR_API_URL", ""),
-			Token:   envValue(env, "MERCATOR_API_TOKEN", ""),
-			Args:    args[1:],
-			Stdout:  stdout,
-			Stderr:  stderr,
+			BaseURL:     envValue(env, "MERCATOR_API_URL", ""),
+			Token:       envValue(env, "MERCATOR_API_TOKEN", ""),
+			WorkspaceID: envValue(env, "MERCATOR_WORKSPACE_ID", ""),
+			Args:        args[1:],
+			Stdout:      stdout,
+			Stderr:      stderr,
 		})
 	}
 	addr := envValue(env, "MERCATOR_ADDR", "127.0.0.1:8080")
@@ -179,16 +180,31 @@ func dockerOffer(values map[string]string) domain.OfferSnapshot {
 }
 
 func fakeOffers(values map[string]string) []domain.OfferSnapshot {
-	if values["MERCATOR_FAKE_OFFER"] == "" {
+	mode := values["MERCATOR_FAKE_OFFER"]
+	if mode == "" {
 		return nil
 	}
 	now := time.Now().UTC()
+	// The fake offer's Kind drives the recorded cleanup disposition end-to-end
+	// with no network: a standing offer records disposition=release (the default)
+	// and a provisionable offer records disposition=terminate. Set
+	// MERCATOR_FAKE_OFFER=provisionable (or "terminate") to exercise the
+	// terminate path; any other non-empty value yields the standing/release path.
+	kind := domain.OfferKindStanding
+	id := "offer_local_fake"
+	nativeRef := "fake://local"
+	switch mode {
+	case "provisionable", "terminate":
+		kind = domain.OfferKindProvisionable
+		id = "offer_local_fake_provisionable"
+		nativeRef = "fake://local/provisionable"
+	}
 	return []domain.OfferSnapshot{{
-		ID:           "offer_local_fake",
+		ID:           id,
 		ConnectionID: "conn_local_fake",
 		AdapterType:  "fake",
-		Kind:         domain.OfferKindStanding,
-		NativeRef:    "fake://local",
+		Kind:         kind,
+		NativeRef:    nativeRef,
 		ObservedAt:   now,
 		ExpiresAt:    now.Add(time.Hour),
 		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},

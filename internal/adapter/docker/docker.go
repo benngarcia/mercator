@@ -140,6 +140,16 @@ func (a *Adapter) Release(ctx context.Context, req adapter.ReleaseRequest) (adap
 	return adapter.ReleaseReceipt{Released: true}, nil
 }
 
+// Terminate is unsupported for local Docker: it is a STANDING pool, so the
+// broker owns no host to destroy — it only removes the container it created
+// (that is Release). A run placed on a Docker (standing) offer always records
+// disposition=release, so the orchestrator never routes Terminate here in
+// practice; if it ever does, that is a misrouted cleanup and we surface it
+// explicitly rather than silently destroying or no-op'ing.
+func (a *Adapter) Terminate(context.Context, adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	return adapter.TerminateReceipt{}, adapter.ErrTerminateUnsupported
+}
+
 func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
 	containers, err := a.client.ListContainers(ctx, map[string]string{"mercator.workspace_id": req.WorkspaceID})
 	if err != nil {

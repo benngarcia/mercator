@@ -7,6 +7,7 @@ import type {
   CreateSecretVersionResponse,
   CreateWorkloadRequest,
   CreateWorkloadResponse,
+  EnvBinding,
   EventListResponse,
   FetchFunction,
   GrantSecretRequest,
@@ -35,6 +36,43 @@ export type MercatorClientConfig = {
   token?: string;
   fetch?: FetchFunction;
   headers?: HeadersInit;
+  /**
+   * Default workspace applied to every call (query param on reads, body field
+   * on createRun) when a per-call workspaceId is not supplied. Per-call
+   * overrides always win.
+   */
+  workspaceId?: string;
+};
+
+export type RunImageOptions = RequestOptions & {
+  /** Container args for the image. */
+  args?: string[];
+  /** Container env bindings for the image. */
+  env?: Record<string, EnvBinding>;
+  /**
+   * Optional run id. Omit it and the server generates one, returned at
+   * `response.run.id`.
+   */
+  runId?: string;
+  /** Workspace for this run; overrides the client default. */
+  workspaceId?: string;
+  /**
+   * Idempotency key. Required by the server; when omitted a stable key is
+   * derived from `runId` (retry-safe) or a random one is minted for a
+   * generated run.
+   */
+  idempotencyKey?: string;
+};
+
+export type WaitUntilTerminalOptions = RequestOptions & {
+  workspaceId?: string;
+  /**
+   * Overall budget for the poll-until-terminal loop, in milliseconds. The
+   * server long-polls each `:wait` for up to ~30s and returns 202 while the run
+   * is still open; this helper re-issues the wait until the run closes or this
+   * deadline elapses. Defaults to 5 minutes.
+   */
+  deadlineMs?: number;
 };
 
 export class MercatorClient {
@@ -42,6 +80,7 @@ export class MercatorClient {
   private readonly defaultHeaders: Headers;
   private readonly fetchImpl: FetchFunction;
   private readonly token?: string;
+  private readonly workspaceId?: string;
 
   constructor(config: MercatorClientConfig) {
     if (!config.baseUrl) {
@@ -51,9 +90,15 @@ export class MercatorClient {
     this.defaultHeaders = new Headers(config.headers);
     this.fetchImpl = config.fetch ?? globalThis.fetch?.bind(globalThis);
     this.token = config.token;
+    this.workspaceId = config.workspaceId;
     if (!this.fetchImpl) {
       throw new TypeError("MercatorClient requires a fetch implementation.");
     }
+  }
+
+  /** Resolve the effective workspace id for a call, honoring per-call overrides. */
+  private resolveWorkspaceId(params?: WorkspaceRequest): string | undefined {
+    return params?.workspaceId ?? this.workspaceId;
   }
 
   async request<TResponse>(method: string, path: string, options: RequestOptions = {}): Promise<TResponse> {
@@ -108,35 +153,107 @@ export class MercatorClient {
   }
 
   createRun(body: CreateRunRequest, options: MutationRequestOptions): Promise<CreateRunResponse> {
-    return this.request<CreateRunResponse>("POST", "/v1/runs", { ...options, body });
+    const workspaceId = options.workspaceId ?? this.workspaceId;
+    const effectiveBody = workspaceId && body.workspace_id === undefined ? { ...body, workspace_id: workspaceId } : body;
+    return this.request<CreateRunResponse>("POST", "/v1/runs", { ...options, body: effectiveBody });
   }
 
-  listRuns(params: WorkspaceRequest, options: RequestOptions = {}): Promise<RunListResponse> {
-    return this.request<RunListResponse>("GET", "/v1/runs", { ...options, query: workspaceQuery(params, options.query) });
+  /**
+   * Create a run from just an image (the server shorthand form). Only `image`
+   * is required. `runId` is optional: omit it and the server generates one,
+   * which you read from `response.run.id`. The server applies all other
+   * defaults (container name=main, platform=linux/amd64, resources, network,
+   * placement, execution). Returns the same envelope as {@link createRun}.
+   *
+   * `idempotencyKey` is required by the server; when omitted and a `runId` is
+   * supplied this derives a stable, retry-safe key as `` `${runId}:create` ``.
+   * When neither is supplied there is no stable identifier to derive a
+   * retry-safe key from -- silently minting a fresh random key per call would
+   * break the server's at-most-once guarantee (a transport retry would create
+   * a SECOND run instead of replaying the first), so this throws instead. Pass
+   * an explicit `idempotencyKey` (reused verbatim across retries of the same
+   * logical operation) or a `runId` to get retry-safe behavior on the
+   * server-generated-run_id path.
+   */
+  runImage(image: string, options: RunImageOptions = {}): Promise<CreateRunResponse> {
+    const { args, env, runId, workspaceId, idempotencyKey, ...requestOptions } = options;
+    const body: CreateRunRequest = { image };
+    if (args !== undefined) {
+      body.args = args;
+    }
+    if (env !== undefined) {
+      body.env = env;
+    }
+    if (runId !== undefined) {
+      body.run_id = runId;
+    }
+    let key = idempotencyKey;
+    if (key === undefined) {
+      if (runId === undefined) {
+        return Promise.reject(
+          new Error(
+            "runImage requires an explicit idempotencyKey when runId is omitted: an " +
+              "auto-generated random key is per-attempt, not per-logical-operation, so a " +
+              "transport retry would create a second run instead of replaying the first. " +
+              "Pass idempotencyKey (reused across retries) or supply runId.",
+          ),
+        );
+      }
+      key = `${runId}:create`;
+    }
+    return this.createRun(body, { ...requestOptions, idempotencyKey: key, workspaceId });
   }
 
-  getRun(runId: string, params: WorkspaceRequest, options: RequestOptions = {}): Promise<RunResponse> {
-    return this.request<RunResponse>("GET", `/v1/runs/${pathSegment(runId)}`, { ...options, query: workspaceQuery(params, options.query) });
+  listRuns(params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<RunListResponse> {
+    return this.request<RunListResponse>("GET", "/v1/runs", { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
-  waitRun(runId: string, params: WorkspaceRequest, options: RequestOptions = {}): Promise<RunResponse> {
-    return this.request<RunResponse>("GET", `/v1/runs/${pathSegment(runId)}:wait`, { ...options, query: workspaceQuery(params, options.query) });
+  getRun(runId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<RunResponse> {
+    return this.request<RunResponse>("GET", `/v1/runs/${pathSegment(runId)}`, { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
-  refreshRun(runId: string, params: WorkspaceRequest, options: RequestOptions = {}): Promise<RunResponse> {
-    return this.request<RunResponse>("POST", `/v1/runs/${pathSegment(runId)}:refresh`, { ...options, query: workspaceQuery(params, options.query) });
+  waitRun(runId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<RunResponse> {
+    return this.request<RunResponse>("GET", `/v1/runs/${pathSegment(runId)}:wait`, { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
-  cancelRun(runId: string, params: WorkspaceRequest, options: RequestOptions = {}): Promise<RunResponse> {
-    return this.request<RunResponse>("POST", `/v1/runs/${pathSegment(runId)}:cancel`, { ...options, query: workspaceQuery(params, options.query) });
+  /**
+   * Block until a run reaches a terminal (closed) state, honoring the server's
+   * long-poll semantics: `:wait` returns 202 with the latest still-open run at
+   * its internal deadline, and this helper re-issues the wait until the run
+   * closes (HTTP 200) or `deadlineMs` elapses. Returns the latest run envelope
+   * either way; inspect `result.run.closed` to distinguish terminal from
+   * timed-out.
+   */
+  async waitRunUntilTerminal(runId: string, options: WaitUntilTerminalOptions = {}): Promise<RunResponse> {
+    const { deadlineMs = 5 * 60 * 1000, workspaceId, ...requestOptions } = options;
+    const params: WorkspaceRequest = { workspaceId };
+    const path = `/v1/runs/${pathSegment(runId)}:wait`;
+    const query = this.workspaceQuery(params, requestOptions.query);
+    const deadline = Date.now() + deadlineMs;
+    let latest: RunResponse;
+    do {
+      latest = await this.request<RunResponse>("GET", path, { ...requestOptions, query });
+      if (latest.run.closed) {
+        return latest;
+      }
+    } while (Date.now() < deadline);
+    return latest;
   }
 
-  listRunEvents<TData = unknown>(runId: string, params: WorkspaceRequest, options: RequestOptions = {}): Promise<EventListResponse<TData>> {
-    return this.request<EventListResponse<TData>>("GET", `/v1/runs/${pathSegment(runId)}/events`, { ...options, query: workspaceQuery(params, options.query) });
+  refreshRun(runId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<RunResponse> {
+    return this.request<RunResponse>("POST", `/v1/runs/${pathSegment(runId)}:refresh`, { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
-  getRunDecision(runId: string, params: WorkspaceRequest, options: RequestOptions = {}): Promise<PlacementDecisionResponse> {
-    return this.request<PlacementDecisionResponse>("GET", `/v1/runs/${pathSegment(runId)}/decision`, { ...options, query: workspaceQuery(params, options.query) });
+  cancelRun(runId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<RunResponse> {
+    return this.request<RunResponse>("POST", `/v1/runs/${pathSegment(runId)}:cancel`, { ...options, query: this.workspaceQuery(params, options.query) });
+  }
+
+  listRunEvents<TData = unknown>(runId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<EventListResponse<TData>> {
+    return this.request<EventListResponse<TData>>("GET", `/v1/runs/${pathSegment(runId)}/events`, { ...options, query: this.workspaceQuery(params, options.query) });
+  }
+
+  getRunDecision(runId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<PlacementDecisionResponse> {
+    return this.request<PlacementDecisionResponse>("GET", `/v1/runs/${pathSegment(runId)}/decision`, { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
   previewPlacement(body: PlacementPreviewRequest, options: RequestOptions = {}): Promise<PlacementDecisionResponse> {
@@ -152,21 +269,21 @@ export class MercatorClient {
     return this.request<WorkloadRevisionResponse>("POST", `/v1/workloads/${pathSegment(workloadId)}/revisions`, {
       ...options,
       body: { revision },
-      query: workspaceQuery({ workspaceId }, options.query),
+      query: this.workspaceQuery({ workspaceId }, options.query),
     });
   }
 
-  listWorkloadRevisions(workloadId: string, params: WorkspaceRequest, options: RequestOptions = {}): Promise<WorkloadRevisionListResponse> {
+  listWorkloadRevisions(workloadId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<WorkloadRevisionListResponse> {
     return this.request<WorkloadRevisionListResponse>("GET", `/v1/workloads/${pathSegment(workloadId)}/revisions`, {
       ...options,
-      query: workspaceQuery(params, options.query),
+      query: this.workspaceQuery(params, options.query),
     });
   }
 
-  getWorkloadRevision(workloadId: string, revisionId: string, params: WorkspaceRequest, options: RequestOptions = {}): Promise<WorkloadRevisionResponse> {
+  getWorkloadRevision(workloadId: string, revisionId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<WorkloadRevisionResponse> {
     return this.request<WorkloadRevisionResponse>("GET", `/v1/workloads/${pathSegment(workloadId)}/revisions/${pathSegment(revisionId)}`, {
       ...options,
-      query: workspaceQuery(params, options.query),
+      query: this.workspaceQuery(params, options.query),
     });
   }
 
@@ -174,16 +291,16 @@ export class MercatorClient {
     return this.request<ResolveImageResponse>("POST", "/v1/images:resolve", { ...options, body });
   }
 
-  listConnections(params: WorkspaceRequest, options: RequestOptions = {}): Promise<ConnectionListResponse> {
-    return this.request<ConnectionListResponse>("GET", "/v1/connections", { ...options, query: workspaceQuery(params, options.query) });
+  listConnections(params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<ConnectionListResponse> {
+    return this.request<ConnectionListResponse>("GET", "/v1/connections", { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
-  listOffers(params: WorkspaceRequest, options: RequestOptions = {}): Promise<OfferListResponse> {
-    return this.request<OfferListResponse>("GET", "/v1/offers", { ...options, query: workspaceQuery(params, options.query) });
+  listOffers(params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<OfferListResponse> {
+    return this.request<OfferListResponse>("GET", "/v1/offers", { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
-  listSecrets(params: WorkspaceRequest, options: RequestOptions = {}): Promise<SecretMetadataListResponse> {
-    return this.request<SecretMetadataListResponse>("GET", "/v1/secrets", { ...options, query: workspaceQuery(params, options.query) });
+  listSecrets(params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<SecretMetadataListResponse> {
+    return this.request<SecretMetadataListResponse>("GET", "/v1/secrets", { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
   createSecretVersion(secretId: string, body: CreateSecretVersionRequest, options: MutationRequestOptions): Promise<CreateSecretVersionResponse> {
@@ -204,6 +321,14 @@ export class MercatorClient {
 
   replaySink(sinkId: string, body: ReplaySinkRequest, options: RequestOptions = {}): Promise<SinkResult> {
     return this.request<SinkResult>("POST", `/v1/sinks/${pathSegment(sinkId)}:replay`, { ...options, body });
+  }
+
+  private workspaceQuery(params: WorkspaceRequest, existing?: QueryParams): QueryParams {
+    const workspaceId = this.resolveWorkspaceId(params);
+    if (workspaceId === undefined) {
+      return { ...existing };
+    }
+    return { ...existing, workspace_id: workspaceId };
   }
 
   private urlFor(path: string, query?: QueryParams): string {
@@ -240,10 +365,6 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 function pathSegment(value: string): string {
   return encodeURIComponent(value);
-}
-
-function workspaceQuery(params: WorkspaceRequest, existing?: QueryParams): QueryParams {
-  return { ...existing, workspace_id: params.workspaceId };
 }
 
 async function parseResponseBody(response: Response): Promise<unknown> {

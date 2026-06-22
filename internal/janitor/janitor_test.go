@@ -2,11 +2,13 @@ package janitor
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/bengarcia/mercator/internal/adapter"
 	"github.com/bengarcia/mercator/internal/adapter/fake"
+	"github.com/bengarcia/mercator/internal/domain"
 	"github.com/bengarcia/mercator/internal/eventlog"
 )
 
@@ -124,5 +126,86 @@ func appendRunEvent(t *testing.T, log eventlog.EventLog, workspaceID, runID, eve
 	})
 	if err != nil {
 		t.Fatalf("append run event: %v", err)
+	}
+}
+
+func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := fake.New()
+	_, err := ad.Launch(ctx, adapter.LaunchRequest{
+		OperationKey:       "launch_term",
+		RequestHash:        "sha256:term",
+		WorkspaceID:        "ws_1",
+		RunID:              "run_term",
+		AttemptID:          "att_term",
+		OwnershipToken:     "own_term",
+		LaunchKey:          "launch_term",
+		CleanupLocator:     "cleanup_term",
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+		Disposition:        domain.DispositionTerminate,
+	})
+	if err != nil {
+		t.Fatalf("seed terminate orphan: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	appendLaunchIntent(t, log, "ws_1", "run_term", domain.DispositionTerminate)
+
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Released != 1 {
+		t.Fatalf("expected one reclaim, got %+v", result)
+	}
+	if ad.TerminateCount() != 1 {
+		t.Fatalf("janitor must reclaim a provisioned run via Terminate, terminate count=%d", ad.TerminateCount())
+	}
+	if ad.ReleaseCount() != 0 {
+		t.Fatalf("janitor must not Release a provisioned run, release count=%d", ad.ReleaseCount())
+	}
+}
+
+func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
+	t.Helper()
+	intent := adapter.LaunchRequest{
+		AttemptID:   "att_" + runID,
+		LaunchKey:   "launch_" + runID,
+		Disposition: disposition,
+	}
+	private, err := json.Marshal(intent)
+	if err != nil {
+		t.Fatalf("marshal intent: %v", err)
+	}
+	_, err = log.Append(context.Background(), eventlog.AppendRequest{
+		Stream:                eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
+		ExpectedStreamVersion: 0,
+		CommandKey:            "seed:intent:" + runID,
+		RequestHash:           "sha256:seed_intent",
+		CorrelationID:         runID,
+		CausationID:           "seed",
+		Events: []eventlog.NewEvent{
+			{
+				ID:            "evt_" + workspaceID + "_" + runID + "_intent",
+				Type:          "compute.run.launch_intent_recorded.v1",
+				SchemaVersion: 1,
+				OccurredAt:    time.Now().UTC(),
+				Visibility:    eventlog.VisibilityPublic,
+				Data:          []byte(`{}`),
+				PrivateData:   private,
+			},
+			{
+				ID:            "evt_" + workspaceID + "_" + runID + "_cleanup",
+				Type:          "compute.run.cleanup_requested.v1",
+				SchemaVersion: 1,
+				OccurredAt:    time.Now().UTC(),
+				Visibility:    eventlog.VisibilityPublic,
+				Data:          []byte(`{}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("append launch intent: %v", err)
 	}
 }

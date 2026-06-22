@@ -354,14 +354,50 @@ const (
 	CleanupBlocked     CleanupState = "blocked"
 )
 
+// Disposition is the cost-safety discriminator that records, at launch time,
+// what cleanup must do for a run. It is recorded explicitly on the launch
+// intent and the cleanup path dispatches on the RECORDED value; it is never
+// re-inferred from live offers/state at cleanup time. This is what makes
+// teardown crash-safe and orphan-free.
+//
+//   - DispositionTerminate: the run created a resource WE OWN (a provisioned
+//     host/instance) that MUST be destroyed on cleanup.
+//   - DispositionRelease: the run occupies a slot in a pool we DON'T own (a
+//     standing pool); cleanup removes only our job/container and never touches
+//     the host.
+type Disposition string
+
+const (
+	DispositionRelease   Disposition = "release"
+	DispositionTerminate Disposition = "terminate"
+)
+
+// DispositionForOfferKind maps the natural source of disposition — the selected
+// offer's Kind — to the cleanup disposition. A provisionable offer means we
+// provisioned (and own) the host, so cleanup must terminate it; a standing
+// offer means we borrowed a slot in a pool we don't own, so cleanup only
+// releases our job. Any unknown/empty kind defaults to release, the safe option
+// that NEVER destroys a host.
+func DispositionForOfferKind(kind OfferKind) Disposition {
+	if kind == OfferKindProvisionable {
+		return DispositionTerminate
+	}
+	return DispositionRelease
+}
+
 type RunRecord struct {
 	ID                 string       `json:"id"`
 	WorkspaceID        string       `json:"workspace_id"`
 	WorkloadRevisionID string       `json:"workload_revision_id"`
 	Phase              string       `json:"phase"`
 	Outcome            RunOutcome   `json:"outcome,omitempty"`
+	ExitCode           *int         `json:"exit_code,omitempty"`
 	Cleanup            CleanupState `json:"cleanup"`
-	Closed             bool         `json:"closed"`
+	// Disposition surfaces the RECORDED cleanup disposition (terminate vs
+	// release) so operators can see whether this run will destroy a host it owns
+	// or merely release a borrowed slot. Empty until a launch intent is recorded.
+	Disposition Disposition `json:"disposition,omitempty"`
+	Closed      bool        `json:"closed"`
 }
 
 type AttemptRecord struct {

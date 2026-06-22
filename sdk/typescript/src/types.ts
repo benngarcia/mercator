@@ -19,10 +19,15 @@ export type RequestOptions = {
 
 export type MutationRequestOptions = RequestOptions & {
   idempotencyKey: string;
+  /**
+   * Workspace for this mutation. Applied to createRun's request body when the
+   * body does not already carry workspace_id; overrides the client default.
+   */
+  workspaceId?: string;
 };
 
 export type WorkspaceRequest = {
-  workspaceId: string;
+  workspaceId?: string;
 };
 
 export type ErrorResponse = {
@@ -149,19 +154,30 @@ export type WorkloadRevision = {
 
 export type CreateRunRequest = {
   workspace_id?: string;
-  run_id: string;
+  /**
+   * Optional. When omitted the server generates a uuidv7-based run id and
+   * returns it at `response.run.id`.
+   */
+  run_id?: string;
   workload_id?: string;
   workload_revision_id?: string;
+  /**
+   * Image shorthand: the only required field for the minimal create form. The
+   * server synthesizes the single container and defaults everything else.
+   * Ignored when a full `workload` (or `workload_revision_id`) is supplied.
+   */
+  image?: string;
+  /** Container args for the image shorthand. */
+  args?: string[];
+  /** Container env bindings for the image shorthand. */
+  env?: Record<string, EnvBinding>;
+  /** Full workload revision. Takes precedence over the image shorthand. */
   workload?: WorkloadRevision;
-};
-
-export type CreateRunResponse = {
-  run_id: string;
-  duplicate?: boolean;
 };
 
 export type RunOutcome = "succeeded" | "failed" | "cancelled" | string;
 export type CleanupState = "not_required" | "pending" | "confirmed" | "blocked" | string;
+export type Disposition = "release" | "terminate" | string;
 
 export type RunRecord = {
   id: string;
@@ -169,14 +185,44 @@ export type RunRecord = {
   workload_revision_id?: string;
   phase: string;
   outcome?: RunOutcome;
+  /**
+   * Container exit code, surfaced directly on the run once a terminal
+   * observation is recorded. `undefined` means "not yet known"; a present `0`
+   * is a real success exit. Read this instead of digging through the
+   * `compute.run.external_state_observed.v1` event payload.
+   */
+  exit_code?: number;
   cleanup: CleanupState;
+  /**
+   * Recorded cleanup disposition. `terminate` means the run provisioned a host
+   * we own that is destroyed on cleanup; `release` means the run borrowed a slot
+   * in a standing pool we do not own and cleanup removes only our job. Recorded
+   * at launch time and dispatched on the recorded value, never re-inferred at
+   * cleanup time. `undefined` until a launch intent is recorded.
+   */
+  disposition?: Disposition;
   closed: boolean;
 };
 
 export type RunResponse = {
+  /**
+   * Convenience top-level run identifier, equal to `run.id`. Returned on every
+   * run response alongside the full run record.
+   */
+  run_id: string;
   run: RunRecord;
+  /** Reserved for per-response metadata. */
+  metadata?: Record<string, unknown>;
   links?: Record<string, string>;
+  /** True when a create was a safe idempotent replay of an existing run. */
+  duplicate?: boolean;
 };
+
+/**
+ * createRun returns the same envelope as get/wait/cancel: a convenience
+ * top-level `run_id` alongside the full `run` record.
+ */
+export type CreateRunResponse = RunResponse;
 
 export type RunListResponse = {
   runs: RunRecord[];

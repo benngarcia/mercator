@@ -770,6 +770,12 @@ func orchRevision() domain.WorkloadRevision {
 	}
 }
 
+func orchProvisionableOffer(id string, now time.Time) domain.OfferSnapshot {
+	offer := orchOffer(id, now)
+	offer.Kind = domain.OfferKindProvisionable
+	return offer
+}
+
 func orchOffer(id string, now time.Time) domain.OfferSnapshot {
 	return domain.OfferSnapshot{
 		ID:           id,

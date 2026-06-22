@@ -17,6 +17,22 @@ type Adapter struct {
 	offers        []domain.OfferSnapshot
 	objects       map[string]adapter.OwnedExternalObject
 	ops           map[string]operationRecord
+	// openObserves is the number of times Observe reports a non-terminal
+	// "running" phase before reporting the configured launch outcome. It models
+	// a run that stays open past one or more internal poll windows.
+	openObserves int
+	observeCount map[string]int
+	// exitCode, when set, is the container exit code reported on a terminal
+	// observation. It defaults to 0 (success). A non-zero value lets a test
+	// drive the failed/non-zero exit path end-to-end. exitCodeSet distinguishes
+	// "explicitly configured" from the implicit success default.
+	exitCode    int
+	exitCodeSet bool
+	// releaseCount and terminateCount track which cleanup disposition path the
+	// orchestrator invoked, for end-to-end assertions. Both paths are idempotent
+	// and remove the owned object.
+	releaseCount   int
+	terminateCount int
 }
 
 type operationRecord struct {
@@ -38,12 +54,33 @@ func WithOffers(offers []domain.OfferSnapshot) Option {
 	}
 }
 
+// WithExitCode configures the container exit code reported on a terminal
+// observation. Combine with WithLaunchOutcome(ExternalPhaseFailed) and a
+// non-zero code to exercise the failed/non-zero exit path end-to-end.
+func WithExitCode(code int) Option {
+	return func(a *Adapter) {
+		a.exitCode = code
+		a.exitCodeSet = true
+	}
+}
+
+// WithOpenObservations makes Observe report a non-terminal "running" phase for
+// the first n observations of a launched object before reporting the configured
+// launch outcome. This models a run that stays open past one or more internal
+// poll windows so callers can exercise long-poll/wait behavior.
+func WithOpenObservations(n int) Option {
+	return func(a *Adapter) {
+		a.openObserves = n
+	}
+}
+
 func New(options ...Option) *Adapter {
 	a := &Adapter{
 		now:           time.Now,
 		launchOutcome: adapter.ExternalPhaseRunning,
 		objects:       map[string]adapter.OwnedExternalObject{},
 		ops:           map[string]operationRecord{},
+		observeCount:  map[string]int{},
 	}
 	for _, option := range options {
 		option(a)
@@ -126,15 +163,35 @@ func (a *Adapter) Observe(_ context.Context, req adapter.ObserveRequest) (adapte
 	if req.RequestHash != "" && object.RequestHash != req.RequestHash {
 		return adapter.ExternalObservation{}, adapter.ErrIdempotencyConflict
 	}
+	phase := object.Phase
+	if a.openObserves > 0 && isFakeTerminal(phase) {
+		seen := a.observeCount[req.LaunchKey]
+		a.observeCount[req.LaunchKey] = seen + 1
+		if seen < a.openObserves {
+			phase = adapter.ExternalPhaseRunning
+		}
+	}
 	observation := adapter.ExternalObservation{
 		ExternalID: object.ExternalID,
 		LaunchKey:  object.LaunchKey,
-		Phase:      object.Phase,
+		Phase:      phase,
 		ObservedAt: a.now().UTC(),
 		NativeJSON: fmt.Sprintf(`{"adapter":"fake","external_id":%q}`, object.ExternalID),
 	}
-	if object.Phase == adapter.ExternalPhaseSucceeded {
+	switch phase {
+	case adapter.ExternalPhaseSucceeded:
 		code := 0
+		if a.exitCodeSet {
+			code = a.exitCode
+		}
+		observation.ExitCode = &code
+	case adapter.ExternalPhaseFailed:
+		// A failed run surfaces a non-zero exit code. Default to 1 unless an
+		// explicit code was configured.
+		code := 1
+		if a.exitCodeSet {
+			code = a.exitCode
+		}
 		observation.ExitCode = &code
 	}
 	return observation, nil
@@ -186,9 +243,59 @@ func (a *Adapter) Release(_ context.Context, req adapter.ReleaseRequest) (adapte
 		}
 	}
 	delete(a.objects, req.LaunchKey)
+	a.releaseCount++
 	receipt := adapter.ReleaseReceipt{Released: true}
 	a.ops[req.OperationKey] = operationRecord{hash: req.RequestHash, receipt: receipt}
 	return receipt, nil
+}
+
+// Terminate destroys the owned object the same way Release removes it, but
+// records that the TERMINATE disposition path was exercised. This lets the fake
+// drive the provisionable->terminate path end-to-end with no network while
+// keeping the same idempotency (OperationKey/RequestHash) and ownership
+// machinery as Release.
+func (a *Adapter) Terminate(_ context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := requireOperation(req.OperationKey, req.RequestHash); err != nil {
+		return adapter.TerminateReceipt{}, err
+	}
+	if existing, ok := a.ops[req.OperationKey]; ok {
+		if existing.hash != req.RequestHash {
+			return adapter.TerminateReceipt{}, adapter.ErrIdempotencyConflict
+		}
+		receipt := existing.receipt.(adapter.TerminateReceipt)
+		receipt.Duplicate = true
+		return receipt, nil
+	}
+	if object, ok := a.objects[req.LaunchKey]; ok {
+		if req.OwnershipToken != "" && object.OwnershipToken != req.OwnershipToken {
+			return adapter.TerminateReceipt{}, adapter.ErrIdempotencyConflict
+		}
+		if req.LaunchRequestHash != "" && object.RequestHash != req.LaunchRequestHash {
+			return adapter.TerminateReceipt{}, adapter.ErrIdempotencyConflict
+		}
+	}
+	delete(a.objects, req.LaunchKey)
+	a.terminateCount++
+	receipt := adapter.TerminateReceipt{Terminated: true}
+	a.ops[req.OperationKey] = operationRecord{hash: req.RequestHash, receipt: receipt}
+	return receipt, nil
+}
+
+// ReleaseCount reports how many times the release disposition path was invoked.
+func (a *Adapter) ReleaseCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.releaseCount
+}
+
+// TerminateCount reports how many times the terminate disposition path was
+// invoked.
+func (a *Adapter) TerminateCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.terminateCount
 }
 
 func (a *Adapter) ListOwned(_ context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
@@ -201,6 +308,10 @@ func (a *Adapter) ListOwned(_ context.Context, req adapter.OwnershipQuery) ([]ad
 		}
 	}
 	return objects, nil
+}
+
+func isFakeTerminal(phase adapter.ExternalPhase) bool {
+	return phase == adapter.ExternalPhaseSucceeded || phase == adapter.ExternalPhaseFailed || phase == adapter.ExternalPhaseCancelled
 }
 
 func requireOperation(key, hash string) error {

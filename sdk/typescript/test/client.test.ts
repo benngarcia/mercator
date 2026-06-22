@@ -55,8 +55,113 @@ function headersOf(request: CapturedRequest): Headers {
   return new Headers(request.init.headers);
 }
 
+test("createRun returns the unified run envelope with exit_code and duplicate", async () => {
+  const { fetch } = createMockFetch([
+    {
+      status: 202,
+      body: {
+        run_id: "run_1",
+        run: { id: "run_1", workspace_id: "ws_1", phase: "closed", outcome: "succeeded", exit_code: 0, cleanup: "confirmed", disposition: "release", closed: true },
+        links: { self: "/v1/runs/run_1?workspace_id=ws_1" },
+        duplicate: true,
+      },
+    },
+  ]);
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch });
+
+  const response = await client.createRun(
+    { run_id: "run_1", workload: { spec: { containers: [], resources: {}, network: {}, placement: {}, execution: {} } } },
+    { idempotencyKey: "run_1:create", workspaceId: "ws_1" },
+  );
+
+  // The convenience top-level run_id is returned alongside the full run record.
+  assert.equal(response.run_id, "run_1");
+  assert.equal(response.run.id, "run_1");
+  assert.equal(response.run_id, response.run.id);
+  assert.equal(response.run.exit_code, 0);
+  assert.equal(response.run.outcome, "succeeded");
+  assert.equal(response.run.disposition, "release");
+  assert.equal(response.duplicate, true);
+});
+
+test("runImage shorthand omits run_id and returns the server-generated id", async () => {
+  const { fetch, requests } = createMockFetch([
+    {
+      status: 202,
+      body: {
+        run: { id: "run_generated_1", workspace_id: "ws_1", phase: "requested", cleanup: "not_required", closed: false },
+        duplicate: false,
+      },
+    },
+  ]);
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_1" });
+
+  const response = await client.runImage("busybox", {
+    args: ["echo", "hi"],
+    idempotencyKey: "idem-shorthand",
+  });
+
+  assert.equal(response.run.id, "run_generated_1");
+  assert.deepEqual(requests[0]?.body, { image: "busybox", args: ["echo", "hi"], workspace_id: "ws_1" });
+  const body = requests[0]?.body as Record<string, unknown>;
+  assert.equal("run_id" in body, false); // omitted -> server generates it
+  assert.equal(headersOf(requests[0]!).get("idempotency-key"), "idem-shorthand");
+});
+
+test("runImage shorthand honors explicit run_id, env, and mints an idempotency key", async () => {
+  const { fetch, requests } = createMockFetch([
+    { status: 202, body: { run: { id: "run_explicit", workspace_id: "ws_1", phase: "requested", cleanup: "not_required", closed: false } } },
+  ]);
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_1" });
+
+  await client.runImage("busybox", { runId: "run_explicit", env: { K: { value: "v" } } });
+
+  const body = requests[0]?.body as Record<string, unknown>;
+  assert.equal(body.run_id, "run_explicit");
+  assert.deepEqual(body.env, { K: { value: "v" } });
+  assert.equal("args" in body, false);
+  assert.equal(headersOf(requests[0]!).get("idempotency-key"), "run_explicit:create");
+});
+
+test("runImage requires an explicit idempotencyKey when runId is omitted", async () => {
+  const { fetch, requests } = createMockFetch([]);
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_1" });
+
+  await assert.rejects(() => client.runImage("busybox"), /idempotencyKey/);
+  assert.equal(requests.length, 0);
+});
+
+test("client-scoped workspaceId is applied to calls and overridable per-call", async () => {
+  const { fetch, requests } = createMockFetch((request) => {
+    if (request.url.includes("/v1/runs/run_1")) {
+      return { body: { run: { id: "run_1", workspace_id: "ws_default", phase: "closed", cleanup: "confirmed", closed: true } } };
+    }
+    if (request.url.startsWith("https://mercator.example/v1/runs")) {
+      return { status: 202, body: { run: { id: "run_1", workspace_id: "ws_default", phase: "requested", cleanup: "not_required", closed: false } } };
+    }
+    throw new Error(`Unhandled route: ${request.url}`);
+  });
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_default" });
+
+  await client.createRun(
+    { run_id: "run_1", workload: { spec: { containers: [], resources: {}, network: {}, placement: {}, execution: {} } } },
+    { idempotencyKey: "run_1:create" },
+  );
+  await client.getRun("run_1");
+  await client.getRun("run_1", { workspaceId: "ws_override" });
+
+  // create body carries the default workspace_id
+  assert.equal(requests[0]?.body && (requests[0].body as { workspace_id?: string }).workspace_id, "ws_default");
+  // get uses the default in the query
+  assert.equal(requests[1]?.url, "https://mercator.example/v1/runs/run_1?workspace_id=ws_default");
+  // explicit per-call override wins
+  assert.equal(requests[2]?.url, "https://mercator.example/v1/runs/run_1?workspace_id=ws_override");
+});
+
 test("createRun sends bearer auth, JSON body, workspace fallback, and idempotency key", async () => {
-  const { fetch, requests } = createMockFetch([{ status: 202, body: { run_id: "run_1" } }]);
+  const { fetch, requests } = createMockFetch([
+    { status: 202, body: { run: { id: "run_1", workspace_id: "ws_1", phase: "requested", cleanup: "not_required", closed: false } } },
+  ]);
   const client = new MercatorClient({
     baseUrl: "https://mercator.example/api/",
     token: "secret-token",
@@ -74,12 +179,12 @@ test("createRun sends bearer auth, JSON body, workspace fallback, and idempotenc
     },
   };
 
-  const response = await client.createRun({ run_id: "run_1", workload }, { idempotencyKey: "idem-1" });
+  const response = await client.createRun({ run_id: "run_1", workload }, { idempotencyKey: "idem-1", workspaceId: "ws_1" });
 
-  assert.deepEqual(response, { run_id: "run_1" });
+  assert.equal(response.run.id, "run_1");
   assert.equal(requests[0]?.url, "https://mercator.example/api/v1/runs");
   assert.equal(requests[0]?.init.method, "POST");
-  assert.deepEqual(requests[0]?.body, { run_id: "run_1", workload });
+  assert.deepEqual(requests[0]?.body, { run_id: "run_1", workload, workspace_id: "ws_1" });
   const headers = headersOf(requests[0]!);
   assert.equal(headers.get("authorization"), "Bearer secret-token");
   assert.equal(headers.get("content-type"), "application/json");
@@ -171,6 +276,38 @@ test("workloads, images, connections, offers, secrets, placements, and sinks use
   assert.equal(headersOf(requests[1]!).get("idempotency-key"), "idem-revision");
   assert.equal(headersOf(requests[8]!).get("idempotency-key"), "idem-secret");
   assert.deepEqual(requests.at(-1)?.body, { from_exclusive: 1, limit: 10, replay_id: "replay_1" });
+});
+
+test("waitRunUntilTerminal re-issues wait while the server returns 202 (open) until closed", async () => {
+  const { fetch, requests } = createMockFetch([
+    { status: 202, body: { run: { id: "run_1", workspace_id: "ws_1", phase: "launch", cleanup: "pending", closed: false } } },
+    { status: 202, body: { run: { id: "run_1", workspace_id: "ws_1", phase: "launch", cleanup: "pending", closed: false } } },
+    { status: 200, body: { run: { id: "run_1", workspace_id: "ws_1", phase: "closed", outcome: "succeeded", exit_code: 0, cleanup: "confirmed", closed: true } } },
+  ]);
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_1" });
+
+  const run = await client.waitRunUntilTerminal("run_1");
+
+  assert.equal(requests.length, 3);
+  assert.equal(run.run.closed, true);
+  assert.equal(run.run.exit_code, 0);
+  for (const request of requests) {
+    assert.equal(request.url, "https://mercator.example/v1/runs/run_1:wait?workspace_id=ws_1");
+  }
+});
+
+test("waitRunUntilTerminal stops re-issuing once its deadline elapses and returns the open run", async () => {
+  const { fetch, requests } = createMockFetch(() => ({
+    status: 202,
+    body: { run: { id: "run_1", workspace_id: "ws_1", phase: "launch", cleanup: "pending", closed: false } },
+  }));
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_1" });
+
+  // A zero deadline means: issue exactly one wait, then give up (still open).
+  const run = await client.waitRunUntilTerminal("run_1", { deadlineMs: 0 });
+
+  assert.equal(requests.length, 1);
+  assert.equal(run.run.closed, false);
 });
 
 test("throws MercatorAPIError with parsed error details on non-2xx responses", async () => {

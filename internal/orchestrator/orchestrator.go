@@ -52,6 +52,16 @@ type CreateRunRequest struct {
 	IdempotencyKey string
 	Actor          json.RawMessage
 	Workload       domain.WorkloadRevision
+	// GeneratedRunID is true when the server minted RunID (no client-supplied
+	// run_id). A generated run_id is cosmetic for idempotency: it is excluded
+	// from the request hash so a replay keyed by the same Idempotency-Key still
+	// matches and returns the original run rather than a freshly generated one.
+	GeneratedRunID bool
+	// ResolveImage, when set, pins each container's tag-form image to a
+	// digest-pinned reference AFTER the idempotency request hash is computed over
+	// the submitted (tag-form) spec. This keeps logical retries and moving tags
+	// (e.g. :latest) replay-stable while storing/launching a pinned revision.
+	ResolveImage func(ctx context.Context, image, platform string) (string, error)
 }
 
 type CreateRunResult struct {
@@ -125,15 +135,45 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if req.Workload.WorkspaceID != "" && req.WorkspaceID != req.Workload.WorkspaceID {
 		return CreateRunResult{}, fmt.Errorf("WORKSPACE_MISMATCH: request workspace_id must match workload workspace_id")
 	}
+	// Fill omitted, defaultable fields BEFORE validation so a minimal create body
+	// (just an image) expands into a fully-specified, validatable revision.
+	req.Workload = domain.NormalizeWorkloadRevision(req.Workload)
 	if violations := domain.ValidateWorkloadRevision(req.Workload); len(violations) > 0 {
 		return CreateRunResult{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
+	}
+	// The request hash must be stable across logical retries that regenerate
+	// cosmetic, client-minted identifiers. The workload revision ID is one such
+	// id: a retry that re-mints it is the same logical create and must replay,
+	// not 409. Exclude it (and any other cosmetic churn) from the hash. A
+	// server-generated run_id is likewise cosmetic for idempotency: excluding it
+	// lets a replay keyed by the same Idempotency-Key return the original run.
+	// The hash is computed over the SUBMITTED (tag-form) spec, BEFORE digest
+	// resolution, so a moving tag like :latest stays replay-stable.
+	hashableWorkload := req.Workload
+	hashableWorkload.ID = ""
+	hashRunID := req.RunID
+	if req.GeneratedRunID {
+		hashRunID = ""
 	}
 	requestHash, err := domain.CanonicalHash(struct {
 		RunID    string                  `json:"run_id"`
 		Workload domain.WorkloadRevision `json:"workload"`
-	}{req.RunID, req.Workload})
+	}{hashRunID, hashableWorkload})
 	if err != nil {
 		return CreateRunResult{}, err
+	}
+	// Resolve tag-form images to digest-pinned references and pin them into the
+	// stored/launched revision. This happens AFTER the hash above so replay
+	// stays stable regardless of where a moving tag currently points.
+	if req.ResolveImage != nil {
+		for i := range req.Workload.Spec.Containers {
+			c := req.Workload.Spec.Containers[i]
+			pinned, rerr := req.ResolveImage(ctx, c.Image, c.Platform.String())
+			if rerr != nil {
+				return CreateRunResult{}, fmt.Errorf("IMAGE_RESOLUTION_FAILED: %s", rerr.Error())
+			}
+			req.Workload.Spec.Containers[i].Image = pinned
+		}
 	}
 	privateData, err := json.Marshal(runRequestedData{RunID: req.RunID, Workload: req.Workload})
 	if err != nil {
@@ -164,7 +204,21 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	return CreateRunResult{RunID: req.RunID, Duplicate: result.Duplicate}, nil
+	runID := req.RunID
+	if result.Duplicate {
+		// A replay (same workspace + command key) returns the ORIGINAL stored
+		// events. The run identifier is the stream id of the original
+		// run_requested event, NOT the (possibly freshly generated) req.RunID.
+		// This preserves the idempotency invariant: same Idempotency-Key replay
+		// returns the original run_id.
+		for _, event := range result.Events {
+			if event.Type == EventRunRequested {
+				runID = event.StreamID
+				break
+			}
+		}
+	}
+	return CreateRunResult{RunID: runID, Duplicate: result.Duplicate}, nil
 }
 
 func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string) error {
@@ -415,6 +469,10 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		SelectedOfferConnectionID: selectedOffer.ConnectionID,
 		SelectedOfferAdapterType:  selectedOffer.AdapterType,
 		SelectedOfferNativeRef:    selectedOffer.NativeRef,
+		// Derive the cleanup disposition from the selected offer's Kind and RECORD
+		// it on the launch intent now. This recorded value — not the offer kind
+		// looked up later — is the source of truth for cleanup.
+		Disposition: domain.DispositionForOfferKind(selectedOffer.Kind),
 	}
 	hash, err := domain.CanonicalHash(launchReq)
 	if err != nil {
@@ -481,17 +539,38 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 	if launchReq == nil {
 		return fmt.Errorf("orchestrator: cleanup requested without launch intent")
 	}
-	releaseReq := adapter.ReleaseRequest{OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
-	hash, err := domain.CanonicalHash(releaseReq)
-	if err != nil {
-		return err
+	// Dispatch on the RECORDED disposition from the launch intent. We never
+	// consult live offers or re-derive the disposition here: that is what makes
+	// cleanup crash-safe and orphan-free even if offers changed or disappeared.
+	// A missing recorded disposition (e.g. a pre-change event log) defaults to
+	// release, the safe option that never destroys a host.
+	disposition := launchReq.Disposition
+	if disposition == "" {
+		disposition = domain.DispositionRelease
 	}
-	releaseReq.RequestHash = hash
-	if _, err := o.adapter.Release(ctx, releaseReq); err != nil {
-		return err
+	if disposition == domain.DispositionTerminate {
+		terminateReq := adapter.TerminateRequest{OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+		hash, err := domain.CanonicalHash(terminateReq)
+		if err != nil {
+			return err
+		}
+		terminateReq.RequestHash = hash
+		if _, err := o.adapter.Terminate(ctx, terminateReq); err != nil {
+			return err
+		}
+	} else {
+		releaseReq := adapter.ReleaseRequest{OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+		hash, err := domain.CanonicalHash(releaseReq)
+		if err != nil {
+			return err
+		}
+		releaseReq.RequestHash = hash
+		if _, err := o.adapter.Release(ctx, releaseReq); err != nil {
+			return err
+		}
 	}
 	return o.appendEvents(ctx, workspaceID, runID, version, "advance:cleanup", []eventlog.NewEvent{
-		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, map[string]any{"launch_key": launchReq.LaunchKey}, o.now()),
+		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, map[string]any{"launch_key": launchReq.LaunchKey, "disposition": string(disposition)}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
 	})
 }
@@ -527,6 +606,7 @@ type runState struct {
 	cleanupRequested    bool
 	cleanupConfirmed    bool
 	closed              bool
+	exitCode            *int
 }
 
 func reduceRun(events []eventlog.StoredEvent) (runState, error) {
@@ -559,6 +639,14 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 				return runState{}, err
 			}
 			state.launchIntent = &data
+		case EventExternalStateObserved:
+			var data struct {
+				ExitCode *int `json:"exit_code"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err == nil && data.ExitCode != nil {
+				code := *data.ExitCode
+				state.exitCode = &code
+			}
 		case EventLaunchAccepted:
 			state.launchAccepted = true
 		case EventLaunchIndeterminate:
@@ -602,6 +690,13 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 	}
 	if state.launchIntent != nil {
 		record.Phase = "launching"
+		// Surface the RECORDED disposition (defaulting a missing one to release)
+		// so operators can see whether this run will terminate an owned host or
+		// merely release a borrowed slot.
+		record.Disposition = state.launchIntent.Disposition
+		if record.Disposition == "" {
+			record.Disposition = domain.DispositionRelease
+		}
 	}
 	if state.launchAccepted || state.launchIndeterminate {
 		record.Phase = "running"
@@ -613,6 +708,10 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 	}
 	if state.cleanupConfirmed {
 		record.Cleanup = domain.CleanupConfirmed
+	}
+	if state.exitCode != nil {
+		code := *state.exitCode
+		record.ExitCode = &code
 	}
 	if state.closed {
 		record.Phase = "closed"

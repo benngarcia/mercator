@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -34,6 +35,7 @@ class MercatorClient:
         base_url: str,
         token: str | None = None,
         *,
+        workspace_id: str | None = None,
         timeout: float | None = 30.0,
         user_agent: str = "mercator-python/0.1.0",
     ) -> None:
@@ -42,6 +44,10 @@ class MercatorClient:
             raise ValueError("base_url must not be empty")
         self.base_url = normalized_base_url
         self.token = token
+        # Default workspace applied to every call (query param on reads, body
+        # field on create_run) when a per-call workspace_id is not supplied.
+        # Per-call values always win.
+        self.workspace_id = workspace_id
         self.timeout = timeout
         self.user_agent = user_agent
 
@@ -107,37 +113,117 @@ class MercatorClient:
     def get_openapi(self) -> Any:
         return self.request("GET", "/openapi.json")
 
-    def list_runs(self, workspace_id: str) -> Any:
+    def list_runs(self, workspace_id: str | None = None) -> Any:
         return self.request("GET", "/v1/runs", query=self._workspace_query(workspace_id))
 
-    def create_run(self, payload: Mapping[str, Any], *, idempotency_key: str) -> Any:
-        return self.request("POST", "/v1/runs", json_body=dict(payload), idempotency_key=idempotency_key)
+    def create_run(self, payload: Mapping[str, Any], *, idempotency_key: str, workspace_id: str | None = None) -> Any:
+        body = dict(payload)
+        effective_workspace = workspace_id if workspace_id is not None else self.workspace_id
+        if effective_workspace is not None and not body.get("workspace_id"):
+            body["workspace_id"] = effective_workspace
+        return self.request("POST", "/v1/runs", json_body=body, idempotency_key=idempotency_key)
 
-    def get_run(self, run_id: str, workspace_id: str) -> Any:
+    def run_image(
+        self,
+        image: str,
+        *,
+        args: list[str] | None = None,
+        env: Mapping[str, Any] | None = None,
+        run_id: str | None = None,
+        workspace_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> Any:
+        """Create a run from just an image (the server shorthand form).
+
+        Only ``image`` is required. ``run_id`` is optional: omit it and the
+        server generates one, which you read from the convenience top-level
+        ``result["run_id"]`` (equal to ``result["run"]["id"]``). The
+        server applies all other defaults (container name=main,
+        platform=linux/amd64, resources, network, placement, execution). Returns
+        the same envelope as :meth:`create_run`.
+
+        ``idempotency_key`` is required by the server; when omitted and a
+        ``run_id`` is supplied this derives a stable, retry-safe key as
+        ``f"{run_id}:create"``. When neither is supplied there is no stable
+        identifier to derive a retry-safe key from -- silently minting a fresh
+        random key per call would break the server's at-most-once guarantee (a
+        transport retry would create a SECOND run instead of replaying the
+        first), so this raises ``ValueError`` instead. Pass an explicit
+        ``idempotency_key`` (reused verbatim across retries of the same logical
+        operation) or a ``run_id`` to get retry-safe behavior on the
+        server-generated-run_id path.
+        """
+
+        payload: dict[str, Any] = {"image": image}
+        if args:
+            payload["args"] = list(args)
+        if env:
+            payload["env"] = dict(env)
+        if run_id is not None:
+            payload["run_id"] = run_id
+        key = idempotency_key
+        if key is None:
+            if run_id is None:
+                raise ValueError(
+                    "run_image requires an explicit idempotency_key when run_id is omitted: "
+                    "an auto-generated random key is per-attempt, not per-logical-operation, "
+                    "so a transport retry would create a second run instead of replaying the "
+                    "first. Pass idempotency_key=... (reused across retries) or supply run_id."
+                )
+            key = f"{run_id}:create"
+        return self.create_run(payload, idempotency_key=key, workspace_id=workspace_id)
+
+    def get_run(self, run_id: str, workspace_id: str | None = None) -> Any:
         return self.request("GET", f"/v1/runs/{self._path(run_id)}", query=self._workspace_query(workspace_id))
 
-    def wait_run(self, run_id: str, workspace_id: str) -> Any:
+    def wait_run(self, run_id: str, workspace_id: str | None = None) -> Any:
         return self.request("GET", f"/v1/runs/{self._path(run_id)}:wait", query=self._workspace_query(workspace_id))
 
-    def refresh_run(self, run_id: str, workspace_id: str) -> Any:
+    def wait_run_until_terminal(
+        self,
+        run_id: str,
+        workspace_id: str | None = None,
+        *,
+        deadline: float = 300.0,
+    ) -> Any:
+        """Block until a run reaches a terminal (closed) state.
+
+        Honors the server's long-poll semantics: ``:wait`` returns 202 with the
+        latest still-open run at its internal (~30s) deadline, so this helper
+        re-issues the wait until the run closes or ``deadline`` seconds elapse.
+        Returns the latest run envelope either way; inspect
+        ``result["run"]["closed"]`` to distinguish terminal from timed-out, and
+        read ``result["run"]["exit_code"]`` for the container exit code.
+        """
+
+        end = time.monotonic() + deadline
+        while True:
+            response = self.wait_run(run_id, workspace_id)
+            run = response.get("run") if isinstance(response, dict) else None
+            if isinstance(run, dict) and run.get("closed"):
+                return response
+            if time.monotonic() >= end:
+                return response
+
+    def refresh_run(self, run_id: str, workspace_id: str | None = None) -> Any:
         return self.request("POST", f"/v1/runs/{self._path(run_id)}:refresh", query=self._workspace_query(workspace_id))
 
-    def cancel_run(self, run_id: str, workspace_id: str) -> Any:
+    def cancel_run(self, run_id: str, workspace_id: str | None = None) -> Any:
         return self.request("POST", f"/v1/runs/{self._path(run_id)}:cancel", query=self._workspace_query(workspace_id))
 
-    def list_run_events(self, run_id: str, workspace_id: str) -> Any:
+    def list_run_events(self, run_id: str, workspace_id: str | None = None) -> Any:
         return self.request("GET", f"/v1/runs/{self._path(run_id)}/events", query=self._workspace_query(workspace_id))
 
-    def get_run_decision(self, run_id: str, workspace_id: str) -> Any:
+    def get_run_decision(self, run_id: str, workspace_id: str | None = None) -> Any:
         return self.request("GET", f"/v1/runs/{self._path(run_id)}/decision", query=self._workspace_query(workspace_id))
 
     def preview_placement(self, payload: Mapping[str, Any]) -> Any:
         return self.request("POST", "/v1/placements:preview", json_body=dict(payload))
 
-    def list_connections(self, workspace_id: str) -> Any:
+    def list_connections(self, workspace_id: str | None = None) -> Any:
         return self.request("GET", "/v1/connections", query=self._workspace_query(workspace_id))
 
-    def list_offers(self, workspace_id: str) -> Any:
+    def list_offers(self, workspace_id: str | None = None) -> Any:
         return self.request("GET", "/v1/offers", query=self._workspace_query(workspace_id))
 
     def create_workload(self, workspace_id: str, workload_id: str, name: str, *, idempotency_key: str) -> Any:
@@ -148,7 +234,7 @@ class MercatorClient:
             idempotency_key=idempotency_key,
         )
 
-    def list_workload_revisions(self, workload_id: str, workspace_id: str) -> Any:
+    def list_workload_revisions(self, workload_id: str, workspace_id: str | None = None) -> Any:
         return self.request(
             "GET",
             f"/v1/workloads/{self._path(workload_id)}/revisions",
@@ -158,7 +244,7 @@ class MercatorClient:
     def create_workload_revision(
         self,
         workload_id: str,
-        workspace_id: str,
+        workspace_id: str | None,
         revision: Mapping[str, Any],
         *,
         idempotency_key: str,
@@ -171,7 +257,7 @@ class MercatorClient:
             idempotency_key=idempotency_key,
         )
 
-    def get_workload_revision(self, workload_id: str, revision_id: str, workspace_id: str) -> Any:
+    def get_workload_revision(self, workload_id: str, revision_id: str, workspace_id: str | None = None) -> Any:
         return self.request(
             "GET",
             f"/v1/workloads/{self._path(workload_id)}/revisions/{self._path(revision_id)}",
@@ -181,7 +267,7 @@ class MercatorClient:
     def resolve_image(self, image: str, platform: str) -> Any:
         return self.request("POST", "/v1/images:resolve", json_body={"image": image, "platform": platform})
 
-    def list_secrets(self, workspace_id: str) -> Any:
+    def list_secrets(self, workspace_id: str | None = None) -> Any:
         return self.request("GET", "/v1/secrets", query=self._workspace_query(workspace_id))
 
     def create_secret_version(self, secret_id: str, workspace_id: str, value: str, *, idempotency_key: str) -> Any:
@@ -277,8 +363,11 @@ class MercatorClient:
                 return value
         return fallback
 
-    def _workspace_query(self, workspace_id: str) -> dict[str, str]:
-        return {"workspace_id": workspace_id}
+    def _workspace_query(self, workspace_id: str | None) -> dict[str, str]:
+        effective = workspace_id if workspace_id is not None else self.workspace_id
+        if effective is None:
+            return {}
+        return {"workspace_id": effective}
 
     def _path(self, value: str) -> str:
         return quote(value, safe="")

@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-var digestImagePattern = regexp.MustCompile(`^.+@sha256:[a-fA-F0-9]{64}$`)
 var envNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 const maxEnvValueBytes = 32 * 1024
@@ -33,10 +32,10 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 			Message: "V1 requires the only container to be named main.",
 		})
 	}
-	if !digestImagePattern.MatchString(container.Image) {
+	if container.Image == "" {
 		violations = append(violations, Violation{
-			Code: "IMAGE_DIGEST_REQUIRED", Path: "spec.containers[0].image", Required: "image@sha256:<digest>", Offered: container.Image,
-			Message: "Workload revisions must reference digest-pinned images before placement.",
+			Code: "IMAGE_REQUIRED", Path: "spec.containers[0].image", Required: "image reference",
+			Message: "Workload revisions must reference a container image.",
 		})
 	}
 	if container.Platform.OS != "linux" || !supportedLinuxArch(container.Platform.Architecture) {

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/bengarcia/mercator/internal/adapter"
 	"github.com/bengarcia/mercator/internal/adapter/fake"
 	"github.com/bengarcia/mercator/internal/authz"
@@ -61,10 +63,22 @@ type principalContextKey struct{}
 
 type createRunBody struct {
 	WorkspaceID        string                  `json:"workspace_id,omitempty"`
-	RunID              string                  `json:"run_id"`
+	RunID              string                  `json:"run_id,omitempty"`
 	WorkloadID         string                  `json:"workload_id,omitempty"`
 	WorkloadRevisionID string                  `json:"workload_revision_id,omitempty"`
 	Workload           domain.WorkloadRevision `json:"workload"`
+	// Top-level image shorthand. When no full workload (or revision id) is
+	// supplied, the server synthesizes workload.spec.containers[0] from these.
+	Image string                       `json:"image,omitempty"`
+	Args  []string                     `json:"args,omitempty"`
+	Env   map[string]domain.EnvBinding `json:"env,omitempty"`
+}
+
+// hasWorkloadSpec reports whether the body carries an explicit full workload
+// spec (at least one container). The shorthand image form is only expanded when
+// no explicit spec is present.
+func (b createRunBody) hasWorkloadSpec() bool {
+	return len(b.Workload.Spec.Containers) > 0
 }
 
 type createWorkloadBody struct {
@@ -130,11 +144,6 @@ type replaySinkBody struct {
 	ReplayID      string                  `json:"replay_id"`
 }
 
-type createRunResponse struct {
-	RunID     string `json:"run_id"`
-	Duplicate bool   `json:"duplicate,omitempty"`
-}
-
 type eventListResponse struct {
 	Events []eventlog.CloudEvent `json:"events"`
 }
@@ -150,8 +159,25 @@ type placementPreviewResponse struct {
 }
 
 type runResponse struct {
-	Run   domain.RunRecord  `json:"run"`
-	Links map[string]string `json:"links,omitempty"`
+	// RunID is the convenience top-level run identifier, returned alongside the
+	// full run{} record on every run response for envelope consistency. Metadata
+	// is reserved for a future per-response metadata object.
+	RunID     string            `json:"run_id"`
+	Run       domain.RunRecord  `json:"run"`
+	Metadata  map[string]any    `json:"metadata,omitempty"`
+	Links     map[string]string `json:"links,omitempty"`
+	Duplicate bool              `json:"duplicate,omitempty"`
+}
+
+// newRunResponse builds a run response envelope with the top-level run_id
+// derived from the record, keeping run_id and run.id consistent.
+func newRunResponse(workspaceID string, record domain.RunRecord, duplicate bool) runResponse {
+	return runResponse{
+		RunID:     record.ID,
+		Run:       record,
+		Links:     runLinks(workspaceID, record.ID),
+		Duplicate: duplicate,
+	}
 }
 
 type runListResponse struct {
@@ -292,6 +318,12 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	if workspaceID == "" {
 		workspaceID = body.Workload.WorkspaceID
 	}
+	if workspaceID == "" {
+		workspaceID = r.URL.Query().Get("workspace_id")
+	}
+	if workspaceID == "" {
+		workspaceID = s.defaultWorkspace()
+	}
 	if !authorizeRequestWorkspace(w, r, workspaceID) {
 		return
 	}
@@ -307,15 +339,43 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		workloadRevision = revision
+	} else if !body.hasWorkloadSpec() && body.Image != "" {
+		// Top-level image shorthand: synthesize the single container from the
+		// top-level fields. Defaulting (container name, platform, resources, etc.)
+		// is applied server-side during CreateRun's normalize pass. An explicit
+		// full workload spec always takes precedence over shorthand.
+		workloadRevision = domain.WorkloadRevision{
+			WorkspaceID: workspaceID,
+			WorkloadID:  body.WorkloadID,
+			Spec: domain.WorkloadSpec{
+				Containers: []domain.ContainerSpec{{
+					Image: body.Image,
+					Args:  body.Args,
+					Env:   body.Env,
+				}},
+			},
+		}
 	}
-	if !s.authorizeSecretRefs(w, r, workspaceID, body.RunID, workloadRevision) {
+
+	// run_id is optional: generate a uuidv7 when omitted and use it as the
+	// stream/run identifier returned to the caller.
+	runID := body.RunID
+	generated := false
+	if runID == "" {
+		generated = true
+		runID = newRunID()
+	}
+
+	if !s.authorizeSecretRefs(w, r, workspaceID, runID, workloadRevision) {
 		return
 	}
 	result, err := s.orch.CreateRun(r.Context(), orchestrator.CreateRunRequest{
 		WorkspaceID:    workspaceID,
-		RunID:          body.RunID,
+		RunID:          runID,
+		GeneratedRunID: generated,
 		IdempotencyKey: idempotencyKey,
 		Workload:       workloadRevision,
+		ResolveImage:   s.resolveImageFn(),
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
@@ -325,16 +385,23 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_RUN_FAILED"), err.Error())
 		return
 	}
-	if err := s.orch.AdvanceRun(r.Context(), workspaceID, body.RunID); err != nil {
+	// result.RunID is the canonical run identifier (the ORIGINAL run_id on a
+	// replay, even if this request generated a fresh one).
+	if err := s.orch.AdvanceRun(r.Context(), workspaceID, result.RunID); err != nil {
 		writeError(w, http.StatusBadGateway, "ADVANCE_RUN_FAILED", "Run advancement failed; inspect public run events for the stable failure code.")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, createRunResponse{RunID: result.RunID, Duplicate: result.Duplicate})
+	record, err := s.orch.GetRun(r.Context(), workspaceID, result.RunID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "RUN_NOT_FOUND", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, newRunResponse(workspaceID, record, result.Duplicate))
 }
 
 func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("run_id")
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -362,37 +429,61 @@ func (s *Server) getRunOrWait(w http.ResponseWriter, r *http.Request) {
 	s.writeRun(w, r, runID)
 }
 
+// waitDeadline bounds how long waitRun will long-poll for a terminal state.
+// Overridable in tests.
+var waitDeadline = 30 * time.Second
+
+// waitPollInterval is the cadence at which waitRun re-drives an open run toward
+// a terminal state. Overridable in tests.
+var waitPollInterval = 100 * time.Millisecond
+
 func (s *Server) waitRun(w http.ResponseWriter, r *http.Request, runID string) {
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
-	deadline := time.Now().Add(30 * time.Second)
+	// Confirm the run exists (and the caller is authorized) before looping.
+	record, err := s.orch.GetRun(r.Context(), workspaceID, runID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
+		return
+	}
+	deadline := time.Now().Add(waitDeadline)
 	for {
-		record, err := s.orch.GetRun(r.Context(), workspaceID, runID)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
-			return
-		}
 		if record.Closed {
-			writeJSON(w, http.StatusOK, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
+			writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
 			return
 		}
-		if time.Now().After(deadline) {
-			writeJSON(w, http.StatusAccepted, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
+		if !time.Now().Before(deadline) {
+			// Bounded-deadline timeout: return the latest open run with a clean
+			// 202 signal so the caller can decide to re-issue the wait.
+			writeJSON(w, http.StatusAccepted, newRunResponse(workspaceID, record, false))
 			return
 		}
 		select {
 		case <-r.Context().Done():
 			writeError(w, http.StatusRequestTimeout, "WAIT_CANCELLED", "Wait request was cancelled.")
 			return
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(waitPollInterval):
 		}
+		// Actively drive the run toward terminal rather than passively re-reading
+		// stale state. RefreshRun advances the run then returns the latest record.
+		next, err := s.orch.RefreshRun(r.Context(), workspaceID, runID)
+		if err != nil {
+			// Advancement may legitimately error mid-flight (e.g. indeterminate
+			// launch); fall back to the last readable state and keep waiting.
+			next, err = s.orch.GetRun(r.Context(), workspaceID, runID)
+			if err != nil {
+				writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
+				return
+			}
+		}
+		record = next
 	}
 }
 
 func (s *Server) writeRun(w http.ResponseWriter, r *http.Request, runID string) {
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -401,11 +492,11 @@ func (s *Server) writeRun(w http.ResponseWriter, r *http.Request, runID string) 
 		writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
+	writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
 }
 
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -431,7 +522,7 @@ func (s *Server) runAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, runID string) {
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -440,11 +531,11 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, runID string)
 		writeError(w, http.StatusBadGateway, "CANCEL_RUN_FAILED", "Run cancellation failed.")
 		return
 	}
-	writeJSON(w, http.StatusOK, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
+	writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
 }
 
 func (s *Server) refreshRun(w http.ResponseWriter, r *http.Request, runID string) {
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -456,11 +547,11 @@ func (s *Server) refreshRun(w http.ResponseWriter, r *http.Request, runID string
 		writeError(w, http.StatusBadGateway, "REFRESH_RUN_FAILED", "Run refresh failed.")
 		return
 	}
-	writeJSON(w, http.StatusOK, runResponse{Run: record, Links: runLinks(workspaceID, record.ID)})
+	writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
 }
 
 func (s *Server) runDecision(w http.ResponseWriter, r *http.Request) {
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -613,7 +704,7 @@ func (s *Server) createRevision(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
 		return
 	}
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -635,7 +726,7 @@ func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
 		return
 	}
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -652,7 +743,7 @@ func (s *Server) getRevision(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
 		return
 	}
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -683,7 +774,7 @@ func (s *Server) resolveImage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -700,7 +791,7 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -763,7 +854,7 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, "SECRET_VAULT_DISABLED", "Secret vault is not configured.")
 		return
 	}
-	workspaceID, ok := requiredWorkspace(w, r)
+	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
@@ -868,8 +959,29 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, errorResponse{Code: code, Message: strings.TrimSpace(message)})
 }
 
-func requiredWorkspace(w http.ResponseWriter, r *http.Request) (string, bool) {
+// defaultWorkspace returns the single concrete workspace this server is scoped
+// to, if exactly one is configured (and it is not the "*" wildcard). It lets
+// callers omit workspace_id on a single-tenant deployment. Empty means there is
+// no unambiguous default and workspace_id must be supplied explicitly.
+func (s *Server) defaultWorkspace() string {
+	concrete := ""
+	for _, ws := range s.security.Workspaces {
+		if ws == "" || ws == "*" {
+			return ""
+		}
+		if concrete != "" && concrete != ws {
+			return ""
+		}
+		concrete = ws
+	}
+	return concrete
+}
+
+func (s *Server) requiredWorkspace(w http.ResponseWriter, r *http.Request) (string, bool) {
 	workspaceID := r.URL.Query().Get("workspace_id")
+	if workspaceID == "" {
+		workspaceID = s.defaultWorkspace()
+	}
 	if workspaceID == "" {
 		writeError(w, http.StatusBadRequest, "WORKSPACE_ID_REQUIRED", "workspace_id query parameter is required.")
 		return "", false
@@ -904,6 +1016,36 @@ func pathSecretID(w http.ResponseWriter, r *http.Request, bodySecretID string) (
 		return "", false
 	}
 	return pathSecretID, true
+}
+
+// newRunID mints a server-generated run identifier from a uuidv7 (time-ordered,
+// collision-resistant). Used when a caller omits run_id on create.
+func newRunID() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		// NewV7 only errors if the system RNG fails; fall back to a v4.
+		id = uuid.New()
+	}
+	return "run_" + id.String()
+}
+
+// resolveImageFn adapts the server's OCI resolver into the orchestrator's
+// ResolveImage hook. It returns nil when no resolver is configured, in which
+// case images are stored/launched as submitted (backward-compatible).
+func (s *Server) resolveImageFn() func(context.Context, string, string) (string, error) {
+	if s.resolver == nil {
+		return nil
+	}
+	return func(ctx context.Context, image, platform string) (string, error) {
+		resolved, err := s.resolver.Resolve(ctx, ociresolver.ResolveRequest{Image: image, Platform: platform})
+		if err != nil {
+			return "", err
+		}
+		if resolved.Image != "" {
+			return resolved.Image, nil
+		}
+		return image, nil
+	}
 }
 
 func runLinks(workspaceID, runID string) map[string]string {
@@ -952,7 +1094,12 @@ func HandlerForSQLiteWithAdapter(ctx context.Context, dsn string, ad adapter.Ada
 	}
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	return NewWithAllServices(orch, sched, ad, workload.New(log), secrets.New(log, key), sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}), connection.New(log), offers.New(log), ociresolver.NewStaticResolver(nil), options...), log.Close, nil
+	// Synthetic-digest resolution lets the minimal create path
+	// (POST /v1/runs {"image":"busybox"}) resolve an arbitrary tag to a
+	// deterministic digest with no network, keeping fake mode end-to-end
+	// exercisable without a pre-pinned image.
+	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
+	return NewWithAllServices(orch, sched, ad, workload.New(log), secrets.New(log, key), sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}), connection.New(log), offers.New(log), resolver, options...), log.Close, nil
 }
 
 func handlerSecretKey(configured []byte) ([]byte, error) {

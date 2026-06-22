@@ -41,17 +41,26 @@ func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsMutableTagsAndInvalidRevisions(t *testing.T) {
+// Mutable (tag-form) images are now accepted at revision-store time: digests
+// are no longer mandatory and are resolved server-side at run-create. Genuinely
+// invalid revisions (e.g. an empty image) must still be rejected.
+func TestServiceAcceptsMutableTagsRejectsInvalidRevisions(t *testing.T) {
 	ctx := context.Background()
 	svc := New(openWorkloadTestLog(t))
 	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
 		t.Fatalf("create workload: %v", err)
 	}
-	rev := validRevision()
-	rev.Spec.Containers[0].Image = "ghcr.io/acme/trainer:latest"
 
-	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Revision: rev}); err == nil {
-		t.Fatal("expected mutable tag revision to be rejected")
+	tagRev := validRevision()
+	tagRev.Spec.Containers[0].Image = "ghcr.io/acme/trainer:latest"
+	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Revision: tagRev}); err != nil {
+		t.Fatalf("mutable tag revision should now be accepted (resolution is deferred to run-create): %v", err)
+	}
+
+	badRev := validRevision()
+	badRev.Spec.Containers[0].Image = ""
+	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Revision: badRev}); err == nil {
+		t.Fatal("expected an empty-image revision to be rejected")
 	}
 }
 

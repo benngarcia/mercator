@@ -209,6 +209,18 @@ func TestAdapterReleaseIsIdempotentWhenContainerAlreadyRemoved(t *testing.T) {
 	}
 }
 
+// Local Docker is a STANDING pool: there is no broker-owned host to destroy, so
+// Terminate is an explicit, contract-documented error rather than a silent
+// no-op or container removal.
+func TestAdapterTerminateIsUnsupportedForStandingPool(t *testing.T) {
+	ad := New(newFakeClient())
+
+	_, err := ad.Terminate(context.Background(), adapter.TerminateRequest{OperationKey: "terminate_1", RequestHash: "sha256:terminate", LaunchKey: "any"})
+	if !errors.Is(err, adapter.ErrTerminateUnsupported) {
+		t.Fatalf("expected ErrTerminateUnsupported, got %v", err)
+	}
+}
+
 func TestPhaseFromStateDoesNotMarkCreatedContainerRunning(t *testing.T) {
 	if phase := phaseFromState("created", nil); phase != adapter.ExternalPhaseQueued {
 		t.Fatalf("created container should be queued, got %s", phase)

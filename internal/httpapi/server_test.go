@@ -46,11 +46,11 @@ func TestCreateRunAndListEvents(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var created createRunResponse
+	var created runResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if created.RunID != "run_1" {
+	if created.Run.ID != "run_1" {
 		t.Fatalf("unexpected create response: %+v", created)
 	}
 
@@ -179,8 +179,11 @@ func TestCreateRunIdempotencyConflictReturns409(t *testing.T) {
 		t.Fatalf("expected first 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
+	// A logically different create (different image) reusing the same
+	// idempotency key must conflict. The revision ID is cosmetic and excluded
+	// from the hash, so a substantive field is changed here.
 	other := httpRevision()
-	other.ID = "wrev_other"
+	other.Spec.Containers[0].Image = "ghcr.io/acme/inference@sha256:2222222222222222222222222222222222222222222222222222222222222222"
 	body = mustMarshal(t, createRunBody{RunID: "run_conflict", Workload: other})
 	req = httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_conflict")
@@ -371,7 +374,7 @@ func TestPlacementPreviewAndOpenAPI(t *testing.T) {
 			t.Fatalf("%s expected 200, got %d body=%s", path, rec.Code, rec.Body.String())
 		}
 		if path == "/openapi.json" {
-			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "/v1/workloads", "/v1/images:resolve", "/v1/secrets", "PlacementPreviewRequest", "PlacementPreviewResponse", "IdempotencyConflict", `"409"`} {
+			for _, required := range []string{"/v1/runs/{run_id}", "/v1/runs/{run_id}/decision", "/v1/runs/{run_id}/events", "/v1/workloads", "/v1/images:resolve", "/v1/secrets", "PlacementPreviewRequest", "PlacementPreviewResponse", "IdempotencyConflict", `"409"`, "exit_code"} {
 				if !strings.Contains(rec.Body.String(), required) {
 					t.Fatalf("OpenAPI missing %s: %s", required, rec.Body.String())
 				}

@@ -18,7 +18,37 @@ The validator enforces:
 - public port exposure requires `spec.network.inbound` set to `public_port`;
 - `spec.raw` extension payloads are rejected.
 
-## Create A Run Directly
+## The Minimal Run: One Field
+
+The smallest run is just an image. The CLI takes it as the first positional
+argument; any container args follow `--`. `--run-id` is optional (the server
+generates a uuidv7-based id and returns it at `.run.id`), `--idempotency-key` is
+optional (the CLI mints a stable one), and no workload spec is needed — the
+server synthesizes the single container and defaults the container name (`main`),
+platform (`linux/amd64`), resources, network, placement, and execution policy.
+
+```sh
+export MERCATOR_WORKSPACE_ID=ws_eval
+go run ./cmd/mercator run create busybox -- echo hi | jq '.run.id'
+```
+
+The image may be a tag (`busybox` or `busybox:latest`); the server resolves and
+pins it to `image@sha256:...` in the stored revision before the workload
+validator runs. The equivalent raw HTTP call carries the required
+`Idempotency-Key` header and omits `run_id`:
+
+```sh
+curl -fsS -X POST "$MERCATOR_API_URL/v1/runs?workspace_id=ws_eval" \
+  -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: idem-minimal-1' \
+  -d '{"image":"busybox","args":["echo","hi"]}' | jq '.run.id'
+```
+
+The SDKs expose the same shorthand as `run_image(...)` (Python) and
+`runImage(...)` (TypeScript).
+
+## Create A Run From A Full Workload Spec
 
 ```sh
 WORKLOAD_JSON="$(jq -c . /tmp/mercator-workload.json)"
@@ -29,6 +59,28 @@ go run ./cmd/mercator run create \
   --idempotency-key idem-run-eval-1 \
   --workload-json "$WORKLOAD_JSON"
 ```
+
+`POST /v1/runs` returns the same envelope as the read endpoints and a `202`
+status: `{"run_id": "...", "run": {id, workspace_id, workload_revision_id,
+phase, outcome, exit_code, cleanup, disposition, closed}, "metadata": {...},
+"links": {...}, "duplicate": <bool>}`. The convenience top-level `run_id` is
+returned on every run response (create, get, wait, refresh, cancel) and always
+equals `.run.id`; `metadata` is reserved for future per-response metadata. Read
+the run id from `.run_id` or `.run.id`. `duplicate` is `true` (and otherwise
+omitted) when the create was a safe idempotent replay.
+
+You can omit `--workspace-id` on every `run` subcommand by exporting
+`MERCATOR_WORKSPACE_ID`:
+
+```sh
+export MERCATOR_WORKSPACE_ID=ws_eval
+go run ./cmd/mercator run create \
+  --run-id run_eval_1 \
+  --idempotency-key idem-run-eval-1 \
+  --workload-json "$WORKLOAD_JSON"
+```
+
+An explicit `--workspace-id` flag always overrides the env default.
 
 Equivalent REST shape:
 
@@ -74,9 +126,25 @@ go run ./cmd/mercator run events --workspace-id ws_eval --run-id run_eval_1 | jq
 go run ./cmd/mercator run decision --workspace-id ws_eval --run-id run_eval_1 | jq .
 ```
 
-`run wait` polls the HTTP wait endpoint for up to about 30 seconds. It returns
-`200` if the run closes before the deadline and `202` with the current run state
-if it is still open.
+`run get` returns the run object directly, including `exit_code` once a terminal
+observation has been recorded:
+
+```sh
+go run ./cmd/mercator run get --workspace-id ws_eval --run-id run_eval_1 \
+  | jq '{phase: .run.phase, outcome: .run.outcome, exit_code: .run.exit_code, closed: .run.closed}'
+```
+
+Read the container exit code from `.run.exit_code` directly. It is omitted while
+"not yet known"; a present `0` is a real success exit. You no longer need to
+parse the `compute.run.external_state_observed.v1` event to recover it.
+
+`run wait` issues one HTTP long-poll. The server actively advances the run
+(about every 100ms) for up to ~30 seconds, then returns `200` with the terminal
+run if it closed before the deadline, or `202` with the latest still-open run if
+not. To block past a single deadline, loop while the response is `202`
+(re-issuing `run wait`); the SDKs expose this as
+`wait_run_until_terminal` / `waitRunUntilTerminal`. In fake mode a run closes
+well within the first long-poll, so a single `run wait` is sufficient.
 
 ## Refresh And Cancel
 
@@ -88,6 +156,48 @@ go run ./cmd/mercator run cancel --workspace-id ws_eval --run-id run_eval_1 | jq
 Refresh resumes event-log-authoritative advancement. Cancel records cancellation
 through the adapter-backed lifecycle and still requires cleanup confirmation
 before the run is closed.
+
+## Cleanup Disposition: Terminate vs Release
+
+Every run records, at launch time, a cleanup **disposition** that determines
+what teardown does. This is a cost-safety contract borrowed from the adapter
+boundary:
+
+- **`terminate`** — the run provisioned a resource **we own** (a host/instance
+  from a *provisionable* offer). Cleanup must **destroy that host**.
+- **`release`** — the run occupies a slot in a pool **we do not own** (a
+  *standing* offer, e.g. local Docker). Cleanup removes **only our
+  job/container** and never touches the host.
+
+The disposition is derived from the selected offer's `kind`
+(`provisionable -> terminate`, `standing -> release`) and **recorded explicitly
+on the `compute.run.launch_intent_recorded.v1` event at launch time**. It is
+surfaced on the run object as `.run.disposition`:
+
+```sh
+go run ./cmd/mercator run get --workspace-id ws_eval --run-id run_eval_1 \
+  | jq '{phase: .run.phase, disposition: .run.disposition, cleanup: .run.cleanup, closed: .run.closed}'
+```
+
+**Recorded, not inferred.** The cleanup path dispatches on the value recorded at
+launch time — it never re-derives the disposition from live offers or current
+state at cleanup time. This is what makes teardown crash-safe and orphan-free: a
+run that provisioned a host is always torn down with `terminate` even if the
+offer that produced it has since changed or disappeared. The adapter exposes two
+distinct cleanup verbs, `Release` and `Terminate`, and the orchestrator (and the
+orphan-reclaiming janitor) call the one matching the recorded disposition.
+
+**Backward compatibility.** A run whose event log predates this field (no
+recorded disposition) defaults to `release` — the safe option that never
+destroys a host.
+
+**Adapter semantics.** The fake adapter implements both verbs idempotently and
+tracks which path ran (the standing fake offer drives `release`; set
+`MERCATOR_FAKE_OFFER=provisionable` to drive `terminate`, both with no network).
+Local Docker is a standing pool: it implements `Release` (remove the container)
+and returns an explicit error from `Terminate` (there is no broker-owned host to
+destroy), which the orchestrator never reaches because a Docker offer always
+records `release`.
 
 ## Event Order To Check
 
@@ -101,5 +211,15 @@ For a successful fake run, the public event stream should show the core shape:
 6. cleanup requested;
 7. cleanup confirmed;
 8. run closed.
+
+Public CloudEvents `data` payloads are snake_case. For example, the terminal
+`compute.run.external_state_observed.v1` event carries
+`{external_id, launch_key, phase, observed_at, exit_code, native_json}`, and
+`compute.run.launch_accepted.v1` carries
+`{external_id, launch_key, ownership_token, cleanup_locator, phase, accepted_at,
+duplicate}`, and `compute.run.cleanup_confirmed.v1` carries
+`{launch_key, disposition}` recording which cleanup verb (terminate or release)
+ran. Prefer reading `run.exit_code`, `run.outcome`, and `run.disposition` from
+the run object over parsing these events.
 
 Do not infer state from adapter observations that are not represented by events.

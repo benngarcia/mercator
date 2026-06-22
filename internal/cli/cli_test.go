@@ -47,14 +47,121 @@ func TestRunCommandsEmitParseableJSON(t *testing.T) {
 	}
 }
 
+func TestWorkspaceIDDefaultsFromConfig(t *testing.T) {
+	handler := newCLITestServer(t)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	workload := mustJSON(t, cliRevision())
+
+	// With Config.WorkspaceID set (sourced from MERCATOR_WORKSPACE_ID), commands
+	// may omit --workspace-id entirely.
+	create := []string{"run", "create", "--run-id", "run_ws_default", "--idempotency-key", "idem_ws_default", "--workload-json", workload}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), Config{
+		BaseURL:     server.URL,
+		WorkspaceID: "ws_1",
+		Args:        create,
+		Stdout:      &stdout,
+		Stderr:      &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("create with default workspace failed code=%d stderr=%s", code, stderr.String())
+	}
+	var created struct {
+		Run struct {
+			ID          string `json:"id"`
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"run"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response %q: %v", stdout.String(), err)
+	}
+	if created.Run.ID != "run_ws_default" || created.Run.WorkspaceID != "ws_1" {
+		t.Fatalf("unexpected create run: %+v", created.Run)
+	}
+
+	// A read also works without --workspace-id, and an explicit flag still
+	// overrides the default.
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), Config{
+		BaseURL:     server.URL,
+		WorkspaceID: "ws_1",
+		Args:        []string{"run", "get", "--run-id", "run_ws_default"},
+		Stdout:      &stdout,
+		Stderr:      &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("get with default workspace failed code=%d stderr=%s", code, stderr.String())
+	}
+}
+
+func TestRunCreatePositionalImageShorthand(t *testing.T) {
+	handler := newCLITestServer(t)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	// The simplest possible invocation: positional image, no --run-id (the
+	// server generates and returns one), no --idempotency-key (the CLI mints a
+	// stable one), workspace from MERCATOR_WORKSPACE_ID. Args after `--` become
+	// the container args.
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), Config{
+		BaseURL:     server.URL,
+		WorkspaceID: "ws_1",
+		Args:        []string{"run", "create", "busybox", "--", "echo", "hi"},
+		Stdout:      &stdout,
+		Stderr:      &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("positional shorthand create failed code=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var created struct {
+		Run struct {
+			ID          string `json:"id"`
+			WorkspaceID string `json:"workspace_id"`
+		} `json:"run"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode shorthand create response %q: %v", stdout.String(), err)
+	}
+	if created.Run.WorkspaceID != "ws_1" {
+		t.Fatalf("expected workspace ws_1, got %+v", created.Run)
+	}
+	if created.Run.ID == "" {
+		t.Fatalf("expected a server-generated run id, got empty: %s", stdout.String())
+	}
+}
+
+func TestRunCreateRequiresImageOrWorkload(t *testing.T) {
+	handler := newCLITestServer(t)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), Config{
+		BaseURL:     server.URL,
+		WorkspaceID: "ws_1",
+		Args:        []string{"run", "create"},
+		Stdout:      &stdout,
+		Stderr:      &stderr,
+	})
+	if code != 2 {
+		t.Fatalf("expected arg validation exit 2, got %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestIdempotencyConflictIsReportedAsJSON(t *testing.T) {
 	handler := newCLITestServer(t)
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
 	first := mustJSON(t, cliRevision())
+	// A regenerated cosmetic revision ID is a safe replay, not a conflict; use a
+	// substantive change (different image) to provoke a real idempotency conflict.
 	other := cliRevision()
-	other.ID = "wrev_cli_other"
+	other.Spec.Containers[0].Image = "ghcr.io/acme/other@sha256:3333333333333333333333333333333333333333333333333333333333333333"
 	second := mustJSON(t, other)
 
 	var stdout, stderr bytes.Buffer

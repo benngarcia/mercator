@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,11 +17,15 @@ import (
 type Config struct {
 	BaseURL string
 	Token   string
-	Args    []string
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
-	Client  *http.Client
+	// WorkspaceID is the default workspace applied to run subcommands when
+	// --workspace-id is not passed. Sourced from MERCATOR_WORKSPACE_ID. An
+	// explicit --workspace-id flag always overrides it.
+	WorkspaceID string
+	Args        []string
+	Stdin       io.Reader
+	Stdout      io.Writer
+	Stderr      io.Writer
+	Client      *http.Client
 }
 
 func Run(ctx context.Context, cfg Config) int {
@@ -45,7 +51,7 @@ func Run(ctx context.Context, cfg Config) int {
 		writeCLIError(cfg.Stderr, "COMMAND_REQUIRED", "command is required")
 		return 2
 	}
-	req, err := buildRequest(ctx, baseURL, args)
+	req, err := buildRequest(ctx, baseURL, cfg.WorkspaceID, args)
 	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
 		return 2
@@ -92,13 +98,13 @@ func parseGlobalFlags(baseURL string, args []string) (string, []string, error) {
 	return *apiURL, fs.Args(), nil
 }
 
-func buildRequest(ctx context.Context, baseURL string, args []string) (*http.Request, error) {
+func buildRequest(ctx context.Context, baseURL, defaultWorkspaceID string, args []string) (*http.Request, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("%s subcommand is required", args[0])
 	}
 	switch args[0] {
 	case "run":
-		return buildRunRequest(ctx, baseURL, args[1:])
+		return buildRunRequest(ctx, baseURL, defaultWorkspaceID, args[1:])
 	case "sink":
 		return buildSinkRequest(ctx, baseURL, args[1:])
 	default:
@@ -106,31 +112,67 @@ func buildRequest(ctx context.Context, baseURL string, args []string) (*http.Req
 	}
 }
 
-func buildRunRequest(ctx context.Context, baseURL string, args []string) (*http.Request, error) {
+func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, args []string) (*http.Request, error) {
 	command := args[0]
+
+	// Split off container args after a `--` separator (used by the image
+	// shorthand, e.g. `run create busybox -- echo hi`). Everything after the
+	// first bare `--` is passed verbatim as container args and is not flag-parsed.
+	flagArgs, containerArgs := splitDoubleDash(args[1:])
+
 	fs := flag.NewFlagSet("run "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", "", "workspace id")
-	runID := fs.String("run-id", "", "run id")
-	idempotencyKey := fs.String("idempotency-key", "", "idempotency key")
+	workspaceID := fs.String("workspace-id", defaultWorkspaceID, "workspace id (defaults to MERCATOR_WORKSPACE_ID)")
+	runID := fs.String("run-id", "", "run id (optional on create; server generates one when omitted)")
+	idempotencyKey := fs.String("idempotency-key", "", "idempotency key (optional on create; derived from the run when omitted)")
 	workloadJSON := fs.String("workload-json", "", "workload revision json")
-	if err := fs.Parse(args[1:]); err != nil {
+	image := fs.String("image", "", "container image shorthand (alternative to --workload-json)")
+	if err := fs.Parse(flagArgs); err != nil {
 		return nil, err
 	}
 	switch command {
 	case "create":
-		if *workspaceID == "" || *runID == "" || *idempotencyKey == "" || *workloadJSON == "" {
-			return nil, fmt.Errorf("create requires --workspace-id, --run-id, --idempotency-key, and --workload-json")
+		// A bare positional first arg is the image shorthand:
+		//   run create busybox -- echo hi
+		positional := fs.Args()
+		if *image == "" && len(positional) > 0 {
+			*image = positional[0]
+			positional = positional[1:]
 		}
-		var workload json.RawMessage
-		if err := json.Unmarshal([]byte(*workloadJSON), &workload); err != nil {
-			return nil, fmt.Errorf("invalid --workload-json: %w", err)
+		// Any positional tokens that appear BEFORE a `--` (other than the image)
+		// are also treated as container args, so `run create busybox echo hi`
+		// works as well as the `--`-separated form.
+		if len(positional) > 0 {
+			containerArgs = append(append([]string{}, positional...), containerArgs...)
 		}
-		body, err := json.Marshal(map[string]any{
-			"workspace_id": *workspaceID,
-			"run_id":       *runID,
-			"workload":     workload,
-		})
+
+		if *workspaceID == "" {
+			return nil, fmt.Errorf("create requires --workspace-id or MERCATOR_WORKSPACE_ID")
+		}
+		hasWorkload := *workloadJSON != ""
+		hasImage := *image != ""
+		if hasWorkload == hasImage {
+			return nil, fmt.Errorf("create requires exactly one of an image (positional arg or --image) or --workload-json")
+		}
+
+		payload := map[string]any{"workspace_id": *workspaceID}
+		// run_id is optional: omit it so the server generates one and returns it.
+		if *runID != "" {
+			payload["run_id"] = *runID
+		}
+		if hasWorkload {
+			var workload json.RawMessage
+			if err := json.Unmarshal([]byte(*workloadJSON), &workload); err != nil {
+				return nil, fmt.Errorf("invalid --workload-json: %w", err)
+			}
+			payload["workload"] = workload
+		} else {
+			payload["image"] = *image
+			if len(containerArgs) > 0 {
+				payload["args"] = containerArgs
+			}
+		}
+		body, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +181,19 @@ func buildRunRequest(ctx context.Context, baseURL string, args []string) (*http.
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Idempotency-Key", *idempotencyKey)
+		// Idempotency-Key is required by the server. When the caller omits it, mint
+		// a stable key so the simplest invocation is still retry-safe within a run
+		// id; when run_id is also omitted, fall back to a fresh random key (a
+		// generated run is single-shot, so there is no stable key to derive).
+		key := *idempotencyKey
+		if key == "" {
+			if *runID != "" {
+				key = *runID + ":create"
+			} else {
+				key = "idem-" + randomToken()
+			}
+		}
+		req.Header.Set("Idempotency-Key", key)
 		return req, nil
 	case "list":
 		if *workspaceID == "" {
@@ -206,6 +260,31 @@ func buildSinkRequest(ctx context.Context, baseURL string, args []string) (*http
 	default:
 		return nil, fmt.Errorf("unknown sink command %q", command)
 	}
+}
+
+// splitDoubleDash splits args at the first bare "--": everything before is
+// returned for flag parsing, everything after is returned verbatim (used as
+// container args by the image shorthand). When there is no "--", the second
+// result is nil.
+func splitDoubleDash(args []string) ([]string, []string) {
+	for i, a := range args {
+		if a == "--" {
+			return args[:i], append([]string{}, args[i+1:]...)
+		}
+	}
+	return args, nil
+}
+
+// randomToken returns a short random hex string for minting an idempotency key
+// when neither a key nor a run id is supplied.
+func randomToken() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		// rand.Read only fails if the system RNG is unavailable; fall back to a
+		// fixed token rather than panic (still unique enough per-process use).
+		return "00000000000000000000000000000000"
+	}
+	return hex.EncodeToString(buf)
 }
 
 func mustURL(baseURL, path string, values url.Values) string {

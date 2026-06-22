@@ -47,7 +47,23 @@ class RecordingHandler(BaseHTTPRequestHandler):
             return
 
         if self.command == "POST" and self.path == "/v1/runs":
-            self._send_json(202, {"run_id": body["run_id"]})
+            # Mirror the server: run_id is optional and generated when omitted.
+            run_id = (body or {}).get("run_id") or "run_generated_1"
+            self._send_json(
+                202,
+                {
+                    "run_id": run_id,
+                    "run": {
+                        "id": run_id,
+                        "workspace_id": (body or {}).get("workspace_id", ""),
+                        "phase": "requested",
+                        "cleanup": "not_required",
+                        "disposition": "release",
+                        "closed": False,
+                    },
+                    "duplicate": False,
+                },
+            )
             return
 
         if self.path.startswith("/v1/runs/run%201"):
@@ -92,7 +108,12 @@ class ClientServerTestCase(unittest.TestCase):
             idempotency_key="idem-1",
         )
 
-        self.assertEqual(result, {"run_id": "run_1"})
+        self.assertEqual(result["run"]["id"], "run_1")
+        # Convenience top-level run_id is returned alongside the full run record.
+        self.assertEqual(result["run_id"], "run_1")
+        self.assertEqual(result["run_id"], result["run"]["id"])
+        self.assertEqual(result["run"]["disposition"], "release")
+        self.assertEqual(result["duplicate"], False)
         request = RecordingHandler.requests[-1]
         self.assertEqual(request["method"], "POST")
         self.assertEqual(request["path"], "/v1/runs")
@@ -176,6 +197,139 @@ class ClientServerTestCase(unittest.TestCase):
         self.assertEqual(RecordingHandler.requests[11]["headers"]["Idempotency-Key"], "revision-key")
         self.assertEqual(RecordingHandler.requests[15]["headers"]["Idempotency-Key"], "secret-key")
         self.assertEqual(RecordingHandler.requests[19]["body"], {"from_exclusive": 10, "limit": 50, "replay_id": "replay_1"})
+
+    def test_client_scoped_workspace_id_applies_and_is_overridable(self):
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
+
+        client.create_run({"run_id": "run_1", "workload": {"workspace_id": "ws_default"}}, idempotency_key="idem-1")
+        client.get_run("run_1")
+        client.get_run("run_1", workspace_id="ws_override")
+
+        create_request = RecordingHandler.requests[0]
+        self.assertEqual(create_request["body"]["workspace_id"], "ws_default")
+        self.assertEqual(RecordingHandler.requests[1]["path"], "/v1/runs/run_1?workspace_id=ws_default")
+        self.assertEqual(RecordingHandler.requests[2]["path"], "/v1/runs/run_1?workspace_id=ws_override")
+
+    def test_explicit_workspace_id_in_create_body_is_not_overwritten(self):
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
+
+        client.create_run({"run_id": "run_1", "workspace_id": "ws_explicit"}, idempotency_key="idem-1")
+
+        self.assertEqual(RecordingHandler.requests[0]["body"]["workspace_id"], "ws_explicit")
+
+    def test_run_image_shorthand_omits_run_id_and_returns_generated_id(self):
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
+
+        result = client.run_image("busybox", args=["echo", "hi"], idempotency_key="idem-shorthand")
+
+        body = RecordingHandler.requests[0]["body"]
+        self.assertEqual(body["image"], "busybox")
+        self.assertEqual(body["args"], ["echo", "hi"])
+        self.assertNotIn("run_id", body)  # omitted -> server generates it
+        self.assertEqual(body["workspace_id"], "ws_default")
+        self.assertEqual(RecordingHandler.requests[0]["headers"]["Idempotency-Key"], "idem-shorthand")
+        # The SDK surfaces the server-generated id directly.
+        self.assertEqual(result["run"]["id"], "run_generated_1")
+
+    def test_run_image_shorthand_honors_explicit_run_id_and_env(self):
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
+
+        client.run_image(
+            "busybox",
+            run_id="run_explicit",
+            env={"K": {"value": "v"}},
+            idempotency_key="idem-explicit",
+        )
+
+        body = RecordingHandler.requests[0]["body"]
+        self.assertEqual(body["run_id"], "run_explicit")
+        self.assertEqual(body["env"], {"K": {"value": "v"}})
+        self.assertNotIn("args", body)  # omitted when no args supplied
+
+    def test_run_image_shorthand_derives_stable_key_from_explicit_run_id(self):
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
+
+        client.run_image("busybox", run_id="run_explicit")
+
+        self.assertEqual(
+            RecordingHandler.requests[0]["headers"]["Idempotency-Key"], "run_explicit:create"
+        )
+
+    def test_run_image_requires_idempotency_key_when_run_id_omitted(self):
+        # Retry-safety regression guard: minting a fresh random key per call
+        # silently breaks at-most-once for the generated-run_id path. The SDK
+        # must refuse rather than create a second run on transport retry.
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
+
+        with self.assertRaises(ValueError):
+            client.run_image("busybox")
+
+        self.assertEqual(RecordingHandler.requests, [])
+
+
+class WaitHandler(BaseHTTPRequestHandler):
+    open_responses = 0
+    seen = 0
+
+    def do_GET(self):
+        WaitHandler.seen += 1
+        closed = WaitHandler.seen > WaitHandler.open_responses
+        status = 200 if closed else 202
+        payload = {
+            "run": {
+                "id": "run_1",
+                "workspace_id": "ws_1",
+                "phase": "closed" if closed else "launch",
+                "outcome": "succeeded" if closed else None,
+                "exit_code": 0 if closed else None,
+                "cleanup": "confirmed" if closed else "pending",
+                "closed": closed,
+            }
+        }
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, format, *args):
+        return
+
+
+class WaitUntilTerminalTestCase(unittest.TestCase):
+    def setUp(self):
+        WaitHandler.seen = 0
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), WaitHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+        host, port = self.server.server_address
+        self.base_url = f"http://{host}:{port}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=5)
+        self.server.server_close()
+
+    def test_wait_run_until_terminal_repolls_until_closed(self):
+        WaitHandler.open_responses = 2
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_1")
+
+        result = client.wait_run_until_terminal("run_1")
+
+        self.assertEqual(WaitHandler.seen, 3)
+        self.assertTrue(result["run"]["closed"])
+        self.assertEqual(result["run"]["exit_code"], 0)
+
+    def test_wait_run_until_terminal_stops_at_deadline_and_returns_open_run(self):
+        WaitHandler.open_responses = 100
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_1")
+
+        result = client.wait_run_until_terminal("run_1", deadline=0.0)
+
+        self.assertEqual(WaitHandler.seen, 1)
+        self.assertFalse(result["run"]["closed"])
 
 
 if __name__ == "__main__":

@@ -30,11 +30,11 @@ func TestValidateWorkloadRevisionEnforcesV1OCIContract(t *testing.T) {
 			path: "spec.containers[0].name",
 		},
 		{
-			name: "requires digest pinned image",
+			name: "requires a non-empty image (digests are no longer mandatory; tags resolve server-side)",
 			edit: func(rev *WorkloadRevision) {
-				rev.Spec.Containers[0].Image = "ghcr.io/acme/inference:latest"
+				rev.Spec.Containers[0].Image = ""
 			},
-			code: "IMAGE_DIGEST_REQUIRED",
+			code: "IMAGE_REQUIRED",
 			path: "spec.containers[0].image",
 		},
 		{
@@ -211,4 +211,21 @@ func mustRawMap(t *testing.T, value map[string]string) map[string]json.RawMessag
 		out[key] = data
 	}
 	return out
+}
+
+func TestDispositionForOfferKind(t *testing.T) {
+	cases := []struct {
+		kind OfferKind
+		want Disposition
+	}{
+		{OfferKindProvisionable, DispositionTerminate},
+		{OfferKindStanding, DispositionRelease},
+		{OfferKind(""), DispositionRelease},
+		{OfferKind("unknown"), DispositionRelease},
+	}
+	for _, tc := range cases {
+		if got := DispositionForOfferKind(tc.kind); got != tc.want {
+			t.Fatalf("DispositionForOfferKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
 }
