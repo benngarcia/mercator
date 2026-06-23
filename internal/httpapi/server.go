@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -737,16 +738,70 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.conns == nil {
-		writeJSON(w, http.StatusOK, connectionListResponse{Connections: []connection.Record{}})
-		return
+
+	// Start from the connection registry (connections created/authorized via the
+	// connection service). Registry records carry real authorization state and
+	// win on conflict.
+	byID := map[string]connection.Record{}
+	if s.conns != nil {
+		records, err := s.conns.List(r.Context(), workspaceID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err.Error())
+			return
+		}
+		for _, record := range records {
+			byID[record.ID] = record
+		}
 	}
-	records, err := s.conns.List(r.Context(), workspaceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err.Error())
-		return
+
+	// Derive connections from the offers visible to this workspace. Every offer
+	// names the connection (and adapter) it was discovered through, so a
+	// configured adapter's connection appears on this surface even before
+	// connection management exists — the offer is the source of truth. A
+	// connection actively serving offers reads as authorized.
+	if offerList, err := s.visibleOffers(r.Context(), workspaceID); err == nil {
+		for _, offer := range offerList {
+			if offer.ConnectionID == "" {
+				continue
+			}
+			if _, registered := byID[offer.ConnectionID]; registered {
+				continue
+			}
+			byID[offer.ConnectionID] = connection.Record{
+				ID:          offer.ConnectionID,
+				WorkspaceID: workspaceID,
+				AdapterType: offer.AdapterType,
+				Authorized:  true,
+			}
+		}
+	}
+
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	records := make([]connection.Record, 0, len(ids))
+	for _, id := range ids {
+		records = append(records, byID[id])
 	}
 	writeJSON(w, http.StatusOK, connectionListResponse{Connections: records})
+}
+
+// visibleOffers returns the offers a workspace can see: the offer cache when
+// populated, otherwise a live adapter query. Shared by the offers and
+// connections surfaces.
+func (s *Server) visibleOffers(ctx context.Context, workspaceID string) ([]domain.OfferSnapshot, error) {
+	if s.offers != nil {
+		records, err := s.offers.ListCached(ctx, workspaceID, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		if len(records) > 0 {
+			return records, nil
+		}
+	}
+	return s.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
 }
 
 func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
