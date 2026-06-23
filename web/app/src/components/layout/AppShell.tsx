@@ -16,7 +16,7 @@ export interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   return (
-    <div className="grid h-screen grid-cols-[15rem_minmax(0,1fr)] overflow-hidden bg-background text-foreground">
+    <div className="grid h-screen grid-cols-[15rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background text-foreground">
       <Sidebar />
       <div className="flex min-w-0 flex-col">
         <Topbar />

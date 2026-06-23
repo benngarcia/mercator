@@ -63,8 +63,36 @@ export function setToken(token: string | null): void {
   write(TOKEN_KEY, token);
 }
 
+// getWorkspace returns the operator's current workspace: the explicitly chosen
+// one, else the most recently added (the latest committed workspace), else null.
+// There is no hardcoded default — the console only knows workspaces the operator
+// has used, and there is no API to enumerate them.
 export function getWorkspace(): string | null {
-  return read(WORKSPACE_KEY);
+  const stored = read(WORKSPACE_KEY);
+  if (stored && stored.trim() !== "") {
+    return stored;
+  }
+  return getRecentWorkspaces()[0] ?? null;
+}
+
+// workspaceOptions builds the list the switcher offers: the active workspace
+// first (so it is always selectable, even when it came from a URL and was never
+// committed to recents), then recents — deduped, with empty entries dropped.
+export function workspaceOptions(
+  current: string | null | undefined,
+  recents: string[],
+): string[] {
+  const seen = new Set<string>();
+  const options: string[] = [];
+  for (const candidate of [current ?? "", ...recents]) {
+    const id = candidate.trim();
+    if (id === "" || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    options.push(id);
+  }
+  return options;
 }
 
 export function setWorkspace(workspaceID: string | null): void {

@@ -17,7 +17,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { getRecentWorkspaces } from "@/lib/session";
+import { getRecentWorkspaces, workspaceOptions } from "@/lib/session";
 
 export interface WorkspaceSwitcherProps {
   value: string | null;
@@ -50,15 +50,22 @@ export function WorkspaceSwitcher({ value, onChange }: WorkspaceSwitcherProps) {
 
   const trimmedDraft = draft.trim();
   const query = trimmedDraft.toLowerCase();
+  // Always include the active workspace and the default, not just recents, so
+  // the current selection is visible/selectable even when it was set via URL or
+  // never explicitly committed.
+  const options = useMemo(
+    () => workspaceOptions(value, recents),
+    [value, recents],
+  );
   const filtered = useMemo(
     () =>
       query === ""
-        ? recents
-        : recents.filter((ws) => ws.toLowerCase().includes(query)),
-    [recents, query],
+        ? options
+        : options.filter((ws) => ws.toLowerCase().includes(query)),
+    [options, query],
   );
   const draftIsNew =
-    trimmedDraft !== "" && !recents.some((ws) => ws === trimmedDraft);
+    trimmedDraft !== "" && !options.some((ws) => ws === trimmedDraft);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -69,7 +76,7 @@ export function WorkspaceSwitcher({ value, onChange }: WorkspaceSwitcherProps) {
           role="combobox"
           aria-expanded={open}
           aria-label="Switch workspace"
-          className="min-w-44 justify-between gap-2"
+          className="min-w-44 justify-between gap-2 rounded-full"
         >
           <span className="flex min-w-0 items-center gap-2">
             <Layers className="text-muted-foreground" />
@@ -128,7 +135,7 @@ export function WorkspaceSwitcher({ value, onChange }: WorkspaceSwitcherProps) {
             <>
               {draftIsNew ? <div className="my-1 h-px bg-border" /> : null}
               <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
-                Recent
+                Workspaces
               </div>
               {filtered.map((ws) => (
                 <button
