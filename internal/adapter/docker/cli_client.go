@@ -13,6 +13,12 @@ import (
 
 type CLIClient struct {
 	Binary string
+	// Host and Context select the Docker endpoint. Empty means the ambient
+	// default (the loopback socket / active context). Host maps to the global
+	// `--host` flag (unix://, tcp://, ssh://); Context maps to `--context`.
+	// Docker treats them as mutually exclusive, so Context wins when both are set.
+	Host    string
+	Context string
 }
 
 func NewCLIClient(binary string) *CLIClient {
@@ -20,6 +26,18 @@ func NewCLIClient(binary string) *CLIClient {
 		binary = "docker"
 	}
 	return &CLIClient{Binary: binary}
+}
+
+// globalArgs returns the endpoint-selecting global flags that must precede every
+// docker subcommand. Empty when the ambient default endpoint is used.
+func (c *CLIClient) globalArgs() []string {
+	if c.Context != "" {
+		return []string{"--context", c.Context}
+	}
+	if c.Host != "" {
+		return []string{"--host", c.Host}
+	}
+	return nil
 }
 
 func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequest) (Container, error) {
@@ -134,7 +152,7 @@ func (c *CLIClient) ListContainers(ctx context.Context, labels map[string]string
 }
 
 func (c *CLIClient) run(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, c.Binary, args...)
+	cmd := exec.CommandContext(ctx, c.Binary, append(c.globalArgs(), args...)...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), err
