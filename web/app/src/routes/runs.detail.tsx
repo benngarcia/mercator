@@ -15,6 +15,7 @@ import {
   PageHeader,
   StatBlock,
 } from "@/components/common";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -57,7 +58,7 @@ function RunDetailPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-5 p-5">
       <PageHeader
         title={
           <span className="flex items-center gap-2">
@@ -66,85 +67,90 @@ function RunDetailPage() {
           </span>
         }
         description={
-          <span className="flex items-center gap-2">
-            <RunStatusBadge
-              phase={data.phase}
-              outcome={data.outcome}
-              closed={data.closed}
-            />
-          </span>
+          <RunStatusBadge
+            phase={data.phase}
+            outcome={data.outcome}
+            closed={data.closed}
+          />
         }
         actions={<RunActions run={data} />}
       />
 
-      <RunPhaseTimeline run={data} />
-
-      <Tabs defaultValue="overview">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="events">Events</TabsTrigger>
-          <TabsTrigger value="decision">Decision</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="overview" className="pt-4">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+      {/* Summary: lifecycle + key facts, always visible. */}
+      <Card>
+        <CardContent className="flex flex-col gap-6 p-5">
+          <RunPhaseTimeline run={data} />
+          <div className="grid grid-cols-2 gap-x-4 gap-y-4 border-t pt-5 sm:grid-cols-4">
             <StatBlock label="Phase" value={data.phase} />
             <StatBlock label="Outcome" value={data.outcome ?? "—"} />
-            <StatBlock
-              label="Exit code"
-              value={data.exit_code ?? "—"}
-              mono
-            />
+            <StatBlock label="Exit code" value={data.exit_code ?? "—"} mono />
             <StatBlock label="Cleanup" value={data.cleanup} />
             <StatBlock label="Disposition" value={data.disposition ?? "—"} />
             <StatBlock label="Closed" value={data.closed ? "yes" : "no"} />
             <StatBlock
               label="Revision"
-              value={data.workload_revision_id}
+              value={data.workload_revision_id || "—"}
               mono
             />
             <StatBlock label="Workspace" value={data.workspace_id} mono />
           </div>
-        </TabsContent>
+        </CardContent>
+      </Card>
 
-        <TabsContent value="events" className="pt-4">
-          {events.isError ? (
-            <ErrorState
-              error={events.error}
-              onRetry={() => void events.refetch()}
-            />
-          ) : (
-            <EventTimeline
-              events={events.data ?? []}
-              isLoading={events.isLoading}
-            />
-          )}
-        </TabsContent>
+      {/* Details: Decision / Events, with the switcher anchored in the card. */}
+      <Tabs defaultValue="decision">
+        <Card className="overflow-hidden">
+          <div className="border-b px-4 py-3">
+            <TabsList>
+              <TabsTrigger value="decision">Decision</TabsTrigger>
+              <TabsTrigger value="events">Events</TabsTrigger>
+            </TabsList>
+          </div>
 
-        <TabsContent value="decision" className="pt-4">
-          {decision.isLoading ? (
-            <Skeleton className="h-48 w-full" />
-          ) : decision.isError ? (
-            <ErrorState
-              error={decision.error}
-              onRetry={() => void decision.refetch()}
-            />
-          ) : decision.data ? (
-            <div className="flex flex-col gap-4">
-              <DecisionPanel decision={decision.data} />
-              <CandidateTable
-                candidates={decision.data.candidates ?? []}
-                selectedOfferId={decision.data.selected_offer_snapshot_id}
+          <TabsContent value="decision" className="mt-0 p-5">
+            {decision.isLoading ? (
+              <Skeleton className="h-48 w-full" />
+            ) : decision.isError ? (
+              <ErrorState
+                error={decision.error}
+                onRetry={() => void decision.refetch()}
               />
-            </div>
-          ) : (
-            <EmptyState
-              icon={Compass}
-              title="No placement decision yet"
-              description="A decision appears once the scheduler evaluates offers for this run."
-            />
-          )}
-        </TabsContent>
+            ) : decision.data ? (
+              <div className="flex flex-col gap-5">
+                <DecisionPanel decision={decision.data} />
+                <div className="flex flex-col gap-3 border-t pt-5">
+                  <span className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
+                    Candidates
+                  </span>
+                  <CandidateTable
+                    candidates={decision.data.candidates ?? []}
+                    selectedOfferId={decision.data.selected_offer_snapshot_id}
+                  />
+                </div>
+              </div>
+            ) : (
+              <EmptyState
+                icon={Compass}
+                title="No placement decision yet"
+                description="A decision appears once the scheduler evaluates offers for this run."
+              />
+            )}
+          </TabsContent>
+
+          <TabsContent value="events" className="mt-0 p-5">
+            {events.isError ? (
+              <ErrorState
+                error={events.error}
+                onRetry={() => void events.refetch()}
+              />
+            ) : (
+              <EventTimeline
+                events={events.data ?? []}
+                isLoading={events.isLoading}
+              />
+            )}
+          </TabsContent>
+        </Card>
       </Tabs>
     </div>
   );

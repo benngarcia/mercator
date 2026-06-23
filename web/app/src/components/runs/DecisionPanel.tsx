@@ -4,7 +4,6 @@ import type { PlacementDecision } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { phaseLabel, shortDigest } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { StatBlock, CopyButton, RelativeTime } from "@/components/common";
 
 export interface DecisionPanelProps {
@@ -63,17 +62,17 @@ export function DecisionPanel({ decision, className }: DecisionPanelProps) {
   const selected = decision.selected_offer_snapshot_id;
 
   return (
-    <div className={cn("flex flex-col gap-4", className)}>
-      {/* Headline: selected offer + objective */}
-      <Card className="flex flex-col gap-4 p-4">
+    <div className={cn("flex flex-col", className)}>
+      {/* Headline: selected offer + objective, with reason codes inline. */}
+      <div className="flex flex-col gap-4 pb-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex min-w-0 flex-col gap-2">
             <span className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
               Selected offer
             </span>
             {selected ? (
               <div className="flex items-center gap-1.5">
-                <span className="truncate font-mono text-sm font-medium text-primary">
+                <span className="truncate font-mono text-base font-medium text-primary">
                   {selected}
                 </span>
                 <CopyButton value={selected} label="Copy offer id" />
@@ -84,13 +83,26 @@ export function DecisionPanel({ decision, className }: DecisionPanelProps) {
                 No offer selected
               </span>
             )}
+            {decision.selection_reason_codes.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {decision.selection_reason_codes.map((code) => (
+                  <Badge
+                    key={code}
+                    variant="outline"
+                    className="border-border font-mono text-[0.6875rem] text-muted-foreground"
+                  >
+                    {code}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
           </div>
           <Badge className="border-primary/30 bg-primary/10 text-primary">
             {objectiveLabel(policy.objective)}
           </Badge>
         </div>
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
           <StatBlock label="Model version" value={decision.model_version} mono />
           <StatBlock
             label="Candidates"
@@ -103,7 +115,7 @@ export function DecisionPanel({ decision, className }: DecisionPanelProps) {
           />
           <StatBlock
             label="Revision digest"
-            value={shortDigest(decision.workload_revision_digest, 16)}
+            value={shortDigest(decision.workload_revision_digest, 12)}
             mono
             trailing={
               decision.workload_revision_digest ? (
@@ -129,34 +141,10 @@ export function DecisionPanel({ decision, className }: DecisionPanelProps) {
             />
           ) : null}
         </div>
-      </Card>
-
-      {/* Selection reason codes */}
-      <Card className="flex flex-col gap-2 p-4">
-        <span className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
-          Selection reason codes
-        </span>
-        {decision.selection_reason_codes.length === 0 ? (
-          <span className="text-xs text-muted-foreground">
-            No reason codes recorded.
-          </span>
-        ) : (
-          <div className="flex flex-wrap gap-1.5">
-            {decision.selection_reason_codes.map((code) => (
-              <Badge
-                key={code}
-                variant="outline"
-                className="border-border font-mono text-[0.6875rem] text-foreground"
-              >
-                {code}
-              </Badge>
-            ))}
-          </div>
-        )}
-      </Card>
+      </div>
 
       {/* Collection report */}
-      <Card className="flex flex-col gap-3 p-4">
+      <div className="flex flex-col gap-3 border-t pt-5">
         <span className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
           Collection report
         </span>
@@ -177,7 +165,7 @@ export function DecisionPanel({ decision, className }: DecisionPanelProps) {
             tone="border-phase-cancelled/30 bg-phase-cancelled/10 text-muted-foreground"
           />
         </div>
-      </Card>
+      </div>
     </div>
   );
 }
