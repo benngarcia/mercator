@@ -16,6 +16,8 @@ import { applyInitialTheme } from "@/components/layout";
 import { ApiError } from "@/lib/api/client";
 import { router } from "@/routes/router";
 
+import "@fontsource-variable/figtree";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
 
 // Apply the persisted (or dark-first default) theme before React mounts.
