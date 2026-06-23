@@ -89,33 +89,45 @@ export function RunPhaseTimeline({ run, className }: RunPhaseTimelineProps) {
   const currentIndex = run.closed
     ? PHASES.length - 1
     : (PHASE_INDEX[run.phase] ?? 0);
+  const failedTerminal =
+    run.closed && (run.outcome === "failed" || run.outcome === "cancelled");
+  // Each cell is flex-1 with the node centered, so node centers sit at
+  // (i + 0.5)/n of the width → 10%…90% for five steps. A single track spans the
+  // first to the last node center; the progress line fills to the current step.
+  const edge = 100 / (PHASES.length * 2); // 10%
+  const progress =
+    (currentIndex / (PHASES.length - 1)) * (100 - edge * 2); // 0…80%
+  const progressTone = !run.closed
+    ? "bg-primary"
+    : failedTerminal
+      ? "bg-phase-failed"
+      : "bg-phase-succeeded";
 
   return (
-    <ol className={cn("flex w-full items-start", className)}>
-      {PHASES.map((phase, i) => {
-        const status = stepStatus(i, currentIndex, run);
-        const tone = TONE[status];
-        const isLast = i === PHASES.length - 1;
-        return (
-          <li
-            key={phase}
-            className={cn("flex flex-1 flex-col items-center", isLast && "flex-none")}
-          >
-            <div className="flex w-full items-center">
-              <span className="flex-1" aria-hidden={i === 0}>
-                {i > 0 ? (
-                  <span
-                    className={cn(
-                      "block h-0.5 w-full",
-                      // The connector reflects the step *entering* this node.
-                      TONE[stepStatus(i - 1, currentIndex, run)].line,
-                    )}
-                  />
-                ) : null}
-              </span>
+    <div className={cn("relative", className)}>
+      {/* Track + progress, vertically centered on the 28px (size-7) nodes. */}
+      <div
+        className="pointer-events-none absolute top-3.5 h-0.5 -translate-y-1/2 rounded-full bg-border"
+        style={{ left: `${edge}%`, right: `${edge}%` }}
+        aria-hidden
+      />
+      <div
+        className={cn(
+          "pointer-events-none absolute top-3.5 h-0.5 -translate-y-1/2 rounded-full transition-all",
+          progressTone,
+        )}
+        style={{ left: `${edge}%`, width: `${progress}%` }}
+        aria-hidden
+      />
+      <ol className="relative flex">
+        {PHASES.map((phase, i) => {
+          const status = stepStatus(i, currentIndex, run);
+          const tone = TONE[status];
+          return (
+            <li key={phase} className="flex flex-1 flex-col items-center gap-2">
               <span
                 className={cn(
-                  "flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-medium",
+                  "relative z-10 flex size-7 items-center justify-center rounded-full border text-xs font-medium",
                   tone.node,
                 )}
               >
@@ -127,29 +139,19 @@ export function RunPhaseTimeline({ run, className }: RunPhaseTimelineProps) {
                   i + 1
                 )}
               </span>
-              <span className="flex-1" aria-hidden={isLast}>
-                {!isLast ? (
-                  <span
-                    className={cn(
-                      "block h-0.5 w-full",
-                      TONE[stepStatus(i, currentIndex, run)].line,
-                    )}
-                  />
-                ) : null}
+              <span
+                className={cn(
+                  "whitespace-nowrap text-xs font-medium",
+                  tone.text,
+                  status === "current" && "animate-pulse",
+                )}
+              >
+                {stepLabel(phase, run)}
               </span>
-            </div>
-            <span
-              className={cn(
-                "mt-1.5 text-center text-xs font-medium",
-                tone.text,
-                status === "current" && "animate-pulse",
-              )}
-            >
-              {stepLabel(phase, run)}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }

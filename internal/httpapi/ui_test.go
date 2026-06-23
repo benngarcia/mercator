@@ -23,6 +23,30 @@ func uiBuilt() bool {
 	return true
 }
 
+// TestBuiltIndexReferencesAbsoluteAssets guards the deep-link contract: the
+// embedded index.html must reference its assets with root-absolute URLs
+// (/assets/...). Relative references (./assets/...) resolve against the current
+// route, so a hard load of /runs/{id} would request /runs/assets/... , get the
+// SPA-fallback index.html back, and fail the module MIME check (blank page).
+// This is enforced by publicPath:"/" in web/app/build.ts.
+func TestBuiltIndexReferencesAbsoluteAssets(t *testing.T) {
+	if !uiBuilt() {
+		t.Skip("UI not built; run the `ui` task (bun run build) to exercise this")
+	}
+	handler := newHTTPTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/runs/run_anything", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if strings.Contains(body, "./assets/") {
+		t.Fatalf("index.html uses relative asset paths (./assets/), which break deep links: %s", body)
+	}
+	if !strings.Contains(body, `="/assets/`) {
+		t.Fatalf("index.html should reference root-absolute /assets/ URLs: %s", body)
+	}
+}
+
 // TestSPAFallbackServesIndex asserts the SPA fallback: any unmatched non-API
 // GET path is handled by serveUI (serving index.html with no-cache), not a mux
 // 404. Client-side routes like /runs/{id} must reach the SPA.

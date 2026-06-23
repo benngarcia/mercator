@@ -27,6 +27,13 @@ await writeFile(resolve(outdir, ".gitkeep"), "");
 const result = await Bun.build({
   entrypoints: [resolve(appDir, "index.html")],
   outdir,
+  // Absolute asset URLs (/assets/...). Without this the emitted index.html
+  // references assets relatively (./assets/...), which breaks on deep links like
+  // /runs/{id}: the SPA-fallback index.html resolves ./assets against /runs/,
+  // requests /runs/assets/... , gets index.html back, and fails the module MIME
+  // check. publicPath "/" makes the references root-absolute so they resolve
+  // correctly from any route depth.
+  publicPath: "/",
   target: "browser",
   format: "esm",
   splitting: true,

@@ -17,18 +17,23 @@ import type { WorkloadRevision } from "@/lib/api/types";
 import { useSession } from "@/hooks/useSession";
 
 const STARTER = `{
-  "id": "",
-  "workspace_id": "",
-  "workload_id": "",
-  "digest": "",
   "spec": {
     "containers": [
-      { "image": "docker.io/library/alpine:3.20", "command": ["echo", "hello"] }
+      {
+        "name": "main",
+        "image": "busybox@sha256:1cfa4e2b09e127b9c4ed43578d3f3c18e7d44ea47b9ea98475c0cbe9086525f8",
+        "platform": { "os": "linux", "architecture": "amd64" },
+        "args": ["echo", "hello from mercator"]
+      }
     ],
-    "resources": { "cpu": "1", "memory": "1Gi" },
-    "network": {},
-    "placement": { "objective": "cheapest" },
-    "execution": {}
+    "resources": {
+      "cpu": { "min_millis": 500 },
+      "memory": { "min_bytes": 134217728 },
+      "ephemeral_disk": { "min_bytes": 1073741824 }
+    },
+    "network": { "inbound": "none" },
+    "placement": { "objective": "balanced" },
+    "execution": { "max_runtime_seconds": 300, "max_pre_start_attempts": 3 }
   }
 }`;
 

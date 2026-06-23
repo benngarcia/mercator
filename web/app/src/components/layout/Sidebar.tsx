@@ -48,18 +48,15 @@ function NavLink({ item }: { item: NavItem }) {
       to={item.to as never}
       activeOptions={{ exact: item.exact ?? false }}
       className={cn(
-        "group flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition-colors",
-        "hover:bg-accent/60 hover:text-foreground",
+        "group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors",
+        "hover:bg-foreground/[0.04] hover:text-foreground",
       )}
       activeProps={{
-        className: cn(
-          "bg-accent text-accent-foreground",
-          // teal active rail
-          "relative before:absolute before:-left-2.5 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-primary",
-        ),
+        // HIG selection: a soft accent-tinted pill with accent text + icon.
+        className: cn("bg-accent-soft text-primary hover:bg-accent-soft"),
       }}
     >
-      <Icon className="size-4 shrink-0 opacity-80 group-hover:opacity-100" />
+      <Icon className="size-[1.05rem] shrink-0" />
       <span className="truncate">{item.label}</span>
     </Link>
   );

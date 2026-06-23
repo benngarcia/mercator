@@ -74,6 +74,17 @@ export function OffersTable({
         ),
       },
       {
+        id: "connection",
+        header: "Connection",
+        sortable: true,
+        sortValue: (o) => o.connection_id,
+        cell: (o) => (
+          <span className="font-mono text-[0.8125rem] text-muted-foreground">
+            {o.connection_id}
+          </span>
+        ),
+      },
+      {
         id: "platform",
         header: "Platform",
         sortable: true,
