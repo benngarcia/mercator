@@ -1,7 +1,10 @@
 import * as React from "react";
-import { Braces, CheckCircle2, XCircle, Plug } from "lucide-react";
+import { Braces, CheckCircle2, XCircle, Plug, ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
 
 import type { ConnectionRecord } from "@/lib/api/types";
+import { ApiError } from "@/lib/api/client";
+import { useAuthorizeConnection } from "@/lib/api/queries";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +32,51 @@ export interface ConnectionsTableProps {
   connections: ConnectionRecord[];
   isLoading?: boolean;
   className?: string;
+}
+
+/**
+ * AuthorizeButton calls :authorize for a single connection. It is shown only
+ * when the connection is not yet authorized. Pending state disables the button;
+ * errors surface via a toast (matching the app-wide feedback pattern).
+ */
+function AuthorizeButton({ connectionId }: { connectionId: string }) {
+  const authorize = useAuthorizeConnection();
+
+  const handleClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    authorize.mutate(connectionId, {
+      onSuccess: () => {
+        toast.success("Connection authorized", { description: connectionId });
+      },
+      onError: (error) => {
+        const message =
+          error instanceof ApiError
+            ? error.message
+            : "Failed to authorize connection";
+        toast.error("Could not authorize", { description: message });
+      },
+    });
+  };
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1.5 px-2 text-xs"
+          onClick={handleClick}
+          disabled={authorize.isPending}
+          aria-label="Authorize connection"
+        >
+          <ShieldCheck className="size-3.5" />
+          {authorize.isPending ? "Authorizing…" : "Authorize"}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>Verify and authorize this connection</TooltipContent>
+    </Tooltip>
+  );
 }
 
 /**
@@ -102,6 +150,16 @@ export function ConnectionsTable({
         sortable: true,
         sortValue: (row) => (row.authorized ? 1 : 0),
         cell: (row) => <AuthorizedBadge authorized={row.authorized} />,
+      },
+      {
+        id: "actions",
+        header: "",
+        align: "right",
+        className: "w-28",
+        cell: (row) =>
+          row.authorized ? null : (
+            <AuthorizeButton connectionId={row.id} />
+          ),
       },
       {
         id: "raw",
