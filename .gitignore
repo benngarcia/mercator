@@ -27,3 +27,6 @@ __pycache__/
 
 # Local verification artifacts (screenshots, traces)
 /output/
+
+# Subagent-driven-development scratch (ledger, briefs, reports, diffs)
+/.superpowers/
