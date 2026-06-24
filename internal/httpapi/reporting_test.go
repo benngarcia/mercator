@@ -1,10 +1,23 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/reporting"
+	"github.com/benngarcia/mercator/internal/scheduler"
+	"github.com/benngarcia/mercator/internal/workload"
 )
 
 // TestReportEndpointExemptFromOperatorAuth verifies that POST /v1/runs/<id>:report
@@ -51,4 +64,175 @@ func TestReportEndpointExemptFromOperatorAuth(t *testing.T) {
 			t.Fatalf("POST :cancel without token: expected UNAUTHORIZED body, got %s", rec.Body.String())
 		}
 	})
+}
+
+// newReportingTestServer builds a server wired with a real orchestrator and
+// event log, plus a WithReportSigner and optional operator bearer auth.
+func newReportingTestServer(t *testing.T, signerKey []byte, extra ...Option) http.Handler {
+	t.Helper()
+	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := log.Close(); err != nil {
+			t.Fatalf("close event log: %v", err)
+		}
+	})
+	now := time.Now().UTC()
+	ad := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_rep", now)}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
+	)
+	sched := scheduler.New()
+	orch := orchestrator.New(log, sched, ad)
+	signer := reporting.NewSigner(signerKey)
+	opts := append([]Option{
+		WithReportSigner(signer),
+		WithBearerAuth("op-token", []string{"*"}),
+	}, extra...)
+	return NewWithServices(orch, sched, ad, workload.New(log), nil, opts...)
+}
+
+// createReportingRun creates a run via POST /v1/runs and returns its run_id.
+// The server must be wired with operator bearer auth "op-token".
+func createReportingRun(t *testing.T, handler http.Handler, runID string) string {
+	t.Helper()
+	body := mustMarshal(t, createRunBody{RunID: runID, Workload: httpRevision()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_report_"+runID)
+	req.Header.Set("Authorization", "Bearer op-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create run: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp runResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode create run response: %v", err)
+	}
+	return resp.Run.ID
+}
+
+// TestReportIngestEndpointRecordsEvent is the main TDD test for the report endpoint.
+func TestReportIngestEndpointRecordsEvent(t *testing.T) {
+	key32 := []byte("0123456789abcdef0123456789abcdef")
+	signer := reporting.NewSigner(key32)
+	handler := newReportingTestServer(t, key32)
+
+	// Create a run so its stream exists.
+	runID := createReportingRun(t, handler, "run_report_e2e")
+
+	// POST :report with the correct run token — should 202.
+	reportPayload := mustMarshal(t, map[string]any{
+		"type": "progress",
+		"data": map[string]any{"pct": 50},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report?workspace_id=ws_1", bytes.NewReader(reportPayload))
+	req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("report: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var reportResp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &reportResp); err != nil {
+		t.Fatalf("decode report response: %v", err)
+	}
+	if reportResp["recorded"] != true {
+		t.Fatalf("expected {recorded:true}, got %+v", reportResp)
+	}
+
+	// GET /v1/runs/{id}/events with the operator token should show the reported event.
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/"+runID+"/events?workspace_id=ws_1", nil)
+	req.Header.Set("Authorization", "Bearer op-token")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get events: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listed eventListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode events: %v", err)
+	}
+	var found bool
+	for _, ev := range listed.Events {
+		if ev.Type == orchestrator.EventRunReported {
+			found = true
+			// The data must contain the type and payload.
+			if !strings.Contains(string(ev.Data), "progress") {
+				t.Fatalf("reported event data missing type: %s", string(ev.Data))
+			}
+			if !strings.Contains(string(ev.Data), "50") {
+				t.Fatalf("reported event data missing pct payload: %s", string(ev.Data))
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a %s event, got events: %+v", orchestrator.EventRunReported, listed.Events)
+	}
+}
+
+// TestReportIngestEndpointWrongToken verifies that a token valid for a DIFFERENT run
+// id is rejected with 401.
+func TestReportIngestEndpointWrongToken(t *testing.T) {
+	key32 := []byte("0123456789abcdef0123456789abcdef")
+	signer := reporting.NewSigner(key32)
+	handler := newReportingTestServer(t, key32)
+
+	runID := createReportingRun(t, handler, "run_report_wrong_tok")
+
+	otherRunToken := signer.Token("run_completely_different")
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report?workspace_id=ws_1",
+		bytes.NewReader([]byte(`{"type":"progress"}`)))
+	req.Header.Set("Authorization", "Bearer "+otherRunToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong token: expected 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "INVALID_RUN_TOKEN") {
+		t.Fatalf("expected INVALID_RUN_TOKEN, got %s", rec.Body.String())
+	}
+}
+
+// TestReportIngestEndpointMissingWorkspaceID verifies that omitting workspace_id
+// returns 400 WORKSPACE_REQUIRED.
+func TestReportIngestEndpointMissingWorkspaceID(t *testing.T) {
+	key32 := []byte("0123456789abcdef0123456789abcdef")
+	signer := reporting.NewSigner(key32)
+	handler := newReportingTestServer(t, key32)
+
+	runID := createReportingRun(t, handler, "run_report_no_ws")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report",
+		bytes.NewReader([]byte(`{"type":"progress"}`)))
+	req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing workspace: expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "WORKSPACE_REQUIRED") {
+		t.Fatalf("expected WORKSPACE_REQUIRED, got %s", rec.Body.String())
+	}
+}
+
+// TestReportIngestEndpointDisabledWithoutSigner verifies that a server without
+// WithReportSigner returns 501 REPORTING_DISABLED.
+func TestReportIngestEndpointDisabledWithoutSigner(t *testing.T) {
+	// Build a server WITHOUT WithReportSigner.
+	handler := newHTTPTestServerWithOptions(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x:report?workspace_id=ws_1",
+		bytes.NewReader([]byte(`{"type":"progress"}`)))
+	req.Header.Set("Authorization", "Bearer sometoken")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("no signer: expected 501, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "REPORTING_DISABLED") {
+		t.Fatalf("expected REPORTING_DISABLED, got %s", rec.Body.String())
+	}
 }

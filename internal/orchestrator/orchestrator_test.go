@@ -214,6 +214,11 @@ func TestAdvanceRunInjectsReportingEnvWhenConfigured(t *testing.T) {
 	if reportTokenBinding.Value == nil || *reportTokenBinding.Value != wantToken {
 		t.Fatalf("MERCATOR_RUN_TOKEN wrong: got %+v, want %q", reportTokenBinding, wantToken)
 	}
+	// MERCATOR_WORKSPACE_ID
+	workspaceIDBinding := findLaunchEnv(t, req.Environment, "MERCATOR_WORKSPACE_ID")
+	if workspaceIDBinding.Value == nil || *workspaceIDBinding.Value != "ws_1" {
+		t.Fatalf("MERCATOR_WORKSPACE_ID wrong: %+v", workspaceIDBinding)
+	}
 }
 
 func TestAdvanceRunDoesNotInjectReportingEnvWhenNotConfigured(t *testing.T) {
@@ -237,7 +242,7 @@ func TestAdvanceRunDoesNotInjectReportingEnvWhenNotConfigured(t *testing.T) {
 	}
 
 	req := ad.launchRequest
-	for _, name := range []string{"MERCATOR_RUN_ID", "MERCATOR_REPORT_URL", "MERCATOR_RUN_TOKEN"} {
+	for _, name := range []string{"MERCATOR_RUN_ID", "MERCATOR_REPORT_URL", "MERCATOR_RUN_TOKEN", "MERCATOR_WORKSPACE_ID"} {
 		for _, binding := range req.Environment {
 			if binding.Name == name {
 				t.Fatalf("unexpected reporting env var %q in environment when reporting is not configured", name)

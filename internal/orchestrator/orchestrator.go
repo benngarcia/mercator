@@ -33,6 +33,7 @@ const (
 	EventCleanupRequested      = "compute.run.cleanup_requested.v1"
 	EventCleanupConfirmed      = "compute.run.cleanup_confirmed.v1"
 	EventRunClosed             = "compute.run.closed.v1"
+	EventRunReported           = "compute.run.reported.v1"
 )
 
 type Orchestrator struct {
@@ -440,6 +441,64 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string)
 	return o.GetRun(ctx, workspaceID, runID)
 }
 
+type runReportedData struct {
+	Type     string          `json:"type"`
+	Data     json.RawMessage `json:"data,omitempty"`
+	ExitCode *int            `json:"exit_code,omitempty"`
+}
+
+// RecordReport appends a compute.run.reported.v1 event to the run's stream.
+// It uses optimistic concurrency and retries once on a concurrency conflict.
+func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, reportType string, data json.RawMessage, exitCode *int) error {
+	payload := runReportedData{Type: reportType, Data: data, ExitCode: exitCode}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("orchestrator: marshal report data: %w", err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		events, err := o.log.ReadStream(ctx, runStream(workspaceID, runID), 0, 10000)
+		if err != nil {
+			return fmt.Errorf("orchestrator: read run stream: %w", err)
+		}
+		if len(events) == 0 {
+			return fmt.Errorf("orchestrator: run not found")
+		}
+		version := uint64(len(events))
+		suffix := fmt.Sprintf("reported_%d", version+1)
+		evt := eventlog.NewEvent{
+			ID:            eventID(workspaceID, runID, suffix),
+			Type:          EventRunReported,
+			SchemaVersion: 1,
+			OccurredAt:    o.now().UTC(),
+			Visibility:    eventlog.VisibilityPublic,
+			Data:          encoded,
+		}
+		requestHash, err := domain.CanonicalHash([]eventlog.NewEvent{evt})
+		if err != nil {
+			return err
+		}
+		_, appendErr := o.log.Append(ctx, eventlog.AppendRequest{
+			Stream:                runStream(workspaceID, runID),
+			ExpectedStreamVersion: version,
+			CommandKey:            runID + ":report:" + suffix,
+			RequestHash:           requestHash,
+			CorrelationID:         runID,
+			CausationID:           "report",
+			Events:                []eventlog.NewEvent{evt},
+		})
+		if appendErr == nil {
+			return nil
+		}
+		if errors.Is(appendErr, eventlog.ErrConcurrencyConflict) && attempt == 0 {
+			// Retry once on optimistic-concurrency conflict.
+			continue
+		}
+		return fmt.Errorf("orchestrator: append report event: %w", appendErr)
+	}
+	return fmt.Errorf("orchestrator: append report event: concurrency conflict after retry")
+}
+
 func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
 	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: requested.Workload.WorkspaceID})
 	if err != nil {
@@ -480,6 +539,7 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 			adapter.EnvironmentBinding{Name: "MERCATOR_RUN_ID", Value: stringPtr(runID)},
 			adapter.EnvironmentBinding{Name: "MERCATOR_REPORT_URL", Value: stringPtr(reportPublicURL)},
 			adapter.EnvironmentBinding{Name: "MERCATOR_RUN_TOKEN", Value: stringPtr(reportToken)},
+			adapter.EnvironmentBinding{Name: "MERCATOR_WORKSPACE_ID", Value: stringPtr(workspaceID)},
 		)
 	}
 	launchReq := adapter.LaunchRequest{
