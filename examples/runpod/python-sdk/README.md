@@ -4,9 +4,9 @@ Proves the SDK path: arbitrary event types plus automatic exit reporting.
 
 ## Create the run
 
-The pod installs the SDK and runs `run.py`. Point `args` at a shell that
-installs the SDK from your published package (or vendors it) and executes the
-script:
+This example is self-contained: the container start command installs the SDK
+and runs the reporting logic inline via a heredoc, so no pre-baked image or
+file on disk is required. Run it verbatim:
 
 ```sh
 curl -X POST "$MERCATOR/v1/runs" \
@@ -20,7 +20,7 @@ curl -X POST "$MERCATOR/v1/runs" \
       "spec": {
         "containers": [{
           "image": "python:3-slim",
-          "args": ["sh","-c","pip install --quiet mercator-sdk && python /app/run.py"]
+          "args": ["sh","-c","pip install --quiet mercator-sdk && python - <<'\''PY'\''\nimport time\nfrom mercator import run_reporter\n\nreporter = run_reporter()\nif reporter is None:\n    raise SystemExit(0)\nwith reporter:\n    reporter.report(\"model.loaded\", {\"name\": \"demo-model\"})\n    for pct in (25, 50, 75, 100):\n        reporter.report(\"progress\", {\"pct\": pct})\n        time.sleep(1)\nPY"]
         }],
         "resources": { "accelerators": [ { "vendor": "NVIDIA", "count": 1 } ] }
       }
@@ -28,15 +28,21 @@ curl -X POST "$MERCATOR/v1/runs" \
   }'
 ```
 
-`run.py` must be present in the image (bake it in, or fetch it in the start
-command). The exact install line depends on how the Python SDK is distributed;
-adapt `pip install ...` to the published package name or a vendored copy.
+The exact install line depends on how the Python SDK is distributed; adapt
+`pip install mercator-sdk` to the published package name or a vendored copy.
+
+[`run.py`](./run.py) in this directory is the same logic in readable,
+standalone form — use it as the reference. For a real workload you would bake
+`run.py` into a custom image (and run `python run.py`) rather than inlining the
+script in the start command.
 
 ## SDK API used
 
-`run.py` calls `run_reporter()` from the Mercator Python SDK. The function
-returns a `Reporter` when the `MERCATOR_*` env is present, or `None` when
-running outside Mercator (graceful degradation). Events are emitted via:
+The script calls `run_reporter()` from the Mercator Python SDK. The function
+returns a `Reporter` when the injected reporting env is present, or `None` when
+the required vars (`MERCATOR_REPORT_URL`, `MERCATOR_RUN_ID`,
+`MERCATOR_RUN_TOKEN`) are missing — so it degrades gracefully when run outside
+Mercator. Events are emitted via:
 
 ```python
 reporter.report("model.loaded", {"name": "demo-model"})  # type str, data dict

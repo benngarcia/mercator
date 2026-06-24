@@ -3,7 +3,8 @@
 Reads the injected MERCATOR_* env, emits two custom event types, and reports
 exit automatically via the context manager. Run inside a python:3-slim pod.
 
-When the MERCATOR_* env is absent (e.g. running locally without Mercator),
+When the injected reporting env is missing (MERCATOR_REPORT_URL, MERCATOR_RUN_ID,
+or MERCATOR_RUN_TOKEN absent — e.g. running locally without Mercator),
 run_reporter() returns None — the script degrades gracefully and still exits 0.
 """
 import time
