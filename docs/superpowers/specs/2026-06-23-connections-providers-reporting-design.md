@@ -27,21 +27,33 @@ exit status on providers whose control plane doesn't expose it.
 
 ## Non-goals
 
-- Mercator-owned encrypted secret storage / KMS (ADR 0001). Credentials are
-  *referenced*, never stored.
-- Multi-tenant runtime self-service of credentials (single-operator for now;
-  the credential-source seam leaves room for `vault`/`aws-secrets` later).
+- A **generic** secret vault / per-run, per-workload secret materialization
+  (ADR 0001 stays for *workload* secrets). Connection credentials are the
+  deliberate exception — a scoped, encrypted, out-of-log store — because they
+  are infrastructure credentials Mercator itself needs to function. A short
+  follow-up ADR should clarify that ADR 0001 governs workload secrets, not
+  connection credentials.
+- Multi-tenant runtime self-service of *workspaces' own* credentials at scale
+  (single-operator positioning; the credential-source seam leaves room for
+  `vault`/`aws-secrets` sources later).
 - Connection delete/deauthorize endpoints (YAGNI for now).
 - The `fake` adapter as a shippable provider (kept only as a test double).
 
 ## Decisions made during brainstorming
 
-- **Credential model: env-referenced, behind a `credential_source` seam.** A
-  connection record holds `{ source: "env", ref: "<ENV_VAR>" }` — a *reference*,
-  never the secret. The event log therefore never contains a secret (a
-  Mercator-specific hard constraint: the log is append-only, replayable, and
-  sink-streamed). `EnvSource` is the only source now; `vault`/`aws-secrets` are
-  future sources behind the same interface. Single-operator positioning.
+- **Credential model: a `credential_source` seam with three sources.** A
+  connection record holds `{ source, ref }` — a *reference*, never the secret.
+  The event log therefore never contains a secret (a Mercator-specific hard
+  constraint: the log is append-only, replayable, and sink-streamed). Sources:
+  - `env` — `ref` is an env var name (operator-provisioned).
+  - `mercator` — `ref` is the connection id; the secret is stored **encrypted**
+    (AES-GCM under a process master key `MERCATOR_SECRET_KEY`) in a separate
+    KV table, never in the event log. This is the **default for UI-added
+    connections** and makes "add a connection" fully self-service (paste the
+    key, authorize, run — no env var, no restart).
+  - `vault` / `aws-secrets` — future external sources behind the same interface.
+  Connection credentials are first-class (infrastructure creds Mercator needs);
+  generic workload secrets stay out (ADR 0001). Single-operator positioning.
 - **Fake adapter:** drop as a runtime offer source (remove the
   `MERCATOR_FAKE_OFFER` path; do not register `fake` in the production factory).
   Keep `internal/adapter/fake` as the test double the httpapi suite depends on.
@@ -71,13 +83,25 @@ exit status on providers whose control plane doesn't expose it.
 - `config map[string]string` — non-secret provider config (endpoint, region…).
 - `credential struct { Source string; Ref string }` — e.g. `{env, MERCATOR_CONN_RUNPOD_MAIN_KEY}`.
 
-A new `CredentialResolver` interface resolves `{source, ref}` → secret at use
-time:
+A `CredentialResolver` resolves `{source, ref}` → secret at use time:
 ```go
-type CredentialResolver interface { Resolve(ctx, src Credential) (string, error) }
+type CredentialResolver interface { Resolve(ctx, c Credential) (string, error) }
 ```
-Only `EnvSource` (reads `os.Getenv(ref)`) now. The resolved secret is passed to
-the adapter factory; it is never persisted or logged.
+Sources:
+- **`EnvSource`** — `os.Getenv(ref)`. Operator-provisioned; zero storage.
+- **`MercatorSecretStore`** (default for UI-added connections) — secrets stored
+  **encrypted** and addressed by `ref` = connection id:
+  - A separate KV table `connection_secret(workspace_id, connection_id,
+    ciphertext, nonce)` — **not** the event log.
+  - AES-256-GCM under a process master key from `MERCATOR_SECRET_KEY` (32 bytes,
+    base64/hex). Absent key → the `mercator` source is disabled and creating a
+    stored-credential connection returns a clear error.
+  - On create with an inline secret, Mercator encrypts + stores it, then writes
+    the `connection.created` event holding only `{source:"mercator", ref:id}`.
+- (`vault`/`aws-secrets` are future sources.)
+
+The resolved secret is passed to the adapter factory at build time; it is never
+persisted in the event log nor returned by any read API.
 
 ### Adapter factory + Broker (core change)
 
@@ -112,7 +136,7 @@ endpoint; fake: nil).
 
 ### Connection management API
 
-- `POST /v1/connections` — create `{workspace_id, connection_id, adapter_type, config, credential: {source, ref}}` (extends `connection.Service.Create`). Idempotency-Key required (mutation).
+- `POST /v1/connections` — create `{workspace_id, connection_id, adapter_type, config, credential: {source, ref}}` (extends `connection.Service.Create`). Idempotency-Key required (mutation). When `source:"mercator"`, the body also carries a **write-only `secret`** value: Mercator encrypts + stores it and persists only `{source, ref}` in the event; the secret is never echoed back by any read.
 - `POST /v1/connections/{id}:authorize` — resolve the credential, build the
   adapter, call `Verify`; on success record `authorized=true`
   (`connection.Service.UpdateAuthorization`); on failure stay unauthorized and
@@ -130,8 +154,12 @@ endpoint; fake: nil).
 
 - `Broker`: unit tests with two fake connections → aggregated offers; lifecycle
   routes to the correct connection's adapter.
-- `CredentialResolver`/`EnvSource`: unit tests.
-- httpapi: create → authorize (with a fake `Verify`) → list reflects authorized.
+- `CredentialResolver`: `EnvSource` and `MercatorSecretStore` (AES-GCM
+  encrypt→decrypt round-trip; missing master key disables the source; wrong key
+  fails closed).
+- httpapi: create with an inline `secret` → the secret is **not** in the
+  resulting event/read; authorize (with a fake `Verify`) → list reflects
+  authorized.
 
 ---
 
