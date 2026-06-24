@@ -14,6 +14,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
@@ -35,14 +36,34 @@ const (
 )
 
 type Orchestrator struct {
-	log       eventlog.EventLog
-	scheduler scheduler.Scheduler
-	adapter   adapter.Adapter
-	now       func() time.Time
+	log                eventlog.EventLog
+	scheduler          scheduler.Scheduler
+	adapter            adapter.Adapter
+	now                func() time.Time
+	reportingPublicURL string
+	reportingSigner    *reporting.Signer
 }
 
-func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter adapter.Adapter) *Orchestrator {
-	return &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
+// Option configures an Orchestrator.
+type Option func(*Orchestrator)
+
+// WithReporting enables injection of run-scoped reporting env vars into the
+// container at launch. When publicURL is non-empty and signer.Enabled(), three
+// vars are appended to the launch environment: MERCATOR_RUN_ID,
+// MERCATOR_REPORT_URL, and MERCATOR_RUN_TOKEN.
+func WithReporting(publicURL string, signer *reporting.Signer) Option {
+	return func(o *Orchestrator) {
+		o.reportingPublicURL = publicURL
+		o.reportingSigner = signer
+	}
+}
+
+func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter adapter.Adapter, opts ...Option) *Orchestrator {
+	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return o
 }
 
 type CreateRunRequest struct {
@@ -244,7 +265,12 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		if err != nil {
 			return err
 		}
-		launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer)
+		reportPublicURL, reportToken := "", ""
+		if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
+			reportPublicURL = o.reportingPublicURL
+			reportToken = o.reportingSigner.Token(runID)
+		}
+		launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
 		if err != nil {
 			return err
 		}
@@ -446,8 +472,16 @@ func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested
 	return decision, attempt, selectedOffer, nil
 }
 
-func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot) (adapter.LaunchRequest, error) {
+func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot, reportPublicURL, reportToken string) (adapter.LaunchRequest, error) {
 	container := requested.Workload.Spec.Containers[0]
+	env := launchEnvironment(container.Env)
+	if reportPublicURL != "" && reportToken != "" {
+		env = append(env,
+			adapter.EnvironmentBinding{Name: "MERCATOR_RUN_ID", Value: stringPtr(runID)},
+			adapter.EnvironmentBinding{Name: "MERCATOR_REPORT_URL", Value: stringPtr(reportPublicURL)},
+			adapter.EnvironmentBinding{Name: "MERCATOR_RUN_TOKEN", Value: stringPtr(reportToken)},
+		)
+	}
 	launchReq := adapter.LaunchRequest{
 		OperationKey:              attempt.LaunchKey,
 		WorkspaceID:               workspaceID,
@@ -462,7 +496,7 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		Platform:                  container.Platform,
 		Entrypoint:                container.Entrypoint,
 		Args:                      append([]string(nil), container.Args...),
-		Environment:               launchEnvironment(container.Env),
+		Environment:               env,
 		Ports:                     append([]domain.PortSpec(nil), container.Ports...),
 		Resources:                 requested.Workload.Spec.Resources,
 		SelectedOfferSnapshotID:   selectedOffer.ID,
@@ -950,3 +984,5 @@ func cloneStringPtr(value *string) *string {
 	cloned := *value
 	return &cloned
 }
+
+func stringPtr(s string) *string { return &s }
