@@ -87,3 +87,32 @@ func TestBrokerLaunchUnknownConnectionErrors(t *testing.T) {
 		t.Fatalf("expected ErrConnectionNotFound, got %v", err)
 	}
 }
+
+// ownedAdapter is a stub adapter whose ListOwned returns one object tagged with its id.
+type ownedAdapter struct {
+	adapter.Adapter
+	id string
+}
+
+func (a ownedAdapter) ListOwned(_ context.Context, _ adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+	return []adapter.OwnedExternalObject{{ExternalID: "ext_" + a.id}}, nil
+}
+
+func TestBrokerListOwnedFansOut(t *testing.T) {
+	f := NewFactory()
+	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+		return ownedAdapter{id: cfg["id"]}, nil
+	})
+	conns := fakeConns{recs: []ConnRef{
+		{ID: "conn_a", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "a"}},
+		{ID: "conn_b", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "b"}},
+	}}
+	b := NewBroker(conns, f, nilResolver{})
+	owned, err := b.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list owned: %v", err)
+	}
+	if len(owned) != 2 {
+		t.Fatalf("expected owned objects from both connections, got %d", len(owned))
+	}
+}

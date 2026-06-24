@@ -101,4 +101,62 @@ func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter
 	return ad.Launch(ctx, req)
 }
 
+func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	if err != nil {
+		return adapter.ExternalObservation{}, err
+	}
+	return ad.Observe(ctx, req)
+}
+
+func (b *Broker) Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error) {
+	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	if err != nil {
+		return adapter.CancelReceipt{}, err
+	}
+	return ad.Cancel(ctx, req)
+}
+
+func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
+	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	if err != nil {
+		return adapter.ReleaseReceipt{}, err
+	}
+	return ad.Release(ctx, req)
+}
+
+func (b *Broker) Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	if err != nil {
+		return adapter.TerminateReceipt{}, err
+	}
+	return ad.Terminate(ctx, req)
+}
+
+func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+	recs, err := b.conns.List(ctx, req.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	var all []adapter.OwnedExternalObject
+	for _, c := range recs {
+		if !c.Authorized {
+			continue
+		}
+		ad, err := b.build(ctx, req.WorkspaceID, c)
+		if err != nil {
+			continue
+		}
+		owned, err := ad.ListOwned(ctx, req)
+		if err != nil {
+			continue
+		}
+		all = append(all, owned...)
+	}
+	return all, nil
+}
+
 func (b *Broker) Verify(ctx context.Context) error { return nil } // per-connection verify is in Plan 1B
+
+// Compile-time assertion: *Broker must satisfy adapter.Adapter.
+var _ adapter.Adapter = (*Broker)(nil)

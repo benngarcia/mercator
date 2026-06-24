@@ -100,6 +100,8 @@ type LaunchReceipt struct {
 }
 
 type ObserveRequest struct {
+	WorkspaceID    string
+	ConnectionID   string
 	LaunchKey      string
 	OwnershipToken string
 	RequestHash    string
@@ -115,6 +117,8 @@ type ExternalObservation struct {
 }
 
 type CancelRequest struct {
+	WorkspaceID  string
+	ConnectionID string
 	OperationKey string
 	RequestHash  string
 	LaunchKey    string
@@ -126,6 +130,8 @@ type CancelReceipt struct {
 }
 
 type ReleaseRequest struct {
+	WorkspaceID       string
+	ConnectionID      string
 	OperationKey      string
 	RequestHash       string
 	LaunchKey         string
@@ -143,6 +149,8 @@ type ReleaseReceipt struct {
 // ownership material (OwnershipToken/LaunchRequestHash) as ReleaseRequest so
 // the no-orphan reconciliation path is identical.
 type TerminateRequest struct {
+	WorkspaceID       string
+	ConnectionID      string
 	OperationKey      string
 	RequestHash       string
 	LaunchKey         string

@@ -391,7 +391,7 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string)
 		state.cancelRequested = true
 	}
 	if !state.cancelAccepted {
-		cancelReq := adapter.CancelRequest{OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
+		cancelReq := adapter.CancelRequest{WorkspaceID: workspaceID, ConnectionID: state.launchIntent.SelectedOfferConnectionID, OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
 		hash, err := domain.CanonicalHash(cancelReq)
 		if err != nil {
 			return domain.RunRecord{}, err
@@ -504,6 +504,8 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 
 func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, state runState) (adapter.ExternalObservation, error) {
 	observation, err := o.adapter.Observe(ctx, adapter.ObserveRequest{
+		WorkspaceID:    workspaceID,
+		ConnectionID:   state.launchIntent.SelectedOfferConnectionID,
 		LaunchKey:      state.launchIntent.LaunchKey,
 		OwnershipToken: state.launchIntent.OwnershipToken,
 		RequestHash:    state.launchIntent.RequestHash,
@@ -549,7 +551,7 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 		disposition = domain.DispositionRelease
 	}
 	if disposition == domain.DispositionTerminate {
-		terminateReq := adapter.TerminateRequest{OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+		terminateReq := adapter.TerminateRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
 		hash, err := domain.CanonicalHash(terminateReq)
 		if err != nil {
 			return err
@@ -559,7 +561,7 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 			return err
 		}
 	} else {
-		releaseReq := adapter.ReleaseRequest{OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+		releaseReq := adapter.ReleaseRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
 		hash, err := domain.CanonicalHash(releaseReq)
 		if err != nil {
 			return err
