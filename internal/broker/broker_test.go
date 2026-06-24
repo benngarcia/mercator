@@ -146,3 +146,36 @@ func TestBrokerRoutesObserveByConnection(t *testing.T) {
 		t.Fatalf("expected observe routed to conn_b, got %q", observedBy)
 	}
 }
+
+// verifyAdapter is a stub adapter that records which connection had its Verify called.
+type verifyAdapter struct {
+	adapter.Adapter
+	id       string
+	verified *string
+}
+
+func (a verifyAdapter) Verify(context.Context) error {
+	*a.verified = a.id
+	return nil
+}
+
+func TestBrokerVerifyConnectionBuildsAndVerifies(t *testing.T) {
+	var verified string
+	f := NewFactory()
+	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+		return verifyAdapter{id: cfg["id"], verified: &verified}, nil
+	})
+	conns := fakeConns{recs: []ConnRef{
+		{ID: "conn_a", AdapterType: "stub", Authorized: false, Config: map[string]string{"id": "conn_a"}},
+	}}
+	b := NewBroker(conns, f, nilResolver{})
+	if err := b.VerifyConnection(context.Background(), "ws_1", "conn_a"); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if verified != "conn_a" {
+		t.Fatalf("expected Verify on conn_a, got %q", verified)
+	}
+	if err := b.VerifyConnection(context.Background(), "ws_1", "nope"); !errors.Is(err, ErrConnectionNotFound) {
+		t.Fatalf("expected ErrConnectionNotFound, got %v", err)
+	}
+}
