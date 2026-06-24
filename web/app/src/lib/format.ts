@@ -129,6 +129,10 @@ export function humanizeEventType(type: string | null | undefined): string {
   if (!type) {
     return "—";
   }
+  // Special cases for friendlier labels
+  if (type === "compute.run.reported.v1") {
+    return "Workload report";
+  }
   let working = type;
   // Drop a trailing version segment (".v1", ".v2", …).
   working = working.replace(/\.v\d+$/i, "");
