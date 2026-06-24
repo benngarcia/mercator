@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -95,13 +96,20 @@ func buildBroker(values map[string]string) *broker.Broker {
 		return nil
 	}
 	factory := broker.NewFactory()
+	var (
+		dockerOnce    sync.Once
+		dockerAdapter adapter.Adapter
+	)
 	factory.Register("docker", func(config map[string]string, _ string) (adapter.Adapter, error) {
-		client := dockeradapter.NewCLIClient(config["bin"])
-		client.Host = config["host"]
-		client.Context = config["context"]
-		id := dockerIdentity(values)
-		offer := dockerOfferFromInfo(values, id, probeDockerHost(client, id), time.Now().UTC())
-		return offeringAdapter{Adapter: dockeradapter.New(client), offers: []domain.OfferSnapshot{offer}}, nil
+		dockerOnce.Do(func() {
+			client := dockeradapter.NewCLIClient(config["bin"])
+			client.Host = config["host"]
+			client.Context = config["context"]
+			id := dockerIdentity(values)
+			offer := dockerOfferFromInfo(values, id, probeDockerHost(client, id), time.Now().UTC())
+			dockerAdapter = offeringAdapter{Adapter: dockeradapter.New(client), offers: []domain.OfferSnapshot{offer}}
+		})
+		return dockerAdapter, nil
 	})
 
 	// Decode master key: try hex then base64; empty env var → nil key.
