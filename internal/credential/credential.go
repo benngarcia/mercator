@@ -90,7 +90,7 @@ func (s *MemoryStore) Get(_ context.Context, ws, id string) ([]byte, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return blob, nil
+	return append([]byte(nil), blob...), nil
 }
 
 type Resolver struct {
@@ -103,6 +103,8 @@ func NewResolver(getenv func(string) string, store SecretStore, masterKey []byte
 	return &Resolver{getenv: getenv, store: store, masterKey: masterKey}
 }
 
+// Resolve returns the plaintext credential value from the {source, ref} tuple.
+// An empty Source is treated as SourceEnv.
 func (r *Resolver) Resolve(ctx context.Context, workspaceID string, c Credential) (string, error) {
 	switch c.Source {
 	case "", SourceEnv:
