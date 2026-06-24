@@ -20,6 +20,7 @@ import * as endpoints from "./endpoints";
 import { queryKeys } from "./keys";
 import type {
   ConnectionRecord,
+  CreateConnectionRequest,
   CreateRevisionRequest,
   CreateRunRequest,
   CreateWorkloadRequest,
@@ -437,6 +438,56 @@ export function useReplaySink(): UseMutationResult<
     onSuccess: (res) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.sinkStatus(res.sink_id),
+      });
+    },
+  });
+}
+
+export function useCreateConnection(
+  workspaceOverride?: string,
+): UseMutationResult<ConnectionRecord, ApiError, CreateConnectionRequest> {
+  const queryClient = useQueryClient();
+  const { workspace } = useSession();
+  const workspaceID = workspaceOverride ?? workspace ?? undefined;
+  return useMutation<ConnectionRecord, ApiError, CreateConnectionRequest>({
+    mutationFn: async (body) => {
+      const res = await endpoints.createConnection(body, {
+        workspaceId: workspaceID,
+      });
+      return res.connection;
+    },
+    onSuccess: () => {
+      const ws = workspaceID ?? getWorkspace() ?? "";
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.connections(ws),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.offers(ws),
+      });
+    },
+  });
+}
+
+export function useAuthorizeConnection(
+  workspaceOverride?: string,
+): UseMutationResult<ConnectionRecord, ApiError, string> {
+  const queryClient = useQueryClient();
+  const { workspace } = useSession();
+  const workspaceID = workspaceOverride ?? workspace ?? undefined;
+  return useMutation<ConnectionRecord, ApiError, string>({
+    mutationFn: async (connectionId) => {
+      const res = await endpoints.authorizeConnection(connectionId, {
+        workspaceId: workspaceID,
+      });
+      return res.connection;
+    },
+    onSuccess: () => {
+      const ws = workspaceID ?? getWorkspace() ?? "";
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.connections(ws),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.offers(ws),
       });
     },
   });

@@ -5,6 +5,8 @@
 import { apiFetch } from "./client";
 import type {
   ConnectionListResponse,
+  ConnectionResponse,
+  CreateConnectionRequest,
   CreateRevisionRequest,
   CreateRunRequest,
   CreateWorkloadRequest,
@@ -156,6 +158,32 @@ export function listConnections(
     workspaceId: arg.workspaceId,
     signal: arg.signal,
   });
+}
+
+export function createConnection(
+  body: CreateConnectionRequest,
+  opts: { idempotencyKey?: string; workspaceId?: string } = {},
+): Promise<ConnectionResponse> {
+  return apiFetch<ConnectionResponse>("/v1/connections", {
+    method: "POST",
+    body,
+    idempotencyKey: opts.idempotencyKey,
+    workspaceId: opts.workspaceId,
+  });
+}
+
+export function authorizeConnection(
+  connectionId: string,
+  opts: { idempotencyKey?: string; workspaceId?: string } = {},
+): Promise<ConnectionResponse> {
+  return apiFetch<ConnectionResponse>(
+    `/v1/connections/${encodeURIComponent(connectionId)}:authorize`,
+    {
+      method: "POST",
+      idempotencyKey: opts.idempotencyKey,
+      workspaceId: opts.workspaceId,
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
