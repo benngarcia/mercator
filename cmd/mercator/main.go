@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"io"
 	"log"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
+	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/cli"
+	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/httpapi"
 )
@@ -45,10 +48,11 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	var handler http.Handler
 	var closeFn func() error
-	if ad := runtimeAdapter(env); ad != nil {
-		handler, closeFn, err = httpapi.HandlerForSQLiteWithAdapter(context.Background(), dsn, ad, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
+	br := buildBroker(env)
+	if br != nil {
+		handler, closeFn, err = httpapi.HandlerForSQLiteWithAdapter(context.Background(), dsn, br, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
 	} else {
-		handler, closeFn, err = httpapi.HandlerForSQLiteWithOptions(context.Background(), dsn, fakeOffers(env), httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
+		handler, closeFn, err = httpapi.HandlerForSQLiteWithOptions(context.Background(), dsn, nil, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
 	}
 	if err != nil {
 		log.Fatalf("start mercator: %v", err)
@@ -74,23 +78,60 @@ func (a offeringAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]do
 	return append([]domain.OfferSnapshot(nil), a.offers...), nil
 }
 
-func runtimeAdapter(values map[string]string) adapter.Adapter {
-	switch strings.ToLower(values["MERCATOR_ADAPTER"]) {
-	case "docker":
-		// The Docker adapter targets a Docker endpoint, which may be the loopback
-		// socket or an arbitrary host reached over tcp:// or ssh://. The endpoint
-		// is a property of the connection, not the adapter; "local" is just the
-		// default. We probe the endpoint's `docker info` to build an honest offer
-		// (arch/cpu/mem) instead of hardcoding it.
-		client := dockeradapter.NewCLIClient(values["MERCATOR_DOCKER_BIN"])
-		client.Host = values["MERCATOR_DOCKER_HOST"]
-		client.Context = values["MERCATOR_DOCKER_CONTEXT"]
-		id := dockerIdentity(values)
-		offer := dockerOfferFromInfo(values, id, probeDockerHost(client, id), time.Now().UTC())
-		return offeringAdapter{Adapter: dockeradapter.New(client), offers: []domain.OfferSnapshot{offer}}
-	default:
+// staticConnections is a minimal broker.Connections that always returns the
+// same fixed slice of connection refs, regardless of workspace. Used to
+// bootstrap the single docker connection in 1A (the full connection.Service
+// adapter lands in Plan 1B).
+type staticConnections []broker.ConnRef
+
+func (s staticConnections) List(_ context.Context, _ string) ([]broker.ConnRef, error) {
+	return []broker.ConnRef(s), nil
+}
+
+// buildBroker constructs a Broker pre-loaded with the docker connection when
+// MERCATOR_ADAPTER=docker. Returns nil for any other (or absent) adapter type.
+func buildBroker(values map[string]string) *broker.Broker {
+	if strings.ToLower(values["MERCATOR_ADAPTER"]) != "docker" {
 		return nil
 	}
+	factory := broker.NewFactory()
+	factory.Register("docker", func(config map[string]string, _ string) (adapter.Adapter, error) {
+		client := dockeradapter.NewCLIClient(config["bin"])
+		client.Host = config["host"]
+		client.Context = config["context"]
+		id := dockerIdentity(values)
+		offer := dockerOfferFromInfo(values, id, probeDockerHost(client, id), time.Now().UTC())
+		return offeringAdapter{Adapter: dockeradapter.New(client), offers: []domain.OfferSnapshot{offer}}, nil
+	})
+
+	// Decode master key: try hex then base64; empty env var → nil key.
+	var masterKey []byte
+	if raw := values["MERCATOR_SECRET_KEY"]; raw != "" {
+		if b, err := hex.DecodeString(raw); err == nil {
+			masterKey = b
+		} else if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
+			masterKey = b
+		}
+	}
+
+	resolver := credential.NewResolver(
+		func(k string) string { return values[k] },
+		credential.NewMemoryStore(),
+		masterKey,
+	)
+
+	id := dockerIdentity(values)
+	conn := broker.ConnRef{
+		ID:          id.ConnectionID,
+		AdapterType: "docker",
+		Authorized:  true,
+		Config: map[string]string{
+			"bin":     values["MERCATOR_DOCKER_BIN"],
+			"host":    values["MERCATOR_DOCKER_HOST"],
+			"context": values["MERCATOR_DOCKER_CONTEXT"],
+		},
+	}
+	return broker.NewBroker(staticConnections{conn}, factory, resolver)
 }
 
 // dockerEndpointIdentity is the identity Mercator advertises for a Docker
@@ -252,75 +293,6 @@ func dockerOfferFromInfo(values map[string]string, id dockerEndpointIdentity, in
 	}
 }
 
-func fakeOffers(values map[string]string) []domain.OfferSnapshot {
-	mode := values["MERCATOR_FAKE_OFFER"]
-	if mode == "" {
-		return nil
-	}
-	now := time.Now().UTC()
-	// The fake offer's Kind drives the recorded cleanup disposition end-to-end
-	// with no network: a standing offer records disposition=release (the default)
-	// and a provisionable offer records disposition=terminate. Set
-	// MERCATOR_FAKE_OFFER=provisionable (or "terminate") to exercise the
-	// terminate path; any other non-empty value yields the standing/release path.
-	kind := domain.OfferKindStanding
-	id := "offer_local_fake"
-	nativeRef := "fake://local"
-	switch mode {
-	case "provisionable", "terminate":
-		kind = domain.OfferKindProvisionable
-		id = "offer_local_fake_provisionable"
-		nativeRef = "fake://local/provisionable"
-	}
-	return []domain.OfferSnapshot{{
-		ID:           id,
-		ConnectionID: "conn_local_fake",
-		AdapterType:  "fake",
-		Kind:         kind,
-		NativeRef:    nativeRef,
-		ObservedAt:   now,
-		ExpiresAt:    now.Add(time.Hour),
-		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
-		Resources: domain.ResourceInventory{
-			CPUMillis:          1000,
-			MemoryBytes:        1024 * 1024 * 1024,
-			EphemeralDiskBytes: 2 * 1024 * 1024 * 1024,
-		},
-		Capabilities: domain.CapabilityProfile{
-			Container: domain.ContainerCapabilities{
-				MaxContainers:       1,
-				SupportsDigestRefs:  true,
-				MaxEnvironmentBytes: 4096,
-			},
-			Lifecycle: domain.LifecycleCapabilities{
-				IdempotentLaunch: "launch_key",
-				ListOwned:        true,
-				CancelQueued:     true,
-			},
-			Resources: domain.ResourceCapabilities{},
-			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
-			Pricing:   domain.PricingCapabilities{Known: true},
-		},
-		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
-			Scope:      domain.NetworkScopeRegistry,
-			Statistic:  "p10",
-			ValueMbps:  100,
-			Source:     "local",
-			ObservedAt: now,
-			ValidUntil: now.Add(time.Hour),
-			Confidence: 1,
-		}}},
-		Pricing: domain.PriceModel{
-			Currency:             "USD",
-			RatePerSecondUSD:     0.001,
-			MinimumChargeSeconds: 1,
-			GranularitySeconds:   1,
-			Known:                true,
-		},
-		ImageCache: domain.ImageCacheEvidence{Known: true, ManifestCached: true},
-		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
-	}}
-}
 
 func environ() map[string]string {
 	values := map[string]string{}

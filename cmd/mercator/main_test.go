@@ -38,26 +38,19 @@ func TestRunDelegatesJSONCLICommands(t *testing.T) {
 	}
 }
 
-func TestRuntimeAdapterCanSelectDocker(t *testing.T) {
-	ad := runtimeAdapter(map[string]string{"MERCATOR_ADAPTER": "docker"})
-	if ad == nil {
-		t.Fatal("expected docker runtime adapter")
+func TestRuntimeBrokerServesDockerConnection(t *testing.T) {
+	br := buildBroker(map[string]string{
+		"MERCATOR_ADAPTER":     "docker",
+		"MERCATOR_DOCKER_ARCH": "amd64",
+	})
+	if br == nil {
+		t.Fatal("expected a broker for docker")
 	}
-	offers, err := ad.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := br.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
 	if err != nil {
-		t.Fatalf("list docker offers: %v", err)
+		t.Fatalf("list offers: %v", err)
 	}
-	if len(offers) != 1 || offers[0].AdapterType != "docker" {
-		t.Fatalf("unexpected docker offers: %+v", offers)
-	}
-}
-
-func TestFakeOffersAreOptIn(t *testing.T) {
-	if got := fakeOffers(map[string]string{}); got != nil {
-		t.Fatalf("expected no fake offers by default, got %+v", got)
-	}
-	got := fakeOffers(map[string]string{"MERCATOR_FAKE_OFFER": "1"})
-	if len(got) != 1 || got[0].AdapterType != "fake" || got[0].ConnectionID == "" {
-		t.Fatalf("unexpected fake offers: %+v", got)
+	if len(offers) != 1 || offers[0].AdapterType != "docker" || offers[0].ConnectionID == "" {
+		t.Fatalf("unexpected offers via broker: %+v", offers)
 	}
 }
