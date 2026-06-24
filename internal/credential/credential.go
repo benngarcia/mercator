@@ -103,6 +103,19 @@ func NewResolver(getenv func(string) string, store SecretStore, masterKey []byte
 	return &Resolver{getenv: getenv, store: store, masterKey: masterKey}
 }
 
+// Seal encrypts plaintext using the resolver's master key. Returns the sealed
+// blob and true on success, or nil and false if no master key is configured.
+func (r *Resolver) Seal(plaintext []byte) ([]byte, bool) {
+	if len(r.masterKey) == 0 {
+		return nil, false
+	}
+	blob, err := Seal(r.masterKey, plaintext)
+	if err != nil {
+		return nil, false
+	}
+	return blob, true
+}
+
 // Resolve returns the plaintext credential value from the {source, ref} tuple.
 // An empty Source is treated as SourceEnv.
 func (r *Resolver) Resolve(ctx context.Context, workspaceID string, c Credential) (string, error) {

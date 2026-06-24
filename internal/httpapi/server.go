@@ -133,6 +133,16 @@ type resolveImageResponse struct {
 	Image ociresolver.ResolvedImage `json:"image"`
 }
 
+type createConnectionBody struct {
+	WorkspaceID  string                `json:"workspace_id"`
+	ConnectionID string                `json:"connection_id"`
+	AdapterType  string                `json:"adapter_type"`
+	Config       map[string]string     `json:"config,omitempty"`
+	Credential   credential.Credential `json:"credential"`
+	// Secret is write-only: accepted on create, never echoed in any response.
+	Secret string `json:"secret,omitempty"`
+}
+
 type connectionListResponse struct {
 	Connections []connection.Record `json:"connections"`
 }
@@ -275,6 +285,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions", s.listRevisions)
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions/{revision_id}", s.getRevision)
 	s.mux.HandleFunc("POST /v1/images:resolve", s.resolveImage)
+	s.mux.HandleFunc("POST /v1/connections", s.createConnection)
 	s.mux.HandleFunc("GET /v1/connections", s.listConnections)
 	s.mux.HandleFunc("GET /v1/offers", s.listOffers)
 	s.mux.HandleFunc("GET /v1/sinks/{sink_id}", s.sinkStatus)
@@ -759,6 +770,59 @@ func (s *Server) resolveImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resolveImageResponse{Image: resolved})
+}
+
+func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
+	if s.conns == nil {
+		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
+		return
+	}
+	if r.Header.Get("Idempotency-Key") == "" {
+		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
+		return
+	}
+	var body createConnectionBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	if !authorizeRequestWorkspace(w, r, body.WorkspaceID) {
+		return
+	}
+
+	cred := body.Credential
+	// For mercator-source connections with a provided secret, seal the secret
+	// out-of-band and store the ciphertext in the secret store. The plaintext
+	// never enters the event log or the response.
+	if cred.Source == credential.SourceMercator && body.Secret != "" {
+		if s.credentials == nil || s.secretStore == nil {
+			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Secret store is not configured; cannot accept mercator credentials.")
+			return
+		}
+		blob, ok := s.credentials.Seal([]byte(body.Secret))
+		if !ok {
+			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Master key is not set; cannot seal mercator credentials.")
+			return
+		}
+		if err := s.secretStore.Put(r.Context(), body.WorkspaceID, body.ConnectionID, blob); err != nil {
+			writeError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err.Error())
+			return
+		}
+		cred.Ref = body.ConnectionID
+	}
+
+	record, err := s.conns.Create(r.Context(), connection.CreateRequest{
+		WorkspaceID:  body.WorkspaceID,
+		ConnectionID: body.ConnectionID,
+		AdapterType:  body.AdapterType,
+		Config:       body.Config,
+		Credential:   cred,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_CONNECTION_FAILED"), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, record)
 }
 
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
