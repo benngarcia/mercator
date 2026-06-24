@@ -222,6 +222,14 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "rp_live_key") {
 		t.Fatal("response must not echo the secret")
 	}
+	// Decode the response body and verify that credential.ref is set correctly.
+	var got connection.Record
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if got.Credential.Ref != "conn_rp" {
+		t.Errorf("credential ref: got %q, want %q (credential ref must be set to connection id)", got.Credential.Ref, "conn_rp")
+	}
 	// Secret is retrievable (encrypted) and decrypts to the original.
 	blob, err := store.Get(context.Background(), "ws_1", "conn_rp")
 	if err != nil {

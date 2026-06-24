@@ -835,6 +835,10 @@ func (s *Server) connectionAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id string) {
+	if s.conns == nil {
+		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
+		return
+	}
 	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
