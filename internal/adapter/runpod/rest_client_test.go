@@ -44,6 +44,19 @@ func TestCreatePodSendsBearerAndBody(t *testing.T) {
 	}
 }
 
+func TestCreatePodNon2xxErrorOmitsAPIKey(t *testing.T) {
+	client := newRESTClient("secret-key", "https://rest.test/v1", newFakeHTTPClient(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(500, `{"error":"boom"}`), nil
+	}))
+	_, err := client.createPod(context.Background(), podCreateInput{Name: "mercator-lk", ImageName: "busybox"})
+	if err == nil {
+		t.Fatal("createPod with 500 must error")
+	}
+	if strings.Contains(err.Error(), "secret-key") {
+		t.Fatalf("error must not leak the API key: %q", err.Error())
+	}
+}
+
 func TestGetPodNotFound(t *testing.T) {
 	client := newRESTClient("k", "https://rest.test/v1", newFakeHTTPClient(func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(404, `{"error":"not found"}`), nil
@@ -56,6 +69,12 @@ func TestGetPodNotFound(t *testing.T) {
 
 func TestListPodsByNameFiltersPrefixClientSide(t *testing.T) {
 	client := newRESTClient("k", "https://rest.test/v1", newFakeHTTPClient(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/v1/pods" {
+			t.Errorf("path = %q, want /v1/pods", r.URL.Path)
+		}
 		if got := r.URL.Query().Get("name"); got != "mercator-" {
 			t.Errorf("name filter = %q, want mercator-", got)
 		}

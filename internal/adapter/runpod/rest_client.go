@@ -159,7 +159,8 @@ func (c *restClient) getPod(ctx context.Context, id string) (pod, error) {
 }
 
 func (c *restClient) listPodsByName(ctx context.Context, namePrefix string) ([]pod, error) {
-	status, body, err := c.do(ctx, http.MethodGet, "/pods?name="+url.QueryEscape(namePrefix), nil)
+	q := url.Values{"name": {namePrefix}}
+	status, body, err := c.do(ctx, http.MethodGet, "/pods?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
