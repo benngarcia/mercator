@@ -51,6 +51,20 @@ func New(client Client) *Adapter {
 	return &Adapter{client: client, now: time.Now}
 }
 
+// Verify checks that the Docker endpoint is reachable by running a cheap Info
+// probe. It does not launch anything. If the underlying client does not
+// implement Info (e.g. a test double), Verify returns nil.
+func (a *Adapter) Verify(ctx context.Context) error {
+	type infoer interface {
+		Info(context.Context) (HostInfo, error)
+	}
+	if v, ok := a.client.(infoer); ok {
+		_, err := v.Info(ctx)
+		return err
+	}
+	return nil
+}
+
 func (a *Adapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	return nil, fmt.Errorf("docker: offer collection is provided by offer service in this slice")
 }

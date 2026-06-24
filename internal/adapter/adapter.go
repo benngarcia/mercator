@@ -34,6 +34,9 @@ const (
 )
 
 type Adapter interface {
+	// Verify performs a cheap credential/reachability check for the authorize
+	// flow. It does not launch anything.
+	Verify(ctx context.Context) error
 	ListOffers(ctx context.Context, req OfferRequest) ([]domain.OfferSnapshot, error)
 	Launch(ctx context.Context, req LaunchRequest) (LaunchReceipt, error)
 	Observe(ctx context.Context, req ObserveRequest) (ExternalObservation, error)
