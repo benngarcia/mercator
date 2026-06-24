@@ -490,6 +490,12 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 			Events:                []eventlog.NewEvent{evt},
 		})
 		if appendErr == nil {
+			if exitCode != nil {
+				// Drive the authoritative outcome + prompt cleanup from the
+				// reported exit code. Best-effort: any error here is non-fatal —
+				// the AdvanceRun reconcile and Observe backstop still finalize.
+				_ = o.finalizeReportedExit(ctx, workspaceID, runID)
+			}
 			return nil
 		}
 		if errors.Is(appendErr, eventlog.ErrConcurrencyConflict) && attempt == 0 {
@@ -500,6 +506,38 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 	}
 	// All retries exhausted; last error was a concurrency conflict.
 	return fmt.Errorf("orchestrator: append report event: concurrency conflict after retry")
+}
+
+// finalizeReportedExit makes a reported exit code authoritative: it records the
+// run outcome (0 -> succeeded, else -> failed) and requests cleanup, then closes
+// the run by releasing/terminating its external resource. It is a no-op when the
+// run is already outcome-recorded or closed (the Observe backstop or a prior
+// report won the race), or when there is no launch intent / no reported exit
+// code to act on.
+func (o *Orchestrator) finalizeReportedExit(ctx context.Context, workspaceID, runID string) error {
+	events, err := o.GetRunEvents(ctx, workspaceID, runID)
+	if err != nil {
+		return err
+	}
+	state, err := reduceRun(events)
+	if err != nil {
+		return err
+	}
+	if state.outcomeRecorded || state.closed || state.launchIntent == nil || state.exitCode == nil {
+		return nil
+	}
+	outcome := string(domain.RunOutcomeSucceeded)
+	if *state.exitCode != 0 {
+		outcome = string(domain.RunOutcomeFailed)
+	}
+	version := uint64(len(events))
+	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:report-finalize", []eventlog.NewEvent{
+		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": outcome}, o.now()),
+		mustEvent(runID, "cleanup_requested", EventCleanupRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+	}); err != nil {
+		return err
+	}
+	return o.releaseAndClose(ctx, workspaceID, runID, version+2, state.launchIntent)
 }
 
 func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
@@ -739,6 +777,14 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 			}
 			state.launchIntent = &data
 		case EventExternalStateObserved:
+			var data struct {
+				ExitCode *int `json:"exit_code"`
+			}
+			if err := json.Unmarshal(event.Data, &data); err == nil && data.ExitCode != nil {
+				code := *data.ExitCode
+				state.exitCode = &code
+			}
+		case EventRunReported:
 			var data struct {
 				ExitCode *int `json:"exit_code"`
 			}
