@@ -205,7 +205,7 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 	handler := newHTTPTestServerWithConns(t, store, resolver)
 
 	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID: "ws_1",
+		WorkspaceID:  "ws_1",
 		ConnectionID: "conn_rp",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},

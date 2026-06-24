@@ -258,3 +258,26 @@ func TestReportEndpointRejectsOperatorToken(t *testing.T) {
 		t.Fatalf("expected INVALID_RUN_TOKEN, got %s", rec.Body.String())
 	}
 }
+
+// TestReportEndpointRunNotFound verifies that POSTing :report for a
+// non-existent run (with valid token and workspace_id) returns 404 RUN_NOT_FOUND.
+func TestReportEndpointRunNotFound(t *testing.T) {
+	key32 := []byte("0123456789abcdef0123456789abcdef")
+	signer := reporting.NewSigner(key32)
+	handler := newReportingTestServer(t, key32)
+
+	// Don't create a run; just try to report for a non-existent runID.
+	nonExistentRunID := "run_nonexistent_12345"
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+nonExistentRunID+":report?workspace_id=ws_1",
+		bytes.NewReader([]byte(`{"type":"progress"}`)))
+	req.Header.Set("Authorization", "Bearer "+signer.Token(nonExistentRunID))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("report non-existent run: expected 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "RUN_NOT_FOUND") {
+		t.Fatalf("expected RUN_NOT_FOUND, got %s", rec.Body.String())
+	}
+}

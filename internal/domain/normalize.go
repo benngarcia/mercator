@@ -10,9 +10,9 @@ const (
 	DefaultPlatformOS          = "linux"
 	DefaultPlatformArch        = "amd64"
 	DefaultCPUMillis           = 250
-	DefaultMemoryBytes         = 256 * 1024 * 1024      // 256Mi
-	DefaultEphemeralDiskBytes  = 1024 * 1024 * 1024     // 1Gi
-	DefaultMaxRuntimeSeconds   = 3600                   // bounded 1h
+	DefaultMemoryBytes         = 256 * 1024 * 1024  // 256Mi
+	DefaultEphemeralDiskBytes  = 1024 * 1024 * 1024 // 1Gi
+	DefaultMaxRuntimeSeconds   = 3600               // bounded 1h
 	DefaultMaxPreStartAttempts = 1
 )
 

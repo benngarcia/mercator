@@ -131,11 +131,11 @@ type serverDeps struct {
 	secretDB    *sql.DB
 	// signer is non-nil when MERCATOR_SECRET_KEY is set. It signs per-run
 	// reporting tokens using a domain-separated subkey derived from the master key.
-	signer    *reporting.Signer
+	signer *reporting.Signer
 	// publicURL is the value of MERCATOR_PUBLIC_URL. Reporting is only enabled
 	// when both signer.Enabled() and publicURL != "".
 	publicURL string
-	close       func() error
+	close     func() error
 }
 
 // buildServerDeps composes the registry-backed Broker, the shared
@@ -444,7 +444,6 @@ func dockerOfferFromInfo(values map[string]string, id dockerEndpointIdentity, in
 		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
-
 
 func environ() map[string]string {
 	values := map[string]string{}

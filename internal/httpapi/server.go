@@ -41,11 +41,11 @@ type Server struct {
 	resolver  interface {
 		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 	}
-	secretStore    credential.SecretStore
-	credentials    *credential.Resolver
-	verifier       connectionVerifier
-	security       securityConfig
-	reportSigner   *reporting.Signer
+	secretStore  credential.SecretStore
+	credentials  *credential.Resolver
+	verifier     connectionVerifier
+	security     securityConfig
+	reportSigner *reporting.Signer
 }
 
 // connectionVerifier is the narrow capability the server needs from the Broker
@@ -679,6 +679,10 @@ func (s *Server) reportRun(w http.ResponseWriter, r *http.Request, runID string)
 		return
 	}
 	if err := s.orch.RecordReport(r.Context(), workspaceID, runID, body.Type, body.Data, body.ExitCode); err != nil {
+		if errors.Is(err, orchestrator.ErrRunNotFound) {
+			writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", "Run not found.")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "REPORT_FAILED", err.Error())
 		return
 	}

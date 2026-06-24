@@ -18,6 +18,8 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
+var ErrRunNotFound = errors.New("orchestrator: run not found")
+
 const (
 	EventRunRequested          = "compute.run.requested.v1"
 	EventPlacementDecided      = "compute.run.placement_decided.v1"
@@ -462,7 +464,7 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 			return fmt.Errorf("orchestrator: read run stream: %w", err)
 		}
 		if len(events) == 0 {
-			return fmt.Errorf("orchestrator: run not found")
+			return ErrRunNotFound
 		}
 		version := uint64(len(events))
 		suffix := fmt.Sprintf("reported_%d", version+1)
