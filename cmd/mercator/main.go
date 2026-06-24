@@ -148,7 +148,9 @@ func buildServerDeps(values map[string]string) (serverDeps, bool) {
 	svc := connection.New(log)
 
 	// Second *sql.DB on the same DSN for the secret store; the event log's
-	// *sql.DB is private and not shared.
+	// *sql.DB is private and not shared. This second *sql.DB must see the same data
+	// as the event log. This works for on-disk DSNs and ?mode=memory&cache=shared, but
+	// a bare ?mode=memory (without shared cache) would give it an isolated, empty DB.
 	secretDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		stdlog.Fatalf("open secret store db: %v", err)
@@ -193,6 +195,11 @@ func buildServerDeps(values map[string]string) (serverDeps, bool) {
 	br := broker.NewBroker(connbroker.New(svc), factory, resolver)
 
 	// Register + authorize the bootstrap docker connection under each workspace.
+	// Create is idempotent by command key, so re-registering on every boot is safe.
+	// However, if the docker connection config (bin/host/context) CHANGES between boots,
+	// the request hash differs under the same command key → ErrIdempotencyConflict
+	// (the server will fatal). This is intentional event-sourced semantics: you cannot
+	// silently mutate a connection's config via Create.
 	id := dockerIdentity(values)
 	cfg := map[string]string{
 		"bin":     values["MERCATOR_DOCKER_BIN"],

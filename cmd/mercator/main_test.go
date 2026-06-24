@@ -68,4 +68,10 @@ func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
 	if len(conns) != 1 || !conns[0].Authorized {
 		t.Fatalf("expected one authorized registered connection, got %+v", conns)
 	}
+
+	// Verify the offer is backed by the registry record: the offer's ConnectionID
+	// must match the registered connection's ID.
+	if offers[0].ConnectionID != conns[0].ID {
+		t.Fatalf("offer is not backed by registry: offer.ConnectionID=%s, conn.ID=%s", offers[0].ConnectionID, conns[0].ID)
+	}
 }
