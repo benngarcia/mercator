@@ -236,8 +236,22 @@ func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Schedul
 	return s
 }
 
+// isRunReportPath reports whether the request is the run-report endpoint, which
+// is exempted from the operator-token gate because it authenticates with a
+// per-run token (handled by the report handler itself, added in a later task).
+// The check is intentionally narrow: POST method, path under /v1/runs/, suffix
+// exactly :report — so it cannot accidentally exempt actions like :cancel.
+func isRunReportPath(r *http.Request) bool {
+	return r.Method == http.MethodPost &&
+		strings.HasPrefix(r.URL.Path, "/v1/runs/") &&
+		strings.HasSuffix(r.URL.Path, ":report")
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.security.Token != "" && strings.HasPrefix(r.URL.Path, "/v1/") {
+	operatorAuthRequired := s.security.Token != "" &&
+		strings.HasPrefix(r.URL.Path, "/v1/") &&
+		!isRunReportPath(r)
+	if operatorAuthRequired {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token is required.")
