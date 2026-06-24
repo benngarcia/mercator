@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"io"
-	"log"
+	stdlog "log"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,9 +19,18 @@ import (
 	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/cli"
+	"github.com/benngarcia/mercator/internal/connbroker"
+	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
+	"github.com/benngarcia/mercator/internal/ociresolver"
+	"github.com/benngarcia/mercator/internal/offers"
+	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/scheduler"
+	"github.com/benngarcia/mercator/internal/sinks"
+	"github.com/benngarcia/mercator/internal/workload"
 )
 
 func main() {
@@ -42,30 +52,47 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	dsn := envValue(env, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
 	apiToken, generatedToken, err := apiTokenFromEnv(env)
 	if err != nil {
-		log.Fatalf("load api token: %v", err)
+		stdlog.Fatalf("load api token: %v", err)
 	}
 	if generatedToken {
-		log.Printf("generated MERCATOR_API_TOKEN for this server process: %s", apiToken)
+		stdlog.Printf("generated MERCATOR_API_TOKEN for this server process: %s", apiToken)
 	}
 	var handler http.Handler
 	var closeFn func() error
-	br := buildBroker(env)
-	if br != nil {
-		handler, closeFn, err = httpapi.HandlerForSQLiteWithAdapter(context.Background(), dsn, br, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
+	if deps, ok := buildServerDeps(env); ok {
+		// Mirror HandlerForSQLiteWithAdapter's internal construction but over the
+		// SHARED event log, connection.Service, and Broker (the Broker is the
+		// adapter), plus the secret store, credential resolver, and verifier.
+		sched := scheduler.New()
+		orch := orchestrator.New(deps.log, sched, deps.broker)
+		imageResolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
+		handler = httpapi.NewWithAllServices(
+			orch, sched, deps.broker,
+			workload.New(deps.log),
+			sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
+			deps.conns,
+			offers.New(deps.log),
+			imageResolver,
+			httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
+			httpapi.WithSecretStore(deps.secretStore),
+			httpapi.WithCredentialResolver(deps.resolver),
+			httpapi.WithVerifier(deps.broker),
+		)
+		closeFn = deps.close
 	} else {
 		handler, closeFn, err = httpapi.HandlerForSQLiteWithOptions(context.Background(), dsn, nil, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
-	}
-	if err != nil {
-		log.Fatalf("start mercator: %v", err)
+		if err != nil {
+			stdlog.Fatalf("start mercator: %v", err)
+		}
 	}
 	defer func() {
 		if err := closeFn(); err != nil {
-			log.Printf("close event log: %v", err)
+			stdlog.Printf("close event log: %v", err)
 		}
 	}()
-	log.Printf("mercator listening on %s", addr)
+	stdlog.Printf("mercator listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {
-		log.Fatal(err)
+		stdlog.Fatal(err)
 	}
 	return 0
 }
@@ -79,22 +106,73 @@ func (a offeringAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]do
 	return append([]domain.OfferSnapshot(nil), a.offers...), nil
 }
 
-// staticConnections is a minimal broker.Connections that always returns the
-// same fixed slice of connection refs, regardless of workspace. Used to
-// bootstrap the single docker connection in 1A (the full connection.Service
-// adapter lands in Plan 1B).
-type staticConnections []broker.ConnRef
-
-func (s staticConnections) List(_ context.Context, _ string) ([]broker.ConnRef, error) {
-	return []broker.ConnRef(s), nil
+// serverDeps holds the shared backing services for the docker server path. The
+// Broker's connection registry and the HTTP server's connection.Service are the
+// SAME service over the SAME event log, so offers served by the Broker and
+// connections listed by the server stay consistent. The secret store is a
+// SECOND *sql.DB opened on the same DSN (the event log's *sql.DB is private).
+type serverDeps struct {
+	broker      *broker.Broker
+	conns       *connection.Service
+	secretStore credential.SecretStore
+	resolver    *credential.Resolver
+	log         eventlog.EventLog
+	secretDB    *sql.DB
+	close       func() error
 }
 
-// buildBroker constructs a Broker pre-loaded with the docker connection when
-// MERCATOR_ADAPTER=docker. Returns nil for any other (or absent) adapter type.
-func buildBroker(values map[string]string) *broker.Broker {
+// buildServerDeps composes the registry-backed Broker, the shared
+// connection.Service over one event log, the SQLite secret store, and the
+// credential resolver for the docker server path. It registers and authorizes
+// the bootstrap docker connection into the service idempotently (Create is
+// keyed on connection:create:<id>, so calling it on every boot is safe).
+//
+// Workspace decision: connections are workspace-scoped but the docker offer is
+// global. The bootstrap connection is registered under each concrete workspace
+// in authWorkspaces. When auth is the "*" wildcard (any workspace), it is
+// registered under the default workspace "ws_1"; full multi-workspace bootstrap
+// is future work.
+//
+// Returns ok=false for any non-docker adapter (the fake fallback path).
+func buildServerDeps(values map[string]string) (serverDeps, bool) {
 	if strings.ToLower(values["MERCATOR_ADAPTER"]) != "docker" {
-		return nil
+		return serverDeps{}, false
 	}
+	ctx := context.Background()
+	dsn := envValue(values, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
+
+	log, err := eventlog.OpenSQLite(ctx, dsn)
+	if err != nil {
+		stdlog.Fatalf("open event log: %v", err)
+	}
+	svc := connection.New(log)
+
+	// Second *sql.DB on the same DSN for the secret store; the event log's
+	// *sql.DB is private and not shared.
+	secretDB, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		stdlog.Fatalf("open secret store db: %v", err)
+	}
+	store, err := credential.NewSQLiteStore(ctx, secretDB)
+	if err != nil {
+		stdlog.Fatalf("init secret store: %v", err)
+	}
+
+	// Decode master key: try hex then base64; empty env var → nil key.
+	var masterKey []byte
+	if raw := values["MERCATOR_SECRET_KEY"]; raw != "" {
+		if b, err := hex.DecodeString(raw); err == nil {
+			masterKey = b
+		} else if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
+			masterKey = b
+		}
+	}
+	resolver := credential.NewResolver(
+		func(k string) string { return values[k] },
+		store,
+		masterKey,
+	)
+
 	factory := broker.NewFactory()
 	var (
 		dockerOnce    sync.Once
@@ -112,34 +190,68 @@ func buildBroker(values map[string]string) *broker.Broker {
 		return dockerAdapter, nil
 	})
 
-	// Decode master key: try hex then base64; empty env var → nil key.
-	var masterKey []byte
-	if raw := values["MERCATOR_SECRET_KEY"]; raw != "" {
-		if b, err := hex.DecodeString(raw); err == nil {
-			masterKey = b
-		} else if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
-			masterKey = b
+	br := broker.NewBroker(connbroker.New(svc), factory, resolver)
+
+	// Register + authorize the bootstrap docker connection under each workspace.
+	id := dockerIdentity(values)
+	cfg := map[string]string{
+		"bin":     values["MERCATOR_DOCKER_BIN"],
+		"host":    values["MERCATOR_DOCKER_HOST"],
+		"context": values["MERCATOR_DOCKER_CONTEXT"],
+	}
+	for _, ws := range bootstrapWorkspaces(values) {
+		if _, err := svc.Create(ctx, connection.CreateRequest{
+			WorkspaceID:  ws,
+			ConnectionID: id.ConnectionID,
+			AdapterType:  "docker",
+			Config:       cfg,
+		}); err != nil {
+			stdlog.Fatalf("register docker connection in %s: %v", ws, err)
+		}
+		if err := svc.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
+			WorkspaceID:  ws,
+			ConnectionID: id.ConnectionID,
+			Authorized:   true,
+		}); err != nil {
+			stdlog.Fatalf("authorize docker connection in %s: %v", ws, err)
 		}
 	}
 
-	resolver := credential.NewResolver(
-		func(k string) string { return values[k] },
-		credential.NewMemoryStore(),
-		masterKey,
-	)
-
-	id := dockerIdentity(values)
-	conn := broker.ConnRef{
-		ID:          id.ConnectionID,
-		AdapterType: "docker",
-		Authorized:  true,
-		Config: map[string]string{
-			"bin":     values["MERCATOR_DOCKER_BIN"],
-			"host":    values["MERCATOR_DOCKER_HOST"],
-			"context": values["MERCATOR_DOCKER_CONTEXT"],
-		},
+	closeFn := func() error {
+		secretErr := secretDB.Close()
+		logErr := log.Close()
+		if logErr != nil {
+			return logErr
+		}
+		return secretErr
 	}
-	return broker.NewBroker(staticConnections{conn}, factory, resolver)
+
+	return serverDeps{
+		broker:      br,
+		conns:       svc,
+		secretStore: store,
+		resolver:    resolver,
+		log:         log,
+		secretDB:    secretDB,
+		close:       closeFn,
+	}, true
+}
+
+// bootstrapWorkspaces returns the concrete workspace ids under which the
+// bootstrap docker connection is registered. Concrete ids from authWorkspaces
+// are used directly; the "*" wildcard maps to the default workspace "ws_1".
+func bootstrapWorkspaces(values map[string]string) []string {
+	var out []string
+	for _, ws := range authWorkspaces(values) {
+		if ws == "*" {
+			continue
+		}
+		out = append(out, ws)
+	}
+	if len(out) == 0 {
+		return []string{"ws_1"}
+	}
+	return out
 }
 
 // dockerEndpointIdentity is the identity Mercator advertises for a Docker
@@ -196,7 +308,7 @@ func probeDockerHost(client *dockeradapter.CLIClient, id dockerEndpointIdentity)
 	defer cancel()
 	info, err := client.Info(ctx)
 	if err != nil {
-		log.Printf("docker endpoint %q probe failed; using fallback capacity: %v", id.NativeRef, err)
+		stdlog.Printf("docker endpoint %q probe failed; using fallback capacity: %v", id.NativeRef, err)
 		return dockeradapter.HostInfo{}
 	}
 	return info

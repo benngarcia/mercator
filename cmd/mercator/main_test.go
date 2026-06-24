@@ -38,19 +38,34 @@ func TestRunDelegatesJSONCLICommands(t *testing.T) {
 	}
 }
 
-func TestRuntimeBrokerServesDockerConnection(t *testing.T) {
-	br := buildBroker(map[string]string{
+func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
+	deps, ok := buildServerDeps(map[string]string{
 		"MERCATOR_ADAPTER":     "docker",
 		"MERCATOR_DOCKER_ARCH": "amd64",
+		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 	})
-	if br == nil {
-		t.Fatal("expected a broker for docker")
+	if !ok {
+		t.Fatal("expected docker server deps")
 	}
-	offers, err := br.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	defer func() {
+		if err := deps.close(); err != nil {
+			t.Fatalf("close deps: %v", err)
+		}
+	}()
+
+	offers, err := deps.broker.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
 	if len(offers) != 1 || offers[0].AdapterType != "docker" || offers[0].ConnectionID == "" {
-		t.Fatalf("unexpected offers via broker: %+v", offers)
+		t.Fatalf("expected one docker offer from the registered connection, got %+v", offers)
+	}
+
+	conns, err := deps.conns.List(context.Background(), "ws_1")
+	if err != nil {
+		t.Fatalf("list conns: %v", err)
+	}
+	if len(conns) != 1 || !conns[0].Authorized {
+		t.Fatalf("expected one authorized registered connection, got %+v", conns)
 	}
 }

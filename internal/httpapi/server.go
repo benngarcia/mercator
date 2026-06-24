@@ -17,6 +17,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/authz"
 	"github.com/benngarcia/mercator/internal/connection"
+	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/ociresolver"
@@ -40,7 +41,16 @@ type Server struct {
 	resolver  interface {
 		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 	}
-	security securityConfig
+	secretStore credential.SecretStore
+	credentials *credential.Resolver
+	verifier    connectionVerifier
+	security    securityConfig
+}
+
+// connectionVerifier is the narrow capability the server needs from the Broker
+// to verify a connection during the authorize flow.
+type connectionVerifier interface {
+	VerifyConnection(ctx context.Context, workspaceID, connectionID string) error
 }
 
 type securityConfig struct {
@@ -54,6 +64,24 @@ func WithBearerAuth(token string, workspaces []string) Option {
 	return func(s *Server) {
 		s.security = securityConfig{Token: token, Workspaces: append([]string(nil), workspaces...)}
 	}
+}
+
+// WithSecretStore wires the SecretStore the server uses to persist sealed
+// connection credentials.
+func WithSecretStore(store credential.SecretStore) Option {
+	return func(s *Server) { s.secretStore = store }
+}
+
+// WithCredentialResolver wires the credential.Resolver the server uses to turn
+// a {source, ref} credential into a plaintext secret.
+func WithCredentialResolver(resolver *credential.Resolver) Option {
+	return func(s *Server) { s.credentials = resolver }
+}
+
+// WithVerifier wires the connection verifier (the Broker) the server uses to
+// validate a connection during the authorize flow.
+func WithVerifier(verifier connectionVerifier) Option {
+	return func(s *Server) { s.verifier = verifier }
 }
 
 type principalContextKey struct{}
