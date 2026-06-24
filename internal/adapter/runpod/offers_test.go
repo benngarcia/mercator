@@ -47,6 +47,16 @@ func TestBuildOffersFiltersByAllowlistStockAndPrice(t *testing.T) {
 	}
 }
 
+func TestBuildOffersDropsAllowListedGPUWithNilPrice(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	// An allow-listed, in-stock GPU with no community price must still be dropped,
+	// exercising the nil-price filter independently of the allow-list filter.
+	unpriced := []gpuType{{ID: "NVIDIA RTX A2000", DisplayName: "A2000", MemoryInGb: 6, CommunityPrice: nil, StockStatus: "High"}}
+	if got := buildOffers(unpriced, []string{"NVIDIA RTX A2000"}, now); len(got) != 0 {
+		t.Fatalf("allow-listed GPU with nil price must be dropped, got %d", len(got))
+	}
+}
+
 func TestStockAvailable(t *testing.T) {
 	for _, c := range []struct {
 		in   string
