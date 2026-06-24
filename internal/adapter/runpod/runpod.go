@@ -26,7 +26,7 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 	allow := defaultAllowlist
 	if raw := strings.TrimSpace(config["gpu_types"]); raw != "" {
 		parts := strings.Split(raw, ",")
-		allow = allow[:0]
+		allow = make([]string, 0, len(parts))
 		for _, p := range parts {
 			if t := strings.TrimSpace(p); t != "" {
 				allow = append(allow, t)
@@ -198,6 +198,11 @@ func (a *Adapter) findOwned(ctx context.Context, launchKey, ownershipToken strin
 		if p.Name != name {
 			continue
 		}
+		// Ownership: the exact unique launch-key pod name is the authoritative
+		// ownership signal; the token guards against the (near-impossible) reuse of
+		// that name. We conflict only on a POSITIVE token mismatch (token present and
+		// different), never on a missing/empty token — a false conflict here would
+		// fail cleanup and orphan a paid pod, the worse failure.
 		if ownershipToken != "" && p.Env != nil {
 			if tok, ok := p.Env["MERCATOR_OWNERSHIP_TOKEN"]; ok && tok != ownershipToken {
 				return pod{}, false, adapter.ErrIdempotencyConflict
