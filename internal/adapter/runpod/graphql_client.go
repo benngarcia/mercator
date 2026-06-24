@@ -83,7 +83,11 @@ func (c *graphqlClient) gpuTypes(ctx context.Context) ([]gpuType, error) {
 		return nil, fmt.Errorf("runpod: decode gpuTypes: %w", err)
 	}
 	if len(out.Errors) > 0 {
-		return nil, fmt.Errorf("runpod: gpuTypes graphql error: %s", out.Errors[0].Message)
+		msgs := make([]string, len(out.Errors))
+		for i, e := range out.Errors {
+			msgs[i] = e.Message
+		}
+		return nil, fmt.Errorf("runpod: gpuTypes graphql errors: %s", strings.Join(msgs, "; "))
 	}
 	gpus := make([]gpuType, 0, len(out.Data.GPUTypes))
 	for _, g := range out.Data.GPUTypes {

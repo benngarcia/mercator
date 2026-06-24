@@ -27,7 +27,7 @@ func TestGPUTypesQueryAndDecode(t *testing.T) {
 	if gotAuth != "Bearer gkey" {
 		t.Errorf("auth = %q", gotAuth)
 	}
-	if !strings.Contains(gotBody, "gpuTypes") {
+	if !strings.Contains(gotBody, "gpuTypes") || !strings.Contains(gotBody, "lowestPrice") {
 		t.Errorf("body missing query: %s", gotBody)
 	}
 	if len(gpus) != 2 {
@@ -45,7 +45,11 @@ func TestGPUTypesSurfacesGraphQLErrors(t *testing.T) {
 	client := newGraphQLClient("gkey", "https://gql.test/graphql", newFakeHTTPClient(func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"errors":[{"message":"boom"}]}`), nil
 	}))
-	if _, err := client.gpuTypes(context.Background()); err == nil {
+	_, err := client.gpuTypes(context.Background())
+	if err == nil {
 		t.Fatal("graphql errors must surface as an error")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error should carry the graphql message, got %q", err.Error())
 	}
 }
