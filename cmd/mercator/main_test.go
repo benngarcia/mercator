@@ -11,6 +11,76 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 )
 
+// TestBuildServerDepsReportingSigner verifies that buildServerDeps populates the
+// signer and publicURL fields correctly.
+func TestBuildServerDepsReportingSigner(t *testing.T) {
+	// A 64-char hex string decodes cleanly to 32 bytes.
+	hexKey := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+
+	t.Run("with_key_and_public_url_signer_enabled", func(t *testing.T) {
+		deps, ok := buildServerDeps(map[string]string{
+			"MERCATOR_ADAPTER":     "docker",
+			"MERCATOR_DOCKER_ARCH": "amd64",
+			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+			"MERCATOR_SECRET_KEY":  hexKey,
+			"MERCATOR_PUBLIC_URL":  "http://127.0.0.1:8080",
+		})
+		if !ok {
+			t.Fatal("expected docker server deps")
+		}
+		defer deps.close()
+		if deps.signer == nil {
+			t.Fatal("expected non-nil signer when MERCATOR_SECRET_KEY is set")
+		}
+		if !deps.signer.Enabled() {
+			t.Fatal("signer should be enabled with a key")
+		}
+		if deps.publicURL != "http://127.0.0.1:8080" {
+			t.Fatalf("unexpected publicURL: %q", deps.publicURL)
+		}
+	})
+
+	t.Run("without_public_url_signer_still_built_but_reporting_off", func(t *testing.T) {
+		deps, ok := buildServerDeps(map[string]string{
+			"MERCATOR_ADAPTER":     "docker",
+			"MERCATOR_DOCKER_ARCH": "amd64",
+			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+			"MERCATOR_SECRET_KEY":  hexKey,
+			// No MERCATOR_PUBLIC_URL
+		})
+		if !ok {
+			t.Fatal("expected docker server deps")
+		}
+		defer deps.close()
+		if deps.signer == nil {
+			t.Fatal("expected non-nil signer when MERCATOR_SECRET_KEY is set")
+		}
+		if !deps.signer.Enabled() {
+			t.Fatal("signer key should still be derived even without publicURL")
+		}
+		// Reporting is only enabled when BOTH signer.Enabled() AND publicURL != "".
+		if deps.publicURL != "" {
+			t.Fatalf("expected empty publicURL, got %q", deps.publicURL)
+		}
+	})
+
+	t.Run("without_secret_key_signer_disabled", func(t *testing.T) {
+		deps, ok := buildServerDeps(map[string]string{
+			"MERCATOR_ADAPTER":     "docker",
+			"MERCATOR_DOCKER_ARCH": "amd64",
+			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+			// No MERCATOR_SECRET_KEY, no MERCATOR_PUBLIC_URL
+		})
+		if !ok {
+			t.Fatal("expected docker server deps")
+		}
+		defer deps.close()
+		if deps.signer != nil && deps.signer.Enabled() {
+			t.Fatal("signer should be disabled when no MERCATOR_SECRET_KEY is set")
+		}
+	})
+}
+
 func TestRunDelegatesJSONCLICommands(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/runs" || r.URL.Query().Get("workspace_id") != "ws_1" {

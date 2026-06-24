@@ -9,6 +9,19 @@ import (
 	"encoding/base64"
 )
 
+// DeriveKey produces a domain-separated subkey for the report-token signer from
+// a master key. It returns HMAC-SHA256(masterKey, "mercator-report-token-v1") so
+// the signer never uses the raw AES master key directly. An empty/nil masterKey
+// returns nil, which leaves the signer disabled.
+func DeriveKey(masterKey []byte) []byte {
+	if len(masterKey) == 0 {
+		return nil
+	}
+	mac := hmac.New(sha256.New, masterKey)
+	mac.Write([]byte("mercator-report-token-v1"))
+	return mac.Sum(nil)
+}
+
 type Signer struct{ key []byte }
 
 func NewSigner(key []byte) *Signer { return &Signer{key: key} }

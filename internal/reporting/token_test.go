@@ -1,6 +1,33 @@
 package reporting
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
+
+func TestDeriveKey(t *testing.T) {
+	master := []byte("0123456789abcdef0123456789abcdef")
+	derived := DeriveKey(master)
+	if len(derived) == 0 {
+		t.Fatal("DeriveKey returned empty key for non-empty master")
+	}
+	// Derived key must differ from the master key.
+	if bytes.Equal(derived, master) {
+		t.Fatal("DeriveKey returned the master key unchanged")
+	}
+	// Deterministic: same input → same output.
+	derived2 := DeriveKey(master)
+	if !bytes.Equal(derived, derived2) {
+		t.Fatal("DeriveKey is not deterministic")
+	}
+	// Empty master → nil/empty (signer disabled).
+	if got := DeriveKey(nil); len(got) != 0 {
+		t.Fatalf("DeriveKey(nil) should return empty, got %v", got)
+	}
+	if got := DeriveKey([]byte{}); len(got) != 0 {
+		t.Fatalf("DeriveKey(empty) should return empty, got %v", got)
+	}
+}
 
 func TestTokenRoundTripAndScoping(t *testing.T) {
 	s := NewSigner([]byte("0123456789abcdef0123456789abcdef"))
