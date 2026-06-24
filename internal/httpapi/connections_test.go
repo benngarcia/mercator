@@ -136,11 +136,11 @@ func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("authorize expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var record connection.Record
-	if err := json.Unmarshal(rec.Body.Bytes(), &record); err != nil {
+	var resp connectionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode authorize response: %v", err)
 	}
-	if !record.Authorized {
+	if !resp.Connection.Authorized {
 		t.Errorf("authorize response: Authorized = false, want true")
 	}
 }
@@ -223,10 +223,11 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 		t.Fatal("response must not echo the secret")
 	}
 	// Decode the response body and verify that credential.ref is set correctly.
-	var got connection.Record
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+	var resp connectionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
+	got := resp.Connection
 	if got.Credential.Ref != "conn_rp" {
 		t.Errorf("credential ref: got %q, want %q (credential ref must be set to connection id)", got.Credential.Ref, "conn_rp")
 	}

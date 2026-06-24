@@ -142,6 +142,10 @@ type createConnectionBody struct {
 	Secret string `json:"secret,omitempty"`
 }
 
+type connectionResponse struct {
+	Connection connection.Record `json:"connection"`
+}
+
 type connectionListResponse struct {
 	Connections []connection.Record `json:"connections"`
 }
@@ -786,7 +790,14 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
 		return
 	}
-	if !authorizeRequestWorkspace(w, r, body.WorkspaceID) {
+	workspaceID := body.WorkspaceID
+	if workspaceID == "" {
+		workspaceID = r.URL.Query().Get("workspace_id")
+	}
+	if workspaceID == "" {
+		workspaceID = s.defaultWorkspace()
+	}
+	if !authorizeRequestWorkspace(w, r, workspaceID) {
 		return
 	}
 
@@ -804,7 +815,7 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Master key is not set; cannot seal mercator credentials.")
 			return
 		}
-		if err := s.secretStore.Put(r.Context(), body.WorkspaceID, body.ConnectionID, blob); err != nil {
+		if err := s.secretStore.Put(r.Context(), workspaceID, body.ConnectionID, blob); err != nil {
 			writeError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err.Error())
 			return
 		}
@@ -812,17 +823,21 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	record, err := s.conns.Create(r.Context(), connection.CreateRequest{
-		WorkspaceID:  body.WorkspaceID,
+		WorkspaceID:  workspaceID,
 		ConnectionID: body.ConnectionID,
 		AdapterType:  body.AdapterType,
 		Config:       body.Config,
 		Credential:   cred,
 	})
 	if err != nil {
+		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
+			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
+			return
+		}
 		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_CONNECTION_FAILED"), err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, record)
+	writeJSON(w, http.StatusAccepted, connectionResponse{Connection: record})
 }
 
 func (s *Server) connectionAction(w http.ResponseWriter, r *http.Request) {
@@ -864,7 +879,7 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id 
 		writeError(w, http.StatusInternalServerError, "CONNECTION_NOT_FOUND", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, record)
+	writeJSON(w, http.StatusOK, connectionResponse{Connection: record})
 }
 
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
