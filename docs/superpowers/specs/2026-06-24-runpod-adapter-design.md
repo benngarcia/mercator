@@ -160,6 +160,8 @@ isolates a broken connection from the aggregate list.
   in labels. Observe/Release/Terminate verify `MERCATOR_OWNERSHIP_TOKEN` +
   `MERCATOR_REQUEST_HASH` match before acting; mismatch → `ErrIdempotencyConflict`.
 
+**Implementation note:** the shipped adapter verifies the ownership token only (not `MERCATOR_REQUEST_HASH`); it conflicts only on a positive token mismatch (token present and different), never on an absent token. The unique `mercator-<launchKey>` pod name is the primary ownership signal, and requiring both fields would risk false conflicts that orphan paid pods — the worse failure mode.
+
 **Launch.** `createPod` with:
 - `name`, `imageName: req.Image`, `gpuTypeIds: [req.SelectedOfferNativeRef,
   ...remaining allow-list]` (fallbacks improve community-stock scheduling odds),

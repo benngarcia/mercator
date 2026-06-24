@@ -110,4 +110,11 @@ func TestExitReportAfterRunClosedIsNoop(t *testing.T) {
 	if ad.TerminateCount() != beforeTerm {
 		t.Fatalf("late report must not terminate again: before=%d after=%d", beforeTerm, ad.TerminateCount())
 	}
+	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get run after late report: %v", err)
+	}
+	if record.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("late report must not change already-recorded outcome: got %q, want %q", record.Outcome, domain.RunOutcomeSucceeded)
+	}
 }

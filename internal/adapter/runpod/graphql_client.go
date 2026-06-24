@@ -57,7 +57,7 @@ func (c *graphqlClient) gpuTypes(ctx context.Context) ([]gpuType, error) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("runpod: gpuTypes read body: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, httpError(http.MethodPost, "/graphql", resp.StatusCode, body)

@@ -59,6 +59,10 @@ NVIDIA accelerator (feasible) and is selected.
   and terminates the pod promptly. If a pod shows `EXITED` with no report, the
   run is marked **failed** (indeterminate) and the pod is terminated.
 
+### Cost attribution
+
+When a run is launched, the adapter sends `gpuTypeIds = [selected offer's GPU] + (the rest of the allow-list as fallbacks)` to improve community-cloud scheduling odds. **RunPod may provision any GPU in that list**, so the realized GPU — and therefore the actual hourly cost — may differ from the offer the scheduler quoted and costed the run against. Operators who need realized cost to exactly match the quoted offer should set the connection config `gpu_types` to a single GPU id, which removes all fallbacks.
+
 ## Live verification
 
 See `examples/runpod/` for two ready-to-run workloads. Both require the GPU

@@ -176,6 +176,7 @@ func (a *Adapter) launchEnv(req adapter.LaunchRequest) map[string]string {
 			env[b.Name] = *b.Value
 		}
 	}
+	// Ownership/identity keys are authoritative here; they intentionally match the orchestrator-injected reporting vars of the same name (identical values).
 	env["MERCATOR_WORKSPACE_ID"] = req.WorkspaceID
 	env["MERCATOR_RUN_ID"] = req.RunID
 	env["MERCATOR_ATTEMPT_ID"] = req.AttemptID
