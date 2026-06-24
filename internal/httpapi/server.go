@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -286,6 +285,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions/{revision_id}", s.getRevision)
 	s.mux.HandleFunc("POST /v1/images:resolve", s.resolveImage)
 	s.mux.HandleFunc("POST /v1/connections", s.createConnection)
+	s.mux.HandleFunc("POST /v1/connections/{conn_action}", s.connectionAction)
 	s.mux.HandleFunc("GET /v1/connections", s.listConnections)
 	s.mux.HandleFunc("GET /v1/offers", s.listOffers)
 	s.mux.HandleFunc("GET /v1/sinks/{sink_id}", s.sinkStatus)
@@ -825,57 +825,60 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, record)
 }
 
+func (s *Server) connectionAction(w http.ResponseWriter, r *http.Request) {
+	connAction := r.PathValue("conn_action")
+	if strings.HasSuffix(connAction, ":authorize") {
+		s.authorizeConnection(w, r, strings.TrimSuffix(connAction, ":authorize"))
+		return
+	}
+	writeError(w, http.StatusNotFound, "CONNECTION_ACTION_NOT_FOUND", "Unknown connection action.")
+}
+
+func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id string) {
+	workspaceID, ok := s.requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if s.verifier == nil {
+		writeError(w, http.StatusNotImplemented, "CONNECTION_VERIFY_DISABLED", "Connection verification is not configured.")
+		return
+	}
+	if err := s.verifier.VerifyConnection(r.Context(), workspaceID, id); err != nil {
+		writeError(w, http.StatusBadGateway, "CONNECTION_VERIFY_FAILED", err.Error())
+		return
+	}
+	if err := s.conns.UpdateAuthorization(r.Context(), connection.UpdateAuthorizationRequest{
+		WorkspaceID:  workspaceID,
+		ConnectionID: id,
+		Authorized:   true,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "CONNECTION_AUTHORIZE_FAILED", err.Error())
+		return
+	}
+	record, err := s.conns.Get(r.Context(), workspaceID, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "CONNECTION_NOT_FOUND", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
-
-	// Start from the connection registry (connections created/authorized via the
-	// connection service). Registry records carry real authorization state and
-	// win on conflict.
-	byID := map[string]connection.Record{}
-	if s.conns != nil {
-		records, err := s.conns.List(r.Context(), workspaceID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err.Error())
-			return
-		}
-		for _, record := range records {
-			byID[record.ID] = record
-		}
+	if s.conns == nil {
+		writeJSON(w, http.StatusOK, connectionListResponse{Connections: []connection.Record{}})
+		return
 	}
-
-	// Derive connections from the offers visible to this workspace. Every offer
-	// names the connection (and adapter) it was discovered through, so a
-	// configured adapter's connection appears on this surface even before
-	// connection management exists — the offer is the source of truth. A
-	// connection actively serving offers reads as authorized.
-	if offerList, err := s.visibleOffers(r.Context(), workspaceID); err == nil {
-		for _, offer := range offerList {
-			if offer.ConnectionID == "" {
-				continue
-			}
-			if _, registered := byID[offer.ConnectionID]; registered {
-				continue
-			}
-			byID[offer.ConnectionID] = connection.Record{
-				ID:          offer.ConnectionID,
-				WorkspaceID: workspaceID,
-				AdapterType: offer.AdapterType,
-				Authorized:  true,
-			}
-		}
+	records, err := s.conns.List(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err.Error())
+		return
 	}
-
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	records := make([]connection.Record, 0, len(ids))
-	for _, id := range ids {
-		records = append(records, byID[id])
+	if records == nil {
+		records = []connection.Record{}
 	}
 	writeJSON(w, http.StatusOK, connectionListResponse{Connections: records})
 }
