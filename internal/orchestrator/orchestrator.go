@@ -496,6 +496,7 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 		}
 		return fmt.Errorf("orchestrator: append report event: %w", appendErr)
 	}
+	// All retries exhausted; last error was a concurrency conflict.
 	return fmt.Errorf("orchestrator: append report event: concurrency conflict after retry")
 }
 

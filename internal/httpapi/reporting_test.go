@@ -236,3 +236,25 @@ func TestReportIngestEndpointDisabledWithoutSigner(t *testing.T) {
 		t.Fatalf("expected REPORTING_DISABLED, got %s", rec.Body.String())
 	}
 }
+
+// TestReportEndpointRejectsOperatorToken verifies that POST /v1/runs/{id}:report
+// rejects the operator token and requires a valid RUN token instead.
+func TestReportEndpointRejectsOperatorToken(t *testing.T) {
+	key32 := []byte("0123456789abcdef0123456789abcdef")
+	handler := newReportingTestServer(t, key32)
+
+	runID := createReportingRun(t, handler, "run_report_op_token_reject")
+
+	// POST :report with the operator token (not the run token) — should 401.
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report?workspace_id=ws_1",
+		bytes.NewReader([]byte(`{"type":"progress"}`)))
+	req.Header.Set("Authorization", "Bearer op-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("operator token: expected 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "INVALID_RUN_TOKEN") {
+		t.Fatalf("expected INVALID_RUN_TOKEN, got %s", rec.Body.String())
+	}
+}
