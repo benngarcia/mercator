@@ -52,6 +52,10 @@ func (b *Broker) build(ctx context.Context, workspaceID string, c ConnRef) (adap
 	return b.factory.Build(c.AdapterType, c.Config, secret)
 }
 
+// connByID retrieves a connection by ID and builds its adapter.
+// Unlike ListOffers and ListOwned, this intentionally does NOT filter on Authorized.
+// Post-launch operations (Observe/Cancel/Release/Terminate) must still reach a run that was
+// launched on a connection which has since been de-authorized, so cleanup is never stranded.
 func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (ConnRef, adapter.Adapter, error) {
 	recs, err := b.conns.List(ctx, workspaceID)
 	if err != nil {

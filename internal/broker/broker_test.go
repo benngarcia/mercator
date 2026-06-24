@@ -20,11 +20,12 @@ func (nilResolver) Resolve(context.Context, string, credential.Credential) (stri
 	return "secret", nil
 }
 
-// recording adapter that reports which connection launched.
+// recording adapter that reports which connection launched or observed.
 type recAdapter struct {
 	adapter.Adapter
 	id       string
 	launched *string
+	observed *string
 }
 
 func (a recAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
@@ -33,6 +34,12 @@ func (a recAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.
 func (a recAdapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	*a.launched = a.id
 	return adapter.LaunchReceipt{LaunchKey: req.LaunchKey}, nil
+}
+func (a recAdapter) Observe(_ context.Context, _ adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	if a.observed != nil {
+		*a.observed = a.id
+	}
+	return adapter.ExternalObservation{}, nil
 }
 func (recAdapter) Verify(context.Context) error { return nil }
 
@@ -114,5 +121,28 @@ func TestBrokerListOwnedFansOut(t *testing.T) {
 	}
 	if len(owned) != 2 {
 		t.Fatalf("expected owned objects from both connections, got %d", len(owned))
+	}
+}
+
+func TestBrokerRoutesObserveByConnection(t *testing.T) {
+	var observedBy string
+	f := NewFactory()
+	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+		return recAdapter{id: cfg["id"], observed: &observedBy}, nil
+	})
+	conns := fakeConns{recs: []ConnRef{
+		{ID: "conn_a", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "conn_a"}},
+		{ID: "conn_b", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "conn_b"}},
+	}}
+	b := NewBroker(conns, f, nilResolver{})
+	_, err := b.Observe(context.Background(), adapter.ObserveRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_b",
+	})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if observedBy != "conn_b" {
+		t.Fatalf("expected observe routed to conn_b, got %q", observedBy)
 	}
 }
