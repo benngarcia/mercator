@@ -116,6 +116,11 @@ class Reporter:
                 "Authorization": f"Bearer {self._token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                # Set an explicit User-Agent. urllib otherwise sends
+                # "Python-urllib/X.Y", which Cloudflare's managed rules ban
+                # (HTTP 1010 / 403) — so reports through a Cloudflare-fronted
+                # Mercator (e.g. a named tunnel) would be silently rejected.
+                "User-Agent": "mercator-reporter (python)",
             },
             method="POST",
         )

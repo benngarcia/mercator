@@ -69,6 +69,10 @@ export class Reporter {
         headers: {
           "Authorization": `Bearer ${this.token}`,
           "Content-Type": "application/json",
+          // Explicit User-Agent: some runtimes/proxies (e.g. Cloudflare's
+          // managed rules) reject default agent strings with HTTP 403, which
+          // would silently drop reports through a Cloudflare-fronted Mercator.
+          "User-Agent": "mercator-reporter (typescript)",
         },
         body: JSON.stringify(body),
       });

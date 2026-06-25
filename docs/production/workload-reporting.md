@@ -90,10 +90,15 @@ MERCATOR_PUBLIC_URL=https://<random>.trycloudflare.com \
   go run ./cmd/mercator
 ```
 
-**Note**: trycloudflare.com free tunnels may block POST requests from certain
-networks due to WAF rules. The `:report` endpoint works correctly when accessed
-directly (local or from within the same network). For a stable dev tunnel,
-consider a named cloudflare tunnel with a custom domain.
+POST `:report` works correctly through both quick tunnels and named cloudflare
+tunnels (verified end-to-end against a named tunnel with a custom domain). For a
+stable dev/prod tunnel, prefer a named cloudflare tunnel with a custom domain.
+
+**Shell gotcha (zsh):** when testing `:report` by hand, always brace the run-id
+variable — `"${RUN_ID}:report"`, not `"$RUN_ID:report"`. In zsh the unbraced
+form applies the `:r` history modifier to `$RUN_ID` and silently eats the `:r`
+of `:report`, producing `…<id>eport` and a spurious operator-`401`. The SDK
+reporters build the URL in TypeScript/Python and are unaffected.
 
 ---
 

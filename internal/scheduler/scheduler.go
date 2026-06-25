@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/gpunorm"
 )
 
 type Scheduler interface {
@@ -294,10 +295,13 @@ func acceleratorRequirementsSatisfied(requirements []domain.AcceleratorRequireme
 		}
 		matched := 0
 		for _, inventory := range offer.Resources.Accelerators {
-			if req.Vendor != "" && inventory.Vendor != req.Vendor {
+			// Vendor is normalized on both sides so provider casing/aliases
+			// ("NVIDIA" vs "Nvidia") align; the model is matched on the
+			// provider-agnostic canonical id, not the raw provider string.
+			if req.Vendor != "" && gpunorm.NormalizeVendor(inventory.Vendor) != gpunorm.NormalizeVendor(req.Vendor) {
 				continue
 			}
-			if len(req.ModelAnyOf) > 0 && !slices.Contains(req.ModelAnyOf, inventory.Model) {
+			if len(req.ModelAnyOf) > 0 && !slices.Contains(req.ModelAnyOf, inventory.CanonicalModel) {
 				continue
 			}
 			if req.MemoryMinBytes > 0 && inventory.MemoryBytes < req.MemoryMinBytes {

@@ -30,3 +30,9 @@ __pycache__/
 
 # Subagent-driven-development scratch (ledger, briefs, reports, diffs)
 /.superpowers/
+
+# compiled binary from `go build` in repo root
+/mercator
+
+# playwright-cli skill session artifacts
+/.playwright-cli/

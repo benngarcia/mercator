@@ -1,0 +1,95 @@
+// Package gpunorm maps each provider's native GPU vendor/model strings onto a
+// stable canonical id, so a workload's accelerator requirement matches the same
+// GPU regardless of which provider advertises it. The canonical model id is
+// "<vendor>-<model>" in kebab-case, e.g. "nvidia-rtx-a2000".
+//
+// Granularity is model-level: memory/SKU variants of one marketing model share
+// a single id (e.g. A100 40GB and 80GB both map to "nvidia-a100"); callers
+// distinguish them via AcceleratorRequirement.MemoryMinBytes.
+package gpunorm
+
+import (
+	"regexp"
+	"strings"
+)
+
+var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
+
+// slug lowercases s and collapses every run of non-alphanumeric characters into
+// a single hyphen, trimming leading/trailing hyphens.
+func slug(s string) string {
+	s = nonAlnum.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "-")
+	return strings.Trim(s, "-")
+}
+
+// vendorAliases maps known vendor spellings to a canonical vendor token.
+var vendorAliases = map[string]string{
+	"nvidia":                 "nvidia",
+	"nvidia corporation":     "nvidia",
+	"amd":                    "amd",
+	"advanced micro devices": "amd",
+	"radeon":                 "amd",
+	"intel":                  "intel",
+}
+
+// NormalizeVendor returns a canonical vendor token (e.g. "nvidia"). Unknown
+// vendors fall back to their slug so matching stays deterministic.
+func NormalizeVendor(vendor string) string {
+	if v, ok := vendorAliases[strings.ToLower(strings.TrimSpace(vendor))]; ok {
+		return v
+	}
+	return slug(vendor)
+}
+
+// modelAliases maps a normalized model key (the model slug with any leading
+// vendor prefix stripped) to the canonical model part. It consolidates provider
+// spellings and memory/SKU variants onto one id.
+var modelAliases = map[string]string{
+	"a2000": "rtx-a2000", "rtx-a2000": "rtx-a2000", "rtx-a2000-6gb": "rtx-a2000",
+	"a4000": "rtx-a4000", "rtx-a4000": "rtx-a4000",
+	"a5000": "rtx-a5000", "rtx-a5000": "rtx-a5000",
+	"a6000": "rtx-a6000", "rtx-a6000": "rtx-a6000",
+	"a40":  "a40",
+	"a100": "a100", "a100-pcie": "a100", "a100-sxm": "a100", "a100-sxm4": "a100",
+	"a100-40gb": "a100", "a100-80gb": "a100", "a100-80gb-pcie": "a100",
+	"h100": "h100", "h100-pcie": "h100", "h100-sxm": "h100", "h100-sxm5": "h100",
+	"h100-nvl": "h100", "h100-80gb": "h100",
+	"h200": "h200",
+	"l4":   "l4",
+	"l40":  "l40", "l40s": "l40s",
+	"t4":   "t4",
+	"v100": "v100", "v100-sxm2": "v100",
+	"a10": "a10", "a10g": "a10g",
+	"4090": "rtx-4090", "rtx-4090": "rtx-4090",
+	"3090": "rtx-3090", "rtx-3090": "rtx-3090",
+}
+
+// canonicalModelPart resolves the canonical model token for (vendor, model) and
+// reports whether it came from the curated alias table (true) or the
+// deterministic slug fallback (false).
+func canonicalModelPart(vendor, model string) (string, bool) {
+	key := strings.TrimPrefix(slug(model), NormalizeVendor(vendor)+"-")
+	if c, ok := modelAliases[key]; ok {
+		return c, true
+	}
+	return key, false
+}
+
+// Canonical returns the canonical GPU id "<vendor>-<model>" (e.g.
+// "nvidia-rtx-a2000"). An unseeded GPU resolves to a stable slug rather than
+// failing, so matching still works within a provider.
+func Canonical(vendor, model string) string {
+	cv := NormalizeVendor(vendor)
+	part, _ := canonicalModelPart(vendor, model)
+	if part == "" {
+		return cv
+	}
+	return cv + "-" + part
+}
+
+// Known reports whether (vendor, model) matched a curated alias rather than the
+// slug fallback — useful for flagging GPUs that should be added to the table.
+func Known(vendor, model string) bool {
+	_, ok := canonicalModelPart(vendor, model)
+	return ok
+}

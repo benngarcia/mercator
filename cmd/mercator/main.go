@@ -17,6 +17,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
+	runpodadapter "github.com/benngarcia/mercator/internal/adapter/runpod"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/cli"
 	"github.com/benngarcia/mercator/internal/connbroker"
@@ -213,6 +214,10 @@ func buildServerDeps(values map[string]string) (serverDeps, bool) {
 			dockerAdapter = offeringAdapter{Adapter: dockeradapter.New(client), offers: []domain.OfferSnapshot{offer}}
 		})
 		return dockerAdapter, nil
+	})
+
+	factory.Register("runpod", func(config map[string]string, secret string) (adapter.Adapter, error) {
+		return runpodadapter.New(secret, config)
 	})
 
 	br := broker.NewBroker(connbroker.New(svc), factory, resolver)
