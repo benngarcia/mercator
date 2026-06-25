@@ -263,7 +263,11 @@ check_required_files() {
     docs/launch/reviewer-outreach.md
     docs/project/compatibility.md
     docs/project/contributor-starter-queue.md
+    docs/project/issue-drafts/docker-eval-transcript.md
     docs/project/issue-drafts/external-sink-configuration.md
+    docs/project/issue-drafts/longer-launch-demo.md
+    docs/project/issue-drafts/release-archive-install-smoke.md
+    docs/project/issue-drafts/sdk-fake-adapter-examples.md
     docs/project/package-distribution.md
     docs/project/release-process.md
     docs/project/release-notes/v0.1.0.md
@@ -276,6 +280,10 @@ check_required_files() {
     docs/production/workload-run-lifecycle.md
     docs/reference/cli.md
     docs/reference/openapi.md
+    examples/runpod/README.md
+    examples/runpod/busybox-report/README.md
+    examples/runpod/python-sdk/README.md
+    examples/runpod/python-sdk/run.py
     sdk/typescript/README.md
     sdk/python/README.md
     sdk/ruby/README.md
@@ -330,6 +338,7 @@ check_readme_surface() {
   require_pattern README.md 'docs/launch/pre-public-exposure-review\.md' "README links pre-public exposure review"
   require_pattern README.md 'docs/launch/proof-points/README\.md' "README links proof-point evidence"
   require_pattern README.md 'docs/launch/proof-point-template\.md' "README links proof-point template"
+  require_pattern README.md 'examples/runpod/README\.md' "README links RunPod examples"
   require_pattern README.md 'CODE_OF_CONDUCT\.md' "README links code of conduct"
   require_pattern README.md 'SUPPORT\.md' "README links support policy"
   require_pattern README.md 'GOVERNANCE\.md' "README links governance policy"
@@ -383,6 +392,7 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Repository settings checklist documented' "Scorecard includes repository settings checklist"
   require_pattern docs/launch/open-source-readiness.md 'Maintainer reproducible proof baseline documented' "Scorecard includes reproducible proof baseline"
   require_pattern docs/launch/open-source-readiness.md 'Node 24-compatible workflow action pins documented' "Scorecard includes Node 24-compatible workflow action pins"
+  require_pattern docs/launch/open-source-readiness.md 'RunPod provider examples documented' "Scorecard includes RunPod examples"
   require_pattern docs/launch/reviewer-packet.md 'Are public repository settings planned\?' "Reviewer packet asks about repository settings"
   require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
   require_pattern CONTRIBUTING.md 'GOVERNANCE\.md' "Contributing guide links governance policy"
@@ -402,11 +412,26 @@ check_launch_docs() {
   require_pattern docs/launch/public-launch-runbook.md 'docs/launch/github-repository-settings\.md' "Runbook links repository settings checklist"
   require_pattern docs/launch/public-launch-runbook.md 'docs/launch/pre-public-exposure-review\.md' "Runbook links pre-public exposure review"
   require_pattern docs/launch/public-launch-runbook.md 'gh issue create' "Runbook includes starter issue creation commands"
+  require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/longer-launch-demo\.md' "Runbook creates longer-demo issue from draft"
+  require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/sdk-fake-adapter-examples\.md' "Runbook creates SDK examples issue from draft"
+  require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/docker-eval-transcript\.md' "Runbook creates Docker transcript issue from draft"
+  require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/release-archive-install-smoke\.md' "Runbook creates release smoke issue from draft"
+  require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/external-sink-configuration\.md' "Runbook creates external sink issue from draft"
+  require_pattern docs/project/contributor-starter-queue.md 'question` \| First-run help or evaluation questions' "Starter queue documents question label"
+  require_pattern docs/project/contributor-starter-queue.md 'Five launch-ready issue drafts' "Starter queue names launch-ready issue draft count"
   require_pattern docs/launch/github-repository-settings.md 'Branch Protection' "Repository settings checklist covers branch protection"
   require_pattern docs/launch/github-repository-settings.md 'Require approval for all external contributors' "Repository settings checklist covers external contributor workflow approval"
   require_pattern docs/launch/github-repository-settings.md 'Workflow permissions' "Repository settings checklist covers workflow permissions"
   require_pattern docs/launch/github-repository-settings.md 'Dependabot security updates' "Repository settings checklist covers Dependabot security updates"
   require_pattern docs/launch/github-repository-settings.md 'Private vulnerability reporting' "Repository settings checklist covers private vulnerability reporting"
+  require_pattern docs/production/runpod.md 'examples/runpod/' "RunPod docs link provider examples"
+  require_pattern docs/production/runpod.md 'SDK registry packages are not published for the first launch' "RunPod docs are honest about SDK package status"
+  require_pattern examples/runpod/README.md 'SDK registry packages are not published for the first launch' "RunPod examples index explains SDK package status"
+  require_pattern examples/runpod/README.md 'busybox-report' "RunPod examples index links busybox example"
+  require_pattern examples/runpod/README.md 'python-sdk' "RunPod examples index links Python SDK example"
+  require_pattern examples/runpod/busybox-report/README.md 'no SDK package' "Busybox RunPod example is no-SDK"
+  require_pattern examples/runpod/python-sdk/README.md 'git\+https://github\.com/benngarcia/mercator\.git@v0\.1\.0#subdirectory=sdk/python' "Python RunPod example source-installs SDK"
+  require_pattern examples/runpod/python-sdk/run.py 'run_reporter' "Python RunPod example uses reporter helper"
   require_pattern docs/launch/proof-points/README.md 'external/public proof gate' "Proof-points index keeps external proof gate open"
   require_pattern docs/launch/proof-points/fake-adapter-baseline.md 'Mercator fake-adapter smoke test passed' "Proof baseline includes fake smoke evidence"
   require_pattern docs/launch/proof-points/fake-adapter-baseline.md 'scripts/smoke-test-fake\.sh' "Proof baseline includes reproduction command"

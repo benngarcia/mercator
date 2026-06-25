@@ -11,9 +11,9 @@ production readiness claim; production hardening remains tracked in
 | Area | Evidence | Grade | A+ Gap |
 | --- | --- | --- | --- |
 | README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
-| New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; SDK docs show run, event, decision, and sink status reads; the README now routes evaluators across fake, Docker, and RunPod paths with requirements and start docs; the CLI reference now has copy-paste follow-up commands, JSON error examples, and an exit-code reference; the OpenAPI reference now maps route families, auth boundaries, and a first HTTP integration path; fake-eval docs show OpenAPI smoke commands and a sanitized smoke-test transcript; package/distribution plan names source, archive, SDK install paths, per-OS checksum verification, and archive troubleshooting. | A | Publish binaries so users do not need a source checkout. |
+| New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; SDK docs show run, event, decision, and sink status reads; the README now routes evaluators across fake, Docker, and RunPod paths with requirements, start docs, and provider examples; the CLI reference now has copy-paste follow-up commands, JSON error examples, and an exit-code reference; the OpenAPI reference now maps route families, auth boundaries, and a first HTTP integration path; fake-eval docs show OpenAPI smoke commands and a sanitized smoke-test transcript; package/distribution plan names source, archive, SDK install paths, per-OS checksum verification, and archive troubleshooting. | A | Publish binaries so users do not need a source checkout. |
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, governance policy, code of conduct, support policy, dependency update policy, GitHub repository settings checklist, Apache-2.0 license, CI/release workflows, local release archive builder, curated `v0.1.0` release notes, launch audit script, pre-public exposure review, compatibility policy, a concrete external-sink hardening issue draft, and explicit pre-GA status are present. | A | Public CI history, tagged releases, configured branch/security settings, and one external security/design review. |
-| OSS contributor path | `CONTRIBUTING.md`, `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, question/bug/feature/proof issue templates, PR template, roadmap, security policy, starter contributor queue, and public issue-conversion commands are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
+| OSS contributor path | `CONTRIBUTING.md`, `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, question/bug/feature/proof issue templates, PR template, roadmap, security policy, five launch-ready starter issue drafts, and public issue-conversion commands are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm`, a README-linked GIF fallback, a text demo transcript, and screenshot capture notes are tracked in `docs/assets/`. | A | Optional post-launch polish: add a longer narrated demo from the shot list. |
 | Social proof | Repo has durable verification docs, a real operator-oriented runbook set, a public proof-point intake template, and a checked-in maintainer fake-adapter baseline in `docs/launch/proof-points/`. | B+ | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
@@ -97,6 +97,8 @@ Strengths:
 - Fake adapter quickstart gives a successful run without provider setup.
 - README evaluation ladder explains when to stay on fake, move to Docker, or
   try RunPod.
+- RunPod provider examples are documented without assuming SDK registry
+  publishing or synthetic image digests will work on a real provider.
 - Console screenshots and the short WebM demo make the run/decision experience
   concrete.
 - The demo has a GIF fallback and text transcript.
@@ -122,7 +124,7 @@ Strengths:
 
 - Contribution guide names checks, behavior-risk areas, and docs update rules.
 - Issue/PR templates guide useful reports.
-- Starter queue identifies bounded `good first issue` and `help wanted`
+- Starter queue identifies five bounded `good first issue` and `help wanted`
   candidates without steering newcomers into run-safety-critical code first.
 - Proof-point issue form gives users a structured way to share trials,
   integration notes, benchmarks, or external reviews.
@@ -177,6 +179,7 @@ Grade: **A**.
 - [x] Text transcript added for the README demo.
 - [x] Fake-adapter smoke transcript documented.
 - [x] Fake/Docker/RunPod evaluation ladder documented in the README.
+- [x] RunPod provider examples documented.
 - [x] Console screenshot capture notes documented.
 - [x] One-command fake-adapter smoke test added and wired into CI.
 - [x] CLI help available without a configured API URL.
@@ -186,6 +189,7 @@ Grade: **A**.
 - [x] OpenAPI smoke commands documented.
 - [x] OpenAPI route overview documented.
 - [x] Starter contributor queue documented.
+- [x] Five launch-ready starter issue drafts documented.
 - [x] Public starter-issue conversion commands documented.
 - [x] SDK package publishing decision made for first public release.
 - [x] SDK source-install commands documented.

@@ -202,30 +202,38 @@ Then create issues from the starter queue. Keep acceptance criteria intact so
 new contributors can tell when an issue is done.
 
 ```sh
-cat >/tmp/mercator-issue-launch-demo.md <<'EOF'
-Problem:
-
-The README has a short demo and transcript, but the launch scorecard also
-includes a 75-100 second shot list that could show the full fake-adapter
-evaluation path.
-
-Acceptance criteria:
-
-- Follow the shot list in `docs/launch/open-source-readiness.md`.
-- Keep the video free of private tokens, hostnames, and local machine
-  identifiers.
-- Add the selected video under `docs/assets/` or document why it should stay
-  externally hosted.
-- Include either captions or a text transcript.
-- Do not remove the existing short WebM/GIF demo.
-EOF
-
 gh issue create \
   --title "Record a longer launch demo from the shot list" \
   --label "good first issue" \
   --label docs \
   --label console \
-  --body-file /tmp/mercator-issue-launch-demo.md
+  --body-file docs/project/issue-drafts/longer-launch-demo.md
+```
+
+```sh
+gh issue create \
+  --title "Add SDK fake-adapter examples" \
+  --label "good first issue" \
+  --label sdk \
+  --label docs \
+  --body-file docs/project/issue-drafts/sdk-fake-adapter-examples.md
+```
+
+```sh
+gh issue create \
+  --title "Capture a sanitized Docker adapter evaluation transcript" \
+  --label "help wanted" \
+  --label docs \
+  --body-file docs/project/issue-drafts/docker-eval-transcript.md
+```
+
+```sh
+gh issue create \
+  --title "Verify release archive install after v0.1.0" \
+  --label "good first issue" \
+  --label docs \
+  --label release \
+  --body-file docs/project/issue-drafts/release-archive-install-smoke.md
 ```
 
 ```sh

@@ -65,10 +65,15 @@ When a run is launched, the adapter sends `gpuTypeIds = [selected offer's GPU] +
 
 ## Live verification
 
-See `examples/runpod/` for two ready-to-run workloads. Both require the GPU
-accelerator (so they land on RunPod), use the cheapest community GPU, and
-auto-terminate on their exit report (< $0.01 each). Rotate the API key after
-testing.
+See `examples/runpod/` for provider validation examples. Both require the GPU
+accelerator so they land on RunPod, use the cheapest community GPU, and
+auto-terminate on their exit report. They also require a public Mercator report
+URL and real registry-pullable image digests; synthetic fake-mode digests are
+not pullable by RunPod.
+
+SDK registry packages are not published for the first launch. The Python SDK
+example source-installs from a public Mercator Git ref instead of assuming PyPI
+publishing. Rotate the API key after testing.
 
 ### Image refs must be real and pullable
 
