@@ -20,7 +20,8 @@ production readiness claim; production hardening remains tracked in
 Overall current launch grade: **A**. The repo is credible and tryable in the
 private PR state, but an A+ public launch still needs public visibility,
 public CI/release evidence, actual release artifacts, and at least one real
-external proof point.
+external proof point. The remaining permission-bound steps are sequenced in
+`docs/launch/public-launch-runbook.md`.
 
 ## Current GitHub Evidence
 
@@ -116,6 +117,7 @@ Grade: **A**.
 - [x] Starter contributor queue documented.
 - [x] SDK package publishing decision made for first public release.
 - [x] Release archive builder reused by CI and release workflow.
+- [x] Public launch runbook documented.
 - [x] Private draft PR CI run is green.
 - [ ] Launch-prep PR merged to the default branch.
 - [ ] Repository visibility changed from private to public.

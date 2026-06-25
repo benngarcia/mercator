@@ -2,7 +2,9 @@
 
 Mercator does not have a public release yet. This file defines the intended
 release mechanics so the first tagged release can be reviewed instead of
-invented during launch.
+invented during launch. For the full public cutover sequence, including repo
+visibility, public CI, starter issues, and proof collection, see
+`docs/launch/public-launch-runbook.md`.
 
 ## Release Artifacts
 
