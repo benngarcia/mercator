@@ -70,23 +70,7 @@ Acceptance criteria:
 - Keep raw local captures in ignored `output/` until selected.
 - Do not replace existing screenshots unless the new ones are clearer.
 
-### 4. Add An OpenAPI Route Overview
-
-Suggested labels: `good first issue`, `docs`
-
-Problem: `/openapi.json` is easy to smoke-check, but new integrators still need
-a short route-family overview before reading the full JSON document.
-
-Acceptance criteria:
-
-- Add a short route overview covering health/discovery, runs, placement,
-  workloads/images, connections/offers, and sinks.
-- State that health, OpenAPI, and the UI shell are public on the listen
-  interface while executable `/v1/*` routes require bearer auth.
-- Do not regenerate the OpenAPI document.
-- Run the fake adapter server or smoke path needed to verify the command.
-
-### 5. Triage A Production Hardening Issue
+### 4. Triage A Production Hardening Issue
 
 Suggested labels: `help wanted`, `needs-maintainer-input`
 
