@@ -11,7 +11,8 @@ adopting a cluster control plane.
 
 Watch the short fake-adapter console demo:
 [WebM](docs/assets/mercator-demo.webm) or
-[GIF fallback](docs/assets/mercator-demo.gif).
+[GIF fallback](docs/assets/mercator-demo.gif). A text transcript is in
+[docs/assets/README.md](docs/assets/README.md#demo-transcript).
 
 ![Mercator fake-adapter console demo](docs/assets/mercator-demo.gif)
 
@@ -164,6 +165,7 @@ go build ./cmd/mercator
 | Threat model | [docs/project/threat-model.md](docs/project/threat-model.md) |
 | Package and distribution plan | [docs/project/package-distribution.md](docs/project/package-distribution.md) |
 | Starter contributor queue | [docs/project/contributor-starter-queue.md](docs/project/contributor-starter-queue.md) |
+| External reviewer packet | [docs/launch/reviewer-packet.md](docs/launch/reviewer-packet.md) |
 | Public launch runbook | [docs/launch/public-launch-runbook.md](docs/launch/public-launch-runbook.md) |
 | Public proof point template | [docs/launch/proof-point-template.md](docs/launch/proof-point-template.md) |
 | Release process | [docs/project/release-process.md](docs/project/release-process.md) |

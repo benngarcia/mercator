@@ -4,6 +4,9 @@ Mercator should not claim an A+ public launch from maintainer-written docs
 alone. Use this template to collect real public evidence after the repository
 is public.
 
+For reviewer prompts by audience, see
+`docs/launch/reviewer-packet.md`.
+
 ## Accepted Proof Types
 
 At least one of these is required before the launch scorecard can mark social

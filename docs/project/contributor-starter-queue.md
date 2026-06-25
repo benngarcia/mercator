@@ -39,21 +39,23 @@ Acceptance criteria:
 - Do not add new CLI flags or behavior.
 - Run `go run ./cmd/mercator --help` and `git diff --check`.
 
-### 2. Add Captions Or A Text Transcript For The README Demo
+### 2. Record A Longer Launch Demo From The Shot List
 
 Suggested labels: `good first issue`, `docs`, `console`
 
-Problem: The README has a WebM demo and GIF fallback, but users who cannot or
-do not want to watch the animation need a text equivalent.
+Problem: The README has a short demo and transcript, but the launch scorecard
+also includes a 75-100 second shot list that could show the full fake-adapter
+evaluation path.
 
 Acceptance criteria:
 
-- Add a short transcript or caption list under `docs/assets/README.md` or a
-  dedicated launch doc.
-- Cover the run list, run detail, placement decision, and public events shown
-  in the demo.
-- Link the transcript near the README demo links.
-- Do not remove the WebM or GIF fallback.
+- Follow the shot list in `docs/launch/open-source-readiness.md`.
+- Keep the video free of private tokens, hostnames, and local machine
+  identifiers.
+- Add the selected video under `docs/assets/` or document why it should stay
+  externally hosted.
+- Include either captions or a text transcript.
+- Do not remove the existing short WebM/GIF demo.
 
 ### 3. Add SDK Source-Install Examples
 

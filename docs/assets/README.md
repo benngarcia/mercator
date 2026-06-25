@@ -15,6 +15,21 @@ Current assets:
   state.
 - `mercator-connections.png` - connection list and authorization status.
 
+## Demo Transcript
+
+The README demo shows the fake-adapter path a new evaluator can run without
+Docker, RunPod, or a registry.
+
+1. The console opens on the runs list for workspace `ws_1`.
+2. A fake `busybox` run appears with terminal status, exit code, cleanup, and
+   closure state visible in the table.
+3. The run detail view shows the selected run and its lifecycle state.
+4. The decision tab shows the placement decision and why the fake local offer
+   was selected.
+5. The events view shows public run events so the evaluator can connect the UI
+   back to Mercator's event-sourced audit trail.
+6. The demo ends by returning to the documented fake evaluation path.
+
 Demo video regeneration:
 
 1. Start Mercator with `MERCATOR_FAKE_OFFER=1`.

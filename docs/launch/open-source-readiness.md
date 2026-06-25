@@ -14,7 +14,7 @@ production readiness claim; production hardening remains tracked in
 | New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; package/distribution plan names source, archive, and SDK paths. | A | Publish binaries so users do not need a source checkout. |
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, Apache-2.0 license, CI/release workflows, local release archive builder, compatibility policy, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, security policy, and a starter contributor queue are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
-| Assets | Three console screenshots plus `docs/assets/mercator-demo.webm` and a README-linked GIF fallback are tracked in `docs/assets/`. | A | Optional post-launch polish: add captions or a text transcript for the demo. |
+| Assets | Three console screenshots plus `docs/assets/mercator-demo.webm`, a README-linked GIF fallback, and a text demo transcript are tracked in `docs/assets/`. | A | Optional post-launch polish: add a longer narrated demo from the shot list. |
 | Social proof | Repo has durable verification docs, a real operator-oriented runbook set, and a public proof-point intake template. | B | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
 Overall current launch grade: **A**. The repo is credible and tryable in the
@@ -33,6 +33,9 @@ external proof point. The remaining permission-bound steps are sequenced in
 - Public proof collection path: `.github/ISSUE_TEMPLATE/proof_point.yml` and
   `docs/launch/proof-point-template.md` are checked in, but no public proof
   point exists yet.
+- External review packet: `docs/launch/reviewer-packet.md` gives staff
+  engineer, prospective-user, and OSS-developer reviewers concrete questions
+  and verdict formats.
 
 ## Persona Evaluation
 
@@ -48,6 +51,7 @@ Strengths:
   are visible in docs and tests.
 - The root README now gives a clear problem statement and the docs map points
   to operational evidence.
+- External reviewer packet gives a concise staff-engineer checklist.
 
 Concerns before A+:
 
@@ -69,6 +73,7 @@ Strengths:
 - Fake adapter quickstart gives a successful run without provider setup.
 - Console screenshots and the short WebM demo make the run/decision experience
   concrete.
+- The demo has a GIF fallback and text transcript.
 - `mercator --help` works before the user has configured a server URL.
 - SDK happy path shows the intended integration shape.
 
@@ -92,6 +97,8 @@ Strengths:
   candidates without steering newcomers into run-safety-critical code first.
 - Proof-point issue form gives users a structured way to share trials,
   integration notes, benchmarks, or external reviews.
+- External reviewer packet gives contributors a clear way to judge the launch
+  surface before opening feedback.
 - Security policy avoids public vulnerability disclosure by default.
 - Roadmap separates launch polish, production hardening, later work, and
   non-goals.
@@ -118,6 +125,7 @@ Grade: **A**.
 - [x] Package/install story documented.
 - [x] Demo video recorded and linked from the README.
 - [x] README GIF fallback generated from the demo video.
+- [x] Text transcript added for the README demo.
 - [x] One-command fake-adapter smoke test added and wired into CI.
 - [x] CLI help available without a configured API URL.
 - [x] Starter contributor queue documented.
@@ -125,6 +133,7 @@ Grade: **A**.
 - [x] Release archive builder reused by CI and release workflow.
 - [x] Public launch runbook documented.
 - [x] Public proof-point intake path documented.
+- [x] External reviewer packet documented.
 - [x] Private draft PR CI run is green.
 - [ ] Launch-prep PR merged to the default branch.
 - [ ] Repository visibility changed from private to public.
