@@ -41,19 +41,21 @@ Acceptance criteria:
 - Include either captions or a text transcript.
 - Do not remove the existing short WebM/GIF demo.
 
-### 2. Triage A Production Hardening Issue
+### 2. Open The External Sink Configuration Design Issue
 
 Suggested labels: `help wanted`, `needs-maintainer-input`
 
-Problem: Some production hardening items need maintainer direction before
-implementation, especially registry credentials and external sink configuration.
+Problem: External sink configuration needs maintainer direction before
+implementation. The issue draft at
+`docs/project/issue-drafts/external-sink-configuration.md` narrows this to the
+first `cmd/mercator` sink configuration surface and failure model.
 
 Acceptance criteria:
 
-- Pick one item from `docs/production/known-limitations.md`.
-- Open a design issue that states the problem, non-goals, proposed first slice,
-  and acceptance criteria.
-- Do not implement the behavior in the same starter issue.
+- Open a GitHub issue from
+  `docs/project/issue-drafts/external-sink-configuration.md`.
+- Keep the `help wanted` and `needs-maintainer-input` labels.
+- Do not implement sink behavior in the same starter issue.
 
 ## Maintainer Rules
 

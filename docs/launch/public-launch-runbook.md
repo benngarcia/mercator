@@ -184,25 +184,11 @@ gh issue create \
 ```
 
 ```sh
-cat >/tmp/mercator-issue-hardening-triage.md <<'EOF'
-Problem:
-
-Some production hardening items need maintainer direction before implementation,
-especially registry credentials and external sink configuration.
-
-Acceptance criteria:
-
-- Pick one item from `docs/production/known-limitations.md`.
-- Open a design issue that states the problem, non-goals, proposed first slice,
-  and acceptance criteria.
-- Do not implement the behavior in the same starter issue.
-EOF
-
 gh issue create \
-  --title "Triage a production hardening issue" \
+  --title "Design external sink configuration for cmd/mercator" \
   --label "help wanted" \
   --label "needs-maintainer-input" \
-  --body-file /tmp/mercator-issue-hardening-triage.md
+  --body-file docs/project/issue-drafts/external-sink-configuration.md
 ```
 
 ## 6. Collect A Public Proof Point
