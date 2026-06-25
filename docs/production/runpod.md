@@ -69,3 +69,21 @@ See `examples/runpod/` for two ready-to-run workloads. Both require the GPU
 accelerator (so they land on RunPod), use the cheapest community GPU, and
 auto-terminate on their exit report (< $0.01 each). Rotate the API key after
 testing.
+
+### Image refs must be real and pullable
+
+Unlike the local docker adapter, RunPod **actually pulls** the container image
+on a provisioned host. The image ref that reaches the adapter must therefore be
+a real, registry-pullable tag or digest. Two consequences:
+
+- Mercator's image resolver must produce real registry digests. The default dev
+  binary resolves tags to **synthetic** digests (for offline testing); those are
+  not on any registry and RunPod rejects them with HTTP 500 "image … was not
+  found on the registry." When testing RunPod with such a build, submit images
+  already pinned to a **real** digest (e.g.
+  `busybox@sha256:<real-index-digest>`); the resolver passes already-pinned refs
+  through unchanged.
+- Workloads self-report their exit code through `MERCATOR_REPORT_URL`. Behind a
+  Cloudflare-fronted Mercator, the report client must send a non-default
+  `User-Agent` (the SDKs do; a raw `curl`/`wget` is fine, but plain
+  `python-urllib`/default agents can be 403'd by Cloudflare's managed rules).
