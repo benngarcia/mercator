@@ -10,16 +10,26 @@ production readiness claim; production hardening remains tracked in
 
 | Area | Evidence | Grade | A+ Gap |
 | --- | --- | --- | --- |
-| README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the first run exists. |
+| README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
 | New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; CLI hides run IDs and idempotency on the happy path. | A- | Publish binaries or package-manager install commands so users do not need a source checkout. |
 | Staff-engineer trust | Production docs, known limitations, security model, contribution bar, Apache-2.0 license, CI/release workflows, compatibility policy, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, and security policy are checked in. | A | Add labeled starter issues after the first public triage pass. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm` are tracked in `docs/assets/`. | A | Optionally add a compressed GIF to the README if GitHub video rendering is not prominent enough. |
 | Social proof | Repo has durable verification docs and a real operator-oriented runbook set. | B- | Add a public user story, integration note, benchmark, or maintainer-approved case study. |
 
-Overall current launch grade: **A**. The repo is credible and tryable, but an
-A+ public launch still needs public CI/release evidence, package/install
-distribution, and at least one real external proof point.
+Overall current launch grade: **A**. The repo is credible and tryable in the
+private PR state, but an A+ public launch still needs public visibility,
+public CI/release evidence, package/install distribution, and at least one real
+external proof point.
+
+## Current GitHub Evidence
+
+- Draft PR: `https://github.com/benngarcia/mercator/pull/7`
+- Head commit: `214f1d9b2d8fd7ff6959e7a7b6c579871c15546d`
+- CI run: `https://github.com/benngarcia/mercator/actions/runs/28143623823`
+- CI result: Go, SDKs, and Console jobs succeeded.
+- Repository visibility at evaluation time: private. This means the CI run is
+  useful launch-prep evidence, but not public social proof yet.
 
 ## Persona Evaluation
 
@@ -39,6 +49,7 @@ Strengths:
 Concerns before A+:
 
 - Need public CI run history and release artifacts.
+- Need the launch-prep PR merged or otherwise promoted to the default branch.
 - Need a maintainer-reviewed threat model for token, credential, and adapter
   boundaries.
 
@@ -96,6 +107,9 @@ Grade: **A**.
 - [x] Release workflow and release process documented.
 - [x] API/SDK compatibility policy documented.
 - [x] Demo video recorded and linked from the README.
+- [x] Private draft PR CI run is green.
+- [ ] Launch-prep PR merged to the default branch.
+- [ ] Repository visibility changed from private to public.
 - [ ] First public CI run is green.
 - [ ] Tagged release with binaries/checksums.
 - [ ] Package install story for CLI/server and SDKs.
