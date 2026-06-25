@@ -92,7 +92,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		)
 		closeFn = deps.close
 	} else {
-		handler, closeFn, err = httpapi.HandlerForSQLiteWithOptions(context.Background(), dsn, nil, httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
+		handler, closeFn, err = httpapi.HandlerForSQLiteWithOptions(context.Background(), dsn, fakeOffersFromEnv(env), httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
 		if err != nil {
 			stdlog.Fatalf("start mercator: %v", err)
 		}
@@ -272,6 +272,65 @@ func buildServerDeps(values map[string]string) (serverDeps, bool) {
 		publicURL:   publicURL,
 		close:       closeFn,
 	}, true
+}
+
+func fakeOffersFromEnv(values map[string]string) []domain.OfferSnapshot {
+	mode := strings.TrimSpace(strings.ToLower(values["MERCATOR_FAKE_OFFER"]))
+	if mode == "" {
+		return nil
+	}
+	kind := domain.OfferKindStanding
+	if mode == string(domain.OfferKindProvisionable) {
+		kind = domain.OfferKindProvisionable
+	}
+	now := time.Now().UTC()
+	return []domain.OfferSnapshot{{
+		ID:           "offer_local_fake",
+		ConnectionID: "conn_local_fake",
+		AdapterType:  "fake",
+		Kind:         kind,
+		NativeRef:    "local-fake",
+		ObservedAt:   now,
+		ExpiresAt:    now.Add(time.Hour),
+		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
+		Resources: domain.ResourceInventory{
+			CPUMillis:          2000,
+			MemoryBytes:        4 * 1024 * 1024 * 1024,
+			EphemeralDiskBytes: 16 * 1024 * 1024 * 1024,
+		},
+		Capabilities: domain.CapabilityProfile{
+			Container: domain.ContainerCapabilities{
+				MaxContainers:       8,
+				SupportsDigestRefs:  true,
+				MaxEnvironmentBytes: 32768,
+			},
+			Lifecycle: domain.LifecycleCapabilities{
+				IdempotentLaunch: "launch_key",
+				ListOwned:        true,
+				CancelQueued:     true,
+			},
+			Network: domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
+			Pricing: domain.PricingCapabilities{Known: true},
+		},
+		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
+			Scope:      domain.NetworkScopeRegistry,
+			Statistic:  "p10",
+			ValueMbps:  100,
+			Source:     "local",
+			ObservedAt: now,
+			ValidUntil: now.Add(time.Hour),
+			Confidence: 1,
+		}}},
+		Pricing: domain.PriceModel{
+			Currency:             "USD",
+			RatePerSecondUSD:     0,
+			MinimumChargeSeconds: 0,
+			GranularitySeconds:   1,
+			Known:                true,
+		},
+		ImageCache: domain.ImageCacheEvidence{Known: true},
+		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
+	}}
 }
 
 // bootstrapWorkspaces returns the concrete workspace ids under which the

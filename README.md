@@ -1,76 +1,189 @@
 # Mercator
 
-An **event-sourced OCI run broker**.
+Mercator is an **event-sourced OCI run broker** for teams that need to run
+immutable container workloads on the best feasible compute offer without
+adopting a cluster control plane.
 
-> Run this immutable container workload against the best currently feasible offer.
+> "Run this container image now, on the cheapest/fastest feasible place, and
+> tell me exactly what happened."
 
-Mercator is a single Go process with an embedded SQLite event log, in-process
-provider adapters, and a deterministic scheduler. It places immutable container
-workloads onto the best currently feasible offer across providers — with no
-cluster object, SSH bootstrap, code synchronization, or managed runtime.
+![Mercator console showing runs](docs/assets/mercator-runs.png)
 
-## Status
+## Why It Exists
 
-M13-verified V1 slice. The current implementation covers the load-bearing run
-broker path and operator surfaces:
+Small teams often outgrow "ssh into a box and start Docker" before they are
+ready to operate Kubernetes, Slurm, or a custom GPU scheduler. The hard parts
+show up quickly:
 
-1. **Event core** — SQLite `EventLog` (atomic multi-event append, optimistic
-   concurrency, command idempotency), CloudEvents-shaped envelope, in-process
-   subscriptions, durable cursors, and read-model projections.
-2. **Domain** — Workload / Run / Attempt / Offer / Decision / connection /
-   sink models and their state transitions.
-3. **Adapters** — deterministic fake provider and Docker host adapter, including
-   a guarded live Docker integration test.
-4. **Scheduler** — pure capability filtering plus a money-equivalent cost/latency
-   placement model that emits an audited decision.
-5. **Run lifecycle** — event-first orchestration through placement, launch intent,
-   launch, observation, cancel, cleanup confirmation, and run closure.
-6. **Surfaces** — REST/OpenAPI, JSON-first CLI, embedded static UI, env-based
-   workload configuration, workload revisions, offer reads, connection reads,
-   sink replay, and health.
+- placement decisions need to explain why one machine or provider won;
+- retries need idempotency, not duplicate launches;
+- operators need a run history, exit codes, cleanup status, and event audit;
+- workloads should not leak secrets into public events;
+- local Docker, standing pools, and cloud GPU providers need one run contract.
 
-Remaining limitations are tracked in `docs/long-horizon/v1/Documentation.md`;
-notably workload-owned secret management, registry-backed tag resolution, and concrete
-Kafka/Postgres client wiring are still basic.
+Mercator keeps that surface small. It runs as one Go process with SQLite as the
+event log, exposes a JSON HTTP API and CLI, embeds an operator console, and
+drives provider adapters through an auditable run lifecycle.
 
-For operator-facing V1 evaluation and production-hardening runbooks, start at
-`docs/production/README.md`.
+## What It Does
 
-## Build
+- Accepts a minimal image shorthand or a full OCI workload revision.
+- Resolves and records immutable workload/run state in an event log.
+- Filters offers by platform, resources, accelerator needs, capability facts,
+  price constraints, and policy.
+- Records placement decisions and rejected candidates for audit.
+- Launches through fake, Docker, and RunPod-oriented adapter paths.
+- Surfaces run status, exit codes, cleanup disposition, public events, sink
+  cursors/replay, and workspace-scoped reads.
+- Provides hand-written TypeScript, Python, and Ruby SDKs for the V1 API.
+
+Mercator is **V1 evaluation-ready, not GA infrastructure yet**. See
+[Known Limitations](docs/production/known-limitations.md) and
+[Roadmap](ROADMAP.md) before relying on it for production workloads.
+
+## Try It In 5 Minutes
+
+The fake adapter exercises the full broker path without Docker, RunPod, or a
+registry. You need Go 1.25+, `jq`, and a shell.
+
+Terminal 1:
 
 ```sh
-go build ./...
+rm -f /tmp/mercator-demo.db /tmp/mercator-demo.db-wal /tmp/mercator-demo.db-shm
+
+export MERCATOR_ADDR=127.0.0.1:8080
+export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_AUTH_WORKSPACES='ws_1'
+export MERCATOR_FAKE_OFFER=1
+
+go run ./cmd/mercator serve
+```
+
+Terminal 2:
+
+```sh
+export MERCATOR_API_URL=http://127.0.0.1:8080
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_WORKSPACE_ID=ws_1
+
+RUN_ID="$(go run ./cmd/mercator run create busybox -- echo hi | jq -r '.run.id')"
+
+go run ./cmd/mercator run get --run-id "$RUN_ID" \
+  | jq '{id: .run.id, outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
+```
+
+Expected shape:
+
+```json
+{
+  "id": "run_...",
+  "outcome": "succeeded",
+  "exit_code": 0,
+  "cleanup": "confirmed",
+  "closed": true
+}
+```
+
+Open the console at
+[`http://127.0.0.1:8080/?workspace_id=ws_1`](http://127.0.0.1:8080/?workspace_id=ws_1)
+and paste `dev-token` when prompted.
+
+For a fuller local evaluation, use
+[docs/production/fake-eval-path.md](docs/production/fake-eval-path.md). For a
+real Docker host, use
+[docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md).
+
+## SDK Happy Path
+
+The SDKs hide the low-level idempotency mechanics for the common case. A caller
+can ask Mercator to run an image, wait for closure, and read the exit code from
+the run object.
+
+```python
+from mercator import MercatorClient
+
+client = MercatorClient("http://127.0.0.1:8080", token="dev-token", workspace_id="ws_1")
+
+created = client.run_image("busybox", args=["echo", "hi"])
+result = client.wait_run_until_terminal(created["run_id"])
+
+print(result["run"]["outcome"], result["run"]["exit_code"])
+```
+
+- TypeScript: [sdk/typescript](sdk/typescript/README.md)
+- Python: [sdk/python](sdk/python/README.md)
+- Ruby: [sdk/ruby](sdk/ruby/README.md)
+
+## Console
+
+The embedded React console is built into `web/static` and served by the Go
+binary. It is meant for operators to scan runs, inspect placement decisions,
+manage connections, and replay sink delivery.
+
+![Mercator placement decision](docs/assets/mercator-run-decision.png)
+
+Frontend source lives in [web/app](web/app/README.md). To rebuild the embedded
+assets:
+
+```sh
+mise run ui
+go build ./cmd/mercator
+```
+
+## Documentation Map
+
+| Need | Start Here |
+| --- | --- |
+| Install, start, health checks | [docs/production/install-configuration.md](docs/production/install-configuration.md) |
+| First deterministic evaluation | [docs/production/fake-eval-path.md](docs/production/fake-eval-path.md) |
+| Docker adapter operation | [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md) |
+| Workload and run lifecycle | [docs/production/workload-run-lifecycle.md](docs/production/workload-run-lifecycle.md) |
+| Authentication and workspaces | [docs/production/authentication-workspaces.md](docs/production/authentication-workspaces.md) |
+| Security boundaries | [docs/production/security-model.md](docs/production/security-model.md) |
+| Backup and restore | [docs/production/backup-recovery.md](docs/production/backup-recovery.md) |
+| Human evaluation checklist | [docs/production/human-eval-checklist.md](docs/production/human-eval-checklist.md) |
+| Open source launch readiness | [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md) |
+
+## Build And Test
+
+```sh
 go test ./...
+go build ./...
+
+cd sdk/typescript && npm ci && npm test
+cd ../python && python3 -m unittest discover -s tests
+cd ../ruby && ruby -Ilib:test test/test_client.rb
 ```
 
-The project uses a pure-Go SQLite driver (`modernc.org/sqlite`) so the binary
-builds without cgo.
+The Go binary uses the pure-Go SQLite driver `modernc.org/sqlite`, so normal
+builds do not require cgo.
 
-## Run
+## Project Status
 
-```sh
-MERCATOR_SQLITE_DSN='file:/tmp/mercator.db' go run ./cmd/mercator
-```
+Current branch status:
 
-The server listens on `127.0.0.1:8080` by default. Set `MERCATOR_ADDR` to
-override it. The executable API is bearer-token protected; set
-`MERCATOR_API_TOKEN` explicitly, or read the generated one from the startup log.
-Use the same token for CLI calls:
+- M13-verified V1 broker slice with fake, Docker, and RunPod-oriented paths.
+- Embedded operator console and JSON-first CLI.
+- Hand-written SDKs for TypeScript, Python, and Ruby.
+- Production evaluation docs and known limitations are checked in.
+- Open source launch prep is underway; screenshots are tracked, and the demo
+  video/social-proof plan is in
+  [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md).
 
-```sh
-MERCATOR_API_URL=http://127.0.0.1:8080 \
-MERCATOR_API_TOKEN='<token>' \
-go run ./cmd/mercator run list --workspace-id ws_1
-```
+Important pre-GA gaps include package publishing, release tags, public CI run
+history, demo video, stronger external sink wiring, registry credential flows,
+and a maintainer-approved compatibility policy.
 
-For local fake-adapter smoke testing, set `MERCATOR_FAKE_OFFER=1`. To run
-through the Docker host adapter, set `MERCATOR_ADAPTER=docker`; Docker workloads
-must still use digest-pinned images accepted by the V1 workload validator.
+## Contributing
 
-## SDKs
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. The
+short version: keep changes narrow, include tests or docs evidence, run the
+relevant local checks, and update production docs when behavior changes.
 
-Hand-written SDKs for the V1 HTTP API:
+Security issues should be reported privately. See [SECURITY.md](SECURITY.md).
 
-- TypeScript: [`sdk/typescript`](sdk/typescript/README.md)
-- Python: [`sdk/python`](sdk/python/README.md)
-- Ruby: [`sdk/ruby`](sdk/ruby/README.md)
+## License
+
+Mercator is licensed under the Apache License, Version 2.0. See
+[LICENSE](LICENSE) and [NOTICE](NOTICE).

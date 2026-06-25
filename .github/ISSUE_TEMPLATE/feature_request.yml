@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a scoped Mercator improvement.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user/operator problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the smallest useful change.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - broker / event log
+        - scheduler / placement
+        - adapter
+        - HTTP API / OpenAPI
+        - CLI
+        - SDK
+        - console
+        - docs / launch
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: What should this explicitly not do?
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Links, examples, screenshots, or related docs that make the case.

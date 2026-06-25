@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 // TestBuildServerDepsReportingSigner verifies that buildServerDeps populates the
@@ -105,6 +106,31 @@ func TestRunDelegatesJSONCLICommands(t *testing.T) {
 	var decoded map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
 		t.Fatalf("stdout was not json: %q: %v", stdout.String(), err)
+	}
+}
+
+func TestFakeOffersFromEnv(t *testing.T) {
+	if got := fakeOffersFromEnv(map[string]string{}); got != nil {
+		t.Fatalf("unset MERCATOR_FAKE_OFFER should not seed offers, got %+v", got)
+	}
+
+	standing := fakeOffersFromEnv(map[string]string{"MERCATOR_FAKE_OFFER": "1"})
+	if len(standing) != 1 {
+		t.Fatalf("expected one standing fake offer, got %+v", standing)
+	}
+	if standing[0].ID != "offer_local_fake" || standing[0].AdapterType != "fake" || standing[0].Kind != domain.OfferKindStanding {
+		t.Fatalf("unexpected standing fake offer: %+v", standing[0])
+	}
+	if standing[0].ConnectionID != "conn_local_fake" || standing[0].Platform.Architecture != "amd64" {
+		t.Fatalf("standing fake offer missing launch-critical identity/platform fields: %+v", standing[0])
+	}
+
+	provisionable := fakeOffersFromEnv(map[string]string{"MERCATOR_FAKE_OFFER": "provisionable"})
+	if len(provisionable) != 1 {
+		t.Fatalf("expected one provisionable fake offer, got %+v", provisionable)
+	}
+	if provisionable[0].ID != "offer_local_fake" || provisionable[0].AdapterType != "fake" || provisionable[0].Kind != domain.OfferKindProvisionable {
+		t.Fatalf("unexpected provisionable fake offer: %+v", provisionable[0])
 	}
 }
 
