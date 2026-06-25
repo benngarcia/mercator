@@ -381,6 +381,7 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Repository settings checklist documented' "Scorecard includes repository settings checklist"
   require_pattern docs/launch/open-source-readiness.md 'Maintainer reproducible proof baseline documented' "Scorecard includes reproducible proof baseline"
   require_pattern docs/launch/open-source-readiness.md 'Node 24-compatible workflow action pins documented' "Scorecard includes Node 24-compatible workflow action pins"
+  require_pattern docs/launch/reviewer-packet.md 'Are public repository settings planned\?' "Reviewer packet asks about repository settings"
   require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
   require_pattern CONTRIBUTING.md 'GOVERNANCE\.md' "Contributing guide links governance policy"
   require_pattern .github/ISSUE_TEMPLATE/config.yml 'SUPPORT\.md' "Issue template config links support policy"
