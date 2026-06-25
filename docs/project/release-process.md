@@ -38,7 +38,7 @@ go build ./...
 cd web/app && bun install && bun run typecheck && bun run build
 cd ../../sdk/typescript && npm ci && npm test
 cd ../python && python3 -m unittest discover -s tests
-cd ../ruby && ruby -Ilib:test test/test_client.rb
+cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 Run the fake-adapter smoke:

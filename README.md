@@ -158,7 +158,7 @@ go build ./...
 
 cd sdk/typescript && npm ci && npm test
 cd ../python && python3 -m unittest discover -s tests
-cd ../ruby && ruby -Ilib:test test/test_client.rb
+cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 The Go binary uses the pure-Go SQLite driver `modernc.org/sqlite`, so normal

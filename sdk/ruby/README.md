@@ -34,11 +34,12 @@ From the repository checkout:
 
 ```sh
 cd sdk/ruby
-ruby -Ilib:test test/test_client.rb
+bundle install
+bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 The SDK uses only Ruby standard-library runtime modules: `Net::HTTP`, `URI`,
-`JSON`, and `Timeout`.
+`JSON`, and `Timeout`. Tests use WEBrick as a development dependency.
 
 ## Client
 
