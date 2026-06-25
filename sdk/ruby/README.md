@@ -28,6 +28,31 @@ puts "#{run.fetch('outcome')} #{run.fetch('exit_code')}" # => succeeded 0
 `Idempotency-Key` from it (`"#{run_id}:create"`). Pass `idempotency_key:` only
 when you need to coordinate retries with an external caller.
 
+## Install from source
+
+The Ruby gem is not published to RubyGems for the first public launch. Install
+it from a Mercator source checkout instead.
+
+For a Bundler-managed application, add the local checkout to your `Gemfile`:
+
+```ruby
+gem "mercator-sdk", path: "/path/to/mercator/sdk/ruby"
+```
+
+Then run:
+
+```sh
+bundle install
+```
+
+For a one-off local gem install from the checkout:
+
+```sh
+cd sdk/ruby
+gem build mercator-sdk.gemspec
+gem install ./mercator-sdk-0.1.0.gem
+```
+
 ## Local development
 
 From the repository checkout:

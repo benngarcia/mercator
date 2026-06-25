@@ -74,9 +74,20 @@ returns `409 IDEMPOTENCY_CONFLICT`.
 
 ## Install
 
-From the repository checkout:
+The Python package is not published to PyPI for the first public launch. Install
+it from a Mercator source checkout instead.
+
+From an existing checkout:
 
 ```sh
+python3 -m pip install -e sdk/python
+```
+
+Or from a fresh checkout:
+
+```sh
+git clone https://github.com/benngarcia/mercator.git
+cd mercator
 python3 -m pip install -e sdk/python
 ```
 

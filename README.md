@@ -132,6 +132,10 @@ print(result["run"]["outcome"], result["run"]["exit_code"])
 - Python: [sdk/python](sdk/python/README.md)
 - Ruby: [sdk/ruby](sdk/ruby/README.md)
 
+First-launch SDK registry publishing is deferred. Until packages are published,
+install SDKs from a source checkout; each SDK README includes copy-paste source
+install commands.
+
 ## Console
 
 The embedded React console is built into `web/static` and served by the Go

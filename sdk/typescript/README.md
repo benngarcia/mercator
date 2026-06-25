@@ -77,6 +77,28 @@ recorded and a present `0` is a real success exit.
 
 ## Install for local development
 
+The TypeScript package is not published to npm for the first public launch.
+Install it from a Mercator source checkout instead.
+
+To build a local tarball from the checkout:
+
+```sh
+git clone https://github.com/benngarcia/mercator.git
+cd mercator/sdk/typescript
+npm ci
+npm run build
+npm pack --pack-destination /tmp
+```
+
+Then install the generated tarball in your application:
+
+```sh
+cd /path/to/your/app
+npm install /tmp/mercator-sdk-0.1.0.tgz
+```
+
+For SDK development inside this repository:
+
 ```sh
 cd sdk/typescript
 npm install

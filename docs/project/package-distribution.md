@@ -69,9 +69,45 @@ provenance, and clean-environment install tests are confirmed.
 
 The SDKs are source-installable today:
 
-- TypeScript: `sdk/typescript`
-- Python: `sdk/python`
-- Ruby: `sdk/ruby`
+TypeScript local tarball:
+
+```sh
+git clone https://github.com/benngarcia/mercator.git
+cd mercator/sdk/typescript
+npm ci
+npm run build
+npm pack --pack-destination /tmp
+
+cd /path/to/your/app
+npm install /tmp/mercator-sdk-0.1.0.tgz
+```
+
+Python editable install:
+
+```sh
+git clone https://github.com/benngarcia/mercator.git
+cd mercator
+python3 -m pip install -e sdk/python
+```
+
+Ruby local path or gem install:
+
+```ruby
+# Gemfile
+gem "mercator-sdk", path: "/path/to/mercator/sdk/ruby"
+```
+
+```sh
+cd mercator/sdk/ruby
+gem build mercator-sdk.gemspec
+gem install ./mercator-sdk-0.1.0.gem
+```
+
+See the language READMEs for usage examples:
+
+- TypeScript: `sdk/typescript/README.md`
+- Python: `sdk/python/README.md`
+- Ruby: `sdk/ruby/README.md`
 
 Recommended future package names:
 
