@@ -1190,21 +1190,23 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 
 func HandlerForSQLiteWithOptions(ctx context.Context, dsn string, offer []domain.OfferSnapshot, options ...Option) (http.Handler, func() error, error) {
 	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
-	return HandlerForSQLiteWithAdapter(ctx, dsn, ad, options...)
+	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
+	return handlerForSQLite(ctx, dsn, ad, resolver, options...)
 }
 
 func HandlerForSQLiteWithAdapter(ctx context.Context, dsn string, ad adapter.Adapter, options ...Option) (http.Handler, func() error, error) {
+	return handlerForSQLite(ctx, dsn, ad, nil, options...)
+}
+
+func handlerForSQLite(ctx context.Context, dsn string, ad adapter.Adapter, resolver interface {
+	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
+}, options ...Option) (http.Handler, func() error, error) {
 	log, err := eventlog.OpenSQLite(ctx, dsn)
 	if err != nil {
 		return nil, nil, err
 	}
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	// Synthetic-digest resolution lets the minimal create path
-	// (POST /v1/runs {"image":"busybox"}) resolve an arbitrary tag to a
-	// deterministic digest with no network, keeping fake mode end-to-end
-	// exercisable without a pre-pinned image.
-	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
 	return NewWithAllServices(orch, sched, ad, workload.New(log), sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}), connection.New(log), offers.New(log), resolver, options...), log.Close, nil
 }
 

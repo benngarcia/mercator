@@ -63,9 +63,10 @@ MERCATOR_API_TOKEN='<token>' \
 go run ./cmd/mercator run list --workspace-id ws_1
 ```
 
-For local fake-adapter smoke testing, set `MERCATOR_FAKE_OFFER=1`. To run
-through the Docker host adapter, set `MERCATOR_ADAPTER=docker`; Docker workloads
-must still use digest-pinned images accepted by the V1 workload validator.
+By default, `serve` starts the broker-backed path and registers an authorized
+Docker connection for the configured workspace(s). Set `MERCATOR_ADAPTER=fake`
+only for local fake-adapter smoke testing. Docker workloads can use local tag
+refs; provider-backed workloads such as RunPod must use registry-pullable refs.
 
 ## SDKs
 

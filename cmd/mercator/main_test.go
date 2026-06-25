@@ -19,7 +19,6 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("with_key_and_public_url_signer_enabled", func(t *testing.T) {
 		deps, ok := buildServerDeps(map[string]string{
-			"MERCATOR_ADAPTER":     "docker",
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			"MERCATOR_SECRET_KEY":  hexKey,
@@ -42,7 +41,6 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("without_public_url_signer_still_built_but_reporting_off", func(t *testing.T) {
 		deps, ok := buildServerDeps(map[string]string{
-			"MERCATOR_ADAPTER":     "docker",
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			"MERCATOR_SECRET_KEY":  hexKey,
@@ -66,7 +64,6 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("without_secret_key_signer_disabled", func(t *testing.T) {
 		deps, ok := buildServerDeps(map[string]string{
-			"MERCATOR_ADAPTER":     "docker",
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			// No MERCATOR_SECRET_KEY, no MERCATOR_PUBLIC_URL
@@ -79,6 +76,38 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 			t.Fatal("signer should be disabled when no MERCATOR_SECRET_KEY is set")
 		}
 	})
+}
+
+func TestBuildServerDepsDefaultsToDockerBroker(t *testing.T) {
+	deps, ok := buildServerDeps(map[string]string{
+		"MERCATOR_DOCKER_ARCH": "amd64",
+		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+	})
+	if !ok {
+		t.Fatal("expected default server deps")
+	}
+	defer func() {
+		if err := deps.close(); err != nil {
+			t.Fatalf("close deps: %v", err)
+		}
+	}()
+
+	offers, err := deps.broker.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	if len(offers) != 1 || offers[0].AdapterType != "docker" {
+		t.Fatalf("expected one docker offer by default, got %+v", offers)
+	}
+}
+
+func TestBuildServerDepsAllowsExplicitFakeMode(t *testing.T) {
+	_, ok := buildServerDeps(map[string]string{
+		"MERCATOR_ADAPTER": "fake",
+	})
+	if ok {
+		t.Fatal("expected fake mode to bypass broker-backed server deps")
+	}
 }
 
 func TestRunDelegatesJSONCLICommands(t *testing.T) {
@@ -110,7 +139,6 @@ func TestRunDelegatesJSONCLICommands(t *testing.T) {
 
 func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
 	deps, ok := buildServerDeps(map[string]string{
-		"MERCATOR_ADAPTER":     "docker",
 		"MERCATOR_DOCKER_ARCH": "amd64",
 		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 	})

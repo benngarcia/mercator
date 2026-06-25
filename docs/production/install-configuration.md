@@ -42,13 +42,12 @@ server path.
 | `MERCATOR_SQLITE_DSN` | `file:/data/mercator.db` | SQLite event-log DSN. |
 | `MERCATOR_API_TOKEN` | generated at startup | Bearer token for `/v1/*`. Set explicitly for operations. |
 | `MERCATOR_AUTH_WORKSPACES` | `*` | Comma-separated workspace allow list for the bearer principal. |
-| `MERCATOR_FAKE_OFFER` | unset | Any non-empty value seeds one fake offer. |
-| `MERCATOR_ADAPTER` | unset | Set to `docker` for the Docker host adapter. |
+| `MERCATOR_ADAPTER` | unset | Leave unset for broker-backed service mode with the bootstrap Docker connection. Set to `fake` only for fake/offline smoke tests. |
 | `MERCATOR_DOCKER_BIN` | `docker` lookup behavior in CLI client | Docker executable path. |
-| `MERCATOR_DOCKER_NATIVE_REF` | `local` | Native reference in the synthetic Docker offer. |
-| `MERCATOR_DOCKER_OFFER_ID` | `offer_local_docker` | Synthetic Docker offer ID. |
-| `MERCATOR_DOCKER_CONNECTION_ID` | `conn_local_docker` | Synthetic Docker connection ID. |
-| `MERCATOR_DOCKER_ARCH` | `amd64` | Architecture advertised by the Docker offer. |
+| `MERCATOR_DOCKER_NATIVE_REF` | derived from Docker context/host, otherwise `loopback` | Native reference in the bootstrap Docker offer. |
+| `MERCATOR_DOCKER_OFFER_ID` | `offer_docker_<label>` | Bootstrap Docker offer ID. |
+| `MERCATOR_DOCKER_CONNECTION_ID` | `conn_docker_<label>` | Bootstrap Docker connection ID. |
+| `MERCATOR_DOCKER_ARCH` | probed from Docker, fallback `amd64` | Optional architecture override for the Docker offer. |
 | `MERCATOR_API_URL` | none | CLI base URL; required for CLI mode unless `--api-url` is provided. |
 
 ## Health And Discovery

@@ -26,7 +26,6 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
-	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/offers"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
@@ -71,7 +70,6 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 			orchOpts = append(orchOpts, orchestrator.WithReporting(deps.publicURL, deps.signer))
 		}
 		orch := orchestrator.New(deps.log, sched, deps.broker, orchOpts...)
-		imageResolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
 		serverOpts := []httpapi.Option{
 			httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
 			httpapi.WithSecretStore(deps.secretStore),
@@ -87,7 +85,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 			sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 			deps.conns,
 			offers.New(deps.log),
-			imageResolver,
+			nil,
 			serverOpts...,
 		)
 		closeFn = deps.close
@@ -151,9 +149,9 @@ type serverDeps struct {
 // registered under the default workspace "ws_1"; full multi-workspace bootstrap
 // is future work.
 //
-// Returns ok=false for any non-docker adapter (the fake fallback path).
+// Returns ok=false only for explicitly requested fake mode.
 func buildServerDeps(values map[string]string) (serverDeps, bool) {
-	if strings.ToLower(values["MERCATOR_ADAPTER"]) != "docker" {
+	if strings.EqualFold(values["MERCATOR_ADAPTER"], "fake") {
 		return serverDeps{}, false
 	}
 	ctx := context.Background()

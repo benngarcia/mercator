@@ -21,8 +21,6 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-docker.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
-export MERCATOR_ADAPTER=docker
-export MERCATOR_DOCKER_ARCH=amd64
 
 go run ./cmd/mercator serve
 ```
@@ -34,6 +32,7 @@ export MERCATOR_DOCKER_BIN=/usr/local/bin/docker
 export MERCATOR_DOCKER_NATIVE_REF=local
 export MERCATOR_DOCKER_OFFER_ID=offer_local_docker
 export MERCATOR_DOCKER_CONNECTION_ID=conn_local_docker
+export MERCATOR_DOCKER_ARCH=amd64
 ```
 
 ## Workload Requirements
@@ -41,7 +40,8 @@ export MERCATOR_DOCKER_CONNECTION_ID=conn_local_docker
 Docker workloads must satisfy the same V1 workload contract:
 
 - exactly one Linux container named `main`;
-- digest-pinned image reference, not a mutable tag;
+- image reference available to the selected Docker endpoint; local tag refs are
+  accepted for local Docker workflows;
 - `linux/amd64` or `linux/arm64` platform;
 - no mounts, workdir, stdin, TTY, host networking, sidecars, setup commands, or
   raw extension payloads;
