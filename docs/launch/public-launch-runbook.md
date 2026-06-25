@@ -207,7 +207,8 @@ Use `docs/launch/proof-point-template.md` as the source of truth. After the
 repository is public, external users can also submit the checked-in GitHub issue
 form named `Trial, integration note, or case study`.
 For a concise reviewer prompt, send `docs/launch/reviewer-packet.md` with the
-README and proof-point form.
+README and proof-point form. For ready-to-send outreach copy, use
+`docs/launch/reviewer-outreach.md`.
 
 Minimum bar for the proof point:
 

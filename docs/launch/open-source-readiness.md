@@ -35,7 +35,8 @@ external proof point. The remaining permission-bound steps are sequenced in
   point exists yet.
 - External review packet: `docs/launch/reviewer-packet.md` gives staff
   engineer, prospective-user, and OSS-developer reviewers concrete questions
-  and verdict formats.
+  and verdict formats. `docs/launch/reviewer-outreach.md` gives maintainers
+  ready-to-send request copy for those reviewers.
 
 ## Persona Evaluation
 
@@ -102,6 +103,8 @@ Strengths:
   integration notes, benchmarks, or external reviews.
 - External reviewer packet gives contributors a clear way to judge the launch
   surface before opening feedback.
+- Reviewer outreach prompts make external proof collection reproducible after
+  the repository is public.
 - Security policy avoids public vulnerability disclosure by default.
 - Roadmap separates launch polish, production hardening, later work, and
   non-goals.
@@ -152,6 +155,7 @@ Grade: **A**.
 - [x] Public launch runbook documented.
 - [x] Public proof-point intake path documented.
 - [x] External reviewer packet documented.
+- [x] External reviewer outreach prompts documented.
 - [x] Concrete production hardening issue draft documented.
 - [x] Private draft PR CI run is green.
 - [ ] Launch-prep PR merged to the default branch.

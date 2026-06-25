@@ -227,6 +227,7 @@ check_required_files() {
     docs/launch/public-launch-runbook.md
     docs/launch/proof-point-template.md
     docs/launch/reviewer-packet.md
+    docs/launch/reviewer-outreach.md
     docs/project/compatibility.md
     docs/project/contributor-starter-queue.md
     docs/project/issue-drafts/external-sink-configuration.md
@@ -314,6 +315,9 @@ check_launch_docs() {
   require_pattern docs/launch/public-launch-runbook.md 'gh issue create' "Runbook includes starter issue creation commands"
   require_pattern docs/launch/proof-point-template.md 'Do not convert private maintainer notes into social proof' "Proof template rejects private social proof"
   require_pattern docs/launch/reviewer-packet.md 'Staff-engineer verdict: A\+ \| A \| B \| not ready' "Reviewer packet includes staff verdict format"
+  require_pattern docs/launch/reviewer-outreach.md 'Staff Engineer Review Request' "Reviewer outreach includes staff-engineer request"
+  require_pattern docs/launch/reviewer-outreach.md 'Prospective User Trial Request' "Reviewer outreach includes prospective-user request"
+  require_pattern docs/launch/reviewer-outreach.md 'Open Source Developer Review Request' "Reviewer outreach includes OSS-developer request"
   require_pattern docs/project/package-distribution.md 'First-launch decision: \*\*do not publish SDK packages for `v0\.1\.0`\*\*' "Package plan documents SDK publishing decision"
   require_pattern docs/project/release-process.md 'scripts/build-release-archives\.sh v0\.1\.0 dist' "Release process documents archive builder"
 }

@@ -5,7 +5,8 @@ alone. Use this template to collect real public evidence after the repository
 is public.
 
 For reviewer prompts by audience, see
-`docs/launch/reviewer-packet.md`.
+`docs/launch/reviewer-packet.md`. For ready-to-send request copy, see
+`docs/launch/reviewer-outreach.md`.
 
 ## Accepted Proof Types
 

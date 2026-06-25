@@ -4,6 +4,8 @@ Use this packet when asking a staff engineer, prospective user, or open source
 developer to evaluate Mercator for public launch. It is intentionally separate
 from the maintainer-authored scorecard: a launch proof point must come from a
 real public review, trial, integration note, benchmark, or case study.
+For ready-to-send prompts, use
+`docs/launch/reviewer-outreach.md`.
 
 Mercator is V1 evaluation-ready, not production GA. Reviewers should judge the
 public first impression, the ability to try the project quickly, and the
