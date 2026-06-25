@@ -156,6 +156,55 @@ gh label create "proof-point" --description "Public trial, integration note, ben
 Then create issues from the starter queue. Keep acceptance criteria intact so
 new contributors can tell when an issue is done.
 
+```sh
+cat >/tmp/mercator-issue-launch-demo.md <<'EOF'
+Problem:
+
+The README has a short demo and transcript, but the launch scorecard also
+includes a 75-100 second shot list that could show the full fake-adapter
+evaluation path.
+
+Acceptance criteria:
+
+- Follow the shot list in `docs/launch/open-source-readiness.md`.
+- Keep the video free of private tokens, hostnames, and local machine
+  identifiers.
+- Add the selected video under `docs/assets/` or document why it should stay
+  externally hosted.
+- Include either captions or a text transcript.
+- Do not remove the existing short WebM/GIF demo.
+EOF
+
+gh issue create \
+  --title "Record a longer launch demo from the shot list" \
+  --label "good first issue" \
+  --label docs \
+  --label console \
+  --body-file /tmp/mercator-issue-launch-demo.md
+```
+
+```sh
+cat >/tmp/mercator-issue-hardening-triage.md <<'EOF'
+Problem:
+
+Some production hardening items need maintainer direction before implementation,
+especially registry credentials and external sink configuration.
+
+Acceptance criteria:
+
+- Pick one item from `docs/production/known-limitations.md`.
+- Open a design issue that states the problem, non-goals, proposed first slice,
+  and acceptance criteria.
+- Do not implement the behavior in the same starter issue.
+EOF
+
+gh issue create \
+  --title "Triage a production hardening issue" \
+  --label "help wanted" \
+  --label "needs-maintainer-input" \
+  --body-file /tmp/mercator-issue-hardening-triage.md
+```
+
 ## 6. Collect A Public Proof Point
 
 Before calling the launch A+, collect at least one public proof point:
