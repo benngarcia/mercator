@@ -10,7 +10,10 @@ adopting a cluster control plane.
 ![Mercator console showing runs](docs/assets/mercator-runs.png)
 
 Watch the short fake-adapter console demo:
-[docs/assets/mercator-demo.webm](docs/assets/mercator-demo.webm).
+[WebM](docs/assets/mercator-demo.webm) or
+[GIF fallback](docs/assets/mercator-demo.gif).
+
+![Mercator fake-adapter console demo](docs/assets/mercator-demo.gif)
 
 ## Why It Exists
 

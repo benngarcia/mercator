@@ -7,6 +7,8 @@ Current assets:
 
 - `mercator-demo.webm` - 10-second fake-adapter console walkthrough from run
   list to run detail, placement decision, and public events.
+- `mercator-demo.gif` - 640x360 GIF fallback generated from
+  `mercator-demo.webm` for README contexts where WebM links are less prominent.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
   and workspace context.
 - `mercator-run-decision.png` - run detail placement decision and lifecycle
@@ -21,5 +23,11 @@ Demo video regeneration:
 4. Inspect the decision tab and public events.
 5. End with the fake evaluation command and docs pointer.
 
-Target output: replace `docs/assets/mercator-demo.webm`, plus a shorter GIF cut
-for the README if the final file size is reasonable.
+Target output: replace `docs/assets/mercator-demo.webm`, then regenerate the
+README GIF fallback under 5 MB:
+
+```sh
+ffmpeg -y -i docs/assets/mercator-demo.webm \
+  -vf "fps=8,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" \
+  docs/assets/mercator-demo.gif
+```

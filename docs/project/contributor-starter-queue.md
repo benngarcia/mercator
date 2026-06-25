@@ -39,20 +39,21 @@ Acceptance criteria:
 - Do not add new CLI flags or behavior.
 - Run `go run ./cmd/mercator --help` and `git diff --check`.
 
-### 2. Add A GIF Fallback For The README Demo
+### 2. Add Captions Or A Text Transcript For The README Demo
 
 Suggested labels: `good first issue`, `docs`, `console`
 
-Problem: GitHub renders tracked videos inconsistently in some contexts. A small
-GIF fallback would make the demo more visible.
+Problem: The README has a WebM demo and GIF fallback, but users who cannot or
+do not want to watch the animation need a text equivalent.
 
 Acceptance criteria:
 
-- Add a compressed GIF under `docs/assets/` derived from
-  `docs/assets/mercator-demo.webm`.
-- Keep the GIF under 5 MB.
-- Link it near the existing WebM demo link in `README.md`.
-- Do not remove the WebM.
+- Add a short transcript or caption list under `docs/assets/README.md` or a
+  dedicated launch doc.
+- Cover the run list, run detail, placement decision, and public events shown
+  in the demo.
+- Link the transcript near the README demo links.
+- Do not remove the WebM or GIF fallback.
 
 ### 3. Add SDK Source-Install Examples
 

@@ -14,7 +14,7 @@ production readiness claim; production hardening remains tracked in
 | New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; package/distribution plan names source, archive, and SDK paths. | A | Publish binaries so users do not need a source checkout. |
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, Apache-2.0 license, CI/release workflows, local release archive builder, compatibility policy, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, security policy, and a starter contributor queue are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
-| Assets | Three console screenshots plus `docs/assets/mercator-demo.webm` are tracked in `docs/assets/`. | A | Optionally add a compressed GIF to the README if GitHub video rendering is not prominent enough. |
+| Assets | Three console screenshots plus `docs/assets/mercator-demo.webm` and a README-linked GIF fallback are tracked in `docs/assets/`. | A | Optional post-launch polish: add captions or a text transcript for the demo. |
 | Social proof | Repo has durable verification docs, a real operator-oriented runbook set, and a public proof-point intake template. | B | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
 Overall current launch grade: **A**. The repo is credible and tryable in the
@@ -117,6 +117,7 @@ Grade: **A**.
 - [x] Threat model documented.
 - [x] Package/install story documented.
 - [x] Demo video recorded and linked from the README.
+- [x] README GIF fallback generated from the demo video.
 - [x] One-command fake-adapter smoke test added and wired into CI.
 - [x] CLI help available without a configured API URL.
 - [x] Starter contributor queue documented.
