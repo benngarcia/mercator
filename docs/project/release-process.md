@@ -21,10 +21,16 @@ Each archive contains:
 - `LICENSE`
 - `NOTICE`
 
-SDK package publishing is not part of the first binary release. Until package
-publishing is decided, SDK users should install from the repository checkout and
-follow the language-specific README. See `docs/project/package-distribution.md`
-for the package plan.
+The archive builder is reusable outside GitHub Actions:
+
+```sh
+scripts/build-release-archives.sh v0.1.0 dist
+```
+
+SDK package publishing is not part of the first binary release. SDK users should
+install from the repository checkout until package names, registry ownership,
+provenance, and clean-environment install tests are confirmed. See
+`docs/project/package-distribution.md` for the package plan.
 
 ## Pre-Tag Checklist
 
@@ -35,6 +41,7 @@ git status --short --branch
 git diff --check
 go test ./...
 go build ./...
+scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist
 
 cd web/app && bun install && bun run typecheck && bun run build
 cd ../../sdk/typescript && npm ci && npm test
@@ -61,7 +68,9 @@ git push origin v0.1.0
 ```
 
 The GitHub Actions release workflow builds archives, writes checksums, and
-creates a GitHub Release with generated notes.
+creates a GitHub Release with generated notes. The workflow calls
+`scripts/build-release-archives.sh`, so local archive verification and release
+archive generation share the same implementation.
 
 ## Post-Release Checklist
 

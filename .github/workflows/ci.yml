@@ -19,6 +19,7 @@ jobs:
       - run: go test ./...
       - run: go build ./...
       - run: scripts/smoke-test-fake.sh
+      - run: scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist
 
   sdks:
     name: SDKs

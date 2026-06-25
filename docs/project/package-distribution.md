@@ -41,6 +41,8 @@ The release workflow is configured to upload:
 - `checksums.txt`
 
 Each archive should contain `mercator`, `README.md`, `LICENSE`, and `NOTICE`.
+The workflow and local verification both call
+`scripts/build-release-archives.sh`.
 
 Example install command after a release exists:
 
@@ -93,6 +95,8 @@ Do not publish a release unless all of these are true:
 
 - The default branch CI is green.
 - `scripts/smoke-test-fake.sh` passes against the source checkout.
+- `scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist`
+  builds archives and checksums successfully.
 - The release workflow has been reviewed on the launch-prep PR.
 - `docs/project/release-process.md` has been followed.
 - The release notes state that Mercator is pre-1.0 and V1 evaluation-ready, not
