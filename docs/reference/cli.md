@@ -44,6 +44,33 @@ mercator run refresh --run-id run_...
 mercator run cancel --run-id run_...
 ```
 
+From a source checkout, use these follow-up commands after starting the
+fake-adapter quickstart server from the README. If you installed a release
+binary, replace `go run ./cmd/mercator` with `mercator`.
+
+```sh
+export MERCATOR_API_URL=http://127.0.0.1:8080
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_WORKSPACE_ID=ws_1
+
+RUN_ID="$(go run ./cmd/mercator run create busybox -- echo hi | jq -r '.run.id')"
+
+go run ./cmd/mercator run list \
+  | jq '.runs[] | {id, outcome, closed}'
+
+go run ./cmd/mercator run wait --run-id "$RUN_ID" \
+  | jq '{id: .run.id, outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
+
+go run ./cmd/mercator run events --run-id "$RUN_ID" \
+  | jq '.events[] | .type'
+
+go run ./cmd/mercator run decision --run-id "$RUN_ID" \
+  | jq '{selected_offer_snapshot_id: .decision.selected_offer_snapshot_id, rejected_count: (.decision.rejected | length)}'
+
+go run ./cmd/mercator sink status --sink-id audit \
+  | jq '{sink_id, cursor}'
+```
+
 Use `--workspace-id ID` on any run command to override
 `MERCATOR_WORKSPACE_ID`.
 

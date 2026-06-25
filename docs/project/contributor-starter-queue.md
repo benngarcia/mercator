@@ -23,19 +23,20 @@ Create these labels during public triage:
 
 ## Starter Issues
 
-### 1. Add Copy-Paste CLI Examples To The CLI Reference
+### 1. Add CLI Error Response Examples
 
 Suggested labels: `good first issue`, `docs`, `cli`
 
-Problem: `docs/reference/cli.md` explains the command groups but has only a few
-examples.
+Problem: `docs/reference/cli.md` shows successful fake-adapter commands, but it
+does not show what the JSON-first CLI prints for common setup mistakes.
 
 Acceptance criteria:
 
-- Add a short example for `run list`, `run wait`, `run events`, `run decision`,
-  and `sink status`.
-- Use the existing fake-adapter quickstart environment: `ws_1`, `dev-token`,
-  and `http://127.0.0.1:8080`.
+- Add short examples for missing `MERCATOR_API_URL`, an incorrect bearer token,
+  and an unauthorized workspace.
+- Show the JSON error shape with `code` and `message`.
+- Use the existing fake-adapter quickstart environment where a server is needed:
+  `ws_1`, `dev-token`, and `http://127.0.0.1:8080`.
 - Do not add new CLI flags or behavior.
 - Run `go run ./cmd/mercator --help` and `git diff --check`.
 
@@ -57,21 +58,23 @@ Acceptance criteria:
 - Include either captions or a text transcript.
 - Do not remove the existing short WebM/GIF demo.
 
-### 3. Add SDK Source-Install Examples
+### 3. Add SDK Event And Decision Examples
 
 Suggested labels: `good first issue`, `docs`, `sdk`
 
-Problem: SDK package registry publishing is intentionally deferred for the first
-public launch, so source-install paths should be easy to copy.
+Problem: The SDK READMEs show create/wait flows, but new users still have to
+infer how to read public events and placement decisions.
 
 Acceptance criteria:
 
-- Update each SDK README with a source-checkout install command:
-  TypeScript from `sdk/typescript`, Python from `sdk/python`, Ruby from
-  `sdk/ruby`.
-- Keep package-registry language future-facing unless packages are actually
+- Add short examples to the TypeScript, Python, and Ruby README files showing
+  event and decision reads after a `busybox` fake-adapter run.
+- Use the existing methods: `listRunEvents` / `getRunDecision`,
+  `list_run_events` / `get_run_decision`, and `list_run_events` /
+  `get_run_decision`.
+- Keep examples source-install friendly; do not claim SDK packages are
   published.
-- Run the relevant SDK tests for any README command that executes code.
+- Run the relevant SDK tests.
 
 ### 4. Document Release Archive Verification On macOS And Linux
 
