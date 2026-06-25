@@ -81,6 +81,30 @@ tar -xzf "mercator_${version}_${os}_${arch}.tar.gz"
 sudo install "mercator_${version}_${os}_${arch}/mercator" /usr/local/bin/mercator
 ```
 
+### Troubleshooting Release Archives
+
+If the archive install fails after a release exists, check these first:
+
+- **Checksum mismatch:** delete the local `.tar.gz` and `checksums.txt`, then
+  download both files again from the same release version. Do not use an archive
+  if `shasum -a 256 -c checksums.txt --ignore-missing` or
+  `sha256sum -c checksums.txt --ignore-missing` fails.
+- **Wrong OS or architecture:** confirm the archive name matches the machine.
+  Linux uses `mercator_${version}_linux_amd64.tar.gz` or
+  `mercator_${version}_linux_arm64.tar.gz`; macOS uses
+  `mercator_${version}_darwin_amd64.tar.gz` or
+  `mercator_${version}_darwin_arm64.tar.gz`.
+- **Binary is not executable:** run
+  `chmod +x "mercator_${version}_${os}_${arch}/mercator"` before copying it, or
+  reinstall with
+  `sudo install -m 0755 "mercator_${version}_${os}_${arch}/mercator" /usr/local/bin/mercator`.
+- **Command not found after install:** check `command -v mercator` and confirm
+  the install directory is on `PATH`. If `/usr/local/bin` is not on `PATH`,
+  install into another directory that is.
+- **Permission denied during install:** install to a user-writable directory,
+  for example `mkdir -p "$HOME/.local/bin"` followed by
+  `install -m 0755 "mercator_${version}_${os}_${arch}/mercator" "$HOME/.local/bin/mercator"`.
+
 ## SDK Distribution
 
 First-launch decision: **do not publish SDK packages for `v0.1.0`**. The first

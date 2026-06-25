@@ -11,7 +11,7 @@ production readiness claim; production hardening remains tracked in
 | Area | Evidence | Grade | A+ Gap |
 | --- | --- | --- | --- |
 | README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
-| New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; SDK docs show run, event, decision, and sink status reads; the CLI reference now has copy-paste follow-up commands, JSON error examples, and an exit-code reference; fake-eval docs show OpenAPI smoke commands; package/distribution plan names source, archive, SDK install paths, and per-OS checksum verification. | A | Publish binaries so users do not need a source checkout. |
+| New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; SDK docs show run, event, decision, and sink status reads; the CLI reference now has copy-paste follow-up commands, JSON error examples, and an exit-code reference; fake-eval docs show OpenAPI smoke commands; package/distribution plan names source, archive, SDK install paths, per-OS checksum verification, and archive troubleshooting. | A | Publish binaries so users do not need a source checkout. |
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, Apache-2.0 license, CI/release workflows, local release archive builder, compatibility policy, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, security policy, and a starter contributor queue are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm`, a README-linked GIF fallback, and a text demo transcript are tracked in `docs/assets/`. | A | Optional post-launch polish: add a longer narrated demo from the shot list. |
@@ -124,6 +124,7 @@ Grade: **A**.
 - [x] Threat model documented.
 - [x] Package/install story documented.
 - [x] Release checksum verification commands documented for macOS and Linux.
+- [x] Release archive troubleshooting documented.
 - [x] Demo video recorded and linked from the README.
 - [x] README GIF fallback generated from the demo video.
 - [x] Text transcript added for the README demo.

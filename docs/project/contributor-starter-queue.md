@@ -41,23 +41,7 @@ Acceptance criteria:
 - Include either captions or a text transcript.
 - Do not remove the existing short WebM/GIF demo.
 
-### 2. Add Release Archive Troubleshooting Notes
-
-Suggested labels: `good first issue`, `docs`, `release`
-
-Problem: `docs/project/package-distribution.md` shows the happy path for a
-future release archive, but not the first checks a user should run when install
-fails.
-
-Acceptance criteria:
-
-- Add short troubleshooting notes for checksum mismatch, wrong `os`/`arch`,
-  missing execute bit or shell `PATH`, and install permission errors.
-- Keep artifact names aligned with `.github/workflows/release.yml`.
-- Do not claim a release exists before the first tag is published.
-- Run `git diff --check`.
-
-### 3. Expand The Fake Adapter Evaluation Transcript
+### 2. Expand The Fake Adapter Evaluation Transcript
 
 Suggested labels: `good first issue`, `docs`
 
@@ -72,7 +56,7 @@ Acceptance criteria:
   ports.
 - Run `scripts/smoke-test-fake.sh`.
 
-### 4. Add Console Screenshot Capture Notes
+### 3. Add Console Screenshot Capture Notes
 
 Suggested labels: `good first issue`, `docs`, `console`
 
@@ -86,7 +70,7 @@ Acceptance criteria:
 - Keep raw local captures in ignored `output/` until selected.
 - Do not replace existing screenshots unless the new ones are clearer.
 
-### 5. Add An OpenAPI Route Overview
+### 4. Add An OpenAPI Route Overview
 
 Suggested labels: `good first issue`, `docs`
 
@@ -102,7 +86,7 @@ Acceptance criteria:
 - Do not regenerate the OpenAPI document.
 - Run the fake adapter server or smoke path needed to verify the command.
 
-### 6. Triage A Production Hardening Issue
+### 5. Triage A Production Hardening Issue
 
 Suggested labels: `help wanted`, `needs-maintainer-input`
 
