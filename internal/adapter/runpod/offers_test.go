@@ -42,6 +42,11 @@ func TestBuildOffersFiltersByAllowlistStockAndPrice(t *testing.T) {
 	if o.Resources.Accelerators[0].MemoryBytes != int64(6)*1024*1024*1024 {
 		t.Errorf("accelerator memory = %d", o.Resources.Accelerators[0].MemoryBytes)
 	}
+	// The canonical id is what the scheduler matches on, derived from the
+	// RunPod displayName ("RTX A2000") -> "nvidia-rtx-a2000".
+	if o.Resources.Accelerators[0].CanonicalModel != "nvidia-rtx-a2000" {
+		t.Errorf("canonical model = %q, want nvidia-rtx-a2000", o.Resources.Accelerators[0].CanonicalModel)
+	}
 	if !o.Capacity.Available {
 		t.Errorf("capacity should be available")
 	}

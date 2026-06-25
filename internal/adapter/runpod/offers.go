@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/gpunorm"
 )
 
 const gib = int64(1024) * 1024 * 1024
@@ -39,10 +40,11 @@ func buildOffers(gpus []gpuType, allowlist []string, now time.Time) []domain.Off
 				MemoryBytes:        16 * gib,
 				EphemeralDiskBytes: 20 * gib,
 				Accelerators: []domain.AcceleratorInventory{{
-					Vendor:      "NVIDIA",
-					Model:       g.DisplayName,
-					Count:       1,
-					MemoryBytes: int64(g.MemoryInGb) * gib,
+					Vendor:         "NVIDIA",
+					Model:          g.DisplayName,
+					CanonicalModel: gpunorm.Canonical("NVIDIA", g.DisplayName),
+					Count:          1,
+					MemoryBytes:    int64(g.MemoryInGb) * gib,
 				}},
 			},
 			Capabilities: domain.CapabilityProfile{
