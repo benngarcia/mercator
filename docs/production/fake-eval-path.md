@@ -19,6 +19,13 @@ the run closes with `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`, and
 `closed=true`. Use the manual steps below when you want to inspect each response
 or keep the server running for the console.
 
+Expected transcript shape:
+
+```text
+Mercator fake-adapter smoke test passed
+run_id=run_... outcome=succeeded exit_code=0 cleanup=confirmed closed=true
+```
+
 ## Start Server
 
 ```sh

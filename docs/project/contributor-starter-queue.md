@@ -41,36 +41,7 @@ Acceptance criteria:
 - Include either captions or a text transcript.
 - Do not remove the existing short WebM/GIF demo.
 
-### 2. Expand The Fake Adapter Evaluation Transcript
-
-Suggested labels: `good first issue`, `docs`
-
-Problem: `docs/production/fake-eval-path.md` gives commands but could show one
-complete transcript of the expected JSON fields.
-
-Acceptance criteria:
-
-- Add a short transcript block for `scripts/smoke-test-fake.sh`.
-- Include `run_id`, `outcome`, `exit_code`, `cleanup`, and `closed`.
-- Keep generated IDs as `run_...`; do not commit local machine-specific paths or
-  ports.
-- Run `scripts/smoke-test-fake.sh`.
-
-### 3. Add Console Screenshot Capture Notes
-
-Suggested labels: `good first issue`, `docs`, `console`
-
-Problem: Launch screenshots are checked in, but future contributors need a
-repeatable way to refresh them.
-
-Acceptance criteria:
-
-- Add capture guidance to `docs/assets/README.md`.
-- Name the required fake-adapter setup and which console screens to capture.
-- Keep raw local captures in ignored `output/` until selected.
-- Do not replace existing screenshots unless the new ones are clearer.
-
-### 4. Triage A Production Hardening Issue
+### 2. Triage A Production Hardening Issue
 
 Suggested labels: `help wanted`, `needs-maintainer-input`
 

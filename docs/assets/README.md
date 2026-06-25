@@ -15,6 +15,23 @@ Current assets:
   state.
 - `mercator-connections.png` - connection list and authorization status.
 
+## Screenshot Capture Notes
+
+Use the fake-adapter path for launch screenshots so captures are reproducible
+and do not require Docker, RunPod, registry credentials, or private workloads.
+
+1. Start Mercator with `MERCATOR_FAKE_OFFER=1`, `MERCATOR_API_TOKEN` set, and a
+   launch-safe workspace such as `ws_1`.
+2. Create `busybox -- echo hi` through the CLI and wait for the run to close.
+3. Open the embedded console for that workspace.
+4. Capture these screens: run list, selected run detail, placement decision,
+   public events, and connections/offers if they materially improve the docs.
+5. Keep raw captures under ignored `output/` until reviewed.
+6. Move only selected images into `docs/assets/`, with descriptive filenames and
+   no private tokens, hostnames, local usernames, or machine identifiers.
+7. Do not replace the existing screenshots unless the new captures are clearer
+   or show a launch-relevant state the current images miss.
+
 ## Demo Transcript
 
 The README demo shows the fake-adapter path a new evaluator can run without
