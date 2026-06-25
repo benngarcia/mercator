@@ -9,6 +9,9 @@ adopting a cluster control plane.
 
 ![Mercator console showing runs](docs/assets/mercator-runs.png)
 
+Watch the short fake-adapter console demo:
+[docs/assets/mercator-demo.webm](docs/assets/mercator-demo.webm).
+
 ## Why It Exists
 
 Small teams often outgrow "ssh into a box and start Docker" before they are
@@ -167,12 +170,12 @@ Current branch status:
 - Embedded operator console and JSON-first CLI.
 - Hand-written SDKs for TypeScript, Python, and Ruby.
 - Production evaluation docs and known limitations are checked in.
-- Open source launch prep is underway; screenshots are tracked, and the demo
-  video/social-proof plan is in
+- Open source launch prep is underway; screenshots and a short demo video are
+  tracked, and the remaining launch scorecard is in
   [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md).
 
 Important pre-GA gaps include package publishing, release tags, public CI run
-history, demo video, stronger external sink wiring, registry credential flows,
+history, stronger external sink wiring, registry credential flows, social proof,
 and a maintainer-approved compatibility policy.
 
 ## Contributing

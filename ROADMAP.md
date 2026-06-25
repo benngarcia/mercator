@@ -15,11 +15,10 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 - Production evaluation runbooks.
 - OSS project scaffolding: license, security policy, contribution guide, issue
   templates, CI workflow, screenshots, and launch scorecard.
+- Short fake-adapter console demo committed under `docs/assets/`.
 
 ## Next: Open Source Launch Polish
 
-- Publish a short demo video showing fake run creation, run detail, placement
-  decision, and cleanup.
 - Add a first tagged release with downloadable binaries and checksums.
 - Publish SDK packages or document exact local install paths for each language.
 - Add public CI badges after the first GitHub Actions run succeeds.

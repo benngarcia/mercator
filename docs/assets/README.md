@@ -3,15 +3,17 @@
 Tracked assets in this directory are selected for launch-facing docs. Raw local
 captures stay in ignored `output/` until they are reviewed and renamed.
 
-Current screenshots:
+Current assets:
 
+- `mercator-demo.webm` - 10-second fake-adapter console walkthrough from run
+  list to run detail, placement decision, and public events.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
   and workspace context.
 - `mercator-run-decision.png` - run detail placement decision and lifecycle
   state.
 - `mercator-connections.png` - connection list and authorization status.
 
-Demo video plan:
+Demo video regeneration:
 
 1. Start Mercator with `MERCATOR_FAKE_OFFER=1`.
 2. Create `busybox -- echo hi` from the CLI.
@@ -19,5 +21,5 @@ Demo video plan:
 4. Inspect the decision tab and public events.
 5. End with the fake evaluation command and docs pointer.
 
-Target output: `docs/assets/mercator-demo.webm`, plus a shorter GIF cut for the
-README if the final file size is reasonable.
+Target output: replace `docs/assets/mercator-demo.webm`, plus a shorter GIF cut
+for the README if the final file size is reasonable.
