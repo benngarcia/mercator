@@ -43,6 +43,10 @@ print([event["type"] for event in events["events"]])
 decision = client.get_run_decision(run_id)["decision"]
 print(decision["selected_offer_snapshot_id"])
 # => offer_local_fake
+
+sink = client.get_sink_status("audit")
+print(sink["sink_id"], sink["cursor"])
+# => audit 0
 ```
 
 ## Full workload form

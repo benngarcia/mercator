@@ -57,6 +57,10 @@ console.log(events.events.map((event) => event.type));
 const decision = await mercator.getRunDecision(runId);
 console.log(decision.decision.selected_offer_snapshot_id);
 // => offer_local_fake
+
+const sink = await mercator.getSinkStatus("audit");
+console.log(sink.sink_id, sink.cursor);
+// => audit 0
 ```
 
 ## Create, wait, and read the exit code in one round trip

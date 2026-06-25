@@ -41,24 +41,7 @@ Acceptance criteria:
 - Include either captions or a text transcript.
 - Do not remove the existing short WebM/GIF demo.
 
-### 2. Add SDK Sink Status Examples
-
-Suggested labels: `good first issue`, `docs`, `sdk`
-
-Problem: The SDK READMEs show run, event, and decision flows, but sink cursor
-reads are still only obvious from the method lists.
-
-Acceptance criteria:
-
-- Add short examples to the TypeScript, Python, and Ruby README files showing
-  `audit` sink status reads after a fake-adapter run.
-- Use the existing methods: `getSinkStatus`, `get_sink_status`, and
-  `get_sink_status`.
-- Keep examples source-install friendly; do not claim SDK packages are
-  published.
-- Run the relevant SDK tests.
-
-### 3. Add Release Archive Troubleshooting Notes
+### 2. Add Release Archive Troubleshooting Notes
 
 Suggested labels: `good first issue`, `docs`, `release`
 
@@ -74,7 +57,7 @@ Acceptance criteria:
 - Do not claim a release exists before the first tag is published.
 - Run `git diff --check`.
 
-### 4. Expand The Fake Adapter Evaluation Transcript
+### 3. Expand The Fake Adapter Evaluation Transcript
 
 Suggested labels: `good first issue`, `docs`
 
@@ -89,7 +72,7 @@ Acceptance criteria:
   ports.
 - Run `scripts/smoke-test-fake.sh`.
 
-### 5. Add Console Screenshot Capture Notes
+### 4. Add Console Screenshot Capture Notes
 
 Suggested labels: `good first issue`, `docs`, `console`
 
@@ -103,7 +86,7 @@ Acceptance criteria:
 - Keep raw local captures in ignored `output/` until selected.
 - Do not replace existing screenshots unless the new ones are clearer.
 
-### 6. Add An OpenAPI Route Overview
+### 5. Add An OpenAPI Route Overview
 
 Suggested labels: `good first issue`, `docs`
 
@@ -119,7 +102,7 @@ Acceptance criteria:
 - Do not regenerate the OpenAPI document.
 - Run the fake adapter server or smoke path needed to verify the command.
 
-### 7. Triage A Production Hardening Issue
+### 6. Triage A Production Hardening Issue
 
 Suggested labels: `help wanted`, `needs-maintainer-input`
 
