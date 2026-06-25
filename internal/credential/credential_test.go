@@ -63,3 +63,26 @@ func TestResolveMercatorWithoutKeyDisabled(t *testing.T) {
 		t.Fatal("expected mercator source to be disabled without a master key")
 	}
 }
+
+func TestResolverSealRoundTrip(t *testing.T) {
+	r := NewResolver(nil, NewMemoryStore(), key32())
+	blob, ok := r.Seal([]byte("my-secret"))
+	if !ok {
+		t.Fatal("Seal should succeed when master key is set")
+	}
+	plain, err := Open(key32(), blob)
+	if err != nil {
+		t.Fatalf("Open after Seal: %v", err)
+	}
+	if string(plain) != "my-secret" {
+		t.Fatalf("round-trip: got %q, want my-secret", string(plain))
+	}
+}
+
+func TestResolverSealReturnsFalseWithoutKey(t *testing.T) {
+	r := NewResolver(nil, NewMemoryStore(), nil) // no master key
+	_, ok := r.Seal([]byte("my-secret"))
+	if ok {
+		t.Fatal("Seal should return false when no master key is configured")
+	}
+}

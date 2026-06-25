@@ -160,6 +160,17 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 	return all, nil
 }
 
+// VerifyConnection builds the adapter for one connection (regardless of its
+// current Authorized state — authorize runs before the flag is set) and calls
+// its cheap Verify check. Used by the connection authorize flow.
+func (b *Broker) VerifyConnection(ctx context.Context, workspaceID, connectionID string) error {
+	_, ad, err := b.connByID(ctx, workspaceID, connectionID)
+	if err != nil {
+		return err
+	}
+	return ad.Verify(ctx)
+}
+
 func (b *Broker) Verify(ctx context.Context) error { return nil } // per-connection verify is in Plan 1B
 
 // Compile-time assertion: *Broker must satisfy adapter.Adapter.

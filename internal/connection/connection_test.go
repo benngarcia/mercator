@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
@@ -39,6 +40,30 @@ func TestServiceCreatesGetsListsAndUpdatesConnectionAuthorization(t *testing.T) 
 	}
 	if len(list) != 1 || list[0].ID != "conn_1" {
 		t.Fatalf("unexpected list: %+v", list)
+	}
+}
+
+func TestCreateRoundTripsConfigAndCredential(t *testing.T) {
+	svc := New(openConnectionTestLog(t))
+	_, err := svc.Create(context.Background(), CreateRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_rp",
+		AdapterType:  "runpod",
+		Config:       map[string]string{"region": "us"},
+		Credential:   credential.Credential{Source: "mercator", Ref: "conn_rp"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := svc.Get(context.Background(), "ws_1", "conn_rp")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Config["region"] != "us" {
+		t.Errorf("config not round-tripped: %+v", got.Config)
+	}
+	if got.Credential.Source != "mercator" || got.Credential.Ref != "conn_rp" {
+		t.Errorf("credential not round-tripped: %+v", got.Credential)
 	}
 }
 

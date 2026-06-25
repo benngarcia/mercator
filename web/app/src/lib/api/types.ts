@@ -379,12 +379,34 @@ export interface CloudEvent {
 // Connections
 // ---------------------------------------------------------------------------
 
+export type CredentialSource = "env" | "mercator";
+
+export interface CredentialRef {
+  source: CredentialSource;
+  ref: string;
+}
+
 export interface ConnectionRecord {
   id: string;
   workspace_id: string;
   adapter_type: string;
   authorization_schema?: Record<string, string>;
   authorized: boolean;
+  config?: Record<string, string>;
+  credential?: CredentialRef;
+}
+
+export interface CreateConnectionRequest {
+  workspace_id?: string;
+  connection_id?: string;
+  adapter_type: string;
+  config?: Record<string, string>;
+  credential?: CredentialRef;
+  secret?: string;
+}
+
+export interface ConnectionResponse {
+  connection: ConnectionRecord;
 }
 
 // ---------------------------------------------------------------------------

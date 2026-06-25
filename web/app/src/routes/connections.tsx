@@ -2,10 +2,12 @@
 // ConnectionsTable shows id / adapter_type / authorized.
 
 import { createRoute } from "@tanstack/react-router";
+import { Plus } from "lucide-react";
 
 import { rootRoute } from "./root";
 import { ErrorState, PageHeader } from "@/components/common";
-import { ConnectionsTable } from "@/components/connections";
+import { AddConnectionDialog, ConnectionsTable } from "@/components/connections";
+import { Button } from "@/components/ui/button";
 import { useConnections } from "@/lib/api/queries";
 
 function ConnectionsPage() {
@@ -16,6 +18,16 @@ function ConnectionsPage() {
       <PageHeader
         title="Connections"
         description="Adapter connections authorized for this workspace."
+        actions={
+          <AddConnectionDialog
+            trigger={
+              <Button size="sm">
+                <Plus className="size-4" />
+                Add connection
+              </Button>
+            }
+          />
+        }
       />
       {isError ? (
         <ErrorState error={error} onRetry={() => void refetch()} />

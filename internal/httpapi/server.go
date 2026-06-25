@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/authz"
 	"github.com/benngarcia/mercator/internal/connection"
+	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/ociresolver"
@@ -40,7 +40,16 @@ type Server struct {
 	resolver  interface {
 		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 	}
-	security securityConfig
+	secretStore credential.SecretStore
+	credentials *credential.Resolver
+	verifier    connectionVerifier
+	security    securityConfig
+}
+
+// connectionVerifier is the narrow capability the server needs from the Broker
+// to verify a connection during the authorize flow.
+type connectionVerifier interface {
+	VerifyConnection(ctx context.Context, workspaceID, connectionID string) error
 }
 
 type securityConfig struct {
@@ -54,6 +63,24 @@ func WithBearerAuth(token string, workspaces []string) Option {
 	return func(s *Server) {
 		s.security = securityConfig{Token: token, Workspaces: append([]string(nil), workspaces...)}
 	}
+}
+
+// WithSecretStore wires the SecretStore the server uses to persist sealed
+// connection credentials.
+func WithSecretStore(store credential.SecretStore) Option {
+	return func(s *Server) { s.secretStore = store }
+}
+
+// WithCredentialResolver wires the credential.Resolver the server uses to turn
+// a {source, ref} credential into a plaintext secret.
+func WithCredentialResolver(resolver *credential.Resolver) Option {
+	return func(s *Server) { s.credentials = resolver }
+}
+
+// WithVerifier wires the connection verifier (the Broker) the server uses to
+// validate a connection during the authorize flow.
+func WithVerifier(verifier connectionVerifier) Option {
+	return func(s *Server) { s.verifier = verifier }
 }
 
 type principalContextKey struct{}
@@ -103,6 +130,20 @@ type resolveImageBody struct {
 
 type resolveImageResponse struct {
 	Image ociresolver.ResolvedImage `json:"image"`
+}
+
+type createConnectionBody struct {
+	WorkspaceID  string                `json:"workspace_id"`
+	ConnectionID string                `json:"connection_id"`
+	AdapterType  string                `json:"adapter_type"`
+	Config       map[string]string     `json:"config,omitempty"`
+	Credential   credential.Credential `json:"credential"`
+	// Secret is write-only: accepted on create, never echoed in any response.
+	Secret string `json:"secret,omitempty"`
+}
+
+type connectionResponse struct {
+	Connection connection.Record `json:"connection"`
 }
 
 type connectionListResponse struct {
@@ -247,6 +288,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions", s.listRevisions)
 	s.mux.HandleFunc("GET /v1/workloads/{workload_id}/revisions/{revision_id}", s.getRevision)
 	s.mux.HandleFunc("POST /v1/images:resolve", s.resolveImage)
+	s.mux.HandleFunc("POST /v1/connections", s.createConnection)
+	s.mux.HandleFunc("POST /v1/connections/{conn_action}", s.connectionAction)
 	s.mux.HandleFunc("GET /v1/connections", s.listConnections)
 	s.mux.HandleFunc("GET /v1/offers", s.listOffers)
 	s.mux.HandleFunc("GET /v1/sinks/{sink_id}", s.sinkStatus)
@@ -733,57 +776,128 @@ func (s *Server) resolveImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resolveImageResponse{Image: resolved})
 }
 
+func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
+	if s.conns == nil {
+		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
+		return
+	}
+	if r.Header.Get("Idempotency-Key") == "" {
+		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
+		return
+	}
+	var body createConnectionBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	workspaceID := body.WorkspaceID
+	if workspaceID == "" {
+		workspaceID = r.URL.Query().Get("workspace_id")
+	}
+	if workspaceID == "" {
+		workspaceID = s.defaultWorkspace()
+	}
+	if !authorizeRequestWorkspace(w, r, workspaceID) {
+		return
+	}
+
+	cred := body.Credential
+	// For mercator-source connections with a provided secret, seal the secret
+	// out-of-band and store the ciphertext in the secret store. The plaintext
+	// never enters the event log or the response.
+	if cred.Source == credential.SourceMercator && body.Secret != "" {
+		if s.credentials == nil || s.secretStore == nil {
+			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Secret store is not configured; cannot accept mercator credentials.")
+			return
+		}
+		blob, ok := s.credentials.Seal([]byte(body.Secret))
+		if !ok {
+			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Master key is not set; cannot seal mercator credentials.")
+			return
+		}
+		if err := s.secretStore.Put(r.Context(), workspaceID, body.ConnectionID, blob); err != nil {
+			writeError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err.Error())
+			return
+		}
+		cred.Ref = body.ConnectionID
+	}
+
+	record, err := s.conns.Create(r.Context(), connection.CreateRequest{
+		WorkspaceID:  workspaceID,
+		ConnectionID: body.ConnectionID,
+		AdapterType:  body.AdapterType,
+		Config:       body.Config,
+		Credential:   cred,
+	})
+	if err != nil {
+		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
+			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
+			return
+		}
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_CONNECTION_FAILED"), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, connectionResponse{Connection: record})
+}
+
+func (s *Server) connectionAction(w http.ResponseWriter, r *http.Request) {
+	connAction := r.PathValue("conn_action")
+	if strings.HasSuffix(connAction, ":authorize") {
+		s.authorizeConnection(w, r, strings.TrimSuffix(connAction, ":authorize"))
+		return
+	}
+	writeError(w, http.StatusNotFound, "CONNECTION_ACTION_NOT_FOUND", "Unknown connection action.")
+}
+
+func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id string) {
+	if s.conns == nil {
+		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
+		return
+	}
+	workspaceID, ok := s.requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if s.verifier == nil {
+		writeError(w, http.StatusNotImplemented, "CONNECTION_VERIFY_DISABLED", "Connection verification is not configured.")
+		return
+	}
+	if err := s.verifier.VerifyConnection(r.Context(), workspaceID, id); err != nil {
+		writeError(w, http.StatusBadGateway, "CONNECTION_VERIFY_FAILED", err.Error())
+		return
+	}
+	if err := s.conns.UpdateAuthorization(r.Context(), connection.UpdateAuthorizationRequest{
+		WorkspaceID:  workspaceID,
+		ConnectionID: id,
+		Authorized:   true,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "CONNECTION_AUTHORIZE_FAILED", err.Error())
+		return
+	}
+	record, err := s.conns.Get(r.Context(), workspaceID, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "CONNECTION_NOT_FOUND", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, connectionResponse{Connection: record})
+}
+
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
 	}
-
-	// Start from the connection registry (connections created/authorized via the
-	// connection service). Registry records carry real authorization state and
-	// win on conflict.
-	byID := map[string]connection.Record{}
-	if s.conns != nil {
-		records, err := s.conns.List(r.Context(), workspaceID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err.Error())
-			return
-		}
-		for _, record := range records {
-			byID[record.ID] = record
-		}
+	if s.conns == nil {
+		writeJSON(w, http.StatusOK, connectionListResponse{Connections: []connection.Record{}})
+		return
 	}
-
-	// Derive connections from the offers visible to this workspace. Every offer
-	// names the connection (and adapter) it was discovered through, so a
-	// configured adapter's connection appears on this surface even before
-	// connection management exists — the offer is the source of truth. A
-	// connection actively serving offers reads as authorized.
-	if offerList, err := s.visibleOffers(r.Context(), workspaceID); err == nil {
-		for _, offer := range offerList {
-			if offer.ConnectionID == "" {
-				continue
-			}
-			if _, registered := byID[offer.ConnectionID]; registered {
-				continue
-			}
-			byID[offer.ConnectionID] = connection.Record{
-				ID:          offer.ConnectionID,
-				WorkspaceID: workspaceID,
-				AdapterType: offer.AdapterType,
-				Authorized:  true,
-			}
-		}
+	records, err := s.conns.List(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err.Error())
+		return
 	}
-
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	records := make([]connection.Record, 0, len(ids))
-	for _, id := range ids {
-		records = append(records, byID[id])
+	if records == nil {
+		records = []connection.Record{}
 	}
 	writeJSON(w, http.StatusOK, connectionListResponse{Connections: records})
 }

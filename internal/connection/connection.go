@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
@@ -22,11 +23,13 @@ type Service struct {
 }
 
 type Record struct {
-	ID                  string            `json:"id"`
-	WorkspaceID         string            `json:"workspace_id"`
-	AdapterType         string            `json:"adapter_type"`
-	AuthorizationSchema map[string]string `json:"authorization_schema,omitempty"`
-	Authorized          bool              `json:"authorized"`
+	ID                  string                `json:"id"`
+	WorkspaceID         string                `json:"workspace_id"`
+	AdapterType         string                `json:"adapter_type"`
+	AuthorizationSchema map[string]string     `json:"authorization_schema,omitempty"`
+	Authorized          bool                  `json:"authorized"`
+	Config              map[string]string     `json:"config,omitempty"`
+	Credential          credential.Credential `json:"credential,omitempty"`
 }
 
 type CreateRequest struct {
@@ -34,6 +37,8 @@ type CreateRequest struct {
 	ConnectionID        string
 	AdapterType         string
 	AuthorizationSchema map[string]string
+	Config              map[string]string
+	Credential          credential.Credential
 }
 
 type UpdateAuthorizationRequest struct {
@@ -50,7 +55,14 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 	if req.WorkspaceID == "" || req.ConnectionID == "" || req.AdapterType == "" {
 		return Record{}, fmt.Errorf("connection: workspace_id, connection_id, and adapter_type are required")
 	}
-	record := Record{ID: req.ConnectionID, WorkspaceID: req.WorkspaceID, AdapterType: req.AdapterType, AuthorizationSchema: cloneStringMap(req.AuthorizationSchema)}
+	record := Record{
+		ID:                  req.ConnectionID,
+		WorkspaceID:         req.WorkspaceID,
+		AdapterType:         req.AdapterType,
+		AuthorizationSchema: cloneStringMap(req.AuthorizationSchema),
+		Config:              cloneStringMap(req.Config),
+		Credential:          req.Credential,
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return Record{}, err

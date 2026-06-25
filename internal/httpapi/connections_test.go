@@ -1,52 +1,275 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/connection"
+	"github.com/benngarcia/mercator/internal/credential"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/ociresolver"
+	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/scheduler"
+	"github.com/benngarcia/mercator/internal/workload"
 )
 
-// TestConnectionsListReflectsOfferSources asserts that the connections list
-// surfaces the connection an offer came from. Every OfferSnapshot is stamped
-// with the connection_id (and adapter_type) it was discovered through, so a
-// configured adapter's connection appears on the connections surface even
-// before connection management exists — the offer is the source of truth.
-func TestConnectionsListReflectsOfferSources(t *testing.T) {
-	handler := newHTTPTestServer(t) // fake adapter, offers carry conn_1 / fake
+func testKey32() []byte { return []byte("0123456789abcdef0123456789abcdef") }
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/connections?workspace_id=ws_1", nil)
+// fakeVerifier is a test double for connectionVerifier whose VerifyConnection
+// outcome is controlled by the test.
+type fakeVerifier struct {
+	err error
+}
+
+func (f *fakeVerifier) VerifyConnection(_ context.Context, _, _ string) error {
+	return f.err
+}
+
+// newHTTPTestServerWithConns builds a test server with a real connection.Service,
+// secret store, and optional credential resolver and verifier wired in.
+func newHTTPTestServerWithConns(t *testing.T, store credential.SecretStore, resolver *credential.Resolver, extraOpts ...Option) http.Handler {
+	t.Helper()
+	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	now := time.Now().UTC()
+	ad := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", now)}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	)
+	sched := scheduler.New()
+	orch := orchestrator.New(log, sched, ad)
+	staticResolver := ociresolver.NewStaticResolver(nil)
+	svc := connection.New(log)
+	options := []Option{WithSecretStore(store)}
+	if resolver != nil {
+		options = append(options, WithCredentialResolver(resolver))
+	}
+	options = append(options, extraOpts...)
+	return NewWithAllServices(orch, sched, ad, workload.New(log), nil, svc, nil, staticResolver, options...)
+}
+
+// TestConnectionsListReflectsRegistry asserts that GET /v1/connections returns
+// connections that were registered via POST /v1/connections (the registry is
+// now the sole source of truth for the list — offer-derivation has been removed).
+func TestConnectionsListReflectsRegistry(t *testing.T) {
+	store := credential.NewMemoryStore()
+	handler := newHTTPTestServerWithConns(t, store, nil)
+
+	// Create a connection via the API.
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_registry",
+		AdapterType:  "fake",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "k-registry")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusCreated {
+		t.Fatalf("create connection expected 201/202, got %d body=%s", rec.Code, rec.Body.String())
+	}
 
+	// List and confirm the created connection appears.
+	req = httptest.NewRequest(http.MethodGet, "/v1/connections?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("list connections expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp struct {
-		Connections []connection.Record `json:"connections"`
-	}
+	var resp connectionListResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-
 	var got *connection.Record
 	for i := range resp.Connections {
-		if resp.Connections[i].ID == "conn_1" {
+		if resp.Connections[i].ID == "conn_registry" {
 			got = &resp.Connections[i]
 		}
 	}
 	if got == nil {
-		t.Fatalf("connections should include conn_1 (the offer's connection); got %+v", resp.Connections)
+		t.Fatalf("listConnections should include conn_registry; got %+v", resp.Connections)
 	}
 	if got.AdapterType != "fake" {
 		t.Errorf("adapter_type = %q, want fake", got.AdapterType)
 	}
-	if !got.Authorized {
-		t.Error("a connection actively serving offers should read as authorized")
+}
+
+// TestAuthorizeConnectionMarksAuthorized asserts that a successful
+// POST /v1/connections/{id}:authorize returns 200 with the record's
+// authorized field set to true.
+func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
+	store := credential.NewMemoryStore()
+	verifier := &fakeVerifier{err: nil} // verify always succeeds
+	handler := newHTTPTestServerWithConns(t, store, nil, WithVerifier(verifier))
+
+	// Create an unauthorized connection.
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_auth",
+		AdapterType:  "fake",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "k-auth-create")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusCreated {
+		t.Fatalf("create connection expected 201/202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if got.WorkspaceID != "ws_1" {
-		t.Errorf("workspace_id = %q, want ws_1", got.WorkspaceID)
+
+	// Authorize it.
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_auth:authorize?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authorize expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp connectionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode authorize response: %v", err)
+	}
+	if !resp.Connection.Authorized {
+		t.Errorf("authorize response: Authorized = false, want true")
+	}
+}
+
+// TestAuthorizeConnectionVerifyFailureStaysUnauthorized asserts that when the
+// verifier returns an error the authorize endpoint responds non-2xx (502) and
+// a subsequent GET shows the connection is still unauthorized.
+func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
+	store := credential.NewMemoryStore()
+	verifier := &fakeVerifier{err: errors.New("dial timeout")}
+	handler := newHTTPTestServerWithConns(t, store, nil, WithVerifier(verifier))
+
+	// Create an unauthorized connection.
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_noauth",
+		AdapterType:  "fake",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "k-noauth-create")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusCreated {
+		t.Fatalf("create connection expected 201/202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Attempt to authorize — verifier will fail.
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_noauth:authorize?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code < 400 {
+		t.Fatalf("failed verify should return non-2xx, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d", rec.Code)
+	}
+
+	// Follow-up GET confirms the connection is still unauthorized.
+	req = httptest.NewRequest(http.MethodGet, "/v1/connections?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp connectionListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	for _, c := range resp.Connections {
+		if c.ID == "conn_noauth" && c.Authorized {
+			t.Error("conn_noauth should remain unauthorized after failed verify")
+		}
+	}
+}
+
+// TestCreateConnectionStoresSecretOutOfBand asserts that posting a mercator-source
+// connection with a secret stores the secret encrypted out-of-band and never
+// echoes it in the response body.
+func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
+	store := credential.NewMemoryStore()
+	resolver := credential.NewResolver(nil, store, testKey32())
+	handler := newHTTPTestServerWithConns(t, store, resolver)
+
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID: "ws_1",
+		ConnectionID: "conn_rp",
+		AdapterType:  "runpod",
+		Credential:   credential.Credential{Source: "mercator"},
+		Secret:       "rp_live_key",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "k1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted && rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201/202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "rp_live_key") {
+		t.Fatal("response must not echo the secret")
+	}
+	// Decode the response body and verify that credential.ref is set correctly.
+	var resp connectionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	got := resp.Connection
+	if got.Credential.Ref != "conn_rp" {
+		t.Errorf("credential ref: got %q, want %q (credential ref must be set to connection id)", got.Credential.Ref, "conn_rp")
+	}
+	// Secret is retrievable (encrypted) and decrypts to the original.
+	blob, err := store.Get(context.Background(), "ws_1", "conn_rp")
+	if err != nil {
+		t.Fatalf("secret not stored: %v", err)
+	}
+	plain, err := credential.Open(testKey32(), blob)
+	if err != nil {
+		t.Fatalf("decrypt stored secret: %v", err)
+	}
+	if string(plain) != "rp_live_key" {
+		t.Fatalf("stored secret wrong: %q", string(plain))
+	}
+}
+
+// TestCreateConnectionNoMasterKeyReturnsError asserts that posting a
+// mercator-source connection on a server without a master key returns 400
+// SECRET_STORE_DISABLED.
+func TestCreateConnectionNoMasterKeyReturnsError(t *testing.T) {
+	store := credential.NewMemoryStore()
+	// Resolver built with nil key — no master key.
+	resolver := credential.NewResolver(nil, store, nil)
+	handler := newHTTPTestServerWithConns(t, store, resolver)
+
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_rp2",
+		AdapterType:  "runpod",
+		Credential:   credential.Credential{Source: "mercator"},
+		Secret:       "rp_live_key",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "k2")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "SECRET_STORE_DISABLED") {
+		t.Fatalf("expected SECRET_STORE_DISABLED code, got %s", rec.Body.String())
 	}
 }
