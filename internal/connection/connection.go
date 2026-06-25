@@ -79,7 +79,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 		CorrelationID:         req.ConnectionID,
 		CausationID:           "connection:create:" + req.ConnectionID,
 		Events: []eventlog.NewEvent{{
-			ID:            "evt_connection_" + req.ConnectionID + "_created",
+			ID:            fmt.Sprintf("evt_connection_%s_%s_created", req.WorkspaceID, req.ConnectionID),
 			Type:          EventConnectionCreated,
 			SchemaVersion: 1,
 			OccurredAt:    s.now().UTC(),
@@ -117,7 +117,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 		CorrelationID:         req.ConnectionID,
 		CausationID:           "connection:authorization:" + req.ConnectionID,
 		Events: []eventlog.NewEvent{{
-			ID:            fmt.Sprintf("evt_connection_%s_authorized_%t", req.ConnectionID, req.Authorized),
+			ID:            fmt.Sprintf("evt_connection_%s_%s_authorized_%t", req.WorkspaceID, req.ConnectionID, req.Authorized),
 			Type:          EventConnectionAuthorizationUpdated,
 			SchemaVersion: 1,
 			OccurredAt:    s.now().UTC(),
