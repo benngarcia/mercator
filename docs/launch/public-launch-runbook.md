@@ -195,6 +195,7 @@ gh label create release --description "Release packaging, checksums, and install
 gh label create "needs-maintainer-input" --description "Blocked on a project decision before implementation" --color bfdadc
 gh label create launch --description "Open source launch preparation and evidence" --color 0e8a16
 gh label create "proof-point" --description "Public trial, integration note, benchmark, review, or case study" --color 5319e7
+gh label create question --description "First-run help or evaluation question" --color d876e3
 ```
 
 Then create issues from the starter queue. Keep acceptance criteria intact so

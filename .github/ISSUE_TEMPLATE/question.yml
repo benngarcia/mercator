@@ -1,0 +1,62 @@
+name: First-run or evaluation question
+description: Ask for help evaluating Mercator without posting private details.
+title: "question: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for first-run help, evaluation questions, or clarification before filing a bug.
+
+        Do not include secrets, private hostnames, customer data, unpublished downstream details, or credentials.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to understand or evaluate?
+      placeholder: |
+        I am trying to...
+        I expected...
+        I am unsure whether...
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What you tried
+      description: Commands, docs, examples, or screenshots you already checked.
+      placeholder: |
+        Commands:
+        Docs:
+        Result:
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Commit or release, OS, architecture, adapter path, Go version, and any relevant tool versions.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Sanitized output
+      description: Paste sanitized output, logs, or error messages. Remove tokens, private hostnames, local machine identifiers, and customer data.
+  - type: dropdown
+    id: path
+    attributes:
+      label: Evaluation path
+      options:
+        - fake adapter quickstart
+        - Docker adapter
+        - RunPod adapter
+        - CLI
+        - HTTP API / OpenAPI
+        - SDK
+        - console
+        - docs only
+        - not sure yet
+    validations:
+      required: true

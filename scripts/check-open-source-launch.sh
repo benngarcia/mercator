@@ -244,6 +244,7 @@ check_required_files() {
     .github/PULL_REQUEST_TEMPLATE.md
     .github/ISSUE_TEMPLATE/bug_report.yml
     .github/ISSUE_TEMPLATE/feature_request.yml
+    .github/ISSUE_TEMPLATE/question.yml
     .github/ISSUE_TEMPLATE/proof_point.yml
     .github/ISSUE_TEMPLATE/config.yml
     .github/CODEOWNERS
@@ -376,6 +377,7 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Public proof point: user story, integration note, benchmark, or case study' "Scorecard keeps public proof-point gate open"
   require_pattern docs/launch/open-source-readiness.md 'Code of conduct documented' "Scorecard includes code of conduct"
   require_pattern docs/launch/open-source-readiness.md 'Support policy documented' "Scorecard includes support policy"
+  require_pattern docs/launch/open-source-readiness.md 'Question issue template documented' "Scorecard includes question issue template"
   require_pattern docs/launch/open-source-readiness.md 'Governance policy documented' "Scorecard includes governance policy"
   require_pattern docs/launch/open-source-readiness.md 'Pre-public exposure review documented' "Scorecard includes pre-public exposure review"
   require_pattern docs/launch/open-source-readiness.md 'Repository settings checklist documented' "Scorecard includes repository settings checklist"
@@ -385,7 +387,10 @@ check_launch_docs() {
   require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
   require_pattern CONTRIBUTING.md 'GOVERNANCE\.md' "Contributing guide links governance policy"
   require_pattern .github/ISSUE_TEMPLATE/config.yml 'SUPPORT\.md' "Issue template config links support policy"
+  require_pattern .github/ISSUE_TEMPLATE/question.yml 'First-run or evaluation question' "Question template covers first-run help"
+  require_pattern .github/ISSUE_TEMPLATE/question.yml 'sanitized output' "Question template asks for sanitized output"
   require_pattern SUPPORT.md 'Where To Ask' "Support policy explains where to ask"
+  require_pattern SUPPORT.md 'Question issue template' "Support policy routes first-run questions to template"
   require_pattern SUPPORT.md 'Do Not Post Publicly' "Support policy protects sensitive reports"
   require_pattern GOVERNANCE.md 'Decision Rules' "Governance policy explains decision rules"
   require_pattern GOVERNANCE.md 'What Needs Maintainer Decision' "Governance policy names maintainer-decision changes"

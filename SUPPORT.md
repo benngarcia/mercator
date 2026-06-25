@@ -6,9 +6,9 @@ used is much easier to act on than a general description.
 
 ## Where To Ask
 
-- **First-run or evaluation help:** open a GitHub issue with a `question:`
-  title. Include the command you ran, the Mercator commit or release, OS,
-  architecture, adapter, and sanitized output.
+- **First-run or evaluation help:** use the Question issue template. Include
+  the command you ran, the Mercator commit or release, OS, architecture,
+  adapter, and sanitized output.
 - **Reproducible bugs:** use the Bug report issue template. Include the
   smallest command sequence that reproduces the behavior.
 - **Feature or design proposals:** use the Feature request issue template. State
