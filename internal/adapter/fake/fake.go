@@ -33,6 +33,8 @@ type Adapter struct {
 	// and remove the owned object.
 	releaseCount   int
 	terminateCount int
+	// verifyErr is the error returned by Verify. Defaults to nil (success).
+	verifyErr error
 }
 
 type operationRecord struct {
@@ -71,6 +73,14 @@ func WithExitCode(code int) Option {
 func WithOpenObservations(n int) Option {
 	return func(a *Adapter) {
 		a.openObserves = n
+	}
+}
+
+// WithVerifyError configures the error returned by Verify. Use to simulate a
+// credential or reachability failure in tests.
+func WithVerifyError(err error) Option {
+	return func(a *Adapter) {
+		a.verifyErr = err
 	}
 }
 
@@ -297,6 +307,8 @@ func (a *Adapter) TerminateCount() int {
 	defer a.mu.Unlock()
 	return a.terminateCount
 }
+
+func (a *Adapter) Verify(context.Context) error { return a.verifyErr }
 
 func (a *Adapter) ListOwned(_ context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
 	a.mu.Lock()

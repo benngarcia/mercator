@@ -34,6 +34,9 @@ const (
 )
 
 type Adapter interface {
+	// Verify performs a cheap credential/reachability check for the authorize
+	// flow. It does not launch anything.
+	Verify(ctx context.Context) error
 	ListOffers(ctx context.Context, req OfferRequest) ([]domain.OfferSnapshot, error)
 	Launch(ctx context.Context, req LaunchRequest) (LaunchReceipt, error)
 	Observe(ctx context.Context, req ObserveRequest) (ExternalObservation, error)
@@ -97,6 +100,8 @@ type LaunchReceipt struct {
 }
 
 type ObserveRequest struct {
+	WorkspaceID    string
+	ConnectionID   string
 	LaunchKey      string
 	OwnershipToken string
 	RequestHash    string
@@ -112,6 +117,8 @@ type ExternalObservation struct {
 }
 
 type CancelRequest struct {
+	WorkspaceID  string
+	ConnectionID string
 	OperationKey string
 	RequestHash  string
 	LaunchKey    string
@@ -123,6 +130,8 @@ type CancelReceipt struct {
 }
 
 type ReleaseRequest struct {
+	WorkspaceID       string
+	ConnectionID      string
 	OperationKey      string
 	RequestHash       string
 	LaunchKey         string
@@ -140,6 +149,8 @@ type ReleaseReceipt struct {
 // ownership material (OwnershipToken/LaunchRequestHash) as ReleaseRequest so
 // the no-orphan reconciliation path is identical.
 type TerminateRequest struct {
+	WorkspaceID       string
+	ConnectionID      string
 	OperationKey      string
 	RequestHash       string
 	LaunchKey         string
