@@ -111,6 +111,22 @@ For a fuller local evaluation, use
 real Docker host, use
 [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md).
 
+## Pick The Right Evaluation Path
+
+Start with the fake adapter unless you need to prove adapter behavior. It is the
+only path that requires no Docker daemon, provider account, registry access, or
+billable compute.
+
+| Path | Use It To Prove | Requires | Start Here |
+| --- | --- | --- | --- |
+| Fake adapter | Broker lifecycle, placement, public events, cleanup, CLI, SDKs, and console without external dependencies. | Go 1.25+, `jq`, and a shell. | [Fake evaluation path](docs/production/fake-eval-path.md) |
+| Docker adapter | Real local container launch, observation, labels, and cleanup on one host. | Docker CLI/daemon, a digest-pinned Linux image, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
+| RunPod adapter | Provisionable GPU-provider flow and terminate cleanup. | RunPod API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [RunPod runbook](docs/production/runpod.md) |
+
+If the fake path passes but Docker or RunPod does not, treat that as adapter or
+environment evidence rather than broker evidence. Known gaps are tracked in
+[docs/production/known-limitations.md](docs/production/known-limitations.md).
+
 ## SDK Happy Path
 
 The SDKs hide the low-level idempotency mechanics for the common case. A caller
