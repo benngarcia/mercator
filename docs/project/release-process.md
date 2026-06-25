@@ -23,7 +23,8 @@ Each archive contains:
 
 SDK package publishing is not part of the first binary release. Until package
 publishing is decided, SDK users should install from the repository checkout and
-follow the language-specific README.
+follow the language-specific README. See `docs/project/package-distribution.md`
+for the package plan.
 
 ## Pre-Tag Checklist
 
