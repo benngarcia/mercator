@@ -122,8 +122,12 @@ gh run list --workflow Release --limit 3
 gh run watch <run-id> --exit-status
 ```
 
-After the GitHub Release is created, download one archive and verify it before
-announcing the release:
+After the GitHub Release is created, confirm it used the curated release notes
+and then download one archive and verify it before announcing the release:
+
+```sh
+gh release view v0.1.0 --json url,name,body
+```
 
 ```sh
 version=v0.1.0

@@ -71,13 +71,17 @@ git push origin v0.1.0
 ```
 
 The GitHub Actions release workflow builds archives, writes checksums, and
-creates a GitHub Release with generated notes. The workflow calls
-`scripts/build-release-archives.sh`, so local archive verification and release
-archive generation share the same implementation.
+creates a GitHub Release. For `v0.1.0`, the workflow uses the curated notes in
+`docs/project/release-notes/v0.1.0.md`; later tags can add a matching
+`docs/project/release-notes/<tag>.md` file or fall back to generated notes. The
+workflow calls `scripts/build-release-archives.sh`, so local archive
+verification and release archive generation share the same implementation.
 
 ## Post-Release Checklist
 
 - Confirm the release workflow passed.
+- Confirm the published release notes match
+  `docs/project/release-notes/v0.1.0.md` and still link known limitations.
 - Download one archive and run `./mercator serve --help` or start the server.
 - Verify `checksums.txt` matches the uploaded archives.
 - Add the release badge/link to `README.md`.

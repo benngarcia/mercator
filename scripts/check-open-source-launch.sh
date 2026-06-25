@@ -92,7 +92,7 @@ require_pattern() {
   local path="$1"
   local pattern="$2"
   local label="$3"
-  if grep -Eq "${pattern}" "${path}"; then
+  if grep -Eq -- "${pattern}" "${path}"; then
     record_ok "${label}"
   else
     record_fail "${label}"
@@ -110,7 +110,10 @@ require_readme_heading() {
 
 check_markdown_links() {
   if ruby <<'RUBY'
-files = `git ls-files '*.md'`.lines.map(&:chomp)
+files = (
+  `git ls-files '*.md'`.lines.map(&:chomp) +
+  `git ls-files --others --exclude-standard '*.md'`.lines.map(&:chomp)
+).uniq
 missing = []
 
 files.each do |file|
@@ -233,6 +236,7 @@ check_required_files() {
     docs/project/issue-drafts/external-sink-configuration.md
     docs/project/package-distribution.md
     docs/project/release-process.md
+    docs/project/release-notes/v0.1.0.md
     docs/project/threat-model.md
     docs/production/known-limitations.md
     docs/production/fake-eval-path.md
@@ -305,6 +309,8 @@ check_workflow_hooks() {
   require_pattern .github/workflows/ci.yml 'bun run typecheck' "CI typechecks console"
   require_pattern .github/workflows/ci.yml 'bun run build' "CI builds console"
   require_pattern .github/workflows/release.yml 'scripts/build-release-archives\.sh "\$GITHUB_REF_NAME" dist' "Release workflow builds archives"
+  require_pattern .github/workflows/release.yml 'docs/project/release-notes/\$\{GITHUB_REF_NAME\}\.md' "Release workflow checks for curated release notes"
+  require_pattern .github/workflows/release.yml '--notes-file "\$notes_file"' "Release workflow uses curated release notes when present"
   require_pattern .github/workflows/release.yml 'gh release create "\$GITHUB_REF_NAME" dist/\* --generate-notes' "Release workflow publishes GitHub release"
 }
 
@@ -319,7 +325,10 @@ check_launch_docs() {
   require_pattern docs/launch/reviewer-outreach.md 'Prospective User Trial Request' "Reviewer outreach includes prospective-user request"
   require_pattern docs/launch/reviewer-outreach.md 'Open Source Developer Review Request' "Reviewer outreach includes OSS-developer request"
   require_pattern docs/project/package-distribution.md 'First-launch decision: \*\*do not publish SDK packages for `v0\.1\.0`\*\*' "Package plan documents SDK publishing decision"
+  require_pattern docs/project/release-notes/v0.1.0.md 'pre-GA evaluation release' "v0.1.0 release notes are pre-GA honest"
+  require_pattern docs/project/release-notes/v0.1.0.md 'docs/production/known-limitations.md' "v0.1.0 release notes link known limitations"
   require_pattern docs/project/release-process.md 'scripts/build-release-archives\.sh v0\.1\.0 dist' "Release process documents archive builder"
+  require_pattern docs/project/release-process.md 'docs/project/release-notes/v0\.1\.0\.md' "Release process references curated v0.1.0 notes"
 }
 
 run_full_checks() {

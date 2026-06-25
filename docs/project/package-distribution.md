@@ -180,8 +180,9 @@ Do not publish a release unless all of these are true:
   builds archives and checksums successfully.
 - The release workflow has been reviewed on the launch-prep PR.
 - `docs/project/release-process.md` has been followed.
-- The release notes state that Mercator is pre-1.0 and V1 evaluation-ready, not
-  production GA.
+- The release notes come from `docs/project/release-notes/v0.1.0.md` or an
+  equivalent tag-specific note that states Mercator is pre-1.0 and V1
+  evaluation-ready, not production GA.
 - `docs/production/known-limitations.md` is linked from the release notes.
 - The archives and checksums can be downloaded and verified.
 
