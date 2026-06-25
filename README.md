@@ -146,6 +146,8 @@ go build ./cmd/mercator
 | Security boundaries | [docs/production/security-model.md](docs/production/security-model.md) |
 | Backup and restore | [docs/production/backup-recovery.md](docs/production/backup-recovery.md) |
 | Human evaluation checklist | [docs/production/human-eval-checklist.md](docs/production/human-eval-checklist.md) |
+| Compatibility policy | [docs/project/compatibility.md](docs/project/compatibility.md) |
+| Release process | [docs/project/release-process.md](docs/project/release-process.md) |
 | Open source launch readiness | [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md) |
 
 ## Build And Test
@@ -176,7 +178,7 @@ Current branch status:
 
 Important pre-GA gaps include package publishing, release tags, public CI run
 history, stronger external sink wiring, registry credential flows, social proof,
-and a maintainer-approved compatibility policy.
+and a maintainer-reviewed threat model.
 
 ## Contributing
 

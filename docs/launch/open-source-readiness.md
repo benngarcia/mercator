@@ -12,7 +12,7 @@ production readiness claim; production hardening remains tracked in
 | --- | --- | --- | --- |
 | README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the first run exists. |
 | New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; CLI hides run IDs and idempotency on the happy path. | A- | Publish binaries or package-manager install commands so users do not need a source checkout. |
-| Staff-engineer trust | Production docs, known limitations, security model, contribution bar, Apache-2.0 license, CI workflow, and explicit pre-GA status are present. | A- | Public CI history, tagged releases, compatibility policy, and one external security/design review. |
+| Staff-engineer trust | Production docs, known limitations, security model, contribution bar, Apache-2.0 license, CI/release workflows, compatibility policy, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, and security policy are checked in. | A | Add labeled starter issues after the first public triage pass. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm` are tracked in `docs/assets/`. | A | Optionally add a compressed GIF to the README if GitHub video rendering is not prominent enough. |
 | Social proof | Repo has durable verification docs and a real operator-oriented runbook set. | B- | Add a public user story, integration note, benchmark, or maintainer-approved case study. |
@@ -39,11 +39,10 @@ Strengths:
 Concerns before A+:
 
 - Need public CI run history and release artifacts.
-- Need an explicit API/SDK compatibility policy.
 - Need a maintainer-reviewed threat model for token, credential, and adapter
   boundaries.
 
-Grade: **A-**.
+Grade: **A**.
 
 ### Prospective User Persona
 
@@ -82,8 +81,8 @@ Strengths:
 Concerns before A+:
 
 - No labeled beginner issues yet.
-- CI workflow is configured, but needs a successful public run.
-- Release and packaging process is not documented.
+- CI/release workflows are configured, but need successful public runs.
+- SDK package publishing is not decided yet.
 
 Grade: **A**.
 
@@ -94,11 +93,12 @@ Grade: **A**.
 - [x] License, notice, security policy, contribution guide, roadmap.
 - [x] GitHub issue templates and PR template.
 - [x] CI workflow added.
+- [x] Release workflow and release process documented.
+- [x] API/SDK compatibility policy documented.
 - [x] Demo video recorded and linked from the README.
 - [ ] First public CI run is green.
 - [ ] Tagged release with binaries/checksums.
 - [ ] Package install story for CLI/server and SDKs.
-- [ ] API/SDK compatibility policy.
 - [ ] Public proof point: user story, integration note, benchmark, or case study.
 
 ## Longer Demo Video Shot List

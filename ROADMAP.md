@@ -14,7 +14,8 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 - TypeScript, Python, and Ruby SDKs.
 - Production evaluation runbooks.
 - OSS project scaffolding: license, security policy, contribution guide, issue
-  templates, CI workflow, screenshots, and launch scorecard.
+  templates, CI/release workflows, compatibility policy, screenshots, and
+  launch scorecard.
 - Short fake-adapter console demo committed under `docs/assets/`.
 
 ## Next: Open Source Launch Polish
@@ -22,7 +23,6 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 - Add a first tagged release with downloadable binaries and checksums.
 - Publish SDK packages or document exact local install paths for each language.
 - Add public CI badges after the first GitHub Actions run succeeds.
-- Write a short compatibility policy for the V1 HTTP API and SDKs.
 - Add one external user story or case-study style narrative once there is a
   maintainer-approved public reference.
 
