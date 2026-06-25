@@ -6,7 +6,8 @@ is public.
 
 For reviewer prompts by audience, see
 `docs/launch/reviewer-packet.md`. For ready-to-send request copy, see
-`docs/launch/reviewer-outreach.md`.
+`docs/launch/reviewer-outreach.md`. Checked-in proof artifacts live under
+`docs/launch/proof-points/`.
 
 ## Accepted Proof Types
 

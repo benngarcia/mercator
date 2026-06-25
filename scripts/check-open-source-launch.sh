@@ -251,6 +251,8 @@ check_required_files() {
     docs/assets/README.md
     docs/launch/open-source-readiness.md
     docs/launch/pre-public-exposure-review.md
+    docs/launch/proof-points/README.md
+    docs/launch/proof-points/fake-adapter-baseline.md
     docs/launch/public-launch-runbook.md
     docs/launch/proof-point-template.md
     docs/launch/reviewer-packet.md
@@ -321,6 +323,7 @@ check_readme_surface() {
   require_pattern README.md 'scripts/smoke-test-fake\.sh' "README links fake smoke test"
   require_pattern README.md 'docs/launch/open-source-readiness\.md' "README links launch scorecard"
   require_pattern README.md 'docs/launch/pre-public-exposure-review\.md' "README links pre-public exposure review"
+  require_pattern README.md 'docs/launch/proof-points/README\.md' "README links proof-point evidence"
   require_pattern README.md 'docs/launch/proof-point-template\.md' "README links proof-point template"
   require_pattern README.md 'CODE_OF_CONDUCT\.md' "README links code of conduct"
   require_pattern README.md 'SUPPORT\.md' "README links support policy"
@@ -349,6 +352,7 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Support policy documented' "Scorecard includes support policy"
   require_pattern docs/launch/open-source-readiness.md 'Governance policy documented' "Scorecard includes governance policy"
   require_pattern docs/launch/open-source-readiness.md 'Pre-public exposure review documented' "Scorecard includes pre-public exposure review"
+  require_pattern docs/launch/open-source-readiness.md 'Maintainer reproducible proof baseline documented' "Scorecard includes reproducible proof baseline"
   require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
   require_pattern CONTRIBUTING.md 'GOVERNANCE\.md' "Contributing guide links governance policy"
   require_pattern .github/ISSUE_TEMPLATE/config.yml 'SUPPORT\.md' "Issue template config links support policy"
@@ -363,6 +367,9 @@ check_launch_docs() {
   require_pattern docs/launch/public-launch-runbook.md 'gh repo edit --visibility public --accept-visibility-change-consequences' "Runbook includes visibility change command"
   require_pattern docs/launch/public-launch-runbook.md 'docs/launch/pre-public-exposure-review\.md' "Runbook links pre-public exposure review"
   require_pattern docs/launch/public-launch-runbook.md 'gh issue create' "Runbook includes starter issue creation commands"
+  require_pattern docs/launch/proof-points/README.md 'external/public proof gate' "Proof-points index keeps external proof gate open"
+  require_pattern docs/launch/proof-points/fake-adapter-baseline.md 'Mercator fake-adapter smoke test passed' "Proof baseline includes fake smoke evidence"
+  require_pattern docs/launch/proof-points/fake-adapter-baseline.md 'scripts/smoke-test-fake\.sh' "Proof baseline includes reproduction command"
   require_pattern docs/launch/proof-point-template.md 'Do not convert private maintainer notes into social proof' "Proof template rejects private social proof"
   require_pattern docs/launch/reviewer-packet.md 'Staff-engineer verdict: A\+ \| A \| B \| not ready' "Reviewer packet includes staff verdict format"
   require_pattern docs/launch/reviewer-outreach.md 'Staff Engineer Review Request' "Reviewer outreach includes staff-engineer request"

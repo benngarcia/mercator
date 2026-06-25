@@ -15,7 +15,7 @@ production readiness claim; production hardening remains tracked in
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, governance policy, code of conduct, support policy, Apache-2.0 license, CI/release workflows, local release archive builder, curated `v0.1.0` release notes, launch audit script, pre-public exposure review, compatibility policy, a concrete external-sink hardening issue draft, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, issue templates, PR template, roadmap, security policy, starter contributor queue, and public issue-conversion commands are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm`, a README-linked GIF fallback, a text demo transcript, and screenshot capture notes are tracked in `docs/assets/`. | A | Optional post-launch polish: add a longer narrated demo from the shot list. |
-| Social proof | Repo has durable verification docs, a real operator-oriented runbook set, and a public proof-point intake template. | B | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
+| Social proof | Repo has durable verification docs, a real operator-oriented runbook set, a public proof-point intake template, and a checked-in maintainer fake-adapter baseline in `docs/launch/proof-points/`. | B+ | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
 Overall current launch grade: **A**. The repo is credible and tryable in the
 private PR state, but an A+ public launch still needs public visibility,
@@ -33,6 +33,9 @@ external proof point. The remaining permission-bound steps are sequenced in
 - Public proof collection path: `.github/ISSUE_TEMPLATE/proof_point.yml` and
   `docs/launch/proof-point-template.md` are checked in, but no public proof
   point exists yet.
+- Maintainer proof baseline: `docs/launch/proof-points/fake-adapter-baseline.md`
+  records a reproducible fake-adapter smoke run. It is useful launch evidence,
+  but it does not close the external/public proof gate by itself.
 - External review packet: `docs/launch/reviewer-packet.md` gives staff
   engineer, prospective-user, and OSS-developer reviewers concrete questions
   and verdict formats. `docs/launch/reviewer-outreach.md` gives maintainers
@@ -80,6 +83,8 @@ Strengths:
 - Console screenshots and the short WebM demo make the run/decision experience
   concrete.
 - The demo has a GIF fallback and text transcript.
+- A maintainer fake-adapter baseline shows the expected smoke-test output and
+  environment for a deterministic first run.
 - `mercator --help` works before the user has configured a server URL.
 - SDK happy path shows the intended integration shape.
 
@@ -168,6 +173,7 @@ Grade: **A**.
 - [x] Public launch runbook documented.
 - [x] Pre-public exposure review documented.
 - [x] Public proof-point intake path documented.
+- [x] Maintainer reproducible proof baseline documented.
 - [x] External reviewer packet documented.
 - [x] External reviewer outreach prompts documented.
 - [x] Concrete production hardening issue draft documented.

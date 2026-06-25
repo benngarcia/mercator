@@ -193,6 +193,7 @@ go build ./cmd/mercator
 | Public launch runbook | [docs/launch/public-launch-runbook.md](docs/launch/public-launch-runbook.md) |
 | Pre-public exposure review | [docs/launch/pre-public-exposure-review.md](docs/launch/pre-public-exposure-review.md) |
 | Public proof point template | [docs/launch/proof-point-template.md](docs/launch/proof-point-template.md) |
+| Proof-point evidence | [docs/launch/proof-points/README.md](docs/launch/proof-points/README.md) |
 | Release process | [docs/project/release-process.md](docs/project/release-process.md) |
 | Open source launch readiness | [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md) |
 
@@ -228,7 +229,8 @@ Current branch status:
 - Hand-written SDKs for TypeScript, Python, and Ruby.
 - Production evaluation docs and known limitations are checked in.
 - Open source launch prep is underway; screenshots and a short demo video are
-  tracked, and the remaining launch scorecard is in
+  tracked, a maintainer fake-adapter proof baseline is documented, and the
+  remaining launch scorecard is in
   [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md).
 
 Important pre-GA gaps include package publishing, release tags, public CI run
