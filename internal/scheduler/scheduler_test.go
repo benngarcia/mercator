@@ -76,7 +76,7 @@ func TestSchedulerRejectsConservativeFactAndResourceGaps(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	rev := schedulerRevision()
 	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{
-		Vendor: "nvidia", ModelAnyOf: []string{"a10"}, Count: 1, MemoryMinBytes: 16 << 30,
+		Vendor: "nvidia", ModelAnyOf: []string{"nvidia-a10"}, Count: 1, MemoryMinBytes: 16 << 30,
 	}}
 	maxCost := 0.05
 	rev.Spec.Placement.MaxExpectedCostUSD = &maxCost
@@ -89,7 +89,7 @@ func TestSchedulerRejectsConservativeFactAndResourceGaps(t *testing.T) {
 	unknownImageCache := schedulerOffer("off_unknown_image_cache", now, 0.00001, 1)
 	unknownImageCache.ImageCache.Known = false
 	tooExpensive := schedulerOffer("off_too_expensive", now, 0.001, 1)
-	tooExpensive.Resources.Accelerators = []domain.AcceleratorInventory{{Vendor: "nvidia", Model: "a10", Count: 1, MemoryBytes: 24 << 30}}
+	tooExpensive.Resources.Accelerators = []domain.AcceleratorInventory{{Vendor: "nvidia", Model: "a10", CanonicalModel: "nvidia-a10", Count: 1, MemoryBytes: 24 << 30}}
 	tooExpensive.Capabilities.Resources.GPUVendors = []string{"nvidia"}
 	tooExpensive.ImageCache.Known = true
 	tooExpensive.ImageCache.MissingBytes = 0
@@ -112,6 +112,48 @@ func TestSchedulerRejectsConservativeFactAndResourceGaps(t *testing.T) {
 	assertCandidateRejected(t, decision, "off_unavailable", "CAPACITY_UNAVAILABLE", "capacity.available")
 	assertCandidateRejected(t, decision, "off_unknown_image_cache", "UNKNOWN_FACT", "image_cache")
 	assertCandidateRejected(t, decision, "off_too_expensive", "COST_LIMIT_EXCEEDED", "placement.max_expected_cost_usd")
+}
+
+func TestSchedulerMatchesAcceleratorByCanonicalModelAndNormalizedVendor(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+
+	// Offer advertises the GPU with the provider's RAW vendor casing and the
+	// canonical model id. Matching must normalize the vendor and compare the
+	// canonical model — not the raw Model string.
+	gpu := schedulerOffer("off_gpu", now, 0.00001, 1)
+	gpu.Resources.Accelerators = []domain.AcceleratorInventory{{
+		Vendor: "NVIDIA", Model: "RTX A2000", CanonicalModel: "nvidia-rtx-a2000", Count: 1, MemoryBytes: 6 << 30,
+	}}
+	gpu.Capabilities.Resources.GPUVendors = []string{"nvidia"}
+
+	rev := schedulerRevision()
+	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{
+		Vendor: "nvidia", ModelAnyOf: []string{"nvidia-rtx-a2000"}, Count: 1,
+	}}
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID: "run_1", Workload: rev, Offers: []domain.OfferSnapshot{gpu}, ModelVersion: "latency-v1", EvaluatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != "off_gpu" {
+		t.Fatalf("canonical GPU match should select off_gpu, got %q", decision.SelectedOfferSnapshotID)
+	}
+
+	// A requirement for a DIFFERENT canonical model must not match this offer.
+	revH := schedulerRevision()
+	revH.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{
+		Vendor: "nvidia", ModelAnyOf: []string{"nvidia-h100"}, Count: 1,
+	}}
+	dec2, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID: "run_2", Workload: revH, Offers: []domain.OfferSnapshot{gpu}, ModelVersion: "latency-v1", EvaluatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if dec2.SelectedOfferSnapshotID != "" {
+		t.Fatalf("a different canonical model must not match, got %q", dec2.SelectedOfferSnapshotID)
+	}
 }
 
 func TestSchedulerAllowsUnknownNetworkWhenPolicyAllowsIt(t *testing.T) {

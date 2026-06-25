@@ -125,10 +125,10 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 		"API_TOKEN": {Value: ptr("runtime-managed-token")},
 	}
 	rev.Spec.Containers[0].Ports = []domain.PortSpec{{Name: "metrics", ContainerPort: 9090, Protocol: "tcp", Exposure: domain.PortExposurePrivate}}
-	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{Vendor: "nvidia", ModelAnyOf: []string{"a10"}, Count: 1, MemoryMinBytes: 16 << 30}}
+	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{Vendor: "nvidia", ModelAnyOf: []string{"nvidia-a10"}, Count: 1, MemoryMinBytes: 16 << 30}}
 	offer := orchOffer("off_1", time.Now().UTC())
 	offer.NativeRef = "native-offer-1"
-	offer.Resources.Accelerators = []domain.AcceleratorInventory{{Vendor: "nvidia", Model: "a10", Count: 1, MemoryBytes: 24 << 30}}
+	offer.Resources.Accelerators = []domain.AcceleratorInventory{{Vendor: "nvidia", Model: "a10", CanonicalModel: "nvidia-a10", Count: 1, MemoryBytes: 24 << 30}}
 	offer.Capabilities.Resources.GPUVendors = []string{"nvidia"}
 	ad := &captureLaunchAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}))}
 	orch := newTestOrchestrator(t, ad)

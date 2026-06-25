@@ -181,10 +181,15 @@ type ResourceInventory struct {
 }
 
 type AcceleratorInventory struct {
-	Vendor      string `json:"vendor"`
-	Model       string `json:"model"`
-	Count       int    `json:"count"`
-	MemoryBytes int64  `json:"memory_bytes"`
+	Vendor string `json:"vendor"`
+	Model  string `json:"model"`
+	// CanonicalModel is the provider-agnostic GPU id (e.g. "nvidia-rtx-a2000")
+	// the scheduler matches AcceleratorRequirement.ModelAnyOf against. Adapters
+	// derive it from their native model string via internal/gpunorm; Model keeps
+	// the provider's raw display name for provenance.
+	CanonicalModel string `json:"canonical_model,omitempty"`
+	Count          int    `json:"count"`
+	MemoryBytes    int64  `json:"memory_bytes"`
 }
 
 type CapabilityProfile struct {
