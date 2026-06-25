@@ -23,20 +23,19 @@ Create these labels during public triage:
 
 ## Starter Issues
 
-### 1. Add CLI Error Response Examples
+### 1. Add A CLI Exit-Code Reference
 
 Suggested labels: `good first issue`, `docs`, `cli`
 
-Problem: `docs/reference/cli.md` shows successful fake-adapter commands, but it
-does not show what the JSON-first CLI prints for common setup mistakes.
+Problem: `docs/reference/cli.md` shows successful commands and a few JSON error
+responses, but it does not summarize which failures exit `1` versus `2`.
 
 Acceptance criteria:
 
-- Add short examples for missing `MERCATOR_API_URL`, an incorrect bearer token,
-  and an unauthorized workspace.
-- Show the JSON error shape with `code` and `message`.
-- Use the existing fake-adapter quickstart environment where a server is needed:
-  `ws_1`, `dev-token`, and `http://127.0.0.1:8080`.
+- Document that local argument/configuration validation exits `2`.
+- Document that transport failures, non-2xx API responses, response-read
+  failures, and non-JSON API responses exit `1`.
+- Include one local validation example and one API response example.
 - Do not add new CLI flags or behavior.
 - Run `go run ./cmd/mercator --help` and `git diff --check`.
 

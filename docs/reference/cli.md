@@ -74,6 +74,38 @@ go run ./cmd/mercator sink status --sink-id audit \
 Use `--workspace-id ID` on any run command to override
 `MERCATOR_WORKSPACE_ID`.
 
+## Error Responses
+
+The CLI prints JSON on stdout for successful responses and JSON on stderr for
+local validation errors or non-2xx API responses. Common setup mistakes:
+
+```sh
+unset MERCATOR_API_URL
+mercator run list --workspace-id ws_1
+# stderr, exit 2:
+# {"code":"BASE_URL_REQUIRED","message":"MERCATOR_API_URL or --api-url is required"}
+```
+
+```sh
+export MERCATOR_API_URL=http://127.0.0.1:8080
+export MERCATOR_API_TOKEN='wrong'
+export MERCATOR_WORKSPACE_ID=ws_1
+
+mercator run list
+# stderr, exit 1:
+# {"code":"UNAUTHORIZED","message":"Bearer token is required."}
+```
+
+```sh
+export MERCATOR_API_URL=http://127.0.0.1:8080
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_WORKSPACE_ID=ws_nope
+
+mercator run list
+# stderr, exit 1:
+# {"code":"FORBIDDEN","message":"Principal is not authorized for this workspace."}
+```
+
 ## Workload JSON
 
 For full control, pass a workload revision JSON object instead of an image
