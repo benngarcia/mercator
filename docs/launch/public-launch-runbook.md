@@ -14,6 +14,7 @@ first release, converting starter issues, and collecting public proof.
   - `go build ./...`
   - `scripts/smoke-test-fake.sh`
   - `scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist`
+- The SDK CI job includes `scripts/check-open-source-launch.sh`.
 - The repository owner has decided to make the project public.
 - No secrets, tokens, local machine identifiers, or private customer details are
   present in docs, screenshots, demo video, issues, or release notes.
@@ -90,6 +91,7 @@ Run the local release checks from a clean default branch:
 ```sh
 git status --short --branch
 git diff --check
+scripts/check-open-source-launch.sh
 go test ./...
 go build ./...
 scripts/smoke-test-fake.sh

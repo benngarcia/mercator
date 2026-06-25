@@ -41,6 +41,7 @@ Run locally before creating a tag:
 ```sh
 git status --short --branch
 git diff --check
+scripts/check-open-source-launch.sh
 go test ./...
 go build ./...
 scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist

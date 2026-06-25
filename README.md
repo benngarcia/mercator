@@ -198,10 +198,18 @@ go build ./cmd/mercator
 go test ./...
 go build ./...
 go run ./cmd/mercator --help
+scripts/check-open-source-launch.sh
 
 cd sdk/typescript && npm ci && npm test
 cd ../python && python3 -m unittest discover -s tests
 cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
+```
+
+For the heavier launch gate that also exercises the fake adapter and local
+release archive builder, run:
+
+```sh
+scripts/check-open-source-launch.sh --full
 ```
 
 The Go binary uses the pure-Go SQLite driver `modernc.org/sqlite`, so normal

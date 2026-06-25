@@ -37,6 +37,7 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
+      - run: scripts/check-open-source-launch.sh
       - run: npm ci
         working-directory: sdk/typescript
       - run: npm test
