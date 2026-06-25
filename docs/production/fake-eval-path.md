@@ -22,9 +22,14 @@ or keep the server running for the console.
 Expected transcript shape:
 
 ```text
+$ scripts/smoke-test-fake.sh
 Mercator fake-adapter smoke test passed
 run_id=run_... outcome=succeeded exit_code=0 cleanup=confirmed closed=true
 ```
+
+The script also prints a loopback console URL with an ephemeral port. That URL is
+useful for local inspection, but it is intentionally omitted here because it
+changes on every run.
 
 ## Start Server
 
