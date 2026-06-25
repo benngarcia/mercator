@@ -48,6 +48,16 @@ export MERCATOR_API_TOKEN='<token from first shell>'
 export MERCATOR_WORKSPACE_ID=ws_eval
 ```
 
+Before creating a run, smoke-check the public OpenAPI document:
+
+```sh
+curl -fsS "$MERCATOR_API_URL/openapi.json" | jq '.info'
+curl -fsS "$MERCATOR_API_URL/openapi.json" | jq -r '.paths | keys[]'
+```
+
+The OpenAPI route is intentionally unauthenticated like health checks and the
+UI shell; executable `/v1/*` API routes still require the bearer token.
+
 ## The Minimal Run: One Field
 
 The simplest run is just an image. The CLI takes it as the first positional

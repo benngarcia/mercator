@@ -53,12 +53,33 @@ arch=amd64
 
 curl -LO "https://github.com/benngarcia/mercator/releases/download/${version}/mercator_${version}_${os}_${arch}.tar.gz"
 curl -LO "https://github.com/benngarcia/mercator/releases/download/${version}/checksums.txt"
+```
+
+For Linux, keep `os=linux` and set `arch=amd64` or `arm64` as appropriate. For
+macOS, set `os=darwin` and `arch=arm64` or `amd64`.
+
+Verify the archive checksum before extraction. `checksums.txt` contains all
+platform archives, so `--ignore-missing` lets you verify only the archive you
+downloaded.
+
+macOS:
+
+```sh
 shasum -a 256 -c checksums.txt --ignore-missing
+```
+
+Linux:
+
+```sh
+sha256sum -c checksums.txt --ignore-missing
+```
+
+After the checksum passes:
+
+```sh
 tar -xzf "mercator_${version}_${os}_${arch}.tar.gz"
 sudo install "mercator_${version}_${os}_${arch}/mercator" /usr/local/bin/mercator
 ```
-
-For macOS, set `os=darwin` and `arch=arm64` or `amd64` as appropriate.
 
 ## SDK Distribution
 

@@ -76,16 +76,18 @@ Acceptance criteria:
   published.
 - Run the relevant SDK tests.
 
-### 4. Document Release Archive Verification On macOS And Linux
+### 4. Add Release Archive Troubleshooting Notes
 
 Suggested labels: `good first issue`, `docs`, `release`
 
-Problem: `docs/project/package-distribution.md` shows one checksum command, but
-macOS and Linux users may have different defaults.
+Problem: `docs/project/package-distribution.md` shows the happy path for a
+future release archive, but not the first checks a user should run when install
+fails.
 
 Acceptance criteria:
 
-- Add macOS and Linux checksum verification examples.
+- Add short troubleshooting notes for checksum mismatch, wrong `os`/`arch`,
+  missing execute bit or shell `PATH`, and install permission errors.
 - Keep artifact names aligned with `.github/workflows/release.yml`.
 - Do not claim a release exists before the first tag is published.
 - Run `git diff --check`.
@@ -119,18 +121,19 @@ Acceptance criteria:
 - Keep raw local captures in ignored `output/` until selected.
 - Do not replace existing screenshots unless the new ones are clearer.
 
-### 7. Add OpenAPI Smoke Commands
+### 7. Add An OpenAPI Route Overview
 
 Suggested labels: `good first issue`, `docs`
 
-Problem: `/openapi.json` is available but not easy for a new integrator to
-inspect from the docs map.
+Problem: `/openapi.json` is easy to smoke-check, but new integrators still need
+a short route-family overview before reading the full JSON document.
 
 Acceptance criteria:
 
-- Add a short section to `docs/reference/cli.md` or
-  `docs/production/fake-eval-path.md` showing `curl /openapi.json`.
-- Include a `jq` command that lists paths or schemas.
+- Add a short route overview covering health/discovery, runs, placement,
+  workloads/images, connections/offers, and sinks.
+- State that health, OpenAPI, and the UI shell are public on the listen
+  interface while executable `/v1/*` routes require bearer auth.
 - Do not regenerate the OpenAPI document.
 - Run the fake adapter server or smoke path needed to verify the command.
 
