@@ -150,6 +150,7 @@ go build ./cmd/mercator
 | --- | --- |
 | Install, start, health checks | [docs/production/install-configuration.md](docs/production/install-configuration.md) |
 | First deterministic evaluation | [docs/production/fake-eval-path.md](docs/production/fake-eval-path.md) |
+| CLI commands and environment | [docs/reference/cli.md](docs/reference/cli.md) |
 | Docker adapter operation | [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md) |
 | Workload and run lifecycle | [docs/production/workload-run-lifecycle.md](docs/production/workload-run-lifecycle.md) |
 | Authentication and workspaces | [docs/production/authentication-workspaces.md](docs/production/authentication-workspaces.md) |
@@ -167,6 +168,7 @@ go build ./cmd/mercator
 ```sh
 go test ./...
 go build ./...
+go run ./cmd/mercator --help
 
 cd sdk/typescript && npm ci && npm test
 cd ../python && python3 -m unittest discover -s tests

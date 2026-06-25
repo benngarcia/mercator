@@ -47,6 +47,54 @@ func TestRunCommandsEmitParseableJSON(t *testing.T) {
 	}
 }
 
+func TestHelpDoesNotRequireBaseURL(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     []string
+		contains string
+	}{
+		{
+			name:     "root",
+			args:     []string{"--help"},
+			contains: "Usage: mercator",
+		},
+		{
+			name:     "run",
+			args:     []string{"run", "--help"},
+			contains: "Usage: mercator run",
+		},
+		{
+			name:     "run create",
+			args:     []string{"run", "create", "--help"},
+			contains: "mercator run create busybox -- echo hi",
+		},
+		{
+			name:     "sink",
+			args:     []string{"sink", "--help"},
+			contains: "Usage: mercator sink",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Run(context.Background(), Config{
+				Args:   tc.args,
+				Stdout: &stdout,
+				Stderr: &stderr,
+			})
+			if code != 0 {
+				t.Fatalf("help returned code %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("help should not write stderr, got %q", stderr.String())
+			}
+			if !bytes.Contains(stdout.Bytes(), []byte(tc.contains)) {
+				t.Fatalf("help output did not contain %q:\n%s", tc.contains, stdout.String())
+			}
+		})
+	}
+}
+
 func TestWorkspaceIDDefaultsFromConfig(t *testing.T) {
 	handler := newCLITestServer(t)
 	server := httptest.NewServer(handler)
