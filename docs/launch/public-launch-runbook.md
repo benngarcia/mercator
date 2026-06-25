@@ -149,6 +149,8 @@ gh label create sdk --description "SDK examples, tests, or docs" --color d876e3
 gh label create console --description "Embedded operator console polish" --color fbca04
 gh label create release --description "Release packaging, checksums, and install docs" --color c2e0c6
 gh label create "needs-maintainer-input" --description "Blocked on a project decision before implementation" --color bfdadc
+gh label create launch --description "Open source launch preparation and evidence" --color 0e8a16
+gh label create "proof-point" --description "Public trial, integration note, benchmark, review, or case study" --color 5319e7
 ```
 
 Then create issues from the starter queue. Keep acceptance criteria intact so
@@ -164,6 +166,10 @@ Before calling the launch A+, collect at least one public proof point:
 - a small benchmark or reproducible evaluation;
 - a maintainer-approved case study.
 
+Use `docs/launch/proof-point-template.md` as the source of truth. After the
+repository is public, external users can also submit the checked-in GitHub issue
+form named `Trial, integration note, or case study`.
+
 Minimum bar for the proof point:
 
 - It names what was tested.
@@ -171,6 +177,8 @@ Minimum bar for the proof point:
 - It includes commands, screenshots, or review notes.
 - It avoids private tokens, machine identifiers, customer data, and unreleased
   downstream implementation details.
+- It grants permission to quote or link the evidence from the README or launch
+  scorecard.
 
 Record the proof point in `docs/launch/open-source-readiness.md` and link it
 from the README only after it is public.

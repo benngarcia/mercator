@@ -198,6 +198,9 @@ Before calling the repository A+ for public launch:
 - The release notes must include known limitations and pre-GA scope.
 - At least one external review, integration note, or user story must exist
   outside maintainer-only docs.
+- Any public proof point must follow `docs/launch/proof-point-template.md` and
+  exclude secrets, private hostnames, customer data, and unpublished downstream
+  details.
 
 Before calling Mercator production GA:
 

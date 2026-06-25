@@ -15,7 +15,7 @@ production readiness claim; production hardening remains tracked in
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, Apache-2.0 license, CI/release workflows, local release archive builder, compatibility policy, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, security policy, and a starter contributor queue are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm` are tracked in `docs/assets/`. | A | Optionally add a compressed GIF to the README if GitHub video rendering is not prominent enough. |
-| Social proof | Repo has durable verification docs and a real operator-oriented runbook set. | B- | Add a public user story, integration note, benchmark, or maintainer-approved case study. |
+| Social proof | Repo has durable verification docs, a real operator-oriented runbook set, and a public proof-point intake template. | B | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
 Overall current launch grade: **A**. The repo is credible and tryable in the
 private PR state, but an A+ public launch still needs public visibility,
@@ -30,6 +30,9 @@ external proof point. The remaining permission-bound steps are sequenced in
   session, Go, SDKs, and Console jobs were observed green on the PR branch.
 - Repository visibility at evaluation time: private. This means the CI run is
   useful launch-prep evidence, but not public social proof yet.
+- Public proof collection path: `.github/ISSUE_TEMPLATE/proof_point.yml` and
+  `docs/launch/proof-point-template.md` are checked in, but no public proof
+  point exists yet.
 
 ## Persona Evaluation
 
@@ -87,6 +90,8 @@ Strengths:
 - Issue/PR templates guide useful reports.
 - Starter queue identifies bounded `good first issue` and `help wanted`
   candidates without steering newcomers into run-safety-critical code first.
+- Proof-point issue form gives users a structured way to share trials,
+  integration notes, benchmarks, or external reviews.
 - Security policy avoids public vulnerability disclosure by default.
 - Roadmap separates launch polish, production hardening, later work, and
   non-goals.
@@ -118,6 +123,7 @@ Grade: **A**.
 - [x] SDK package publishing decision made for first public release.
 - [x] Release archive builder reused by CI and release workflow.
 - [x] Public launch runbook documented.
+- [x] Public proof-point intake path documented.
 - [x] Private draft PR CI run is green.
 - [ ] Launch-prep PR merged to the default branch.
 - [ ] Repository visibility changed from private to public.

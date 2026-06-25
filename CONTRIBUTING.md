@@ -74,6 +74,7 @@ Update docs in the same PR when behavior changes:
 - SDK behavior: `sdk/*/README.md`
 - console behavior: `web/app/README.md`
 - launch and trust surface: `docs/launch/open-source-readiness.md`
+- public proof points: `docs/launch/proof-point-template.md`
 
 Screenshots used in docs should live under `docs/assets/`. Raw local captures
 belong in ignored `output/` until they are selected and named.

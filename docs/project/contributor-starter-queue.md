@@ -18,6 +18,8 @@ Create these labels during public triage:
 | `console` | Embedded operator console polish. |
 | `release` | Release packaging, checksums, and install docs. |
 | `needs-maintainer-input` | Blocked on a project decision before implementation. |
+| `launch` | Open source launch preparation and evidence. |
+| `proof-point` | Public trial, integration note, benchmark, review, or case study. |
 
 ## Starter Issues
 

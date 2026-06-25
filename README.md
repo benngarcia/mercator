@@ -162,6 +162,7 @@ go build ./cmd/mercator
 | Package and distribution plan | [docs/project/package-distribution.md](docs/project/package-distribution.md) |
 | Starter contributor queue | [docs/project/contributor-starter-queue.md](docs/project/contributor-starter-queue.md) |
 | Public launch runbook | [docs/launch/public-launch-runbook.md](docs/launch/public-launch-runbook.md) |
+| Public proof point template | [docs/launch/proof-point-template.md](docs/launch/proof-point-template.md) |
 | Release process | [docs/project/release-process.md](docs/project/release-process.md) |
 | Open source launch readiness | [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md) |
 
