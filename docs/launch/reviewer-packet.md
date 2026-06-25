@@ -37,6 +37,7 @@ Evaluate whether the repository earns trust from another infrastructure owner.
 | Are security boundaries explicit? | `SECURITY.md`, `docs/production/security-model.md`, `docs/project/threat-model.md` | Public APIs/events avoid secret claims that are not backed by docs/tests. |
 | Is release risk controlled? | `docs/project/release-process.md`, `docs/project/package-distribution.md`, `.github/workflows/release.yml` | First release artifacts and checksums have a reproducible path. |
 | Are dependency updates maintained explicitly? | `.github/dependabot.yml`, `GOVERNANCE.md` | Actions, Go, SDK, and console dependencies are kept current through reviewed CI-backed PRs. |
+| Are public repository settings planned? | `docs/launch/github-repository-settings.md`, `.github/CODEOWNERS` | Branch protection, code-owner review, workflow permissions, external-contributor workflow approval, security updates, and private vulnerability reporting have an owner-reviewed checklist. |
 | Are maintainer decisions explicit? | `GOVERNANCE.md`, `CONTRIBUTING.md`, `ROADMAP.md` | Scope, safety, release, and proof-point decisions have clear maintainer ownership. |
 
 Recommended verdict format:
