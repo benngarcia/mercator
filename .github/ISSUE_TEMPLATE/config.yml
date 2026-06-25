@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Questions and evaluation help
+    url: https://github.com/benngarcia/mercator/blob/master/SUPPORT.md
+    about: Start here for first-run help, support expectations, and private-data guidance.
   - name: Security reports
     url: https://github.com/benngarcia/mercator/security/advisories/new
     about: Please report vulnerabilities privately.

@@ -79,6 +79,7 @@ safety.
 | Are safe starter tasks available? | `docs/project/contributor-starter-queue.md`, issue templates | First issues are bounded away from unsafe lifecycle/auth changes. |
 | Is project direction understandable? | `ROADMAP.md`, `docs/launch/open-source-readiness.md` | Launch, hardening, later work, and non-goals are separated. |
 | Is security reporting handled responsibly? | `SECURITY.md`, `.github/ISSUE_TEMPLATE/config.yml` | Vulnerability reports are routed privately. |
+| Is support routing realistic? | `SUPPORT.md`, `.github/ISSUE_TEMPLATE/config.yml` | Questions, bugs, proof points, security issues, and conduct concerns have distinct paths. |
 
 Recommended verdict format:
 

@@ -66,6 +66,9 @@ For first-time contributors, start with the
 bounded issues that maintainers can convert into `good first issue` or
 `help wanted` tickets after the repository is public.
 
+For questions, evaluation help, and issue-routing expectations, see
+[SUPPORT.md](SUPPORT.md).
+
 ## Documentation
 
 Update docs in the same PR when behavior changes:

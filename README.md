@@ -183,6 +183,7 @@ go build ./cmd/mercator
 | Backup and restore | [docs/production/backup-recovery.md](docs/production/backup-recovery.md) |
 | Human evaluation checklist | [docs/production/human-eval-checklist.md](docs/production/human-eval-checklist.md) |
 | Code of conduct | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
+| Support | [SUPPORT.md](SUPPORT.md) |
 | Compatibility policy | [docs/project/compatibility.md](docs/project/compatibility.md) |
 | Threat model | [docs/project/threat-model.md](docs/project/threat-model.md) |
 | Package and distribution plan | [docs/project/package-distribution.md](docs/project/package-distribution.md) |
@@ -240,6 +241,7 @@ short version: keep changes narrow, include tests or docs evidence, run the
 relevant local checks, and update production docs when behavior changes.
 
 Project spaces are covered by the [Code Of Conduct](CODE_OF_CONDUCT.md).
+For questions and evaluation help, see [SUPPORT.md](SUPPORT.md).
 Security issues should be reported privately. See [SECURITY.md](SECURITY.md).
 
 ## License

@@ -183,7 +183,9 @@ check_placeholder_markers() {
 files = %w[
   README.md
   CONTRIBUTING.md
+  CODE_OF_CONDUCT.md
   SECURITY.md
+  SUPPORT.md
   ROADMAP.md
 ]
 files.concat(Dir["docs/{launch,project,production}/**/*.md"].sort)
@@ -232,6 +234,7 @@ check_required_files() {
     NOTICE
     CODE_OF_CONDUCT.md
     SECURITY.md
+    SUPPORT.md
     CONTRIBUTING.md
     ROADMAP.md
     .github/PULL_REQUEST_TEMPLATE.md
@@ -316,6 +319,7 @@ check_readme_surface() {
   require_pattern README.md 'docs/launch/pre-public-exposure-review\.md' "README links pre-public exposure review"
   require_pattern README.md 'docs/launch/proof-point-template\.md' "README links proof-point template"
   require_pattern README.md 'CODE_OF_CONDUCT\.md' "README links code of conduct"
+  require_pattern README.md 'SUPPORT\.md' "README links support policy"
 }
 
 check_workflow_hooks() {
@@ -337,8 +341,12 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Overall current launch grade: \*\*A\*\*' "Scorecard records current A state"
   require_pattern docs/launch/open-source-readiness.md 'Public proof point: user story, integration note, benchmark, or case study' "Scorecard keeps public proof-point gate open"
   require_pattern docs/launch/open-source-readiness.md 'Code of conduct documented' "Scorecard includes code of conduct"
+  require_pattern docs/launch/open-source-readiness.md 'Support policy documented' "Scorecard includes support policy"
   require_pattern docs/launch/open-source-readiness.md 'Pre-public exposure review documented' "Scorecard includes pre-public exposure review"
   require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
+  require_pattern .github/ISSUE_TEMPLATE/config.yml 'SUPPORT\.md' "Issue template config links support policy"
+  require_pattern SUPPORT.md 'Where To Ask' "Support policy explains where to ask"
+  require_pattern SUPPORT.md 'Do Not Post Publicly' "Support policy protects sensitive reports"
   require_pattern CODE_OF_CONDUCT.md 'Report A Conduct Concern' "Code of conduct includes private reporting path"
   require_pattern docs/launch/pre-public-exposure-review.md 'Do not make the repository public' "Exposure review documents hard public-launch stop"
   require_pattern docs/launch/pre-public-exposure-review.md 'gh repo view --json nameWithOwner,visibility,isPrivate,url' "Exposure review includes repository visibility check"
