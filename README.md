@@ -184,6 +184,7 @@ go build ./cmd/mercator
 | Human evaluation checklist | [docs/production/human-eval-checklist.md](docs/production/human-eval-checklist.md) |
 | Code of conduct | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
 | Support | [SUPPORT.md](SUPPORT.md) |
+| Governance | [GOVERNANCE.md](GOVERNANCE.md) |
 | Compatibility policy | [docs/project/compatibility.md](docs/project/compatibility.md) |
 | Threat model | [docs/project/threat-model.md](docs/project/threat-model.md) |
 | Package and distribution plan | [docs/project/package-distribution.md](docs/project/package-distribution.md) |
@@ -242,6 +243,8 @@ relevant local checks, and update production docs when behavior changes.
 
 Project spaces are covered by the [Code Of Conduct](CODE_OF_CONDUCT.md).
 For questions and evaluation help, see [SUPPORT.md](SUPPORT.md).
+For maintainer decision rules and project boundaries, see
+[GOVERNANCE.md](GOVERNANCE.md).
 Security issues should be reported privately. See [SECURITY.md](SECURITY.md).
 
 ## License

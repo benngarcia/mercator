@@ -60,6 +60,8 @@ Mercator should stay small:
   the core run contract.
 
 Large changes should start with an issue or design note before implementation.
+For maintainer decision rules and changes that need explicit approval, see
+[GOVERNANCE.md](GOVERNANCE.md).
 
 For first-time contributors, start with the
 [Contributor Starter Queue](docs/project/contributor-starter-queue.md). It lists

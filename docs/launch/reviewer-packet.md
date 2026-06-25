@@ -36,6 +36,7 @@ Evaluate whether the repository earns trust from another infrastructure owner.
 | Is the run lifecycle auditable? | `docs/production/workload-run-lifecycle.md`, `docs/production/observability-audit.md` | Placement, events, cleanup, and closure have clear evidence paths. |
 | Are security boundaries explicit? | `SECURITY.md`, `docs/production/security-model.md`, `docs/project/threat-model.md` | Public APIs/events avoid secret claims that are not backed by docs/tests. |
 | Is release risk controlled? | `docs/project/release-process.md`, `docs/project/package-distribution.md`, `.github/workflows/release.yml` | First release artifacts and checksums have a reproducible path. |
+| Are maintainer decisions explicit? | `GOVERNANCE.md`, `CONTRIBUTING.md`, `ROADMAP.md` | Scope, safety, release, and proof-point decisions have clear maintainer ownership. |
 
 Recommended verdict format:
 
@@ -75,7 +76,7 @@ safety.
 
 | Question | Evidence To Inspect | A+ Bar |
 | --- | --- | --- |
-| Are contribution expectations clear? | `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `.github/PULL_REQUEST_TEMPLATE.md` | A contributor knows the evidence expected in a PR and the behavior expected in project spaces. |
+| Are contribution expectations clear? | `CONTRIBUTING.md`, `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `.github/PULL_REQUEST_TEMPLATE.md` | A contributor knows the evidence expected in a PR, the maintainer decision boundaries, and the behavior expected in project spaces. |
 | Are safe starter tasks available? | `docs/project/contributor-starter-queue.md`, issue templates | First issues are bounded away from unsafe lifecycle/auth changes. |
 | Is project direction understandable? | `ROADMAP.md`, `docs/launch/open-source-readiness.md` | Launch, hardening, later work, and non-goals are separated. |
 | Is security reporting handled responsibly? | `SECURITY.md`, `.github/ISSUE_TEMPLATE/config.yml` | Vulnerability reports are routed privately. |

@@ -186,6 +186,7 @@ files = %w[
   CODE_OF_CONDUCT.md
   SECURITY.md
   SUPPORT.md
+  GOVERNANCE.md
   ROADMAP.md
 ]
 files.concat(Dir["docs/{launch,project,production}/**/*.md"].sort)
@@ -193,6 +194,8 @@ pattern = /\b(TODO|TBD|FIXME|XXX)\b|lorem ipsum/i
 matches = []
 
 files.each do |file|
+  next unless File.file?(file)
+
   File.readlines(file, chomp: true).each_with_index do |line, index|
     matches << "#{file}:#{index + 1}:#{line}" if line.match?(pattern)
   end
@@ -235,6 +238,7 @@ check_required_files() {
     CODE_OF_CONDUCT.md
     SECURITY.md
     SUPPORT.md
+    GOVERNANCE.md
     CONTRIBUTING.md
     ROADMAP.md
     .github/PULL_REQUEST_TEMPLATE.md
@@ -320,6 +324,7 @@ check_readme_surface() {
   require_pattern README.md 'docs/launch/proof-point-template\.md' "README links proof-point template"
   require_pattern README.md 'CODE_OF_CONDUCT\.md' "README links code of conduct"
   require_pattern README.md 'SUPPORT\.md' "README links support policy"
+  require_pattern README.md 'GOVERNANCE\.md' "README links governance policy"
 }
 
 check_workflow_hooks() {
@@ -342,11 +347,15 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Public proof point: user story, integration note, benchmark, or case study' "Scorecard keeps public proof-point gate open"
   require_pattern docs/launch/open-source-readiness.md 'Code of conduct documented' "Scorecard includes code of conduct"
   require_pattern docs/launch/open-source-readiness.md 'Support policy documented' "Scorecard includes support policy"
+  require_pattern docs/launch/open-source-readiness.md 'Governance policy documented' "Scorecard includes governance policy"
   require_pattern docs/launch/open-source-readiness.md 'Pre-public exposure review documented' "Scorecard includes pre-public exposure review"
   require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
+  require_pattern CONTRIBUTING.md 'GOVERNANCE\.md' "Contributing guide links governance policy"
   require_pattern .github/ISSUE_TEMPLATE/config.yml 'SUPPORT\.md' "Issue template config links support policy"
   require_pattern SUPPORT.md 'Where To Ask' "Support policy explains where to ask"
   require_pattern SUPPORT.md 'Do Not Post Publicly' "Support policy protects sensitive reports"
+  require_pattern GOVERNANCE.md 'Decision Rules' "Governance policy explains decision rules"
+  require_pattern GOVERNANCE.md 'What Needs Maintainer Decision' "Governance policy names maintainer-decision changes"
   require_pattern CODE_OF_CONDUCT.md 'Report A Conduct Concern' "Code of conduct includes private reporting path"
   require_pattern docs/launch/pre-public-exposure-review.md 'Do not make the repository public' "Exposure review documents hard public-launch stop"
   require_pattern docs/launch/pre-public-exposure-review.md 'gh repo view --json nameWithOwner,visibility,isPrivate,url' "Exposure review includes repository visibility check"
