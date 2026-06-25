@@ -12,7 +12,10 @@ import (
 
 const defaultGraphQLBaseURL = "https://api.runpod.io/graphql"
 
-const gpuTypesQuery = `{ gpuTypes { id displayName memoryInGb communityPrice securePrice lowestPrice { stockStatus } } }`
+// gpuTypesQuery requests the GPU catalog with pricing and availability.
+// RunPod's `lowestPrice` field REQUIRES an input argument — querying it bare
+// returns an INTERNAL_SERVER_ERROR per gpuType — so we pass `input: {gpuCount: 1}`.
+const gpuTypesQuery = `{ gpuTypes { id displayName memoryInGb communityPrice securePrice lowestPrice(input: {gpuCount: 1}) { stockStatus } } }`
 
 type gpuType struct {
 	ID             string

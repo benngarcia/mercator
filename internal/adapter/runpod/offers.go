@@ -59,6 +59,11 @@ func buildOffers(gpus []gpuType, allowlist []string, now time.Time) []domain.Off
 				Known:              true,
 			},
 			Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+			// RunPod pulls the image fresh on the provisioned host. We don't know
+			// the host's cache state, but the fact must be KNOWN (not "unknown")
+			// or the scheduler policy rejects the offer with UNKNOWN_FACT. Report
+			// a known "not cached" fact (a pull is expected).
+			ImageCache: domain.ImageCacheEvidence{Known: true},
 		})
 	}
 	return offers

@@ -45,6 +45,10 @@ func TestBuildOffersFiltersByAllowlistStockAndPrice(t *testing.T) {
 	if !o.Capacity.Available {
 		t.Errorf("capacity should be available")
 	}
+	// Image-cache fact must be KNOWN or the scheduler rejects the offer with UNKNOWN_FACT.
+	if !o.ImageCache.Known {
+		t.Errorf("image cache fact must be known (scheduler rejects unknown)")
+	}
 }
 
 func TestBuildOffersDropsAllowListedGPUWithNilPrice(t *testing.T) {

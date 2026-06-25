@@ -27,7 +27,8 @@ func TestGPUTypesQueryAndDecode(t *testing.T) {
 	if gotAuth != "Bearer gkey" {
 		t.Errorf("auth = %q", gotAuth)
 	}
-	if !strings.Contains(gotBody, "gpuTypes") || !strings.Contains(gotBody, "lowestPrice") {
+	// lowestPrice MUST carry the input arg — RunPod errors on a bare lowestPrice.
+	if !strings.Contains(gotBody, "gpuTypes") || !strings.Contains(gotBody, "lowestPrice(input:") {
 		t.Errorf("body missing query: %s", gotBody)
 	}
 	if len(gpus) != 2 {
