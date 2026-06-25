@@ -13,7 +13,7 @@ production readiness claim; production hardening remains tracked in
 | README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
 | New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; package/distribution plan names source, archive, and SDK paths. | A | Publish binaries so users do not need a source checkout. |
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, Apache-2.0 license, CI/release workflows, compatibility policy, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
-| OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, and security policy are checked in. | A | Add labeled starter issues after the first public triage pass. |
+| OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, security policy, and a starter contributor queue are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm` are tracked in `docs/assets/`. | A | Optionally add a compressed GIF to the README if GitHub video rendering is not prominent enough. |
 | Social proof | Repo has durable verification docs and a real operator-oriented runbook set. | B- | Add a public user story, integration note, benchmark, or maintainer-approved case study. |
 
@@ -84,6 +84,8 @@ Strengths:
 
 - Contribution guide names checks, behavior-risk areas, and docs update rules.
 - Issue/PR templates guide useful reports.
+- Starter queue identifies bounded `good first issue` and `help wanted`
+  candidates without steering newcomers into run-safety-critical code first.
 - Security policy avoids public vulnerability disclosure by default.
 - Roadmap separates launch polish, production hardening, later work, and
   non-goals.
@@ -92,7 +94,8 @@ Concerns before A+:
 
 - No labeled beginner issues yet.
 - CI/release workflows are configured, but need successful public runs.
-- SDK package publishing is planned but not decided for first launch.
+- Starter queue still needs to be converted into real GitHub issues after the
+  repository is public.
 
 Grade: **A**.
 
@@ -110,13 +113,15 @@ Grade: **A**.
 - [x] Demo video recorded and linked from the README.
 - [x] One-command fake-adapter smoke test added and wired into CI.
 - [x] CLI help available without a configured API URL.
+- [x] Starter contributor queue documented.
+- [x] SDK package publishing decision made for first public release.
 - [x] Private draft PR CI run is green.
 - [ ] Launch-prep PR merged to the default branch.
 - [ ] Repository visibility changed from private to public.
 - [ ] First public CI run is green.
 - [ ] Tagged release with binaries/checksums.
 - [ ] Downloadable CLI/server artifacts exist.
-- [ ] SDK package publishing decision made.
+- [ ] Starter queue converted into labeled public GitHub issues.
 - [ ] Public proof point: user story, integration note, benchmark, or case study.
 
 ## Longer Demo Video Shot List

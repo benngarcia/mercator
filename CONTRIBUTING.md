@@ -61,6 +61,11 @@ Mercator should stay small:
 
 Large changes should start with an issue or design note before implementation.
 
+For first-time contributors, start with the
+[Contributor Starter Queue](docs/project/contributor-starter-queue.md). It lists
+bounded issues that maintainers can convert into `good first issue` or
+`help wanted` tickets after the repository is public.
+
 ## Documentation
 
 Update docs in the same PR when behavior changes:

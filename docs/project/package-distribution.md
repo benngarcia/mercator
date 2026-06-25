@@ -60,14 +60,16 @@ For macOS, set `os=darwin` and `arch=arm64` or `amd64` as appropriate.
 
 ## SDK Distribution
 
+First-launch decision: **do not publish SDK packages for `v0.1.0`**. The first
+public launch should publish the Go CLI/server archives only. SDK users should
+install from a source checkout until package names, registry ownership,
+provenance, and clean-environment install tests are confirmed.
+
 The SDKs are source-installable today:
 
 - TypeScript: `sdk/typescript`
 - Python: `sdk/python`
 - Ruby: `sdk/ruby`
-
-Package publishing is intentionally not part of the first launch unless the
-maintainer explicitly approves names and ownership.
 
 Recommended future package names:
 
