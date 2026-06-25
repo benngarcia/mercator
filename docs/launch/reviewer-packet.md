@@ -75,7 +75,7 @@ safety.
 
 | Question | Evidence To Inspect | A+ Bar |
 | --- | --- | --- |
-| Are contribution expectations clear? | `CONTRIBUTING.md`, `.github/PULL_REQUEST_TEMPLATE.md` | A contributor knows the evidence expected in a PR. |
+| Are contribution expectations clear? | `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `.github/PULL_REQUEST_TEMPLATE.md` | A contributor knows the evidence expected in a PR and the behavior expected in project spaces. |
 | Are safe starter tasks available? | `docs/project/contributor-starter-queue.md`, issue templates | First issues are bounded away from unsafe lifecycle/auth changes. |
 | Is project direction understandable? | `ROADMAP.md`, `docs/launch/open-source-readiness.md` | Launch, hardening, later work, and non-goals are separated. |
 | Is security reporting handled responsibly? | `SECURITY.md`, `.github/ISSUE_TEMPLATE/config.yml` | Vulnerability reports are routed privately. |

@@ -113,7 +113,7 @@ check_markdown_links() {
 files = (
   `git ls-files '*.md'`.lines.map(&:chomp) +
   `git ls-files --others --exclude-standard '*.md'`.lines.map(&:chomp)
-).uniq
+).uniq.select { |file| File.file?(file) }
 missing = []
 
 files.each do |file|
@@ -210,11 +210,27 @@ RUBY
   fi
 }
 
+check_internal_artifacts_absent() {
+  local found
+  found="$(while IFS= read -r path; do
+    if [[ -e "${path}" ]]; then
+      printf '%s\n' "${path}"
+    fi
+  done < <(git ls-files docs/superpowers docs/long-horizon))"
+
+  if [[ -n "${found}" ]]; then
+    record_fail "internal agent planning artifacts are not tracked under docs/"
+  else
+    record_ok "internal agent planning artifacts are not tracked under docs/"
+  fi
+}
+
 check_required_files() {
   local files=(
     README.md
     LICENSE
     NOTICE
+    CODE_OF_CONDUCT.md
     SECURITY.md
     CONTRIBUTING.md
     ROADMAP.md
@@ -227,6 +243,7 @@ check_required_files() {
     .github/workflows/release.yml
     docs/assets/README.md
     docs/launch/open-source-readiness.md
+    docs/launch/pre-public-exposure-review.md
     docs/launch/public-launch-runbook.md
     docs/launch/proof-point-template.md
     docs/launch/reviewer-packet.md
@@ -296,7 +313,9 @@ check_readme_surface() {
   require_pattern README.md 'docs/assets/mercator-demo\.gif' "README links demo GIF"
   require_pattern README.md 'scripts/smoke-test-fake\.sh' "README links fake smoke test"
   require_pattern README.md 'docs/launch/open-source-readiness\.md' "README links launch scorecard"
+  require_pattern README.md 'docs/launch/pre-public-exposure-review\.md' "README links pre-public exposure review"
   require_pattern README.md 'docs/launch/proof-point-template\.md' "README links proof-point template"
+  require_pattern README.md 'CODE_OF_CONDUCT\.md' "README links code of conduct"
 }
 
 check_workflow_hooks() {
@@ -317,7 +336,15 @@ check_workflow_hooks() {
 check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Overall current launch grade: \*\*A\*\*' "Scorecard records current A state"
   require_pattern docs/launch/open-source-readiness.md 'Public proof point: user story, integration note, benchmark, or case study' "Scorecard keeps public proof-point gate open"
+  require_pattern docs/launch/open-source-readiness.md 'Code of conduct documented' "Scorecard includes code of conduct"
+  require_pattern docs/launch/open-source-readiness.md 'Pre-public exposure review documented' "Scorecard includes pre-public exposure review"
+  require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
+  require_pattern CODE_OF_CONDUCT.md 'Report A Conduct Concern' "Code of conduct includes private reporting path"
+  require_pattern docs/launch/pre-public-exposure-review.md 'Do not make the repository public' "Exposure review documents hard public-launch stop"
+  require_pattern docs/launch/pre-public-exposure-review.md 'gh repo view --json nameWithOwner,visibility,isPrivate,url' "Exposure review includes repository visibility check"
+  require_pattern docs/launch/pre-public-exposure-review.md 'dev-token|dev-smoke-token|restore-eval-token' "Exposure review documents allowed sample tokens"
   require_pattern docs/launch/public-launch-runbook.md 'gh repo edit --visibility public --accept-visibility-change-consequences' "Runbook includes visibility change command"
+  require_pattern docs/launch/public-launch-runbook.md 'docs/launch/pre-public-exposure-review\.md' "Runbook links pre-public exposure review"
   require_pattern docs/launch/public-launch-runbook.md 'gh issue create' "Runbook includes starter issue creation commands"
   require_pattern docs/launch/proof-point-template.md 'Do not convert private maintainer notes into social proof' "Proof template rejects private social proof"
   require_pattern docs/launch/reviewer-packet.md 'Staff-engineer verdict: A\+ \| A \| B \| not ready' "Reviewer packet includes staff verdict format"
@@ -366,6 +393,7 @@ check_launch_docs
 check_markdown_links
 check_yaml_parse
 check_placeholder_markers
+check_internal_artifacts_absent
 
 if [[ "${FULL}" == "1" ]]; then
   need_command curl

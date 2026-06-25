@@ -16,8 +16,8 @@ first release, converting starter issues, and collecting public proof.
   - `scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist`
 - The SDK CI job includes `scripts/check-open-source-launch.sh`.
 - The repository owner has decided to make the project public.
-- No secrets, tokens, local machine identifiers, or private customer details are
-  present in docs, screenshots, demo video, issues, or release notes.
+- `docs/launch/pre-public-exposure-review.md` has been run from the default
+  branch, and no unresolved findings remain.
 
 ## 1. Merge Or Promote The Launch-Prep PR
 
@@ -47,7 +47,25 @@ git checkout master
 git pull --ff-only origin master
 ```
 
-## 2. Make The Repository Public
+## 2. Run The Pre-Public Exposure Review
+
+From the synced default branch, run
+`docs/launch/pre-public-exposure-review.md`. This covers text scans, launch
+assets, GitHub-facing templates/workflows, and release notes.
+
+At minimum, confirm:
+
+```sh
+git status --short --branch
+gh repo view --json nameWithOwner,visibility,isPrivate,url
+scripts/check-open-source-launch.sh
+```
+
+Do not continue to visibility changes if the review finds unresolved secrets,
+tokens, private hostnames, local machine identifiers, private customer details,
+or unpublished downstream implementation details.
+
+## 3. Make The Repository Public
 
 This is an owner-level decision. Do it only after the merge is on the default
 branch and the owner explicitly approves.
@@ -72,7 +90,7 @@ Afterward:
 gh repo view --json nameWithOwner,visibility,isPrivate,url
 ```
 
-## 3. Confirm Public Default-Branch CI
+## 4. Confirm Public Default-Branch CI
 
 Wait for the default-branch CI run created after merge/public launch:
 
@@ -84,7 +102,7 @@ gh run watch <run-id> --exit-status
 Record the public CI run in `docs/launch/open-source-readiness.md` only after it
 has completed successfully.
 
-## 4. Tag And Publish `v0.1.0`
+## 5. Tag And Publish `v0.1.0`
 
 Run the local release checks from a clean default branch:
 
@@ -140,7 +158,7 @@ shasum -a 256 -c checksums.txt --ignore-missing
 tar -tzf "mercator_${version}_${os}_${arch}.tar.gz" | sort
 ```
 
-## 5. Convert Starter Queue Into GitHub Issues
+## 6. Convert Starter Queue Into GitHub Issues
 
 Use `docs/project/contributor-starter-queue.md` as the source of truth.
 
@@ -197,7 +215,7 @@ gh issue create \
   --body-file docs/project/issue-drafts/external-sink-configuration.md
 ```
 
-## 6. Collect A Public Proof Point
+## 7. Collect A Public Proof Point
 
 Before calling the launch A+, collect at least one public proof point:
 
@@ -227,7 +245,7 @@ Minimum bar for the proof point:
 Record the proof point in `docs/launch/open-source-readiness.md` and link it
 from the README only after it is public.
 
-## 7. Post-Launch README Updates
+## 8. Post-Launch README Updates
 
 After public CI and `v0.1.0` exist:
 

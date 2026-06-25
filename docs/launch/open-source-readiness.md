@@ -12,8 +12,8 @@ production readiness claim; production hardening remains tracked in
 | --- | --- | --- | --- |
 | README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
 | New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; SDK docs show run, event, decision, and sink status reads; the README now routes evaluators across fake, Docker, and RunPod paths with requirements and start docs; the CLI reference now has copy-paste follow-up commands, JSON error examples, and an exit-code reference; the OpenAPI reference now maps route families, auth boundaries, and a first HTTP integration path; fake-eval docs show OpenAPI smoke commands and a sanitized smoke-test transcript; package/distribution plan names source, archive, SDK install paths, per-OS checksum verification, and archive troubleshooting. | A | Publish binaries so users do not need a source checkout. |
-| Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, Apache-2.0 license, CI/release workflows, local release archive builder, curated `v0.1.0` release notes, launch audit script, compatibility policy, a concrete external-sink hardening issue draft, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
-| OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, security policy, starter contributor queue, and public issue-conversion commands are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
+| Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, code of conduct, Apache-2.0 license, CI/release workflows, local release archive builder, curated `v0.1.0` release notes, launch audit script, pre-public exposure review, compatibility policy, a concrete external-sink hardening issue draft, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
+| OSS contributor path | `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue templates, PR template, roadmap, security policy, starter contributor queue, and public issue-conversion commands are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm`, a README-linked GIF fallback, a text demo transcript, and screenshot capture notes are tracked in `docs/assets/`. | A | Optional post-launch polish: add a longer narrated demo from the shot list. |
 | Social proof | Repo has durable verification docs, a real operator-oriented runbook set, and a public proof-point intake template. | B | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
@@ -37,6 +37,9 @@ external proof point. The remaining permission-bound steps are sequenced in
   engineer, prospective-user, and OSS-developer reviewers concrete questions
   and verdict formats. `docs/launch/reviewer-outreach.md` gives maintainers
   ready-to-send request copy for those reviewers.
+- Pre-public exposure review: `docs/launch/pre-public-exposure-review.md`
+  gives maintainers a final text, asset, GitHub-surface, and release-surface
+  review before making the repository public.
 
 ## Persona Evaluation
 
@@ -105,6 +108,8 @@ Strengths:
   surface before opening feedback.
 - Reviewer outreach prompts make external proof collection reproducible after
   the repository is public.
+- Code of conduct gives maintainers a public baseline for contributor behavior
+  and private reporting of sensitive conduct concerns.
 - Security policy avoids public vulnerability disclosure by default.
 - Roadmap separates launch polish, production hardening, later work, and
   non-goals.
@@ -123,6 +128,7 @@ Grade: **A**.
 - [x] Problem-first README with quickstart.
 - [x] Screenshots committed under `docs/assets/`.
 - [x] License, notice, security policy, contribution guide, roadmap.
+- [x] Code of conduct documented.
 - [x] GitHub issue templates and PR template.
 - [x] CI workflow added.
 - [x] Release workflow and release process documented.
@@ -154,6 +160,7 @@ Grade: **A**.
 - [x] Curated `v0.1.0` release notes checked in and wired into release workflow.
 - [x] Open-source launch audit script added and wired into CI.
 - [x] Public launch runbook documented.
+- [x] Pre-public exposure review documented.
 - [x] Public proof-point intake path documented.
 - [x] External reviewer packet documented.
 - [x] External reviewer outreach prompts documented.

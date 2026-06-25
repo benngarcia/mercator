@@ -182,12 +182,14 @@ go build ./cmd/mercator
 | Security boundaries | [docs/production/security-model.md](docs/production/security-model.md) |
 | Backup and restore | [docs/production/backup-recovery.md](docs/production/backup-recovery.md) |
 | Human evaluation checklist | [docs/production/human-eval-checklist.md](docs/production/human-eval-checklist.md) |
+| Code of conduct | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
 | Compatibility policy | [docs/project/compatibility.md](docs/project/compatibility.md) |
 | Threat model | [docs/project/threat-model.md](docs/project/threat-model.md) |
 | Package and distribution plan | [docs/project/package-distribution.md](docs/project/package-distribution.md) |
 | Starter contributor queue | [docs/project/contributor-starter-queue.md](docs/project/contributor-starter-queue.md) |
 | External reviewer packet | [docs/launch/reviewer-packet.md](docs/launch/reviewer-packet.md) |
 | Public launch runbook | [docs/launch/public-launch-runbook.md](docs/launch/public-launch-runbook.md) |
+| Pre-public exposure review | [docs/launch/pre-public-exposure-review.md](docs/launch/pre-public-exposure-review.md) |
 | Public proof point template | [docs/launch/proof-point-template.md](docs/launch/proof-point-template.md) |
 | Release process | [docs/project/release-process.md](docs/project/release-process.md) |
 | Open source launch readiness | [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md) |
@@ -237,6 +239,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. The
 short version: keep changes narrow, include tests or docs evidence, run the
 relevant local checks, and update production docs when behavior changes.
 
+Project spaces are covered by the [Code Of Conduct](CODE_OF_CONDUCT.md).
 Security issues should be reported privately. See [SECURITY.md](SECURITY.md).
 
 ## License

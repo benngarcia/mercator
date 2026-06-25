@@ -81,7 +81,10 @@ belong in ignored `output/` until they are selected and named.
 
 ## Community Conduct
 
-Be concrete, respectful, and technical. Assume contributors are trying to help,
-but keep review standards high for safety-critical behavior. Maintainers may
-close issues or PRs that are abusive, off-topic, spam, or outside the project
-scope.
+Project spaces are covered by the [Code Of Conduct](CODE_OF_CONDUCT.md). The
+short version is: be concrete, respectful, and technical; critique code and
+claims rather than people; keep private security or operational details out of
+public threads.
+
+Maintainers may close issues or PRs that are abusive, off-topic, spam, or
+outside the project scope.
