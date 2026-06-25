@@ -69,6 +69,21 @@ When rejecting a substantial proposal, maintainers should point to the relevant
 roadmap, known limitation, compatibility policy, or design boundary when
 possible.
 
+## Dependency Maintenance
+
+Dependabot watches the public launch dependency surface weekly:
+
+- GitHub Actions workflows under `.github/workflows/`;
+- Go modules from the root `go.mod`;
+- TypeScript SDK npm dependencies under `sdk/typescript`;
+- Bun console dependencies under `web/app`;
+- Ruby SDK Bundler dependencies under `sdk/ruby`.
+
+Dependency update pull requests should go through the same CI and review path
+as human-authored changes. Before `v0.1.0`, maintainers should keep automated
+update volume conservative, review release-risk changes manually, and prefer
+small dependency PRs that can be reverted or skipped without blocking launch.
+
 ## Releases
 
 Only maintainers cut releases. Before the first public release, follow

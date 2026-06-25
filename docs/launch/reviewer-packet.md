@@ -36,6 +36,7 @@ Evaluate whether the repository earns trust from another infrastructure owner.
 | Is the run lifecycle auditable? | `docs/production/workload-run-lifecycle.md`, `docs/production/observability-audit.md` | Placement, events, cleanup, and closure have clear evidence paths. |
 | Are security boundaries explicit? | `SECURITY.md`, `docs/production/security-model.md`, `docs/project/threat-model.md` | Public APIs/events avoid secret claims that are not backed by docs/tests. |
 | Is release risk controlled? | `docs/project/release-process.md`, `docs/project/package-distribution.md`, `.github/workflows/release.yml` | First release artifacts and checksums have a reproducible path. |
+| Are dependency updates maintained explicitly? | `.github/dependabot.yml`, `GOVERNANCE.md` | Actions, Go, SDK, and console dependencies are kept current through reviewed CI-backed PRs. |
 | Are maintainer decisions explicit? | `GOVERNANCE.md`, `CONTRIBUTING.md`, `ROADMAP.md` | Scope, safety, release, and proof-point decisions have clear maintainer ownership. |
 
 Recommended verdict format:

@@ -246,6 +246,7 @@ check_required_files() {
     .github/ISSUE_TEMPLATE/feature_request.yml
     .github/ISSUE_TEMPLATE/proof_point.yml
     .github/ISSUE_TEMPLATE/config.yml
+    .github/dependabot.yml
     .github/workflows/ci.yml
     .github/workflows/release.yml
     docs/assets/README.md
@@ -345,6 +346,21 @@ check_workflow_hooks() {
   require_pattern .github/workflows/release.yml 'gh release create "\$GITHUB_REF_NAME" dist/\* --generate-notes' "Release workflow publishes GitHub release"
 }
 
+check_dependency_maintenance() {
+  require_pattern .github/dependabot.yml 'package-ecosystem: "github-actions"' "Dependabot checks GitHub Actions"
+  require_pattern .github/dependabot.yml 'package-ecosystem: "gomod"' "Dependabot checks Go modules"
+  require_pattern .github/dependabot.yml 'package-ecosystem: "npm"' "Dependabot checks TypeScript SDK npm dependencies"
+  require_pattern .github/dependabot.yml 'directory: "/sdk/typescript"' "Dependabot checks TypeScript SDK directory"
+  require_pattern .github/dependabot.yml 'package-ecosystem: "bun"' "Dependabot checks Bun console dependencies"
+  require_pattern .github/dependabot.yml 'directory: "/web/app"' "Dependabot checks console directory"
+  require_pattern .github/dependabot.yml 'package-ecosystem: "bundler"' "Dependabot checks Ruby SDK dependencies"
+  require_pattern .github/dependabot.yml 'directory: "/sdk/ruby"' "Dependabot checks Ruby SDK directory"
+  require_pattern .github/dependabot.yml 'open-pull-requests-limit: 3' "Dependabot has conservative PR limits"
+  require_pattern GOVERNANCE.md 'Dependency Maintenance' "Governance documents dependency maintenance"
+  require_pattern docs/launch/open-source-readiness.md 'Dependency update policy documented' "Scorecard includes dependency update policy"
+  require_pattern docs/launch/reviewer-packet.md 'Are dependency updates maintained explicitly\?' "Reviewer packet asks about dependency maintenance"
+}
+
 check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Overall current launch grade: \*\*A\*\*' "Scorecard records current A state"
   require_pattern docs/launch/open-source-readiness.md 'Public proof point: user story, integration note, benchmark, or case study' "Scorecard keeps public proof-point gate open"
@@ -413,6 +429,7 @@ need_command ruby
 check_required_files
 check_readme_surface
 check_workflow_hooks
+check_dependency_maintenance
 check_launch_docs
 check_markdown_links
 check_yaml_parse
