@@ -45,26 +45,7 @@ cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 Run the fake-adapter smoke:
 
 ```sh
-rm -f /tmp/mercator-release.db /tmp/mercator-release.db-wal /tmp/mercator-release.db-shm
-
-MERCATOR_ADDR=127.0.0.1:8080 \
-MERCATOR_SQLITE_DSN='file:/tmp/mercator-release.db' \
-MERCATOR_API_TOKEN='dev-token' \
-MERCATOR_AUTH_WORKSPACES='ws_1' \
-MERCATOR_FAKE_OFFER=1 \
-go run ./cmd/mercator serve
-```
-
-In another shell:
-
-```sh
-export MERCATOR_API_URL=http://127.0.0.1:8080
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_WORKSPACE_ID=ws_1
-
-RUN_ID="$(go run ./cmd/mercator run create busybox -- echo hi | jq -r '.run.id')"
-go run ./cmd/mercator run get --run-id "$RUN_ID" \
-  | jq '{outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
+scripts/smoke-test-fake.sh
 ```
 
 Expected: `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`,

@@ -17,7 +17,15 @@ go run ./cmd/mercator serve
 ```
 
 For the deterministic local evaluation path, use the root README quickstart or
-`docs/production/fake-eval-path.md`.
+run:
+
+```sh
+scripts/smoke-test-fake.sh
+```
+
+That command builds a temporary binary, starts the fake adapter, creates one run
+through the CLI, and verifies the closed run fields that the README promises.
+For the longer walkthrough, see `docs/production/fake-eval-path.md`.
 
 ## First Binary Release
 
@@ -82,6 +90,7 @@ Before publishing SDK packages:
 Do not publish a release unless all of these are true:
 
 - The default branch CI is green.
+- `scripts/smoke-test-fake.sh` passes against the source checkout.
 - The release workflow has been reviewed on the launch-prep PR.
 - `docs/project/release-process.md` has been followed.
 - The release notes state that Mercator is pre-1.0 and V1 evaluation-ready, not

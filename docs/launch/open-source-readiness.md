@@ -11,7 +11,7 @@ production readiness claim; production hardening remains tracked in
 | Area | Evidence | Grade | A+ Gap |
 | --- | --- | --- | --- |
 | README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
-| New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; CLI hides run IDs and idempotency on the happy path; package/distribution plan names source, archive, and SDK paths. | A | Publish binaries so users do not need a source checkout. |
+| New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI hides run IDs and idempotency on the happy path; package/distribution plan names source, archive, and SDK paths. | A | Publish binaries so users do not need a source checkout. |
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, Apache-2.0 license, CI/release workflows, compatibility policy, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, issue templates, PR template, roadmap, and security policy are checked in. | A | Add labeled starter issues after the first public triage pass. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm` are tracked in `docs/assets/`. | A | Optionally add a compressed GIF to the README if GitHub video rendering is not prominent enough. |
@@ -107,6 +107,7 @@ Grade: **A**.
 - [x] Threat model documented.
 - [x] Package/install story documented.
 - [x] Demo video recorded and linked from the README.
+- [x] One-command fake-adapter smoke test added and wired into CI.
 - [x] Private draft PR CI run is green.
 - [ ] Launch-prep PR merged to the default branch.
 - [ ] Repository visibility changed from private to public.

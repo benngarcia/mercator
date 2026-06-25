@@ -5,6 +5,20 @@ exercises the event-first broker path through placement, launch intent, launch,
 observation, cleanup, closure, public events, decision reads, sink cursor reads,
 and CLI JSON behavior.
 
+## One-Command Smoke Test
+
+From a source checkout:
+
+```sh
+scripts/smoke-test-fake.sh
+```
+
+The script builds a temporary binary, starts Mercator with `MERCATOR_FAKE_OFFER=1`,
+waits for `/health/ready`, creates a `busybox` run through the CLI, then asserts
+the run closes with `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`, and
+`closed=true`. Use the manual steps below when you want to inspect each response
+or keep the server running for the console.
+
 ## Start Server
 
 ```sh

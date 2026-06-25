@@ -49,6 +49,16 @@ Mercator is **V1 evaluation-ready, not GA infrastructure yet**. See
 The fake adapter exercises the full broker path without Docker, RunPod, or a
 registry. You need Go 1.25+, `jq`, and a shell.
 
+For the fastest local confidence check, run the smoke test:
+
+```sh
+scripts/smoke-test-fake.sh
+```
+
+It builds a temporary `mercator` binary, starts a local fake-adapter server,
+creates a `busybox` run through the CLI, and verifies the run closes with
+`outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`, and `closed=true`.
+
 Terminal 1:
 
 ```sh
