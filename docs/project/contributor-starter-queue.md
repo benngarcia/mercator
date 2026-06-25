@@ -23,23 +23,7 @@ Create these labels during public triage:
 
 ## Starter Issues
 
-### 1. Add A CLI Exit-Code Reference
-
-Suggested labels: `good first issue`, `docs`, `cli`
-
-Problem: `docs/reference/cli.md` shows successful commands and a few JSON error
-responses, but it does not summarize which failures exit `1` versus `2`.
-
-Acceptance criteria:
-
-- Document that local argument/configuration validation exits `2`.
-- Document that transport failures, non-2xx API responses, response-read
-  failures, and non-JSON API responses exit `1`.
-- Include one local validation example and one API response example.
-- Do not add new CLI flags or behavior.
-- Run `go run ./cmd/mercator --help` and `git diff --check`.
-
-### 2. Record A Longer Launch Demo From The Shot List
+### 1. Record A Longer Launch Demo From The Shot List
 
 Suggested labels: `good first issue`, `docs`, `console`
 
@@ -57,7 +41,7 @@ Acceptance criteria:
 - Include either captions or a text transcript.
 - Do not remove the existing short WebM/GIF demo.
 
-### 3. Add SDK Sink Status Examples
+### 2. Add SDK Sink Status Examples
 
 Suggested labels: `good first issue`, `docs`, `sdk`
 
@@ -74,7 +58,7 @@ Acceptance criteria:
   published.
 - Run the relevant SDK tests.
 
-### 4. Add Release Archive Troubleshooting Notes
+### 3. Add Release Archive Troubleshooting Notes
 
 Suggested labels: `good first issue`, `docs`, `release`
 
@@ -90,7 +74,7 @@ Acceptance criteria:
 - Do not claim a release exists before the first tag is published.
 - Run `git diff --check`.
 
-### 5. Expand The Fake Adapter Evaluation Transcript
+### 4. Expand The Fake Adapter Evaluation Transcript
 
 Suggested labels: `good first issue`, `docs`
 
@@ -105,7 +89,7 @@ Acceptance criteria:
   ports.
 - Run `scripts/smoke-test-fake.sh`.
 
-### 6. Add Console Screenshot Capture Notes
+### 5. Add Console Screenshot Capture Notes
 
 Suggested labels: `good first issue`, `docs`, `console`
 
@@ -119,7 +103,7 @@ Acceptance criteria:
 - Keep raw local captures in ignored `output/` until selected.
 - Do not replace existing screenshots unless the new ones are clearer.
 
-### 7. Add An OpenAPI Route Overview
+### 6. Add An OpenAPI Route Overview
 
 Suggested labels: `good first issue`, `docs`
 
@@ -135,7 +119,7 @@ Acceptance criteria:
 - Do not regenerate the OpenAPI document.
 - Run the fake adapter server or smoke path needed to verify the command.
 
-### 8. Triage A Production Hardening Issue
+### 7. Triage A Production Hardening Issue
 
 Suggested labels: `help wanted`, `needs-maintainer-input`
 

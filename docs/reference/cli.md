@@ -74,10 +74,23 @@ go run ./cmd/mercator sink status --sink-id audit \
 Use `--workspace-id ID` on any run command to override
 `MERCATOR_WORKSPACE_ID`.
 
+## Exit Codes
+
+The CLI uses a small exit-code contract so scripts can distinguish local setup
+mistakes from API/runtime failures:
+
+| Exit | Meaning | Examples |
+| --- | --- | --- |
+| `0` | Command completed successfully. | Help output, successful `run`/`sink` responses. |
+| `1` | The command reached the request/response layer, but the request failed or the API returned an error response. | Network/transport failure, non-2xx API response, response-read failure, or non-JSON API response. |
+| `2` | Local argument or configuration validation failed before an API request was sent. | Missing `MERCATOR_API_URL`, missing workspace, missing `--run-id`, unknown command, invalid flags, or invalid `--workload-json`. |
+
 ## Error Responses
 
 The CLI prints JSON on stdout for successful responses and JSON on stderr for
 local validation errors or non-2xx API responses. Common setup mistakes:
+
+Local validation example:
 
 ```sh
 unset MERCATOR_API_URL
@@ -85,6 +98,8 @@ mercator run list --workspace-id ws_1
 # stderr, exit 2:
 # {"code":"BASE_URL_REQUIRED","message":"MERCATOR_API_URL or --api-url is required"}
 ```
+
+API response example:
 
 ```sh
 export MERCATOR_API_URL=http://127.0.0.1:8080
