@@ -332,6 +332,12 @@ check_readme_surface() {
 }
 
 check_workflow_hooks() {
+  require_pattern .github/workflows/ci.yml 'actions/checkout@v5' "CI uses Node 24-compatible checkout action"
+  require_pattern .github/workflows/ci.yml 'actions/setup-go@v6' "CI uses Node 24-compatible setup-go action"
+  require_pattern .github/workflows/ci.yml 'actions/setup-node@v6' "CI uses Node 24-compatible setup-node action"
+  require_pattern .github/workflows/ci.yml 'actions/setup-python@v6' "CI uses Node 24-compatible setup-python action"
+  require_pattern .github/workflows/release.yml 'actions/checkout@v5' "Release uses Node 24-compatible checkout action"
+  require_pattern .github/workflows/release.yml 'actions/setup-go@v6' "Release uses Node 24-compatible setup-go action"
   require_pattern .github/workflows/ci.yml 'go test \./\.\.\.' "CI runs Go tests"
   require_pattern .github/workflows/ci.yml 'scripts/smoke-test-fake\.sh' "CI runs fake smoke test"
   require_pattern .github/workflows/ci.yml 'scripts/build-release-archives\.sh v0\.0\.0-ci' "CI builds release archives"
@@ -369,6 +375,7 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Governance policy documented' "Scorecard includes governance policy"
   require_pattern docs/launch/open-source-readiness.md 'Pre-public exposure review documented' "Scorecard includes pre-public exposure review"
   require_pattern docs/launch/open-source-readiness.md 'Maintainer reproducible proof baseline documented' "Scorecard includes reproducible proof baseline"
+  require_pattern docs/launch/open-source-readiness.md 'Node 24-compatible workflow action pins documented' "Scorecard includes Node 24-compatible workflow action pins"
   require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
   require_pattern CONTRIBUTING.md 'GOVERNANCE\.md' "Contributing guide links governance policy"
   require_pattern .github/ISSUE_TEMPLATE/config.yml 'SUPPORT\.md' "Issue template config links support policy"

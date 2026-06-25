@@ -42,7 +42,9 @@ external proof point. The remaining permission-bound steps are sequenced in
   ready-to-send request copy for those reviewers.
 - Dependency maintenance: `.github/dependabot.yml` checks GitHub Actions, Go
   modules, TypeScript SDK npm dependencies, Bun console dependencies, and Ruby
-  SDK Bundler dependencies on a conservative weekly cadence.
+  SDK Bundler dependencies on a conservative weekly cadence. CI and release
+  workflows pin Node 24-compatible major versions of the official GitHub
+  checkout/setup actions to avoid stale-runtime warnings before public launch.
 - Pre-public exposure review: `docs/launch/pre-public-exposure-review.md`
   gives maintainers a final text, asset, GitHub-surface, and release-surface
   review before making the repository public.
@@ -148,6 +150,7 @@ Grade: **A**.
 - [x] Dependency update policy documented.
 - [x] GitHub issue templates and PR template.
 - [x] CI workflow added.
+- [x] Node 24-compatible workflow action pins documented.
 - [x] Release workflow and release process documented.
 - [x] API/SDK compatibility policy documented.
 - [x] Threat model documented.
