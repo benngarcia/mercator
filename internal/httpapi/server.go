@@ -22,6 +22,7 @@ import (
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/offers"
 	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
 	"github.com/benngarcia/mercator/internal/workload"
@@ -40,10 +41,11 @@ type Server struct {
 	resolver  interface {
 		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 	}
-	secretStore credential.SecretStore
-	credentials *credential.Resolver
-	verifier    connectionVerifier
-	security    securityConfig
+	secretStore  credential.SecretStore
+	credentials  *credential.Resolver
+	verifier     connectionVerifier
+	security     securityConfig
+	reportSigner *reporting.Signer
 }
 
 // connectionVerifier is the narrow capability the server needs from the Broker
@@ -81,6 +83,12 @@ func WithCredentialResolver(resolver *credential.Resolver) Option {
 // validate a connection during the authorize flow.
 func WithVerifier(verifier connectionVerifier) Option {
 	return func(s *Server) { s.verifier = verifier }
+}
+
+// WithReportSigner wires the per-run token signer used to authenticate the
+// POST /v1/runs/{id}:report ingest endpoint.
+func WithReportSigner(signer *reporting.Signer) Option {
+	return func(s *Server) { s.reportSigner = signer }
 }
 
 type principalContextKey struct{}
@@ -236,8 +244,22 @@ func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Schedul
 	return s
 }
 
+// isRunReportPath reports whether the request is the run-report endpoint, which
+// is exempted from the operator-token gate because it authenticates with a
+// per-run token (handled by the report handler itself, added in a later task).
+// The check is intentionally narrow: POST method, path under /v1/runs/, suffix
+// exactly :report — so it cannot accidentally exempt actions like :cancel.
+func isRunReportPath(r *http.Request) bool {
+	return r.Method == http.MethodPost &&
+		strings.HasPrefix(r.URL.Path, "/v1/runs/") &&
+		strings.HasSuffix(r.URL.Path, ":report")
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.security.Token != "" && strings.HasPrefix(r.URL.Path, "/v1/") {
+	operatorAuthRequired := s.security.Token != "" &&
+		strings.HasPrefix(r.URL.Path, "/v1/") &&
+		!isRunReportPath(r)
+	if operatorAuthRequired {
 		authHeader := r.Header.Get("Authorization")
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token is required.")
@@ -596,6 +618,10 @@ func (s *Server) runAction(w http.ResponseWriter, r *http.Request) {
 		s.cancelRun(w, r, strings.TrimSuffix(runAction, ":cancel"))
 		return
 	}
+	if strings.HasSuffix(runAction, ":report") {
+		s.reportRun(w, r, strings.TrimSuffix(runAction, ":report"))
+		return
+	}
 	writeError(w, http.StatusNotFound, "RUN_ACTION_NOT_FOUND", "Unknown run action.")
 }
 
@@ -623,6 +649,44 @@ func (s *Server) refreshRun(w http.ResponseWriter, r *http.Request, runID string
 		return
 	}
 	writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
+}
+
+type reportBody struct {
+	Type     string          `json:"type"`
+	Data     json.RawMessage `json:"data,omitempty"`
+	ExitCode *int            `json:"exit_code,omitempty"`
+}
+
+func (s *Server) reportRun(w http.ResponseWriter, r *http.Request, runID string) {
+	if s.reportSigner == nil || !s.reportSigner.Enabled() {
+		writeError(w, http.StatusNotImplemented, "REPORTING_DISABLED", "Reporting is not configured.")
+		return
+	}
+	workspaceID := r.URL.Query().Get("workspace_id")
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "WORKSPACE_REQUIRED", "workspace_id query parameter is required.")
+		return
+	}
+	authHeader := r.Header.Get("Authorization")
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if !s.reportSigner.Verify(runID, token) {
+		writeError(w, http.StatusUnauthorized, "INVALID_RUN_TOKEN", "Invalid or missing run token.")
+		return
+	}
+	var body reportBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return
+	}
+	if err := s.orch.RecordReport(r.Context(), workspaceID, runID, body.Type, body.Data, body.ExitCode); err != nil {
+		if errors.Is(err, orchestrator.ErrRunNotFound) {
+			writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", "Run not found.")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "REPORT_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"recorded": true})
 }
 
 func (s *Server) runDecision(w http.ResponseWriter, r *http.Request) {

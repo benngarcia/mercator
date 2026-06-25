@@ -12,7 +12,7 @@ import (
 type FactoryFunc func(config map[string]string, secret string) (adapter.Adapter, error)
 
 type Factory struct {
-	mu sync.RWMutex
+	mu  sync.RWMutex
 	fns map[string]FactoryFunc
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
@@ -171,6 +172,82 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	}
 	if binding := findLaunchEnv(t, req.Environment, "LOG_LEVEL"); binding.Value == nil || *binding.Value != literal {
 		t.Fatalf("literal env binding missing from launch request: %+v", binding)
+	}
+}
+
+func TestAdvanceRunInjectsReportingEnvWhenConfigured(t *testing.T) {
+	ctx := context.Background()
+	const publicURL = "https://pub.example"
+	signer := reporting.NewSigner([]byte("0123456789abcdef0123456789abcdef"))
+	offer := orchOffer("off_reporting", time.Now().UTC())
+	ad := &captureLaunchAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}))}
+	log := openOrchestratorLog(t)
+	orch := New(log, scheduler.New(), ad, WithReporting(publicURL, signer))
+
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{
+		WorkspaceID:    "ws_1",
+		RunID:          "run_reporting",
+		CommandKey:     "cmd_reporting",
+		IdempotencyKey: "idem_reporting",
+		Workload:       orchRevision(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_reporting"); err != nil {
+		t.Fatalf("advance run: %v", err)
+	}
+
+	req := ad.launchRequest
+	// MERCATOR_RUN_ID
+	runIDBinding := findLaunchEnv(t, req.Environment, "MERCATOR_RUN_ID")
+	if runIDBinding.Value == nil || *runIDBinding.Value != "run_reporting" {
+		t.Fatalf("MERCATOR_RUN_ID wrong: %+v", runIDBinding)
+	}
+	// MERCATOR_REPORT_URL
+	reportURLBinding := findLaunchEnv(t, req.Environment, "MERCATOR_REPORT_URL")
+	if reportURLBinding.Value == nil || *reportURLBinding.Value != publicURL {
+		t.Fatalf("MERCATOR_REPORT_URL wrong: %+v", reportURLBinding)
+	}
+	// MERCATOR_RUN_TOKEN
+	wantToken := signer.Token("run_reporting")
+	reportTokenBinding := findLaunchEnv(t, req.Environment, "MERCATOR_RUN_TOKEN")
+	if reportTokenBinding.Value == nil || *reportTokenBinding.Value != wantToken {
+		t.Fatalf("MERCATOR_RUN_TOKEN wrong: got %+v, want %q", reportTokenBinding, wantToken)
+	}
+	// MERCATOR_WORKSPACE_ID
+	workspaceIDBinding := findLaunchEnv(t, req.Environment, "MERCATOR_WORKSPACE_ID")
+	if workspaceIDBinding.Value == nil || *workspaceIDBinding.Value != "ws_1" {
+		t.Fatalf("MERCATOR_WORKSPACE_ID wrong: %+v", workspaceIDBinding)
+	}
+}
+
+func TestAdvanceRunDoesNotInjectReportingEnvWhenNotConfigured(t *testing.T) {
+	ctx := context.Background()
+	offer := orchOffer("off_no_reporting", time.Now().UTC())
+	ad := &captureLaunchAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}))}
+	// newTestOrchestrator does NOT pass WithReporting — baseline orchestrator.
+	orch := newTestOrchestrator(t, ad)
+
+	if _, err := orch.CreateRun(ctx, CreateRunRequest{
+		WorkspaceID:    "ws_1",
+		RunID:          "run_no_reporting",
+		CommandKey:     "cmd_no_reporting",
+		IdempotencyKey: "idem_no_reporting",
+		Workload:       orchRevision(),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_no_reporting"); err != nil {
+		t.Fatalf("advance run: %v", err)
+	}
+
+	req := ad.launchRequest
+	for _, name := range []string{"MERCATOR_RUN_ID", "MERCATOR_REPORT_URL", "MERCATOR_RUN_TOKEN", "MERCATOR_WORKSPACE_ID"} {
+		for _, binding := range req.Environment {
+			if binding.Name == name {
+				t.Fatalf("unexpected reporting env var %q in environment when reporting is not configured", name)
+			}
+		}
 	}
 }
 

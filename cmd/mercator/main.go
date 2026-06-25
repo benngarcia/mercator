@@ -28,6 +28,7 @@ import (
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/offers"
 	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
 	"github.com/benngarcia/mercator/internal/workload"
@@ -64,8 +65,21 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		// SHARED event log, connection.Service, and Broker (the Broker is the
 		// adapter), plus the secret store, credential resolver, and verifier.
 		sched := scheduler.New()
-		orch := orchestrator.New(deps.log, sched, deps.broker)
+		orchOpts := []orchestrator.Option{}
+		if deps.signer != nil && deps.signer.Enabled() && deps.publicURL != "" {
+			orchOpts = append(orchOpts, orchestrator.WithReporting(deps.publicURL, deps.signer))
+		}
+		orch := orchestrator.New(deps.log, sched, deps.broker, orchOpts...)
 		imageResolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
+		serverOpts := []httpapi.Option{
+			httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
+			httpapi.WithSecretStore(deps.secretStore),
+			httpapi.WithCredentialResolver(deps.resolver),
+			httpapi.WithVerifier(deps.broker),
+		}
+		if deps.signer != nil && deps.signer.Enabled() {
+			serverOpts = append(serverOpts, httpapi.WithReportSigner(deps.signer))
+		}
 		handler = httpapi.NewWithAllServices(
 			orch, sched, deps.broker,
 			workload.New(deps.log),
@@ -73,10 +87,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 			deps.conns,
 			offers.New(deps.log),
 			imageResolver,
-			httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
-			httpapi.WithSecretStore(deps.secretStore),
-			httpapi.WithCredentialResolver(deps.resolver),
-			httpapi.WithVerifier(deps.broker),
+			serverOpts...,
 		)
 		closeFn = deps.close
 	} else {
@@ -118,7 +129,13 @@ type serverDeps struct {
 	resolver    *credential.Resolver
 	log         eventlog.EventLog
 	secretDB    *sql.DB
-	close       func() error
+	// signer is non-nil when MERCATOR_SECRET_KEY is set. It signs per-run
+	// reporting tokens using a domain-separated subkey derived from the master key.
+	signer *reporting.Signer
+	// publicURL is the value of MERCATOR_PUBLIC_URL. Reporting is only enabled
+	// when both signer.Enabled() and publicURL != "".
+	publicURL string
+	close     func() error
 }
 
 // buildServerDeps composes the registry-backed Broker, the shared
@@ -174,6 +191,12 @@ func buildServerDeps(values map[string]string) (serverDeps, bool) {
 		store,
 		masterKey,
 	)
+
+	// Build the report-token signer from a domain-separated subkey. The signer
+	// is always constructed (so its Enabled() reflects key presence); the
+	// orchestrator and server only wire it in when publicURL is also set.
+	signer := reporting.NewSigner(reporting.DeriveKey(masterKey))
+	publicURL := values["MERCATOR_PUBLIC_URL"]
 
 	factory := broker.NewFactory()
 	var (
@@ -240,6 +263,8 @@ func buildServerDeps(values map[string]string) (serverDeps, bool) {
 		resolver:    resolver,
 		log:         log,
 		secretDB:    secretDB,
+		signer:      signer,
+		publicURL:   publicURL,
 		close:       closeFn,
 	}, true
 }
@@ -419,7 +444,6 @@ func dockerOfferFromInfo(values map[string]string, id dockerEndpointIdentity, in
 		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
-
 
 func environ() map[string]string {
 	values := map[string]string{}

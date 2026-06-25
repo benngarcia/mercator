@@ -14,8 +14,11 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
+
+var ErrRunNotFound = errors.New("orchestrator: run not found")
 
 const (
 	EventRunRequested          = "compute.run.requested.v1"
@@ -32,17 +35,38 @@ const (
 	EventCleanupRequested      = "compute.run.cleanup_requested.v1"
 	EventCleanupConfirmed      = "compute.run.cleanup_confirmed.v1"
 	EventRunClosed             = "compute.run.closed.v1"
+	EventRunReported           = "compute.run.reported.v1"
 )
 
 type Orchestrator struct {
-	log       eventlog.EventLog
-	scheduler scheduler.Scheduler
-	adapter   adapter.Adapter
-	now       func() time.Time
+	log                eventlog.EventLog
+	scheduler          scheduler.Scheduler
+	adapter            adapter.Adapter
+	now                func() time.Time
+	reportingPublicURL string
+	reportingSigner    *reporting.Signer
 }
 
-func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter adapter.Adapter) *Orchestrator {
-	return &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
+// Option configures an Orchestrator.
+type Option func(*Orchestrator)
+
+// WithReporting enables injection of run-scoped reporting env vars into the
+// container at launch. When publicURL is non-empty and signer.Enabled(), three
+// vars are appended to the launch environment: MERCATOR_RUN_ID,
+// MERCATOR_REPORT_URL, and MERCATOR_RUN_TOKEN.
+func WithReporting(publicURL string, signer *reporting.Signer) Option {
+	return func(o *Orchestrator) {
+		o.reportingPublicURL = publicURL
+		o.reportingSigner = signer
+	}
+}
+
+func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter adapter.Adapter, opts ...Option) *Orchestrator {
+	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return o
 }
 
 type CreateRunRequest struct {
@@ -244,7 +268,12 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		if err != nil {
 			return err
 		}
-		launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer)
+		reportPublicURL, reportToken := "", ""
+		if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
+			reportPublicURL = o.reportingPublicURL
+			reportToken = o.reportingSigner.Token(runID)
+		}
+		launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
 		if err != nil {
 			return err
 		}
@@ -414,6 +443,65 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string)
 	return o.GetRun(ctx, workspaceID, runID)
 }
 
+type runReportedData struct {
+	Type     string          `json:"type"`
+	Data     json.RawMessage `json:"data,omitempty"`
+	ExitCode *int            `json:"exit_code,omitempty"`
+}
+
+// RecordReport appends a compute.run.reported.v1 event to the run's stream.
+// It uses optimistic concurrency and retries once on a concurrency conflict.
+func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, reportType string, data json.RawMessage, exitCode *int) error {
+	payload := runReportedData{Type: reportType, Data: data, ExitCode: exitCode}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("orchestrator: marshal report data: %w", err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		events, err := o.log.ReadStream(ctx, runStream(workspaceID, runID), 0, 10000)
+		if err != nil {
+			return fmt.Errorf("orchestrator: read run stream: %w", err)
+		}
+		if len(events) == 0 {
+			return ErrRunNotFound
+		}
+		version := uint64(len(events))
+		suffix := fmt.Sprintf("reported_%d", version+1)
+		evt := eventlog.NewEvent{
+			ID:            eventID(workspaceID, runID, suffix),
+			Type:          EventRunReported,
+			SchemaVersion: 1,
+			OccurredAt:    o.now().UTC(),
+			Visibility:    eventlog.VisibilityPublic,
+			Data:          encoded,
+		}
+		requestHash, err := domain.CanonicalHash([]eventlog.NewEvent{evt})
+		if err != nil {
+			return err
+		}
+		_, appendErr := o.log.Append(ctx, eventlog.AppendRequest{
+			Stream:                runStream(workspaceID, runID),
+			ExpectedStreamVersion: version,
+			CommandKey:            runID + ":report:" + suffix,
+			RequestHash:           requestHash,
+			CorrelationID:         runID,
+			CausationID:           "report",
+			Events:                []eventlog.NewEvent{evt},
+		})
+		if appendErr == nil {
+			return nil
+		}
+		if errors.Is(appendErr, eventlog.ErrConcurrencyConflict) && attempt == 0 {
+			// Retry once on optimistic-concurrency conflict.
+			continue
+		}
+		return fmt.Errorf("orchestrator: append report event: %w", appendErr)
+	}
+	// All retries exhausted; last error was a concurrency conflict.
+	return fmt.Errorf("orchestrator: append report event: concurrency conflict after retry")
+}
+
 func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
 	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: requested.Workload.WorkspaceID})
 	if err != nil {
@@ -446,8 +534,17 @@ func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested
 	return decision, attempt, selectedOffer, nil
 }
 
-func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot) (adapter.LaunchRequest, error) {
+func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot, reportPublicURL, reportToken string) (adapter.LaunchRequest, error) {
 	container := requested.Workload.Spec.Containers[0]
+	env := launchEnvironment(container.Env)
+	if reportPublicURL != "" && reportToken != "" {
+		env = append(env,
+			adapter.EnvironmentBinding{Name: "MERCATOR_RUN_ID", Value: stringPtr(runID)},
+			adapter.EnvironmentBinding{Name: "MERCATOR_REPORT_URL", Value: stringPtr(reportPublicURL)},
+			adapter.EnvironmentBinding{Name: "MERCATOR_RUN_TOKEN", Value: stringPtr(reportToken)},
+			adapter.EnvironmentBinding{Name: "MERCATOR_WORKSPACE_ID", Value: stringPtr(workspaceID)},
+		)
+	}
 	launchReq := adapter.LaunchRequest{
 		OperationKey:              attempt.LaunchKey,
 		WorkspaceID:               workspaceID,
@@ -462,7 +559,7 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		Platform:                  container.Platform,
 		Entrypoint:                container.Entrypoint,
 		Args:                      append([]string(nil), container.Args...),
-		Environment:               launchEnvironment(container.Env),
+		Environment:               env,
 		Ports:                     append([]domain.PortSpec(nil), container.Ports...),
 		Resources:                 requested.Workload.Spec.Resources,
 		SelectedOfferSnapshotID:   selectedOffer.ID,
@@ -950,3 +1047,5 @@ func cloneStringPtr(value *string) *string {
 	cloned := *value
 	return &cloned
 }
+
+func stringPtr(s string) *string { return &s }
