@@ -12,15 +12,16 @@ production readiness claim; production hardening remains tracked in
 | --- | --- | --- | --- |
 | README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
 | New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; SDK docs show run, event, decision, and sink status reads; the README now routes evaluators across fake, Docker, and RunPod paths with requirements and start docs; the CLI reference now has copy-paste follow-up commands, JSON error examples, and an exit-code reference; the OpenAPI reference now maps route families, auth boundaries, and a first HTTP integration path; fake-eval docs show OpenAPI smoke commands and a sanitized smoke-test transcript; package/distribution plan names source, archive, SDK install paths, per-OS checksum verification, and archive troubleshooting. | A | Publish binaries so users do not need a source checkout. |
-| Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, governance policy, code of conduct, support policy, dependency update policy, Apache-2.0 license, CI/release workflows, local release archive builder, curated `v0.1.0` release notes, launch audit script, pre-public exposure review, compatibility policy, a concrete external-sink hardening issue draft, and explicit pre-GA status are present. | A | Public CI history, tagged releases, and one external security/design review. |
+| Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, governance policy, code of conduct, support policy, dependency update policy, GitHub repository settings checklist, Apache-2.0 license, CI/release workflows, local release archive builder, curated `v0.1.0` release notes, launch audit script, pre-public exposure review, compatibility policy, a concrete external-sink hardening issue draft, and explicit pre-GA status are present. | A | Public CI history, tagged releases, configured branch/security settings, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, issue templates, PR template, roadmap, security policy, starter contributor queue, and public issue-conversion commands are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm`, a README-linked GIF fallback, a text demo transcript, and screenshot capture notes are tracked in `docs/assets/`. | A | Optional post-launch polish: add a longer narrated demo from the shot list. |
 | Social proof | Repo has durable verification docs, a real operator-oriented runbook set, a public proof-point intake template, and a checked-in maintainer fake-adapter baseline in `docs/launch/proof-points/`. | B+ | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
 Overall current launch grade: **A**. The repo is credible and tryable in the
 private PR state, but an A+ public launch still needs public visibility,
-public CI/release evidence, actual release artifacts, and at least one real
-external proof point. The remaining permission-bound steps are sequenced in
+configured repository settings, public CI/release evidence, actual release
+artifacts, and at least one real external proof point. The remaining
+permission-bound steps are sequenced in
 `docs/launch/public-launch-runbook.md`.
 
 ## Current GitHub Evidence
@@ -45,6 +46,11 @@ external proof point. The remaining permission-bound steps are sequenced in
   SDK Bundler dependencies on a conservative weekly cadence. CI and release
   workflows pin Node 24-compatible major versions of the official GitHub
   checkout/setup actions to avoid stale-runtime warnings before public launch.
+- Repository settings: `.github/CODEOWNERS` and
+  `docs/launch/github-repository-settings.md` document branch protection,
+  workflow permissions, external-contributor workflow approval, dependency
+  security settings, and private vulnerability reporting before the repository
+  is treated as public-launch complete.
 - Pre-public exposure review: `docs/launch/pre-public-exposure-review.md`
   gives maintainers a final text, asset, GitHub-surface, and release-surface
   review before making the repository public.
@@ -63,6 +69,8 @@ Strengths:
   are visible in docs and tests.
 - Dependency maintenance is explicit instead of relying on ad hoc maintainer
   memory after the repository becomes public.
+- Launch-time GitHub settings are explicit, including branch protection,
+  code-owner review, Actions permissions, and private vulnerability reporting.
 - The root README now gives a clear problem statement and the docs map points
   to operational evidence.
 - External reviewer packet gives a concise staff-engineer checklist.
@@ -70,6 +78,8 @@ Strengths:
 Concerns before A+:
 
 - Need public CI run history and release artifacts.
+- Need branch protection, security reporting, and workflow permissions verified
+  in the public repository settings.
 - Need the launch-prep PR merged or otherwise promoted to the default branch.
 - Need external review of the checked-in threat model.
 
@@ -134,6 +144,8 @@ Concerns before A+:
 
 - No labeled beginner issues yet.
 - CI/release workflows are configured, but need successful public runs.
+- Repository settings are documented, but branch protection and security
+  settings still need to be configured on the public repository.
 - Starter queue still needs to be converted into real GitHub issues after the
   repository is public.
 
@@ -180,6 +192,7 @@ Grade: **A**.
 - [x] Curated `v0.1.0` release notes checked in and wired into release workflow.
 - [x] Open-source launch audit script added and wired into CI.
 - [x] Public launch runbook documented.
+- [x] Repository settings checklist documented.
 - [x] Pre-public exposure review documented.
 - [x] Public proof-point intake path documented.
 - [x] Maintainer reproducible proof baseline documented.
@@ -189,6 +202,7 @@ Grade: **A**.
 - [x] Private draft PR CI run is green.
 - [ ] Launch-prep PR merged to the default branch.
 - [ ] Repository visibility changed from private to public.
+- [ ] Launch GitHub repository settings configured.
 - [ ] First public CI run is green.
 - [ ] Tagged release with binaries/checksums.
 - [ ] Downloadable CLI/server artifacts exist.

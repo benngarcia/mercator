@@ -191,6 +191,7 @@ go build ./cmd/mercator
 | Starter contributor queue | [docs/project/contributor-starter-queue.md](docs/project/contributor-starter-queue.md) |
 | External reviewer packet | [docs/launch/reviewer-packet.md](docs/launch/reviewer-packet.md) |
 | Public launch runbook | [docs/launch/public-launch-runbook.md](docs/launch/public-launch-runbook.md) |
+| GitHub launch settings | [docs/launch/github-repository-settings.md](docs/launch/github-repository-settings.md) |
 | Pre-public exposure review | [docs/launch/pre-public-exposure-review.md](docs/launch/pre-public-exposure-review.md) |
 | Public proof point template | [docs/launch/proof-point-template.md](docs/launch/proof-point-template.md) |
 | Proof-point evidence | [docs/launch/proof-points/README.md](docs/launch/proof-points/README.md) |

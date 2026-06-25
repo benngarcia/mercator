@@ -3,7 +3,8 @@
 This runbook starts after the launch-prep PR is approved. It covers the
 permission-bound steps that should not be performed by automation without
 maintainer approval: merging the PR, making the repository public, tagging the
-first release, converting starter issues, and collecting public proof.
+first release, configuring GitHub repository settings, converting starter
+issues, and collecting public proof.
 
 ## Preconditions
 
@@ -16,6 +17,8 @@ first release, converting starter issues, and collecting public proof.
   - `scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist`
 - The SDK CI job includes `scripts/check-open-source-launch.sh`.
 - The repository owner has decided to make the project public.
+- `docs/launch/github-repository-settings.md` has been reviewed for the
+  current repository owner, plan, and branch name.
 - `docs/launch/pre-public-exposure-review.md` has been run from the default
   branch, and no unresolved findings remain.
 
@@ -90,7 +93,24 @@ Afterward:
 gh repo view --json nameWithOwner,visibility,isPrivate,url
 ```
 
-## 4. Confirm Public Default-Branch CI
+## 4. Configure GitHub Repository Settings
+
+Follow `docs/launch/github-repository-settings.md` after the launch-prep PR is
+on `master` and the owner has approved the public launch. At minimum, configure
+or verify:
+
+- `master` Branch Protection with required PR review, Code Owners review, and
+  required `Go`, `SDKs`, and `Console` checks;
+- restricted Actions Workflow permissions;
+- Require approval for all external contributors before public fork pull-request
+  workflows run;
+- Dependabot alerts and Dependabot security updates;
+- Private vulnerability reporting after the repository is public.
+
+Record plan-specific limitations, such as unavailable secret scanning or push
+protection, in the launch issue or release notes.
+
+## 5. Confirm Public Default-Branch CI
 
 Wait for the default-branch CI run created after merge/public launch:
 
@@ -102,7 +122,7 @@ gh run watch <run-id> --exit-status
 Record the public CI run in `docs/launch/open-source-readiness.md` only after it
 has completed successfully.
 
-## 5. Tag And Publish `v0.1.0`
+## 6. Tag And Publish `v0.1.0`
 
 Run the local release checks from a clean default branch:
 
@@ -158,7 +178,7 @@ shasum -a 256 -c checksums.txt --ignore-missing
 tar -tzf "mercator_${version}_${os}_${arch}.tar.gz" | sort
 ```
 
-## 6. Convert Starter Queue Into GitHub Issues
+## 7. Convert Starter Queue Into GitHub Issues
 
 Use `docs/project/contributor-starter-queue.md` as the source of truth.
 
@@ -215,7 +235,7 @@ gh issue create \
   --body-file docs/project/issue-drafts/external-sink-configuration.md
 ```
 
-## 7. Collect A Public Proof Point
+## 8. Collect A Public Proof Point
 
 Before calling the launch A+, collect at least one public proof point:
 
@@ -245,15 +265,16 @@ Minimum bar for the proof point:
 Record the proof point in `docs/launch/open-source-readiness.md` and link it
 from the README only after it is public.
 
-## 8. Post-Launch README Updates
+## 9. Post-Launch README Updates
 
 After public CI and `v0.1.0` exist:
 
 - Add public CI and release badges to the README.
 - Replace source-only install language with release archive install language.
 - Link the release from `docs/project/package-distribution.md`.
-- Update `docs/launch/open-source-readiness.md` with the public CI run, release
-  URL, converted starter issues, and public proof point.
+- Update `docs/launch/open-source-readiness.md` with the repository settings
+  result, public CI run, release URL, converted starter issues, and public proof
+  point.
 
 ## Rollback Notes
 

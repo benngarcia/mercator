@@ -246,6 +246,7 @@ check_required_files() {
     .github/ISSUE_TEMPLATE/feature_request.yml
     .github/ISSUE_TEMPLATE/proof_point.yml
     .github/ISSUE_TEMPLATE/config.yml
+    .github/CODEOWNERS
     .github/dependabot.yml
     .github/workflows/ci.yml
     .github/workflows/release.yml
@@ -254,6 +255,7 @@ check_required_files() {
     docs/launch/pre-public-exposure-review.md
     docs/launch/proof-points/README.md
     docs/launch/proof-points/fake-adapter-baseline.md
+    docs/launch/github-repository-settings.md
     docs/launch/public-launch-runbook.md
     docs/launch/proof-point-template.md
     docs/launch/reviewer-packet.md
@@ -323,6 +325,7 @@ check_readme_surface() {
   require_pattern README.md 'docs/assets/mercator-demo\.gif' "README links demo GIF"
   require_pattern README.md 'scripts/smoke-test-fake\.sh' "README links fake smoke test"
   require_pattern README.md 'docs/launch/open-source-readiness\.md' "README links launch scorecard"
+  require_pattern README.md 'docs/launch/github-repository-settings\.md' "README links repository settings checklist"
   require_pattern README.md 'docs/launch/pre-public-exposure-review\.md' "README links pre-public exposure review"
   require_pattern README.md 'docs/launch/proof-points/README\.md' "README links proof-point evidence"
   require_pattern README.md 'docs/launch/proof-point-template\.md' "README links proof-point template"
@@ -353,6 +356,7 @@ check_workflow_hooks() {
 }
 
 check_dependency_maintenance() {
+  require_pattern .github/CODEOWNERS '^\* @benngarcia$' "CODEOWNERS has default maintainer owner"
   require_pattern .github/dependabot.yml 'package-ecosystem: "github-actions"' "Dependabot checks GitHub Actions"
   require_pattern .github/dependabot.yml 'package-ecosystem: "gomod"' "Dependabot checks Go modules"
   require_pattern .github/dependabot.yml 'package-ecosystem: "npm"' "Dependabot checks TypeScript SDK npm dependencies"
@@ -374,6 +378,7 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Support policy documented' "Scorecard includes support policy"
   require_pattern docs/launch/open-source-readiness.md 'Governance policy documented' "Scorecard includes governance policy"
   require_pattern docs/launch/open-source-readiness.md 'Pre-public exposure review documented' "Scorecard includes pre-public exposure review"
+  require_pattern docs/launch/open-source-readiness.md 'Repository settings checklist documented' "Scorecard includes repository settings checklist"
   require_pattern docs/launch/open-source-readiness.md 'Maintainer reproducible proof baseline documented' "Scorecard includes reproducible proof baseline"
   require_pattern docs/launch/open-source-readiness.md 'Node 24-compatible workflow action pins documented' "Scorecard includes Node 24-compatible workflow action pins"
   require_pattern CONTRIBUTING.md 'CODE_OF_CONDUCT\.md' "Contributing guide links code of conduct"
@@ -388,8 +393,14 @@ check_launch_docs() {
   require_pattern docs/launch/pre-public-exposure-review.md 'gh repo view --json nameWithOwner,visibility,isPrivate,url' "Exposure review includes repository visibility check"
   require_pattern docs/launch/pre-public-exposure-review.md 'dev-token|dev-smoke-token|restore-eval-token' "Exposure review documents allowed sample tokens"
   require_pattern docs/launch/public-launch-runbook.md 'gh repo edit --visibility public --accept-visibility-change-consequences' "Runbook includes visibility change command"
+  require_pattern docs/launch/public-launch-runbook.md 'docs/launch/github-repository-settings\.md' "Runbook links repository settings checklist"
   require_pattern docs/launch/public-launch-runbook.md 'docs/launch/pre-public-exposure-review\.md' "Runbook links pre-public exposure review"
   require_pattern docs/launch/public-launch-runbook.md 'gh issue create' "Runbook includes starter issue creation commands"
+  require_pattern docs/launch/github-repository-settings.md 'Branch Protection' "Repository settings checklist covers branch protection"
+  require_pattern docs/launch/github-repository-settings.md 'Require approval for all external contributors' "Repository settings checklist covers external contributor workflow approval"
+  require_pattern docs/launch/github-repository-settings.md 'Workflow permissions' "Repository settings checklist covers workflow permissions"
+  require_pattern docs/launch/github-repository-settings.md 'Dependabot security updates' "Repository settings checklist covers Dependabot security updates"
+  require_pattern docs/launch/github-repository-settings.md 'Private vulnerability reporting' "Repository settings checklist covers private vulnerability reporting"
   require_pattern docs/launch/proof-points/README.md 'external/public proof gate' "Proof-points index keeps external proof gate open"
   require_pattern docs/launch/proof-points/fake-adapter-baseline.md 'Mercator fake-adapter smoke test passed' "Proof baseline includes fake smoke evidence"
   require_pattern docs/launch/proof-points/fake-adapter-baseline.md 'scripts/smoke-test-fake\.sh' "Proof baseline includes reproduction command"
