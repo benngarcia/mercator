@@ -28,6 +28,19 @@ puts "#{run.fetch('outcome')} #{run.fetch('exit_code')}" # => succeeded 0
 `Idempotency-Key` from it (`"#{run_id}:create"`). Pass `idempotency_key:` only
 when you need to coordinate retries with an external caller.
 
+After the run closes, read the public event stream and placement decision from
+the same client:
+
+```ruby
+events = client.list_run_events(run_id)
+puts events.fetch("events").map { |event| event.fetch("type") }
+# => [..., "compute.run.closed.v1"]
+
+decision = client.get_run_decision(run_id).fetch("decision")
+puts decision.fetch("selected_offer_snapshot_id")
+# => offer_local_fake
+```
+
 ## Install from source
 
 The Ruby gem is not published to RubyGems for the first public launch. Install

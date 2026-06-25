@@ -32,6 +32,19 @@ recorded cleanup intent.
 `idempotency_key=...` only when you need to coordinate retries with an external
 caller. Pass `env={"K": {"value": "v"}}` for environment.
 
+After the run closes, read the public event stream and placement decision from
+the same client:
+
+```python
+events = client.list_run_events(run_id)
+print([event["type"] for event in events["events"]])
+# => [..., "compute.run.closed.v1"]
+
+decision = client.get_run_decision(run_id)["decision"]
+print(decision["selected_offer_snapshot_id"])
+# => offer_local_fake
+```
+
 ## Full workload form
 
 ```python

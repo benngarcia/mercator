@@ -46,6 +46,19 @@ console.log(result.run.outcome, result.run.exit_code); // => succeeded 0
 when you need to coordinate retries with an external caller. Pass
 `{ env: { K: { value: "v" } } }` for environment.
 
+After the run closes, read the public event stream and placement decision from
+the same client:
+
+```ts
+const events = await mercator.listRunEvents(runId);
+console.log(events.events.map((event) => event.type));
+// => [..., "compute.run.closed.v1"]
+
+const decision = await mercator.getRunDecision(runId);
+console.log(decision.decision.selected_offer_snapshot_id);
+// => offer_local_fake
+```
+
 ## Create, wait, and read the exit code in one round trip
 
 `createRun` returns the same envelope as `getRun`/`waitRun`/`cancelRun`

@@ -57,20 +57,19 @@ Acceptance criteria:
 - Include either captions or a text transcript.
 - Do not remove the existing short WebM/GIF demo.
 
-### 3. Add SDK Event And Decision Examples
+### 3. Add SDK Sink Status Examples
 
 Suggested labels: `good first issue`, `docs`, `sdk`
 
-Problem: The SDK READMEs show create/wait flows, but new users still have to
-infer how to read public events and placement decisions.
+Problem: The SDK READMEs show run, event, and decision flows, but sink cursor
+reads are still only obvious from the method lists.
 
 Acceptance criteria:
 
 - Add short examples to the TypeScript, Python, and Ruby README files showing
-  event and decision reads after a `busybox` fake-adapter run.
-- Use the existing methods: `listRunEvents` / `getRunDecision`,
-  `list_run_events` / `get_run_decision`, and `list_run_events` /
-  `get_run_decision`.
+  `audit` sink status reads after a fake-adapter run.
+- Use the existing methods: `getSinkStatus`, `get_sink_status`, and
+  `get_sink_status`.
 - Keep examples source-install friendly; do not claim SDK packages are
   published.
 - Run the relevant SDK tests.
