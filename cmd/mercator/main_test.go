@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -80,8 +81,9 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 func TestBuildServerDepsDefaultsToDockerBroker(t *testing.T) {
 	deps, ok := buildServerDeps(map[string]string{
-		"MERCATOR_DOCKER_ARCH": "amd64",
-		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+		"MERCATOR_DOCKER_ARCH":  "amd64",
+		"MERCATOR_WORKSPACE_ID": "bucket-worktree",
+		"MERCATOR_SQLITE_DSN":   "file:" + t.Name() + "?mode=memory&cache=shared",
 	})
 	if !ok {
 		t.Fatal("expected default server deps")
@@ -92,12 +94,22 @@ func TestBuildServerDepsDefaultsToDockerBroker(t *testing.T) {
 		}
 	}()
 
-	offers, err := deps.broker.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := deps.broker.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "bucket-worktree"})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
 	if len(offers) != 1 || offers[0].AdapterType != "docker" {
 		t.Fatalf("expected one docker offer by default, got %+v", offers)
+	}
+}
+
+func TestBootstrapWorkspacesPrefersConfiguredWorkspaceID(t *testing.T) {
+	got := bootstrapWorkspaces(map[string]string{
+		"MERCATOR_WORKSPACE_ID": "bucket-worktree",
+	})
+	want := []string{"bucket-worktree"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("bootstrapWorkspaces = %#v, want %#v", got, want)
 	}
 }
 

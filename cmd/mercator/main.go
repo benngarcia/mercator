@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -277,8 +278,14 @@ func buildServerDeps(values map[string]string) (serverDeps, bool) {
 // are used directly; the "*" wildcard maps to the default workspace "ws_1".
 func bootstrapWorkspaces(values map[string]string) []string {
 	var out []string
+	if ws := strings.TrimSpace(values["MERCATOR_WORKSPACE_ID"]); ws != "" {
+		out = append(out, ws)
+	}
 	for _, ws := range authWorkspaces(values) {
 		if ws == "*" {
+			continue
+		}
+		if slices.Contains(out, ws) {
 			continue
 		}
 		out = append(out, ws)
