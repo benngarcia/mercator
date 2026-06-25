@@ -115,6 +115,7 @@ mercator run list
 export MERCATOR_API_URL=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN='dev-token'
 export MERCATOR_WORKSPACE_ID=ws_nope
+# Server was started with MERCATOR_AUTH_WORKSPACES=ws_1.
 
 mercator run list
 # stderr, exit 1:
