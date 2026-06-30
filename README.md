@@ -50,20 +50,11 @@ Mercator is **V1 evaluation-ready, not GA infrastructure yet**. See
 
 ## Try It In 5 Minutes
 
-The fake adapter exercises the full broker path without Docker, RunPod, or a
-registry. You need Go 1.25+, `jq`, and a shell.
+Mercator launches OCI workloads as real containers through the Docker host
+adapter, so a running Docker daemon is the one hard dependency for a first run.
+You need Go 1.25+, a running Docker daemon, `jq`, and a shell.
 
-For the fastest local confidence check, run the smoke test:
-
-```sh
-scripts/smoke-test-fake.sh
-```
-
-It builds a temporary `mercator` binary, starts a local fake-adapter server,
-creates a `busybox` run through the CLI, and verifies the run closes with
-`outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`, and `closed=true`.
-
-Terminal 1:
+Terminal 1 — start the broker against your local Docker host:
 
 ```sh
 rm -f /tmp/mercator-demo.db /tmp/mercator-demo.db-wal /tmp/mercator-demo.db-shm
@@ -72,19 +63,24 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
 export MERCATOR_API_TOKEN='dev-token'
 export MERCATOR_AUTH_WORKSPACES='ws_1'
-export MERCATOR_FAKE_OFFER=1
+export MERCATOR_ADAPTER=docker
+export MERCATOR_DOCKER_ARCH=amd64
 
 go run ./cmd/mercator serve
 ```
 
-Terminal 2:
+Terminal 2 — pin a digest, create a run, and read the result. V1 workloads must
+use a digest-pinned image reference, not a mutable tag:
 
 ```sh
 export MERCATOR_API_URL=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN='dev-token'
 export MERCATOR_WORKSPACE_ID=ws_1
 
-RUN_ID="$(go run ./cmd/mercator run create busybox -- echo hi | jq -r '.run.id')"
+docker pull -q busybox:latest >/dev/null
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+
+RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
 
 go run ./cmd/mercator run get --run-id "$RUN_ID" \
   | jq '{id: .run.id, outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
@@ -102,29 +98,29 @@ Expected shape:
 }
 ```
 
-Open the console at
+Mercator pulls the pinned image, launches a labeled container, captures the exit
+code, and confirms cleanup. Open the console at
 [`http://127.0.0.1:8080/?workspace_id=ws_1`](http://127.0.0.1:8080/?workspace_id=ws_1)
 and paste `dev-token` when prompted.
 
-For a fuller local evaluation, use
-[docs/production/fake-eval-path.md](docs/production/fake-eval-path.md). For a
-real Docker host, use
+For the full Docker runbook — preconditions, container labels, and cleanup
+verification — see
 [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md).
 
 ## Pick The Right Evaluation Path
 
-Start with the fake adapter unless you need to prove adapter behavior. It is the
-only path that requires no Docker daemon, provider account, registry access, or
-billable compute.
+The Docker adapter is the default local path: it launches real containers on a
+single host with no provider account or billable compute. Use RunPod when you
+need to prove the provisionable GPU-provider flow.
 
 | Path | Use It To Prove | Requires | Start Here |
 | --- | --- | --- | --- |
-| Fake adapter | Broker lifecycle, placement, public events, cleanup, CLI, SDKs, and console without external dependencies. | Go 1.25+, `jq`, and a shell. | [Fake evaluation path](docs/production/fake-eval-path.md) |
-| Docker adapter | Real local container launch, observation, labels, and cleanup on one host. | Docker CLI/daemon, a digest-pinned Linux image, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
+| Docker adapter | Broker lifecycle, placement, public events, cleanup, CLI, SDKs, and console with real local container launch, observation, and labels on one host. | Go 1.25+, a running Docker daemon, a digest-pinned Linux image, `jq`, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
 | RunPod adapter | Provisionable GPU-provider flow and terminate cleanup. | RunPod API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [RunPod runbook](docs/production/runpod.md) |
 
-If the fake path passes but Docker or RunPod does not, treat that as adapter or
-environment evidence rather than broker evidence. Known gaps are tracked in
+If the broker lifecycle passes but a specific provider does not, treat that as
+adapter or environment evidence rather than broker evidence. Known gaps are
+tracked in
 [docs/production/known-limitations.md](docs/production/known-limitations.md).
 
 ## SDK Happy Path
@@ -173,7 +169,7 @@ go build ./cmd/mercator
 | Need | Start Here |
 | --- | --- |
 | Install, start, health checks | [docs/production/install-configuration.md](docs/production/install-configuration.md) |
-| First deterministic evaluation | [docs/production/fake-eval-path.md](docs/production/fake-eval-path.md) |
+| First local evaluation | [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md) |
 | CLI commands and environment | [docs/reference/cli.md](docs/reference/cli.md) |
 | HTTP/OpenAPI route overview | [docs/reference/openapi.md](docs/reference/openapi.md) |
 | Docker adapter operation | [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md) |

@@ -255,7 +255,6 @@ check_required_files() {
     docs/launch/open-source-readiness.md
     docs/launch/pre-public-exposure-review.md
     docs/launch/proof-points/README.md
-    docs/launch/proof-points/fake-adapter-baseline.md
     docs/launch/github-repository-settings.md
     docs/launch/public-launch-runbook.md
     docs/launch/proof-point-template.md
@@ -273,7 +272,6 @@ check_required_files() {
     docs/project/release-notes/v0.1.0.md
     docs/project/threat-model.md
     docs/production/known-limitations.md
-    docs/production/fake-eval-path.md
     docs/production/docker-adapter-operation.md
     docs/production/runpod.md
     docs/production/security-model.md
@@ -305,7 +303,6 @@ check_required_files() {
     require_nonempty_file "${asset}"
   done
 
-  require_executable scripts/smoke-test-fake.sh
   require_executable scripts/build-release-archives.sh
   require_executable scripts/check-open-source-launch.sh
 }
@@ -332,7 +329,6 @@ check_readme_surface() {
 
   require_pattern README.md 'docs/assets/mercator-demo\.webm' "README links demo WebM"
   require_pattern README.md 'docs/assets/mercator-demo\.gif' "README links demo GIF"
-  require_pattern README.md 'scripts/smoke-test-fake\.sh' "README links fake smoke test"
   require_pattern README.md 'docs/launch/open-source-readiness\.md' "README links launch scorecard"
   require_pattern README.md 'docs/launch/github-repository-settings\.md' "README links repository settings checklist"
   require_pattern README.md 'docs/launch/pre-public-exposure-review\.md' "README links pre-public exposure review"
@@ -352,7 +348,6 @@ check_workflow_hooks() {
   require_pattern .github/workflows/release.yml 'actions/checkout@v5' "Release uses Node 24-compatible checkout action"
   require_pattern .github/workflows/release.yml 'actions/setup-go@v6' "Release uses Node 24-compatible setup-go action"
   require_pattern .github/workflows/ci.yml 'go test \./\.\.\.' "CI runs Go tests"
-  require_pattern .github/workflows/ci.yml 'scripts/smoke-test-fake\.sh' "CI runs fake smoke test"
   require_pattern .github/workflows/ci.yml 'scripts/build-release-archives\.sh v0\.0\.0-ci' "CI builds release archives"
   require_pattern .github/workflows/ci.yml 'npm test' "CI runs TypeScript SDK tests"
   require_pattern .github/workflows/ci.yml 'python -m unittest discover -s tests' "CI runs Python SDK tests"
@@ -433,8 +428,6 @@ check_launch_docs() {
   require_pattern examples/runpod/python-sdk/README.md 'git\+https://github\.com/benngarcia/mercator\.git@v0\.1\.0#subdirectory=sdk/python' "Python RunPod example source-installs SDK"
   require_pattern examples/runpod/python-sdk/run.py 'run_reporter' "Python RunPod example uses reporter helper"
   require_pattern docs/launch/proof-points/README.md 'external/public proof gate' "Proof-points index keeps external proof gate open"
-  require_pattern docs/launch/proof-points/fake-adapter-baseline.md 'Mercator fake-adapter smoke test passed' "Proof baseline includes fake smoke evidence"
-  require_pattern docs/launch/proof-points/fake-adapter-baseline.md 'scripts/smoke-test-fake\.sh' "Proof baseline includes reproduction command"
   require_pattern docs/launch/proof-point-template.md 'Do not convert private maintainer notes into social proof' "Proof template rejects private social proof"
   require_pattern docs/launch/reviewer-packet.md 'Staff-engineer verdict: A\+ \| A \| B \| not ready' "Reviewer packet includes staff verdict format"
   require_pattern docs/launch/reviewer-outreach.md 'Staff Engineer Review Request' "Reviewer outreach includes staff-engineer request"
@@ -450,12 +443,6 @@ check_launch_docs() {
 run_full_checks() {
   local dist_dir
   dist_dir="$(mktemp -d "${TMPDIR:-/tmp}/mercator-launch-audit.XXXXXX")"
-
-  if scripts/smoke-test-fake.sh; then
-    record_ok "full check: fake-adapter smoke test"
-  else
-    record_fail "full check: fake-adapter smoke test"
-  fi
 
   if scripts/build-release-archives.sh v0.0.0-launch-audit "${dist_dir}"; then
     record_ok "full check: release archive build"

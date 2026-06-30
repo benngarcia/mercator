@@ -51,7 +51,6 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		})
 	}
 	addr := envValue(env, "MERCATOR_ADDR", "127.0.0.1:8080")
-	dsn := envValue(env, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
 	apiToken, generatedToken, err := apiTokenFromEnv(env)
 	if err != nil {
 		stdlog.Fatalf("load api token: %v", err)
@@ -59,44 +58,37 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	if generatedToken {
 		stdlog.Printf("generated MERCATOR_API_TOKEN for this server process: %s", apiToken)
 	}
-	var handler http.Handler
-	var closeFn func() error
-	if deps, ok := buildServerDeps(env); ok {
-		// Mirror HandlerForSQLiteWithAdapter's internal construction but over the
-		// SHARED event log, connection.Service, and Broker (the Broker is the
-		// adapter), plus the secret store, credential resolver, and verifier.
-		sched := scheduler.New()
-		orchOpts := []orchestrator.Option{}
-		if deps.signer != nil && deps.signer.Enabled() && deps.publicURL != "" {
-			orchOpts = append(orchOpts, orchestrator.WithReporting(deps.publicURL, deps.signer))
-		}
-		orch := orchestrator.New(deps.log, sched, deps.broker, orchOpts...)
-		imageResolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
-		serverOpts := []httpapi.Option{
-			httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
-			httpapi.WithSecretStore(deps.secretStore),
-			httpapi.WithCredentialResolver(deps.resolver),
-			httpapi.WithVerifier(deps.broker),
-		}
-		if deps.signer != nil && deps.signer.Enabled() {
-			serverOpts = append(serverOpts, httpapi.WithReportSigner(deps.signer))
-		}
-		handler = httpapi.NewWithAllServices(
-			orch, sched, deps.broker,
-			workload.New(deps.log),
-			sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
-			deps.conns,
-			offers.New(deps.log),
-			imageResolver,
-			serverOpts...,
-		)
-		closeFn = deps.close
-	} else {
-		handler, closeFn, err = httpapi.HandlerForSQLiteWithOptions(context.Background(), dsn, fakeOffersFromEnv(env), httpapi.WithBearerAuth(apiToken, authWorkspaces(env)))
-		if err != nil {
-			stdlog.Fatalf("start mercator: %v", err)
-		}
+	// serve always runs the registry-backed Docker broker path. Mirror
+	// HandlerForSQLiteWithAdapter's internal construction but over the SHARED
+	// event log, connection.Service, and Broker (the Broker is the adapter),
+	// plus the secret store, credential resolver, and verifier.
+	deps := buildServerDeps(env)
+	sched := scheduler.New()
+	orchOpts := []orchestrator.Option{}
+	if deps.signer != nil && deps.signer.Enabled() && deps.publicURL != "" {
+		orchOpts = append(orchOpts, orchestrator.WithReporting(deps.publicURL, deps.signer))
 	}
+	orch := orchestrator.New(deps.log, sched, deps.broker, orchOpts...)
+	imageResolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
+	serverOpts := []httpapi.Option{
+		httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
+		httpapi.WithSecretStore(deps.secretStore),
+		httpapi.WithCredentialResolver(deps.resolver),
+		httpapi.WithVerifier(deps.broker),
+	}
+	if deps.signer != nil && deps.signer.Enabled() {
+		serverOpts = append(serverOpts, httpapi.WithReportSigner(deps.signer))
+	}
+	handler := httpapi.NewWithAllServices(
+		orch, sched, deps.broker,
+		workload.New(deps.log),
+		sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
+		deps.conns,
+		offers.New(deps.log),
+		imageResolver,
+		serverOpts...,
+	)
+	closeFn := deps.close
 	defer func() {
 		if err := closeFn(); err != nil {
 			stdlog.Printf("close event log: %v", err)
@@ -151,11 +143,8 @@ type serverDeps struct {
 // registered under the default workspace "ws_1"; full multi-workspace bootstrap
 // is future work.
 //
-// Returns ok=false for any non-docker adapter (the fake fallback path).
-func buildServerDeps(values map[string]string) (serverDeps, bool) {
-	if strings.ToLower(values["MERCATOR_ADAPTER"]) != "docker" {
-		return serverDeps{}, false
-	}
+// serve uses the Docker host adapter; Docker is a hard requirement.
+func buildServerDeps(values map[string]string) serverDeps {
 	ctx := context.Background()
 	dsn := envValue(values, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
 
@@ -271,66 +260,7 @@ func buildServerDeps(values map[string]string) (serverDeps, bool) {
 		signer:      signer,
 		publicURL:   publicURL,
 		close:       closeFn,
-	}, true
-}
-
-func fakeOffersFromEnv(values map[string]string) []domain.OfferSnapshot {
-	mode := strings.TrimSpace(strings.ToLower(values["MERCATOR_FAKE_OFFER"]))
-	if mode == "" {
-		return nil
 	}
-	kind := domain.OfferKindStanding
-	if mode == string(domain.OfferKindProvisionable) {
-		kind = domain.OfferKindProvisionable
-	}
-	now := time.Now().UTC()
-	return []domain.OfferSnapshot{{
-		ID:           "offer_local_fake",
-		ConnectionID: "conn_local_fake",
-		AdapterType:  "fake",
-		Kind:         kind,
-		NativeRef:    "local-fake",
-		ObservedAt:   now,
-		ExpiresAt:    now.Add(time.Hour),
-		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
-		Resources: domain.ResourceInventory{
-			CPUMillis:          2000,
-			MemoryBytes:        4 * 1024 * 1024 * 1024,
-			EphemeralDiskBytes: 16 * 1024 * 1024 * 1024,
-		},
-		Capabilities: domain.CapabilityProfile{
-			Container: domain.ContainerCapabilities{
-				MaxContainers:       8,
-				SupportsDigestRefs:  true,
-				MaxEnvironmentBytes: 32768,
-			},
-			Lifecycle: domain.LifecycleCapabilities{
-				IdempotentLaunch: "launch_key",
-				ListOwned:        true,
-				CancelQueued:     true,
-			},
-			Network: domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
-			Pricing: domain.PricingCapabilities{Known: true},
-		},
-		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
-			Scope:      domain.NetworkScopeRegistry,
-			Statistic:  "p10",
-			ValueMbps:  100,
-			Source:     "local",
-			ObservedAt: now,
-			ValidUntil: now.Add(time.Hour),
-			Confidence: 1,
-		}}},
-		Pricing: domain.PriceModel{
-			Currency:             "USD",
-			RatePerSecondUSD:     0,
-			MinimumChargeSeconds: 0,
-			GranularitySeconds:   1,
-			Known:                true,
-		},
-		ImageCache: domain.ImageCacheEvidence{Known: true},
-		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
-	}}
 }
 
 // bootstrapWorkspaces returns the concrete workspace ids under which the

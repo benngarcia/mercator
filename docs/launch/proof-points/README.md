@@ -6,15 +6,14 @@ benchmark, external review, or maintainer-approved case study.
 
 Current entries:
 
-- [Fake adapter baseline evaluation](fake-adapter-baseline.md) - a
-  maintainer-run reproducible evaluation of the no-provider fake-adapter path.
+- _None yet._ The Docker adapter quickstart in the root `README.md` is the
+  reproducible first-run reference until a published proof point exists.
 
-The checked-in baseline is useful because it gives reviewers a concrete command,
-environment summary, and expected output shape. It does not satisfy the
-external/public proof gate by itself. Before calling the launch A+, maintainers
-still need at least one public proof point from a real user trial, downstream
-integration note, external review, benchmark, or approved case study that can be
-linked from the launch scorecard.
+There is no checked-in baseline yet, and a maintainer-run evaluation does not
+satisfy the external/public proof gate by itself. Before calling the launch A+,
+maintainers still need at least one public proof point from a real user trial,
+downstream integration note, external review, benchmark, or approved case study
+that can be linked from the launch scorecard.
 
 ## Publication Rules
 
