@@ -5,8 +5,10 @@ captures stay in ignored `output/` until they are reviewed and renamed.
 
 Current assets:
 
-- `mercator-demo.webm` - 10-second fake-adapter console walkthrough from run
-  list to run detail, placement decision, and public events.
+- `mercator-demo.webm` - 10-second console demo from run list to run detail,
+  placement decision, and public events. The committed recording still shows
+  the earlier fake-adapter console flow; re-recording against the Docker
+  quickstart is pending.
 - `mercator-demo.gif` - 640x360 GIF fallback generated from
   `mercator-demo.webm` for README contexts where WebM links are less prominent.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
@@ -17,12 +19,17 @@ Current assets:
 
 ## Screenshot Capture Notes
 
-Use the fake-adapter path for launch screenshots so captures are reproducible
-and do not require Docker, RunPod, registry credentials, or private workloads.
+Use the Docker quickstart path for launch screenshots so captures are
+reproducible against the current build. It requires a running Docker daemon but
+no RunPod, registry credentials, or private workloads.
 
-1. Start Mercator with `MERCATOR_FAKE_OFFER=1`, `MERCATOR_API_TOKEN` set, and a
-   launch-safe workspace such as `ws_1`.
-2. Create `busybox -- echo hi` through the CLI and wait for the run to close.
+1. Start Mercator with the Docker adapter following the
+   [Docker quickstart](../production/docker-adapter-operation.md): set
+   `MERCATOR_ADAPTER=docker`, `MERCATOR_DOCKER_ARCH=amd64`,
+   `MERCATOR_API_TOKEN`, and a launch-safe workspace such as `ws_1`.
+2. Create a digest-pinned `busybox -- echo hi` run through the CLI and wait for
+   the run to close (mutable tags are rejected, so resolve the digest first with
+   `docker inspect --format '{{index .RepoDigests 0}}' busybox:latest`).
 3. Open the embedded console for that workspace.
 4. Capture these screens: run list, selected run detail, placement decision,
    public events, and connections/offers if they materially improve the docs.
@@ -34,26 +41,29 @@ and do not require Docker, RunPod, registry credentials, or private workloads.
 
 ## Demo Transcript
 
-The README demo shows the fake-adapter path a new evaluator can run without
-Docker, RunPod, or a registry.
+The committed README demo recording still shows the earlier fake-adapter
+console flow; re-recording against the Docker quickstart is pending. The
+walkthrough a new evaluator follows is:
 
 1. The console opens on the runs list for workspace `ws_1`.
-2. A fake `busybox` run appears with terminal status, exit code, cleanup, and
+2. A `busybox` run appears with terminal status, exit code, cleanup, and
    closure state visible in the table.
 3. The run detail view shows the selected run and its lifecycle state.
-4. The decision tab shows the placement decision and why the fake local offer
-   was selected.
+4. The decision tab shows the placement decision and why the selected local
+   offer won placement.
 5. The events view shows public run events so the evaluator can connect the UI
    back to Mercator's event-sourced audit trail.
-6. The demo ends by returning to the documented fake evaluation path.
+6. The demo ends by returning to the documented quickstart path.
 
-Demo video regeneration:
+Demo video regeneration (record against the Docker quickstart):
 
-1. Start Mercator with `MERCATOR_FAKE_OFFER=1`.
-2. Create `busybox -- echo hi` from the CLI.
+1. Start Mercator with the Docker adapter per the
+   [Docker quickstart](../production/docker-adapter-operation.md)
+   (`MERCATOR_ADAPTER=docker`, `MERCATOR_DOCKER_ARCH=amd64`).
+2. Create a digest-pinned `busybox -- echo hi` run from the CLI.
 3. Open the console and show the run moving to `succeeded`.
 4. Inspect the decision tab and public events.
-5. End with the fake evaluation command and docs pointer.
+5. End with the run `get` command and the Docker quickstart docs pointer.
 
 Target output: replace `docs/assets/mercator-demo.webm`, then regenerate the
 README GIF fallback under 5 MB:

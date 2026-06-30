@@ -18,10 +18,11 @@ environment.
 - [ ] Disallowed workspace returns `FORBIDDEN`.
 - [ ] All run reads use explicit `workspace_id`.
 
-## Fake Adapter
+## Docker Adapter Quickstart
 
-- [ ] `MERCATOR_FAKE_OFFER=1` exposes `offer_local_fake`.
-- [ ] A fake run reaches `closed: true`.
+- [ ] `serve` started with `MERCATOR_ADAPTER=docker` exposes the configured
+  Docker offer (`offer_local_docker` by default).
+- [ ] A Docker run created from a digest-pinned image reaches `closed: true`.
 - [ ] Cleanup is `confirmed` before closure.
 - [ ] Replaying the same idempotency key with identical payload is safe.
 - [ ] Reusing the same idempotency key with a different payload returns

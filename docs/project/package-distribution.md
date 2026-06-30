@@ -16,16 +16,34 @@ go test ./...
 go run ./cmd/mercator serve
 ```
 
-For the deterministic local evaluation path, use the root README quickstart or
-run:
+For the local evaluation path, use the root README quickstart. It runs the
+Docker host adapter against a digest-pinned image, creates one run through the
+CLI, and verifies the closed run fields that the README promises. With a running
+Docker daemon, `jq`, and a shell:
 
 ```sh
-scripts/smoke-test-fake.sh
+# Terminal 1: serve
+export MERCATOR_ADDR=127.0.0.1:8080
+export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_AUTH_WORKSPACES='ws_1'
+export MERCATOR_ADAPTER=docker
+export MERCATOR_DOCKER_ARCH=amd64
+go run ./cmd/mercator serve
+
+# Terminal 2: create a run with a digest-pinned image (mutable tags are rejected)
+export MERCATOR_API_URL=http://127.0.0.1:8080
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_WORKSPACE_ID=ws_1
+docker pull -q busybox:latest >/dev/null
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
+go run ./cmd/mercator run get --run-id "$RUN_ID" | jq '{outcome:.run.outcome, exit_code:.run.exit_code, cleanup:.run.cleanup, closed:.run.closed}'
 ```
 
-That command builds a temporary binary, starts the fake adapter, creates one run
-through the CLI, and verifies the closed run fields that the README promises.
-For the longer walkthrough, see `docs/production/fake-eval-path.md`.
+Expected: `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`,
+`closed=true`. For the longer walkthrough, see
+`docs/production/docker-adapter-operation.md`.
 
 ## First Binary Release
 
@@ -175,7 +193,8 @@ Before publishing SDK packages:
 Do not publish a release unless all of these are true:
 
 - The default branch CI is green.
-- `scripts/smoke-test-fake.sh` passes against the source checkout.
+- `go test ./...` passes and the Docker quickstart in the root README closes a
+  run with `outcome=succeeded` against the source checkout.
 - `scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist`
   builds archives and checksums successfully.
 - The release workflow has been reviewed on the launch-prep PR.

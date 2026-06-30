@@ -7,7 +7,8 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 ## Current: V1 Evaluation
 
 - Event-sourced run lifecycle over SQLite.
-- Fake adapter for deterministic local evaluation.
+- Docker host adapter for deterministic local evaluation.
+- Internal fake adapter backing the deterministic Go test suite.
 - Docker host adapter with guarded live integration test.
 - RunPod-oriented adapter and examples.
 - Operator console embedded in the Go binary.
@@ -16,9 +17,10 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 - OSS project scaffolding: license, security policy, contribution guide, issue
   templates, CI/release workflows, compatibility policy, screenshots, and
   launch scorecard.
-- Short fake-adapter console demo committed under `docs/assets/`.
-- Threat model, package/distribution plan, CLI reference, smoke test, and starter
-  contributor queue documented.
+- Short console demo committed under `docs/assets/`; re-recording it against the
+  Docker quickstart is pending.
+- Threat model, package/distribution plan, CLI reference, Docker quickstart, and
+  starter contributor queue documented.
 
 ## Next: Open Source Launch Polish
 

@@ -56,7 +56,7 @@ console.log(events.events.map((event) => event.type));
 
 const decision = await mercator.getRunDecision(runId);
 console.log(decision.decision.selected_offer_snapshot_id);
-// => offer_local_fake
+// => offer_local_docker
 
 const sink = await mercator.getSinkStatus("audit");
 console.log(sink.sink_id, sink.cursor);

@@ -4,7 +4,7 @@ Suggested labels: `good first issue`, `docs`, `console`, `launch`
 
 ## Problem
 
-The README has a short fake-adapter demo and transcript, but the launch
+The README has a short console demo and transcript, but the launch
 scorecard includes a 75-100 second shot list that can show the full evaluation
 path: quickstart, run creation, terminal run fields, console run list, decision
 tab, public events, and docs map.
@@ -25,4 +25,4 @@ tab, public events, and docs map.
 - `README.md`
 - `docs/assets/README.md`
 - `docs/launch/open-source-readiness.md`
-- `docs/production/fake-eval-path.md`
+- `docs/production/docker-adapter-operation.md`

@@ -28,7 +28,7 @@ server is configured with exactly one allowed workspace.
 
 ## First Integrator Path
 
-For the smallest HTTP integration, start with the fake adapter and use the
+For the smallest HTTP integration, start with the Docker adapter and use the
 image shorthand:
 
 ```sh

@@ -71,7 +71,7 @@ file docs/assets/mercator-runs.png \
 ```
 
 Open the screenshots and video/GIF. Confirm that they show only Mercator UI,
-fake-adapter data, sample tokens, `ws_1`, local loopback URLs, and intentional
+sample/demo data, sample tokens, `ws_1`, local loopback URLs, and intentional
 demo content. Do not publish assets that show private tabs, local usernames,
 real provider account identifiers, real run IDs from downstream systems, real
 tokens, customer names, or machine hostnames.

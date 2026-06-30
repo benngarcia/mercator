@@ -9,12 +9,14 @@ adopting a cluster control plane.
 
 ![Mercator console showing runs](docs/assets/mercator-runs.png)
 
-Watch the short fake-adapter console demo:
+Watch the short console demo:
 [WebM](docs/assets/mercator-demo.webm) or
 [GIF fallback](docs/assets/mercator-demo.gif). A text transcript is in
-[docs/assets/README.md](docs/assets/README.md#demo-transcript).
+[docs/assets/README.md](docs/assets/README.md#demo-transcript). The current
+recording shows an earlier console flow; re-recording it against the Docker
+quickstart is pending.
 
-![Mercator fake-adapter console demo](docs/assets/mercator-demo.gif)
+![Mercator console demo](docs/assets/mercator-demo.gif)
 
 ## Why It Exists
 
@@ -39,7 +41,7 @@ drives provider adapters through an auditable run lifecycle.
 - Filters offers by platform, resources, accelerator needs, capability facts,
   price constraints, and policy.
 - Records placement decisions and rejected candidates for audit.
-- Launches through fake, Docker, and RunPod-oriented adapter paths.
+- Launches through Docker and RunPod-oriented adapter paths.
 - Surfaces run status, exit codes, cleanup disposition, public events, sink
   cursors/replay, and workspace-scoped reads.
 - Provides hand-written TypeScript, Python, and Ruby SDKs for the V1 API.
@@ -208,8 +210,8 @@ cd ../python && python3 -m unittest discover -s tests
 cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
-For the heavier launch gate that also exercises the fake adapter and local
-release archive builder, run:
+For the heavier launch gate that also exercises the local release archive
+builder, run:
 
 ```sh
 scripts/check-open-source-launch.sh --full
@@ -222,12 +224,13 @@ builds do not require cgo.
 
 Current branch status:
 
-- M13-verified V1 broker slice with fake, Docker, and RunPod-oriented paths.
+- M13-verified V1 broker slice across Docker and RunPod-oriented paths, with an
+  internal fake adapter backing the deterministic test suite.
 - Embedded operator console and JSON-first CLI.
 - Hand-written SDKs for TypeScript, Python, and Ruby.
 - Production evaluation docs and known limitations are checked in.
 - Open source launch prep is underway; screenshots and a short demo video are
-  tracked, a maintainer fake-adapter proof baseline is documented, and the
+  tracked, the Docker quickstart is the documented first-run proof path, and the
   remaining launch scorecard is in
   [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md).
 

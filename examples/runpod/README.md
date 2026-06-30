@@ -1,6 +1,6 @@
 # RunPod Examples
 
-These examples are for provider validation after the fake-adapter path passes.
+These examples are for provider validation after the Docker adapter path passes.
 They require a RunPod API key, a Mercator server reachable by the pod, a real
 registry-pullable image digest, and billable provider capacity.
 

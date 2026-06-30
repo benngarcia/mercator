@@ -45,7 +45,7 @@ mercator run cancel --run-id run_...
 ```
 
 From a source checkout, use these follow-up commands after starting the
-fake-adapter quickstart server from the README. If you installed a release
+Docker quickstart server from the README. If you installed a release
 binary, replace `go run ./cmd/mercator` with `mercator`.
 
 ```sh
@@ -53,7 +53,9 @@ export MERCATOR_API_URL=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN='dev-token'
 export MERCATOR_WORKSPACE_ID=ws_1
 
-RUN_ID="$(go run ./cmd/mercator run create busybox -- echo hi | jq -r '.run.id')"
+docker pull -q busybox:latest >/dev/null
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
 
 go run ./cmd/mercator run list \
   | jq '.runs[] | {id, outcome, closed}'
@@ -151,11 +153,18 @@ Sink commands also print JSON.
 
 ## Local Smoke Test
 
-From a source checkout, run:
+From a source checkout with a running Docker daemon, start `mercator serve`
+with the Docker adapter, then create a digest-pinned run through the CLI and
+confirm it closes successfully:
 
 ```sh
-scripts/smoke-test-fake.sh
+docker pull -q busybox:latest >/dev/null
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
+go run ./cmd/mercator run get --run-id "$RUN_ID" \
+  | jq '{outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
 ```
 
-The script builds a temporary binary, starts Mercator with the fake adapter,
-creates a run through the CLI, and verifies the run closes successfully.
+A healthy run reports `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`,
+and `closed=true`. For the full serve configuration and runbook, see
+[Docker adapter operation](../production/docker-adapter-operation.md).

@@ -29,7 +29,7 @@ Please review:
 - Threat model: <repo URL>/blob/<commit>/docs/project/threat-model.md
 - Release process: <repo URL>/blob/<commit>/docs/project/release-process.md
 
-Suggested path: spend about 20 minutes on the README, fake-adapter smoke path,
+Suggested path: spend about 20 minutes on the README, Docker quickstart,
 threat model, known limitations, and release mechanics. A useful verdict can be
 positive, mixed, or negative; the goal is honest launch evidence.
 
@@ -47,19 +47,39 @@ identifiers, or unpublished downstream details.
 Subject: Mercator first-run trial request
 
 I am looking for a prospective-user read on Mercator's public first impression.
-Could you try the fake-adapter path and tell me whether you would continue
+Could you try the Docker quickstart and tell me whether you would continue
 evaluating it for auditable container dispatch?
 
 Please review:
 
 - README: <repo URL>
 - 20-minute reviewer path: <repo URL>/blob/<commit>/docs/launch/reviewer-packet.md
-- Fake evaluation path: <repo URL>/blob/<commit>/docs/production/fake-eval-path.md
+- Docker adapter operation: <repo URL>/blob/<commit>/docs/production/docker-adapter-operation.md
 
-The fastest command is:
+The quickstart needs Go 1.25+, a running Docker daemon, and `jq`. In one
+terminal start the broker with the Docker adapter:
 
 ```sh
-scripts/smoke-test-fake.sh
+export MERCATOR_ADDR=127.0.0.1:8080
+export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_AUTH_WORKSPACES='ws_1'
+export MERCATOR_ADAPTER=docker
+export MERCATOR_DOCKER_ARCH=amd64
+go run ./cmd/mercator serve
+```
+
+In a second terminal create a run with a digest-pinned image (mutable tags are
+rejected):
+
+```sh
+export MERCATOR_API_URL=http://127.0.0.1:8080
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_WORKSPACE_ID=ws_1
+docker pull -q busybox:latest >/dev/null
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
+go run ./cmd/mercator run get --run-id "$RUN_ID" | jq '{outcome:.run.outcome, exit_code:.run.exit_code, cleanup:.run.cleanup, closed:.run.closed}'
 ```
 
 Useful feedback includes what worked, what blocked confidence, and whether the

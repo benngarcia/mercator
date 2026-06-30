@@ -10,12 +10,12 @@ production readiness claim; production hardening remains tracked in
 
 | Area | Evidence | Grade | A+ Gap |
 | --- | --- | --- | --- |
-| README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a fake-adapter quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
-| New-user likelihood to try | Fake adapter quickstart needs only Go and `jq`; `scripts/smoke-test-fake.sh` gives a one-command first run; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; SDK docs show run, event, decision, and sink status reads; the README now routes evaluators across fake, Docker, and RunPod paths with requirements, start docs, and provider examples; the CLI reference now has copy-paste follow-up commands, JSON error examples, and an exit-code reference; the OpenAPI reference now maps route families, auth boundaries, and a first HTTP integration path; fake-eval docs show OpenAPI smoke commands and a sanitized smoke-test transcript; package/distribution plan names source, archive, SDK install paths, per-OS checksum verification, and archive troubleshooting. | A | Publish binaries so users do not need a source checkout. |
+| README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a Docker quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Add public CI/release badges once the repo is public and the first public run exists. |
+| New-user likelihood to try | The Docker quickstart needs only Go 1.25+, a running Docker daemon, and `jq`; the README quickstart gives a copy-paste first run against a digest-pinned image; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; SDK docs show run, event, decision, and sink status reads; the README now routes evaluators across the Docker and RunPod paths with requirements, start docs, and provider examples; the CLI reference now has copy-paste follow-up commands, JSON error examples, and an exit-code reference; the OpenAPI reference now maps route families, auth boundaries, and a first HTTP integration path; the Docker adapter runbook shows OpenAPI smoke commands and a sanitized run transcript; package/distribution plan names source, archive, SDK install paths, per-OS checksum verification, and archive troubleshooting. | A | Publish binaries so users do not need a source checkout. |
 | Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, governance policy, code of conduct, support policy, dependency update policy, GitHub repository settings checklist, Apache-2.0 license, CI/release workflows, local release archive builder, curated `v0.1.0` release notes, launch audit script, pre-public exposure review, compatibility policy, a concrete external-sink hardening issue draft, and explicit pre-GA status are present. | A | Public CI history, tagged releases, configured branch/security settings, and one external security/design review. |
 | OSS contributor path | `CONTRIBUTING.md`, `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, question/bug/feature/proof issue templates, PR template, roadmap, security policy, five launch-ready starter issue drafts, and public issue-conversion commands are checked in. | A | Convert starter queue entries into labeled GitHub issues after the repo is public. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm`, a README-linked GIF fallback, a text demo transcript, and screenshot capture notes are tracked in `docs/assets/`. | A | Optional post-launch polish: add a longer narrated demo from the shot list. |
-| Social proof | Repo has durable verification docs, a real operator-oriented runbook set, a public proof-point intake template, and a checked-in maintainer fake-adapter baseline in `docs/launch/proof-points/`. | B+ | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
+| Social proof | Repo has durable verification docs, a real operator-oriented runbook set including the Docker adapter operation runbook, and a public proof-point intake template. | B+ | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
 Overall current launch grade: **A**. The repo is credible and tryable in the
 private PR state, but an A+ public launch still needs public visibility,
@@ -34,8 +34,9 @@ permission-bound steps are sequenced in
 - Public proof collection path: `.github/ISSUE_TEMPLATE/proof_point.yml` and
   `docs/launch/proof-point-template.md` are checked in, but no public proof
   point exists yet.
-- Maintainer proof baseline: `docs/launch/proof-points/fake-adapter-baseline.md`
-  records a reproducible fake-adapter smoke run. It is useful launch evidence,
+- Reproducible first run: the README Docker quickstart and
+  `docs/production/docker-adapter-operation.md` give a reproducible Docker
+  adapter run reaching a closed, succeeded run. It is useful launch evidence,
   but it does not close the external/public proof gate by itself.
 - External review packet: `docs/launch/reviewer-packet.md` gives staff
   engineer, prospective-user, and OSS-developer reviewers concrete questions
@@ -94,16 +95,16 @@ Likely reaction: "I can try this quickly and understand why it exists."
 
 Strengths:
 
-- Fake adapter quickstart gives a successful run without provider setup.
-- README evaluation ladder explains when to stay on fake, move to Docker, or
-  try RunPod.
+- Docker quickstart gives a successful run with only a local Docker daemon.
+- README evaluation ladder explains when to stay on local Docker or move to
+  RunPod.
 - RunPod provider examples are documented without assuming SDK registry
   publishing or synthetic image digests will work on a real provider.
 - Console screenshots and the short WebM demo make the run/decision experience
   concrete.
 - The demo has a GIF fallback and text transcript.
-- A maintainer fake-adapter baseline shows the expected smoke-test output and
-  environment for a deterministic first run.
+- The Docker adapter runbook shows the expected output and environment for a
+  reproducible first run.
 - `mercator --help` works before the user has configured a server URL.
 - SDK happy path shows the intended integration shape.
 
@@ -177,11 +178,12 @@ Grade: **A**.
 - [x] Demo video recorded and linked from the README.
 - [x] README GIF fallback generated from the demo video.
 - [x] Text transcript added for the README demo.
-- [x] Fake-adapter smoke transcript documented.
-- [x] Fake/Docker/RunPod evaluation ladder documented in the README.
+- [x] Docker adapter run transcript documented.
+- [x] Docker/RunPod evaluation ladder documented in the README.
 - [x] RunPod provider examples documented.
 - [x] Console screenshot capture notes documented.
-- [x] One-command fake-adapter smoke test added and wired into CI.
+- [x] Copy-paste Docker quickstart documented for a first run.
+- [x] CI runs Go test/build, release-archive build, SDK tests, and console build.
 - [x] CLI help available without a configured API URL.
 - [x] Copy-paste CLI follow-up examples documented.
 - [x] CLI JSON error response examples documented.
@@ -202,7 +204,7 @@ Grade: **A**.
 - [x] Repository settings checklist documented.
 - [x] Pre-public exposure review documented.
 - [x] Public proof-point intake path documented.
-- [x] Maintainer reproducible proof baseline documented.
+- [x] Reproducible first-run path documented in the Docker adapter runbook.
 - [x] External reviewer packet documented.
 - [x] External reviewer outreach prompts documented.
 - [x] Concrete production hardening issue draft documented.
@@ -221,8 +223,9 @@ Grade: **A**.
 The committed `docs/assets/mercator-demo.webm` is a short console walkthrough.
 For a fuller launch video, target 75-100 seconds:
 
-1. Show the README quickstart and start the fake adapter server.
-2. Run `go run ./cmd/mercator run create busybox -- echo hi`.
+1. Show the README quickstart and start the Docker adapter server.
+2. Run `go run ./cmd/mercator run create "$IMAGE" -- echo hi`, where `$IMAGE` is
+   a digest-pinned reference (mutable tags are rejected).
 3. Capture the returned `run_id`, then show `run get` with `outcome`,
    `exit_code`, `cleanup`, and `closed`.
 4. Open the console runs page.

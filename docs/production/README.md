@@ -55,7 +55,8 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
-export MERCATOR_FAKE_OFFER=1
+export MERCATOR_ADAPTER=docker
+export MERCATOR_DOCKER_ARCH=amd64
 
 go run ./cmd/mercator serve
 ```

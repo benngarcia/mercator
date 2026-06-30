@@ -23,7 +23,12 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/var/lib/mercator/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
+export MERCATOR_ADAPTER=docker
+export MERCATOR_DOCKER_ARCH=amd64
 ```
+
+`serve` always uses the Docker host adapter, so a running Docker daemon is a
+hard requirement for a first run.
 
 Then start the server:
 
@@ -42,8 +47,7 @@ server path.
 | `MERCATOR_SQLITE_DSN` | `file:/data/mercator.db` | SQLite event-log DSN. |
 | `MERCATOR_API_TOKEN` | generated at startup | Bearer token for `/v1/*`. Set explicitly for operations. |
 | `MERCATOR_AUTH_WORKSPACES` | `*` | Comma-separated workspace allow list for the bearer principal. |
-| `MERCATOR_FAKE_OFFER` | unset | Any non-empty value seeds one fake offer. |
-| `MERCATOR_ADAPTER` | unset | Set to `docker` for the Docker host adapter. |
+| `MERCATOR_ADAPTER` | `docker` | Host adapter for `serve`. `serve` always uses the Docker host adapter; a running Docker daemon is required for a first run. |
 | `MERCATOR_DOCKER_BIN` | `docker` lookup behavior in CLI client | Docker executable path. |
 | `MERCATOR_DOCKER_NATIVE_REF` | `local` | Native reference in the synthetic Docker offer. |
 | `MERCATOR_DOCKER_OFFER_ID` | `offer_local_docker` | Synthetic Docker offer ID. |

@@ -15,7 +15,7 @@ docs, public-facing assets, GitHub templates, CI/release workflow hooks, local
 Markdown links, and unresolved placeholder markers.
 
 Options:
-  --full   Also run the fake-adapter smoke test and release archive builder.
+  --full   Also build the release archives and verify their checksums.
   -h, --help
            Show this help.
 USAGE
@@ -385,7 +385,7 @@ check_launch_docs() {
   require_pattern docs/launch/open-source-readiness.md 'Governance policy documented' "Scorecard includes governance policy"
   require_pattern docs/launch/open-source-readiness.md 'Pre-public exposure review documented' "Scorecard includes pre-public exposure review"
   require_pattern docs/launch/open-source-readiness.md 'Repository settings checklist documented' "Scorecard includes repository settings checklist"
-  require_pattern docs/launch/open-source-readiness.md 'Maintainer reproducible proof baseline documented' "Scorecard includes reproducible proof baseline"
+  require_pattern docs/launch/open-source-readiness.md 'Reproducible first run' "Scorecard documents a reproducible first-run path"
   require_pattern docs/launch/open-source-readiness.md 'Node 24-compatible workflow action pins documented' "Scorecard includes Node 24-compatible workflow action pins"
   require_pattern docs/launch/open-source-readiness.md 'RunPod provider examples documented' "Scorecard includes RunPod examples"
   require_pattern docs/launch/reviewer-packet.md 'Are public repository settings planned\?' "Reviewer packet asks about repository settings"

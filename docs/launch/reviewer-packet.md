@@ -15,8 +15,9 @@ honesty of the maturity boundaries.
 
 1. Read the root `README.md` through `Try It In 5 Minutes`.
 2. Watch the README demo, or read the transcript in `docs/assets/README.md`.
-3. Run `scripts/smoke-test-fake.sh`, or inspect the latest public CI run after
-   the repository is public.
+3. Run the README Docker quickstart (see
+   `docs/production/docker-adapter-operation.md`), or inspect the latest public
+   CI run after the repository is public.
 4. Skim `docs/launch/open-source-readiness.md` for the maintainer scorecard.
 5. Use the persona checklist below for the review lens that matches you.
 6. Submit feedback through the GitHub proof-point issue form after the
@@ -57,7 +58,7 @@ workflow.
 | Question | Evidence To Inspect | A+ Bar |
 | --- | --- | --- |
 | Can you understand the problem in under two minutes? | README opening, demo GIF/WebM, `What It Does` | The value proposition is clear without reading internals. |
-| Can you get a deterministic first success? | `scripts/smoke-test-fake.sh`, README quickstart | The fake adapter reaches a closed succeeded run. |
+| Can you get a first success? | README Docker quickstart, `docs/production/docker-adapter-operation.md` | The Docker adapter reaches a closed succeeded run. |
 | Can you see the operator experience? | `docs/assets/mercator-runs.png`, demo transcript, console screenshot | Runs, decisions, events, and cleanup are visible. |
 | Can you imagine integration work? | SDK happy path in README, `sdk/*/README.md` | The first API/SDK path does not require learning idempotency internals. |
 

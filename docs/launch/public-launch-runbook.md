@@ -13,7 +13,6 @@ issues, and collecting public proof.
 - The Go CI job includes:
   - `go test ./...`
   - `go build ./...`
-  - `scripts/smoke-test-fake.sh`
   - `scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist`
 - The SDK CI job includes `scripts/check-open-source-launch.sh`.
 - The repository owner has decided to make the project public.
@@ -132,9 +131,13 @@ git diff --check
 scripts/check-open-source-launch.sh
 go test ./...
 go build ./...
-scripts/smoke-test-fake.sh
 scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist
 ```
+
+`go test ./...` covers the internal fake adapter idempotency tests. For an
+end-to-end check against a real daemon, also run the README Docker quickstart
+(see `docs/production/docker-adapter-operation.md`) and confirm the run reaches
+`outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`, `closed=true`.
 
 Verify the local archives:
 

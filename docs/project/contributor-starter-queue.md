@@ -33,7 +33,7 @@ repository is public, keeping the suggested labels and acceptance criteria.
 Suggested labels: `good first issue`, `docs`, `console`
 
 Problem: The README has a short demo and transcript, but the launch scorecard
-also includes a 75-100 second shot list that could show the full fake-adapter
+also includes a 75-100 second shot list that could show the full Docker adapter
 evaluation path.
 
 Acceptance criteria:
@@ -48,7 +48,7 @@ Acceptance criteria:
 
 Issue body: `docs/project/issue-drafts/longer-launch-demo.md`
 
-### 2. Add SDK Fake-Adapter Examples
+### 2. Add SDK Docker-Adapter Examples
 
 Suggested labels: `good first issue`, `sdk`, `docs`
 
@@ -58,7 +58,7 @@ docs.
 
 Acceptance criteria:
 
-- Add one minimal fake-adapter example for each SDK, or explain why one SDK
+- Add one minimal Docker-adapter example for each SDK, or explain why one SDK
   should be deferred.
 - Read `MERCATOR_API_URL`, `MERCATOR_API_TOKEN`, and
   `MERCATOR_WORKSPACE_ID` instead of hardcoding a private endpoint.
@@ -73,9 +73,8 @@ Issue body: `docs/project/issue-drafts/sdk-fake-adapter-examples.md`
 
 Suggested labels: `help wanted`, `docs`
 
-Problem: The fake-adapter path has deterministic smoke-test evidence, but the
-Docker adapter path still needs a compact public transcript showing what success
-looks like on a real local container host.
+Problem: The Docker adapter path still needs a compact public transcript showing
+what success looks like on a real local container host.
 
 Acceptance criteria:
 
