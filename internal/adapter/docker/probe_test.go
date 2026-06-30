@@ -55,14 +55,14 @@ func TestGlobalArgsCarryEndpoint(t *testing.T) {
 	if got := (&CLIClient{}).globalArgs(); len(got) != 0 {
 		t.Errorf("no endpoint configured: globalArgs = %v, want empty", got)
 	}
-	if got := (&CLIClient{Host: "ssh://beng@homeserver"}).globalArgs(); len(got) != 2 || got[0] != "--host" || got[1] != "ssh://beng@homeserver" {
-		t.Errorf("host endpoint: globalArgs = %v, want [--host ssh://beng@homeserver]", got)
+	if got := (&CLIClient{Host: "ssh://user@dockerhost"}).globalArgs(); len(got) != 2 || got[0] != "--host" || got[1] != "ssh://user@dockerhost" {
+		t.Errorf("host endpoint: globalArgs = %v, want [--host ssh://user@dockerhost]", got)
 	}
-	if got := (&CLIClient{Context: "homeserver"}).globalArgs(); len(got) != 2 || got[0] != "--context" || got[1] != "homeserver" {
-		t.Errorf("context endpoint: globalArgs = %v, want [--context homeserver]", got)
+	if got := (&CLIClient{Context: "dockerhost"}).globalArgs(); len(got) != 2 || got[0] != "--context" || got[1] != "dockerhost" {
+		t.Errorf("context endpoint: globalArgs = %v, want [--context dockerhost]", got)
 	}
 	// Context wins over Host (docker treats them as mutually exclusive).
-	if got := (&CLIClient{Host: "tcp://x:2375", Context: "homeserver"}).globalArgs(); got[0] != "--context" {
+	if got := (&CLIClient{Host: "tcp://x:2375", Context: "dockerhost"}).globalArgs(); got[0] != "--context" {
 		t.Errorf("context should win over host, got %v", got)
 	}
 }
