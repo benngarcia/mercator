@@ -35,13 +35,15 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: sdk/ruby
       - run: npm ci
         working-directory: sdk/typescript
       - run: npm test
         working-directory: sdk/typescript
       - run: python -m unittest discover -s tests
         working-directory: sdk/python
-      - run: ruby -Ilib:test test/test_client.rb
+      - run: bundle exec ruby -Ilib:test test/test_client.rb
         working-directory: sdk/ruby
 
   console:
