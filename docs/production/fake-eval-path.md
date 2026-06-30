@@ -5,6 +5,32 @@ exercises the event-first broker path through placement, launch intent, launch,
 observation, cleanup, closure, public events, decision reads, sink cursor reads,
 and CLI JSON behavior.
 
+## One-Command Smoke Test
+
+From a source checkout:
+
+```sh
+scripts/smoke-test-fake.sh
+```
+
+The script builds a temporary binary, starts Mercator with `MERCATOR_FAKE_OFFER=1`,
+waits for `/health/ready`, creates a `busybox` run through the CLI, then asserts
+the run closes with `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`, and
+`closed=true`. Use the manual steps below when you want to inspect each response
+or keep the server running for the console.
+
+Expected transcript shape:
+
+```text
+$ scripts/smoke-test-fake.sh
+Mercator fake-adapter smoke test passed
+run_id=run_... outcome=succeeded exit_code=0 cleanup=confirmed closed=true
+```
+
+The script also prints a loopback console URL with an ephemeral port. That URL is
+useful for local inspection, but it is intentionally omitted here because it
+changes on every run.
+
 ## Start Server
 
 ```sh
@@ -33,6 +59,16 @@ export MERCATOR_API_URL=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN='<token from first shell>'
 export MERCATOR_WORKSPACE_ID=ws_eval
 ```
+
+Before creating a run, smoke-check the public OpenAPI document:
+
+```sh
+curl -fsS "$MERCATOR_API_URL/openapi.json" | jq '.info'
+curl -fsS "$MERCATOR_API_URL/openapi.json" | jq -r '.paths | keys[]'
+```
+
+The OpenAPI route is intentionally unauthenticated like health checks and the
+UI shell; executable `/v1/*` API routes still require the bearer token.
 
 ## The Minimal Run: One Field
 

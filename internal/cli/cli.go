@@ -38,6 +38,10 @@ func Run(ctx context.Context, cfg Config) int {
 	if cfg.Client == nil {
 		cfg.Client = http.DefaultClient
 	}
+	if text, ok := helpText(cfg.Args); ok {
+		_, _ = io.WriteString(cfg.Stdout, text)
+		return 0
+	}
 	baseURL, args, err := parseGlobalFlags(cfg.BaseURL, cfg.Args)
 	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())

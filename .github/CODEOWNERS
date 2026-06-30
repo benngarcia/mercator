@@ -1,0 +1,10 @@
+* @benngarcia
+
+# Keep launch-critical surfaces routed to the maintainer until additional
+# maintainers are added in GOVERNANCE.md.
+/.github/ @benngarcia
+/cmd/ @benngarcia
+/internal/ @benngarcia
+/docs/ @benngarcia
+/sdk/ @benngarcia
+/web/ @benngarcia

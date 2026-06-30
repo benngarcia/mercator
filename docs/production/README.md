@@ -29,6 +29,8 @@ rebuilt from the event log.
 - [docker-adapter-operation.md](docker-adapter-operation.md): Docker host adapter
   setup, labels, lifecycle, and cleanup checks.
 - [fake-eval-path.md](fake-eval-path.md): local deterministic evaluation flow.
+- [../reference/openapi.md](../reference/openapi.md): OpenAPI discovery,
+  route families, auth boundary, and first HTTP integration path.
 - [workload-run-lifecycle.md](workload-run-lifecycle.md): workload JSON, run
   create/list/get/wait/events/decision/refresh/cancel commands.
 - [environment-configuration.md](environment-configuration.md): workload env,

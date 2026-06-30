@@ -1,0 +1,84 @@
+name: Trial, integration note, or case study
+description: Share public evidence from trying or integrating Mercator.
+title: "proof: "
+labels:
+  - proof-point
+  - launch
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for public launch proof: a real trial, integration note, benchmark, external review, or case study.
+
+        Do not include secrets, private machine names, customer data, unpublished downstream details, or credentials.
+  - type: dropdown
+    id: proof_type
+    attributes:
+      label: Proof type
+      options:
+        - user trial
+        - downstream integration note
+        - benchmark or reproducible evaluation
+        - external design/security review
+        - maintainer-approved case study
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Mercator version or commit
+      description: Release tag, commit SHA, or PR branch that was evaluated.
+      placeholder: v0.1.0 or 10ec55c5...
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Scenario
+      description: What did you use Mercator for, and what problem were you evaluating?
+      placeholder: |
+        I used Mercator to...
+        The alternative was...
+        I wanted to learn whether...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Commands, screenshots, logs, benchmark output, review notes, or links that support the result.
+      placeholder: |
+        Commands:
+        Screenshots or links:
+        Result:
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, adapter, provider, and relevant tool versions. Remove secrets and private identifiers.
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - successful trial
+        - partially successful; follow-up needed
+        - unsuccessful; issue found
+        - review only; no run executed
+    validations:
+      required: true
+  - type: checkboxes
+    id: permission
+    attributes:
+      label: Permission and privacy
+      options:
+        - label: This can be quoted or linked from the Mercator README or launch scorecard.
+          required: true
+        - label: I removed secrets, private hostnames, private customer data, and unpublished downstream details.
+          required: true
+        - label: The evidence names the Mercator version or commit that was evaluated.
+          required: true

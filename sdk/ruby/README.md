@@ -28,17 +28,60 @@ puts "#{run.fetch('outcome')} #{run.fetch('exit_code')}" # => succeeded 0
 `Idempotency-Key` from it (`"#{run_id}:create"`). Pass `idempotency_key:` only
 when you need to coordinate retries with an external caller.
 
+After the run closes, read the public event stream and placement decision from
+the same client:
+
+```ruby
+events = client.list_run_events(run_id)
+puts events.fetch("events").map { |event| event.fetch("type") }
+# => [..., "compute.run.closed.v1"]
+
+decision = client.get_run_decision(run_id).fetch("decision")
+puts decision.fetch("selected_offer_snapshot_id")
+# => offer_local_fake
+
+sink = client.get_sink_status("audit")
+puts "#{sink.fetch('sink_id')} #{sink.fetch('cursor')}"
+# => audit 0
+```
+
+## Install from source
+
+The Ruby gem is not published to RubyGems for the first public launch. Install
+it from a Mercator source checkout instead.
+
+For a Bundler-managed application, add the local checkout to your `Gemfile`:
+
+```ruby
+gem "mercator-sdk", path: "/path/to/mercator/sdk/ruby"
+```
+
+Then run:
+
+```sh
+bundle install
+```
+
+For a one-off local gem install from the checkout:
+
+```sh
+cd sdk/ruby
+gem build mercator-sdk.gemspec
+gem install ./mercator-sdk-0.1.0.gem
+```
+
 ## Local development
 
 From the repository checkout:
 
 ```sh
 cd sdk/ruby
-ruby -Ilib:test test/test_client.rb
+bundle install
+bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 The SDK uses only Ruby standard-library runtime modules: `Net::HTTP`, `URI`,
-`JSON`, and `Timeout`.
+`JSON`, and `Timeout`. Tests use WEBrick as a development dependency.
 
 ## Client
 

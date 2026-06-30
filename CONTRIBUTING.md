@@ -24,7 +24,7 @@ go build ./...
 cd web/app && bun install && bun run typecheck && bun run build
 cd ../../sdk/typescript && npm ci && npm test
 cd ../python && python3 -m unittest discover -s tests
-cd ../ruby && ruby -Ilib:test test/test_client.rb
+cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 The Docker integration test is opt-in:
@@ -60,6 +60,16 @@ Mercator should stay small:
   the core run contract.
 
 Large changes should start with an issue or design note before implementation.
+For maintainer decision rules and changes that need explicit approval, see
+[GOVERNANCE.md](GOVERNANCE.md).
+
+For first-time contributors, start with the
+[Contributor Starter Queue](docs/project/contributor-starter-queue.md). It lists
+bounded issues that maintainers can convert into `good first issue` or
+`help wanted` tickets after the repository is public.
+
+For questions, evaluation help, and issue-routing expectations, see
+[SUPPORT.md](SUPPORT.md).
 
 ## Documentation
 
@@ -69,13 +79,17 @@ Update docs in the same PR when behavior changes:
 - SDK behavior: `sdk/*/README.md`
 - console behavior: `web/app/README.md`
 - launch and trust surface: `docs/launch/open-source-readiness.md`
+- public proof points: `docs/launch/proof-point-template.md`
 
 Screenshots used in docs should live under `docs/assets/`. Raw local captures
 belong in ignored `output/` until they are selected and named.
 
 ## Community Conduct
 
-Be concrete, respectful, and technical. Assume contributors are trying to help,
-but keep review standards high for safety-critical behavior. Maintainers may
-close issues or PRs that are abusive, off-topic, spam, or outside the project
-scope.
+Project spaces are covered by the [Code Of Conduct](CODE_OF_CONDUCT.md). The
+short version is: be concrete, respectful, and technical; critique code and
+claims rather than people; keep private security or operational details out of
+public threads.
+
+Maintainers may close issues or PRs that are abusive, off-topic, spam, or
+outside the project scope.

@@ -46,6 +46,23 @@ console.log(result.run.outcome, result.run.exit_code); // => succeeded 0
 when you need to coordinate retries with an external caller. Pass
 `{ env: { K: { value: "v" } } }` for environment.
 
+After the run closes, read the public event stream and placement decision from
+the same client:
+
+```ts
+const events = await mercator.listRunEvents(runId);
+console.log(events.events.map((event) => event.type));
+// => [..., "compute.run.closed.v1"]
+
+const decision = await mercator.getRunDecision(runId);
+console.log(decision.decision.selected_offer_snapshot_id);
+// => offer_local_fake
+
+const sink = await mercator.getSinkStatus("audit");
+console.log(sink.sink_id, sink.cursor);
+// => audit 0
+```
+
 ## Create, wait, and read the exit code in one round trip
 
 `createRun` returns the same envelope as `getRun`/`waitRun`/`cancelRun`
@@ -76,6 +93,28 @@ deadline; `result.run.exit_code` is `undefined` until a terminal observation is
 recorded and a present `0` is a real success exit.
 
 ## Install for local development
+
+The TypeScript package is not published to npm for the first public launch.
+Install it from a Mercator source checkout instead.
+
+To build a local tarball from the checkout:
+
+```sh
+git clone https://github.com/benngarcia/mercator.git
+cd mercator/sdk/typescript
+npm ci
+npm run build
+npm pack --pack-destination /tmp
+```
+
+Then install the generated tarball in your application:
+
+```sh
+cd /path/to/your/app
+npm install /tmp/mercator-sdk-0.1.0.tgz
+```
+
+For SDK development inside this repository:
 
 ```sh
 cd sdk/typescript

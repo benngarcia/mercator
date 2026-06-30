@@ -17,12 +17,15 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
   templates, CI/release workflows, compatibility policy, screenshots, and
   launch scorecard.
 - Short fake-adapter console demo committed under `docs/assets/`.
+- Threat model, package/distribution plan, CLI reference, smoke test, and starter
+  contributor queue documented.
 
 ## Next: Open Source Launch Polish
 
 - Add a first tagged release with downloadable binaries and checksums.
-- Publish SDK packages or document exact local install paths for each language.
 - Add public CI badges after the first GitHub Actions run succeeds.
+- Convert the starter contributor queue into labeled GitHub issues after the
+  repository is public.
 - Add one external user story or case-study style narrative once there is a
   maintainer-approved public reference.
 

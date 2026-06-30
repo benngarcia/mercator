@@ -48,3 +48,6 @@ ask for a private disclosure channel.
 Maintainers will acknowledge credible reports, investigate the impact, and
 coordinate a fix or mitigation before public disclosure. Because the project is
 pre-1.0, release mechanics may change while the security process matures.
+
+For the maintained threat model and launch gates, see
+[docs/project/threat-model.md](docs/project/threat-model.md).

@@ -31,6 +31,10 @@ __pycache__/
 # Subagent-driven-development scratch (ledger, briefs, reports, diffs)
 /.superpowers/
 
+# Internal agent planning artifacts; public docs belong in docs/{launch,project,production,reference}.
+/docs/superpowers/
+/docs/long-horizon/
+
 # compiled binary from `go build` in repo root
 /mercator
 

@@ -2,7 +2,9 @@
 
 Mercator does not have a public release yet. This file defines the intended
 release mechanics so the first tagged release can be reviewed instead of
-invented during launch.
+invented during launch. For the full public cutover sequence, including repo
+visibility, public CI, starter issues, and proof collection, see
+`docs/launch/public-launch-runbook.md`.
 
 ## Release Artifacts
 
@@ -21,9 +23,16 @@ Each archive contains:
 - `LICENSE`
 - `NOTICE`
 
-SDK package publishing is not part of the first binary release. Until package
-publishing is decided, SDK users should install from the repository checkout and
-follow the language-specific README.
+The archive builder is reusable outside GitHub Actions:
+
+```sh
+scripts/build-release-archives.sh v0.1.0 dist
+```
+
+SDK package publishing is not part of the first binary release. SDK users should
+install from the repository checkout until package names, registry ownership,
+provenance, and clean-environment install tests are confirmed. See
+`docs/project/package-distribution.md` for the package plan.
 
 ## Pre-Tag Checklist
 
@@ -32,38 +41,21 @@ Run locally before creating a tag:
 ```sh
 git status --short --branch
 git diff --check
+scripts/check-open-source-launch.sh
 go test ./...
 go build ./...
+scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist
 
 cd web/app && bun install && bun run typecheck && bun run build
 cd ../../sdk/typescript && npm ci && npm test
 cd ../python && python3 -m unittest discover -s tests
-cd ../ruby && ruby -Ilib:test test/test_client.rb
+cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 Run the fake-adapter smoke:
 
 ```sh
-rm -f /tmp/mercator-release.db /tmp/mercator-release.db-wal /tmp/mercator-release.db-shm
-
-MERCATOR_ADDR=127.0.0.1:8080 \
-MERCATOR_SQLITE_DSN='file:/tmp/mercator-release.db' \
-MERCATOR_API_TOKEN='dev-token' \
-MERCATOR_AUTH_WORKSPACES='ws_1' \
-MERCATOR_FAKE_OFFER=1 \
-go run ./cmd/mercator serve
-```
-
-In another shell:
-
-```sh
-export MERCATOR_API_URL=http://127.0.0.1:8080
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_WORKSPACE_ID=ws_1
-
-RUN_ID="$(go run ./cmd/mercator run create busybox -- echo hi | jq -r '.run.id')"
-go run ./cmd/mercator run get --run-id "$RUN_ID" \
-  | jq '{outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
+scripts/smoke-test-fake.sh
 ```
 
 Expected: `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`,
@@ -79,11 +71,17 @@ git push origin v0.1.0
 ```
 
 The GitHub Actions release workflow builds archives, writes checksums, and
-creates a GitHub Release with generated notes.
+creates a GitHub Release. For `v0.1.0`, the workflow uses the curated notes in
+`docs/project/release-notes/v0.1.0.md`; later tags can add a matching
+`docs/project/release-notes/<tag>.md` file or fall back to generated notes. The
+workflow calls `scripts/build-release-archives.sh`, so local archive
+verification and release archive generation share the same implementation.
 
 ## Post-Release Checklist
 
 - Confirm the release workflow passed.
+- Confirm the published release notes match
+  `docs/project/release-notes/v0.1.0.md` and still link known limitations.
 - Download one archive and run `./mercator serve --help` or start the server.
 - Verify `checksums.txt` matches the uploaded archives.
 - Add the release badge/link to `README.md`.
