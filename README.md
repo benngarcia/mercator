@@ -1,5 +1,9 @@
 # Mercator
 
+[![CI](https://github.com/benngarcia/mercator/actions/workflows/ci.yml/badge.svg)](https://github.com/benngarcia/mercator/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/benngarcia/mercator)](https://github.com/benngarcia/mercator/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 Run a container on the best place that can take it, and get an audited record of
 why it landed there and how it exited — what Mercator decided, where it ran, the
 exit code, and whether it cleaned up. Today that place is your local Docker host;

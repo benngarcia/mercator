@@ -209,14 +209,23 @@ Grade: **A**.
 - [x] External reviewer outreach prompts documented.
 - [x] Concrete production hardening issue draft documented.
 - [x] Private draft PR CI run is green.
-- [ ] Launch-prep PR merged to the default branch.
-- [ ] Repository visibility changed from private to public.
+- [x] Launch-prep PR merged to the default branch (PR #7, followed by the
+  pre-launch fix PRs #18 and #19).
+- [x] Repository visibility changed from private to public.
 - [ ] Launch GitHub repository settings configured.
-- [ ] First public CI run is green.
-- [ ] Tagged release with binaries/checksums.
-- [ ] Downloadable CLI/server artifacts exist.
+- [x] First public CI run is green (CI on PRs #18/#19 and the v0.1.0 Release
+  workflow: Go, SDKs, Console, and Image jobs all passing).
+- [x] Tagged release with binaries/checksums (`v0.1.0`, 2026-07-01: four
+  platform archives plus `checksums.txt`, published with the curated notes).
+- [x] Downloadable CLI/server artifacts exist (verified: `checksums.txt`
+  matches the downloaded archive and the extracted `mercator help` exits 0).
 - [ ] Starter queue converted into labeled public GitHub issues.
 - [ ] Public proof point: user story, integration note, benchmark, or case study.
+
+Post-release caveat: the `ghcr.io/benngarcia/mercator` package must be set to
+public visibility in the GitHub package settings before anonymous
+`docker pull` works; the Release workflow pushes it but cannot change
+visibility.
 
 ## Longer Demo Video Shot List
 
