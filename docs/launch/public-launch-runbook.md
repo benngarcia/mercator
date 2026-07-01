@@ -215,7 +215,7 @@ gh issue create \
 
 ```sh
 gh issue create \
-  --title "Add SDK fake-adapter examples" \
+  --title "Add SDK Docker-Adapter Examples" \
   --label "good first issue" \
   --label sdk \
   --label docs \

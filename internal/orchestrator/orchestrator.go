@@ -271,7 +271,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		reportPublicURL, reportToken := "", ""
 		if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
 			reportPublicURL = o.reportingPublicURL
-			reportToken = o.reportingSigner.Token(runID)
+			reportToken = o.reportingSigner.Token(workspaceID, runID)
 		}
 		launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
 		if err != nil {
@@ -298,9 +298,17 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 				})
 				return err
 			}
-			_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
+			// A definitive launch rejection closes the run terminally: nothing
+			// external was created (so no cleanup is needed), and retrying the
+			// same launch on every poll can never succeed — it left runs wedged
+			// in "launching" forever.
+			if appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
 				mustEvent(runID, "launch_failed", EventLaunchFailed, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
-			})
+				mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": string(domain.RunOutcomeFailed)}, o.now()),
+				mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+			}); appendErr != nil {
+				return appendErr
+			}
 			return err
 		}
 		if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted", []eventlog.NewEvent{
@@ -362,13 +370,25 @@ func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (d
 }
 
 func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
-	events, err := o.log.ReadAll(ctx, 0, 1000, eventlog.EventFilter{
-		WorkspaceID: workspaceID,
-		StreamTypes: []string{"run"},
-		EventTypes:  []string{EventRunRequested},
-	})
-	if err != nil {
-		return nil, err
+	// Paginate the run_requested index so busy workspaces don't silently
+	// truncate at one read page.
+	const page = 1000
+	var events []eventlog.StoredEvent
+	var after eventlog.GlobalPosition
+	for {
+		batch, err := o.log.ReadAll(ctx, after, page, eventlog.EventFilter{
+			WorkspaceID: workspaceID,
+			StreamTypes: []string{"run"},
+			EventTypes:  []string{EventRunRequested},
+		})
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, batch...)
+		if len(batch) < page {
+			break
+		}
+		after = batch[len(batch)-1].GlobalPosition
 	}
 	records := make([]domain.RunRecord, 0, len(events))
 	for _, event := range events {

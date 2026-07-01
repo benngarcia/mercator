@@ -14,7 +14,7 @@ Store stable defaults in the workload JSON/YAML specification:
   "spec": {
     "containers": [{
       "name": "main",
-      "image": "ghcr.io/acme/worker:latest",
+      "image": "ghcr.io/acme/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "platform": {"os": "linux", "architecture": "amd64"},
       "env": {
         "LOG_LEVEL": {"value": "info"},
@@ -50,7 +50,7 @@ container env:
 
 ```json
 {
-  "image": "busybox",
+  "image": "busybox@sha256:<digest>",
   "args": ["env"],
   "env": {
     "LOG_LEVEL": {"value": "debug"}

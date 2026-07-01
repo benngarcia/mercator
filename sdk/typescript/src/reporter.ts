@@ -94,11 +94,28 @@ export class Reporter {
 }
 
 /**
+ * Environment variables Mercator injects into workload containers. All four
+ * are required for a working reporter — the server rejects reports without a
+ * workspace_id (400 WORKSPACE_REQUIRED), so a partially populated environment
+ * is a misconfiguration, not "running outside Mercator".
+ */
+const REQUIRED_ENV_VARS = [
+  "MERCATOR_REPORT_URL",
+  "MERCATOR_RUN_ID",
+  "MERCATOR_WORKSPACE_ID",
+  "MERCATOR_RUN_TOKEN",
+] as const;
+
+/**
  * Create a {@link Reporter} from environment variables injected by Mercator.
  *
- * Returns `null` (with a one-time `console.warn`) when the required variables
- * (`MERCATOR_REPORT_URL`, `MERCATOR_RUN_ID`, `MERCATOR_RUN_TOKEN`) are absent,
- * so workloads run outside Mercator degrade gracefully.
+ * Returns `null` (with a one-time `console.warn`) when none of the Mercator
+ * variables (`MERCATOR_REPORT_URL`, `MERCATOR_RUN_ID`,
+ * `MERCATOR_WORKSPACE_ID`, `MERCATOR_RUN_TOKEN`) are set, so workloads run
+ * outside Mercator degrade gracefully. Throws when the environment is only
+ * partially populated (some variables set, some missing/empty) — every report
+ * from such a reporter would fail server-side, so fail fast at construction
+ * instead.
  *
  * @example
  * const reporter = createReporter();
@@ -108,18 +125,26 @@ export class Reporter {
  */
 export function createReporter(opts?: ReporterOptions): Reporter | null {
   const env = opts?.env ?? (typeof process !== "undefined" ? process.env : {});
-  const reportUrl = env["MERCATOR_REPORT_URL"];
-  const runId = env["MERCATOR_RUN_ID"];
-  const workspaceId = env["MERCATOR_WORKSPACE_ID"] ?? "";
-  const token = env["MERCATOR_RUN_TOKEN"];
+  const missing = REQUIRED_ENV_VARS.filter((name) => !env[name]);
 
-  if (!reportUrl || !runId || !token) {
+  if (missing.length === REQUIRED_ENV_VARS.length) {
+    // Not running under Mercator.
     console.warn(
-      "mercator-sdk: MERCATOR_REPORT_URL, MERCATOR_RUN_ID, or MERCATOR_RUN_TOKEN is not set; " +
-      "reporter is disabled (no-op).",
+      "mercator-sdk: MERCATOR_REPORT_URL, MERCATOR_RUN_ID, MERCATOR_WORKSPACE_ID, and " +
+      "MERCATOR_RUN_TOKEN are not set; reporter is disabled (no-op).",
     );
     return null;
   }
+  if (missing.length > 0) {
+    throw new Error(
+      `mercator-sdk: reporter environment is incomplete; missing or empty: ${missing.join(", ")}`,
+    );
+  }
+
+  const reportUrl = env["MERCATOR_REPORT_URL"]!;
+  const runId = env["MERCATOR_RUN_ID"]!;
+  const workspaceId = env["MERCATOR_WORKSPACE_ID"]!;
+  const token = env["MERCATOR_RUN_TOKEN"]!;
 
   const fetchImpl =
     opts?.fetch ??

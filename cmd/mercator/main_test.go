@@ -20,7 +20,6 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("with_key_and_public_url_signer_enabled", func(t *testing.T) {
 		deps := buildServerDeps(map[string]string{
-			"MERCATOR_ADAPTER":     "docker",
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			"MERCATOR_SECRET_KEY":  hexKey,
@@ -40,7 +39,6 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("without_public_url_signer_still_built_but_reporting_off", func(t *testing.T) {
 		deps := buildServerDeps(map[string]string{
-			"MERCATOR_ADAPTER":     "docker",
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			"MERCATOR_SECRET_KEY":  hexKey,
@@ -61,7 +59,6 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("without_secret_key_signer_disabled", func(t *testing.T) {
 		deps := buildServerDeps(map[string]string{
-			"MERCATOR_ADAPTER":     "docker",
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			// No MERCATOR_SECRET_KEY, no MERCATOR_PUBLIC_URL
@@ -102,7 +99,6 @@ func TestRunDelegatesJSONCLICommands(t *testing.T) {
 
 func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
 	deps := buildServerDeps(map[string]string{
-		"MERCATOR_ADAPTER":     "docker",
 		"MERCATOR_DOCKER_ARCH": "amd64",
 		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 	})

@@ -49,6 +49,43 @@ test("createReporter returns null and warns when env vars are absent", () => {
   }
 });
 
+for (const missingVar of [
+  "MERCATOR_REPORT_URL",
+  "MERCATOR_RUN_ID",
+  "MERCATOR_WORKSPACE_ID",
+  "MERCATOR_RUN_TOKEN",
+] as const) {
+  test(`createReporter throws when only ${missingVar} is missing`, () => {
+    // A partially populated environment is a misconfiguration: every report
+    // would fail server-side (e.g. 400 WORKSPACE_REQUIRED without a
+    // workspace id), so construction fails fast instead.
+    const env: Record<string, string | undefined> = { ...TEST_ENV };
+    delete env[missingVar];
+
+    assert.throws(
+      () => createReporter({ env }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, new RegExp(missingVar));
+        return true;
+      },
+    );
+  });
+}
+
+test("createReporter treats an empty MERCATOR_WORKSPACE_ID as missing", () => {
+  const env = { ...TEST_ENV, MERCATOR_WORKSPACE_ID: "" };
+
+  assert.throws(
+    () => createReporter({ env }),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /MERCATOR_WORKSPACE_ID/);
+      return true;
+    },
+  );
+});
+
 test("createReporter returns a Reporter when all env vars are present", () => {
   const { fetch } = makeStubFetch(202);
   const reporter = createReporter({ env: TEST_ENV, fetch });
@@ -147,17 +184,3 @@ test("run_id and workspace_id with special characters are URL-encoded", async ()
   );
 });
 
-test("MERCATOR_WORKSPACE_ID defaults to empty string when absent", async () => {
-  const { fetch, requests } = makeStubFetch(202);
-  const envWithoutWs = {
-    MERCATOR_REPORT_URL: TEST_ENV.MERCATOR_REPORT_URL,
-    MERCATOR_RUN_ID: TEST_ENV.MERCATOR_RUN_ID,
-    MERCATOR_RUN_TOKEN: TEST_ENV.MERCATOR_RUN_TOKEN,
-  };
-  const reporter = createReporter({ env: envWithoutWs, fetch });
-  assert.ok(reporter);
-
-  await reporter.report({ type: "ping" });
-
-  assert.match(requests[0]!.url, /workspace_id=$/);
-});

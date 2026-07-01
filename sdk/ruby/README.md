@@ -4,6 +4,15 @@ Small, dependency-free Ruby client for the Mercator V1 HTTP API.
 
 ## Run an image, get the exit code
 
+On the Docker adapter a workload must reference a **digest-pinned image** — a
+mutable tag like `busybox` or `busybox:latest` is rejected — so pin one first
+(the same approach as the root README quickstart):
+
+```sh
+docker pull -q busybox:latest >/dev/null
+export MERCATOR_IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+```
+
 ```ruby
 require "mercator"
 
@@ -14,7 +23,7 @@ client = Mercator::Client.new(
 )
 
 created = client.run_image(
-  "busybox",
+  ENV.fetch("MERCATOR_IMAGE"), # e.g. busybox@sha256:...
   args: ["echo", "hi"]
 )
 run_id = created.fetch("run_id") # == created.fetch("run").fetch("id")
@@ -77,7 +86,7 @@ From the repository checkout:
 ```sh
 cd sdk/ruby
 bundle install
-bundle exec ruby -Ilib:test test/test_client.rb
+bundle exec ruby -Ilib:test -e 'Dir.glob("test/test_*.rb").each { |f| require_relative f }'
 ```
 
 The SDK uses only Ruby standard-library runtime modules: `Net::HTTP`, `URI`,
@@ -105,11 +114,16 @@ Pass `workspace_id:` to a method to override the default for that call.
 - `run_image(image, args: nil, env: nil, run_id: nil, workspace_id: nil, idempotency_key: nil)`
 - `list_runs(workspace_id: nil)`, `create_run(payload, idempotency_key:, workspace_id: nil)`
 - `get_run(run_id, workspace_id: nil)`, `wait_run(run_id, workspace_id: nil)`
-- `wait_run_until_terminal(run_id, workspace_id: nil, deadline: 300.0)`
+- `wait_run_until_terminal(run_id, workspace_id: nil, deadline: 300.0)` — the
+  server holds each `:wait` for up to ~30s, so `wait_run` uses a dedicated read
+  timeout of at least 60s for that call (a larger configured `timeout` still
+  wins); the configured `timeout` applies unchanged to all other calls
 - `refresh_run(run_id, workspace_id: nil)`, `cancel_run(run_id, workspace_id: nil)`
 - `list_run_events(run_id, workspace_id: nil)`, `get_run_decision(run_id, workspace_id: nil)`
 - `preview_placement(payload)`
 - `list_connections(workspace_id: nil)`, `list_offers(workspace_id: nil)`
+- `create_connection(payload, idempotency_key:, workspace_id: nil)`
+- `authorize_connection(connection_id, workspace_id: nil)`
 - `create_workload(workspace_id, workload_id, name, idempotency_key:)`
 - `list_workload_revisions(workload_id, workspace_id: nil)`
 - `create_workload_revision(workload_id, workspace_id, revision, idempotency_key:)`

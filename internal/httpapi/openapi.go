@@ -136,6 +136,44 @@ const OpenAPIJSON = `{
           "200": {"description": "Connection list", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectionListResponse"}}}},
           "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
         }
+      },
+      "post": {
+        "operationId": "createConnection",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateConnectionRequest"}}}},
+        "responses": {
+          "201": {"description": "Connection created", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectionResponse"}}}},
+          "400": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "409": {"description": "Idempotency conflict", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
+    "/v1/connections/{connection_id}:authorize": {
+      "post": {
+        "operationId": "authorizeConnection",
+        "parameters": [
+          {"name": "connection_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Connection verified and authorized", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConnectionResponse"}}}},
+          "502": {"description": "Connection verification failed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
+    "/v1/runs/{run_id}:report": {
+      "post": {
+        "operationId": "reportRun",
+        "description": "Workload-facing report ingest. Authenticated with the per-run bearer token injected as MERCATOR_RUN_TOKEN (not the operator token).",
+        "parameters": [
+          {"name": "run_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ReportRunRequest"}}}},
+        "responses": {
+          "202": {"description": "Report recorded", "content": {"application/json": {"schema": {"type": "object", "properties": {"recorded": {"type": "boolean"}}}}}},
+          "401": {"description": "Invalid run token", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}},
+          "404": {"description": "Run not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
       }
     },
     "/v1/offers": {
@@ -260,6 +298,9 @@ const OpenAPIJSON = `{
       "PlacementPreviewResponse": {"type": "object", "required": ["decision"], "properties": {"decision": {"type": "object"}}},
       "PlacementDecisionResponse": {"type": "object", "required": ["decision"], "properties": {"decision": {"type": "object"}}},
       "ConnectionListResponse": {"type": "object", "required": ["connections"], "properties": {"connections": {"type": "array", "items": {"type": "object"}}}},
+      "CreateConnectionRequest": {"type": "object", "required": ["workspace_id", "connection_id", "adapter_type"], "properties": {"workspace_id": {"type": "string"}, "connection_id": {"type": "string"}, "adapter_type": {"type": "string"}, "config": {"type": "object", "additionalProperties": {"type": "string"}}, "credential": {"type": "object", "properties": {"source": {"type": "string"}, "ref": {"type": "string"}}}, "secret": {"type": "string", "description": "Write-only: accepted on create, sealed at rest, never echoed in any response."}}},
+      "ConnectionResponse": {"type": "object", "required": ["connection"], "properties": {"connection": {"type": "object"}}},
+      "ReportRunRequest": {"type": "object", "required": ["type"], "properties": {"type": {"type": "string"}, "data": {"type": "object", "additionalProperties": true}, "exit_code": {"type": "integer", "description": "Terminal exit code; when present the broker records the authoritative outcome and requests cleanup."}}},
       "OfferListResponse": {"type": "object", "required": ["offers"], "properties": {"offers": {"type": "array", "items": {"type": "object"}}}},
       "ReplaySinkRequest": {"type": "object", "properties": {"from_exclusive": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1}, "replay_id": {"type": "string"}}},
       "SinkResult": {"type": "object", "required": ["sink_id", "delivered", "last_position"], "properties": {"sink_id": {"type": "string"}, "delivered": {"type": "integer"}, "last_position": {"type": "integer"}, "failed_event_id": {"type": "string"}, "replay_id": {"type": "string"}}},

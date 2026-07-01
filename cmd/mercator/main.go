@@ -6,12 +6,16 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
 	stdlog "log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -25,6 +29,7 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
+	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/offers"
 	"github.com/benngarcia/mercator/internal/orchestrator"
@@ -68,7 +73,10 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		orchOpts = append(orchOpts, orchestrator.WithReporting(deps.publicURL, deps.signer))
 	}
 	orch := orchestrator.New(deps.log, sched, deps.broker, orchOpts...)
-	imageResolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
+	// No synthetic digests in the served path: a mutable tag must be rejected
+	// at create time (registry tag resolution is not implemented), never
+	// silently rewritten to a fabricated digest the daemon can't pull.
+	imageResolver := ociresolver.NewStaticResolver(nil)
 	serverOpts := []httpapi.Option{
 		httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
 		httpapi.WithSecretStore(deps.secretStore),
@@ -93,11 +101,88 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 			stdlog.Printf("close event log: %v", err)
 		}
 	}()
+
+	// Background orphan reclamation: sweep each bootstrap workspace so external
+	// objects whose runs requested cleanup (or that lost their run entirely)
+	// are reclaimed even if no client ever polls the run again.
+	janitorCtx, stopJanitor := context.WithCancel(ctx)
+	defer stopJanitor()
+	go runJanitorSweeps(janitorCtx, janitor.New(deps.broker, janitor.WithEventLog(deps.log)), bootstrapWorkspaces(env))
+
+	warnIfNonLoopback(addr)
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		// WriteTimeout must comfortably exceed the 30s :wait long-poll window.
+		WriteTimeout: 90 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.ListenAndServe() }()
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	stdlog.Printf("mercator listening on %s", addr)
-	if err := http.ListenAndServe(addr, handler); err != nil {
-		stdlog.Fatal(err)
+	select {
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			stdlog.Printf("serve: %v", err)
+			return 1
+		}
+	case sig := <-stop:
+		// Graceful shutdown so in-flight requests finish and the deferred
+		// event-log close (WAL checkpoint) actually runs.
+		stdlog.Printf("received %s; shutting down", sig)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			stdlog.Printf("shutdown: %v", err)
+		}
 	}
 	return 0
+}
+
+// runJanitorSweeps reclaims orphaned external objects on a fixed cadence until
+// ctx is cancelled. Sweep errors are logged, never fatal: the next tick retries.
+func runJanitorSweeps(ctx context.Context, jan *janitor.Janitor, workspaces []string) {
+	const interval = time.Minute
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, ws := range workspaces {
+				result, err := jan.Sweep(ctx, ws)
+				if err != nil {
+					stdlog.Printf("janitor sweep %s: %v", ws, err)
+					continue
+				}
+				if result.Released > 0 {
+					stdlog.Printf("janitor sweep %s: reclaimed %d of %d owned objects", ws, result.Released, result.Found)
+				}
+			}
+		}
+	}
+}
+
+// warnIfNonLoopback logs a loud warning when the server binds beyond loopback:
+// Mercator serves plaintext HTTP, so on any other interface the bearer token
+// and run data cross the network unencrypted unless a TLS proxy sits in front.
+func warnIfNonLoopback(addr string) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return
+	}
+	if host == "localhost" {
+		return
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return
+	}
+	stdlog.Printf("WARNING: listening on non-loopback address %s over plaintext HTTP; bearer tokens and run data are unencrypted in transit — put a TLS-terminating proxy in front for anything beyond local evaluation", addr)
 }
 
 // dockerOfferingAdapter serves one docker endpoint's offer, probing the
@@ -169,6 +254,12 @@ func buildServerDeps(values map[string]string) serverDeps {
 	if err != nil {
 		stdlog.Fatalf("open secret store db: %v", err)
 	}
+	// This pool shares the file with the event log's pool: serialize it and
+	// wait out the other writer instead of failing instantly with SQLITE_BUSY.
+	secretDB.SetMaxOpenConns(1)
+	if _, err := secretDB.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
+		stdlog.Fatalf("configure secret store db: %v", err)
+	}
 	store, err := credential.NewSQLiteStore(ctx, secretDB)
 	if err != nil {
 		stdlog.Fatalf("init secret store: %v", err)
@@ -236,6 +327,9 @@ func buildServerDeps(values map[string]string) serverDeps {
 			AdapterType:  "docker",
 			Config:       cfg,
 		}); err != nil {
+			if errors.Is(err, eventlog.ErrIdempotencyConflict) {
+				stdlog.Fatalf("register docker connection in %s: the MERCATOR_DOCKER_{BIN,HOST,CONTEXT} config changed since this database registered %q. Connection configs are immutable; set MERCATOR_DOCKER_CONNECTION_ID to a new id for the new endpoint (or point MERCATOR_SQLITE_DSN at a fresh database)", ws, id.ConnectionID)
+			}
 			stdlog.Fatalf("register docker connection in %s: %v", ws, err)
 		}
 		if err := svc.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{

@@ -210,7 +210,7 @@ func TestAdvanceRunInjectsReportingEnvWhenConfigured(t *testing.T) {
 		t.Fatalf("MERCATOR_REPORT_URL wrong: %+v", reportURLBinding)
 	}
 	// MERCATOR_RUN_TOKEN
-	wantToken := signer.Token("run_reporting")
+	wantToken := signer.Token("ws_1", "run_reporting")
 	reportTokenBinding := findLaunchEnv(t, req.Environment, "MERCATOR_RUN_TOKEN")
 	if reportTokenBinding.Value == nil || *reportTokenBinding.Value != wantToken {
 		t.Fatalf("MERCATOR_RUN_TOKEN wrong: got %+v, want %q", reportTokenBinding, wantToken)
@@ -1027,5 +1027,32 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 	}
 	if record.Phase != "closed" || record.Outcome != domain.RunOutcomeSucceeded {
 		t.Fatalf("expected closed/succeeded run, got phase=%q outcome=%q", record.Phase, record.Outcome)
+	}
+}
+
+func TestAdvanceRunClosesRunOnDefinitiveLaunchFailure(t *testing.T) {
+	// A definitive launch rejection must terminate the run (failed outcome,
+	// closed) rather than retrying the same doomed launch on every poll and
+	// leaving the run wedged in "launching" forever.
+	ctx := context.Background()
+	orch := newTestOrchestrator(t, conflictAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}))})
+	createRun(t, ctx, orch)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err == nil {
+		t.Fatal("expected advance to report the launch failure")
+	}
+	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if record.Phase != "closed" || record.Outcome != domain.RunOutcomeFailed {
+		t.Fatalf("expected closed/failed run after definitive launch failure, got phase=%q outcome=%q", record.Phase, record.Outcome)
+	}
+	if record.Cleanup != domain.CleanupNotRequired {
+		t.Fatalf("nothing launched, so cleanup must not be required; got %q", record.Cleanup)
+	}
+	// Subsequent advances are no-ops on the closed run, not relaunch attempts.
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("advance on closed run must be a no-op, got %v", err)
 	}
 }

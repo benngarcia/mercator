@@ -58,6 +58,11 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 	}
 	result := Result{Found: len(owned)}
 	for _, object := range owned {
+		if object.WorkspaceID == "" {
+			// An orphan listed without workspace labels still belongs to the
+			// swept workspace; requests need it to route through the broker.
+			object.WorkspaceID = workspaceID
+		}
 		releasable, disposition, err := j.releasable(ctx, object)
 		if err != nil {
 			return result, err
@@ -71,6 +76,8 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 		// defaults to release, the safe option that never destroys a host.
 		if disposition == domain.DispositionTerminate {
 			req := adapter.TerminateRequest{
+				WorkspaceID:       object.WorkspaceID,
+				ConnectionID:      object.ConnectionID,
 				OperationKey:      "janitor:terminate:" + object.LaunchKey,
 				LaunchKey:         object.LaunchKey,
 				OwnershipToken:    object.OwnershipToken,
@@ -86,6 +93,8 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 			}
 		} else {
 			req := adapter.ReleaseRequest{
+				WorkspaceID:       object.WorkspaceID,
+				ConnectionID:      object.ConnectionID,
 				OperationKey:      "janitor:release:" + object.LaunchKey,
 				LaunchKey:         object.LaunchKey,
 				OwnershipToken:    object.OwnershipToken,

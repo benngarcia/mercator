@@ -76,7 +76,7 @@ func (r *StaticResolver) Resolve(_ context.Context, req ResolveRequest) (Resolve
 			Platform: req.Platform,
 		}, nil
 	}
-	return ResolvedImage{}, fmt.Errorf("ociresolver: tag resolution not found")
+	return ResolvedImage{}, fmt.Errorf("image %q is not digest-pinned and registry tag resolution is not implemented; pin it as repository@sha256:<digest> (e.g. via `docker inspect --format '{{index .RepoDigests 0}}' <tag>`)", req.Image)
 }
 
 // syntheticDigest derives a stable sha256:<hex> from the image tag + platform so

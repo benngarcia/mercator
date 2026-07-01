@@ -19,7 +19,9 @@ evaluation. It is not a GA security assurance statement.
 Implemented protections:
 
 - Public event APIs skip private events and expose public CloudEvents only.
-- Workload env literal values are redacted from public run events.
+- Workload env literal values are redacted from public run events. The
+  redaction covers env **values** only: image references and container args are
+  recorded verbatim in public events, so do not put secrets in them.
 - `secret_ref` env bindings are rejected; Mercator does not own secret storage,
   grants, KMS integration, or runtime secret materialization.
 - Sink delivery skips private events.
@@ -41,8 +43,12 @@ go run ./cmd/mercator run events --workspace-id ws_eval --run-id run_secret_1 \
 
 ## Current Risks
 
-- No TLS termination is provided by Mercator; use a local-only bind or a trusted
-  reverse proxy for any remote evaluation.
+- No TLS termination is provided by Mercator; binding `MERCATOR_ADDR` to a
+  non-loopback address serves plaintext HTTP (the server logs a warning). Use a
+  local-only bind or a trusted TLS-terminating reverse proxy for any remote
+  evaluation.
+- When `MERCATOR_API_TOKEN` is unset, `serve` logs a generated token to stdout;
+  operators shipping logs should set the variable explicitly.
 - There is one bearer token, not per-user auth.
 - Secret management is delegated to the workload/runtime. Mercator has no
   secret vault, grant API, or KMS adapter surface.

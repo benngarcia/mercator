@@ -4,18 +4,22 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type SQLiteEventLog struct {
-	db   *sql.DB
-	mu   sync.Mutex
-	subs map[*subscription]struct{}
+	db        *sql.DB
+	mu        sync.Mutex
+	subs      map[*subscription]struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type subscription struct {
@@ -32,7 +36,7 @@ func OpenSQLite(ctx context.Context, dsn string) (*SQLiteEventLog, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	log := &SQLiteEventLog{db: db, subs: map[*subscription]struct{}{}}
+	log := &SQLiteEventLog{db: db, subs: map[*subscription]struct{}{}, done: make(chan struct{})}
 	if err := log.init(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -41,12 +45,18 @@ func OpenSQLite(ctx context.Context, dsn string) (*SQLiteEventLog, error) {
 }
 
 func (l *SQLiteEventLog) Close() error {
+	// Stop subscription goroutines before closing the DB so none of them park
+	// on a wake signal that will never come.
+	l.closeOnce.Do(func() { close(l.done) })
 	return l.db.Close()
 }
 
 func (l *SQLiteEventLog) init(ctx context.Context) error {
 	stmts := []string{
 		`PRAGMA journal_mode=WAL`,
+		// Wait for competing writers (e.g. the secret store's pool on the same
+		// file) instead of failing instantly with SQLITE_BUSY.
+		`PRAGMA busy_timeout=5000`,
 		`CREATE TABLE IF NOT EXISTS events (
 			global_position INTEGER PRIMARY KEY AUTOINCREMENT,
 			event_id TEXT NOT NULL UNIQUE,
@@ -155,7 +165,7 @@ func (l *SQLiteEventLog) Append(ctx context.Context, req AppendRequest) (AppendR
 			[]byte(event.Data), event.PrivateData,
 		)
 		if err != nil {
-			if strings.Contains(err.Error(), "constraint failed") {
+			if isConstraintViolation(err) {
 				return AppendResult{}, ErrIdempotencyConflict
 			}
 			return AppendResult{}, err
@@ -190,7 +200,7 @@ func (l *SQLiteEventLog) Append(ctx context.Context, req AppendRequest) (AppendR
 		) VALUES (?, ?, ?, ?, ?)`,
 			req.Stream.WorkspaceID, req.CommandKey, req.RequestHash,
 			stored[0].GlobalPosition, stored[len(stored)-1].GlobalPosition); err != nil {
-			if strings.Contains(err.Error(), "constraint failed") {
+			if isConstraintViolation(err) {
 				return AppendResult{}, ErrIdempotencyConflict
 			}
 			return AppendResult{}, err
@@ -323,15 +333,25 @@ func (l *SQLiteEventLog) runSubscription(ctx context.Context, sub *subscription)
 		select {
 		case <-ctx.Done():
 			return
+		case <-l.done:
+			return
 		case <-sub.wake:
 			for {
 				events, err := l.ReadAll(ctx, sub.after, 100, sub.filter)
-				if err != nil || len(events) == 0 {
+				if err != nil {
+					// Transient read failure: retry shortly instead of
+					// stalling this subscription until the next append.
+					time.AfterFunc(time.Second, sub.signal)
+					break
+				}
+				if len(events) == 0 {
 					break
 				}
 				for _, event := range events {
 					select {
 					case <-ctx.Done():
+						return
+					case <-l.done:
 						return
 					case sub.ch <- Delivery{SubscriptionID: sub.id, Event: event}:
 						sub.after = event.GlobalPosition
@@ -355,6 +375,16 @@ func (s *subscription) signal() {
 	case s.wake <- struct{}{}:
 	default:
 	}
+}
+
+// isConstraintViolation reports whether err is any SQLite constraint failure
+// (unique, primary key, …), matched by error code rather than message text.
+func isConstraintViolation(err error) bool {
+	var serr *sqlite.Error
+	if errors.As(err, &serr) {
+		return serr.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
+	}
+	return false
 }
 
 func readCommand(ctx context.Context, tx *sql.Tx, workspaceID, commandKey string) ([]StoredEvent, error) {

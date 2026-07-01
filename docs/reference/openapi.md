@@ -29,14 +29,18 @@ server is configured with exactly one allowed workspace.
 ## First Integrator Path
 
 For the smallest HTTP integration, start with the Docker adapter and use the
-image shorthand:
+image shorthand with a digest-pinned image (mutable tags are rejected with a
+`400` at create time):
 
 ```sh
+docker pull -q busybox:latest >/dev/null
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+
 RUN_ID="$(curl -fsS -X POST "$MERCATOR_API_URL/v1/runs?workspace_id=$MERCATOR_WORKSPACE_ID" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: idem-minimal-1' \
-  -d '{"image":"busybox","args":["echo","hi"]}' | jq -r '.run_id')"
+  -d "{\"image\":\"$IMAGE\",\"args\":[\"echo\",\"hi\"]}" | jq -r '.run_id')"
 
 printf '%s\n' "$RUN_ID"
 ```
@@ -54,7 +58,7 @@ curl -fsS "$MERCATOR_API_URL/v1/runs/$RUN_ID/events?workspace_id=$MERCATOR_WORKS
 
 curl -fsS "$MERCATOR_API_URL/v1/runs/$RUN_ID/decision?workspace_id=$MERCATOR_WORKSPACE_ID" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
-  | jq '{selected_offer_snapshot_id: .decision.selected_offer_snapshot_id, rejected_count: (.decision.rejected | length)}'
+  | jq '{selected_offer_snapshot_id: .decision.selected_offer_snapshot_id, candidate_count: (.decision.candidates | length), rejected_count: ([.decision.candidates[] | select(.feasible | not)] | length)}'
 
 curl -fsS "$MERCATOR_API_URL/v1/sinks/audit" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN" \

@@ -34,18 +34,26 @@ func TestTokenRoundTripAndScoping(t *testing.T) {
 	if !s.Enabled() {
 		t.Fatal("signer should be enabled with a key")
 	}
-	tok := s.Token("run_a")
+	tok := s.Token("ws_1", "run_a")
 	if tok == "" {
 		t.Fatal("empty token")
 	}
-	if !s.Verify("run_a", tok) {
-		t.Fatal("token should verify for its run")
+	if !s.Verify("ws_1", "run_a", tok) {
+		t.Fatal("token should verify for its workspace+run")
 	}
-	if s.Verify("run_b", tok) {
+	if s.Verify("ws_1", "run_b", tok) {
 		t.Fatal("token must NOT verify for a different run")
 	}
-	if s.Verify("run_a", "garbage") {
+	if s.Verify("ws_2", "run_a", tok) {
+		t.Fatal("token must NOT verify for a different workspace")
+	}
+	if s.Verify("ws_1", "run_a", "garbage") {
 		t.Fatal("garbage token must not verify")
+	}
+	// The workspace/run joint must be unambiguous: shifting bytes across the
+	// boundary must not produce the same token.
+	if s.Token("ws_1x", "run") == s.Token("ws_1", "xrun") {
+		t.Fatal("workspace/run boundary is ambiguous")
 	}
 }
 
@@ -54,7 +62,7 @@ func TestDisabledSignerVerifiesNothing(t *testing.T) {
 	if s.Enabled() {
 		t.Fatal("nil key → disabled")
 	}
-	if s.Verify("run_a", s.Token("run_a")) {
+	if s.Verify("ws_1", "run_a", s.Token("ws_1", "run_a")) {
 		t.Fatal("disabled signer must verify nothing")
 	}
 }

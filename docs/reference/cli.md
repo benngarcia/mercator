@@ -74,7 +74,7 @@ go run ./cmd/mercator run events --run-id "$RUN_ID" \
   | jq '.events[] | .type'
 
 go run ./cmd/mercator run decision --run-id "$RUN_ID" \
-  | jq '{selected_offer_snapshot_id: .decision.selected_offer_snapshot_id, rejected_count: (.decision.rejected | length)}'
+  | jq '{selected_offer_snapshot_id: .decision.selected_offer_snapshot_id, candidate_count: (.decision.candidates | length), rejected_count: ([.decision.candidates[] | select(.feasible | not)] | length)}'
 
 go run ./cmd/mercator sink status --sink-id audit \
   | jq '{sink_id, cursor}'

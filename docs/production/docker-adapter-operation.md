@@ -21,7 +21,6 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-docker.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
-export MERCATOR_ADAPTER=docker
 export MERCATOR_DOCKER_ARCH=amd64
 
 go run ./cmd/mercator serve
@@ -31,9 +30,9 @@ Optional Docker offer identity variables:
 
 ```sh
 export MERCATOR_DOCKER_BIN=/usr/local/bin/docker
-export MERCATOR_DOCKER_NATIVE_REF=local
-export MERCATOR_DOCKER_OFFER_ID=offer_local_docker
-export MERCATOR_DOCKER_CONNECTION_ID=conn_local_docker
+export MERCATOR_DOCKER_NATIVE_REF=loopback
+export MERCATOR_DOCKER_OFFER_ID=offer_docker_loopback
+export MERCATOR_DOCKER_CONNECTION_ID=conn_docker_loopback
 ```
 
 ## Workload Requirements

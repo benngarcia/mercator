@@ -28,29 +28,27 @@ func NewSigner(key []byte) *Signer { return &Signer{key: key} }
 
 func (s *Signer) Enabled() bool { return len(s.key) > 0 }
 
-// Token mints an HMAC token that authorizes a workload to report for runID.
-// NOTE: The token binds only the runID (not the workspace). This is safe under
-// the current single-operator model where run IDs are globally unique (uuidv7),
-// but a future multi-workspace/multi-tenant deployment should bind the workspace
-// into the token as well to prevent cross-workspace confusion.
-func (s *Signer) Token(runID string) string {
+// Token mints an HMAC token that authorizes a workload to report for exactly
+// one run in exactly one workspace. Binding the workspace (not just the run ID)
+// means a leaked token can never be replayed against another workspace's view
+// of the same run, and the workspace_id a reporter sends must be the one the
+// token was minted for.
+func (s *Signer) Token(workspaceID, runID string) string {
 	if !s.Enabled() {
 		return ""
 	}
 	mac := hmac.New(sha256.New, s.key)
+	mac.Write([]byte(workspaceID))
+	mac.Write([]byte{0})
 	mac.Write([]byte(runID))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// Verify checks whether token is a valid token for the given runID.
-// NOTE: The token binds only the runID (not the workspace). This is safe under
-// the current single-operator model where run IDs are globally unique (uuidv7),
-// but a future multi-workspace/multi-tenant deployment should bind the workspace
-// into the token as well to prevent cross-workspace confusion.
-func (s *Signer) Verify(runID, token string) bool {
+// Verify checks whether token authorizes reporting for runID in workspaceID.
+func (s *Signer) Verify(workspaceID, runID, token string) bool {
 	if !s.Enabled() || token == "" {
 		return false
 	}
-	want := s.Token(runID)
+	want := s.Token(workspaceID, runID)
 	return subtle.ConstantTimeCompare([]byte(want), []byte(token)) == 1
 }

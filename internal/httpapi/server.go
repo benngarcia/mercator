@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -266,14 +268,40 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token == "" || token != s.security.Token {
+		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.security.Token)) != 1 {
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token is required.")
 			return
 		}
 		principal := authz.Principal{Subject: "bearer", WorkspaceIDs: append([]string(nil), s.security.Workspaces...)}
 		r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal))
 	}
+	// Bound every request body so no caller (operator or run-token holder) can
+	// stream an unbounded payload into a JSON decoder or the event store.
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// maxRequestBodyBytes bounds request bodies server-wide. The largest legitimate
+// payloads (full workload revisions, run reports) are well under 1 MiB; the
+// container env budget alone is capped at 32 KiB by capability validation.
+const maxRequestBodyBytes = 1 << 20
+
+// decodeJSONBody decodes a request body into v, writing the appropriate error
+// response (413 for an over-limit body, 400 otherwise) and returning false on
+// failure.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "Request body exceeds the 1 MiB limit.")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+		return false
+	}
+	return true
 }
 
 func (s *Server) routes() {
@@ -340,7 +368,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	stat, err := file.Stat()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "UI_NOT_AVAILABLE", err.Error())
+		writeInternalError(w, http.StatusInternalServerError, "UI_NOT_AVAILABLE", err)
 		return
 	}
 	reader, ok := file.(interface {
@@ -396,8 +424,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body createRunBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	workspaceID := body.WorkspaceID
@@ -410,7 +437,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	if workspaceID == "" {
 		workspaceID = s.defaultWorkspace()
 	}
-	if !authorizeRequestWorkspace(w, r, workspaceID) {
+	if !s.authorizeRequestWorkspace(w, r, workspaceID) {
 		return
 	}
 	workloadRevision := body.Workload
@@ -466,7 +493,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
 			return
 		}
-		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_RUN_FAILED"), err.Error())
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_RUN_FAILED"), errorMessage(err))
 		return
 	}
 	// result.RunID is the canonical run identifier (the ORIGINAL run_id on a
@@ -477,7 +504,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 	}
 	record, err := s.orch.GetRun(r.Context(), workspaceID, result.RunID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "RUN_NOT_FOUND", err.Error())
+		writeInternalError(w, http.StatusInternalServerError, "RUN_NOT_FOUND", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, newRunResponse(workspaceID, record, result.Duplicate))
@@ -507,7 +534,7 @@ func (s *Server) runEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.orch.GetRunEvents(r.Context(), workspaceID, runID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "READ_EVENTS_FAILED", err.Error())
+		writeInternalError(w, http.StatusInternalServerError, "READ_EVENTS_FAILED", err)
 		return
 	}
 	public := make([]eventlog.CloudEvent, 0, len(events))
@@ -602,7 +629,7 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	records, err := s.orch.ListRuns(r.Context(), workspaceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "LIST_RUNS_FAILED", err.Error())
+		writeInternalError(w, http.StatusInternalServerError, "LIST_RUNS_FAILED", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, runListResponse{Runs: records})
@@ -669,13 +696,12 @@ func (s *Server) reportRun(w http.ResponseWriter, r *http.Request, runID string)
 	}
 	authHeader := r.Header.Get("Authorization")
 	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if !s.reportSigner.Verify(runID, token) {
+	if !s.reportSigner.Verify(workspaceID, runID, token) {
 		writeError(w, http.StatusUnauthorized, "INVALID_RUN_TOKEN", "Invalid or missing run token.")
 		return
 	}
 	var body reportBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if err := s.orch.RecordReport(r.Context(), workspaceID, runID, body.Type, body.Data, body.ExitCode); err != nil {
@@ -683,7 +709,7 @@ func (s *Server) reportRun(w http.ResponseWriter, r *http.Request, runID string)
 			writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", "Run not found.")
 			return
 		}
-		writeError(w, http.StatusBadGateway, "REPORT_FAILED", err.Error())
+		writeInternalError(w, http.StatusBadGateway, "REPORT_FAILED", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"recorded": true})
@@ -704,15 +730,14 @@ func (s *Server) runDecision(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 	var body placementPreviewBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	workspaceID := body.WorkspaceID
 	if workspaceID == "" {
 		workspaceID = body.Workload.WorkspaceID
 	}
-	if !authorizeRequestWorkspace(w, r, workspaceID) {
+	if !s.authorizeRequestWorkspace(w, r, workspaceID) {
 		return
 	}
 	if violations := domain.ValidateWorkloadRevision(body.Workload); len(violations) > 0 {
@@ -721,7 +746,7 @@ func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 	}
 	offers, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "OFFER_QUERY_FAILED", err.Error())
+		writeInternalError(w, http.StatusBadGateway, "OFFER_QUERY_FAILED", err)
 		return
 	}
 	decision, err := s.scheduler.Evaluate(r.Context(), scheduler.SchedulingInput{
@@ -748,15 +773,14 @@ func (s *Server) createWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body createWorkloadBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	if !authorizeRequestWorkspace(w, r, body.WorkspaceID) {
+	if !s.authorizeRequestWorkspace(w, r, body.WorkspaceID) {
 		return
 	}
 	if err := s.workloads.CreateWorkload(r.Context(), workload.CreateWorkloadRequest{WorkspaceID: body.WorkspaceID, WorkloadID: body.WorkloadID, Name: body.Name}); err != nil {
-		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_WORKLOAD_FAILED"), err.Error())
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_WORKLOAD_FAILED"), errorMessage(err))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"workload_id": body.WorkloadID})
@@ -776,13 +800,12 @@ func (s *Server) createRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body createRevisionBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	revision, err := s.workloads.CreateRevision(r.Context(), workload.CreateRevisionRequest{WorkspaceID: workspaceID, WorkloadID: r.PathValue("workload_id"), Revision: body.Revision})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_REVISION_FAILED"), err.Error())
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_REVISION_FAILED"), errorMessage(err))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, workloadRevisionResponse{Revision: revision})
@@ -799,7 +822,7 @@ func (s *Server) listRevisions(w http.ResponseWriter, r *http.Request) {
 	}
 	revisions, err := s.workloads.ListRevisions(r.Context(), workspaceID, r.PathValue("workload_id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "LIST_REVISIONS_FAILED", err.Error())
+		writeInternalError(w, http.StatusInternalServerError, "LIST_REVISIONS_FAILED", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, workloadRevisionListResponse{Revisions: revisions})
@@ -828,8 +851,7 @@ func (s *Server) resolveImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body resolveImageBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	resolved, err := s.resolver.Resolve(r.Context(), ociresolver.ResolveRequest{Image: body.Image, Platform: body.Platform})
@@ -850,8 +872,7 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body createConnectionBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	workspaceID := body.WorkspaceID
@@ -861,7 +882,7 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 	if workspaceID == "" {
 		workspaceID = s.defaultWorkspace()
 	}
-	if !authorizeRequestWorkspace(w, r, workspaceID) {
+	if !s.authorizeRequestWorkspace(w, r, workspaceID) {
 		return
 	}
 
@@ -880,7 +901,7 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.secretStore.Put(r.Context(), workspaceID, body.ConnectionID, blob); err != nil {
-			writeError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err.Error())
+			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
 			return
 		}
 		cred.Ref = body.ConnectionID
@@ -898,7 +919,7 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
 			return
 		}
-		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_CONNECTION_FAILED"), err.Error())
+		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_CONNECTION_FAILED"), errorMessage(err))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, connectionResponse{Connection: record})
@@ -927,7 +948,7 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	if err := s.verifier.VerifyConnection(r.Context(), workspaceID, id); err != nil {
-		writeError(w, http.StatusBadGateway, "CONNECTION_VERIFY_FAILED", err.Error())
+		writeInternalError(w, http.StatusBadGateway, "CONNECTION_VERIFY_FAILED", err)
 		return
 	}
 	if err := s.conns.UpdateAuthorization(r.Context(), connection.UpdateAuthorizationRequest{
@@ -935,12 +956,12 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id 
 		ConnectionID: id,
 		Authorized:   true,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "CONNECTION_AUTHORIZE_FAILED", err.Error())
+		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_AUTHORIZE_FAILED", err)
 		return
 	}
 	record, err := s.conns.Get(r.Context(), workspaceID, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "CONNECTION_NOT_FOUND", err.Error())
+		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_NOT_FOUND", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, connectionResponse{Connection: record})
@@ -957,7 +978,7 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	}
 	records, err := s.conns.List(r.Context(), workspaceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err.Error())
+		writeInternalError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err)
 		return
 	}
 	if records == nil {
@@ -990,7 +1011,7 @@ func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
 	if s.offers != nil {
 		records, err := s.offers.ListCached(r.Context(), workspaceID, time.Now().UTC())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "LIST_OFFERS_FAILED", err.Error())
+			writeInternalError(w, http.StatusInternalServerError, "LIST_OFFERS_FAILED", err)
 			return
 		}
 		if len(records) > 0 {
@@ -1000,7 +1021,7 @@ func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
 	}
 	records, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "LIST_OFFERS_FAILED", err.Error())
+		writeInternalError(w, http.StatusBadGateway, "LIST_OFFERS_FAILED", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, offerListResponse{Offers: records})
@@ -1039,7 +1060,7 @@ func (s *Server) deliverSink(w http.ResponseWriter, r *http.Request, sinkID stri
 	}
 	result, err := s.sinks.DeliverOnce(r.Context(), sinkID)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "SINK_DELIVERY_FAILED", err.Error())
+		writeInternalError(w, http.StatusBadGateway, "SINK_DELIVERY_FAILED", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, result)
@@ -1051,13 +1072,12 @@ func (s *Server) replaySink(w http.ResponseWriter, r *http.Request, sinkID strin
 		return
 	}
 	var body replaySinkBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	result, err := s.sinks.Replay(r.Context(), sinkspkg.ReplayRequest{SinkID: sinkID, FromExclusive: body.FromExclusive, Limit: body.Limit, ReplayID: body.ReplayID})
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "SINK_REPLAY_FAILED", err.Error())
+		writeInternalError(w, http.StatusBadGateway, "SINK_REPLAY_FAILED", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, result)
@@ -1081,6 +1101,14 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, errorResponse{Code: code, Message: strings.TrimSpace(message)})
+}
+
+// writeInternalError logs the underlying error server-side and returns a
+// generic message to the client, so internal state (file paths, SQL fragments,
+// adapter internals) never leaks through 5xx response bodies.
+func writeInternalError(w http.ResponseWriter, status int, code string, err error) {
+	log.Printf("httpapi: %d %s: %v", status, code, err)
+	writeError(w, status, code, "Internal error; see server logs for detail.")
 }
 
 // defaultWorkspace returns the single concrete workspace this server is scoped
@@ -1110,16 +1138,24 @@ func (s *Server) requiredWorkspace(w http.ResponseWriter, r *http.Request) (stri
 		writeError(w, http.StatusBadRequest, "WORKSPACE_ID_REQUIRED", "workspace_id query parameter is required.")
 		return "", false
 	}
-	if !authorizeRequestWorkspace(w, r, workspaceID) {
+	if !s.authorizeRequestWorkspace(w, r, workspaceID) {
 		return "", false
 	}
 	return workspaceID, true
 }
 
-func authorizeRequestWorkspace(w http.ResponseWriter, r *http.Request, workspaceID string) bool {
+func (s *Server) authorizeRequestWorkspace(w http.ResponseWriter, r *http.Request, workspaceID string) bool {
 	principal, ok := r.Context().Value(principalContextKey{}).(authz.Principal)
 	if !ok {
-		return true
+		// No principal is only legitimate when bearer auth is disabled entirely
+		// (an explicit dev/embedding mode). With auth enabled, a missing
+		// principal means the request somehow bypassed the token gate — deny,
+		// never fail open.
+		if s.security.Token == "" {
+			return true
+		}
+		writeError(w, http.StatusForbidden, "FORBIDDEN", "Principal is not authorized for this workspace.")
+		return false
 	}
 	for _, allowed := range principal.WorkspaceIDs {
 		if allowed == "*" {
@@ -1182,6 +1218,16 @@ func errorCode(err error, fallback string) string {
 		return match[1]
 	}
 	return fallback
+}
+
+// errorMessage strips a coded error's "CODE: " prefix so the code isn't
+// duplicated inside the response message field.
+func errorMessage(err error) string {
+	match := codedErrorPattern.FindStringSubmatch(err.Error())
+	if len(match) == 3 {
+		return match[2]
+	}
+	return err.Error()
 }
 
 func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot) (http.Handler, func() error, error) {

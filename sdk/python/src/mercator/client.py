@@ -13,6 +13,9 @@ from urllib.request import Request, urlopen
 JSONValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 JSONObject = dict[str, Any]
 
+# Sentinel distinguishing "not passed" from an explicit ``timeout=None``.
+_UNSET: Any = object()
+
 
 @dataclass
 class MercatorError(Exception):
@@ -30,6 +33,13 @@ class MercatorError(Exception):
 
 class MercatorClient:
     """Dependency-free client for the Mercator V1 HTTP API."""
+
+    # Read timeout applied to `:wait` long-polls. The server holds each wait
+    # open for up to ~30s before answering, so the effective read timeout on
+    # that call must comfortably exceed 30s or every wait on a long run times
+    # out client-side instead of re-polling. The user's configured ``timeout``
+    # still applies to all other calls (and wins here when it is larger).
+    WAIT_READ_TIMEOUT = 60.0
 
     def __init__(
         self,
@@ -61,8 +71,13 @@ class MercatorClient:
         json_body: JSONValue = None,
         headers: Mapping[str, str] | None = None,
         idempotency_key: str | None = None,
+        timeout: float | None = _UNSET,
     ) -> Any:
-        """Send an HTTP request and return the decoded JSON response."""
+        """Send an HTTP request and return the decoded JSON response.
+
+        ``timeout`` overrides the client-wide timeout for this call only; omit
+        it to use the client default.
+        """
 
         if not path.startswith("/"):
             raise ValueError("path must start with '/'")
@@ -88,11 +103,12 @@ class MercatorClient:
             headers=request_headers,
             method=method.upper(),
         )
+        effective_timeout = self.timeout if timeout is _UNSET else timeout
         try:
-            if self.timeout is None:
+            if effective_timeout is None:
                 response = urlopen(request)
             else:
-                response = urlopen(request, timeout=self.timeout)
+                response = urlopen(request, timeout=effective_timeout)
             with response:
                 return self._decode_response(response.getcode(), response.headers.get("Content-Type", ""), response.read())
         except HTTPError as exc:
@@ -104,6 +120,11 @@ class MercatorClient:
         except URLError as exc:
             reason = getattr(exc, "reason", exc)
             raise MercatorError(None, "REQUEST_FAILED", str(reason)) from exc
+        except TimeoutError as exc:
+            # urllib only wraps errors raised while sending the request; a
+            # socket timeout while reading the response escapes as a bare
+            # TimeoutError, so normalize it to the same transport error.
+            raise MercatorError(None, "REQUEST_FAILED", str(exc) or "timed out") from exc
 
     def health_live(self) -> Any:
         return self.request("GET", "/health/live")
@@ -158,7 +179,12 @@ class MercatorClient:
         return self.request("GET", f"/v1/runs/{self._path(run_id)}", query=self._workspace_query(workspace_id))
 
     def wait_run(self, run_id: str, workspace_id: str | None = None) -> Any:
-        return self.request("GET", f"/v1/runs/{self._path(run_id)}:wait", query=self._workspace_query(workspace_id))
+        return self.request(
+            "GET",
+            f"/v1/runs/{self._path(run_id)}:wait",
+            query=self._workspace_query(workspace_id),
+            timeout=self._wait_timeout(),
+        )
 
     def wait_run_until_terminal(
         self,
@@ -203,6 +229,29 @@ class MercatorClient:
 
     def list_connections(self, workspace_id: str | None = None) -> Any:
         return self.request("GET", "/v1/connections", query=self._workspace_query(workspace_id))
+
+    def create_connection(self, payload: Mapping[str, Any], *, idempotency_key: str, workspace_id: str | None = None) -> Any:
+        """Create a connection (POST /v1/connections).
+
+        ``payload`` carries the server's create-connection body:
+        ``connection_id``, ``adapter_type``, optional ``config``, optional
+        ``credential`` (``{"source": ..., "ref": ...}``), and optional
+        write-only ``secret``. ``workspace_id`` follows the same fallback rules
+        as :meth:`create_run`.
+        """
+
+        body = dict(payload)
+        effective_workspace = workspace_id if workspace_id is not None else self.workspace_id
+        if effective_workspace is not None and not body.get("workspace_id"):
+            body["workspace_id"] = effective_workspace
+        return self.request("POST", "/v1/connections", json_body=body, idempotency_key=idempotency_key)
+
+    def authorize_connection(self, connection_id: str, workspace_id: str | None = None) -> Any:
+        return self.request(
+            "POST",
+            f"/v1/connections/{self._path(connection_id)}:authorize",
+            query=self._workspace_query(workspace_id),
+        )
 
     def list_offers(self, workspace_id: str | None = None) -> Any:
         return self.request("GET", "/v1/offers", query=self._workspace_query(workspace_id))
@@ -320,6 +369,17 @@ class MercatorClient:
             if isinstance(value, str) and value:
                 return value
         return fallback
+
+    def _wait_timeout(self) -> float | None:
+        """Effective read timeout for `:wait` long-polls.
+
+        ``None`` (no timeout) already outlasts the server's ~30s window;
+        otherwise never poll with less than :data:`WAIT_READ_TIMEOUT`.
+        """
+
+        if self.timeout is None:
+            return None
+        return max(self.timeout, self.WAIT_READ_TIMEOUT)
 
     def _workspace_query(self, workspace_id: str | None) -> dict[str, str]:
         effective = workspace_id if workspace_id is not None else self.workspace_id

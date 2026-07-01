@@ -168,8 +168,13 @@ type OwnershipQuery struct {
 }
 
 type OwnedExternalObject struct {
-	ExternalID     string
-	WorkspaceID    string
+	ExternalID  string
+	WorkspaceID string
+	// ConnectionID names the connection the object was listed through.
+	// Individual adapters may leave it empty; the Broker stamps it during
+	// aggregation so callers (e.g. the janitor) can route Release/Terminate
+	// back through the right connection.
+	ConnectionID   string
 	RunID          string
 	AttemptID      string
 	OwnershipToken string

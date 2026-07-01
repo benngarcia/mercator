@@ -1,6 +1,8 @@
 import { MercatorAPIError, MercatorRequestError, type MercatorRequestInfo, errorResponseFromBody } from "./errors.js";
 import type {
   ConnectionListResponse,
+  ConnectionResponse,
+  CreateConnectionRequest,
   CreateRunRequest,
   CreateRunResponse,
   CreateWorkloadRequest,
@@ -8,6 +10,7 @@ import type {
   EnvBinding,
   EventListResponse,
   FetchFunction,
+  HealthStatus,
   MutationRequestOptions,
   OfferListResponse,
   PlacementDecisionResponse,
@@ -98,7 +101,7 @@ export class MercatorClient {
     const normalizedMethod = method.toUpperCase();
     const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     const url = this.urlFor(normalizedPath, options.query);
-    const headers = this.headersFor(normalizedPath, options);
+    const headers = this.headersFor(options);
     const init: RequestInit = {
       headers,
       method: normalizedMethod,
@@ -143,6 +146,18 @@ export class MercatorClient {
       });
     }
     return body as TResponse;
+  }
+
+  healthLive(options: RequestOptions = {}): Promise<HealthStatus> {
+    return this.request<HealthStatus>("GET", "/health/live", options);
+  }
+
+  healthReady(options: RequestOptions = {}): Promise<HealthStatus> {
+    return this.request<HealthStatus>("GET", "/health/ready", options);
+  }
+
+  getOpenapi(options: RequestOptions = {}): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("GET", "/openapi.json", options);
   }
 
   createRun(body: CreateRunRequest, options: MutationRequestOptions): Promise<CreateRunResponse> {
@@ -266,6 +281,21 @@ export class MercatorClient {
     return this.request<ConnectionListResponse>("GET", "/v1/connections", { ...options, query: this.workspaceQuery(params, options.query) });
   }
 
+  /**
+   * Create a connection. `workspace_id` follows the same fallback rules as
+   * {@link createRun}: the client default is applied to the request body when
+   * the body does not already carry one, and per-call `workspaceId` wins.
+   */
+  createConnection(body: CreateConnectionRequest, options: MutationRequestOptions): Promise<ConnectionResponse> {
+    const workspaceId = options.workspaceId ?? this.workspaceId;
+    const effectiveBody = workspaceId && body.workspace_id === undefined ? { ...body, workspace_id: workspaceId } : body;
+    return this.request<ConnectionResponse>("POST", "/v1/connections", { ...options, body: effectiveBody });
+  }
+
+  authorizeConnection(connectionId: string, params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<ConnectionResponse> {
+    return this.request<ConnectionResponse>("POST", `/v1/connections/${pathSegment(connectionId)}:authorize`, { ...options, query: this.workspaceQuery(params, options.query) });
+  }
+
   listOffers(params: WorkspaceRequest = {}, options: RequestOptions = {}): Promise<OfferListResponse> {
     return this.request<OfferListResponse>("GET", "/v1/offers", { ...options, query: this.workspaceQuery(params, options.query) });
   }
@@ -300,12 +330,14 @@ export class MercatorClient {
     return url.toString();
   }
 
-  private headersFor(path: string, options: RequestOptions): Headers {
+  private headersFor(options: RequestOptions): Headers {
     const headers = new Headers(this.defaultHeaders);
     for (const [key, value] of new Headers(options.headers)) {
       headers.set(key, value);
     }
-    if (this.token && path.startsWith("/v1/")) {
+    // Send Authorization on every request (matching the Python and Ruby
+    // SDKs), not just /v1/* routes.
+    if (this.token) {
       headers.set("Authorization", `Bearer ${this.token}`);
     }
     if (options.idempotencyKey) {

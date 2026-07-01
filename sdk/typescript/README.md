@@ -23,6 +23,15 @@ do not supply a full workload spec (the server defaults everything). Then block
 until the run closes and read the container exit code straight off the run
 object.
 
+On the Docker adapter a workload must reference a **digest-pinned image** — a
+mutable tag like `busybox` or `busybox:latest` is rejected — so pin one first
+(the same approach as the root README quickstart):
+
+```sh
+docker pull -q busybox:latest >/dev/null
+export MERCATOR_IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+```
+
 ```ts
 import { MercatorClient } from "@mercator/sdk";
 
@@ -32,7 +41,8 @@ const mercator = new MercatorClient({
   workspaceId: "ws_1",
 });
 
-const created = await mercator.runImage("busybox", {
+// e.g. busybox@sha256:...
+const created = await mercator.runImage(process.env.MERCATOR_IMAGE!, {
   args: ["echo", "hi"],
 });
 const runId = created.run.id; // server-generated id
@@ -196,11 +206,12 @@ try {
 
 `MercatorClient` includes methods for:
 
+- health and OpenAPI: healthLive, healthReady, getOpenapi
 - runs: create, list, get, wait, waitRunUntilTerminal (poll-until-terminal), refresh, cancel, events, decision
 - placement preview
 - workloads and workload revisions
 - image resolution
-- connections and offers
+- connections (list, create, authorize) and offers
 - sink status, delivery, and replay
 
 The nested workload, offer, placement, event, and run shapes are pragmatic DTO

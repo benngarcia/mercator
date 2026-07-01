@@ -92,10 +92,22 @@ docker build -t mercator:local .
 
 docker run --rm \
   -e MERCATOR_ADDR=0.0.0.0:8080 \
-  -e MERCATOR_ADAPTER=docker -e MERCATOR_DOCKER_ARCH=amd64 \
+  -e MERCATOR_DOCKER_ARCH=amd64 \
   -e MERCATOR_API_TOKEN=dev-token -e MERCATOR_AUTH_WORKSPACES=ws_1 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -p 8080:8080 mercator:local serve
+```
+
+Or skip the build and use the prebuilt image published by CI — same flags,
+no source checkout needed:
+
+```sh
+docker run --rm \
+  -e MERCATOR_ADDR=0.0.0.0:8080 \
+  -e MERCATOR_DOCKER_ARCH=amd64 \
+  -e MERCATOR_API_TOKEN=dev-token -e MERCATOR_AUTH_WORKSPACES=ws_1 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -p 8080:8080 ghcr.io/benngarcia/mercator:latest serve
 ```
 
 The image build compiles Mercator inside the container, so you do not need Go
@@ -169,7 +181,7 @@ reuse it:
 ```sh
 go build -o mercator ./cmd/mercator
 
-export MERCATOR_ADDR=127.0.0.1:8080 MERCATOR_ADAPTER=docker MERCATOR_DOCKER_ARCH=amd64
+export MERCATOR_ADDR=127.0.0.1:8080 MERCATOR_DOCKER_ARCH=amd64
 export MERCATOR_API_TOKEN=dev-token MERCATOR_AUTH_WORKSPACES=ws_1
 export MERCATOR_SQLITE_DSN="file:$HOME/.mercator/mercator.db" && mkdir -p "$HOME/.mercator"
 ./mercator serve   # then drive it with ./mercator run create "$IMAGE" -- echo hi

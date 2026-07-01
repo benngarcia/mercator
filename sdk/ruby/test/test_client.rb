@@ -151,6 +151,12 @@ class ClientTest < Minitest::Test
     client.get_run_decision("run_1", workspace_id: "ws_1")
     client.preview_placement({ "workspace_id" => "ws_1", "workload" => { "workspace_id" => "ws_1" } })
     client.list_connections(workspace_id: "ws_1")
+    client.create_connection(
+      { "connection_id" => "conn_1", "adapter_type" => "docker" },
+      idempotency_key: "connection-key",
+      workspace_id: "ws_1"
+    )
+    client.authorize_connection("conn_1", workspace_id: "ws_1")
     client.list_offers(workspace_id: "ws_1")
     client.create_workload("ws_1", "workload_1", "demo", idempotency_key: "workload-key")
     client.list_workload_revisions("workload_1", workspace_id: "ws_1")
@@ -170,6 +176,8 @@ class ClientTest < Minitest::Test
       ["GET", "/v1/runs/run_1/decision?workspace_id=ws_1"],
       ["POST", "/v1/placements:preview"],
       ["GET", "/v1/connections?workspace_id=ws_1"],
+      ["POST", "/v1/connections"],
+      ["POST", "/v1/connections/conn_1:authorize?workspace_id=ws_1"],
       ["GET", "/v1/offers?workspace_id=ws_1"],
       ["POST", "/v1/workloads"],
       ["GET", "/v1/workloads/workload_1/revisions?workspace_id=ws_1"],
@@ -180,12 +188,30 @@ class ClientTest < Minitest::Test
       ["POST", "/v1/sinks/audit:deliver"],
       ["POST", "/v1/sinks/audit:replay"]
     ], RecordingServlet.requests.map { |request| [request.fetch(:method), request.fetch(:path)] }
-    assert_equal "workload-key", RecordingServlet.requests[9].fetch(:headers).fetch("idempotency-key")
-    assert_equal "revision-key", RecordingServlet.requests[11].fetch(:headers).fetch("idempotency-key")
+    assert_equal "connection-key", RecordingServlet.requests[8].fetch(:headers).fetch("idempotency-key")
+    assert_equal(
+      { "connection_id" => "conn_1", "adapter_type" => "docker", "workspace_id" => "ws_1" },
+      RecordingServlet.requests[8].fetch(:body)
+    )
+    assert_equal "workload-key", RecordingServlet.requests[11].fetch(:headers).fetch("idempotency-key")
+    assert_equal "revision-key", RecordingServlet.requests[13].fetch(:headers).fetch("idempotency-key")
     assert_equal(
       { "from_exclusive" => 10, "limit" => 50, "replay_id" => "replay_1" },
-      RecordingServlet.requests[16].fetch(:body)
+      RecordingServlet.requests[18].fetch(:body)
     )
+  end
+
+  def test_create_connection_applies_client_workspace_without_overwriting_explicit
+    client = Mercator::Client.new(@base_url, token: "secret-token", workspace_id: "ws_default")
+
+    client.create_connection({ "connection_id" => "conn_1", "adapter_type" => "docker" }, idempotency_key: "conn-1")
+    client.create_connection(
+      { "connection_id" => "conn_2", "adapter_type" => "docker", "workspace_id" => "ws_explicit" },
+      idempotency_key: "conn-2"
+    )
+
+    assert_equal "ws_default", RecordingServlet.requests[0].fetch(:body).fetch("workspace_id")
+    assert_equal "ws_explicit", RecordingServlet.requests[1].fetch(:body).fetch("workspace_id")
   end
 
   def test_client_scoped_workspace_id_applies_and_is_overridable
@@ -322,5 +348,66 @@ class WaitUntilTerminalTest < Minitest::Test
 
     assert_equal 1, WaitServlet.seen
     assert_equal false, result.fetch("run").fetch("closed")
+  end
+end
+
+class SlowServlet < WEBrick::HTTPServlet::AbstractServlet
+  DELAY = 0.5
+
+  def do_GET(_request, response)
+    sleep DELAY
+    response.status = 200
+    response["Content-Type"] = "application/json"
+    response.body = JSON.generate({
+      run: {
+        id: "run_1",
+        workspace_id: "ws_1",
+        phase: "closed",
+        outcome: "succeeded",
+        exit_code: 0,
+        cleanup: "confirmed",
+        closed: true
+      }
+    })
+  end
+end
+
+# The `:wait` long-poll must use a read timeout that outlasts the server's
+# ~30s hold even when the client-wide timeout is shorter.
+class WaitReadTimeoutTest < Minitest::Test
+  def setup
+    @server = WEBrick::HTTPServer.new(
+      BindAddress: "127.0.0.1",
+      Port: 0,
+      Logger: WEBrick::Log.new(File::NULL),
+      AccessLog: []
+    )
+    @server.mount "/", SlowServlet
+    @thread = Thread.new { @server.start }
+    @base_url = "http://127.0.0.1:#{@server.config[:Port]}"
+  end
+
+  def teardown
+    @server.shutdown
+    @thread.join(5)
+  end
+
+  def test_wait_run_outlives_a_client_timeout_shorter_than_the_server_hold
+    client = Mercator::Client.new(@base_url, token: "secret-token", workspace_id: "ws_1", timeout: 0.15)
+
+    # A normal read still honors the configured timeout...
+    error = assert_raises(Mercator::Error) { client.get_run("run_1") }
+    assert_equal "REQUEST_FAILED", error.code
+
+    # ...but the :wait long-poll uses the dedicated longer read timeout.
+    result = client.wait_run("run_1")
+    assert_equal true, result.fetch("run").fetch("closed")
+  end
+
+  def test_wait_read_timeout_never_shrinks_a_larger_configured_timeout
+    assert_equal Mercator::Client::WAIT_READ_TIMEOUT, Mercator::Client.new(@base_url, timeout: 30.0).wait_read_timeout
+    assert_equal 120.0, Mercator::Client.new(@base_url, timeout: 120.0).wait_read_timeout
+    assert_equal Mercator::Client::WAIT_READ_TIMEOUT, Mercator::Client.new(@base_url, timeout: nil).wait_read_timeout
+    assert_operator Mercator::Client::WAIT_READ_TIMEOUT, :>, 30.0
   end
 end

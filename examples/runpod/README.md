@@ -24,8 +24,9 @@ Git ref. After `v0.1.0` exists, use that tag. Before the tag exists, replace
 - Use a public URL for `MERCATOR_PUBLIC_URL`; a loopback or private laptop URL
   is not reachable from RunPod.
 - Set `MERCATOR_SECRET_KEY` so Mercator can sign per-run reporting tokens.
-- Pin image references to real registry digests when using the current dev
-  resolver. Synthetic fake-mode digests are not pullable by RunPod.
+- Pin image references to real registry digests. The server rejects mutable
+  tags at create time, and RunPod can only pull digests that actually exist in
+  a registry.
 - Keep the GPU requirement in the workload resources so Docker is infeasible
   and the RunPod offer can win placement.
 - Rotate the RunPod API key after public launch testing.

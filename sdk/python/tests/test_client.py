@@ -1,6 +1,7 @@
 import json
 import sys
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -155,6 +156,12 @@ class ClientServerTestCase(unittest.TestCase):
         client.get_run_decision("run_1", "ws_1")
         client.preview_placement({"workspace_id": "ws_1", "workload": {"workspace_id": "ws_1"}})
         client.list_connections("ws_1")
+        client.create_connection(
+            {"connection_id": "conn_1", "adapter_type": "docker"},
+            idempotency_key="connection-key",
+            workspace_id="ws_1",
+        )
+        client.authorize_connection("conn_1", "ws_1")
         client.list_offers("ws_1")
         client.create_workload("ws_1", "workload_1", "demo", idempotency_key="workload-key")
         client.list_workload_revisions("workload_1", "ws_1")
@@ -176,6 +183,8 @@ class ClientServerTestCase(unittest.TestCase):
                 ("GET", "/v1/runs/run_1/decision?workspace_id=ws_1"),
                 ("POST", "/v1/placements:preview"),
                 ("GET", "/v1/connections?workspace_id=ws_1"),
+                ("POST", "/v1/connections"),
+                ("POST", "/v1/connections/conn_1:authorize?workspace_id=ws_1"),
                 ("GET", "/v1/offers?workspace_id=ws_1"),
                 ("POST", "/v1/workloads"),
                 ("GET", "/v1/workloads/workload_1/revisions?workspace_id=ws_1"),
@@ -187,9 +196,14 @@ class ClientServerTestCase(unittest.TestCase):
                 ("POST", "/v1/sinks/audit:replay"),
             ],
         )
-        self.assertEqual(RecordingHandler.requests[9]["headers"]["Idempotency-Key"], "workload-key")
-        self.assertEqual(RecordingHandler.requests[11]["headers"]["Idempotency-Key"], "revision-key")
-        self.assertEqual(RecordingHandler.requests[16]["body"], {"from_exclusive": 10, "limit": 50, "replay_id": "replay_1"})
+        self.assertEqual(RecordingHandler.requests[8]["headers"]["Idempotency-Key"], "connection-key")
+        self.assertEqual(
+            RecordingHandler.requests[8]["body"],
+            {"connection_id": "conn_1", "adapter_type": "docker", "workspace_id": "ws_1"},
+        )
+        self.assertEqual(RecordingHandler.requests[11]["headers"]["Idempotency-Key"], "workload-key")
+        self.assertEqual(RecordingHandler.requests[13]["headers"]["Idempotency-Key"], "revision-key")
+        self.assertEqual(RecordingHandler.requests[18]["body"], {"from_exclusive": 10, "limit": 50, "replay_id": "replay_1"})
 
     def test_client_scoped_workspace_id_applies_and_is_overridable(self):
         client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
@@ -256,6 +270,18 @@ class ClientServerTestCase(unittest.TestCase):
         self.assertRegex(body["run_id"], r"^run_[0-9a-f-]{36}$")
         self.assertEqual(RecordingHandler.requests[0]["headers"]["Idempotency-Key"], "idem-shorthand")
 
+    def test_create_connection_applies_client_workspace_without_overwriting_explicit(self):
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_default")
+
+        client.create_connection({"connection_id": "conn_1", "adapter_type": "docker"}, idempotency_key="conn-1")
+        client.create_connection(
+            {"connection_id": "conn_2", "adapter_type": "docker", "workspace_id": "ws_explicit"},
+            idempotency_key="conn-2",
+        )
+
+        self.assertEqual(RecordingHandler.requests[0]["body"]["workspace_id"], "ws_default")
+        self.assertEqual(RecordingHandler.requests[1]["body"]["workspace_id"], "ws_explicit")
+
 
 class WaitHandler(BaseHTTPRequestHandler):
     open_responses = 0
@@ -320,6 +346,75 @@ class WaitUntilTerminalTestCase(unittest.TestCase):
 
         self.assertEqual(WaitHandler.seen, 1)
         self.assertFalse(result["run"]["closed"])
+
+
+class SlowHandler(BaseHTTPRequestHandler):
+    """Delays every response, so a short client read timeout trips on it."""
+
+    delay = 0.5
+
+    def do_GET(self):
+        time.sleep(self.delay)
+        payload = {
+            "run": {
+                "id": "run_1",
+                "workspace_id": "ws_1",
+                "phase": "closed",
+                "outcome": "succeeded",
+                "exit_code": 0,
+                "cleanup": "confirmed",
+                "closed": True,
+            }
+        }
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, format, *args):
+        return
+
+
+class WaitReadTimeoutTestCase(unittest.TestCase):
+    """The `:wait` long-poll must use a read timeout that outlasts the server's
+    ~30s hold even when the client-wide timeout is shorter."""
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.daemon = True
+        self.thread.start()
+        host, port = self.server.server_address
+        self.base_url = f"http://{host}:{port}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(timeout=5)
+        self.server.server_close()
+
+    def test_wait_run_outlives_a_client_timeout_shorter_than_the_server_hold(self):
+        client = MercatorClient(self.base_url, token="secret-token", workspace_id="ws_1", timeout=0.15)
+
+        # A normal read still honors the configured timeout...
+        with self.assertRaises(MercatorError) as raised:
+            client.get_run("run_1")
+        self.assertEqual(raised.exception.code, "REQUEST_FAILED")
+
+        # ...but the :wait long-poll uses the dedicated longer read timeout.
+        result = client.wait_run("run_1")
+        self.assertTrue(result["run"]["closed"])
+
+    def test_wait_timeout_never_shrinks_a_larger_configured_timeout(self):
+        short = MercatorClient(self.base_url, timeout=30.0)
+        long = MercatorClient(self.base_url, timeout=120.0)
+        untimed = MercatorClient(self.base_url, timeout=None)
+
+        self.assertEqual(short._wait_timeout(), MercatorClient.WAIT_READ_TIMEOUT)
+        self.assertEqual(long._wait_timeout(), 120.0)
+        self.assertIsNone(untimed._wait_timeout())
+        self.assertGreater(MercatorClient.WAIT_READ_TIMEOUT, 30.0)
 
 
 if __name__ == "__main__":

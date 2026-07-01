@@ -20,8 +20,8 @@ environment.
 
 ## Docker Adapter Quickstart
 
-- [ ] `serve` started with `MERCATOR_ADAPTER=docker` exposes the configured
-  Docker offer (`offer_local_docker` by default).
+- [ ] `serve` exposes the configured Docker offer (`offer_docker_loopback` by
+  default).
 - [ ] A Docker run created from a digest-pinned image reaches `closed: true`.
 - [ ] Cleanup is `confirmed` before closure.
 - [ ] Replaying the same idempotency key with identical payload is safe.

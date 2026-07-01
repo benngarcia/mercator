@@ -262,3 +262,18 @@ func newHTTPTestServerWithOpenObservations(t *testing.T, openObserves int) http.
 	resolver := ociresolver.NewStaticResolver(nil)
 	return NewWithServices(orch, sched, ad, workload.New(log), resolver)
 }
+
+func TestOversizedRequestBodyIsRejected(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	// Slightly over the 1 MiB server-wide body cap.
+	huge := bytes.Repeat([]byte("x"), maxRequestBodyBytes+1)
+	body := []byte(`{"image":"` + string(huge) + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_huge")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized body, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
