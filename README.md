@@ -11,13 +11,14 @@ console — no Kubernetes, Slurm, or cluster control plane.
 
 ![Mercator console showing runs](docs/assets/mercator-runs.png)
 
-Watch the 30-second quickstart demo — start the broker in Docker, run a
-digest-pinned container, read the exit code, and ask why it landed there:
+Watch the short console demo — the runs list, a run's lifecycle and exit code,
+the placement decision that explains why it landed there, and the event-sourced
+audit trail:
 [WebM](docs/assets/mercator-demo.webm) or
 [GIF fallback](docs/assets/mercator-demo.gif). A text transcript is in
 [docs/assets/README.md](docs/assets/README.md#demo-transcript).
 
-![Mercator Docker quickstart demo: run a container and read the placement decision](docs/assets/mercator-demo.gif)
+![Mercator console demo: runs list, run detail, placement decision, and events](docs/assets/mercator-demo.gif)
 
 ## Why It Exists
 

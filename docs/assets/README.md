@@ -5,14 +5,14 @@ captures stay in ignored `output/` until they are reviewed and renamed.
 
 Current assets:
 
-- `mercator-demo.webm` - ~30-second terminal demo of the README Docker
-  quickstart: start the broker in Docker, create a digest-pinned run, read the
-  terminal result (`succeeded` / exit code / cleanup), and ask for the placement
-  decision. Rendered deterministically from `mercator-demo.tape`.
+- `mercator-demo.webm` - ~9-second embedded-console walkthrough: the runs list,
+  a run's detail (phase timeline, outcome, exit code, cleanup), the placement
+  decision (selected offer and reason codes), and the event-sourced audit trail.
+  Recorded headlessly and deterministically by `record-demo.mjs`.
 - `mercator-demo.gif` - GIF fallback of the same recording for README contexts
   where WebM links are less prominent.
-- `mercator-demo.tape` - the [VHS](https://github.com/charmbracelet/vhs) script
-  that produces both files, so the demo is reproducible.
+- `record-demo.mjs` - the [Playwright](https://playwright.dev) script that seeds
+  a run and records the console, so the demo is reproducible.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
   and workspace context.
 - `mercator-run-decision.png` - run detail placement decision and lifecycle
@@ -43,32 +43,42 @@ no RunPod, registry credentials, or private workloads.
 
 ## Demo Transcript
 
-The committed recording follows the README
-[Docker quickstart](../../README.md#try-it-in-5-minutes) end to end:
+The committed recording is a walk through the embedded console for workspace
+`ws_1`:
 
-1. Start the broker in Docker with the Docker adapter
-   (`docker run ... -v /var/run/docker.sock:/var/run/docker.sock mercator:local serve`)
-   and confirm `GET /health/ready` returns `{"status": "ready"}`.
-2. Pin a digest (`docker inspect --format '{{index .RepoDigests 0}}' busybox:latest`)
-   and create a run with `mercator run create "$IMAGE" -- echo hi`.
-3. Read the terminal result with `mercator run get`:
-   `outcome: succeeded`, `exit_code: 0`, `cleanup: confirmed`, `closed: true`.
-4. Ask why it landed there with `mercator run decision`:
-   `selected: offer_docker_loopback`, `candidate_count: 1`.
+1. The runs list shows two `Succeeded` runs with their status, cleanup
+   disposition (`release · confirmed`), and exit code.
+2. Opening a run shows its detail: the phase timeline
+   (`Requested → Launching → Running → Cleaning up → Succeeded`) and run facts —
+   `outcome: succeeded`, `exit code: 0`, `cleanup: confirmed`, `closed: yes`.
+3. The Decision tab shows the placement decision: the selected offer
+   (`offer_docker_loopback`), reason codes (`FEASIBLE`, `LOWEST_SCORE`), the
+   model version, and the collection report (`conn_docker_loopback` queried).
+4. The Events tab shows the public, event-sourced audit trail — placement
+   decided, launch accepted, external state observed, outcome recorded, cleanup
+   confirmed, and closed.
 
 ## Demo Regeneration
 
-The demo is rendered deterministically from `mercator-demo.tape` with
-[VHS](https://github.com/charmbracelet/vhs), so it stays in sync with the
-quickstart. From the repository root, with a running Docker daemon:
+The demo is recorded headlessly with [Playwright](https://playwright.dev) by
+`record-demo.mjs`, so it stays in sync with the console. From the repository
+root, with a running Docker daemon and the broker up (see the README
+[quickstart](../../README.md#try-it-in-5-minutes)):
 
 ```sh
-docker build -t mercator:local .        # broker image used by the tape
-go build -o mercator ./cmd/mercator      # CLI on $PWD, driven by the tape
-vhs docs/assets/mercator-demo.tape       # writes gif + webm to docs/assets/output/
+npm i playwright && npx playwright install chromium
+node docs/assets/record-demo.mjs      # seeds a run, writes webm to docs/assets/output/
 ```
 
-Review the result under `docs/assets/output/`, then move the `mercator-demo.gif`
-and `mercator-demo.webm` files into `docs/assets/`. The tape sets a clean `$ `
-prompt so no local path, hostname, or username is captured; keep it that way if
-you edit it.
+Then generate the GIF fallback and move both files into `docs/assets/`:
+
+```sh
+ffmpeg -y -i docs/assets/output/mercator-demo.webm \
+  -vf "fps=13,scale=1100:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=160[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4" \
+  docs/assets/output/mercator-demo.gif
+mv docs/assets/output/mercator-demo.{webm,gif} docs/assets/
+```
+
+The script seeds the session (token + workspace) into `localStorage` exactly as
+the console does — nothing sensitive is captured, and the seeded run is a
+short-lived `busybox echo` with no private image, host path, or credential.
