@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/connection"
 )
 
 // TestBuildServerDepsReportingSigner verifies that buildServerDeps populates the
@@ -131,5 +132,59 @@ func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
 	// must match the registered connection's ID.
 	if offers[0].ConnectionID != conns[0].ID {
 		t.Fatalf("offer is not backed by registry: offer.ConnectionID=%s, conn.ID=%s", offers[0].ConnectionID, conns[0].ID)
+	}
+}
+
+// TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint guards against the
+// factory memoizing a single docker adapter: a second docker connection must
+// advertise its own offer identity (and thus route launches to its own
+// endpoint), not relabel the first connection's.
+func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
+	deps := buildServerDeps(map[string]string{
+		"MERCATOR_DOCKER_ARCH": "amd64",
+		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+	})
+	defer func() {
+		if err := deps.close(); err != nil {
+			t.Fatalf("close deps: %v", err)
+		}
+	}()
+	ctx := context.Background()
+
+	if _, err := deps.conns.Create(ctx, connection.CreateRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_docker_remote",
+		AdapterType:  "docker",
+		Config:       map[string]string{"host": "tcp://gpu-2:2375"},
+	}); err != nil {
+		t.Fatalf("create second docker connection: %v", err)
+	}
+	if err := deps.conns.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_docker_remote",
+		Authorized:   true,
+	}); err != nil {
+		t.Fatalf("authorize second docker connection: %v", err)
+	}
+
+	offers, err := deps.broker.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	if len(offers) != 2 {
+		t.Fatalf("expected one offer per docker connection, got %+v", offers)
+	}
+	byConn := map[string]string{}
+	for _, offer := range offers {
+		byConn[offer.ConnectionID] = offer.ID
+	}
+	if byConn["conn_docker_loopback"] == "" || byConn["conn_docker_remote"] == "" {
+		t.Fatalf("expected offers for both connections, got %+v", byConn)
+	}
+	if byConn["conn_docker_loopback"] == byConn["conn_docker_remote"] {
+		t.Fatalf("both connections advertise the same offer id %q: adapter is shared", byConn["conn_docker_loopback"])
+	}
+	if byConn["conn_docker_remote"] != "offer_docker_gpu-2" {
+		t.Fatalf("remote offer id = %q, want offer_docker_gpu-2 derived from its own endpoint", byConn["conn_docker_remote"])
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -919,4 +920,112 @@ func findLaunchEnv(t *testing.T, bindings []adapter.EnvironmentBinding, name str
 	}
 	t.Fatalf("environment binding %s not found in %+v", name, bindings)
 	return adapter.EnvironmentBinding{}
+}
+
+func TestAdvanceRunDoesNotAppendUnchangedObservations(t *testing.T) {
+	// A run polled repeatedly while still running must not grow its event stream
+	// on every poll: waitRun refreshes every 100ms, so per-poll appends brick the
+	// stream once it outgrows a single read page. 1500 polls comfortably exceeds
+	// that page size if each one were to append.
+	ctx := context.Background()
+	ad := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+		fake.WithOpenObservations(1500),
+	)
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	for i := 0; i < 1500; i++ {
+		if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+			t.Fatalf("advance %d: %v", i, err)
+		}
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	if n := countEvents(events, EventExternalStateObserved); n != 1 {
+		t.Fatalf("expected exactly one recorded observation across identical running polls, got %d", n)
+	}
+
+	// The next poll observes the terminal phase; the run must still close.
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("terminal advance: %v", err)
+	}
+	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if record.Phase != "closed" || record.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("expected closed/succeeded run, got phase=%q outcome=%q", record.Phase, record.Outcome)
+	}
+	events, err = orch.GetRunEvents(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get events after close: %v", err)
+	}
+	if n := countEvents(events, EventExternalStateObserved); n != 2 {
+		t.Fatalf("expected running + terminal observations only, got %d", n)
+	}
+}
+
+func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
+	// Streams longer than one 1000-event read page must still reduce and append
+	// at the true stream version instead of wedging on a concurrency conflict.
+	ctx := context.Background()
+	log := openOrchestratorLog(t)
+	ad := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	)
+	orch := New(log, scheduler.New(), ad)
+	createRun(t, ctx, orch)
+
+	version := uint64(1) // run_requested
+	for batch := 0; batch < 11; batch++ {
+		var filler []eventlog.NewEvent
+		for i := 0; i < 100; i++ {
+			filler = append(filler, eventlog.NewEvent{
+				ID:            fmt.Sprintf("evt_run_1_filler_%d_%d", batch, i),
+				Type:          "test.filler.v1",
+				SchemaVersion: 1,
+				OccurredAt:    time.Now().UTC(),
+				Visibility:    eventlog.VisibilityPublic,
+				Data:          json.RawMessage(`{}`),
+			})
+		}
+		if _, err := log.Append(ctx, eventlog.AppendRequest{
+			Stream:                runStream("ws_1", "run_1"),
+			ExpectedStreamVersion: version,
+			CommandKey:            fmt.Sprintf("run_1:filler:%d", batch),
+			RequestHash:           mustHash(t, filler),
+			CorrelationID:         "run_1",
+			CausationID:           "filler",
+			Events:                filler,
+		}); err != nil {
+			t.Fatalf("append filler batch %d: %v", batch, err)
+		}
+		version += 100
+	}
+
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	if len(events) != 1101 {
+		t.Fatalf("expected full paginated read of 1101 events, got %d", len(events))
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+			t.Fatalf("advance %d past read page: %v", i, err)
+		}
+	}
+	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if record.Phase != "closed" || record.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("expected closed/succeeded run, got phase=%q outcome=%q", record.Phase, record.Outcome)
+	}
 }

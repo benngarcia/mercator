@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -101,13 +100,21 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	return 0
 }
 
-type offeringAdapter struct {
+// dockerOfferingAdapter serves one docker endpoint's offer, probing the
+// endpoint at ListOffers time so capacity, ObservedAt, and ExpiresAt are fresh
+// on every placement decision. Building the offer once at adapter construction
+// froze those timestamps: after the one-hour expiry window every placement
+// failed with OFFER_EXPIRED until the process restarted.
+type dockerOfferingAdapter struct {
 	adapter.Adapter
-	offers []domain.OfferSnapshot
+	client *dockeradapter.CLIClient
+	values map[string]string
+	id     dockerEndpointIdentity
 }
 
-func (a offeringAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	return append([]domain.OfferSnapshot(nil), a.offers...), nil
+func (a dockerOfferingAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	offer := dockerOfferFromInfo(a.values, a.id, probeDockerHost(a.client, a.id), time.Now().UTC())
+	return []domain.OfferSnapshot{offer}, nil
 }
 
 // serverDeps holds the shared backing services for the docker server path. The
@@ -189,20 +196,19 @@ func buildServerDeps(values map[string]string) serverDeps {
 	publicURL := values["MERCATOR_PUBLIC_URL"]
 
 	factory := broker.NewFactory()
-	var (
-		dockerOnce    sync.Once
-		dockerAdapter adapter.Adapter
-	)
+	// Build a fresh adapter from each connection's own config: memoizing one
+	// instance would route every docker connection to whichever endpoint was
+	// built first, silently launching containers on the wrong host.
 	factory.Register("docker", func(config map[string]string, _ string) (adapter.Adapter, error) {
-		dockerOnce.Do(func() {
-			client := dockeradapter.NewCLIClient(config["bin"])
-			client.Host = config["host"]
-			client.Context = config["context"]
-			id := dockerIdentity(values)
-			offer := dockerOfferFromInfo(values, id, probeDockerHost(client, id), time.Now().UTC())
-			dockerAdapter = offeringAdapter{Adapter: dockeradapter.New(client), offers: []domain.OfferSnapshot{offer}}
-		})
-		return dockerAdapter, nil
+		client := dockeradapter.NewCLIClient(config["bin"])
+		client.Host = config["host"]
+		client.Context = config["context"]
+		return dockerOfferingAdapter{
+			Adapter: dockeradapter.New(client),
+			client:  client,
+			values:  values,
+			id:      dockerIdentityForConfig(values, config),
+		}, nil
 	})
 
 	factory.Register("runpod", func(config map[string]string, secret string) (adapter.Adapter, error) {
@@ -289,6 +295,26 @@ type dockerEndpointIdentity struct {
 	NativeRef    string
 	Host         string
 	Context      string
+}
+
+// dockerIdentityForConfig derives the offer identity for one docker
+// connection's config. The bootstrap endpoint (registered from MERCATOR_DOCKER_*
+// env on boot) keeps its env-driven identity, including the explicit
+// MERCATOR_DOCKER_{CONNECTION_ID,OFFER_ID,NATIVE_REF} overrides; any other
+// docker connection (added later via POST /v1/connections) derives its identity
+// from its own endpoint so two connections never share an offer id.
+func dockerIdentityForConfig(values, config map[string]string) dockerEndpointIdentity {
+	if config["host"] == values["MERCATOR_DOCKER_HOST"] && config["context"] == values["MERCATOR_DOCKER_CONTEXT"] {
+		return dockerIdentity(values)
+	}
+	label := dockerEndpointLabel(config["host"], config["context"])
+	return dockerEndpointIdentity{
+		ConnectionID: "conn_docker_" + label,
+		OfferID:      "offer_docker_" + label,
+		NativeRef:    label,
+		Host:         config["host"],
+		Context:      config["context"],
+	}
 }
 
 // dockerIdentity derives the connection/offer identity from the configured

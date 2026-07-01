@@ -171,6 +171,7 @@ go build -o mercator ./cmd/mercator
 
 export MERCATOR_ADDR=127.0.0.1:8080 MERCATOR_ADAPTER=docker MERCATOR_DOCKER_ARCH=amd64
 export MERCATOR_API_TOKEN=dev-token MERCATOR_AUTH_WORKSPACES=ws_1
+export MERCATOR_SQLITE_DSN="file:$HOME/.mercator/mercator.db" && mkdir -p "$HOME/.mercator"
 ./mercator serve   # then drive it with ./mercator run create "$IMAGE" -- echo hi
 ```
 
