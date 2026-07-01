@@ -4,7 +4,7 @@ Suggested labels: `good first issue`, `docs`, `console`, `launch`
 
 ## Problem
 
-The README has a short console demo and transcript, but the launch
+The README has a short terminal demo and transcript, but the launch
 scorecard includes a 75-100 second shot list that can show the full evaluation
 path: quickstart, run creation, terminal run fields, console run list, decision
 tab, public events, and docs map.

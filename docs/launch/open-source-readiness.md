@@ -220,8 +220,8 @@ Grade: **A**.
 
 ## Longer Demo Video Shot List
 
-The committed `docs/assets/mercator-demo.webm` is a short console walkthrough.
-For a fuller launch video, target 75-100 seconds:
+The committed `docs/assets/mercator-demo.webm` is a short terminal walkthrough
+of the Docker quickstart. For a fuller launch video, target 75-100 seconds:
 
 1. Show the README quickstart and start the Docker adapter server.
 2. Run `go run ./cmd/mercator run create "$IMAGE" -- echo hi`, where `$IMAGE` is

@@ -5,12 +5,14 @@ captures stay in ignored `output/` until they are reviewed and renamed.
 
 Current assets:
 
-- `mercator-demo.webm` - 10-second console demo from run list to run detail,
-  placement decision, and public events. The committed recording still shows
-  the earlier fake-adapter console flow; re-recording against the Docker
-  quickstart is pending.
-- `mercator-demo.gif` - 640x360 GIF fallback generated from
-  `mercator-demo.webm` for README contexts where WebM links are less prominent.
+- `mercator-demo.webm` - ~30-second terminal demo of the README Docker
+  quickstart: start the broker in Docker, create a digest-pinned run, read the
+  terminal result (`succeeded` / exit code / cleanup), and ask for the placement
+  decision. Rendered deterministically from `mercator-demo.tape`.
+- `mercator-demo.gif` - GIF fallback of the same recording for README contexts
+  where WebM links are less prominent.
+- `mercator-demo.tape` - the [VHS](https://github.com/charmbracelet/vhs) script
+  that produces both files, so the demo is reproducible.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
   and workspace context.
 - `mercator-run-decision.png` - run detail placement decision and lifecycle
@@ -41,35 +43,32 @@ no RunPod, registry credentials, or private workloads.
 
 ## Demo Transcript
 
-The committed README demo recording still shows the earlier fake-adapter
-console flow; re-recording against the Docker quickstart is pending. The
-walkthrough a new evaluator follows is:
+The committed recording follows the README
+[Docker quickstart](../../README.md#try-it-in-5-minutes) end to end:
 
-1. The console opens on the runs list for workspace `ws_1`.
-2. A `busybox` run appears with terminal status, exit code, cleanup, and
-   closure state visible in the table.
-3. The run detail view shows the selected run and its lifecycle state.
-4. The decision tab shows the placement decision and why the selected local
-   offer won placement.
-5. The events view shows public run events so the evaluator can connect the UI
-   back to Mercator's event-sourced audit trail.
-6. The demo ends by returning to the documented quickstart path.
+1. Start the broker in Docker with the Docker adapter
+   (`docker run ... -v /var/run/docker.sock:/var/run/docker.sock mercator:local serve`)
+   and confirm `GET /health/ready` returns `{"status": "ready"}`.
+2. Pin a digest (`docker inspect --format '{{index .RepoDigests 0}}' busybox:latest`)
+   and create a run with `mercator run create "$IMAGE" -- echo hi`.
+3. Read the terminal result with `mercator run get`:
+   `outcome: succeeded`, `exit_code: 0`, `cleanup: confirmed`, `closed: true`.
+4. Ask why it landed there with `mercator run decision`:
+   `selected: offer_docker_loopback`, `candidate_count: 1`.
 
-Demo video regeneration (record against the Docker quickstart):
+## Demo Regeneration
 
-1. Start Mercator with the Docker adapter per the
-   [Docker quickstart](../production/docker-adapter-operation.md)
-   (`MERCATOR_ADAPTER=docker`, `MERCATOR_DOCKER_ARCH=amd64`).
-2. Create a digest-pinned `busybox -- echo hi` run from the CLI.
-3. Open the console and show the run moving to `succeeded`.
-4. Inspect the decision tab and public events.
-5. End with the run `get` command and the Docker quickstart docs pointer.
-
-Target output: replace `docs/assets/mercator-demo.webm`, then regenerate the
-README GIF fallback under 5 MB:
+The demo is rendered deterministically from `mercator-demo.tape` with
+[VHS](https://github.com/charmbracelet/vhs), so it stays in sync with the
+quickstart. From the repository root, with a running Docker daemon:
 
 ```sh
-ffmpeg -y -i docs/assets/mercator-demo.webm \
-  -vf "fps=8,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" \
-  docs/assets/mercator-demo.gif
+docker build -t mercator:local .        # broker image used by the tape
+go build -o mercator ./cmd/mercator      # CLI on $PWD, driven by the tape
+vhs docs/assets/mercator-demo.tape       # writes gif + webm to docs/assets/output/
 ```
+
+Review the result under `docs/assets/output/`, then move the `mercator-demo.gif`
+and `mercator-demo.webm` files into `docs/assets/`. The tape sets a clean `$ `
+prompt so no local path, hostname, or username is captured; keep it that way if
+you edit it.
