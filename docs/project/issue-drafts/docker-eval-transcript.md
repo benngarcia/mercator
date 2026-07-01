@@ -4,10 +4,10 @@ Suggested labels: `good first issue`, `docs`
 
 ## Problem
 
-The fake-adapter path is deterministic and first-run friendly. The Docker
-adapter docs explain live local container behavior, but the launch surface does
-not yet include a sanitized transcript showing a real digest-pinned Docker run
-from start to cleanup.
+The Docker adapter is the first-run path and the Docker adapter docs explain
+live local container behavior, but the launch surface does not yet include a
+sanitized transcript showing a real digest-pinned Docker run from start to
+cleanup.
 
 ## Acceptance Criteria
 

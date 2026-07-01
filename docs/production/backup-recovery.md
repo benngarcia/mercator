@@ -38,7 +38,8 @@ cp /var/backups/mercator/mercator-YYYYMMDDTHHMMSSZ.db /tmp/mercator-restore.db
 
 MERCATOR_SQLITE_DSN='file:/tmp/mercator-restore.db' \
 MERCATOR_API_TOKEN='restore-eval-token' \
-MERCATOR_FAKE_OFFER=1 \
+MERCATOR_ADAPTER=docker \
+MERCATOR_DOCKER_ARCH=amd64 \
 go run ./cmd/mercator serve
 ```
 

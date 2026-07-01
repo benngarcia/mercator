@@ -33,7 +33,7 @@ The design should answer:
   logs, API responses, CLI output, or UI responses;
 - retry, timeout, and dead-letter behavior;
 - cursor advancement rules after partial failures;
-- local fake-adapter verification commands;
+- local Docker-adapter verification commands;
 - production deployment notes, including where TLS and outbound network policy
   are enforced.
 

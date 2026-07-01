@@ -15,8 +15,8 @@ path instead of only the source checkout path.
   Releases.
 - Verify the checksum using the platform-appropriate command.
 - Extract the archive and run `mercator --help`.
-- Start a local fake-adapter server from the archive binary or document why the
-  source checkout smoke remains the only supported path.
+- Start a local Docker-adapter server from the archive binary or document why
+  the source checkout smoke remains the only supported path.
 - Record sanitized commands and output in release docs or launch proof notes.
 - Do not mark the release artifact gate complete until the archive was
   downloaded from the public release, not built locally.

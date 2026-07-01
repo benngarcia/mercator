@@ -49,7 +49,7 @@ body:
     attributes:
       label: Evaluation path
       options:
-        - fake adapter quickstart
+        - Docker adapter quickstart
         - Docker adapter
         - RunPod adapter
         - CLI

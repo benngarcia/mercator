@@ -257,7 +257,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 	if state.closed {
 		return nil
 	}
-	version := uint64(len(events))
+	version := streamVersion(events)
 
 	if state.cleanupRequested && !state.cleanupConfirmed {
 		return o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
@@ -320,7 +320,30 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 }
 
 func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID string) ([]eventlog.StoredEvent, error) {
-	return o.log.ReadStream(ctx, runStream(workspaceID, runID), 0, 1000)
+	const page = 1000
+	var events []eventlog.StoredEvent
+	var after uint64
+	for {
+		batch, err := o.log.ReadStream(ctx, runStream(workspaceID, runID), after, page)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, batch...)
+		if len(batch) < page {
+			return events, nil
+		}
+		after = batch[len(batch)-1].StreamVersion
+	}
+}
+
+// streamVersion is the optimistic-concurrency expectation for the next append:
+// the stream version of the last stored event, not len(events), so a partial or
+// filtered read can never silently expect a stale version.
+func streamVersion(events []eventlog.StoredEvent) uint64 {
+	if len(events) == 0 {
+		return 0
+	}
+	return events[len(events)-1].StreamVersion
 }
 
 func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
@@ -399,7 +422,7 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string)
 	if state.closed {
 		return runRecordFromState(workspaceID, runID, state), nil
 	}
-	version := uint64(len(events))
+	version := streamVersion(events)
 	if state.launchIntent == nil {
 		if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:close_before_launch", []eventlog.NewEvent{
 			mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"reason": "user"}, o.now()),
@@ -459,14 +482,14 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		events, err := o.log.ReadStream(ctx, runStream(workspaceID, runID), 0, 10000)
+		events, err := o.GetRunEvents(ctx, workspaceID, runID)
 		if err != nil {
 			return fmt.Errorf("orchestrator: read run stream: %w", err)
 		}
 		if len(events) == 0 {
 			return ErrRunNotFound
 		}
-		version := uint64(len(events))
+		version := streamVersion(events)
 		suffix := fmt.Sprintf("reported_%d", version+1)
 		evt := eventlog.NewEvent{
 			ID:            eventID(workspaceID, runID, suffix),
@@ -530,7 +553,7 @@ func (o *Orchestrator) finalizeReportedExit(ctx context.Context, workspaceID, ru
 	if *state.exitCode != 0 {
 		outcome = string(domain.RunOutcomeFailed)
 	}
-	version := uint64(len(events))
+	version := streamVersion(events)
 	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:report-finalize", []eventlog.NewEvent{
 		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": outcome}, o.now()),
 		mustEvent(runID, "cleanup_requested", EventCleanupRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
@@ -618,6 +641,12 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 }
 
 func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID string, version uint64, state runState, observation adapter.ExternalObservation) error {
+	// A non-terminal observation that repeats the last recorded phase carries no
+	// new information; appending it anyway would grow the stream on every poll
+	// (waitRun refreshes every 100ms) without bound.
+	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase {
+		return nil
+	}
 	toAppend := []eventlog.NewEvent{
 		mustEvent(runID, fmt.Sprintf("external_state_observed_%d", version+1), EventExternalStateObserved, observation, o.now()),
 	}
@@ -744,6 +773,7 @@ type runState struct {
 	cleanupConfirmed    bool
 	closed              bool
 	exitCode            *int
+	lastObservedPhase   adapter.ExternalPhase
 }
 
 func reduceRun(events []eventlog.StoredEvent) (runState, error) {
@@ -778,11 +808,15 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 			state.launchIntent = &data
 		case EventExternalStateObserved:
 			var data struct {
-				ExitCode *int `json:"exit_code"`
+				Phase    adapter.ExternalPhase `json:"phase"`
+				ExitCode *int                  `json:"exit_code"`
 			}
-			if err := json.Unmarshal(event.Data, &data); err == nil && data.ExitCode != nil {
-				code := *data.ExitCode
-				state.exitCode = &code
+			if err := json.Unmarshal(event.Data, &data); err == nil {
+				state.lastObservedPhase = data.Phase
+				if data.ExitCode != nil {
+					code := *data.ExitCode
+					state.exitCode = &code
+				}
 			}
 		case EventRunReported:
 			var data struct {

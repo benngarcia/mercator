@@ -28,7 +28,7 @@ server is configured with exactly one allowed workspace.
 
 ## First Integrator Path
 
-For the smallest HTTP integration, start with the fake adapter and use the
+For the smallest HTTP integration, start with the Docker adapter and use the
 image shorthand:
 
 ```sh
@@ -63,4 +63,4 @@ curl -fsS "$MERCATOR_API_URL/v1/sinks/audit" \
 
 For a CLI-first walkthrough that produces the same state, see
 the [CLI reference](cli.md) and
-[fake adapter evaluation path](../production/fake-eval-path.md).
+[Docker adapter operation](../production/docker-adapter-operation.md).

@@ -52,10 +52,24 @@ cd ../python && python3 -m unittest discover -s tests
 cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
-Run the fake-adapter smoke:
+Run the Docker adapter smoke against a running Docker daemon (`go test ./...`
+above already covers the broker in CI):
 
 ```sh
-scripts/smoke-test-fake.sh
+export MERCATOR_ADDR=127.0.0.1:8080
+export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
+export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_AUTH_WORKSPACES='ws_1'
+export MERCATOR_ADAPTER=docker
+export MERCATOR_DOCKER_ARCH=amd64
+go run ./cmd/mercator serve &
+
+export MERCATOR_API_URL=http://127.0.0.1:8080
+export MERCATOR_WORKSPACE_ID=ws_1
+docker pull -q busybox:latest >/dev/null
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
+go run ./cmd/mercator run get --run-id "$RUN_ID" | jq '{outcome:.run.outcome, exit_code:.run.exit_code, cleanup:.run.cleanup, closed:.run.closed}'
 ```
 
 Expected: `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`,

@@ -18,7 +18,6 @@ jobs:
           cache: true
       - run: go test ./...
       - run: go build ./...
-      - run: scripts/smoke-test-fake.sh
       - run: scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist
 
   sdks:
@@ -63,3 +62,39 @@ jobs:
         working-directory: web/app
       - run: bun run build
         working-directory: web/app
+
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      # Pull requests build the image to prove the Dockerfile is valid, but do
+      # not log in or push. Only pushes to master publish to ghcr.io.
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

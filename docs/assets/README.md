@@ -5,10 +5,18 @@ captures stay in ignored `output/` until they are reviewed and renamed.
 
 Current assets:
 
-- `mercator-demo.webm` - 10-second fake-adapter console walkthrough from run
-  list to run detail, placement decision, and public events.
-- `mercator-demo.gif` - 640x360 GIF fallback generated from
-  `mercator-demo.webm` for README contexts where WebM links are less prominent.
+- `mercator-demo.webm` - ~13-second embedded-console walkthrough: the runs list,
+  a run's detail (phase timeline, outcome, exit code, cleanup), the placement
+  decision (selected offer and reason codes), and the event-sourced audit trail.
+  A synthetic cursor glides to each target, clicks leave a ripple, and the view
+  eases-zooms into the decision and the event trail. Recorded headlessly and
+  deterministically by `record-demo.mjs`.
+- `mercator-demo.gif` - GIF fallback of the same recording for README contexts
+  where WebM links are less prominent.
+- `record-demo.mjs` - the [Playwright](https://playwright.dev) +
+  [ghost-cursor](https://github.com/Xetera/ghost-cursor) script that seeds a run
+  and records the console (pointer motion, click ripples, zoom), so the demo is
+  reproducible.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
   and workspace context.
 - `mercator-run-decision.png` - run detail placement decision and lifecycle
@@ -17,12 +25,17 @@ Current assets:
 
 ## Screenshot Capture Notes
 
-Use the fake-adapter path for launch screenshots so captures are reproducible
-and do not require Docker, RunPod, registry credentials, or private workloads.
+Use the Docker quickstart path for launch screenshots so captures are
+reproducible against the current build. It requires a running Docker daemon but
+no RunPod, registry credentials, or private workloads.
 
-1. Start Mercator with `MERCATOR_FAKE_OFFER=1`, `MERCATOR_API_TOKEN` set, and a
-   launch-safe workspace such as `ws_1`.
-2. Create `busybox -- echo hi` through the CLI and wait for the run to close.
+1. Start Mercator with the Docker adapter following the
+   [Docker quickstart](../production/docker-adapter-operation.md): set
+   `MERCATOR_ADAPTER=docker`, `MERCATOR_DOCKER_ARCH=amd64`,
+   `MERCATOR_API_TOKEN`, and a launch-safe workspace such as `ws_1`.
+2. Create a digest-pinned `busybox -- echo hi` run through the CLI and wait for
+   the run to close (mutable tags are rejected, so resolve the digest first with
+   `docker inspect --format '{{index .RepoDigests 0}}' busybox:latest`).
 3. Open the embedded console for that workspace.
 4. Capture these screens: run list, selected run detail, placement decision,
    public events, and connections/offers if they materially improve the docs.
@@ -34,32 +47,43 @@ and do not require Docker, RunPod, registry credentials, or private workloads.
 
 ## Demo Transcript
 
-The README demo shows the fake-adapter path a new evaluator can run without
-Docker, RunPod, or a registry.
+The committed recording is a walk through the embedded console for workspace
+`ws_1`:
 
-1. The console opens on the runs list for workspace `ws_1`.
-2. A fake `busybox` run appears with terminal status, exit code, cleanup, and
-   closure state visible in the table.
-3. The run detail view shows the selected run and its lifecycle state.
-4. The decision tab shows the placement decision and why the fake local offer
-   was selected.
-5. The events view shows public run events so the evaluator can connect the UI
-   back to Mercator's event-sourced audit trail.
-6. The demo ends by returning to the documented fake evaluation path.
+1. The runs list shows two `Succeeded` runs with their status, cleanup
+   disposition (`release · confirmed`), and exit code.
+2. Opening a run shows its detail: the phase timeline
+   (`Requested → Launching → Running → Cleaning up → Succeeded`) and run facts —
+   `outcome: succeeded`, `exit code: 0`, `cleanup: confirmed`, `closed: yes`.
+3. The Decision tab shows the placement decision: the selected offer
+   (`offer_docker_loopback`), reason codes (`FEASIBLE`, `LOWEST_SCORE`), the
+   model version, and the collection report (`conn_docker_loopback` queried).
+4. The Events tab shows the public, event-sourced audit trail — placement
+   decided, launch accepted, external state observed, outcome recorded, cleanup
+   confirmed, and closed.
 
-Demo video regeneration:
+## Demo Regeneration
 
-1. Start Mercator with `MERCATOR_FAKE_OFFER=1`.
-2. Create `busybox -- echo hi` from the CLI.
-3. Open the console and show the run moving to `succeeded`.
-4. Inspect the decision tab and public events.
-5. End with the fake evaluation command and docs pointer.
-
-Target output: replace `docs/assets/mercator-demo.webm`, then regenerate the
-README GIF fallback under 5 MB:
+The demo is recorded headlessly with [Playwright](https://playwright.dev) by
+`record-demo.mjs`, so it stays in sync with the console. From the repository
+root, with a running Docker daemon and the broker up (see the README
+[quickstart](../../README.md#try-it-in-5-minutes)):
 
 ```sh
-ffmpeg -y -i docs/assets/mercator-demo.webm \
-  -vf "fps=8,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" \
-  docs/assets/mercator-demo.gif
+npm i playwright ghost-cursor && npx playwright install chromium
+node docs/assets/record-demo.mjs      # seeds a run, writes webm to docs/assets/output/
 ```
+
+Then generate the GIF fallback (the zoom motion inflates the GIF, so this keeps
+it under 5 MB) and move both files into `docs/assets/`:
+
+```sh
+ffmpeg -y -i docs/assets/output/mercator-demo.webm \
+  -vf "fps=12,scale=880:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" \
+  docs/assets/output/mercator-demo.gif
+mv docs/assets/output/mercator-demo.{webm,gif} docs/assets/
+```
+
+The script seeds the session (token + workspace) into `localStorage` exactly as
+the console does — nothing sensitive is captured, and the seeded run is a
+short-lived `busybox echo` with no private image, host path, or credential.

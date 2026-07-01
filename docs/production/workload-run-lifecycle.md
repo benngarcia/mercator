@@ -191,9 +191,9 @@ orphan-reclaiming janitor) call the one matching the recorded disposition.
 recorded disposition) defaults to `release` — the safe option that never
 destroys a host.
 
-**Adapter semantics.** The fake adapter implements both verbs idempotently and
-tracks which path ran (the standing fake offer drives `release`; set
-`MERCATOR_FAKE_OFFER=provisionable` to drive `terminate`, both with no network).
+**Adapter semantics.** The fake adapter (an internal test mechanism) implements
+both verbs idempotently and tracks which path ran: its standing offer drives
+`release` and its provisionable variant drives `terminate`, both with no network.
 Local Docker is a standing pool: it implements `Release` (remove the container)
 and returns an explicit error from `Terminate` (there is no broker-owned host to
 destroy), which the orchestrator never reaches because a Docker offer always

@@ -24,7 +24,7 @@ The import alias `@/*` maps to `web/app/src/*` (see `tsconfig.json`).
 The Go API must be running first (it owns `/v1/*`, `/health/*`, `/openapi.json`):
 
 ```sh
-go run ./cmd/mercator          # serves :8080 (set MERCATOR_FAKE_OFFER=1 for the fake adapter)
+go run ./cmd/mercator          # serves :8080 (set MERCATOR_ADAPTER=docker; requires a running Docker daemon)
 cd web/app && bun install      # once
 bun dev                        # serves :3000 with HMR, proxies API → 127.0.0.1:8080
 ```

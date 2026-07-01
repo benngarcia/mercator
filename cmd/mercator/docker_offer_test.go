@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter"
 	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
 )
 
@@ -110,5 +111,47 @@ func TestDockerArchOverrideWinsOverProbe(t *testing.T) {
 	offer := dockerOfferFromInfo(values, id, info, now)
 	if offer.Platform.Architecture != "arm64" {
 		t.Errorf("explicit MERCATOR_DOCKER_ARCH should win: got %q, want arm64", offer.Platform.Architecture)
+	}
+}
+
+func TestDockerIdentityForConfigKeepsBootstrapOverrides(t *testing.T) {
+	values := map[string]string{
+		"MERCATOR_DOCKER_HOST":     "ssh://ops@gpu-1",
+		"MERCATOR_DOCKER_OFFER_ID": "offer_custom",
+	}
+	id := dockerIdentityForConfig(values, map[string]string{"host": "ssh://ops@gpu-1"})
+	if id.OfferID != "offer_custom" {
+		t.Errorf("bootstrap config OfferID = %q, want env override offer_custom", id.OfferID)
+	}
+	other := dockerIdentityForConfig(values, map[string]string{"host": "ssh://ops@gpu-2"})
+	if other.OfferID != "offer_docker_gpu-2" || other.NativeRef != "gpu-2" {
+		t.Errorf("second endpoint identity = %+v, want offer_docker_gpu-2/gpu-2", other)
+	}
+	if other.OfferID == id.OfferID {
+		t.Error("two docker endpoints must not share an offer id")
+	}
+}
+
+func TestDockerOfferingAdapterServesFreshOffersPerCall(t *testing.T) {
+	// The offer must be rebuilt on every ListOffers call: a snapshot frozen at
+	// adapter construction expires one hour in and permanently fails placement.
+	client := dockeradapter.NewCLIClient("false") // probe fails instantly; capacity falls back
+	values := map[string]string{}
+	ad := dockerOfferingAdapter{client: client, values: values, id: dockerIdentity(values)}
+
+	first, err := ad.ListOffers(t.Context(), adapter.OfferRequest{})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first ListOffers: offers=%v err=%v", first, err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	second, err := ad.ListOffers(t.Context(), adapter.OfferRequest{})
+	if err != nil || len(second) != 1 {
+		t.Fatalf("second ListOffers: offers=%v err=%v", second, err)
+	}
+	if !second[0].ObservedAt.After(first[0].ObservedAt) {
+		t.Fatalf("offer is frozen: first ObservedAt=%v, second ObservedAt=%v", first[0].ObservedAt, second[0].ObservedAt)
+	}
+	if !second[0].ExpiresAt.After(time.Now().Add(30 * time.Minute)) {
+		t.Fatalf("offer expiry did not refresh: %v", second[0].ExpiresAt)
 	}
 }

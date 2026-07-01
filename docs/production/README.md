@@ -14,10 +14,9 @@ rebuilt from the event log.
 
 1. Install and configure the process: [install-configuration.md](install-configuration.md).
 2. Lock down API access: [authentication-workspaces.md](authentication-workspaces.md).
-3. Run the fake-adapter evaluation path: [fake-eval-path.md](fake-eval-path.md).
-4. Exercise a real local Docker adapter: [docker-adapter-operation.md](docker-adapter-operation.md).
-5. Evaluate workload semantics: [workload-run-lifecycle.md](workload-run-lifecycle.md).
-6. Check the production-hardening gaps before relying on it:
+3. Exercise the local Docker adapter: [docker-adapter-operation.md](docker-adapter-operation.md).
+4. Evaluate workload semantics: [workload-run-lifecycle.md](workload-run-lifecycle.md).
+5. Check the production-hardening gaps before relying on it:
    [known-limitations.md](known-limitations.md).
 
 ## Operator Runbooks
@@ -28,7 +27,6 @@ rebuilt from the event log.
   workspace allow-list behavior.
 - [docker-adapter-operation.md](docker-adapter-operation.md): Docker host adapter
   setup, labels, lifecycle, and cleanup checks.
-- [fake-eval-path.md](fake-eval-path.md): local deterministic evaluation flow.
 - [../reference/openapi.md](../reference/openapi.md): OpenAPI discovery,
   route families, auth boundary, and first HTTP integration path.
 - [workload-run-lifecycle.md](workload-run-lifecycle.md): workload JSON, run
@@ -57,7 +55,8 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
-export MERCATOR_FAKE_OFFER=1
+export MERCATOR_ADAPTER=docker
+export MERCATOR_DOCKER_ARCH=amd64
 
 go run ./cmd/mercator serve
 ```
