@@ -9,12 +9,24 @@ You do not supply a full workload spec (the server defaults everything). Then
 block until the run closes and read the container exit code straight off the run
 object.
 
+On the Docker adapter a workload must reference a **digest-pinned image** — a
+mutable tag like `busybox` or `busybox:latest` is rejected — so pin one first
+(the same approach as the root README quickstart):
+
+```sh
+docker pull -q busybox:latest >/dev/null
+export MERCATOR_IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+```
+
 ```python
+import os
+
 from mercator import MercatorClient
 
 client = MercatorClient("http://127.0.0.1:8080", token="dev-token", workspace_id="ws_1")
 
-created = client.run_image("busybox", args=["echo", "hi"])
+image = os.environ["MERCATOR_IMAGE"]                 # e.g. busybox@sha256:...
+created = client.run_image(image, args=["echo", "hi"])
 run_id = created["run_id"]                           # == created["run"]["id"]
 
 result = client.wait_run_until_terminal(run_id)
@@ -144,6 +156,8 @@ of those schemas intentionally open.
 - `list_run_events(run_id, workspace_id=None)`, `get_run_decision(run_id, workspace_id=None)`
 - `preview_placement(payload)`
 - `list_connections(workspace_id=None)`, `list_offers(workspace_id=None)`
+- `create_connection(payload, idempotency_key=..., workspace_id=None)`
+- `authorize_connection(connection_id, workspace_id=None)`
 - `create_workload(workspace_id, workload_id, name, idempotency_key=...)`
 - `list_workload_revisions(workload_id, workspace_id=None)`
 - `create_workload_revision(workload_id, workspace_id, revision, idempotency_key=...)`
@@ -162,6 +176,10 @@ client.request("GET", "/v1/runs", query={"workspace_id": "ws_1"})
 
 `wait_run(run_id)` issues a single long-poll: the server advances the run for up
 to ~30 seconds and returns the run, which may still be open at the deadline.
+Because the server holds the request that long, `wait_run` uses a dedicated
+read timeout of at least 60 seconds for that call (a larger configured client
+`timeout` still wins); the configured `timeout` applies unchanged to all other
+calls.
 `wait_run_until_terminal(run_id)` wraps that loop: it re-issues the wait until
 `run["closed"]` is true or its own `deadline` (default 300s) elapses, then
 returns the latest envelope. Inspect `result["run"]["closed"]` to distinguish a

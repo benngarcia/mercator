@@ -155,7 +155,10 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 		if err != nil {
 			continue
 		}
-		all = append(all, owned...)
+		for i := range owned {
+			owned[i].ConnectionID = c.ID
+			all = append(all, owned[i])
+		}
 	}
 	return all, nil
 }

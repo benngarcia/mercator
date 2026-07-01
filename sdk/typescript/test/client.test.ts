@@ -247,6 +247,8 @@ test("workloads, images, connections, offers, placements, and sinks use v1 route
     if (request.url.endsWith("/v1/workloads/wl_1/revisions/rev_1?workspace_id=ws_1")) return { body: { revision: { id: "rev_1", workspace_id: "ws_1", workload_id: "wl_1", digest: "sha256:abc", spec: {} } } };
     if (request.url.endsWith("/v1/images:resolve")) return { body: { image: { image: "repo/app:latest", digest: "sha256:abc", platform: "linux/amd64" } } };
     if (request.url.endsWith("/v1/connections?workspace_id=ws_1")) return { body: { connections: [{ id: "conn_1", workspace_id: "ws_1", adapter_type: "fake", authorized: true }] } };
+    if (request.url.endsWith("/v1/connections")) return { status: 202, body: { connection: { id: "conn_1", workspace_id: "ws_1", adapter_type: "docker", authorized: false } } };
+    if (request.url.endsWith("/v1/connections/conn_1:authorize?workspace_id=ws_1")) return { body: { connection: { id: "conn_1", workspace_id: "ws_1", adapter_type: "docker", authorized: true } } };
     if (request.url.endsWith("/v1/offers?workspace_id=ws_1")) return { body: { offers: [] } };
     if (request.url.endsWith("/v1/placements:preview")) return { body: { decision: { id: "decision_1", workload_revision_digest: "sha256:x", evaluated_at: "2026-06-20T00:00:00Z", model_version: "latency-v1", policy: { objective: "balanced" }, collection_report: {}, candidates: [], selection_reason_codes: [] } } };
     if (request.url.endsWith("/v1/sinks/audit")) return { body: { sink_id: "audit", cursor: 1, has_cursor: true } };
@@ -263,6 +265,11 @@ test("workloads, images, connections, offers, placements, and sinks use v1 route
   await client.getWorkloadRevision("wl_1", "rev_1", { workspaceId: "ws_1" });
   await client.resolveImage({ image: "repo/app:latest", platform: "linux/amd64" });
   await client.listConnections({ workspaceId: "ws_1" });
+  const createdConnection = await client.createConnection(
+    { connection_id: "conn_1", adapter_type: "docker" },
+    { idempotencyKey: "idem-connection", workspaceId: "ws_1" },
+  );
+  const authorizedConnection = await client.authorizeConnection("conn_1", { workspaceId: "ws_1" });
   await client.listOffers({ workspaceId: "ws_1" });
   await client.previewPlacement({ workspace_id: "ws_1", workload: revision });
   await client.getSinkStatus("audit");
@@ -271,7 +278,59 @@ test("workloads, images, connections, offers, placements, and sinks use v1 route
 
   assert.equal(headersOf(requests[0]!).get("idempotency-key"), "idem-workload");
   assert.equal(headersOf(requests[1]!).get("idempotency-key"), "idem-revision");
+  // createConnection is a mutation: the idempotency key is sent and the
+  // client-resolved workspace is applied to the request body.
+  const createConnectionRequest = requests[6]!;
+  assert.equal(createConnectionRequest.url, "https://mercator.example/v1/connections");
+  assert.equal(createConnectionRequest.init.method, "POST");
+  assert.equal(headersOf(createConnectionRequest).get("idempotency-key"), "idem-connection");
+  assert.deepEqual(createConnectionRequest.body, { connection_id: "conn_1", adapter_type: "docker", workspace_id: "ws_1" });
+  assert.equal(createdConnection.connection.id, "conn_1");
+  const authorizeRequest = requests[7]!;
+  assert.equal(authorizeRequest.url, "https://mercator.example/v1/connections/conn_1:authorize?workspace_id=ws_1");
+  assert.equal(authorizeRequest.init.method, "POST");
+  assert.equal(authorizedConnection.connection.authorized, true);
   assert.deepEqual(requests.at(-1)?.body, { from_exclusive: 1, limit: 10, replay_id: "replay_1" });
+});
+
+test("createConnection does not overwrite an explicit body workspace_id", async () => {
+  const { fetch, requests } = createMockFetch([
+    { status: 202, body: { connection: { id: "conn_1", workspace_id: "ws_explicit", adapter_type: "docker", authorized: false } } },
+  ]);
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", fetch, workspaceId: "ws_default" });
+
+  await client.createConnection(
+    { connection_id: "conn_1", adapter_type: "docker", workspace_id: "ws_explicit" },
+    { idempotencyKey: "idem-connection" },
+  );
+
+  assert.equal((requests[0]?.body as { workspace_id?: string }).workspace_id, "ws_explicit");
+});
+
+test("healthLive, healthReady, and getOpenapi hit unversioned routes with Authorization", async () => {
+  const { fetch, requests } = createMockFetch((request) => {
+    if (request.url.endsWith("/health/live")) return { body: { status: "ok" } };
+    if (request.url.endsWith("/health/ready")) return { body: { status: "ok" } };
+    if (request.url.endsWith("/openapi.json")) return { body: { openapi: "3.0.0" } };
+    throw new Error(`Unhandled route: ${request.url}`);
+  });
+  const client = new MercatorClient({ baseUrl: "https://mercator.example", token: "secret-token", fetch });
+
+  const live = await client.healthLive();
+  const ready = await client.healthReady();
+  const openapi = await client.getOpenapi();
+
+  assert.equal(live.status, "ok");
+  assert.equal(ready.status, "ok");
+  assert.equal(openapi.openapi, "3.0.0");
+  assert.equal(requests[0]?.url, "https://mercator.example/health/live");
+  assert.equal(requests[1]?.url, "https://mercator.example/health/ready");
+  assert.equal(requests[2]?.url, "https://mercator.example/openapi.json");
+  // Authorization is sent on every request (parity with the Python and Ruby
+  // SDKs), including unversioned routes.
+  for (const request of requests) {
+    assert.equal(headersOf(request).get("authorization"), "Bearer secret-token");
+  }
 });
 
 test("waitRunUntilTerminal re-issues wait while the server returns 202 (open) until closed", async () => {

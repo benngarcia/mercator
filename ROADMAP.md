@@ -17,8 +17,8 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 - OSS project scaffolding: license, security policy, contribution guide, issue
   templates, CI/release workflows, compatibility policy, screenshots, and
   launch scorecard.
-- Short console demo committed under `docs/assets/`; re-recording it against the
-  Docker quickstart is pending.
+- Short console demo committed under `docs/assets/`, recorded against the
+  Docker quickstart (see `docs/assets/README.md` for the recording setup).
 - Threat model, package/distribution plan, CLI reference, Docker quickstart, and
   starter contributor queue documented.
 

@@ -186,48 +186,51 @@ class ReporterServerTestCase(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class RunReporterFactoryTests(unittest.TestCase):
+    FULL_ENV = {
+        "MERCATOR_REPORT_URL": "https://pub.example",
+        "MERCATOR_RUN_ID": "run_1",
+        "MERCATOR_WORKSPACE_ID": "ws_42",
+        "MERCATOR_RUN_TOKEN": "tok",
+    }
+
+    def _env_without(self, *names):
+        return {key: value for key, value in self.FULL_ENV.items() if key not in names}
+
     def test_returns_none_when_env_is_empty(self):
         result = run_reporter(env={})
         self.assertIsNone(result)
 
-    def test_returns_none_when_report_url_missing(self):
-        result = run_reporter(env={
-            "MERCATOR_RUN_ID": "run_1",
-            "MERCATOR_RUN_TOKEN": "tok",
-        })
-        self.assertIsNone(result)
+    def test_raises_when_report_url_missing(self):
+        with self.assertRaises(ValueError) as raised:
+            run_reporter(env=self._env_without("MERCATOR_REPORT_URL"))
+        self.assertIn("MERCATOR_REPORT_URL", str(raised.exception))
 
-    def test_returns_none_when_run_id_missing(self):
-        result = run_reporter(env={
-            "MERCATOR_REPORT_URL": "https://pub.example",
-            "MERCATOR_RUN_TOKEN": "tok",
-        })
-        self.assertIsNone(result)
+    def test_raises_when_run_id_missing(self):
+        with self.assertRaises(ValueError) as raised:
+            run_reporter(env=self._env_without("MERCATOR_RUN_ID"))
+        self.assertIn("MERCATOR_RUN_ID", str(raised.exception))
 
-    def test_returns_none_when_run_token_missing(self):
-        result = run_reporter(env={
-            "MERCATOR_REPORT_URL": "https://pub.example",
-            "MERCATOR_RUN_ID": "run_1",
-        })
-        self.assertIsNone(result)
+    def test_raises_when_run_token_missing(self):
+        with self.assertRaises(ValueError) as raised:
+            run_reporter(env=self._env_without("MERCATOR_RUN_TOKEN"))
+        self.assertIn("MERCATOR_RUN_TOKEN", str(raised.exception))
+
+    def test_raises_when_workspace_id_missing(self):
+        # A reporter without a workspace id fails every report server-side
+        # (400 WORKSPACE_REQUIRED), so construction must fail fast instead.
+        with self.assertRaises(ValueError) as raised:
+            run_reporter(env=self._env_without("MERCATOR_WORKSPACE_ID"))
+        self.assertIn("MERCATOR_WORKSPACE_ID", str(raised.exception))
+
+    def test_raises_when_workspace_id_is_empty_string(self):
+        env = dict(self.FULL_ENV, MERCATOR_WORKSPACE_ID="")
+        with self.assertRaises(ValueError) as raised:
+            run_reporter(env=env)
+        self.assertIn("MERCATOR_WORKSPACE_ID", str(raised.exception))
 
     def test_returns_reporter_when_all_required_vars_present(self):
-        result = run_reporter(env={
-            "MERCATOR_REPORT_URL": "https://pub.example",
-            "MERCATOR_RUN_ID": "run_1",
-            "MERCATOR_RUN_TOKEN": "tok",
-        })
+        result = run_reporter(env=dict(self.FULL_ENV))
         self.assertIsInstance(result, Reporter)
-
-    def test_workspace_id_defaults_to_empty_string_when_absent(self):
-        reporter = run_reporter(env={
-            "MERCATOR_REPORT_URL": "https://pub.example",
-            "MERCATOR_RUN_ID": "run_1",
-            "MERCATOR_RUN_TOKEN": "tok",
-        })
-        self.assertIsNotNone(reporter)
-        # _workspace_id should default to ""
-        self.assertEqual(reporter._workspace_id, "")
 
     def test_workspace_id_is_read_from_env(self):
         reporter = run_reporter(env={

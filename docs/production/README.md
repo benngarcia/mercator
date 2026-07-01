@@ -5,7 +5,8 @@ unqualified GA operation. Treat this directory as the operator entry point for
 running, testing, and auditing the current single-process OCI run broker.
 
 Mercator runs as one Go process with an embedded SQLite event log, REST/OpenAPI
-API, JSON-first CLI, embedded UI, fake and Docker adapters, env-based workload
+API, JSON-first CLI, embedded UI, a Docker host adapter (with RunPod added via
+connections), env-based workload
 configuration, sink cursor/replay support, and disposable projections. SQLite events are the source
 of truth; read models, offer caches, projections, and sink cursors can be
 rebuilt from the event log.
@@ -55,7 +56,6 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
-export MERCATOR_ADAPTER=docker
 export MERCATOR_DOCKER_ARCH=amd64
 
 go run ./cmd/mercator serve

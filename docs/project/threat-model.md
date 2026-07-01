@@ -15,7 +15,8 @@ In scope:
 - Single-process `cmd/mercator` server.
 - SQLite event log and read models.
 - `/v1/*` HTTP API, CLI, SDKs, and embedded console.
-- Fake, Docker, and RunPod-oriented adapter paths.
+- The Docker host adapter path, plus RunPod-oriented adapters added via
+  connections.
 - Workload metadata, run lifecycle events, placement decisions, and cleanup
   intents.
 - Adapter credentials, per-run reporting tokens, and public event visibility.

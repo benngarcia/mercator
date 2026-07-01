@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,6 +51,11 @@ func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequ
 	}
 	for _, key := range sortedKeys(req.Env) {
 		args = append(args, "--env", key+"="+req.Env[key])
+	}
+	// Publish each requested container port to an ephemeral host port;
+	// dropping these silently would strand a workload that asked for ingress.
+	for _, port := range req.Ports {
+		args = append(args, "--publish", strconv.Itoa(port))
 	}
 	if len(req.Entrypoint) > 0 {
 		args = append(args, "--entrypoint", req.Entrypoint[0])

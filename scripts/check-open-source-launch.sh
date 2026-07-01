@@ -109,7 +109,9 @@ require_readme_heading() {
 }
 
 check_markdown_links() {
-  if ruby <<'RUBY'
+  # -E UTF-8:UTF-8 keeps file reads UTF-8 even under POSIX/C locales, where
+  # Ruby would otherwise fail on non-ASCII bytes in the docs.
+  if ruby -E UTF-8:UTF-8 <<'RUBY'
 files = (
   `git ls-files '*.md'`.lines.map(&:chomp) +
   `git ls-files --others --exclude-standard '*.md'`.lines.map(&:chomp)
@@ -145,7 +147,7 @@ RUBY
 }
 
 check_yaml_parse() {
-  if ruby <<'RUBY'
+  if ruby -E UTF-8:UTF-8 <<'RUBY'
 require "yaml"
 files = Dir[".github/**/*.yml", ".github/**/*.yaml"]
 files.each { |file| YAML.load_file(file) }
@@ -179,7 +181,7 @@ verify_checksums() {
 }
 
 check_placeholder_markers() {
-  if ruby <<'RUBY'
+  if ruby -E UTF-8:UTF-8 <<'RUBY'
 files = %w[
   README.md
   CONTRIBUTING.md

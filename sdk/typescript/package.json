@@ -11,9 +11,15 @@
       "default": "./dist/src/index.js"
     }
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benngarcia/mercator.git",
+    "directory": "sdk/typescript"
+  },
   "files": [
-    "dist",
-    "README.md"
+    "dist/src",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

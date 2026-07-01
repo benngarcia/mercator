@@ -7,7 +7,7 @@ Suggested labels: `good first issue`, `docs`, `sdk`
 The SDK READMEs show the happy path, event reads, placement-decision reads, and
 sink-status reads. A new SDK evaluator would still benefit from small
 copy-paste example files that run against the local Docker quickstart
-(`MERCATOR_ADAPTER=docker` against a running Docker daemon) without needing
+(`mercator serve` against a running Docker daemon) without needing
 RunPod, package registries, or billable compute.
 
 ## Acceptance Criteria

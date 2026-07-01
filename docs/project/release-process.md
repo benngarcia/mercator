@@ -60,7 +60,6 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
 export MERCATOR_API_TOKEN='dev-token'
 export MERCATOR_AUTH_WORKSPACES='ws_1'
-export MERCATOR_ADAPTER=docker
 export MERCATOR_DOCKER_ARCH=amd64
 go run ./cmd/mercator serve &
 
@@ -96,7 +95,8 @@ verification and release archive generation share the same implementation.
 - Confirm the release workflow passed.
 - Confirm the published release notes match
   `docs/project/release-notes/v0.1.0.md` and still link known limitations.
-- Download one archive and run `./mercator serve --help` or start the server.
+- Download one archive and run `./mercator help` (prints CLI usage and exits 0
+  with no server, DSN, or Docker daemon required) or start the server.
 - Verify `checksums.txt` matches the uploaded archives.
 - Add the release badge/link to `README.md`.
 - Update `docs/launch/open-source-readiness.md` with public CI/release evidence.

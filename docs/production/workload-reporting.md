@@ -41,13 +41,19 @@ runToken = base64url-raw(HMAC-SHA256(reportKey, run_id))
 ```
 
 The token is injected into the container at launch as `MERCATOR_RUN_TOKEN`.
-Two additional vars are also injected:
+Three additional vars are also injected:
 
 | Container Var | Value |
 |---|---|
 | `MERCATOR_RUN_ID` | The run's UUID (e.g. `run_019ef...`) |
-| `MERCATOR_REPORT_URL` | `<MERCATOR_PUBLIC_URL>/v1/runs/<run_id>:report` |
+| `MERCATOR_WORKSPACE_ID` | The run's workspace ID; required as the `workspace_id` query parameter on `:report` |
+| `MERCATOR_REPORT_URL` | The base URL (`<MERCATOR_PUBLIC_URL>`); clients append `/v1/runs/<run_id>:report` |
 | `MERCATOR_RUN_TOKEN` | The per-run HMAC token |
+
+Note that `MERCATOR_REPORT_URL` is the **base URL only** — the orchestrator does
+not inject the full `:report` path. Reporting clients (including the SDK
+reporters) build the full endpoint by appending
+`/v1/runs/<MERCATOR_RUN_ID>:report?workspace_id=<MERCATOR_WORKSPACE_ID>`.
 
 ---
 
@@ -115,7 +121,9 @@ No tunnel needed. The injected container vars point directly at the
 `MERCATOR_PUBLIC_URL`.
 
 Containers launched by a run-pod provider (e.g. RunPod) will use
-`MERCATOR_REPORT_URL` to POST progress and result events back during execution.
+`MERCATOR_REPORT_URL` as the base URL — appending
+`/v1/runs/<run_id>:report` — to POST progress and result events back during
+execution.
 
 ---
 

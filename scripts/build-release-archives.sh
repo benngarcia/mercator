@@ -64,6 +64,10 @@ for target in ${TARGETS}; do
   archives+=("${archive}")
 done
 
+if [[ "${#archives[@]}" -eq 0 ]]; then
+  fail "no release archives were built; MERCATOR_RELEASE_TARGETS resolved to an empty target list"
+fi
+
 (
   cd "${DIST_DIR}"
   rm -f checksums.txt

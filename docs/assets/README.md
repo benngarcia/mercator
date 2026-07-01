@@ -31,8 +31,8 @@ no RunPod, registry credentials, or private workloads.
 
 1. Start Mercator with the Docker adapter following the
    [Docker quickstart](../production/docker-adapter-operation.md): set
-   `MERCATOR_ADAPTER=docker`, `MERCATOR_DOCKER_ARCH=amd64`,
-   `MERCATOR_API_TOKEN`, and a launch-safe workspace such as `ws_1`.
+   `MERCATOR_DOCKER_ARCH=amd64`, `MERCATOR_API_TOKEN`, and a launch-safe
+   workspace such as `ws_1`.
 2. Create a digest-pinned `busybox -- echo hi` run through the CLI and wait for
    the run to close (mutable tags are rejected, so resolve the digest first with
    `docker inspect --format '{{index .RepoDigests 0}}' busybox:latest`).

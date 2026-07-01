@@ -129,7 +129,7 @@ func TestReportIngestEndpointRecordsEvent(t *testing.T) {
 		"data": map[string]any{"pct": 50},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report?workspace_id=ws_1", bytes.NewReader(reportPayload))
-	req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
+	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -182,7 +182,7 @@ func TestReportIngestEndpointWrongToken(t *testing.T) {
 
 	runID := createReportingRun(t, handler, "run_report_wrong_tok")
 
-	otherRunToken := signer.Token("run_completely_different")
+	otherRunToken := signer.Token("ws_1", "run_completely_different")
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report?workspace_id=ws_1",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer "+otherRunToken)
@@ -207,7 +207,7 @@ func TestReportIngestEndpointMissingWorkspaceID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
-	req.Header.Set("Authorization", "Bearer "+signer.Token(runID))
+	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -271,7 +271,7 @@ func TestReportEndpointRunNotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+nonExistentRunID+":report?workspace_id=ws_1",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
-	req.Header.Set("Authorization", "Bearer "+signer.Token(nonExistentRunID))
+	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", nonExistentRunID))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {

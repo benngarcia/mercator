@@ -12,7 +12,8 @@ The validator enforces:
 - image reference matching `image@sha256:<64 hex chars>`;
 - platform `linux/amd64` or `linux/arm64`;
 - env names matching `^[A-Z_][A-Z0-9_]*$`;
-- each env binding has exactly one literal value or exact secret version;
+- each env binding is exactly one literal value (`secret_ref` bindings are
+  rejected; see [ADR 0001](../adr/0001-env-api-no-secret-vault.md));
 - literal env values are at most 32768 bytes;
 - ports are TCP only and in range `1-65535`;
 - public port exposure requires `spec.network.inbound` set to `public_port`;
@@ -27,14 +28,19 @@ optional (the CLI mints a stable one), and no workload spec is needed — the
 server synthesizes the single container and defaults the container name (`main`),
 platform (`linux/amd64`), resources, network, placement, and execution policy.
 
+The image must be **digest-pinned** (`image@sha256:...`). A mutable tag such as
+`busybox` or `busybox:latest` is rejected at create time with a `400` error —
+registry tag→digest resolution is not implemented — so resolve the digest
+yourself first:
+
 ```sh
 export MERCATOR_WORKSPACE_ID=ws_eval
-go run ./cmd/mercator run create busybox -- echo hi | jq '.run.id'
+docker pull -q busybox:latest >/dev/null
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq '.run.id'
 ```
 
-The image may be a tag (`busybox` or `busybox:latest`); the server resolves and
-pins it to `image@sha256:...` in the stored revision before the workload
-validator runs. The equivalent raw HTTP call carries the required
+The equivalent raw HTTP call carries the required
 `Idempotency-Key` header and omits `run_id`:
 
 ```sh
@@ -42,7 +48,7 @@ curl -fsS -X POST "$MERCATOR_API_URL/v1/runs?workspace_id=ws_eval" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: idem-minimal-1' \
-  -d '{"image":"busybox","args":["echo","hi"]}' | jq '.run.id'
+  -d "{\"image\":\"$IMAGE\",\"args\":[\"echo\",\"hi\"]}" | jq '.run.id'
 ```
 
 The SDKs expose the same shorthand as `run_image(...)` (Python) and
@@ -113,7 +119,7 @@ curl -fsS -X POST "$MERCATOR_API_URL/v1/runs" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
   -H "Idempotency-Key: idem-run-from-revision-1" \
   -H "Content-Type: application/json" \
-  -d '{"workspace_id":"ws_eval","run_id":"run_from_revision_1","workload_id":"wrk_eval","workload_revision_id":"wrev_fake_1"}'
+  -d '{"workspace_id":"ws_eval","run_id":"run_from_revision_1","workload_id":"wrk_eval","workload_revision_id":"wrev_eval_1"}'
 ```
 
 ## Read Lifecycle State
@@ -143,8 +149,13 @@ parse the `compute.run.external_state_observed.v1` event to recover it.
 run if it closed before the deadline, or `202` with the latest still-open run if
 not. To block past a single deadline, loop while the response is `202`
 (re-issuing `run wait`); the SDKs expose this as
-`wait_run_until_terminal` / `waitRunUntilTerminal`. In fake mode a run closes
-well within the first long-poll, so a single `run wait` is sufficient.
+`wait_run_until_terminal` / `waitRunUntilTerminal`. On the local Docker path a
+short run (such as `echo hi`) usually closes within the first long-poll, so a
+single `run wait` is often sufficient.
+
+A run whose launch definitively fails — for example an image the Docker daemon
+cannot pull — records a `failed` outcome and closes; it is not retried
+indefinitely.
 
 ## Refresh And Cancel
 
@@ -201,7 +212,8 @@ records `release`.
 
 ## Event Order To Check
 
-For a successful fake run, the public event stream should show the core shape:
+For a successful Docker run, the public event stream should show the core
+shape:
 
 1. run requested;
 2. placement decided;

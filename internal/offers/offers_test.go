@@ -86,3 +86,27 @@ func offerSnapshot(id string, now time.Time) domain.OfferSnapshot {
 		ImageCache: domain.ImageCacheEvidence{Known: true, ManifestCached: true},
 	}
 }
+
+func TestServiceIngestsRepeatedlyForSameConnection(t *testing.T) {
+	// A periodic offer refresh ingests the same connection's stream over and
+	// over; a fixed ExpectedStreamVersion of 0 allowed exactly one ingest ever.
+	ctx := context.Background()
+	svc := New(openOffersTestLog(t))
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+
+	for i := 0; i < 3; i++ {
+		offer := offerSnapshot("offer_1", now.Add(time.Duration(i)*time.Minute))
+		if err := svc.Ingest(ctx, IngestRequest{WorkspaceID: "ws_1", ConnectionID: "conn_1", Offers: []domain.OfferSnapshot{offer}}); err != nil {
+			t.Fatalf("ingest %d: %v", i, err)
+		}
+	}
+	list, err := svc.ListCached(ctx, "ws_1", now)
+	if err != nil {
+		t.Fatalf("list cached: %v", err)
+	}
+	// offerSnapshot sets ObservedAt one minute before its argument; the last
+	// ingest used now+2m, so the winning snapshot observes at now+1m.
+	if len(list) != 1 || !list[0].ObservedAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("expected the latest ingest to win, got %+v", list)
+	}
+}

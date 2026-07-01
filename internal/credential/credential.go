@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -123,6 +124,11 @@ func (r *Resolver) Resolve(ctx context.Context, workspaceID string, c Credential
 	case "", SourceEnv:
 		if r.getenv == nil {
 			return "", errors.New("credential: env source unavailable")
+		}
+		// The broker's own configuration (MERCATOR_SECRET_KEY, MERCATOR_API_TOKEN,
+		// …) must never be readable as a provider credential.
+		if strings.HasPrefix(strings.ToUpper(c.Ref), "MERCATOR_") {
+			return "", fmt.Errorf("credential: env var %q is reserved broker configuration and cannot be used as a credential ref", c.Ref)
 		}
 		v := r.getenv(c.Ref)
 		if v == "" {

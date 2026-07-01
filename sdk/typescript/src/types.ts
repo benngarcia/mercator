@@ -30,6 +30,10 @@ export type WorkspaceRequest = {
   workspaceId?: string;
 };
 
+export type HealthStatus = {
+  status: string;
+};
+
 export type ErrorResponse = {
   code: string;
   message: string;
@@ -337,16 +341,39 @@ export type ResolveImageResponse = {
   image: ResolvedImage;
 };
 
+export type CredentialSource = "env" | "mercator" | string;
+
+export type CredentialRef = {
+  source: CredentialSource;
+  ref: string;
+};
+
 export type ConnectionRecord = {
   id: string;
   workspace_id: string;
   adapter_type: string;
   authorization_schema?: Record<string, string>;
   authorized: boolean;
+  config?: Record<string, string>;
+  credential?: CredentialRef;
 };
 
 export type ConnectionListResponse = {
   connections: ConnectionRecord[];
+};
+
+export type CreateConnectionRequest = {
+  workspace_id?: string;
+  connection_id?: string;
+  adapter_type: string;
+  config?: Record<string, string>;
+  credential?: CredentialRef;
+  /** Write-only: accepted on create, never echoed in any response. */
+  secret?: string;
+};
+
+export type ConnectionResponse = {
+  connection: ConnectionRecord;
 };
 
 export type OfferKind = "standing" | "provisionable" | string;

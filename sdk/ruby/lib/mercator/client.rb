@@ -12,6 +12,13 @@ module Mercator
   class Client
     DEFAULT_USER_AGENT = "mercator-ruby/#{Mercator::VERSION}"
 
+    # Read timeout applied to `:wait` long-polls. The server holds each wait
+    # open for up to ~30s before answering, so the effective read timeout on
+    # that call must comfortably exceed 30s or every wait on a long run times
+    # out client-side instead of re-polling. The configured `timeout` still
+    # applies to all other calls (and wins here when it is larger).
+    WAIT_READ_TIMEOUT = 60.0
+
     attr_reader :base_url, :token, :workspace_id, :timeout, :user_agent
 
     def initialize(base_url, token: nil, workspace_id: nil, timeout: 30.0, user_agent: DEFAULT_USER_AGENT)
@@ -25,14 +32,17 @@ module Mercator
       @user_agent = user_agent
     end
 
-    def request(method, path, query: nil, json_body: nil, headers: nil, idempotency_key: nil)
+    # `read_timeout:` overrides the client-wide timeout for this call's read
+    # phase only; omit it to use the client default.
+    def request(method, path, query: nil, json_body: nil, headers: nil, idempotency_key: nil, read_timeout: nil)
       raise ArgumentError, "path must start with '/'" unless path.start_with?("/")
 
       uri = build_uri(path, query)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == "https"
       http.open_timeout = timeout unless timeout.nil?
-      http.read_timeout = timeout unless timeout.nil?
+      effective_read_timeout = read_timeout.nil? ? timeout : read_timeout
+      http.read_timeout = effective_read_timeout unless effective_read_timeout.nil?
 
       request = request_class(method).new(uri.request_uri)
       request["Accept"] = "application/json"
@@ -93,7 +103,12 @@ module Mercator
     end
 
     def wait_run(run_id, workspace_id: nil)
-      request("GET", "/v1/runs/#{path_segment(run_id)}:wait", query: workspace_query(workspace_id))
+      request(
+        "GET",
+        "/v1/runs/#{path_segment(run_id)}:wait",
+        query: workspace_query(workspace_id),
+        read_timeout: wait_read_timeout
+      )
     end
 
     def wait_run_until_terminal(run_id, workspace_id: nil, deadline: 300.0)
@@ -128,6 +143,26 @@ module Mercator
 
     def list_connections(workspace_id: nil)
       request("GET", "/v1/connections", query: workspace_query(workspace_id))
+    end
+
+    # Create a connection (POST /v1/connections). `payload` carries the
+    # server's create-connection body: `connection_id`, `adapter_type`,
+    # optional `config`, optional `credential` (`{"source" => ..., "ref" => ...}`),
+    # and optional write-only `secret`. `workspace_id:` follows the same
+    # fallback rules as `create_run`.
+    def create_connection(payload, idempotency_key:, workspace_id: nil)
+      body = stringify_keys(payload)
+      effective_workspace = workspace_id.nil? ? @workspace_id : workspace_id
+      body["workspace_id"] = effective_workspace if !effective_workspace.nil? && empty_value?(body["workspace_id"])
+      request("POST", "/v1/connections", json_body: body, idempotency_key: idempotency_key)
+    end
+
+    def authorize_connection(connection_id, workspace_id: nil)
+      request(
+        "POST",
+        "/v1/connections/#{path_segment(connection_id)}:authorize",
+        query: workspace_query(workspace_id)
+      )
     end
 
     def list_offers(workspace_id: nil)
@@ -191,6 +226,14 @@ module Mercator
           "replay_id" => replay_id
         })
       )
+    end
+
+    # Effective read timeout for `:wait` long-polls: never poll with less than
+    # WAIT_READ_TIMEOUT, but a larger configured timeout still wins.
+    def wait_read_timeout
+      return WAIT_READ_TIMEOUT if timeout.nil?
+
+      [timeout, WAIT_READ_TIMEOUT].max
     end
 
     private

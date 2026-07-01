@@ -146,23 +146,46 @@ class Reporter:
 # Factory
 # ------------------------------------------------------------------
 
+#: Environment variables Mercator injects into workload containers. All four
+#: are required for a working reporter — the server rejects reports without a
+#: workspace_id (400 WORKSPACE_REQUIRED), so a partially populated environment
+#: is a misconfiguration, not "running outside Mercator".
+REQUIRED_ENV_VARS = (
+    "MERCATOR_REPORT_URL",
+    "MERCATOR_RUN_ID",
+    "MERCATOR_WORKSPACE_ID",
+    "MERCATOR_RUN_TOKEN",
+)
+
+
 def run_reporter(env=None, *, opener=None) -> Reporter | None:
     """Create a :class:`Reporter` from environment variables injected by Mercator.
 
-    Returns ``None`` (without raising) when the required variables are absent,
-    so workloads running outside Mercator degrade gracefully.
+    Returns ``None`` (without raising) when none of the Mercator variables are
+    set, so workloads running outside Mercator degrade gracefully. Raises
+    :class:`ValueError` when the environment is only partially populated (some
+    variables set, some missing/empty) — every report from such a reporter
+    would fail server-side, so fail fast at construction instead.
 
     :param env: Mapping to read env vars from (defaults to ``os.environ``).
     :param opener: Override the HTTP opener (useful in tests).
     """
     source = env if env is not None else os.environ
-    report_url = source.get("MERCATOR_REPORT_URL")
-    run_id = source.get("MERCATOR_RUN_ID")
-    workspace_id = source.get("MERCATOR_WORKSPACE_ID", "")
-    token = source.get("MERCATOR_RUN_TOKEN")
+    values = {name: source.get(name) or "" for name in REQUIRED_ENV_VARS}
+    missing = [name for name in REQUIRED_ENV_VARS if not values[name]]
 
-    if not report_url or not run_id or not token:
-        return None
+    if len(missing) == len(REQUIRED_ENV_VARS):
+        return None  # not running under Mercator
+    if missing:
+        raise ValueError(
+            "Mercator reporter environment is incomplete; missing or empty: "
+            + ", ".join(missing)
+        )
+
+    report_url = values["MERCATOR_REPORT_URL"]
+    run_id = values["MERCATOR_RUN_ID"]
+    workspace_id = values["MERCATOR_WORKSPACE_ID"]
+    token = values["MERCATOR_RUN_TOKEN"]
 
     return Reporter(
         run_id=run_id,

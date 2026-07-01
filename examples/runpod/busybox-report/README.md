@@ -9,9 +9,9 @@ for validating that injected reporting env, per-run tokens, exit reporting, and
 provider cleanup work.
 
 Before running, replace `busybox@sha256:<real-index-digest>` with a real
-registry-pullable BusyBox digest for the platform RunPod will pull. The current
-dev resolver can synthesize fake digests for local evaluation; those are not
-pullable by RunPod.
+registry-pullable BusyBox digest for the platform RunPod will pull. The server
+rejects mutable tags at create time, and RunPod can only pull digests that
+actually exist in a registry.
 
 ## Create the run
 
