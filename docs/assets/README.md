@@ -5,14 +5,18 @@ captures stay in ignored `output/` until they are reviewed and renamed.
 
 Current assets:
 
-- `mercator-demo.webm` - ~9-second embedded-console walkthrough: the runs list,
+- `mercator-demo.webm` - ~13-second embedded-console walkthrough: the runs list,
   a run's detail (phase timeline, outcome, exit code, cleanup), the placement
   decision (selected offer and reason codes), and the event-sourced audit trail.
-  Recorded headlessly and deterministically by `record-demo.mjs`.
+  A synthetic cursor glides to each target, clicks leave a ripple, and the view
+  eases-zooms into the decision and the event trail. Recorded headlessly and
+  deterministically by `record-demo.mjs`.
 - `mercator-demo.gif` - GIF fallback of the same recording for README contexts
   where WebM links are less prominent.
-- `record-demo.mjs` - the [Playwright](https://playwright.dev) script that seeds
-  a run and records the console, so the demo is reproducible.
+- `record-demo.mjs` - the [Playwright](https://playwright.dev) +
+  [ghost-cursor](https://github.com/Xetera/ghost-cursor) script that seeds a run
+  and records the console (pointer motion, click ripples, zoom), so the demo is
+  reproducible.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
   and workspace context.
 - `mercator-run-decision.png` - run detail placement decision and lifecycle
@@ -66,15 +70,16 @@ root, with a running Docker daemon and the broker up (see the README
 [quickstart](../../README.md#try-it-in-5-minutes)):
 
 ```sh
-npm i playwright && npx playwright install chromium
+npm i playwright ghost-cursor && npx playwright install chromium
 node docs/assets/record-demo.mjs      # seeds a run, writes webm to docs/assets/output/
 ```
 
-Then generate the GIF fallback and move both files into `docs/assets/`:
+Then generate the GIF fallback (the zoom motion inflates the GIF, so this keeps
+it under 5 MB) and move both files into `docs/assets/`:
 
 ```sh
 ffmpeg -y -i docs/assets/output/mercator-demo.webm \
-  -vf "fps=13,scale=1100:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=160[p];[s1][p]paletteuse=dither=bayer:bayer_scale=4" \
+  -vf "fps=12,scale=880:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=96[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5" \
   docs/assets/output/mercator-demo.gif
 mv docs/assets/output/mercator-demo.{webm,gif} docs/assets/
 ```
