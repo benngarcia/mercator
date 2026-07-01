@@ -329,11 +329,7 @@ check_readme_surface() {
 
   require_pattern README.md 'docs/assets/mercator-demo\.webm' "README links demo WebM"
   require_pattern README.md 'docs/assets/mercator-demo\.gif' "README links demo GIF"
-  require_pattern README.md 'docs/launch/open-source-readiness\.md' "README links launch scorecard"
-  require_pattern README.md 'docs/launch/github-repository-settings\.md' "README links repository settings checklist"
-  require_pattern README.md 'docs/launch/pre-public-exposure-review\.md' "README links pre-public exposure review"
-  require_pattern README.md 'docs/launch/proof-points/README\.md' "README links proof-point evidence"
-  require_pattern README.md 'docs/launch/proof-point-template\.md' "README links proof-point template"
+  require_pattern README.md 'docs/launch/' "README points to the launch/process docs directory"
   require_pattern README.md 'examples/runpod/README\.md' "README links RunPod examples"
   require_pattern README.md 'CODE_OF_CONDUCT\.md' "README links code of conduct"
   require_pattern README.md 'SUPPORT\.md' "README links support policy"

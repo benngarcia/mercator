@@ -23,14 +23,21 @@ The global `--api-url URL` flag overrides `MERCATOR_API_URL`.
 
 ## Run Commands
 
-The image shorthand is the normal first-run path:
+Create a run from an image reference. On the Docker adapter the image must be
+digest-pinned — a mutable tag like `busybox:latest` is rejected, and registry
+tag→digest resolution is not implemented yet (see
+[known-limitations.md](../production/known-limitations.md)), so pin the digest
+yourself:
 
 ```sh
-mercator run create busybox -- echo hi
+IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
+mercator run create "$IMAGE" -- echo hi
 ```
 
 That command omits `--run-id` and `--idempotency-key`; the server generates a
-run id, and the CLI mints or derives the idempotency key needed by the API.
+run id, and the CLI mints or derives the idempotency key needed by the API. The
+bare `busybox` shorthand resolves only under the internal test resolver, not
+against a real Docker host.
 
 Common commands:
 

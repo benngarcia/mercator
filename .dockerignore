@@ -1,0 +1,9 @@
+.git
+.emdash
+**/node_modules
+web/app
+dist
+*.db
+*.db-wal
+*.db-shm
+mercator

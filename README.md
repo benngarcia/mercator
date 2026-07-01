@@ -1,11 +1,13 @@
 # Mercator
 
-Mercator is an **event-sourced OCI run broker** for teams that need to run
-immutable container workloads on the best feasible compute offer without
-adopting a cluster control plane.
+Run a container on the best place that can take it, and get an audited record of
+why it landed there and how it exited — what Mercator decided, where it ran, the
+exit code, and whether it cleaned up. Today that place is your local Docker host;
+multi-provider placement (RunPod and other GPU providers) is emerging.
 
-> "Run this container image now, on the cheapest/fastest feasible place, and
-> tell me exactly what happened."
+Under the hood, Mercator is an event-sourced run broker for OCI containers: one
+Go process, a SQLite event log, a JSON HTTP API and CLI, and an embedded
+console — no Kubernetes, Slurm, or cluster control plane.
 
 ![Mercator console showing runs](docs/assets/mercator-runs.png)
 
@@ -50,49 +52,87 @@ Mercator is **V1 evaluation-ready, not GA infrastructure yet**. See
 [Known Limitations](docs/production/known-limitations.md) and
 [Roadmap](ROADMAP.md) before relying on it for production workloads.
 
+## The Model
+
+An **offer** is one concrete place Mercator could run your container — your local
+Docker host today, a RunPod GPU or a standing pool later — described by capability
+facts (platform, resources, accelerators) and price. When you ask Mercator to run
+a workload, it filters the available offers against what the workload needs,
+**records which offer won and why (and which candidates it rejected)**, then
+launches the container and watches it to a clean exit. That placement decision —
+not the launch itself — is the part `docker run` can't give you.
+
+## Who It's For
+
+**For you if:** you run real container workloads on a handful of machines (one
+box, a couple of hosts, a spot GPU), you've outgrown `ssh in && docker run`, but
+you're nowhere near wanting Kubernetes, Slurm, or Nomad — and you want an
+auditable answer to "what ran where, why there, and did it exit clean?"
+
+**Not for you (yet) if:** you need multi-node failover, per-user auth, or TLS
+today; you want a GA platform with a support SLA; or you only ever target one
+local host and never need the audit trail (a shell script around `docker run` is
+genuinely fine — Mercator adds idempotent retries, a recorded placement decision
+across multiple offers, and a queryable run history on top of that).
+
+Mercator is built by a solo maintainer, in the open, with nothing to sell — no
+company, no upsell, no telemetry. For the right person that is a feature; set
+your support expectations accordingly (see [SUPPORT.md](SUPPORT.md)).
+
 ## Try It In 5 Minutes
 
-Mercator launches OCI workloads as real containers through the Docker host
-adapter, so a running Docker daemon is the one hard dependency for a first run.
-You need Go 1.25+, a running Docker daemon, `jq`, and a shell.
+Mercator launches your workload as a real Docker container, so **a running
+Docker daemon is the only thing you need** — no Go toolchain. From a source
+checkout, plus `curl` and `jq` to talk to the API:
 
-Terminal 1 — start the broker against your local Docker host:
+### 1. Run the broker (Docker)
 
 ```sh
-rm -f /tmp/mercator-demo.db /tmp/mercator-demo.db-wal /tmp/mercator-demo.db-shm
+docker build -t mercator:local .
 
-export MERCATOR_ADDR=127.0.0.1:8080
-export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_AUTH_WORKSPACES='ws_1'
-export MERCATOR_ADAPTER=docker
-export MERCATOR_DOCKER_ARCH=amd64
-
-go run ./cmd/mercator serve
+docker run --rm \
+  -e MERCATOR_ADDR=0.0.0.0:8080 \
+  -e MERCATOR_ADAPTER=docker -e MERCATOR_DOCKER_ARCH=amd64 \
+  -e MERCATOR_API_TOKEN=dev-token -e MERCATOR_AUTH_WORKSPACES=ws_1 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -p 8080:8080 mercator:local serve
 ```
 
-Terminal 2 — pin a digest, create a run, and read the result. V1 workloads must
-use a digest-pinned image reference, not a mutable tag:
+The image build compiles Mercator inside the container, so you do not need Go
+installed. Mounting `/var/run/docker.sock` lets the broker launch containers on
+your host Docker — and grants the container root-equivalent control of that
+daemon, which is fine on a machine you own for local evaluation but not on an
+untrusted host.
+
+### 2. Create a run and read the result
+
+In another shell. On the Docker adapter a workload must reference a
+**digest-pinned image** — a mutable tag like `busybox:latest` is rejected, and
+tag→digest resolution against a registry is not implemented yet — so pin one
+first:
 
 ```sh
 export MERCATOR_API_URL=http://127.0.0.1:8080
-export MERCATOR_API_TOKEN='dev-token'
+export MERCATOR_API_TOKEN=dev-token
 export MERCATOR_WORKSPACE_ID=ws_1
 
 docker pull -q busybox:latest >/dev/null
 IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
 
-RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
+RUN_ID="$(curl -fsS -X POST "$MERCATOR_API_URL/v1/runs?workspace_id=$MERCATOR_WORKSPACE_ID" \
+  -H "Authorization: Bearer $MERCATOR_API_TOKEN" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: quickstart-1' \
+  -d "{\"image\":\"$IMAGE\",\"args\":[\"echo\",\"hi\"]}" | jq -r '.run_id')"
 
-go run ./cmd/mercator run get --run-id "$RUN_ID" \
-  | jq '{id: .run.id, outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
+curl -fsS "$MERCATOR_API_URL/v1/runs/$RUN_ID?workspace_id=$MERCATOR_WORKSPACE_ID" \
+  -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
+  | jq '{outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
 ```
 
-Expected shape:
+Expected:
 
 ```json
 {
-  "id": "run_...",
   "outcome": "succeeded",
   "exit_code": 0,
   "cleanup": "confirmed",
@@ -100,10 +140,39 @@ Expected shape:
 }
 ```
 
-Mercator pulls the pinned image, launches a labeled container, captures the exit
-code, and confirms cleanup. Open the console at
+### 3. See why it ran there
+
+The point of a broker is the placement decision — ask for it:
+
+```sh
+curl -fsS "$MERCATOR_API_URL/v1/runs/$RUN_ID/decision?workspace_id=$MERCATOR_WORKSPACE_ID" \
+  -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
+  | jq '{selected: .decision.selected_offer_snapshot_id, candidate_count: (.decision.candidates | length)}'
+```
+
+```json
+{ "selected": "offer_docker_loopback", "candidate_count": 1 }
+```
+
+On a single Docker host there is one offer, so it wins uncontested — but the
+selected offer, every rejected candidate, and the reason codes are recorded for
+each run, and that record fills in as more offers appear (a second host, a
+RunPod GPU). Open the console at
 [`http://127.0.0.1:8080/?workspace_id=ws_1`](http://127.0.0.1:8080/?workspace_id=ws_1)
 and paste `dev-token` when prompted.
+
+### From source (contributors)
+
+With Go 1.25+, skip the image and use the binary directly — compile once, then
+reuse it:
+
+```sh
+go build -o mercator ./cmd/mercator
+
+export MERCATOR_ADDR=127.0.0.1:8080 MERCATOR_ADAPTER=docker MERCATOR_DOCKER_ARCH=amd64
+export MERCATOR_API_TOKEN=dev-token MERCATOR_AUTH_WORKSPACES=ws_1
+./mercator serve   # then drive it with ./mercator run create "$IMAGE" -- echo hi
+```
 
 For the full Docker runbook — preconditions, container labels, and cleanup
 verification — see
@@ -136,7 +205,9 @@ from mercator import MercatorClient
 
 client = MercatorClient("http://127.0.0.1:8080", token="dev-token", workspace_id="ws_1")
 
-created = client.run_image("busybox", args=["echo", "hi"])
+# On the Docker adapter the image must be digest-pinned (see the quickstart).
+image = "busybox@sha256:<digest>"
+created = client.run_image(image, args=["echo", "hi"])
 result = client.wait_run_until_terminal(created["run_id"])
 
 print(result["run"]["outcome"], result["run"]["exit_code"])
@@ -171,31 +242,18 @@ go build ./cmd/mercator
 | Need | Start Here |
 | --- | --- |
 | Install, start, health checks | [docs/production/install-configuration.md](docs/production/install-configuration.md) |
-| First local evaluation | [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md) |
+| First local evaluation (Docker) | [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md) |
 | CLI commands and environment | [docs/reference/cli.md](docs/reference/cli.md) |
 | HTTP/OpenAPI route overview | [docs/reference/openapi.md](docs/reference/openapi.md) |
-| Docker adapter operation | [docs/production/docker-adapter-operation.md](docs/production/docker-adapter-operation.md) |
-| RunPod workload examples | [examples/runpod/README.md](examples/runpod/README.md) |
 | Workload and run lifecycle | [docs/production/workload-run-lifecycle.md](docs/production/workload-run-lifecycle.md) |
 | Authentication and workspaces | [docs/production/authentication-workspaces.md](docs/production/authentication-workspaces.md) |
 | Security boundaries | [docs/production/security-model.md](docs/production/security-model.md) |
-| Backup and restore | [docs/production/backup-recovery.md](docs/production/backup-recovery.md) |
-| Human evaluation checklist | [docs/production/human-eval-checklist.md](docs/production/human-eval-checklist.md) |
-| Code of conduct | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
-| Support | [SUPPORT.md](SUPPORT.md) |
-| Governance | [GOVERNANCE.md](GOVERNANCE.md) |
-| Compatibility policy | [docs/project/compatibility.md](docs/project/compatibility.md) |
-| Threat model | [docs/project/threat-model.md](docs/project/threat-model.md) |
-| Package and distribution plan | [docs/project/package-distribution.md](docs/project/package-distribution.md) |
-| Starter contributor queue | [docs/project/contributor-starter-queue.md](docs/project/contributor-starter-queue.md) |
-| External reviewer packet | [docs/launch/reviewer-packet.md](docs/launch/reviewer-packet.md) |
-| Public launch runbook | [docs/launch/public-launch-runbook.md](docs/launch/public-launch-runbook.md) |
-| GitHub launch settings | [docs/launch/github-repository-settings.md](docs/launch/github-repository-settings.md) |
-| Pre-public exposure review | [docs/launch/pre-public-exposure-review.md](docs/launch/pre-public-exposure-review.md) |
-| Public proof point template | [docs/launch/proof-point-template.md](docs/launch/proof-point-template.md) |
-| Proof-point evidence | [docs/launch/proof-points/README.md](docs/launch/proof-points/README.md) |
-| Release process | [docs/project/release-process.md](docs/project/release-process.md) |
-| Open source launch readiness | [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md) |
+| Known limitations | [docs/production/known-limitations.md](docs/production/known-limitations.md) |
+| RunPod workload examples | [examples/runpod/README.md](examples/runpod/README.md) |
+
+Project process — governance, compatibility, threat model, release process, and
+launch prep — lives under [docs/project/](docs/project) and
+[docs/launch/](docs/launch).
 
 ## Build And Test
 
@@ -224,19 +282,17 @@ builds do not require cgo.
 
 Current branch status:
 
-- M13-verified V1 broker slice across Docker and RunPod-oriented paths, with an
-  internal fake adapter backing the deterministic test suite.
+- The core run lifecycle works end to end against local Docker and a
+  RunPod-oriented path, exercised by a full Go test suite. RunPod support is
+  experimental.
 - Embedded operator console and JSON-first CLI.
 - Hand-written SDKs for TypeScript, Python, and Ruby.
-- Production evaluation docs and known limitations are checked in.
-- Open source launch prep is underway; screenshots and a short demo video are
-  tracked, the Docker quickstart is the documented first-run proof path, and the
-  remaining launch scorecard is in
-  [docs/launch/open-source-readiness.md](docs/launch/open-source-readiness.md).
+- Production evaluation docs and honest known limitations are checked in.
+- No tagged release or published packages yet; install from a source checkout.
 
 Important pre-GA gaps include package publishing, release tags, public CI run
-history, stronger external sink wiring, registry credential flows, social proof,
-and external threat-model review.
+history, stronger external sink wiring, registry credential flows, and external
+threat-model review.
 
 ## Contributing
 

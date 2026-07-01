@@ -38,7 +38,7 @@ puts events.fetch("events").map { |event| event.fetch("type") }
 
 decision = client.get_run_decision(run_id).fetch("decision")
 puts decision.fetch("selected_offer_snapshot_id")
-# => offer_local_docker
+# => the selected Docker offer, e.g. offer_docker_loopback
 
 sink = client.get_sink_status("audit")
 puts "#{sink.fetch('sink_id')} #{sink.fetch('cursor')}"
