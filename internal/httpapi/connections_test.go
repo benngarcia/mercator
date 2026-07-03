@@ -58,7 +58,7 @@ func newHTTPTestServerWithConns(t *testing.T, store credential.SecretStore, reso
 		options = append(options, WithCredentialResolver(resolver))
 	}
 	options = append(options, extraOpts...)
-	return NewWithAllServices(orch, sched, ad, workload.New(log), nil, svc, nil, staticResolver, options...)
+	return New(Deps{Orchestrator: orch, Scheduler: sched, Adapter: ad, Workloads: workload.New(log), Connections: svc, Resolver: staticResolver}, options...)
 }
 
 // TestConnectionsListReflectsRegistry asserts that GET /v1/connections returns

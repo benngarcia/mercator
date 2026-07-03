@@ -6,22 +6,17 @@ import (
 	"fmt"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
 var ErrConnectionNotFound = errors.New("broker: connection not found")
 
-type ConnRef struct {
-	ID          string
-	AdapterType string
-	Config      map[string]string
-	Credential  credential.Credential
-	Authorized  bool
-}
-
+// Connections lists the registered connections for a workspace.
+// *connection.Service satisfies it directly.
 type Connections interface {
-	List(ctx context.Context, workspaceID string) ([]ConnRef, error)
+	List(ctx context.Context, workspaceID string) ([]connection.Record, error)
 }
 
 type Resolver interface {
@@ -38,9 +33,8 @@ func NewBroker(conns Connections, factory *Factory, resolver Resolver) *Broker {
 	return &Broker{conns: conns, factory: factory, resolver: resolver}
 }
 
-// build constructs the adapter for one connection (no caching yet — YAGNI;
-// providers' ListOffers are cached upstream by the offer service).
-func (b *Broker) build(ctx context.Context, workspaceID string, c ConnRef) (adapter.Adapter, error) {
+// build constructs the adapter for one connection (no caching yet — YAGNI).
+func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Record) (adapter.Adapter, error) {
 	secret := ""
 	if c.Credential.Source != "" {
 		s, err := b.resolver.Resolve(ctx, workspaceID, c.Credential)
@@ -56,10 +50,10 @@ func (b *Broker) build(ctx context.Context, workspaceID string, c ConnRef) (adap
 // Unlike ListOffers and ListOwned, this intentionally does NOT filter on Authorized.
 // Post-launch operations (Observe/Cancel/Release/Terminate) must still reach a run that was
 // launched on a connection which has since been de-authorized, so cleanup is never stranded.
-func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (ConnRef, adapter.Adapter, error) {
+func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (connection.Record, adapter.Adapter, error) {
 	recs, err := b.conns.List(ctx, workspaceID)
 	if err != nil {
-		return ConnRef{}, nil, err
+		return connection.Record{}, nil, err
 	}
 	for _, c := range recs {
 		if c.ID == connectionID {
@@ -67,7 +61,7 @@ func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string)
 			return c, ad, err
 		}
 	}
-	return ConnRef{}, nil, fmt.Errorf("%w: %s", ErrConnectionNotFound, connectionID)
+	return connection.Record{}, nil, fmt.Errorf("%w: %s", ErrConnectionNotFound, connectionID)
 }
 
 func (b *Broker) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {

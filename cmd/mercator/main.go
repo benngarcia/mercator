@@ -23,7 +23,6 @@ import (
 	runpodadapter "github.com/benngarcia/mercator/internal/adapter/runpod"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/cli"
-	"github.com/benngarcia/mercator/internal/connbroker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -31,7 +30,6 @@ import (
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/ociresolver"
-	"github.com/benngarcia/mercator/internal/offers"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
@@ -63,9 +61,9 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("generated MERCATOR_API_TOKEN for this server process: %s", apiToken)
 	}
 	// serve always runs the registry-backed Docker broker path. Mirror
-	// HandlerForSQLiteWithAdapter's internal construction but over the SHARED
-	// event log, connection.Service, and Broker (the Broker is the adapter),
-	// plus the secret store, credential resolver, and verifier.
+	// HandlerForSQLite's internal construction but over the SHARED event log,
+	// connection.Service, and Broker (the Broker is the adapter), plus the
+	// secret store, credential resolver, and verifier.
 	deps := buildServerDeps(env)
 	sched := scheduler.New()
 	orchOpts := []orchestrator.Option{}
@@ -86,15 +84,15 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	if deps.signer != nil && deps.signer.Enabled() {
 		serverOpts = append(serverOpts, httpapi.WithReportSigner(deps.signer))
 	}
-	handler := httpapi.NewWithAllServices(
-		orch, sched, deps.broker,
-		workload.New(deps.log),
-		sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
-		deps.conns,
-		offers.New(deps.log),
-		imageResolver,
-		serverOpts...,
-	)
+	handler := httpapi.New(httpapi.Deps{
+		Orchestrator: orch,
+		Scheduler:    sched,
+		Adapter:      deps.broker,
+		Workloads:    workload.New(deps.log),
+		Sinks:        sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
+		Connections:  deps.conns,
+		Resolver:     imageResolver,
+	}, serverOpts...)
 	closeFn := deps.close
 	defer func() {
 		if err := closeFn(); err != nil {
@@ -306,7 +304,7 @@ func buildServerDeps(values map[string]string) serverDeps {
 		return runpodadapter.New(secret, config)
 	})
 
-	br := broker.NewBroker(connbroker.New(svc), factory, resolver)
+	br := broker.NewBroker(svc, factory, resolver)
 
 	// Register + authorize the bootstrap docker connection under each workspace.
 	// Create is idempotent by command key, so re-registering on every boot is safe.

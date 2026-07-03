@@ -1056,3 +1056,29 @@ func TestAdvanceRunClosesRunOnDefinitiveLaunchFailure(t *testing.T) {
 		t.Fatalf("advance on closed run must be a no-op, got %v", err)
 	}
 }
+
+func hasEvent(events []eventlog.StoredEvent, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func decodeRunRequested(events []eventlog.StoredEvent) (runRequestedData, error) {
+	for _, event := range events {
+		if event.Type == EventRunRequested {
+			var data runRequestedData
+			payload := event.PrivateData
+			if len(payload) == 0 {
+				payload = event.Data
+			}
+			if err := json.Unmarshal(payload, &data); err != nil {
+				return runRequestedData{}, err
+			}
+			return data, nil
+		}
+	}
+	return runRequestedData{}, fmt.Errorf("orchestrator: run requested event not found")
+}

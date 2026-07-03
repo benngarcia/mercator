@@ -925,23 +925,6 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 	return record
 }
 
-func decodeRunRequested(events []eventlog.StoredEvent) (runRequestedData, error) {
-	for _, event := range events {
-		if event.Type == EventRunRequested {
-			var data runRequestedData
-			payload := event.PrivateData
-			if len(payload) == 0 {
-				payload = event.Data
-			}
-			if err := json.Unmarshal(payload, &data); err != nil {
-				return runRequestedData{}, err
-			}
-			return data, nil
-		}
-	}
-	return runRequestedData{}, fmt.Errorf("orchestrator: run requested event not found")
-}
-
 func mustEvent(runID, suffix, eventType string, data any, now time.Time) eventlog.NewEvent {
 	encoded, err := json.Marshal(data)
 	if err != nil {
@@ -1015,15 +998,6 @@ func shortExternalHash(parts ...string) string {
 
 func runStream(workspaceID, runID string) eventlog.StreamKey {
 	return eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID}
-}
-
-func hasEvent(events []eventlog.StoredEvent, eventType string) bool {
-	for _, event := range events {
-		if event.Type == eventType {
-			return true
-		}
-	}
-	return false
 }
 
 func isTerminal(phase adapter.ExternalPhase) bool {
