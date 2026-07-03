@@ -573,14 +573,23 @@ func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested
 	if !ok {
 		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: selected offer %s not found", decision.SelectedOfferSnapshotID)
 	}
-	attemptID := "att_" + externalIDPart(workspaceID) + "_" + externalIDPart(strings.TrimPrefix(runID, "run_")) + "_" + shortExternalHash(workspaceID, runID)
-	attempt := attemptData{
-		AttemptID:      attemptID,
-		LaunchKey:      "launch_" + attemptID,
-		OwnershipToken: "own_" + attemptID,
-		CleanupLocator: "cleanup_" + attemptID,
+	return decision, newAttempt(workspaceID, runID), selectedOffer, nil
+}
+
+// newAttempt mints the run's attempt identity. There is ONE identity — the
+// attempt id — and three fixed derivations of it that adapters use for
+// different jobs: LaunchKey names the external object, OwnershipToken labels
+// it as ours, CleanupLocator addresses its cleanup. The derivations are part
+// of the adapter wire contract (container labels, pod env), so they are
+// recorded on the launch intent and never re-derived after launch.
+func newAttempt(workspaceID, runID string) attemptData {
+	id := "att_" + externalIDPart(workspaceID) + "_" + externalIDPart(strings.TrimPrefix(runID, "run_")) + "_" + shortExternalHash(workspaceID, runID)
+	return attemptData{
+		AttemptID:      id,
+		LaunchKey:      "launch_" + id,
+		OwnershipToken: "own_" + id,
+		CleanupLocator: "cleanup_" + id,
 	}
-	return decision, attempt, selectedOffer, nil
 }
 
 func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot, reportPublicURL, reportToken string) (adapter.LaunchRequest, error) {
