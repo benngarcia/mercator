@@ -33,6 +33,14 @@ const (
 	ExternalPhaseReleased  ExternalPhase = "released"
 )
 
+// Exited reports whether the phase represents a container that ran to an
+// exit — the only phases where an exit code carries meaning. Docker reports
+// .State.ExitCode as 0 for containers that are still running, so consumers
+// must never treat an exit code on a non-exited observation as authoritative.
+func (p ExternalPhase) Exited() bool {
+	return p == ExternalPhaseSucceeded || p == ExternalPhaseFailed
+}
+
 type Adapter interface {
 	// Verify performs a cheap credential/reachability check for the authorize
 	// flow. It does not launch anything.

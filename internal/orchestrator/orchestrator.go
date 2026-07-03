@@ -889,7 +889,13 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 			}
 			if err := json.Unmarshal(event.Data, &data); err == nil {
 				state.lastObservedPhase = data.Phase
-				if data.ExitCode != nil {
+				// Only an exited container's code is authoritative: docker
+				// observes ExitCode 0 on running containers, and adopting it
+				// here made the next advance finalize the run and reclaim a
+				// live container. The guard also neutralizes such events
+				// already recorded in existing logs. Workload-reported codes
+				// (EventRunReported below) are trusted as-is.
+				if data.ExitCode != nil && data.Phase.Exited() {
 					code := *data.ExitCode
 					state.exitCode = &code
 				}
