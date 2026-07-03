@@ -157,6 +157,13 @@ A run whose launch definitively fails — for example an image the Docker daemon
 cannot pull — records a `failed` outcome and closes; it is not retried
 indefinitely.
 
+Polling is optional. The serving broker runs a background reconcile sweep every
+minute (alongside the orphan-reclaiming janitor) that advances every open run:
+observing container exits, recording terminal outcomes, confirming cleanup, and
+closing the run. An exited run therefore reaches `closed` even if no client
+ever calls `run wait` or `run refresh` again — client polling only changes how
+quickly you observe the terminal state, not whether the run converges.
+
 ## Refresh And Cancel
 
 ```sh
