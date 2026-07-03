@@ -22,34 +22,34 @@ func TestDockerIdentityDefaultsToLoopbackNotLocal(t *testing.T) {
 }
 
 func TestDockerIdentityDerivesFromContext(t *testing.T) {
-	id := dockerIdentity(map[string]string{"MERCATOR_DOCKER_CONTEXT": "homeserver"})
-	if id.Context != "homeserver" {
-		t.Errorf("Context = %q, want homeserver", id.Context)
+	id := dockerIdentity(map[string]string{"MERCATOR_DOCKER_CONTEXT": "dockerhost"})
+	if id.Context != "dockerhost" {
+		t.Errorf("Context = %q, want dockerhost", id.Context)
 	}
-	if id.ConnectionID != "conn_docker_homeserver" {
-		t.Errorf("ConnectionID = %q, want conn_docker_homeserver", id.ConnectionID)
+	if id.ConnectionID != "conn_docker_dockerhost" {
+		t.Errorf("ConnectionID = %q, want conn_docker_dockerhost", id.ConnectionID)
 	}
-	if id.NativeRef != "homeserver" {
-		t.Errorf("NativeRef = %q, want homeserver", id.NativeRef)
+	if id.NativeRef != "dockerhost" {
+		t.Errorf("NativeRef = %q, want dockerhost", id.NativeRef)
 	}
 }
 
 func TestDockerIdentityDerivesLabelFromRemoteHost(t *testing.T) {
-	id := dockerIdentity(map[string]string{"MERCATOR_DOCKER_HOST": "ssh://beng@homeserver"})
-	if id.Host != "ssh://beng@homeserver" {
-		t.Errorf("Host = %q, want ssh://beng@homeserver", id.Host)
+	id := dockerIdentity(map[string]string{"MERCATOR_DOCKER_HOST": "ssh://user@dockerhost"})
+	if id.Host != "ssh://user@dockerhost" {
+		t.Errorf("Host = %q, want ssh://user@dockerhost", id.Host)
 	}
-	if id.ConnectionID != "conn_docker_homeserver" {
-		t.Errorf("ConnectionID = %q, want conn_docker_homeserver (host label)", id.ConnectionID)
+	if id.ConnectionID != "conn_docker_dockerhost" {
+		t.Errorf("ConnectionID = %q, want conn_docker_dockerhost (host label)", id.ConnectionID)
 	}
-	if id.NativeRef != "homeserver" {
-		t.Errorf("NativeRef = %q, want homeserver", id.NativeRef)
+	if id.NativeRef != "dockerhost" {
+		t.Errorf("NativeRef = %q, want dockerhost", id.NativeRef)
 	}
 }
 
 func TestDockerIdentityHonorsExplicitOverrides(t *testing.T) {
 	id := dockerIdentity(map[string]string{
-		"MERCATOR_DOCKER_CONTEXT":       "homeserver",
+		"MERCATOR_DOCKER_CONTEXT":       "dockerhost",
 		"MERCATOR_DOCKER_CONNECTION_ID": "conn_custom",
 		"MERCATOR_DOCKER_OFFER_ID":      "offer_custom",
 		"MERCATOR_DOCKER_NATIVE_REF":    "my-ref",
@@ -61,19 +61,19 @@ func TestDockerIdentityHonorsExplicitOverrides(t *testing.T) {
 
 func TestDockerOfferFromInfoUsesProbedCapacity(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
-	id := dockerIdentity(map[string]string{"MERCATOR_DOCKER_CONTEXT": "homeserver"})
-	info := dockeradapter.HostInfo{Architecture: "x86_64", OSType: "linux", NCPU: 8, MemTotalBytes: 16 * 1024 * 1024 * 1024, Name: "homeserver"}
+	id := dockerIdentity(map[string]string{"MERCATOR_DOCKER_CONTEXT": "dockerhost"})
+	info := dockeradapter.HostInfo{Architecture: "x86_64", OSType: "linux", NCPU: 8, MemTotalBytes: 16 * 1024 * 1024 * 1024, Name: "dockerhost"}
 
-	offer := dockerOfferFromInfo(map[string]string{"MERCATOR_DOCKER_CONTEXT": "homeserver"}, id, info, now)
+	offer := dockerOfferFromInfo(map[string]string{"MERCATOR_DOCKER_CONTEXT": "dockerhost"}, id, info, now)
 
 	if offer.AdapterType != "docker" {
 		t.Errorf("AdapterType = %q, want docker", offer.AdapterType)
 	}
-	if offer.ID != "offer_docker_homeserver" || offer.ConnectionID != "conn_docker_homeserver" {
+	if offer.ID != "offer_docker_dockerhost" || offer.ConnectionID != "conn_docker_dockerhost" {
 		t.Errorf("identity not applied: id=%q conn=%q", offer.ID, offer.ConnectionID)
 	}
-	if offer.NativeRef != "homeserver" {
-		t.Errorf("NativeRef = %q, want homeserver", offer.NativeRef)
+	if offer.NativeRef != "dockerhost" {
+		t.Errorf("NativeRef = %q, want dockerhost", offer.NativeRef)
 	}
 	if offer.Platform.Architecture != "amd64" {
 		t.Errorf("Architecture = %q, want amd64 (normalized from x86_64)", offer.Platform.Architecture)

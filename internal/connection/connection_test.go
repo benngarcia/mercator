@@ -67,6 +67,38 @@ func TestCreateRoundTripsConfigAndCredential(t *testing.T) {
 	}
 }
 
+func TestSameConnectionIDCanExistInMultipleWorkspaces(t *testing.T) {
+	ctx := context.Background()
+	svc := New(openConnectionTestLog(t))
+
+	for _, workspaceID := range []string{"ws_1", "bucket-worktree"} {
+		if _, err := svc.Create(ctx, CreateRequest{
+			WorkspaceID:  workspaceID,
+			ConnectionID: "conn_docker_loopback",
+			AdapterType:  "docker",
+		}); err != nil {
+			t.Fatalf("create %s: %v", workspaceID, err)
+		}
+		if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{
+			WorkspaceID:  workspaceID,
+			ConnectionID: "conn_docker_loopback",
+			Authorized:   true,
+		}); err != nil {
+			t.Fatalf("authorize %s: %v", workspaceID, err)
+		}
+	}
+
+	for _, workspaceID := range []string{"ws_1", "bucket-worktree"} {
+		got, err := svc.Get(ctx, workspaceID, "conn_docker_loopback")
+		if err != nil {
+			t.Fatalf("get %s: %v", workspaceID, err)
+		}
+		if !got.Authorized {
+			t.Fatalf("connection in %s was not authorized: %+v", workspaceID, got)
+		}
+	}
+}
+
 func openConnectionTestLog(t *testing.T) *eventlog.SQLiteEventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
