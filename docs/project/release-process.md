@@ -76,19 +76,35 @@ Expected: `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`,
 
 ## Tag And Publish
 
-Use an annotated tag:
+Releasing is always a deliberate act; nothing publishes on ordinary pushes.
+There are two equivalent triggers.
+
+**Manual dispatch (preferred).** From the Actions tab, run the `Release`
+workflow on the branch to release (normally `master`) with the version as
+input, or from a checkout:
 
 ```sh
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+gh workflow run release.yml --ref master -f version=v0.2.0
 ```
 
-The GitHub Actions release workflow builds archives, writes checksums, and
-creates a GitHub Release. For `v0.1.0`, the workflow uses the curated notes in
-`docs/project/release-notes/v0.1.0.md`; later tags can add a matching
-`docs/project/release-notes/<tag>.md` file or fall back to generated notes. The
-workflow calls `scripts/build-release-archives.sh`, so local archive
-verification and release archive generation share the same implementation.
+The workflow validates the version (`vMAJOR.MINOR.PATCH`, optional prerelease
+suffix), refuses an existing tag, runs the tests, and creates the tag at the
+branch head as part of publishing the release.
+
+**Tag push.** Push an annotated tag; the workflow releases exactly that
+commit:
+
+```sh
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
+```
+
+Either way the workflow builds archives, writes checksums, creates a GitHub
+Release, and publishes the container image to ghcr.io. When
+`docs/project/release-notes/<tag>.md` exists it becomes the release notes;
+otherwise notes are generated. The workflow calls
+`scripts/build-release-archives.sh`, so local archive verification and release
+archive generation share the same implementation.
 
 ## Post-Release Checklist
 
