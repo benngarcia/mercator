@@ -21,46 +21,46 @@ func TestDeriveIdentityDefaultsToLoopbackNotLocal(t *testing.T) {
 }
 
 func TestDeriveIdentityFromContext(t *testing.T) {
-	id := DeriveIdentity("", "homeserver")
-	if id.Context != "homeserver" {
-		t.Errorf("Context = %q, want homeserver", id.Context)
+	id := DeriveIdentity("", "dockerhost")
+	if id.Context != "dockerhost" {
+		t.Errorf("Context = %q, want dockerhost", id.Context)
 	}
-	if id.ConnectionID != "conn_docker_homeserver" {
-		t.Errorf("ConnectionID = %q, want conn_docker_homeserver", id.ConnectionID)
+	if id.ConnectionID != "conn_docker_dockerhost" {
+		t.Errorf("ConnectionID = %q, want conn_docker_dockerhost", id.ConnectionID)
 	}
-	if id.NativeRef != "homeserver" {
-		t.Errorf("NativeRef = %q, want homeserver", id.NativeRef)
+	if id.NativeRef != "dockerhost" {
+		t.Errorf("NativeRef = %q, want dockerhost", id.NativeRef)
 	}
 }
 
 func TestDeriveIdentityLabelFromRemoteHost(t *testing.T) {
-	id := DeriveIdentity("ssh://beng@homeserver", "")
-	if id.Host != "ssh://beng@homeserver" {
-		t.Errorf("Host = %q, want ssh://beng@homeserver", id.Host)
+	id := DeriveIdentity("ssh://user@dockerhost", "")
+	if id.Host != "ssh://user@dockerhost" {
+		t.Errorf("Host = %q, want ssh://user@dockerhost", id.Host)
 	}
-	if id.ConnectionID != "conn_docker_homeserver" {
-		t.Errorf("ConnectionID = %q, want conn_docker_homeserver (host label)", id.ConnectionID)
+	if id.ConnectionID != "conn_docker_dockerhost" {
+		t.Errorf("ConnectionID = %q, want conn_docker_dockerhost (host label)", id.ConnectionID)
 	}
-	if id.NativeRef != "homeserver" {
-		t.Errorf("NativeRef = %q, want homeserver", id.NativeRef)
+	if id.NativeRef != "dockerhost" {
+		t.Errorf("NativeRef = %q, want dockerhost", id.NativeRef)
 	}
 }
 
 func TestStandingOfferUsesProbedCapacity(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
-	id := DeriveIdentity("", "homeserver")
-	info := HostInfo{Architecture: "x86_64", OSType: "linux", NCPU: 8, MemTotalBytes: 16 * 1024 * 1024 * 1024, Name: "homeserver"}
+	id := DeriveIdentity("", "dockerhost")
+	info := HostInfo{Architecture: "x86_64", OSType: "linux", NCPU: 8, MemTotalBytes: 16 * 1024 * 1024 * 1024, Name: "dockerhost"}
 
 	offer := StandingOffer(id, "", info, now)
 
 	if offer.AdapterType != "docker" {
 		t.Errorf("AdapterType = %q, want docker", offer.AdapterType)
 	}
-	if offer.ID != "offer_docker_homeserver" || offer.ConnectionID != "conn_docker_homeserver" {
+	if offer.ID != "offer_docker_dockerhost" || offer.ConnectionID != "conn_docker_dockerhost" {
 		t.Errorf("identity not applied: id=%q conn=%q", offer.ID, offer.ConnectionID)
 	}
-	if offer.NativeRef != "homeserver" {
-		t.Errorf("NativeRef = %q, want homeserver", offer.NativeRef)
+	if offer.NativeRef != "dockerhost" {
+		t.Errorf("NativeRef = %q, want dockerhost", offer.NativeRef)
 	}
 	if offer.Platform.Architecture != "amd64" {
 		t.Errorf("Architecture = %q, want amd64 (normalized from x86_64)", offer.Platform.Architecture)

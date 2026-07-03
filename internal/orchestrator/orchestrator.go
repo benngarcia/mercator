@@ -426,6 +426,86 @@ func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string) ([]doma
 	return records, nil
 }
 
+// AdvanceOpenRunsResult summarizes one background advancement sweep of a
+// workspace: how many open runs were found and how many of them reached the
+// closed state during the sweep.
+type AdvanceOpenRunsResult struct {
+	Open   int
+	Closed int
+}
+
+// AdvanceOpenRuns drives every open (not yet closed) run in the workspace
+// through AdvanceRun so runs converge to closed with zero client involvement:
+// observing container exits, recording terminal outcomes, and confirming
+// cleanup is the broker's job, not something every client must poll for via
+// :refresh or :wait. An error on one run never stops advancement of the
+// others; per-run errors are joined into the returned error alongside the
+// sweep result, which stays valid either way.
+func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context, workspaceID string) (AdvanceOpenRunsResult, error) {
+	openRuns, err := o.listOpenRunIDs(ctx, workspaceID)
+	if err != nil {
+		return AdvanceOpenRunsResult{}, err
+	}
+	result := AdvanceOpenRunsResult{Open: len(openRuns)}
+	var errs []error
+	for _, runID := range openRuns {
+		if err := o.AdvanceRun(ctx, workspaceID, runID); err != nil {
+			errs = append(errs, fmt.Errorf("advance %s: %w", runID, err))
+			continue
+		}
+		record, err := o.GetRun(ctx, workspaceID, runID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("advance %s: %w", runID, err))
+			continue
+		}
+		if record.Closed {
+			result.Closed++
+		}
+	}
+	return result, errors.Join(errs...)
+}
+
+// listOpenRunIDs enumerates run streams that recorded RunRequested but no
+// RunClosed, using the same paginated event-index scan as ListRuns but without
+// hydrating per-run streams. That keeps the background sweep cheap when idle:
+// a workspace whose history is all closed runs costs one filtered index scan
+// and zero stream reads per tick.
+func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) ([]string, error) {
+	const page = 1000
+	var requested []string
+	closed := map[string]bool{}
+	var after eventlog.GlobalPosition
+	for {
+		batch, err := o.log.ReadAll(ctx, after, page, eventlog.EventFilter{
+			WorkspaceID: workspaceID,
+			StreamTypes: []string{"run"},
+			EventTypes:  []string{EventRunRequested, EventRunClosed},
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range batch {
+			switch event.Type {
+			case EventRunRequested:
+				requested = append(requested, event.StreamID)
+			case EventRunClosed:
+				closed[event.StreamID] = true
+			}
+		}
+		if len(batch) < page {
+			break
+		}
+		after = batch[len(batch)-1].GlobalPosition
+	}
+	var open []string
+	for _, runID := range requested {
+		if !closed[runID] {
+			open = append(open, runID)
+		}
+	}
+	return open, nil
+}
+
 func (o *Orchestrator) GetPlacementDecision(ctx context.Context, workspaceID, runID string) (domain.PlacementDecision, error) {
 	events, err := o.GetRunEvents(ctx, workspaceID, runID)
 	if err != nil {

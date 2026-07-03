@@ -98,12 +98,13 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		}
 	}()
 
-	// Background orphan reclamation: sweep each bootstrap workspace so external
-	// objects whose runs requested cleanup (or that lost their run entirely)
-	// are reclaimed even if no client ever polls the run again.
-	janitorCtx, stopJanitor := context.WithCancel(ctx)
-	defer stopJanitor()
-	go runJanitorSweeps(janitorCtx, janitor.New(deps.broker, janitor.WithEventLog(deps.log)), bootstrapWorkspaces(env))
+	// Background reconciliation: each tick advances every open run's lifecycle
+	// (observe container exits, record terminal outcomes, request and confirm
+	// cleanup, close the run) and then reclaims orphaned external objects, so
+	// runs converge to closed even if no client ever polls them again.
+	reconcileCtx, stopReconcile := context.WithCancel(ctx)
+	defer stopReconcile()
+	go runReconcileSweeps(reconcileCtx, orch, janitor.New(deps.broker, janitor.WithEventLog(deps.log)), bootstrapWorkspaces(env))
 
 	warnIfNonLoopback(addr)
 	server := &http.Server{
@@ -139,9 +140,12 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	return 0
 }
 
-// runJanitorSweeps reclaims orphaned external objects on a fixed cadence until
-// ctx is cancelled. Sweep errors are logged, never fatal: the next tick retries.
-func runJanitorSweeps(ctx context.Context, jan *janitor.Janitor, workspaces []string) {
+// runReconcileSweeps converges every bootstrap workspace on a fixed cadence
+// until ctx is cancelled. Sweep errors are logged, never fatal: the next tick
+// retries. Run advancement shares the janitor's one-minute cadence: both are
+// backstops for the same convergence loop, and a second timer would only add a
+// knob without making either sweep more correct.
+func runReconcileSweeps(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor, workspaces []string) {
 	const interval = time.Minute
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -150,16 +154,33 @@ func runJanitorSweeps(ctx context.Context, jan *janitor.Janitor, workspaces []st
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			for _, ws := range workspaces {
-				result, err := jan.Sweep(ctx, ws)
-				if err != nil {
-					stdlog.Printf("janitor sweep %s: %v", ws, err)
-					continue
-				}
-				if result.Released > 0 {
-					stdlog.Printf("janitor sweep %s: reclaimed %d of %d owned objects", ws, result.Released, result.Found)
-				}
-			}
+			reconcileWorkspaces(ctx, orch, jan, workspaces)
+		}
+	}
+}
+
+// reconcileWorkspaces performs one reconcile tick. Run advancement goes first
+// so a freshly exited container's cleanup is requested, confirmed, and its run
+// closed before the janitor looks for leftovers; the janitor stays the backstop
+// for objects whose runs cannot advance (or lost their run entirely). A line is
+// logged per workspace only when something closed, was reclaimed, or errored,
+// so an idle broker does not spam its own log every tick.
+func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor, workspaces []string) {
+	for _, ws := range workspaces {
+		advanced, err := orch.AdvanceOpenRuns(ctx, ws)
+		if err != nil {
+			stdlog.Printf("run advancement sweep %s: %v", ws, err)
+		}
+		if advanced.Closed > 0 {
+			stdlog.Printf("run advancement sweep %s: closed %d of %d open runs", ws, advanced.Closed, advanced.Open)
+		}
+		result, err := jan.Sweep(ctx, ws)
+		if err != nil {
+			stdlog.Printf("janitor sweep %s: %v", ws, err)
+			continue
+		}
+		if result.Released > 0 {
+			stdlog.Printf("janitor sweep %s: reclaimed %d of %d owned objects", ws, result.Released, result.Found)
 		}
 	}
 }

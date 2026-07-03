@@ -6,7 +6,7 @@ import (
 
 func TestDockerIdentityHonorsExplicitOverrides(t *testing.T) {
 	id := dockerIdentity(map[string]string{
-		"MERCATOR_DOCKER_CONTEXT":       "homeserver",
+		"MERCATOR_DOCKER_CONTEXT":       "dockerhost",
 		"MERCATOR_DOCKER_CONNECTION_ID": "conn_custom",
 		"MERCATOR_DOCKER_OFFER_ID":      "offer_custom",
 		"MERCATOR_DOCKER_NATIVE_REF":    "my-ref",
@@ -17,8 +17,8 @@ func TestDockerIdentityHonorsExplicitOverrides(t *testing.T) {
 }
 
 func TestDockerIdentityDerivesFromEnvEndpoint(t *testing.T) {
-	id := dockerIdentity(map[string]string{"MERCATOR_DOCKER_HOST": "ssh://beng@homeserver"})
-	if id.ConnectionID != "conn_docker_homeserver" || id.NativeRef != "homeserver" {
+	id := dockerIdentity(map[string]string{"MERCATOR_DOCKER_HOST": "ssh://user@dockerhost"})
+	if id.ConnectionID != "conn_docker_dockerhost" || id.NativeRef != "dockerhost" {
 		t.Errorf("identity not derived from env endpoint: %+v", id)
 	}
 }
