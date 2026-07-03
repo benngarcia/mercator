@@ -352,10 +352,12 @@ check_workflow_hooks() {
   require_pattern .github/workflows/ci.yml 'bundle exec ruby -Ilib:test test/test_client\.rb' "CI runs Ruby SDK tests"
   require_pattern .github/workflows/ci.yml 'bun run typecheck' "CI typechecks console"
   require_pattern .github/workflows/ci.yml 'bun run build' "CI builds console"
-  require_pattern .github/workflows/release.yml 'scripts/build-release-archives\.sh "\$GITHUB_REF_NAME" dist' "Release workflow builds archives"
-  require_pattern .github/workflows/release.yml 'docs/project/release-notes/\$\{GITHUB_REF_NAME\}\.md' "Release workflow checks for curated release notes"
+  require_pattern .github/workflows/release.yml 'scripts/build-release-archives\.sh "\$VERSION" dist' "Release workflow builds archives"
+  require_pattern .github/workflows/release.yml 'docs/project/release-notes/\$\{VERSION\}\.md' "Release workflow checks for curated release notes"
   require_pattern .github/workflows/release.yml '--notes-file "\$notes_file"' "Release workflow uses curated release notes when present"
-  require_pattern .github/workflows/release.yml 'gh release create "\$GITHUB_REF_NAME" dist/\* --generate-notes' "Release workflow publishes GitHub release"
+  require_pattern .github/workflows/release.yml 'gh release create "\$VERSION" dist/\* --generate-notes' "Release workflow publishes GitHub release"
+  require_pattern .github/workflows/release.yml 'workflow_dispatch' "Release workflow supports manual dispatch"
+  require_pattern .github/workflows/release.yml 'ls-remote --exit-code origin "refs/tags/\$VERSION_INPUT"' "Manual release refuses existing tags"
 }
 
 check_dependency_maintenance() {
