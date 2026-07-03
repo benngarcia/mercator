@@ -98,43 +98,6 @@ type runRequestedData struct {
 	Workload domain.WorkloadRevision `json:"workload_revision"`
 }
 
-type publicRunRequestedData struct {
-	RunID    string                 `json:"run_id"`
-	Workload publicWorkloadRevision `json:"workload_revision"`
-}
-
-type publicWorkloadRevision struct {
-	ID          string             `json:"id"`
-	WorkspaceID string             `json:"workspace_id"`
-	WorkloadID  string             `json:"workload_id"`
-	Digest      string             `json:"digest"`
-	Spec        publicWorkloadSpec `json:"spec"`
-}
-
-type publicWorkloadSpec struct {
-	Containers []publicContainerSpec       `json:"containers"`
-	Resources  domain.ResourceRequirements `json:"resources"`
-	Network    domain.NetworkRequirements  `json:"network"`
-	Placement  domain.PlacementPolicy      `json:"placement"`
-	Execution  domain.ExecutionPolicy      `json:"execution"`
-	Metadata   map[string]string           `json:"metadata,omitempty"`
-	Raw        map[string]json.RawMessage  `json:"raw,omitempty"`
-}
-
-type publicContainerSpec struct {
-	Name       string                      `json:"name"`
-	Image      string                      `json:"image"`
-	Platform   domain.Platform             `json:"platform"`
-	Entrypoint *[]string                   `json:"entrypoint,omitempty"`
-	Args       []string                    `json:"args,omitempty"`
-	Env        map[string]publicEnvBinding `json:"env,omitempty"`
-	Ports      []domain.PortSpec           `json:"ports,omitempty"`
-}
-
-type publicEnvBinding struct {
-	Kind string `json:"kind"`
-}
-
 type placementData struct {
 	Decision domain.PlacementDecision `json:"decision"`
 }
@@ -245,86 +208,147 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	return CreateRunResult{RunID: runID, Duplicate: result.Duplicate}, nil
 }
 
+// AdvanceRun drives a run toward closure by repeatedly reducing its event
+// stream and performing the single next transition: cleanup, cancel,
+// placement, launch, reported-exit finalization, or observation. Every entry
+// point (create, cancel, report, poll) appends its fact events and funnels
+// through this loop, so there is exactly one place a run moves forward. Each
+// iteration re-reads the stream, so state is always derived from the log
+// rather than threaded through in memory.
 func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string) error {
-	events, err := o.GetRunEvents(ctx, workspaceID, runID)
+	for {
+		events, err := o.GetRunEvents(ctx, workspaceID, runID)
+		if err != nil {
+			return err
+		}
+		state, err := reduceRun(events)
+		if err != nil {
+			return err
+		}
+		progressed, err := o.step(ctx, workspaceID, runID, streamVersion(events), state)
+		if err != nil || !progressed {
+			return err
+		}
+	}
+}
+
+// step performs the run's next transition and reports whether the run may have
+// further work (true → reduce and step again). Every transition is one side
+// effect plus one event append at the given optimistic-concurrency version.
+func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+	switch {
+	case state.closed:
+		return false, nil
+	case state.cleanupRequested && !state.cleanupConfirmed:
+		return true, o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
+	case state.cancelRequested:
+		return o.stepCancel(ctx, workspaceID, runID, version, state)
+	case state.launchIntent == nil:
+		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
+	case !state.launchAccepted && !state.launchIndeterminate:
+		return o.stepLaunch(ctx, workspaceID, runID, version, state)
+	case state.exitCode != nil && !state.outcomeRecorded:
+		// A reported exit code is authoritative: record the outcome (0 →
+		// succeeded, else failed) and request cleanup without waiting for the
+		// observation backstop to see the container exit.
+		outcome := string(domain.RunOutcomeSucceeded)
+		if *state.exitCode != 0 {
+			outcome = string(domain.RunOutcomeFailed)
+		}
+		return true, o.appendEvents(ctx, workspaceID, runID, version, "advance:report-finalize", []eventlog.NewEvent{
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": outcome}, o.now()),
+			mustEvent(runID, "cleanup_requested", EventCleanupRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+		})
+	default:
+		observation, err := o.observeLaunch(ctx, workspaceID, state)
+		if err != nil {
+			return false, err
+		}
+		return o.recordObservation(ctx, workspaceID, runID, version, state, observation)
+	}
+}
+
+// stepPlace decides placement and records the decision, attempt, and launch
+// intent in one append, so the intent is durable before any adapter call.
+func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
+	decision, attempt, selectedOffer, err := o.decide(ctx, workspaceID, *state.requested, runID)
 	if err != nil {
 		return err
 	}
-	state, err := reduceRun(events)
+	reportPublicURL, reportToken := "", ""
+	if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
+		reportPublicURL = o.reportingPublicURL
+		reportToken = o.reportingSigner.Token(workspaceID, runID)
+	}
+	launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
 	if err != nil {
 		return err
 	}
-	if state.closed {
-		return nil
-	}
-	version := streamVersion(events)
+	return o.appendEvents(ctx, workspaceID, runID, version, "advance:placement", []eventlog.NewEvent{
+		mustEvent(runID, "placement_decided", EventPlacementDecided, placementData{Decision: decision}, o.now()),
+		mustEvent(runID, "attempt_created", EventAttemptCreated, attempt, o.now()),
+		mustPrivateEvent(runID, "launch_intent_recorded", EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
+	})
+}
 
-	if state.cleanupRequested && !state.cleanupConfirmed {
-		return o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
+func (o *Orchestrator) stepLaunch(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+	receipt, err := o.adapter.Launch(ctx, *state.launchIntent)
+	if err != nil {
+		if errors.Is(err, adapter.ErrLaunchIndeterminate) || errors.Is(err, adapter.ErrLaunchTimeout) {
+			_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_indeterminate", []eventlog.NewEvent{
+				mustEvent(runID, "launch_indeterminate", EventLaunchIndeterminate, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
+			})
+			return false, err
+		}
+		// A definitive launch rejection closes the run terminally: nothing
+		// external was created (so no cleanup is needed), and retrying the
+		// same launch on every poll can never succeed — it left runs wedged
+		// in "launching" forever.
+		if appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
+			mustEvent(runID, "launch_failed", EventLaunchFailed, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": string(domain.RunOutcomeFailed)}, o.now()),
+			mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+		}); appendErr != nil {
+			return false, appendErr
+		}
+		return false, err
 	}
+	return true, o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted", []eventlog.NewEvent{
+		mustEvent(runID, "launch_accepted", EventLaunchAccepted, receipt, o.now()),
+	})
+}
 
+// stepCancel completes a requested cancel: close immediately when nothing was
+// launched, otherwise cancel at the adapter, then record the terminal
+// cancelled observation (the cleanup step closes the run on the next
+// iteration).
+func (o *Orchestrator) stepCancel(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
 	if state.launchIntent == nil {
-		decision, attempt, selectedOffer, err := o.decide(ctx, workspaceID, *state.requested, runID)
-		if err != nil {
-			return err
-		}
-		reportPublicURL, reportToken := "", ""
-		if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
-			reportPublicURL = o.reportingPublicURL
-			reportToken = o.reportingSigner.Token(workspaceID, runID)
-		}
-		launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
-		if err != nil {
-			return err
-		}
-		if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:placement", []eventlog.NewEvent{
-			mustEvent(runID, "placement_decided", EventPlacementDecided, placementData{Decision: decision}, o.now()),
-			mustEvent(runID, "attempt_created", EventAttemptCreated, attempt, o.now()),
-			mustPrivateEvent(runID, "launch_intent_recorded", EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
-		}); err != nil {
-			return err
-		}
-		version += 3
-		state.attempt = &attempt
-		state.launchIntent = &launchReq
+		// Cancelled before placement: nothing external exists, so close
+		// terminally with no cleanup.
+		return true, o.appendEvents(ctx, workspaceID, runID, version, "cancel:close_before_launch", []eventlog.NewEvent{
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": string(domain.RunOutcomeCancelled)}, o.now()),
+			mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+		})
 	}
-
-	if !state.launchAccepted && !state.launchIndeterminate {
-		receipt, err := o.adapter.Launch(ctx, *state.launchIntent)
+	if !state.cancelAccepted {
+		cancelReq := adapter.CancelRequest{WorkspaceID: workspaceID, ConnectionID: state.launchIntent.SelectedOfferConnectionID, OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
+		hash, err := domain.CanonicalHash(cancelReq)
 		if err != nil {
-			if errors.Is(err, adapter.ErrLaunchIndeterminate) || errors.Is(err, adapter.ErrLaunchTimeout) {
-				_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_indeterminate", []eventlog.NewEvent{
-					mustEvent(runID, "launch_indeterminate", EventLaunchIndeterminate, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
-				})
-				return err
-			}
-			// A definitive launch rejection closes the run terminally: nothing
-			// external was created (so no cleanup is needed), and retrying the
-			// same launch on every poll can never succeed — it left runs wedged
-			// in "launching" forever.
-			if appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
-				mustEvent(runID, "launch_failed", EventLaunchFailed, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
-				mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": string(domain.RunOutcomeFailed)}, o.now()),
-				mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
-			}); appendErr != nil {
-				return appendErr
-			}
-			return err
+			return false, err
 		}
-		if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted", []eventlog.NewEvent{
-			mustEvent(runID, "launch_accepted", EventLaunchAccepted, receipt, o.now()),
-		}); err != nil {
-			return err
+		cancelReq.RequestHash = hash
+		if _, err := o.adapter.Cancel(ctx, cancelReq); err != nil {
+			return false, err
 		}
-		version++
-		state.launchAccepted = true
+		return true, o.appendEvents(ctx, workspaceID, runID, version, "cancel:accepted", []eventlog.NewEvent{
+			mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+		})
 	}
-
-	observation, err := o.observeLaunch(ctx, workspaceID, state)
-	if err != nil {
-		return err
+	if !state.outcomeRecorded {
+		return o.recordObservation(ctx, workspaceID, runID, version, state, adapter.ExternalObservation{LaunchKey: state.launchIntent.LaunchKey, Phase: adapter.ExternalPhaseCancelled, ObservedAt: o.now().UTC()})
 	}
-	return o.recordObservation(ctx, workspaceID, runID, version, state, observation)
+	return false, nil
 }
 
 func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID string) ([]eventlog.StoredEvent, error) {
@@ -427,6 +451,9 @@ func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string
 	return o.GetRun(ctx, workspaceID, runID)
 }
 
+// CancelRun records the cancel request as a fact, then advances the run: the
+// advance loop cancels at the adapter, records the cancelled outcome, and
+// cleans up. Cancelling an already-closed run returns the record unchanged.
 func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
 	events, err := o.GetRunEvents(ctx, workspaceID, runID)
 	if err != nil {
@@ -442,45 +469,18 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string)
 	if state.closed {
 		return runRecordFromState(workspaceID, runID, state), nil
 	}
-	version := streamVersion(events)
-	if state.launchIntent == nil {
-		if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:close_before_launch", []eventlog.NewEvent{
-			mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"reason": "user"}, o.now()),
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": string(domain.RunOutcomeCancelled)}, o.now()),
-			mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
-		}); err != nil {
-			return domain.RunRecord{}, err
-		}
-		return o.GetRun(ctx, workspaceID, runID)
-	}
 	if !state.cancelRequested {
-		if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:requested", []eventlog.NewEvent{
-			mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+		data := map[string]any{"reason": "user"}
+		if state.launchIntent != nil {
+			data = map[string]any{"launch_key": state.launchIntent.LaunchKey}
+		}
+		if err := o.appendEvents(ctx, workspaceID, runID, streamVersion(events), "cancel:requested", []eventlog.NewEvent{
+			mustEvent(runID, "cancel_requested", EventCancelRequested, data, o.now()),
 		}); err != nil {
 			return domain.RunRecord{}, err
 		}
-		version++
-		state.cancelRequested = true
 	}
-	if !state.cancelAccepted {
-		cancelReq := adapter.CancelRequest{WorkspaceID: workspaceID, ConnectionID: state.launchIntent.SelectedOfferConnectionID, OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
-		hash, err := domain.CanonicalHash(cancelReq)
-		if err != nil {
-			return domain.RunRecord{}, err
-		}
-		cancelReq.RequestHash = hash
-		if _, err := o.adapter.Cancel(ctx, cancelReq); err != nil {
-			return domain.RunRecord{}, err
-		}
-		if err := o.appendEvents(ctx, workspaceID, runID, version, "cancel:accepted", []eventlog.NewEvent{
-			mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
-		}); err != nil {
-			return domain.RunRecord{}, err
-		}
-		version++
-		state.cancelAccepted = true
-	}
-	if err := o.recordObservation(ctx, workspaceID, runID, version, state, adapter.ExternalObservation{LaunchKey: state.launchIntent.LaunchKey, Phase: adapter.ExternalPhaseCancelled, ObservedAt: o.now().UTC()}); err != nil {
+	if err := o.AdvanceRun(ctx, workspaceID, runID); err != nil {
 		return domain.RunRecord{}, err
 	}
 	return o.GetRun(ctx, workspaceID, runID)
@@ -536,8 +536,8 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 			if exitCode != nil {
 				// Drive the authoritative outcome + prompt cleanup from the
 				// reported exit code. Best-effort: any error here is non-fatal —
-				// the AdvanceRun reconcile and Observe backstop still finalize.
-				_ = o.finalizeReportedExit(ctx, workspaceID, runID)
+				// the next poll's AdvanceRun still finalizes.
+				_ = o.AdvanceRun(ctx, workspaceID, runID)
 			}
 			return nil
 		}
@@ -549,38 +549,6 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 	}
 	// All retries exhausted; last error was a concurrency conflict.
 	return fmt.Errorf("orchestrator: append report event: concurrency conflict after retry")
-}
-
-// finalizeReportedExit makes a reported exit code authoritative: it records the
-// run outcome (0 -> succeeded, else -> failed) and requests cleanup, then closes
-// the run by releasing/terminating its external resource. It is a no-op when the
-// run is already outcome-recorded or closed (the Observe backstop or a prior
-// report won the race), or when there is no launch intent / no reported exit
-// code to act on.
-func (o *Orchestrator) finalizeReportedExit(ctx context.Context, workspaceID, runID string) error {
-	events, err := o.GetRunEvents(ctx, workspaceID, runID)
-	if err != nil {
-		return err
-	}
-	state, err := reduceRun(events)
-	if err != nil {
-		return err
-	}
-	if state.outcomeRecorded || state.closed || state.launchIntent == nil || state.exitCode == nil {
-		return nil
-	}
-	outcome := string(domain.RunOutcomeSucceeded)
-	if *state.exitCode != 0 {
-		outcome = string(domain.RunOutcomeFailed)
-	}
-	version := streamVersion(events)
-	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:report-finalize", []eventlog.NewEvent{
-		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": outcome}, o.now()),
-		mustEvent(runID, "cleanup_requested", EventCleanupRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
-	}); err != nil {
-		return err
-	}
-	return o.releaseAndClose(ctx, workspaceID, runID, version+2, state.launchIntent)
 }
 
 func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
@@ -660,12 +628,15 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 	return launchReq, nil
 }
 
-func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID string, version uint64, state runState, observation adapter.ExternalObservation) error {
-	// A non-terminal observation that repeats the last recorded phase carries no
-	// new information; appending it anyway would grow the stream on every poll
-	// (waitRun refreshes every 100ms) without bound.
+// recordObservation appends the observation and, on a terminal phase, the
+// outcome and cleanup request (the cleanup step then closes the run on the
+// next advance iteration). It reports whether the run progressed. A
+// non-terminal observation that repeats the last recorded phase carries no new
+// information; appending it anyway would grow the stream on every poll
+// (waitRun refreshes every 100ms) without bound.
+func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID string, version uint64, state runState, observation adapter.ExternalObservation) (bool, error) {
 	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase {
-		return nil
+		return false, nil
 	}
 	toAppend := []eventlog.NewEvent{
 		mustEvent(runID, fmt.Sprintf("external_state_observed_%d", version+1), EventExternalStateObserved, observation, o.now()),
@@ -677,13 +648,9 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 		)
 	}
 	if err := o.appendEvents(ctx, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), toAppend); err != nil {
-		return err
+		return false, err
 	}
-	version += uint64(len(toAppend))
-	if isTerminal(observation.Phase) {
-		return o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
-	}
-	return nil
+	return isTerminal(observation.Phase), nil
 }
 
 func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, state runState) (adapter.ExternalObservation, error) {
@@ -1015,63 +982,6 @@ func outcomeForPhase(phase adapter.ExternalPhase) string {
 	}
 }
 
-func publicAdapterError(err error, launchKey string) map[string]any {
-	code := "ADAPTER_ERROR"
-	retryable := true
-	switch {
-	case errors.Is(err, adapter.ErrIdempotencyConflict):
-		code = "ADAPTER_IDEMPOTENCY_CONFLICT"
-		retryable = false
-	case errors.Is(err, adapter.ErrLaunchTimeout):
-		code = "ADAPTER_LAUNCH_TIMEOUT"
-	case errors.Is(err, adapter.ErrLaunchIndeterminate):
-		code = "ADAPTER_LAUNCH_INDETERMINATE"
-	case errors.Is(err, adapter.ErrRetryableFailure):
-		code = "ADAPTER_RETRYABLE_FAILURE"
-	}
-	return map[string]any{"code": code, "message": "Adapter operation failed.", "retryable": retryable, "launch_key": launchKey}
-}
-
-func publicWorkload(rev domain.WorkloadRevision) publicWorkloadRevision {
-	out := publicWorkloadRevision{
-		ID:          rev.ID,
-		WorkspaceID: rev.WorkspaceID,
-		WorkloadID:  rev.WorkloadID,
-		Digest:      rev.Digest,
-		Spec: publicWorkloadSpec{
-			Resources: rev.Spec.Resources,
-			Network:   rev.Spec.Network,
-			Placement: rev.Spec.Placement,
-			Execution: rev.Spec.Execution,
-			Metadata:  rev.Spec.Metadata,
-			Raw:       rev.Spec.Raw,
-		},
-	}
-	out.Spec.Containers = make([]publicContainerSpec, 0, len(rev.Spec.Containers))
-	for _, container := range rev.Spec.Containers {
-		publicContainer := publicContainerSpec{
-			Name:       container.Name,
-			Image:      container.Image,
-			Platform:   container.Platform,
-			Entrypoint: container.Entrypoint,
-			Args:       container.Args,
-			Ports:      container.Ports,
-		}
-		if len(container.Env) > 0 {
-			publicContainer.Env = make(map[string]publicEnvBinding, len(container.Env))
-			for key, binding := range container.Env {
-				kind := "empty"
-				if binding.Value != nil {
-					kind = "literal"
-				}
-				publicContainer.Env[key] = publicEnvBinding{Kind: kind}
-			}
-		}
-		out.Spec.Containers = append(out.Spec.Containers, publicContainer)
-	}
-	return out
-}
-
 func selectedOfferByID(offers []domain.OfferSnapshot, id string) (domain.OfferSnapshot, bool) {
 	for _, offer := range offers {
 		if offer.ID == id {
@@ -1099,19 +1009,6 @@ func launchEnvironment(env map[string]domain.EnvBinding) []adapter.EnvironmentBi
 		})
 	}
 	return bindings
-}
-
-func publicLaunchRequest(req adapter.LaunchRequest) adapter.LaunchRequest {
-	public := req
-	public.Environment = make([]adapter.EnvironmentBinding, 0, len(req.Environment))
-	for _, binding := range req.Environment {
-		kind := "empty"
-		if binding.Value != nil {
-			kind = "literal"
-		}
-		public.Environment = append(public.Environment, adapter.EnvironmentBinding{Name: binding.Name, Value: &kind})
-	}
-	return public
 }
 
 func cloneStringPtr(value *string) *string {
