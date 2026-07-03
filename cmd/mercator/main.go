@@ -11,7 +11,6 @@ import (
 	stdlog "log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -25,7 +24,6 @@ import (
 	"github.com/benngarcia/mercator/internal/cli"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
-	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/janitor"
@@ -183,23 +181,6 @@ func warnIfNonLoopback(addr string) {
 	stdlog.Printf("WARNING: listening on non-loopback address %s over plaintext HTTP; bearer tokens and run data are unencrypted in transit — put a TLS-terminating proxy in front for anything beyond local evaluation", addr)
 }
 
-// dockerOfferingAdapter serves one docker endpoint's offer, probing the
-// endpoint at ListOffers time so capacity, ObservedAt, and ExpiresAt are fresh
-// on every placement decision. Building the offer once at adapter construction
-// froze those timestamps: after the one-hour expiry window every placement
-// failed with OFFER_EXPIRED until the process restarted.
-type dockerOfferingAdapter struct {
-	adapter.Adapter
-	client *dockeradapter.CLIClient
-	values map[string]string
-	id     dockerEndpointIdentity
-}
-
-func (a dockerOfferingAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	offer := dockerOfferFromInfo(a.values, a.id, probeDockerHost(a.client, a.id), time.Now().UTC())
-	return []domain.OfferSnapshot{offer}, nil
-}
-
 // serverDeps holds the shared backing services for the docker server path. The
 // Broker's connection registry and the HTTP server's connection.Service are the
 // SAME service over the SAME event log, so offers served by the Broker and
@@ -292,12 +273,7 @@ func buildServerDeps(values map[string]string) serverDeps {
 		client := dockeradapter.NewCLIClient(config["bin"])
 		client.Host = config["host"]
 		client.Context = config["context"]
-		return dockerOfferingAdapter{
-			Adapter: dockeradapter.New(client),
-			client:  client,
-			values:  values,
-			id:      dockerIdentityForConfig(values, config),
-		}, nil
+		return dockeradapter.NewOffering(client, dockerIdentityForConfig(values, config), values["MERCATOR_DOCKER_ARCH"]), nil
 	})
 
 	factory.Register("runpod", func(config map[string]string, secret string) (adapter.Adapter, error) {
@@ -378,84 +354,28 @@ func bootstrapWorkspaces(values map[string]string) []string {
 	return out
 }
 
-// dockerEndpointIdentity is the identity Mercator advertises for a Docker
-// endpoint: the connection/offer ids and a native ref naming the host. It is
-// derived from the endpoint (context or host), not assumed to be local.
-type dockerEndpointIdentity struct {
-	ConnectionID string
-	OfferID      string
-	NativeRef    string
-	Host         string
-	Context      string
-}
-
 // dockerIdentityForConfig derives the offer identity for one docker
 // connection's config. The bootstrap endpoint (registered from MERCATOR_DOCKER_*
 // env on boot) keeps its env-driven identity, including the explicit
 // MERCATOR_DOCKER_{CONNECTION_ID,OFFER_ID,NATIVE_REF} overrides; any other
 // docker connection (added later via POST /v1/connections) derives its identity
 // from its own endpoint so two connections never share an offer id.
-func dockerIdentityForConfig(values, config map[string]string) dockerEndpointIdentity {
+func dockerIdentityForConfig(values, config map[string]string) dockeradapter.EndpointIdentity {
 	if config["host"] == values["MERCATOR_DOCKER_HOST"] && config["context"] == values["MERCATOR_DOCKER_CONTEXT"] {
 		return dockerIdentity(values)
 	}
-	label := dockerEndpointLabel(config["host"], config["context"])
-	return dockerEndpointIdentity{
-		ConnectionID: "conn_docker_" + label,
-		OfferID:      "offer_docker_" + label,
-		NativeRef:    label,
-		Host:         config["host"],
-		Context:      config["context"],
-	}
+	return dockeradapter.DeriveIdentity(config["host"], config["context"])
 }
 
-// dockerIdentity derives the connection/offer identity from the configured
-// endpoint. A docker context name wins; otherwise the host portion of a
-// DOCKER_HOST URL (ssh://user@HOST, tcp://HOST:port); otherwise "loopback".
-// Explicit MERCATOR_DOCKER_{CONNECTION_ID,OFFER_ID,NATIVE_REF} always override.
-func dockerIdentity(values map[string]string) dockerEndpointIdentity {
-	host := values["MERCATOR_DOCKER_HOST"]
-	dockerContext := values["MERCATOR_DOCKER_CONTEXT"]
-	label := dockerEndpointLabel(host, dockerContext)
-	return dockerEndpointIdentity{
-		ConnectionID: envValue(values, "MERCATOR_DOCKER_CONNECTION_ID", "conn_docker_"+label),
-		OfferID:      envValue(values, "MERCATOR_DOCKER_OFFER_ID", "offer_docker_"+label),
-		NativeRef:    envValue(values, "MERCATOR_DOCKER_NATIVE_REF", label),
-		Host:         host,
-		Context:      dockerContext,
-	}
-}
-
-// dockerEndpointLabel produces a short, human-readable token identifying the
-// endpoint, used in the connection/offer ids and native ref.
-func dockerEndpointLabel(host, dockerContext string) string {
-	if dockerContext != "" {
-		return dockerContext
-	}
-	if host == "" {
-		return "loopback"
-	}
-	if u, err := url.Parse(host); err == nil {
-		if u.Hostname() != "" {
-			return u.Hostname()
-		}
-		return "loopback" // unix socket or otherwise hostless endpoint
-	}
-	return "loopback"
-}
-
-// probeDockerHost queries the endpoint's `docker info` best-effort. A failed or
-// unreachable probe (e.g. a remote host that is down at startup) is not fatal:
-// it returns a zero HostInfo and dockerOfferFromInfo falls back to defaults.
-func probeDockerHost(client *dockeradapter.CLIClient, id dockerEndpointIdentity) dockeradapter.HostInfo {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	info, err := client.Info(ctx)
-	if err != nil {
-		stdlog.Printf("docker endpoint %q probe failed; using fallback capacity: %v", id.NativeRef, err)
-		return dockeradapter.HostInfo{}
-	}
-	return info
+// dockerIdentity derives the bootstrap endpoint's identity from the
+// MERCATOR_DOCKER_{HOST,CONTEXT} env, honoring the explicit
+// MERCATOR_DOCKER_{CONNECTION_ID,OFFER_ID,NATIVE_REF} overrides.
+func dockerIdentity(values map[string]string) dockeradapter.EndpointIdentity {
+	id := dockeradapter.DeriveIdentity(values["MERCATOR_DOCKER_HOST"], values["MERCATOR_DOCKER_CONTEXT"])
+	id.ConnectionID = envValue(values, "MERCATOR_DOCKER_CONNECTION_ID", id.ConnectionID)
+	id.OfferID = envValue(values, "MERCATOR_DOCKER_OFFER_ID", id.OfferID)
+	id.NativeRef = envValue(values, "MERCATOR_DOCKER_NATIVE_REF", id.NativeRef)
+	return id
 }
 
 func apiTokenFromEnv(values map[string]string) (string, bool, error) {
@@ -485,76 +405,6 @@ func authWorkspaces(values map[string]string) []string {
 		return []string{"*"}
 	}
 	return workspaces
-}
-
-// dockerOfferFromInfo builds the offer Mercator advertises for a Docker
-// endpoint. Capacity (arch/cpu/mem) comes from the probed `docker info` when
-// available, falling back to conservative defaults when the probe was empty
-// (unreachable endpoint). An explicit MERCATOR_DOCKER_ARCH always wins, which is
-// useful for forcing emulated platforms.
-func dockerOfferFromInfo(values map[string]string, id dockerEndpointIdentity, info dockeradapter.HostInfo, now time.Time) domain.OfferSnapshot {
-	arch := envValue(values, "MERCATOR_DOCKER_ARCH", "")
-	if arch == "" {
-		arch = info.OCIArch()
-	}
-	if arch == "" {
-		arch = "amd64"
-	}
-	cpuMillis := int64(2000)
-	if info.NCPU > 0 {
-		cpuMillis = int64(info.NCPU) * 1000
-	}
-	memoryBytes := int64(4 * 1024 * 1024 * 1024)
-	if info.MemTotalBytes > 0 {
-		memoryBytes = info.MemTotalBytes
-	}
-	return domain.OfferSnapshot{
-		ID:           id.OfferID,
-		ConnectionID: id.ConnectionID,
-		AdapterType:  "docker",
-		Kind:         domain.OfferKindStanding,
-		NativeRef:    id.NativeRef,
-		ObservedAt:   now,
-		ExpiresAt:    now.Add(time.Hour),
-		Platform:     domain.Platform{OS: "linux", Architecture: arch},
-		Resources: domain.ResourceInventory{
-			CPUMillis:          cpuMillis,
-			MemoryBytes:        memoryBytes,
-			EphemeralDiskBytes: 16 * 1024 * 1024 * 1024,
-		},
-		Capabilities: domain.CapabilityProfile{
-			Container: domain.ContainerCapabilities{
-				MaxContainers:       8,
-				SupportsDigestRefs:  true,
-				MaxEnvironmentBytes: 32768,
-			},
-			Lifecycle: domain.LifecycleCapabilities{
-				IdempotentLaunch: "launch_key",
-				ListOwned:        true,
-				CancelQueued:     true,
-			},
-			Network: domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
-			Pricing: domain.PricingCapabilities{Known: true},
-		},
-		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
-			Scope:      domain.NetworkScopeRegistry,
-			Statistic:  "p10",
-			ValueMbps:  100,
-			Source:     "local",
-			ObservedAt: now,
-			ValidUntil: now.Add(time.Hour),
-			Confidence: 1,
-		}}},
-		Pricing: domain.PriceModel{
-			Currency:             "USD",
-			RatePerSecondUSD:     0,
-			MinimumChargeSeconds: 0,
-			GranularitySeconds:   1,
-			Known:                true,
-		},
-		ImageCache: domain.ImageCacheEvidence{Known: true},
-		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
-	}
 }
 
 func environ() map[string]string {
