@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
-type fakeConns struct{ recs []ConnRef }
+type fakeConns struct{ recs []connection.Record }
 
-func (f fakeConns) List(context.Context, string) ([]ConnRef, error) { return f.recs, nil }
+func (f fakeConns) List(context.Context, string) ([]connection.Record, error) { return f.recs, nil }
 
 type nilResolver struct{}
 
@@ -44,7 +45,7 @@ func (a recAdapter) Observe(_ context.Context, _ adapter.ObserveRequest) (adapte
 func (recAdapter) Verify(context.Context) error { return nil }
 
 func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
-	conns := fakeConns{recs: []ConnRef{
+	conns := fakeConns{recs: []connection.Record{
 		{ID: "conn_a", AdapterType: "stub", Authorized: true},
 		{ID: "conn_b", AdapterType: "stub", Authorized: true},
 		{ID: "conn_unauth", AdapterType: "stub", Authorized: false},
@@ -69,7 +70,7 @@ func TestBrokerRoutesLaunchByConnection(t *testing.T) {
 	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
 		return recAdapter{id: cfg["id"], launched: &launchedBy}, nil
 	})
-	conns := fakeConns{recs: []ConnRef{
+	conns := fakeConns{recs: []connection.Record{
 		{ID: "conn_a", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "conn_a"}},
 		{ID: "conn_b", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "conn_b"}},
 	}}
@@ -110,7 +111,7 @@ func TestBrokerListOwnedFansOut(t *testing.T) {
 	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
 		return ownedAdapter{id: cfg["id"]}, nil
 	})
-	conns := fakeConns{recs: []ConnRef{
+	conns := fakeConns{recs: []connection.Record{
 		{ID: "conn_a", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "a"}},
 		{ID: "conn_b", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "b"}},
 	}}
@@ -130,7 +131,7 @@ func TestBrokerRoutesObserveByConnection(t *testing.T) {
 	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
 		return recAdapter{id: cfg["id"], observed: &observedBy}, nil
 	})
-	conns := fakeConns{recs: []ConnRef{
+	conns := fakeConns{recs: []connection.Record{
 		{ID: "conn_a", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "conn_a"}},
 		{ID: "conn_b", AdapterType: "stub", Authorized: true, Config: map[string]string{"id": "conn_b"}},
 	}}
@@ -165,7 +166,7 @@ func TestBrokerVerifyConnectionBuildsAndVerifies(t *testing.T) {
 	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
 		return verifyAdapter{id: cfg["id"], verified: &verified}, nil
 	})
-	conns := fakeConns{recs: []ConnRef{
+	conns := fakeConns{recs: []connection.Record{
 		{ID: "conn_a", AdapterType: "stub", Authorized: false, Config: map[string]string{"id": "conn_a"}},
 	}}
 	b := NewBroker(conns, f, nilResolver{})

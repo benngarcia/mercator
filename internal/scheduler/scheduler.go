@@ -196,34 +196,15 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 		provision = offer.Provisioning.Expected
 	}
 	pull := estimatePullSeconds(offer)
-	start := queue + provision + pull + 1
+	expected := queue + provision + pull + 1
+	start := domain.Estimate{Expected: expected, P50: expected, P90: expected * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion}
+	// A measured latency estimate for this offer overrides the derived one.
 	if estimate, ok := input.LatencyEstimates[offer.ID]; ok && estimate.SampleCount > 0 {
-		startEstimate := estimate
-		if startEstimate.ModelVersion == "" {
-			startEstimate.ModelVersion = input.ModelVersion
+		start = estimate
+		if start.ModelVersion == "" {
+			start.ModelVersion = input.ModelVersion
 		}
-		return estimateCandidateWithStart(input, offer, queue, provision, pull, startEstimate)
 	}
-	costSeconds := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
-	if costSeconds <= 0 {
-		costSeconds = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
-	}
-	if costSeconds <= 0 {
-		costSeconds = 1
-	}
-	minSeconds := float64(offer.Pricing.MinimumChargeSeconds)
-	billedSeconds := math.Max(costSeconds, minSeconds)
-	cost := offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billedSeconds
-	return domain.CandidateEstimates{
-		QueueSeconds:     domain.Estimate{Expected: queue, P50: queue, P90: queue, Source: "offer", ModelVersion: input.ModelVersion},
-		ProvisionSeconds: domain.Estimate{Expected: provision, P50: provision, P90: provision, Source: "offer", ModelVersion: input.ModelVersion},
-		PullSeconds:      domain.Estimate{Expected: pull, P50: pull, P90: pull * 1.5, Source: "image_cache", ModelVersion: input.ModelVersion},
-		StartSeconds:     domain.Estimate{Expected: start, P50: start, P90: start * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion},
-		CostUSD:          domain.Estimate{Expected: cost, Source: "price_model", ModelVersion: input.ModelVersion},
-	}
-}
-
-func estimateCandidateWithStart(input SchedulingInput, offer domain.OfferSnapshot, queue float64, provision float64, pull float64, start domain.Estimate) domain.CandidateEstimates {
 	costSeconds := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if costSeconds <= 0 {
 		costSeconds = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)

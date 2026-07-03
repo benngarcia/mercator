@@ -22,7 +22,6 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/ociresolver"
-	"github.com/benngarcia/mercator/internal/offers"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
@@ -31,18 +30,32 @@ import (
 	"github.com/benngarcia/mercator/web"
 )
 
+// ImageResolver resolves a tag-form image reference to a digest-pinned one.
+type ImageResolver interface {
+	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
+}
+
+// Deps are the services the server routes to. Orchestrator, Scheduler, and
+// Adapter are required; a nil optional service disables its endpoints.
+type Deps struct {
+	Orchestrator *orchestrator.Orchestrator
+	Scheduler    scheduler.Scheduler
+	Adapter      adapter.Adapter
+	Workloads    *workload.Service
+	Sinks        *sinkspkg.Manager
+	Connections  *connection.Service
+	Resolver     ImageResolver
+}
+
 type Server struct {
-	mux       *http.ServeMux
-	orch      *orchestrator.Orchestrator
-	scheduler scheduler.Scheduler
-	adapter   adapter.Adapter
-	workloads *workload.Service
-	sinks     *sinkspkg.Manager
-	conns     *connection.Service
-	offers    *offers.Service
-	resolver  interface {
-		Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
-	}
+	mux          *http.ServeMux
+	orch         *orchestrator.Orchestrator
+	scheduler    scheduler.Scheduler
+	adapter      adapter.Adapter
+	workloads    *workload.Service
+	sinks        *sinkspkg.Manager
+	conns        *connection.Service
+	resolver     ImageResolver
 	secretStore  credential.SecretStore
 	credentials  *credential.Resolver
 	verifier     connectionVerifier
@@ -220,25 +233,17 @@ type errorResponse struct {
 	Details []domain.Violation `json:"details,omitempty"`
 }
 
-func New(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, options ...Option) http.Handler {
-	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad}
-	for _, option := range options {
-		option(s)
+func New(deps Deps, options ...Option) http.Handler {
+	s := &Server{
+		mux:       http.NewServeMux(),
+		orch:      deps.Orchestrator,
+		scheduler: deps.Scheduler,
+		adapter:   deps.Adapter,
+		workloads: deps.Workloads,
+		sinks:     deps.Sinks,
+		conns:     deps.Connections,
+		resolver:  deps.Resolver,
 	}
-	s.routes()
-	return s
-}
-
-func NewWithServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, resolver interface {
-	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
-}, options ...Option) http.Handler {
-	return NewWithAllServices(orch, sched, ad, workloads, nil, nil, nil, resolver, options...)
-}
-
-func NewWithAllServices(orch *orchestrator.Orchestrator, sched scheduler.Scheduler, ad adapter.Adapter, workloads *workload.Service, sinkManager *sinkspkg.Manager, conns *connection.Service, offerService *offers.Service, resolver interface {
-	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
-}, options ...Option) http.Handler {
-	s := &Server{mux: http.NewServeMux(), orch: orch, scheduler: sched, adapter: ad, workloads: workloads, sinks: sinkManager, conns: conns, offers: offerService, resolver: resolver}
 	for _, option := range options {
 		option(s)
 	}
@@ -987,37 +992,10 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, connectionListResponse{Connections: records})
 }
 
-// visibleOffers returns the offers a workspace can see: the offer cache when
-// populated, otherwise a live adapter query. Shared by the offers and
-// connections surfaces.
-func (s *Server) visibleOffers(ctx context.Context, workspaceID string) ([]domain.OfferSnapshot, error) {
-	if s.offers != nil {
-		records, err := s.offers.ListCached(ctx, workspaceID, time.Now().UTC())
-		if err != nil {
-			return nil, err
-		}
-		if len(records) > 0 {
-			return records, nil
-		}
-	}
-	return s.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
-}
-
 func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
 	workspaceID, ok := s.requiredWorkspace(w, r)
 	if !ok {
 		return
-	}
-	if s.offers != nil {
-		records, err := s.offers.ListCached(r.Context(), workspaceID, time.Now().UTC())
-		if err != nil {
-			writeInternalError(w, http.StatusInternalServerError, "LIST_OFFERS_FAILED", err)
-			return
-		}
-		if len(records) > 0 {
-			writeJSON(w, http.StatusOK, offerListResponse{Offers: records})
-			return
-		}
 	}
 	records, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
 	if err != nil {
@@ -1230,28 +1208,29 @@ func errorMessage(err error) string {
 	return err.Error()
 }
 
-func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot) (http.Handler, func() error, error) {
-	return HandlerForSQLiteWithOptions(ctx, dsn, offer)
-}
-
-func HandlerForSQLiteWithOptions(ctx context.Context, dsn string, offer []domain.OfferSnapshot, options ...Option) (http.Handler, func() error, error) {
-	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
-	return HandlerForSQLiteWithAdapter(ctx, dsn, ad, options...)
-}
-
-func HandlerForSQLiteWithAdapter(ctx context.Context, dsn string, ad adapter.Adapter, options ...Option) (http.Handler, func() error, error) {
+// HandlerForSQLite builds a fully-wired handler over a SQLite event log with
+// the fake adapter serving the given offers. Used for evaluation and tests.
+func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot, options ...Option) (http.Handler, func() error, error) {
 	log, err := eventlog.OpenSQLite(ctx, dsn)
 	if err != nil {
 		return nil, nil, err
 	}
+	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad)
 	// Synthetic-digest resolution lets the minimal create path
 	// (POST /v1/runs {"image":"busybox"}) resolve an arbitrary tag to a
 	// deterministic digest with no network, keeping fake mode end-to-end
 	// exercisable without a pre-pinned image.
-	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
-	return NewWithAllServices(orch, sched, ad, workload.New(log), sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}), connection.New(log), offers.New(log), resolver, options...), log.Close, nil
+	handler := New(Deps{
+		Orchestrator: orchestrator.New(log, sched, ad),
+		Scheduler:    sched,
+		Adapter:      ad,
+		Workloads:    workload.New(log),
+		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
+		Connections:  connection.New(log),
+		Resolver:     ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests()),
+	}, options...)
+	return handler, log.Close, nil
 }
 
 var _ fs.FS = web.Static()

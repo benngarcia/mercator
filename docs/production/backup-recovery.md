@@ -52,10 +52,10 @@ go run ./cmd/mercator run list --workspace-id ws_eval | jq .
 
 ## Recovery Expectations
 
-- Events, command idempotency records, and sink/projection offsets live in
+- Events, command idempotency records, and sink cursors live in
   SQLite.
 - Public broker state is recoverable from the event history.
-- Offer caches and projections are disposable.
+- Derived read models are disposable; the event log is the only state that needs backup.
 
 ## Gaps Before GA
 

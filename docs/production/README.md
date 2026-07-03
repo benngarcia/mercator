@@ -7,8 +7,8 @@ running, testing, and auditing the current single-process OCI run broker.
 Mercator runs as one Go process with an embedded SQLite event log, REST/OpenAPI
 API, JSON-first CLI, embedded UI, a Docker host adapter (with RunPod added via
 connections), env-based workload
-configuration, sink cursor/replay support, and disposable projections. SQLite events are the source
-of truth; read models, offer caches, projections, and sink cursors can be
+configuration and sink cursor/replay support. SQLite events are the source
+of truth; derived read models and sink cursors can be
 rebuilt from the event log.
 
 ## Start Here
