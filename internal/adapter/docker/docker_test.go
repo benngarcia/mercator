@@ -217,6 +217,45 @@ func TestPhaseFromStateDoesNotMarkCreatedContainerRunning(t *testing.T) {
 	}
 }
 
+// Docker inspect reports .State.ExitCode == 0 for containers that are still
+// running; surfacing it let event consumers treat a live container as
+// exited. The observation must omit the exit code until the phase is an
+// actual exit.
+func TestObserveOmitsExitCodeUntilExited(t *testing.T) {
+	client := newFakeClient()
+	ad := New(client)
+	req := launchRequest()
+	if _, err := ad.Launch(context.Background(), req); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	running := client.objects[req.LaunchKey]
+	running.State = "running"
+	zero := 0
+	running.ExitCode = &zero
+	client.objects[req.LaunchKey] = running
+
+	observation, err := ad.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, RequestHash: req.RequestHash})
+	if err != nil {
+		t.Fatalf("observe running: %v", err)
+	}
+	if observation.Phase != adapter.ExternalPhaseRunning || observation.ExitCode != nil {
+		t.Fatalf("running observation must carry no exit code: %+v", observation)
+	}
+
+	exited := client.objects[req.LaunchKey]
+	exited.State = "exited"
+	client.objects[req.LaunchKey] = exited
+
+	observation, err = ad.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, RequestHash: req.RequestHash})
+	if err != nil {
+		t.Fatalf("observe exited: %v", err)
+	}
+	if observation.Phase != adapter.ExternalPhaseSucceeded || observation.ExitCode == nil || *observation.ExitCode != 0 {
+		t.Fatalf("exited observation must carry the exit code: %+v", observation)
+	}
+}
+
 func TestPhaseFromStateUsesExitCode(t *testing.T) {
 	if phase := phaseFromState("exited", intPtr(0)); phase != adapter.ExternalPhaseSucceeded {
 		t.Fatalf("exit 0 should succeed, got %s", phase)

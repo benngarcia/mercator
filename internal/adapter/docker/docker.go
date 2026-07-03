@@ -127,7 +127,15 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	if !ownershipMatches(container.Labels, req.OwnershipToken, req.RequestHash) {
 		return adapter.ExternalObservation{}, adapter.ErrIdempotencyConflict
 	}
-	return adapter.ExternalObservation{ExternalID: container.ID, LaunchKey: req.LaunchKey, Phase: phaseFromState(container.State, container.ExitCode), ExitCode: container.ExitCode, ObservedAt: a.now().UTC()}, nil
+	phase := phaseFromState(container.State, container.ExitCode)
+	// docker inspect reports ExitCode 0 while a container is still running;
+	// surfacing it would let event consumers finalize (and reclaim) live
+	// runs. An exit code exists only once the container exited.
+	var exitCode *int
+	if phase.Exited() {
+		exitCode = container.ExitCode
+	}
+	return adapter.ExternalObservation{ExternalID: container.ID, LaunchKey: req.LaunchKey, Phase: phase, ExitCode: exitCode, ObservedAt: a.now().UTC()}, nil
 }
 
 func (a *Adapter) Cancel(context.Context, adapter.CancelRequest) (adapter.CancelReceipt, error) {
