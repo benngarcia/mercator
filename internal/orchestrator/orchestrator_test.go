@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +162,9 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	}
 	if req.Resources.CPU.MinMillis == 0 || len(req.Resources.Accelerators) != 1 {
 		t.Fatalf("launch request missing resources: %+v", req)
+	}
+	if !reflect.DeepEqual(ad.offerRequest.Resources, rev.Spec.Resources) {
+		t.Fatalf("offer request resources = %+v, want %+v", ad.offerRequest.Resources, rev.Spec.Resources)
 	}
 	if req.SelectedOfferSnapshotID != "off_1" || req.SelectedOfferNativeRef != "native-offer-1" {
 		t.Fatalf("launch request missing selected offer context: %+v", req)
@@ -762,7 +766,13 @@ func (o *ownedIndeterminateLaunchAdapter) ListOwned(context.Context, adapter.Own
 
 type captureLaunchAdapter struct {
 	*fake.Adapter
+	offerRequest  adapter.OfferRequest
 	launchRequest adapter.LaunchRequest
+}
+
+func (c *captureLaunchAdapter) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	c.offerRequest = req
+	return c.Adapter.ListOffers(ctx, req)
 }
 
 func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {

@@ -15,7 +15,7 @@ func stockAvailable(status string) bool {
 	return s != "" && s != "none" && s != "unavailable"
 }
 
-func buildOffers(gpus []gpuType, allowlist []string, now time.Time) []domain.OfferSnapshot {
+func buildOffers(gpus []gpuType, allowlist []string, gpuCount, diskGB int, now time.Time) []domain.OfferSnapshot {
 	allowed := make(map[string]bool, len(allowlist))
 	for _, a := range allowlist {
 		allowed[strings.ToLower(strings.TrimSpace(a))] = true
@@ -38,12 +38,12 @@ func buildOffers(gpus []gpuType, allowlist []string, now time.Time) []domain.Off
 			Resources: domain.ResourceInventory{
 				CPUMillis:          8000,
 				MemoryBytes:        16 * gib,
-				EphemeralDiskBytes: 20 * gib,
+				EphemeralDiskBytes: int64(diskGB) * gib,
 				Accelerators: []domain.AcceleratorInventory{{
 					Vendor:         "NVIDIA",
 					Model:          g.DisplayName,
 					CanonicalModel: gpunorm.Canonical("NVIDIA", g.DisplayName),
-					Count:          1,
+					Count:          gpuCount,
 					MemoryBytes:    int64(g.MemoryInGb) * gib,
 				}},
 			},
@@ -56,7 +56,7 @@ func buildOffers(gpus []gpuType, allowlist []string, now time.Time) []domain.Off
 			},
 			Pricing: domain.PriceModel{
 				Currency:           "USD",
-				RatePerSecondUSD:   *g.CommunityPrice / 3600.0,
+				RatePerSecondUSD:   *g.CommunityPrice * float64(gpuCount) / 3600.0,
 				GranularitySeconds: 1,
 				Known:              true,
 			},

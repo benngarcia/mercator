@@ -17,7 +17,7 @@ func TestBuildOffersFiltersByAllowlistStockAndPrice(t *testing.T) {
 		{ID: "NVIDIA H100", DisplayName: "H100", MemoryInGb: 80, CommunityPrice: pricePtr(3.5), StockStatus: "High"},            // not in allow-list
 		{ID: "NVIDIA RTX A5000", DisplayName: "RTX A5000", MemoryInGb: 24, CommunityPrice: nil, StockStatus: "High"},            // no price (and not allowed)
 	}
-	offers := buildOffers(gpus, []string{"NVIDIA RTX A2000", "NVIDIA RTX A4000"}, now)
+	offers := buildOffers(gpus, []string{"NVIDIA RTX A2000", "NVIDIA RTX A4000"}, 2, 75, now)
 
 	if len(offers) != 1 {
 		t.Fatalf("expected exactly 1 offer (A2000), got %d: %+v", len(offers), offers)
@@ -32,15 +32,18 @@ func TestBuildOffersFiltersByAllowlistStockAndPrice(t *testing.T) {
 	if o.Platform.OS != "linux" || o.Platform.Architecture != "amd64" {
 		t.Errorf("platform = %+v", o.Platform)
 	}
-	// 0.12 / 3600 ~= 3.333e-5
-	if o.Pricing.RatePerSecondUSD < 3.3e-5 || o.Pricing.RatePerSecondUSD > 3.4e-5 {
+	// Two GPUs at $0.12/GPU/hour => $0.24/hour ~= 6.667e-5/second.
+	if o.Pricing.RatePerSecondUSD < 6.6e-5 || o.Pricing.RatePerSecondUSD > 6.7e-5 {
 		t.Errorf("rate per second = %v", o.Pricing.RatePerSecondUSD)
 	}
-	if len(o.Resources.Accelerators) != 1 || o.Resources.Accelerators[0].Vendor != "NVIDIA" || o.Resources.Accelerators[0].Count != 1 {
+	if len(o.Resources.Accelerators) != 1 || o.Resources.Accelerators[0].Vendor != "NVIDIA" || o.Resources.Accelerators[0].Count != 2 {
 		t.Errorf("accelerators = %+v", o.Resources.Accelerators)
 	}
 	if o.Resources.Accelerators[0].MemoryBytes != int64(6)*1024*1024*1024 {
 		t.Errorf("accelerator memory = %d", o.Resources.Accelerators[0].MemoryBytes)
+	}
+	if o.Resources.EphemeralDiskBytes != int64(75)*1024*1024*1024 {
+		t.Errorf("ephemeral disk = %d", o.Resources.EphemeralDiskBytes)
 	}
 	// The canonical id is what the scheduler matches on, derived from the
 	// RunPod displayName ("RTX A2000") -> "nvidia-rtx-a2000".
@@ -61,7 +64,7 @@ func TestBuildOffersDropsAllowListedGPUWithNilPrice(t *testing.T) {
 	// An allow-listed, in-stock GPU with no community price must still be dropped,
 	// exercising the nil-price filter independently of the allow-list filter.
 	unpriced := []gpuType{{ID: "NVIDIA RTX A2000", DisplayName: "A2000", MemoryInGb: 6, CommunityPrice: nil, StockStatus: "High"}}
-	if got := buildOffers(unpriced, []string{"NVIDIA RTX A2000"}, now); len(got) != 0 {
+	if got := buildOffers(unpriced, []string{"NVIDIA RTX A2000"}, 1, 20, now); len(got) != 0 {
 		t.Fatalf("allow-listed GPU with nil price must be dropped, got %d", len(got))
 	}
 }

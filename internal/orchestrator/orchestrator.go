@@ -673,7 +673,10 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 }
 
 func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
-	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: requested.Workload.WorkspaceID})
+	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
+		WorkspaceID: requested.Workload.WorkspaceID,
+		Resources:   requested.Workload.Spec.Resources,
+	})
 	if err != nil {
 		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
 	}

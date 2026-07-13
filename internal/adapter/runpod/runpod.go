@@ -55,12 +55,14 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 
 func (a *Adapter) Verify(ctx context.Context) error { return a.rest.ping(ctx) }
 
-func (a *Adapter) ListOffers(ctx context.Context, _ adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	gpus, err := a.graphql.gpuTypes(ctx)
+func (a *Adapter) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	gpuCount := requestedGPUCount(req.Resources)
+	gpus, err := a.graphql.gpuTypes(ctx, gpuCount)
 	if err != nil {
 		return nil, err
 	}
-	return buildOffers(gpus, a.allowlist, a.now().UTC()), nil
+	diskGB := requestedDiskGB(req.Resources, a.diskGB)
+	return buildOffers(gpus, a.allowlist, gpuCount, diskGB, a.now().UTC()), nil
 }
 
 func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
@@ -69,8 +71,8 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		Name:            name,
 		ImageName:       req.Image,
 		GPUTypeIDs:      a.gpuTypeIDs(req.SelectedOfferNativeRef),
-		GPUCount:        1,
-		ContainerDiskGB: a.diskGB,
+		GPUCount:        requestedGPUCount(req.Resources),
+		ContainerDiskGB: requestedDiskGB(req.Resources, a.diskGB),
 		CloudType:       a.cloudType,
 		Env:             a.launchEnv(req),
 		DockerStartCmd:  append([]string(nil), req.Args...),
@@ -90,6 +92,22 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		Phase:          phaseFromPod(p),
 		AcceptedAt:     a.now().UTC(),
 	}, nil
+}
+
+func requestedGPUCount(resources domain.ResourceRequirements) int {
+	for _, accelerator := range resources.Accelerators {
+		if accelerator.Count > 0 {
+			return accelerator.Count
+		}
+	}
+	return 1
+}
+
+func requestedDiskGB(resources domain.ResourceRequirements, defaultGB int) int {
+	if resources.EphemeralDisk.MinBytes <= 0 {
+		return defaultGB
+	}
+	return int((resources.EphemeralDisk.MinBytes + gib - 1) / gib)
 }
 
 func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {

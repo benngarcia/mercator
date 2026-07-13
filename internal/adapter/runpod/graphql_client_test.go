@@ -20,7 +20,7 @@ func TestGPUTypesQueryAndDecode(t *testing.T) {
 		]}}`), nil
 	}))
 
-	gpus, err := client.gpuTypes(context.Background())
+	gpus, err := client.gpuTypes(context.Background(), 2)
 	if err != nil {
 		t.Fatalf("gpuTypes: %v", err)
 	}
@@ -30,6 +30,9 @@ func TestGPUTypesQueryAndDecode(t *testing.T) {
 	// lowestPrice MUST carry the input arg — RunPod errors on a bare lowestPrice.
 	if !strings.Contains(gotBody, "gpuTypes") || !strings.Contains(gotBody, "lowestPrice(input:") {
 		t.Errorf("body missing query: %s", gotBody)
+	}
+	if !strings.Contains(gotBody, `"variables":{"gpuCount":2}`) {
+		t.Errorf("body missing requested gpu count: %s", gotBody)
 	}
 	if len(gpus) != 2 {
 		t.Fatalf("expected 2 gpu types, got %d", len(gpus))
@@ -46,7 +49,7 @@ func TestGPUTypesSurfacesGraphQLErrors(t *testing.T) {
 	client := newGraphQLClient("gkey", "https://gql.test/graphql", newFakeHTTPClient(func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"errors":[{"message":"boom"}]}`), nil
 	}))
-	_, err := client.gpuTypes(context.Background())
+	_, err := client.gpuTypes(context.Background(), 1)
 	if err == nil {
 		t.Fatal("graphql errors must surface as an error")
 	}
