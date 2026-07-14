@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -45,6 +46,7 @@ type Orchestrator struct {
 	now                func() time.Time
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
+	runLocks           keyedMutex
 }
 
 // Option configures an Orchestrator.
@@ -216,6 +218,9 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 // iteration re-reads the stream, so state is always derived from the log
 // rather than threaded through in memory.
 func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string) error {
+	unlock := o.runLocks.Lock(workspaceID + "/" + runID)
+	defer unlock()
+
 	for {
 		events, err := o.GetRunEvents(ctx, workspaceID, runID)
 		if err != nil {
@@ -229,6 +234,42 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string
 		if err != nil || !progressed {
 			return err
 		}
+	}
+}
+
+type keyedMutex struct {
+	mu      sync.Mutex
+	entries map[string]*keyedMutexEntry
+}
+
+type keyedMutexEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (m *keyedMutex) Lock(key string) func() {
+	m.mu.Lock()
+	if m.entries == nil {
+		m.entries = map[string]*keyedMutexEntry{}
+	}
+	entry := m.entries[key]
+	if entry == nil {
+		entry = &keyedMutexEntry{}
+		m.entries[key] = entry
+	}
+	entry.refs++
+	m.mu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+
+		m.mu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(m.entries, key)
+		}
+		m.mu.Unlock()
 	}
 }
 
@@ -632,7 +673,10 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 }
 
 func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
-	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: requested.Workload.WorkspaceID})
+	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
+		WorkspaceID: requested.Workload.WorkspaceID,
+		Resources:   requested.Workload.Spec.Resources,
+	})
 	if err != nil {
 		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
 	}

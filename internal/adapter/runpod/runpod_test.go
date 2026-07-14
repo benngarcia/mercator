@@ -7,8 +7,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
 // newTestAdapter builds an Adapter whose REST + GraphQL clients share one fake
@@ -37,8 +40,11 @@ func TestVerifyPingsREST(t *testing.T) {
 }
 
 func TestListOffersUsesGraphQLAndAllowlist(t *testing.T) {
+	var body string
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
 		if strings.Contains(r.URL.Host, "gql.test") {
+			raw, _ := io.ReadAll(r.Body)
+			body = string(raw)
 			return jsonResponse(200, `{"data":{"gpuTypes":[
 				{"id":"NVIDIA RTX A2000","displayName":"A2000","memoryInGb":6,"communityPrice":0.12,"lowestPrice":{"stockStatus":"High"}}
 			]}}`), nil
@@ -51,6 +57,92 @@ func TestListOffersUsesGraphQLAndAllowlist(t *testing.T) {
 	}
 	if len(offers) != 1 || offers[0].NativeRef != "NVIDIA RTX A2000" {
 		t.Fatalf("offers = %+v", offers)
+	}
+	if !strings.Contains(body, `"variables":{"gpuCount":1}`) {
+		t.Fatalf("omitted resources must query the one-GPU default: %s", body)
+	}
+	if offers[0].Resources.Accelerators[0].Count != 1 || offers[0].Resources.EphemeralDiskBytes != 20*gib {
+		t.Fatalf("omitted resources must retain adapter defaults: %+v", offers[0].Resources)
+	}
+}
+
+func TestRequestedAllocationSchedulesAndReachesPodCreation(t *testing.T) {
+	var graphqlBody, createBody string
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(r.URL.Host, "gql.test") {
+			graphqlBody = string(body)
+			return jsonResponse(200, `{"data":{"gpuTypes":[
+				{"id":"NVIDIA RTX A2000","displayName":"A2000","memoryInGb":6,"communityPrice":0.12,"lowestPrice":{"stockStatus":"High"}}
+			]}}`), nil
+		}
+		createBody = string(body)
+		return jsonResponse(201, `{"id":"pod_2","name":"mercator-launch_2","desiredStatus":"RUNNING"}`), nil
+	})
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return now }
+	resources := domain.ResourceRequirements{
+		CPU:           domain.CPURequirement{MinMillis: 4000},
+		Memory:        domain.MemoryRequirement{MinBytes: 8 * gib},
+		Accelerators:  []domain.AcceleratorRequirement{{Vendor: "nvidia", Count: 2}},
+		EphemeralDisk: domain.DiskRequirement{MinBytes: 75*gib + 1},
+	}
+
+	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1", Resources: resources})
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	if !strings.Contains(graphqlBody, `"variables":{"gpuCount":2}`) {
+		t.Fatalf("availability query did not request two GPUs: %s", graphqlBody)
+	}
+	if len(offers) != 1 || offers[0].Resources.Accelerators[0].Count != 2 || offers[0].Resources.EphemeralDiskBytes != 76*gib {
+		t.Fatalf("offer does not describe requested allocation: %+v", offers)
+	}
+	if offers[0].Pricing.RatePerSecondUSD < 6.6e-5 || offers[0].Pricing.RatePerSecondUSD > 6.7e-5 {
+		t.Fatalf("offer price does not scale with GPU count: %+v", offers[0].Pricing)
+	}
+
+	workload := domain.WorkloadRevision{
+		Digest: "sha256:revision",
+		Spec: domain.WorkloadSpec{
+			Containers: []domain.ContainerSpec{{
+				Name:     "main",
+				Image:    "ghcr.io/acme/trainer@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+				Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
+			}},
+			Resources: resources,
+			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveCheapest, ExpectedRuntimeSeconds: 60},
+		},
+	}
+	decision, err := scheduler.New().Evaluate(context.Background(), scheduler.SchedulingInput{
+		RunID: "run_2", Workload: workload, Offers: offers, EvaluatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("schedule: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != offers[0].ID {
+		t.Fatalf("requested allocation was not schedulable: %+v", decision)
+	}
+
+	_, err = a.Launch(context.Background(), adapter.LaunchRequest{
+		WorkspaceID:            "ws_1",
+		RunID:                  "run_2",
+		AttemptID:              "att_2",
+		LaunchKey:              "launch_2",
+		OwnershipToken:         "own_2",
+		RequestHash:            "request_2",
+		CleanupLocator:         "cleanup_2",
+		Image:                  workload.Spec.Containers[0].Image,
+		Resources:              resources,
+		SelectedOfferNativeRef: offers[0].NativeRef,
+	})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	for _, want := range []string{`"gpuCount":2`, `"containerDiskInGb":76`} {
+		if !strings.Contains(createBody, want) {
+			t.Errorf("pod create body missing %s: %s", want, createBody)
+		}
 	}
 }
 
@@ -73,7 +165,11 @@ func TestLaunchPostsPodWithOwnershipEnvAndName(t *testing.T) {
 		Image:                  "busybox",
 		Args:                   []string{"sh", "-c", "echo hi"},
 		SelectedOfferNativeRef: "NVIDIA RTX A2000",
-		Environment:            []adapter.EnvironmentBinding{{Name: "FOO", Value: &val}},
+		Resources: domain.ResourceRequirements{
+			Accelerators:  []domain.AcceleratorRequirement{{Vendor: "nvidia", Count: 2}},
+			EphemeralDisk: domain.DiskRequirement{MinBytes: 75*gib + 1},
+		},
+		Environment: []adapter.EnvironmentBinding{{Name: "FOO", Value: &val}},
 	})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
@@ -81,7 +177,7 @@ func TestLaunchPostsPodWithOwnershipEnvAndName(t *testing.T) {
 	if receipt.ExternalID != "pod_1" || receipt.Phase != adapter.ExternalPhaseQueued {
 		t.Fatalf("receipt = %+v", receipt)
 	}
-	for _, want := range []string{`"name":"mercator-lk1"`, `"imageName":"busybox"`, `"MERCATOR_OWNERSHIP_TOKEN":"own1"`, `"MERCATOR_REQUEST_HASH":"rh1"`, `"FOO":"v"`, `"NVIDIA RTX A2000"`} {
+	for _, want := range []string{`"name":"mercator-lk1"`, `"imageName":"busybox"`, `"gpuCount":2`, `"containerDiskInGb":76`, `"MERCATOR_OWNERSHIP_TOKEN":"own1"`, `"MERCATOR_REQUEST_HASH":"rh1"`, `"FOO":"v"`, `"NVIDIA RTX A2000"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("launch body missing %s\nbody=%s", want, body)
 		}

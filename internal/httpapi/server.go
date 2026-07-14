@@ -749,7 +749,10 @@ func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, violations[0].Code, violations[0].Message)
 		return
 	}
-	offers, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
+	offers, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{
+		WorkspaceID: workspaceID,
+		Resources:   body.Workload.Spec.Resources,
+	})
 	if err != nil {
 		writeInternalError(w, http.StatusBadGateway, "OFFER_QUERY_FAILED", err)
 		return

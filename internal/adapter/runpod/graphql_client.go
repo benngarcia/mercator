@@ -12,10 +12,11 @@ import (
 
 const defaultGraphQLBaseURL = "https://api.runpod.io/graphql"
 
-// gpuTypesQuery requests the GPU catalog with pricing and availability.
+// gpuTypesQuery requests the GPU catalog with pricing and availability for a
+// concrete allocation size.
 // RunPod's `lowestPrice` field REQUIRES an input argument — querying it bare
-// returns an INTERNAL_SERVER_ERROR per gpuType — so we pass `input: {gpuCount: 1}`.
-const gpuTypesQuery = `{ gpuTypes { id displayName memoryInGb communityPrice securePrice lowestPrice(input: {gpuCount: 1}) { stockStatus } } }`
+// returns an INTERNAL_SERVER_ERROR per gpuType.
+const gpuTypesQuery = `query GPUTypes($gpuCount: Int!) { gpuTypes { id displayName memoryInGb communityPrice securePrice lowestPrice(input: {gpuCount: $gpuCount}) { stockStatus } } }`
 
 type gpuType struct {
 	ID             string
@@ -42,8 +43,14 @@ func newGraphQLClient(apiKey, baseURL string, httpClient *http.Client) *graphqlC
 	return &graphqlClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, http: httpClient}
 }
 
-func (c *graphqlClient) gpuTypes(ctx context.Context) ([]gpuType, error) {
-	reqBody, err := json.Marshal(map[string]string{"query": gpuTypesQuery})
+func (c *graphqlClient) gpuTypes(ctx context.Context, gpuCount int) ([]gpuType, error) {
+	if gpuCount <= 0 {
+		gpuCount = 1
+	}
+	reqBody, err := json.Marshal(map[string]any{
+		"query":     gpuTypesQuery,
+		"variables": map[string]int{"gpuCount": gpuCount},
+	})
 	if err != nil {
 		return nil, err
 	}

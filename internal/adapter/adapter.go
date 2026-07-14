@@ -61,6 +61,7 @@ type Adapter interface {
 
 type OfferRequest struct {
 	WorkspaceID string
+	Resources   domain.ResourceRequirements
 }
 
 type LaunchRequest struct {
