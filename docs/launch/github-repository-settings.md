@@ -22,8 +22,8 @@ Protect `master` before inviting external contributors:
 - Require review from Code Owners once `.github/CODEOWNERS` is on `master`.
 - Require status checks to pass before merging:
   - `Go`
-  - `SDKs`
   - `Console`
+  - `Image`
 - Prefer "Require branches to be up to date before merging" unless it makes
   the first public issue triage too noisy.
 - Require conversation resolution before merging.

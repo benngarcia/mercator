@@ -72,9 +72,8 @@ URL and real registry-pullable image digests; the server rejects mutable tags
 at create time, and RunPod can only pull digests that actually exist in a
 registry.
 
-SDK registry packages are not published for the first launch. The Python SDK
-example source-installs from a public Mercator Git ref instead of assuming PyPI
-publishing. Rotate the API key after testing.
+The BusyBox example reports progress and exit through ordinary HTTP using the
+injected `MERCATOR_*` environment. Rotate the API key after testing.
 
 ### Image refs must be real and pullable
 
@@ -91,5 +90,5 @@ a real, registry-pullable tag or digest. Two consequences:
   through unchanged.
 - Workloads self-report their exit code through `MERCATOR_REPORT_URL`. Behind a
   Cloudflare-fronted Mercator, the report client must send a non-default
-  `User-Agent` (the SDKs do; a raw `curl`/`wget` is fine, but plain
-  `python-urllib`/default agents can be 403'd by Cloudflare's managed rules).
+  `User-Agent`. Raw `curl` or `wget` works, while plain `python-urllib` default
+  agents can receive a 403 from Cloudflare's managed rules.

@@ -12,7 +12,6 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 - Docker host adapter with guarded live integration test.
 - RunPod-oriented adapter and examples.
 - Operator console embedded in the Go binary.
-- TypeScript, Python, and Ruby SDKs.
 - Production evaluation runbooks.
 - OSS project scaffolding: license, security policy, contribution guide, issue
   templates, CI/release workflows, compatibility policy, screenshots, and
@@ -46,7 +45,7 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 - Additional provider adapters with the same auditable run contract.
 - Package-manager distribution for the CLI/server.
 - More console affordances for run comparison and placement diagnostics.
-- Compatibility tests across SDKs and the OpenAPI document.
+- Compatibility tests for the CLI and OpenAPI document.
 
 ## Non-Goals
 

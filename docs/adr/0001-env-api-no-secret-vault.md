@@ -43,6 +43,6 @@ encrypted secret events, owns secret grants, or needs a process secret key.
 Public run events still redact literal env values. The broker can safely record
 that an env key exists without exposing the value.
 
-SDKs expose env configuration and omit secret/grant helpers. Production docs
-describe the no-secret-vault boundary and point operators to workload-owned
-secret management.
+The HTTP and CLI interfaces expose env configuration and omit secret/grant
+operations. Production docs describe the no-secret-vault boundary and point
+operators to workload-owned secret management.

@@ -50,7 +50,7 @@ drives provider adapters through an auditable run lifecycle.
 - Launches through Docker and RunPod-oriented adapter paths.
 - Surfaces run status, exit codes, cleanup disposition, public events, sink
   cursors/replay, and workspace-scoped reads.
-- Provides hand-written TypeScript, Python, and Ruby SDKs for the V1 API.
+- Describes the versioned JSON HTTP interface through OpenAPI.
 
 Mercator is **V1 evaluation-ready, not GA infrastructure yet**. See
 [Known Limitations](docs/production/known-limitations.md) and
@@ -203,40 +203,13 @@ need to prove the provisionable GPU-provider flow.
 
 | Path | Use It To Prove | Requires | Start Here |
 | --- | --- | --- | --- |
-| Docker adapter | Broker lifecycle, placement, public events, cleanup, CLI, SDKs, and console with real local container launch, observation, and labels on one host. | Go 1.25+, a running Docker daemon, a digest-pinned Linux image, `jq`, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
+| Docker adapter | Broker lifecycle, placement, public events, cleanup, CLI, HTTP interface, and console with real local container launch, observation, and labels on one host. | Go 1.25+, a running Docker daemon, a digest-pinned Linux image, `jq`, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
 | RunPod adapter | Provisionable GPU-provider flow and terminate cleanup. | RunPod API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [RunPod runbook](docs/production/runpod.md) |
 
 If the broker lifecycle passes but a specific provider does not, treat that as
 adapter or environment evidence rather than broker evidence. Known gaps are
 tracked in
 [docs/production/known-limitations.md](docs/production/known-limitations.md).
-
-## SDK Happy Path
-
-The SDKs hide the low-level idempotency mechanics for the common case. A caller
-can ask Mercator to run an image, wait for closure, and read the exit code from
-the run object.
-
-```python
-from mercator import MercatorClient
-
-client = MercatorClient("http://127.0.0.1:8080", token="dev-token", workspace_id="ws_1")
-
-# On the Docker adapter the image must be digest-pinned (see the quickstart).
-image = "busybox@sha256:<digest>"
-created = client.run_image(image, args=["echo", "hi"])
-result = client.wait_run_until_terminal(created["run_id"])
-
-print(result["run"]["outcome"], result["run"]["exit_code"])
-```
-
-- TypeScript: [sdk/typescript](sdk/typescript/README.md)
-- Python: [sdk/python](sdk/python/README.md)
-- Ruby: [sdk/ruby](sdk/ruby/README.md)
-
-First-launch SDK registry publishing is deferred. Until packages are published,
-install SDKs from a source checkout; each SDK README includes copy-paste source
-install commands.
 
 ## Console
 
@@ -279,10 +252,6 @@ go test ./...
 go build ./...
 go run ./cmd/mercator --help
 scripts/check-open-source-launch.sh
-
-cd sdk/typescript && npm ci && npm test
-cd ../python && python3 -m unittest discover -s tests
-cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 For the heavier launch gate that also exercises the local release archive
@@ -303,12 +272,11 @@ Current branch status:
   RunPod-oriented path, exercised by a full Go test suite. RunPod support is
   experimental.
 - Embedded operator console and JSON-first CLI.
-- Hand-written SDKs for TypeScript, Python, and Ruby.
 - Production evaluation docs and honest known limitations are checked in.
-- No tagged release or published packages yet; install from a source checkout.
+- Tagged release archives and container images are published through GitHub.
 
-Important pre-GA gaps include package publishing, release tags, public CI run
-history, stronger external sink wiring, registry credential flows, and external
+Important pre-GA gaps include configured repository protections, a public proof
+point, stronger external sink wiring, registry credential flows, and external
 threat-model review.
 
 ## Contributing

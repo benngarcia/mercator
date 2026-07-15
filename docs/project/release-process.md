@@ -1,10 +1,8 @@
 # Release Process
 
-Mercator does not have a public release yet. This file defines the intended
-release mechanics so the first tagged release can be reviewed instead of
-invented during launch. For the full public cutover sequence, including repo
-visibility, public CI, starter issues, and proof collection, see
-`docs/launch/public-launch-runbook.md`.
+Mercator publishes tagged releases through the release workflow. This file
+defines the repeatable mechanics. The original public cutover sequence remains
+recorded in `docs/launch/public-launch-runbook.md`.
 
 ## Release Artifacts
 
@@ -29,10 +27,8 @@ The archive builder is reusable outside GitHub Actions:
 scripts/build-release-archives.sh v0.1.0 dist
 ```
 
-SDK package publishing is not part of the first binary release. SDK users should
-install from the repository checkout until package names, registry ownership,
-provenance, and clean-environment install tests are confirmed. See
-`docs/project/package-distribution.md` for the package plan.
+Mercator publishes the Go CLI/server archives and container image. Integrations
+use the versioned HTTP interface described by `/openapi.json`.
 
 ## Pre-Tag Checklist
 
@@ -47,9 +43,6 @@ go build ./...
 scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist
 
 cd web/app && bun install && bun run typecheck && bun run build
-cd ../../sdk/typescript && npm ci && npm test
-cd ../python && python3 -m unittest discover -s tests
-cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 Run the Docker adapter smoke against a running Docker daemon (`go test ./...`
@@ -116,5 +109,3 @@ archive generation share the same implementation.
 - Verify `checksums.txt` matches the uploaded archives.
 - Add the release badge/link to `README.md`.
 - Update `docs/launch/open-source-readiness.md` with public CI/release evidence.
-- If any SDK package is published, update the matching SDK README and root
-  README install section.

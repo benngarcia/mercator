@@ -33,7 +33,7 @@ ask for a private disclosure channel.
 - Cleanup bugs that leave owned compute running unexpectedly or terminate the
   wrong resource.
 - Secret-store, credential-resolution, or report-token signing weaknesses.
-- Cross-workspace access through the console, CLI, SDKs, or HTTP API.
+- Cross-workspace access through the console, CLI, or HTTP API.
 
 ## Out Of Scope
 

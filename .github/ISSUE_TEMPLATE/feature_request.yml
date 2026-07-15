@@ -28,7 +28,6 @@ body:
         - adapter
         - HTTP API / OpenAPI
         - CLI
-        - SDK
         - console
         - docs / launch
     validations:

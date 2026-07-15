@@ -6,7 +6,7 @@
 
 - [ ] `go test ./...`
 - [ ] `go build ./...`
-- [ ] SDK/UI checks relevant to this change:
+- [ ] Console checks relevant to this change:
 
 ## Risk Areas
 
@@ -20,5 +20,4 @@
 ## Docs
 
 - [ ] README/docs updated or not needed
-- [ ] SDK docs updated or not needed
 - [ ] Production docs updated or not needed

@@ -9,12 +9,12 @@ issues, and collecting public proof.
 ## Preconditions
 
 - The launch-prep PR is approved by the maintainer.
-- The PR branch CI is green for Go, SDKs, and Console.
+- The PR branch CI is green for Go, Console, and Image.
 - The Go CI job includes:
   - `go test ./...`
   - `go build ./...`
   - `scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist`
-- The SDK CI job includes `scripts/check-open-source-launch.sh`.
+  - `scripts/check-open-source-launch.sh`
 - The repository owner has decided to make the project public.
 - `docs/launch/github-repository-settings.md` has been reviewed for the
   current repository owner, plan, and branch name.
@@ -99,7 +99,7 @@ on `master` and the owner has approved the public launch. At minimum, configure
 or verify:
 
 - `master` Branch Protection with required PR review, Code Owners review, and
-  required `Go`, `SDKs`, and `Console` checks;
+  required `Go`, `Console`, and `Image` checks;
 - restricted Actions Workflow permissions;
 - Require approval for all external contributors before public fork pull-request
   workflows run;
@@ -192,7 +192,6 @@ gh label create "good first issue" --description "Small, well-scoped contributio
 gh label create "help wanted" --description "Maintainers want external help and can review the result" --color 008672
 gh label create docs --description "Documentation-only change" --color 0075ca
 gh label create cli --description "CLI behavior or reference docs" --color 5319e7
-gh label create sdk --description "SDK examples, tests, or docs" --color d876e3
 gh label create console --description "Embedded operator console polish" --color fbca04
 gh label create release --description "Release packaging, checksums, and install docs" --color c2e0c6
 gh label create "needs-maintainer-input" --description "Blocked on a project decision before implementation" --color bfdadc
@@ -211,15 +210,6 @@ gh issue create \
   --label docs \
   --label console \
   --body-file docs/project/issue-drafts/longer-launch-demo.md
-```
-
-```sh
-gh issue create \
-  --title "Add SDK Docker-Adapter Examples" \
-  --label "good first issue" \
-  --label sdk \
-  --label docs \
-  --body-file docs/project/issue-drafts/sdk-fake-adapter-examples.md
 ```
 
 ```sh

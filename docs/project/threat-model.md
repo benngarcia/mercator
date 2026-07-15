@@ -14,7 +14,7 @@ In scope:
 
 - Single-process `cmd/mercator` server.
 - SQLite event log and read models.
-- `/v1/*` HTTP API, CLI, SDKs, and embedded console.
+- `/v1/*` HTTP API, CLI, and embedded console.
 - The Docker host adapter path, plus RunPod-oriented adapters added via
   connections.
 - Workload metadata, run lifecycle events, placement decisions, and cleanup
@@ -90,7 +90,7 @@ connections, offers, or events.
 Mitigations:
 
 - API reads require or derive explicit `workspace_id`.
-- SDK and CLI clients carry workspace defaults centrally.
+- The CLI carries workspace defaults centrally.
 - Query keys in the console are workspace-scoped.
 
 Remaining work:
@@ -124,7 +124,7 @@ Mitigations:
 
 - Command idempotency uses request hashes and returns
   `IDEMPOTENCY_CONFLICT` on conflicting reuse.
-- SDK happy paths generate run IDs and derive stable idempotency keys.
+- The CLI generates run IDs and stable idempotency keys on its happy path.
 - Launch and cleanup side effects are preceded by durable intent events.
 - Fake adapter tests cover idempotency conflict behavior.
 
@@ -162,7 +162,7 @@ Mitigations:
 - Reporting tokens are per-run and signed separately from the operator bearer
   token.
 - Reporting endpoint accepts workload reports, not arbitrary operator actions.
-- SDK reporter returns `nil` outside a Mercator-injected environment.
+- Workloads construct the report request from the injected environment.
 
 Remaining work:
 
