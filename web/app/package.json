@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun run dev.ts",
     "build": "bun run build.ts",
+    "check:react-effects": "test/architecture/no-direct-react-effects",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

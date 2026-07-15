@@ -6,7 +6,7 @@
 // Enter or the "Use" affordance, since workspaces are operator-supplied and
 // need not pre-exist in recents.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check, ChevronsUpDown, Layers, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -30,16 +30,13 @@ export function WorkspaceSwitcher({ value, onChange }: WorkspaceSwitcherProps) {
   const [recents, setRecents] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Refresh recents on open so newly-committed workspaces appear immediately,
-  // and focus the field for quick entry.
-  useEffect(() => {
-    if (open) {
-      setRecents(getRecentWorkspaces());
-      setDraft("");
-      const id = window.setTimeout(() => inputRef.current?.focus(), 0);
-      return () => window.clearTimeout(id);
-    }
-  }, [open]);
+  const changeOpen = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) return;
+    setRecents(getRecentWorkspaces());
+    setDraft("");
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
 
   const select = (workspaceID: string) => {
     const next = workspaceID.trim();
@@ -68,7 +65,7 @@ export function WorkspaceSwitcher({ value, onChange }: WorkspaceSwitcherProps) {
     trimmedDraft !== "" && !options.some((ws) => ws === trimmedDraft);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={changeOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"

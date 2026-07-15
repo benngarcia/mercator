@@ -3,13 +3,13 @@
 // inherited by every child route, making a workspace view deep-linkable. The
 // token never enters the URL (session.ts / localStorage only, per the design).
 //
-// A small effect keeps the URL search param and the session workspace in sync:
+// Two keyed resources keep the URL search param and the session workspace in sync:
 // when the param changes (deep link, back/forward) we write it into the session
 // (the canonical store the data hooks read); when the session changes (Topbar
 // WorkspaceSwitcher) we mirror it back into the URL. The session write is the
 // source of truth; the URL is a shareable projection of it.
 
-import { useEffect } from "react";
+import { useRef } from "react";
 import {
   createRootRoute,
   useNavigate,
@@ -19,6 +19,7 @@ import {
 import { AppShell } from "@/components/layout";
 import { getWorkspace } from "@/lib/session";
 import { useSession } from "@/hooks/useSession";
+import { useMountEffect } from "@/hooks/useMountEffect";
 
 export interface RootSearch {
   workspace_id?: string;
@@ -36,35 +37,63 @@ function validateSearch(search: Record<string, unknown>): RootSearch {
   return {};
 }
 
+function UrlWorkspaceSync({ sessionWorkspace, setWorkspace, urlWorkspace }: {
+  sessionWorkspace: string | null;
+  setWorkspace: (workspace: string) => void;
+  urlWorkspace: string;
+}) {
+  useMountEffect(() => {
+    if (urlWorkspace !== sessionWorkspace) {
+      setWorkspace(urlWorkspace);
+    }
+  });
+  return null;
+}
+
+function SessionWorkspaceSync({ navigate, sessionWorkspace, urlWorkspace }: {
+  navigate: ReturnType<typeof useNavigate>;
+  sessionWorkspace: string;
+  urlWorkspace: string | undefined;
+}) {
+  useMountEffect(() => {
+    if (sessionWorkspace !== urlWorkspace) {
+      void navigate({
+        to: ".",
+        search: (previous) => ({ ...previous, workspace_id: sessionWorkspace }),
+        replace: true,
+      });
+    }
+  });
+  return null;
+}
+
 function WorkspaceSync() {
   const navigate = useNavigate();
   const search = useSearch({ from: "__root__" });
   const { workspace, setWorkspace } = useSession();
+  const sessionWorkspace = workspace ?? getWorkspace();
+  const previousUrlWorkspace = useRef<string | undefined | null>(null);
+  const urlChanged = previousUrlWorkspace.current !== search.workspace_id;
+  previousUrlWorkspace.current = search.workspace_id;
 
-  // URL -> session: a workspace in the URL wins on load / navigation.
-  useEffect(() => {
-    if (search.workspace_id && search.workspace_id !== workspace) {
-      setWorkspace(search.workspace_id);
-    }
-    // Only react to the URL value here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search.workspace_id]);
-
-  // session -> URL: mirror the session workspace into the search param so the
-  // view stays shareable. Skips when already in sync to avoid nav churn.
-  useEffect(() => {
-    const ws = workspace ?? getWorkspace();
-    if (ws && ws !== search.workspace_id) {
-      void navigate({
-        to: ".",
-        search: (prev) => ({ ...prev, workspace_id: ws }),
-        replace: true,
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace]);
-
-  return null;
+  if (search.workspace_id && urlChanged) {
+    return (
+      <UrlWorkspaceSync
+        key={search.workspace_id}
+        sessionWorkspace={workspace}
+        setWorkspace={setWorkspace}
+        urlWorkspace={search.workspace_id}
+      />
+    );
+  }
+  return sessionWorkspace ? (
+    <SessionWorkspaceSync
+      key={sessionWorkspace}
+      navigate={navigate}
+      sessionWorkspace={sessionWorkspace}
+      urlWorkspace={search.workspace_id}
+    />
+  ) : null;
 }
 
 export const rootRoute = createRootRoute({
