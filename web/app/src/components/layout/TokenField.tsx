@@ -4,7 +4,7 @@
 // are offered for operator convenience. apiFetch reads the token centrally, so
 // this component only persists it.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Check, Eye, EyeOff, KeyRound, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -26,19 +26,24 @@ export function TokenField() {
   const { token, hasToken, setToken } = useSession();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(token ?? "");
+  const [draftSource, setDraftSource] = useState(token);
   const [reveal, setReveal] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Sync the draft from the session whenever the popover (re)opens so external
-  // changes (other tabs) are reflected, and focus the field for quick entry.
-  useEffect(() => {
-    if (open) {
-      setDraft(token ?? "");
-      setReveal(false);
-      const id = window.setTimeout(() => inputRef.current?.focus(), 0);
-      return () => window.clearTimeout(id);
-    }
-  }, [open, token]);
+  if (open && draftSource !== token) {
+    setDraftSource(token);
+    setDraft(token ?? "");
+    setReveal(false);
+  }
+
+  const changeOpen = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) return;
+    setDraftSource(token);
+    setDraft(token ?? "");
+    setReveal(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
 
   const commit = () => {
     const next = draft.trim();
@@ -53,7 +58,7 @@ export function TokenField() {
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={changeOpen}>
       <Tooltip>
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 /**
@@ -6,24 +6,21 @@ import { Toaster as Sonner, type ToasterProps } from "sonner";
  * document element (see ThemeToggle), so we observe that rather than depending
  * on a theme provider package.
  */
+function documentTheme(): "light" | "dark" {
+  return typeof document !== "undefined" && document.documentElement.classList.contains("dark")
+    ? "dark"
+    : "light";
+}
+
+function subscribeToDocumentTheme(notify: () => void) {
+  const el = document.documentElement;
+  const observer = new MutationObserver(notify);
+  observer.observe(el, { attributes: true, attributeFilter: ["class"] });
+  return () => observer.disconnect();
+}
+
 function useDocumentTheme(): "light" | "dark" {
-  const [theme, setTheme] = useState<"light" | "dark">(() =>
-    typeof document !== "undefined" &&
-    document.documentElement.classList.contains("dark")
-      ? "dark"
-      : "light",
-  );
-
-  useEffect(() => {
-    const el = document.documentElement;
-    const observer = new MutationObserver(() => {
-      setTheme(el.classList.contains("dark") ? "dark" : "light");
-    });
-    observer.observe(el, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
-  }, []);
-
-  return theme;
+  return useSyncExternalStore(subscribeToDocumentTheme, documentTheme, () => "light");
 }
 
 function Toaster(props: ToasterProps) {

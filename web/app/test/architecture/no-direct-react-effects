@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+app_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+primitive="$app_root/src/hooks/useMountEffect.ts"
+violations=0
+
+while IFS= read -r file; do
+  [[ "$file" == "$primitive" ]] && continue
+  while IFS= read -r match; do
+    [[ -z "$match" ]] && continue
+    printf '%s:%s\n' "${file#"$app_root/"}" "$match"
+    violations=$((violations + 1))
+  done < <(grep -nE '(^|[^[:alnum:]_])(useEffect|useLayoutEffect)([^[:alnum:]_]|$)' "$file" || true)
+done < <(find "$app_root/src" -type f \( -name '*.ts' -o -name '*.tsx' \) | sort)
+
+if ((violations > 0)); then
+  printf '\nFound %d forbidden React effect reference(s).\n' "$violations" >&2
+  exit 1
+fi
+
+printf 'React effect architecture check passed.\n'

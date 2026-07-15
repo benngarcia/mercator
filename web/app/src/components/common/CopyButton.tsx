@@ -8,6 +8,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useMountEffect } from "@/hooks/useMountEffect";
+
+function CopiedReset({ reset }: { reset: () => void }) {
+  useMountEffect(() => {
+    const timeout = setTimeout(reset, 1200);
+    return () => clearTimeout(timeout);
+  });
+  return null;
+}
 
 export interface CopyButtonProps {
   value: string;
@@ -29,14 +38,7 @@ export function CopyButton({
   size = "inline",
 }: CopyButtonProps) {
   const [copied, setCopied] = React.useState(false);
-  const timeout = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  React.useEffect(
-    () => () => {
-      if (timeout.current) clearTimeout(timeout.current);
-    },
-    [],
-  );
+  const [copiedVersion, setCopiedVersion] = React.useState(0);
 
   const onCopy = React.useCallback(
     async (event: React.MouseEvent) => {
@@ -44,8 +46,7 @@ export function CopyButton({
       try {
         await navigator.clipboard.writeText(value);
         setCopied(true);
-        if (timeout.current) clearTimeout(timeout.current);
-        timeout.current = setTimeout(() => setCopied(false), 1200);
+        setCopiedVersion((version) => version + 1);
       } catch {
         // Clipboard can be unavailable (insecure context); fail quietly.
       }
@@ -56,24 +57,27 @@ export function CopyButton({
   const Icon = copied ? Check : Copy;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onCopy}
-          aria-label={label}
-          className={cn(
-            size === "inline"
-              ? "size-6 rounded p-0 text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
-              : "size-8 p-0 text-muted-foreground hover:text-foreground",
-            className,
-          )}
-        >
-          <Icon className={cn(copied && "text-phase-succeeded")} />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{copied ? "Copied" : label}</TooltipContent>
-    </Tooltip>
+    <>
+      {copied && <CopiedReset key={copiedVersion} reset={() => setCopied(false)} />}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onCopy}
+            aria-label={label}
+            className={cn(
+              size === "inline"
+                ? "size-6 rounded p-0 text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
+                : "size-8 p-0 text-muted-foreground hover:text-foreground",
+              className,
+            )}
+          >
+            <Icon className={cn(copied && "text-phase-succeeded")} />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{copied ? "Copied" : label}</TooltipContent>
+      </Tooltip>
+    </>
   );
 }

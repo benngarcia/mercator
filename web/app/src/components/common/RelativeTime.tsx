@@ -1,7 +1,6 @@
-import * as React from "react";
-
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useNow } from "@/hooks/useNow";
 import {
   Tooltip,
   TooltipContent,
@@ -30,13 +29,7 @@ export function RelativeTime({
   className,
   refreshMs = 30_000,
 }: RelativeTimeProps) {
-  const [, force] = React.useReducer((n: number) => n + 1, 0);
-
-  React.useEffect(() => {
-    if (!iso) return;
-    const id = setInterval(force, refreshMs);
-    return () => clearInterval(id);
-  }, [iso, refreshMs]);
+  useNow(refreshMs);
 
   if (!iso) {
     return <span className={cn("text-muted-foreground", className)}>—</span>;

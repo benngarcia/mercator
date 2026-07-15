@@ -9,6 +9,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { useMountEffect } from "@/hooks/useMountEffect";
 
 /**
  * Lightweight, dependency-free command palette.
@@ -99,10 +100,8 @@ const Command = React.forwardRef<
     [matches, search],
   );
 
-  React.useEffect(() => {
-    if (activeId && visibleIds.includes(activeId)) return;
-    setActiveId(visibleIds[0] ?? null);
-  }, [visibleIds, activeId]);
+  const validActiveId = activeId && visibleIds.includes(activeId) ? activeId : (visibleIds[0] ?? null);
+  if (validActiveId !== activeId) setActiveId(validActiveId);
 
   const moveActive = React.useCallback(
     (delta: number) => {
@@ -298,6 +297,21 @@ interface CommandItemProps
   onSelect?: (value: string) => void;
 }
 
+function CommandItemRegistration({ ctx, id, onSelect, value }: {
+  ctx: CommandContextValue;
+  id: string;
+  onSelect: () => void;
+  value: string;
+}) {
+  const selectRef = React.useRef(onSelect);
+  selectRef.current = onSelect;
+  useMountEffect(() => {
+    ctx.registerItem(id, value, () => selectRef.current());
+    return () => ctx.unregisterItem(id);
+  });
+  return null;
+}
+
 const CommandItem = React.forwardRef<HTMLDivElement, CommandItemProps>(
   ({ className, value, disabled, onSelect, children, ...props }, _ref) => {
     const ctx = useCommand();
@@ -313,34 +327,41 @@ const CommandItem = React.forwardRef<HTMLDivElement, CommandItemProps>(
       onSelect?.(searchValue);
     }, [disabled, onSelect, searchValue]);
 
-    React.useEffect(() => {
-      ctx.registerItem(id, searchValue, handleSelect);
-      return () => ctx.unregisterItem(id);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [id, searchValue, handleSelect]);
+    const registration = (
+      <CommandItemRegistration
+        key={`${id}:${searchValue}`}
+        ctx={ctx}
+        id={id}
+        onSelect={handleSelect}
+        value={searchValue}
+      />
+    );
 
-    if (!ctx.matches(searchValue)) return null;
+    if (!ctx.matches(searchValue)) return registration;
 
     const active = ctx.activeId === id;
 
     return (
-      <div
-        ref={innerRef}
-        role="option"
-        aria-selected={active}
-        aria-disabled={disabled || undefined}
-        data-selected={active ? "" : undefined}
-        data-disabled={disabled ? "" : undefined}
-        onPointerMove={() => !disabled && ctx.setActiveId(id)}
-        onClick={handleSelect}
-        className={cn(
-          "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected]:bg-accent data-[selected]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
-          className,
-        )}
-        {...props}
-      >
-        {children}
-      </div>
+      <>
+        {registration}
+        <div
+          ref={innerRef}
+          role="option"
+          aria-selected={active}
+          aria-disabled={disabled || undefined}
+          data-selected={active ? "" : undefined}
+          data-disabled={disabled ? "" : undefined}
+          onPointerMove={() => !disabled && ctx.setActiveId(id)}
+          onClick={handleSelect}
+          className={cn(
+            "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[selected]:bg-accent data-[selected]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+            className,
+          )}
+          {...props}
+        >
+          {children}
+        </div>
+      </>
     );
   },
 );

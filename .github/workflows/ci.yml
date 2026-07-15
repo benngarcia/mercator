@@ -58,6 +58,8 @@ jobs:
           bun-version: "1.3"
       - run: bun install --frozen-lockfile
         working-directory: web/app
+      - run: bun run check:react-effects
+        working-directory: web/app
       - run: bun run typecheck
         working-directory: web/app
       - run: bun run build
