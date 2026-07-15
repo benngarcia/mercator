@@ -39,7 +39,7 @@ body:
         - secrets / credentials / report tokens
         - cleanup / no-orphan behavior
         - scheduler / placement decision
-        - CLI / SDK / console
+        - CLI / HTTP API / console
         - documentation
         - other
     validations:

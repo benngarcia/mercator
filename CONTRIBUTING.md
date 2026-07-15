@@ -10,9 +10,7 @@ Required tools:
 
 - Go 1.25+
 - Bun 1.3+ for the embedded console
-- Node 20+ for the TypeScript SDK tests
-- Python 3.11+ for the Python SDK tests
-- Ruby 3.2+ for the Ruby SDK tests
+- Ruby 3.3+ for the launch audit
 - Docker only when working on live Docker adapter behavior
 
 Useful local checks:
@@ -22,9 +20,6 @@ go test ./...
 go build ./...
 
 cd web/app && bun install && bun run typecheck && bun run build
-cd ../../sdk/typescript && npm ci && npm test
-cd ../python && python3 -m unittest discover -s tests
-cd ../ruby && bundle install && bundle exec ruby -Ilib:test test/test_client.rb
 ```
 
 The Docker integration test is opt-in:
@@ -42,7 +37,7 @@ Every PR should answer:
 - What tests or docs prove the behavior?
 - Does this alter run lifecycle, idempotency, cleanup, auth, secrets, or public
   event visibility?
-- Does any production doc or SDK README need to change?
+- Does any production or reference doc need to change?
 
 For code changes, prefer focused tests near the package being changed. For docs
 or launch materials, include the exact command, screenshot, or source path that
@@ -76,7 +71,7 @@ For questions, evaluation help, and issue-routing expectations, see
 Update docs in the same PR when behavior changes:
 
 - operator-facing behavior: `docs/production/`
-- SDK behavior: `sdk/*/README.md`
+- HTTP and CLI behavior: `docs/reference/`
 - console behavior: `web/app/README.md`
 - launch and trust surface: `docs/launch/open-source-readiness.md`
 - public proof points: `docs/launch/proof-point-template.md`

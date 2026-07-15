@@ -37,7 +37,7 @@ Evaluate whether the repository earns trust from another infrastructure owner.
 | Is the run lifecycle auditable? | `docs/production/workload-run-lifecycle.md`, `docs/production/observability-audit.md` | Placement, events, cleanup, and closure have clear evidence paths. |
 | Are security boundaries explicit? | `SECURITY.md`, `docs/production/security-model.md`, `docs/project/threat-model.md` | Public APIs/events avoid secret claims that are not backed by docs/tests. |
 | Is release risk controlled? | `docs/project/release-process.md`, `docs/project/package-distribution.md`, `.github/workflows/release.yml` | First release artifacts and checksums have a reproducible path. |
-| Are dependency updates maintained explicitly? | `.github/dependabot.yml`, `GOVERNANCE.md` | Actions, Go, SDK, and console dependencies are kept current through reviewed CI-backed PRs. |
+| Are dependency updates maintained explicitly? | `.github/dependabot.yml`, `GOVERNANCE.md` | Actions, Go, and console dependencies are kept current through reviewed CI-backed PRs. |
 | Are public repository settings planned? | `docs/launch/github-repository-settings.md`, `.github/CODEOWNERS` | Branch protection, code-owner review, workflow permissions, external-contributor workflow approval, security updates, and private vulnerability reporting have an owner-reviewed checklist. |
 | Are maintainer decisions explicit? | `GOVERNANCE.md`, `CONTRIBUTING.md`, `ROADMAP.md` | Scope, safety, release, and proof-point decisions have clear maintainer ownership. |
 
@@ -60,7 +60,7 @@ workflow.
 | Can you understand the problem in under two minutes? | README opening, demo GIF/WebM, `What It Does` | The value proposition is clear without reading internals. |
 | Can you get a first success? | README Docker quickstart, `docs/production/docker-adapter-operation.md` | The Docker adapter reaches a closed succeeded run. |
 | Can you see the operator experience? | `docs/assets/mercator-runs.png`, demo transcript, console screenshot | Runs, decisions, events, and cleanup are visible. |
-| Can you imagine integration work? | SDK happy path in README, `sdk/*/README.md` | The first API/SDK path does not require learning idempotency internals. |
+| Can you imagine integration work? | README HTTP quickstart, `docs/reference/openapi.md` | The first HTTP integration path is concrete and copy-pasteable. |
 
 Recommended verdict format:
 

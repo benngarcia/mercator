@@ -70,6 +70,15 @@ require_file() {
   fi
 }
 
+require_absent() {
+  local path="$1"
+  if [[ -e "${path}" ]]; then
+    record_fail "unexpected path exists: ${path}"
+  else
+    record_ok "path is absent: ${path}"
+  fi
+}
+
 require_nonempty_file() {
   local path="$1"
   if [[ -s "${path}" ]]; then
@@ -268,7 +277,6 @@ check_required_files() {
     docs/project/issue-drafts/external-sink-configuration.md
     docs/project/issue-drafts/longer-launch-demo.md
     docs/project/issue-drafts/release-archive-install-smoke.md
-    docs/project/issue-drafts/sdk-fake-adapter-examples.md
     docs/project/package-distribution.md
     docs/project/release-process.md
     docs/project/release-notes/v0.1.0.md
@@ -282,11 +290,6 @@ check_required_files() {
     docs/reference/openapi.md
     examples/runpod/README.md
     examples/runpod/busybox-report/README.md
-    examples/runpod/python-sdk/README.md
-    examples/runpod/python-sdk/run.py
-    sdk/typescript/README.md
-    sdk/python/README.md
-    sdk/ruby/README.md
   )
 
   for file in "${files[@]}"; do
@@ -307,6 +310,10 @@ check_required_files() {
 
   require_executable scripts/build-release-archives.sh
   require_executable scripts/check-open-source-launch.sh
+
+  require_absent sdk
+  require_absent examples/runpod/python-sdk
+  require_absent docs/project/issue-drafts/sdk-fake-adapter-examples.md
 }
 
 check_readme_surface() {
@@ -316,7 +323,6 @@ check_readme_surface() {
     "## What It Does"
     "## Try It In 5 Minutes"
     "## Pick The Right Evaluation Path"
-    "## SDK Happy Path"
     "## Console"
     "## Documentation Map"
     "## Build And Test"
@@ -341,15 +347,11 @@ check_readme_surface() {
 check_workflow_hooks() {
   require_pattern .github/workflows/ci.yml 'actions/checkout@v5' "CI uses Node 24-compatible checkout action"
   require_pattern .github/workflows/ci.yml 'actions/setup-go@v6' "CI uses Node 24-compatible setup-go action"
-  require_pattern .github/workflows/ci.yml 'actions/setup-node@v6' "CI uses Node 24-compatible setup-node action"
-  require_pattern .github/workflows/ci.yml 'actions/setup-python@v6' "CI uses Node 24-compatible setup-python action"
+  require_pattern .github/workflows/ci.yml 'ruby/setup-ruby@v1' "CI installs Ruby for the launch audit"
   require_pattern .github/workflows/release.yml 'actions/checkout@v5' "Release uses Node 24-compatible checkout action"
   require_pattern .github/workflows/release.yml 'actions/setup-go@v6' "Release uses Node 24-compatible setup-go action"
   require_pattern .github/workflows/ci.yml 'go test \./\.\.\.' "CI runs Go tests"
   require_pattern .github/workflows/ci.yml 'scripts/build-release-archives\.sh v0\.0\.0-ci' "CI builds release archives"
-  require_pattern .github/workflows/ci.yml 'npm test' "CI runs TypeScript SDK tests"
-  require_pattern .github/workflows/ci.yml 'python -m unittest discover -s tests' "CI runs Python SDK tests"
-  require_pattern .github/workflows/ci.yml 'bundle exec ruby -Ilib:test test/test_client\.rb' "CI runs Ruby SDK tests"
   require_pattern .github/workflows/ci.yml 'bun run typecheck' "CI typechecks console"
   require_pattern .github/workflows/ci.yml 'bun run build' "CI builds console"
   require_pattern .github/workflows/release.yml 'scripts/build-release-archives\.sh "\$VERSION" dist' "Release workflow builds archives"
@@ -364,12 +366,8 @@ check_dependency_maintenance() {
   require_pattern .github/CODEOWNERS '^\* @benngarcia$' "CODEOWNERS has default maintainer owner"
   require_pattern .github/dependabot.yml 'package-ecosystem: "github-actions"' "Dependabot checks GitHub Actions"
   require_pattern .github/dependabot.yml 'package-ecosystem: "gomod"' "Dependabot checks Go modules"
-  require_pattern .github/dependabot.yml 'package-ecosystem: "npm"' "Dependabot checks TypeScript SDK npm dependencies"
-  require_pattern .github/dependabot.yml 'directory: "/sdk/typescript"' "Dependabot checks TypeScript SDK directory"
   require_pattern .github/dependabot.yml 'package-ecosystem: "bun"' "Dependabot checks Bun console dependencies"
   require_pattern .github/dependabot.yml 'directory: "/web/app"' "Dependabot checks console directory"
-  require_pattern .github/dependabot.yml 'package-ecosystem: "bundler"' "Dependabot checks Ruby SDK dependencies"
-  require_pattern .github/dependabot.yml 'directory: "/sdk/ruby"' "Dependabot checks Ruby SDK directory"
   require_pattern .github/dependabot.yml 'open-pull-requests-limit: 3' "Dependabot has conservative PR limits"
   require_pattern GOVERNANCE.md 'Dependency Maintenance' "Governance documents dependency maintenance"
   require_pattern docs/launch/open-source-readiness.md 'Dependency update policy documented' "Scorecard includes dependency update policy"
@@ -408,32 +406,26 @@ check_launch_docs() {
   require_pattern docs/launch/public-launch-runbook.md 'docs/launch/pre-public-exposure-review\.md' "Runbook links pre-public exposure review"
   require_pattern docs/launch/public-launch-runbook.md 'gh issue create' "Runbook includes starter issue creation commands"
   require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/longer-launch-demo\.md' "Runbook creates longer-demo issue from draft"
-  require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/sdk-fake-adapter-examples\.md' "Runbook creates SDK examples issue from draft"
   require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/docker-eval-transcript\.md' "Runbook creates Docker transcript issue from draft"
   require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/release-archive-install-smoke\.md' "Runbook creates release smoke issue from draft"
   require_pattern docs/launch/public-launch-runbook.md 'docs/project/issue-drafts/external-sink-configuration\.md' "Runbook creates external sink issue from draft"
   require_pattern docs/project/contributor-starter-queue.md 'question` \| First-run help or evaluation questions' "Starter queue documents question label"
-  require_pattern docs/project/contributor-starter-queue.md 'Five launch-ready issue drafts' "Starter queue names launch-ready issue draft count"
+  require_pattern docs/project/contributor-starter-queue.md 'Four launch-ready issue drafts' "Starter queue names launch-ready issue draft count"
   require_pattern docs/launch/github-repository-settings.md 'Branch Protection' "Repository settings checklist covers branch protection"
   require_pattern docs/launch/github-repository-settings.md 'Require approval for all external contributors' "Repository settings checklist covers external contributor workflow approval"
   require_pattern docs/launch/github-repository-settings.md 'Workflow permissions' "Repository settings checklist covers workflow permissions"
   require_pattern docs/launch/github-repository-settings.md 'Dependabot security updates' "Repository settings checklist covers Dependabot security updates"
   require_pattern docs/launch/github-repository-settings.md 'Private vulnerability reporting' "Repository settings checklist covers private vulnerability reporting"
   require_pattern docs/production/runpod.md 'examples/runpod/' "RunPod docs link provider examples"
-  require_pattern docs/production/runpod.md 'SDK registry packages are not published for the first launch' "RunPod docs are honest about SDK package status"
-  require_pattern examples/runpod/README.md 'SDK registry packages are not published for the first launch' "RunPod examples index explains SDK package status"
   require_pattern examples/runpod/README.md 'busybox-report' "RunPod examples index links busybox example"
-  require_pattern examples/runpod/README.md 'python-sdk' "RunPod examples index links Python SDK example"
-  require_pattern examples/runpod/busybox-report/README.md 'no SDK package' "Busybox RunPod example is no-SDK"
-  require_pattern examples/runpod/python-sdk/README.md 'git\+https://github\.com/benngarcia/mercator\.git@v0\.1\.0#subdirectory=sdk/python' "Python RunPod example source-installs SDK"
-  require_pattern examples/runpod/python-sdk/run.py 'run_reporter' "Python RunPod example uses reporter helper"
+  require_pattern examples/runpod/busybox-report/README.md 'ordinary HTTP' "Busybox RunPod example uses ordinary HTTP"
   require_pattern docs/launch/proof-points/README.md 'external/public proof gate' "Proof-points index keeps external proof gate open"
   require_pattern docs/launch/proof-point-template.md 'Do not convert private maintainer notes into social proof' "Proof template rejects private social proof"
   require_pattern docs/launch/reviewer-packet.md 'Staff-engineer verdict: A\+ \| A \| B \| not ready' "Reviewer packet includes staff verdict format"
   require_pattern docs/launch/reviewer-outreach.md 'Staff Engineer Review Request' "Reviewer outreach includes staff-engineer request"
   require_pattern docs/launch/reviewer-outreach.md 'Prospective User Trial Request' "Reviewer outreach includes prospective-user request"
   require_pattern docs/launch/reviewer-outreach.md 'Open Source Developer Review Request' "Reviewer outreach includes OSS-developer request"
-  require_pattern docs/project/package-distribution.md 'First-launch decision: \*\*do not publish SDK packages for `v0\.1\.0`\*\*' "Package plan documents SDK publishing decision"
+  require_pattern docs/project/package-distribution.md 'Mercator distributes one Go binary' "Package plan documents the single binary"
   require_pattern docs/project/release-notes/v0.1.0.md 'pre-GA evaluation release' "v0.1.0 release notes are pre-GA honest"
   require_pattern docs/project/release-notes/v0.1.0.md 'docs/production/known-limitations.md' "v0.1.0 release notes link known limitations"
   require_pattern docs/project/release-process.md 'scripts/build-release-archives\.sh v0\.1\.0 dist' "Release process documents archive builder"

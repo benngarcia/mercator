@@ -54,7 +54,6 @@ body:
         - RunPod adapter
         - CLI
         - HTTP API / OpenAPI
-        - SDK
         - console
         - docs only
         - not sure yet

@@ -50,9 +50,8 @@ Three additional vars are also injected:
 | `MERCATOR_REPORT_URL` | The base URL (`<MERCATOR_PUBLIC_URL>`); clients append `/v1/runs/<run_id>:report` |
 | `MERCATOR_RUN_TOKEN` | The per-run HMAC token |
 
-Note that `MERCATOR_REPORT_URL` is the **base URL only** — the orchestrator does
-not inject the full `:report` path. Reporting clients (including the SDK
-reporters) build the full endpoint by appending
+Note that `MERCATOR_REPORT_URL` is the **base URL only**. The orchestrator does
+not inject the full `:report` path. Workloads build the full endpoint by appending
 `/v1/runs/<MERCATOR_RUN_ID>:report?workspace_id=<MERCATOR_WORKSPACE_ID>`.
 
 ---
@@ -103,8 +102,7 @@ stable dev/prod tunnel, prefer a named cloudflare tunnel with a custom domain.
 **Shell gotcha (zsh):** when testing `:report` by hand, always brace the run-id
 variable — `"${RUN_ID}:report"`, not `"$RUN_ID:report"`. In zsh the unbraced
 form applies the `:r` history modifier to `$RUN_ID` and silently eats the `:r`
-of `:report`, producing `…<id>eport` and a spurious operator-`401`. The SDK
-reporters build the URL in TypeScript/Python and are unaffected.
+of `:report`, producing `…<id>eport` and a spurious operator-`401`.
 
 ---
 

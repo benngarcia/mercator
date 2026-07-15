@@ -51,9 +51,6 @@ curl -fsS -X POST "$MERCATOR_API_URL/v1/runs?workspace_id=ws_eval" \
   -d "{\"image\":\"$IMAGE\",\"args\":[\"echo\",\"hi\"]}" | jq '.run.id'
 ```
 
-The SDKs expose the same shorthand as `run_image(...)` (Python) and
-`runImage(...)` (TypeScript).
-
 ## Create A Run From A Full Workload Spec
 
 ```sh
@@ -147,11 +144,10 @@ parse the `compute.run.external_state_observed.v1` event to recover it.
 `run wait` issues one HTTP long-poll. The server actively advances the run
 (about every 100ms) for up to ~30 seconds, then returns `200` with the terminal
 run if it closed before the deadline, or `202` with the latest still-open run if
-not. To block past a single deadline, loop while the response is `202`
-(re-issuing `run wait`); the SDKs expose this as
-`wait_run_until_terminal` / `waitRunUntilTerminal`. On the local Docker path a
-short run (such as `echo hi`) usually closes within the first long-poll, so a
-single `run wait` is often sufficient.
+not. To block past a single deadline, loop while the response is `202` and
+reissue `run wait`. On the local Docker path a short run such as `echo hi`
+usually closes within the first long-poll, so a single `run wait` is often
+sufficient.
 
 A run whose launch definitively fails — for example an image the Docker daemon
 cannot pull — records a `failed` outcome and closes; it is not retried

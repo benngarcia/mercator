@@ -40,7 +40,7 @@ The project does not yet provide paid support, guaranteed response times, or
 production incident coverage. Maintainers prioritize:
 
 1. security and private-data exposure reports;
-2. regressions in the Docker quickstart, CLI, SDK examples, or release
+2. regressions in the Docker quickstart, CLI, HTTP examples, or release
    artifacts;
 3. bugs with complete reproduction evidence;
 4. documentation fixes that help new evaluators complete a first run;

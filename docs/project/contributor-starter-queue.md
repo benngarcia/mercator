@@ -14,7 +14,6 @@ Create these labels during public triage:
 | `help wanted` | Maintainers want external help and can review the result. |
 | `docs` | Documentation-only change. |
 | `cli` | CLI behavior or reference docs. |
-| `sdk` | SDK examples, tests, or docs. |
 | `console` | Embedded operator console polish. |
 | `release` | Release packaging, checksums, and install docs. |
 | `needs-maintainer-input` | Blocked on a project decision before implementation. |
@@ -24,7 +23,7 @@ Create these labels during public triage:
 
 ## Starter Issues
 
-Five launch-ready issue drafts are checked in under
+Four launch-ready issue drafts are checked in under
 `docs/project/issue-drafts/`. Convert them into public GitHub issues after the
 repository is public, keeping the suggested labels and acceptance criteria.
 
@@ -48,28 +47,7 @@ Acceptance criteria:
 
 Issue body: `docs/project/issue-drafts/longer-launch-demo.md`
 
-### 2. Add SDK Docker-Adapter Examples
-
-Suggested labels: `good first issue`, `sdk`, `docs`
-
-Problem: The SDK READMEs document source installs and happy-path calls, but a
-new SDK evaluator still has to assemble the first runnable example from several
-docs.
-
-Acceptance criteria:
-
-- Add one minimal Docker-adapter example for each SDK, or explain why one SDK
-  should be deferred.
-- Read `MERCATOR_API_URL`, `MERCATOR_API_TOKEN`, and
-  `MERCATOR_WORKSPACE_ID` instead of hardcoding a private endpoint.
-- Create a `busybox -- echo hi` style run, wait for terminal state, and print
-  outcome plus exit code.
-- Link the examples from the SDK READMEs.
-- Document the exact command used to run or test each example.
-
-Issue body: `docs/project/issue-drafts/sdk-fake-adapter-examples.md`
-
-### 3. Capture A Sanitized Docker Adapter Evaluation Transcript
+### 2. Capture A Sanitized Docker Adapter Evaluation Transcript
 
 Suggested labels: `help wanted`, `docs`
 
@@ -90,7 +68,7 @@ Acceptance criteria:
 
 Issue body: `docs/project/issue-drafts/docker-eval-transcript.md`
 
-### 4. Verify Release Archive Install After `v0.1.0`
+### 3. Verify Release Archive Install After `v0.1.0`
 
 Suggested labels: `good first issue`, `docs`, `release`
 
@@ -109,7 +87,7 @@ Acceptance criteria:
 
 Issue body: `docs/project/issue-drafts/release-archive-install-smoke.md`
 
-### 5. Open The External Sink Configuration Design Issue
+### 4. Open The External Sink Configuration Design Issue
 
 Suggested labels: `help wanted`, `needs-maintainer-input`
 
@@ -132,7 +110,7 @@ Issue body: `docs/project/issue-drafts/external-sink-configuration.md`
 - Do not label run lifecycle, auth, secret handling, cleanup, or provider launch
   behavior as `good first issue` unless the acceptance criteria are already
   narrow and a maintainer is ready to review closely.
-- Prefer docs, examples, screenshots, SDK README improvements, and release
-  verification notes for first-time contributors.
+- Prefer docs, examples, screenshots, CLI improvements, and release verification
+  notes for first-time contributors.
 - Convert this queue into real issues only after the launch-prep PR is merged
   and the repository is public.

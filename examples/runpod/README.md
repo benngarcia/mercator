@@ -7,17 +7,11 @@ registry-pullable image digest, and billable provider capacity.
 Start with [docs/production/runpod.md](../../docs/production/runpod.md) for
 connection setup, GPU offer behavior, cleanup, and image-resolution caveats.
 
-SDK registry packages are not published for the first launch. The Python SDK
-example therefore installs from the public Mercator source repository using a
-Git ref. After `v0.1.0` exists, use that tag. Before the tag exists, replace
-`v0.1.0` with the public commit or branch you are evaluating.
-
 ## Examples
 
-| Example | What It Proves | Package Assumption |
-| --- | --- | --- |
-| [busybox-report](busybox-report/README.md) | A minimal container can self-report progress and exit using injected `MERCATOR_*` env and raw HTTP. | no SDK package |
-| [python-sdk](python-sdk/README.md) | A Python workload can emit custom events and report exit through the SDK reporter helper. | SDK source install from Git |
+| Example | What It Proves |
+| --- | --- |
+| [busybox-report](busybox-report/README.md) | A minimal container can self-report progress and exit using injected `MERCATOR_*` env and ordinary HTTP. |
 
 ## Before Running
 

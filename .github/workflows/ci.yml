@@ -16,37 +16,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
-      - run: go build ./...
-      - run: scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist
-
-  sdks:
-    name: SDKs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: sdk/typescript/package-lock.json
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
+      - run: go test ./...
+      - run: go build ./...
+      - run: scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist
       - run: scripts/check-open-source-launch.sh
-      - run: npm ci
-        working-directory: sdk/typescript
-      - run: npm test
-        working-directory: sdk/typescript
-      - run: python -m unittest discover -s tests
-        working-directory: sdk/python
-      - run: bundle install
-        working-directory: sdk/ruby
-      - run: bundle exec ruby -Ilib:test test/test_client.rb
-        working-directory: sdk/ruby
 
   console:
     name: Console

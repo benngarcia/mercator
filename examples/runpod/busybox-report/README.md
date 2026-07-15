@@ -1,12 +1,12 @@
-# busybox - raw-HTTP reporting (no SDK)
+# BusyBox Raw-HTTP Reporting
 
 Proves any minimal image can report to Mercator using only the injected env and
 a plain HTTP POST. `busybox` ships `wget`, which we use to POST the `:report`
 endpoint.
 
-This example uses no SDK package. It is the lowest-dependency RunPod proof path
-for validating that injected reporting env, per-run tokens, exit reporting, and
-provider cleanup work.
+This is the lowest-dependency RunPod proof path. It uses ordinary HTTP to
+validate the injected reporting environment, per-run tokens, exit reporting,
+and provider cleanup.
 
 Before running, replace `busybox@sha256:<real-index-digest>` with a real
 registry-pullable BusyBox digest for the platform RunPod will pull. The server
