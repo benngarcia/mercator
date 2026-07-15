@@ -1,6 +1,6 @@
 # Remove the Language SDKs
 
-Status: implemented locally on 2026-07-15; publication in progress
+Status: complete on 2026-07-15 in [PR #34](https://github.com/benngarcia/mercator/pull/34)
 
 ## Decision
 
@@ -27,7 +27,7 @@ tree.
 - [x] Preserve tagged release history with immutable links.
 - [x] Verify the repository contains no live SDK promise.
 - [x] Run Go tests, Go builds, the launch audit, and real HTTP/reporting flows.
-- [ ] Push the branch, open a pull request, and resolve CI and review feedback.
+- [x] Push the branch, open a pull request, and resolve CI and review feedback.
 
 The real reporting flow exposed an existing Docker exit-report cleanup defect.
 It is tracked separately in [issue #33](https://github.com/benngarcia/mercator/issues/33)
