@@ -58,10 +58,11 @@ Large changes should start with an issue or design note before implementation.
 For maintainer decision rules and changes that need explicit approval, see
 [GOVERNANCE.md](GOVERNANCE.md).
 
-For first-time contributors, start with the
-[Contributor Starter Queue](docs/project/contributor-starter-queue.md). It lists
-bounded issues that maintainers can convert into `good first issue` or
-`help wanted` tickets after the repository is public.
+For first-time contributors, start with the public
+[`good first issue`](https://github.com/benngarcia/mercator/issues?q=state%3Aopen%20label%3A%22good%20first%20issue%22)
+or [`help wanted`](https://github.com/benngarcia/mercator/issues?q=state%3Aopen%20label%3A%22help%20wanted%22)
+queues. These issues are bounded away from unsafe lifecycle, authorization, and
+secret-handling changes unless they explicitly require maintainer input.
 
 For questions, evaluation help, and issue-routing expectations, see
 [SUPPORT.md](SUPPORT.md).

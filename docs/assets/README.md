@@ -31,9 +31,9 @@ no RunPod, registry credentials, or private workloads.
    [Docker quickstart](../production/docker-adapter-operation.md): set
    `MERCATOR_API_TOKEN` and a launch-safe workspace such as `ws_1`. Let the
    Docker probe report the host architecture.
-2. Create a digest-pinned `busybox -- echo hi` run through the CLI and wait for
-   the run to close (mutable tags are rejected, so resolve the digest first with
-   `docker inspect --format '{{index .RepoDigests 0}}' busybox:latest`).
+2. Run `bun run record:demo`. The recorder creates a digest-pinned BusyBox
+   workload (`echo hi`) on the Docker host's native platform and waits for it
+   to close.
 3. Open the embedded console for that workspace.
 4. Capture these screens: run list, selected run detail, placement decision,
    public events, and connections/offers if they materially improve the docs.

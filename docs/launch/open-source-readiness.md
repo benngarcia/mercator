@@ -11,9 +11,9 @@ production readiness claim; production hardening remains tracked in
 | Area | Evidence | Grade | A+ Gap |
 | --- | --- | --- | --- |
 | README explains the problem | Root README now leads with the compute-dispatch problem, why a broker exists, a Docker quickstart, screenshots, demo video link, docs map, and maturity stance. | A | Keep the quickstart and maturity claims aligned with current behavior. |
-| New-user likelihood to try | The Docker quickstart needs only Go 1.25+, a running Docker daemon, and `jq`; the README quickstart gives a copy-paste first run against a digest-pinned image; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; the README routes evaluators across the Docker and RunPod paths with requirements, start docs, and provider examples; the CLI reference has copy-paste follow-up commands, JSON error examples, and an exit-code reference; the OpenAPI reference maps route families, auth boundaries, and a first HTTP integration path; the Docker adapter runbook shows OpenAPI smoke commands and a sanitized run transcript; the package/distribution plan names source and archive paths, per-OS checksum verification, and archive troubleshooting. | A | Keep the published binary and container paths current. |
-| Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, governance policy, code of conduct, support policy, dependency update policy, GitHub repository settings checklist, Apache-2.0 license, CI/release workflows, local release archive builder, curated release notes, launch audit script, compatibility policy, a concrete external-sink hardening issue draft, and explicit pre-GA status are present. | A | Configure the remaining repository protections and obtain one external security/design review. |
-| OSS contributor path | `CONTRIBUTING.md`, `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, question/bug/feature/proof issue templates, PR template, roadmap, security policy, four launch-ready starter issue drafts, and public issue-conversion commands are checked in. | A | Convert starter queue entries into labeled GitHub issues. |
+| New-user likelihood to try | The Docker quickstart needs only a running Docker daemon, `curl`, and `jq`; the README quickstart gives a copy-paste first run against a digest-pinned image; CLI help works before server configuration; CLI hides run IDs and idempotency on the happy path; the README routes evaluators across the Docker and RunPod paths with requirements, start docs, and provider examples; the CLI reference has copy-paste follow-up commands, JSON error examples, and an exit-code reference; the OpenAPI reference maps route families, auth boundaries, and a first HTTP integration path; the Docker adapter runbook shows OpenAPI smoke commands and a sanitized run transcript; the package/distribution plan names source and archive paths, per-OS checksum verification, and archive troubleshooting. | A | Keep the published binary and container paths current. |
+| Staff-engineer trust | Production docs, known limitations, security model, threat model, contribution bar, governance policy, code of conduct, support policy, dependency update policy, GitHub repository settings checklist, Apache-2.0 license, CI/release workflows, local release archive builder, curated release notes, launch audit script, compatibility policy, [external-sink design issue #42](https://github.com/benngarcia/mercator/issues/42), and explicit pre-GA status are present. | A | Configure the remaining repository protections and obtain one external security/design review. |
+| OSS contributor path | `CONTRIBUTING.md`, `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, question/bug/feature/proof issue templates, PR template, roadmap, security policy, and four public starter issues are available. | A | Keep public starter issues current and bounded. |
 | Assets | Three console screenshots plus `docs/assets/mercator-demo.webm`, a README-linked GIF fallback, a text demo transcript, and screenshot capture notes are tracked in `docs/assets/`. | A | Optional post-launch polish: add a longer narrated demo from the shot list. |
 | Social proof | Repo has durable verification docs, a real operator-oriented runbook set including the Docker adapter operation runbook, and a public proof-point intake template. | B+ | Add a real public user story, integration note, benchmark, external review, or maintainer-approved case study. |
 
@@ -29,6 +29,11 @@ launch sequence remains recorded in `docs/launch/public-launch-runbook.md`.
   `https://github.com/benngarcia/mercator/actions/runs/29374419800`.
 - Tagged releases exist through `v0.2.1`, with archives and checksums published
   through GitHub Releases.
+- Public starter work is tracked in issues
+  [#39](https://github.com/benngarcia/mercator/issues/39),
+  [#40](https://github.com/benngarcia/mercator/issues/40),
+  [#41](https://github.com/benngarcia/mercator/issues/41), and
+  [#42](https://github.com/benngarcia/mercator/issues/42).
 - Public proof collection path: `.github/ISSUE_TEMPLATE/proof_point.yml` and
   `docs/launch/proof-point-template.md` are checked in, but no public proof
   point exists yet.
@@ -184,9 +189,9 @@ Grade: **A**.
 - [x] CLI exit-code reference documented.
 - [x] OpenAPI smoke commands documented.
 - [x] OpenAPI route overview documented.
-- [x] Starter contributor queue documented.
-- [x] Four launch-ready starter issue drafts documented.
-- [x] Public starter-issue conversion commands documented.
+- [x] Public `good first issue` and `help wanted` queues available.
+- [x] Four bounded starter issues published with acceptance criteria.
+- [x] Starter issue URLs recorded in the public launch runbook.
 - [x] Release archive builder reused by CI and release workflow.
 - [x] Curated `v0.1.0` release notes checked in and wired into release workflow.
 - [x] Open-source launch audit script added and wired into CI.
@@ -197,7 +202,7 @@ Grade: **A**.
 - [x] Reproducible first-run path documented in the Docker adapter runbook.
 - [x] External reviewer packet documented.
 - [x] External reviewer outreach prompts documented.
-- [x] Concrete production hardening issue draft documented.
+- [x] External sink design tracked publicly in issue #42.
 - [x] Private draft PR CI run is green.
 - [x] Launch-prep PR merged to the default branch (PR #7, followed by the
   pre-launch fix PRs #18 and #19).

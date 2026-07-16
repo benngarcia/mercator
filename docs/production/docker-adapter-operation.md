@@ -21,10 +21,14 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-docker.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
-export MERCATOR_DOCKER_ARCH=amd64
 
 go run ./cmd/mercator serve
 ```
+
+Mercator probes the configured Docker endpoint and advertises its native
+`linux/amd64` or `linux/arm64` platform. Set `MERCATOR_DOCKER_ARCH` only when
+you deliberately want an emulated platform, and make the workload platform and
+image digest match that override.
 
 Optional Docker offer identity variables:
 

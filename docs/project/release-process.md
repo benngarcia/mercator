@@ -45,27 +45,10 @@ scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist
 cd web/app && bun install && bun run typecheck && bun run build
 ```
 
-Run the Docker adapter smoke against a running Docker daemon (`go test ./...`
-above already covers the broker in CI):
-
-```sh
-export MERCATOR_ADDR=127.0.0.1:8080
-export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_AUTH_WORKSPACES='ws_1'
-export MERCATOR_DOCKER_ARCH=amd64
-go run ./cmd/mercator serve &
-
-export MERCATOR_API_URL=http://127.0.0.1:8080
-export MERCATOR_WORKSPACE_ID=ws_1
-docker pull -q busybox:latest >/dev/null
-IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
-RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
-go run ./cmd/mercator run get --run-id "$RUN_ID" | jq '{outcome:.run.outcome, exit_code:.run.exit_code, cleanup:.run.cleanup, closed:.run.closed}'
-```
-
-Expected: `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`,
-`closed=true`.
+Run the root README Docker quickstart against a real daemon. It detects the
+host architecture and must close with `outcome=succeeded`, `exit_code=0`,
+`cleanup=confirmed`, and `closed=true`. `go test ./...` above covers the broker
+in CI; this smoke proves the Docker boundary.
 
 ## Tag And Publish
 

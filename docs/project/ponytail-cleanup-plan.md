@@ -1,6 +1,6 @@
 # Complete the Ponytail Cleanup
 
-Status: implementation in progress on 2026-07-15
+Status: implementation complete on 2026-07-15; PR verification in progress
 
 ## Decision
 
@@ -19,7 +19,7 @@ replace the deleted language SDKs.
 - [x] Delete unreachable console modules and unused dependencies.
 - [x] Make native UI wrappers and the existing theme store own their behavior.
 - [x] Reduce the demo recorder to the real Playwright flow.
-- [ ] Reduce the launch audit to executable evidence.
-- [ ] Convert the contributor queue into public GitHub issues and delete drafts.
-- [ ] Run core, console, launch, and real recorder verification.
+- [x] Reduce the launch audit to executable evidence.
+- [x] Convert the contributor queue into public GitHub issues and delete drafts.
+- [x] Run core, console, launch, and real recorder verification.
 - [ ] Push the branch, open a pull request, and resolve CI and review feedback.

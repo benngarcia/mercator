@@ -56,30 +56,8 @@ Please review:
 - 20-minute reviewer path: <repo URL>/blob/<commit>/docs/launch/reviewer-packet.md
 - Docker adapter operation: <repo URL>/blob/<commit>/docs/production/docker-adapter-operation.md
 
-The quickstart needs Go 1.25+, a running Docker daemon, and `jq`. In one
-terminal start the broker with the Docker adapter:
-
-```sh
-export MERCATOR_ADDR=127.0.0.1:8080
-export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_AUTH_WORKSPACES='ws_1'
-export MERCATOR_DOCKER_ARCH=amd64
-go run ./cmd/mercator serve
-```
-
-In a second terminal create a run with a digest-pinned image (mutable tags are
-rejected):
-
-```sh
-export MERCATOR_API_URL=http://127.0.0.1:8080
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_WORKSPACE_ID=ws_1
-docker pull -q busybox:latest >/dev/null
-IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
-RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
-go run ./cmd/mercator run get --run-id "$RUN_ID" | jq '{outcome:.run.outcome, exit_code:.run.exit_code, cleanup:.run.cleanup, closed:.run.closed}'
-```
+The quickstart needs a running Docker daemon, `curl`, and `jq`. Follow its two
+terminal flow exactly so the workload uses the Docker host's native platform.
 
 Useful feedback includes what worked, what blocked confidence, and whether the
 README made the problem and next step clear. Please submit feedback through the
@@ -102,7 +80,7 @@ Please review:
 
 - README: <repo URL>
 - Contributor guide: <repo URL>/blob/<commit>/CONTRIBUTING.md
-- Starter queue: <repo URL>/blob/<commit>/docs/project/contributor-starter-queue.md
+- Starter issues: <repo URL>/issues?q=state%3Aopen%20label%3A%22good%20first%20issue%22
 - Reviewer packet: <repo URL>/blob/<commit>/docs/launch/reviewer-packet.md
 
 I am especially interested in whether the starter issues are bounded, whether

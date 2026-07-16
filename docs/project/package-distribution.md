@@ -15,31 +15,9 @@ go test ./...
 go run ./cmd/mercator serve
 ```
 
-For the local evaluation path, use the root README quickstart. It runs the
-Docker host adapter against a digest-pinned image, creates one run through the
-CLI, and verifies the closed run fields that the README promises. With a running
-Docker daemon, `jq`, and a shell:
-
-```sh
-# Terminal 1: serve
-export MERCATOR_ADDR=127.0.0.1:8080
-export MERCATOR_SQLITE_DSN='file:/tmp/mercator-demo.db'
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_AUTH_WORKSPACES='ws_1'
-export MERCATOR_DOCKER_ARCH=amd64
-go run ./cmd/mercator serve
-
-# Terminal 2: create a run with a digest-pinned image (mutable tags are rejected)
-export MERCATOR_API_URL=http://127.0.0.1:8080
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_WORKSPACE_ID=ws_1
-docker pull -q busybox:latest >/dev/null
-IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
-RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
-go run ./cmd/mercator run get --run-id "$RUN_ID" | jq '{outcome:.run.outcome, exit_code:.run.exit_code, cleanup:.run.cleanup, closed:.run.closed}'
-```
-
-Expected: `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`,
+For the local evaluation path, use the root README quickstart. It probes the
+Docker host architecture, runs a digest-pinned image on the matching platform,
+and verifies `outcome=succeeded`, `exit_code=0`, `cleanup=confirmed`, and
 `closed=true`. For the longer walkthrough, see
 `docs/production/docker-adapter-operation.md`.
 
