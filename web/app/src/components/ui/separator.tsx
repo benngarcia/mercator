@@ -1,22 +1,23 @@
 import * as React from "react";
-import * as SeparatorPrimitive from "@radix-ui/react-separator";
 
 import { cn } from "@/lib/utils";
 
-const Separator = React.forwardRef<
-  React.ElementRef<typeof SeparatorPrimitive.Root>,
-  React.ComponentPropsWithoutRef<typeof SeparatorPrimitive.Root>
->(
+type SeparatorProps = React.ComponentPropsWithoutRef<"hr"> & {
+  decorative?: boolean;
+  orientation?: "horizontal" | "vertical";
+};
+
+const Separator = React.forwardRef<HTMLHRElement, SeparatorProps>(
   (
     { className, orientation = "horizontal", decorative = true, ...props },
     ref,
   ) => (
-    <SeparatorPrimitive.Root
+    <hr
       ref={ref}
-      decorative={decorative}
-      orientation={orientation}
+      role={decorative ? "none" : undefined}
+      aria-orientation={decorative ? undefined : orientation}
       className={cn(
-        "shrink-0 bg-border",
+        "shrink-0 border-0 bg-border",
         orientation === "horizontal" ? "h-px w-full" : "h-full w-px",
         className,
       )}
@@ -24,6 +25,6 @@ const Separator = React.forwardRef<
     />
   ),
 );
-Separator.displayName = SeparatorPrimitive.Root.displayName;
+Separator.displayName = "Separator";
 
 export { Separator };

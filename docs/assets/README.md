@@ -8,15 +8,13 @@ Current assets:
 - `mercator-demo.webm` - ~13-second embedded-console walkthrough: the runs list,
   a run's detail (phase timeline, outcome, exit code, cleanup), the placement
   decision (selected offer and reason codes), and the event-sourced audit trail.
-  A synthetic cursor glides to each target, clicks leave a ripple, and the view
-  eases-zooms into the decision and the event trail. Recorded headlessly and
-  deterministically by `record-demo.mjs`.
+  Recorded headlessly through the real console flow by the web app's
+  `record:demo` task.
 - `mercator-demo.gif` - GIF fallback of the same recording for README contexts
   where WebM links are less prominent.
-- `record-demo.mjs` - the [Playwright](https://playwright.dev) +
-  [ghost-cursor](https://github.com/Xetera/ghost-cursor) script that seeds a run
-  and records the console (pointer motion, click ripples, zoom), so the demo is
-  reproducible.
+- `../../web/app/scripts/record-demo.mjs` - the
+  [Playwright](https://playwright.dev) script that seeds a run and records the
+  console, so the demo is reproducible.
 - `mercator-runs.png` - run list with status, exit code, cleanup disposition,
   and workspace context.
 - `mercator-run-decision.png` - run detail placement decision and lifecycle
@@ -31,8 +29,8 @@ no RunPod, registry credentials, or private workloads.
 
 1. Start Mercator with the Docker adapter following the
    [Docker quickstart](../production/docker-adapter-operation.md): set
-   `MERCATOR_DOCKER_ARCH=amd64`, `MERCATOR_API_TOKEN`, and a launch-safe
-   workspace such as `ws_1`.
+   `MERCATOR_API_TOKEN` and a launch-safe workspace such as `ws_1`. Let the
+   Docker probe report the host architecture.
 2. Create a digest-pinned `busybox -- echo hi` run through the CLI and wait for
    the run to close (mutable tags are rejected, so resolve the digest first with
    `docker inspect --format '{{index .RepoDigests 0}}' busybox:latest`).
@@ -64,18 +62,22 @@ The committed recording is a walk through the embedded console for workspace
 
 ## Demo Regeneration
 
-The demo is recorded headlessly with [Playwright](https://playwright.dev) by
-`record-demo.mjs`, so it stays in sync with the console. From the repository
-root, with a running Docker daemon and the broker up (see the README
-[quickstart](../../README.md#try-it-in-5-minutes)):
+The demo is recorded headlessly with [Playwright](https://playwright.dev), so it
+stays in sync with the console. With a running Docker daemon and the broker up
+(see the README [quickstart](../../README.md#try-it-in-5-minutes)):
 
 ```sh
-npm i playwright ghost-cursor && npx playwright install chromium
-node docs/assets/record-demo.mjs      # seeds a run, writes webm to docs/assets/output/
+cd web/app
+bun install
+bunx playwright install chromium
+MERCATOR_API_URL=http://127.0.0.1:8080 \
+  MERCATOR_API_TOKEN="$MERCATOR_API_TOKEN" \
+  MERCATOR_WORKSPACE_ID="$MERCATOR_WORKSPACE_ID" \
+  bun run record:demo
+cd ../..
 ```
 
-Then generate the GIF fallback (the zoom motion inflates the GIF, so this keeps
-it under 5 MB) and move both files into `docs/assets/`:
+Then generate the GIF fallback and move both files into `docs/assets/`:
 
 ```sh
 ffmpeg -y -i docs/assets/output/mercator-demo.webm \
