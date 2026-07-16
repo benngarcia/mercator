@@ -1,6 +1,6 @@
 # Complete the Ponytail Cleanup
 
-Status: implementation complete on 2026-07-15; PR verification in progress
+Status: complete on 2026-07-15 in PR #43
 
 ## Decision
 
@@ -22,4 +22,4 @@ replace the deleted language SDKs.
 - [x] Reduce the launch audit to executable evidence.
 - [x] Convert the contributor queue into public GitHub issues and delete drafts.
 - [x] Run core, console, launch, and real recorder verification.
-- [ ] Push the branch, open a pull request, and resolve CI and review feedback.
+- [x] Push the branch, open a pull request, and resolve CI and review feedback.
