@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,8 +12,6 @@ import (
 )
 
 const defaultRESTBaseURL = "https://rest.runpod.io/v1"
-
-var errPodNotFound = errors.New("runpod: pod not found")
 
 type restClient struct {
 	baseURL string
@@ -132,24 +129,6 @@ func (c *restClient) createPod(ctx context.Context, in podCreateInput) (pod, err
 	}
 	if status < 200 || status >= 300 {
 		return pod{}, httpError(http.MethodPost, "/pods", status, body)
-	}
-	var p pod
-	if err := json.Unmarshal(body, &p); err != nil {
-		return pod{}, fmt.Errorf("runpod: decode pod: %w", err)
-	}
-	return p, nil
-}
-
-func (c *restClient) getPod(ctx context.Context, id string) (pod, error) {
-	status, body, err := c.do(ctx, http.MethodGet, "/pods/"+id, nil)
-	if err != nil {
-		return pod{}, err
-	}
-	if status == http.StatusNotFound {
-		return pod{}, errPodNotFound
-	}
-	if status < 200 || status >= 300 {
-		return pod{}, httpError(http.MethodGet, "/pods/"+id, status, body)
 	}
 	var p pod
 	if err := json.Unmarshal(body, &p); err != nil {

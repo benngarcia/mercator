@@ -64,15 +64,13 @@ var modelAliases = map[string]string{
 	"3090": "rtx-3090", "rtx-3090": "rtx-3090",
 }
 
-// canonicalModelPart resolves the canonical model token for (vendor, model) and
-// reports whether it came from the curated alias table (true) or the
-// deterministic slug fallback (false).
-func canonicalModelPart(vendor, model string) (string, bool) {
+// canonicalModelPart resolves the canonical model token for (vendor, model).
+func canonicalModelPart(vendor, model string) string {
 	key := strings.TrimPrefix(slug(model), NormalizeVendor(vendor)+"-")
 	if c, ok := modelAliases[key]; ok {
-		return c, true
+		return c
 	}
-	return key, false
+	return key
 }
 
 // Canonical returns the canonical GPU id "<vendor>-<model>" (e.g.
@@ -80,16 +78,9 @@ func canonicalModelPart(vendor, model string) (string, bool) {
 // failing, so matching still works within a provider.
 func Canonical(vendor, model string) string {
 	cv := NormalizeVendor(vendor)
-	part, _ := canonicalModelPart(vendor, model)
+	part := canonicalModelPart(vendor, model)
 	if part == "" {
 		return cv
 	}
 	return cv + "-" + part
-}
-
-// Known reports whether (vendor, model) matched a curated alias rather than the
-// slug fallback — useful for flagging GPUs that should be added to the table.
-func Known(vendor, model string) bool {
-	_, ok := canonicalModelPart(vendor, model)
-	return ok
 }

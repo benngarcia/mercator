@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"time"
 
@@ -59,8 +60,8 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 		ID:                  req.ConnectionID,
 		WorkspaceID:         req.WorkspaceID,
 		AdapterType:         req.AdapterType,
-		AuthorizationSchema: cloneStringMap(req.AuthorizationSchema),
-		Config:              cloneStringMap(req.Config),
+		AuthorizationSchema: maps.Clone(req.AuthorizationSchema),
+		Config:              maps.Clone(req.Config),
 		Credential:          req.Credential,
 	}
 	data, err := json.Marshal(record)
@@ -179,15 +180,4 @@ func reduceConnection(events []eventlog.StoredEvent) (Record, error) {
 
 func connectionStream(workspaceID, connectionID string) eventlog.StreamKey {
 	return eventlog.StreamKey{WorkspaceID: workspaceID, Type: "connection", ID: connectionID}
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }
