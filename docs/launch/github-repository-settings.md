@@ -69,7 +69,7 @@ After the settings are configured, update
 - the public repository URL and visibility check;
 - the default-branch CI run URL;
 - the `v0.1.0` release URL and checksum verification result;
-- the starter issues created from `docs/project/contributor-starter-queue.md`;
+- the public starter issues and their labels;
 - the first public proof point when it exists.
 
 Do not mark the launch A+ while branch protection, workflow permissions,

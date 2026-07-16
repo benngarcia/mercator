@@ -29,7 +29,6 @@ export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/var/lib/mercator/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 export MERCATOR_AUTH_WORKSPACES='ws_eval'
-export MERCATOR_DOCKER_ARCH=amd64
 ```
 
 `serve` always uses the Docker host adapter, so a running Docker daemon is a
@@ -56,7 +55,7 @@ server path.
 | `MERCATOR_DOCKER_NATIVE_REF` | `loopback` | Native reference in the synthetic Docker offer. |
 | `MERCATOR_DOCKER_OFFER_ID` | `offer_docker_loopback` | Synthetic Docker offer ID. |
 | `MERCATOR_DOCKER_CONNECTION_ID` | `conn_docker_loopback` | Synthetic Docker connection ID. |
-| `MERCATOR_DOCKER_ARCH` | `amd64` | Architecture advertised by the Docker offer. |
+| `MERCATOR_DOCKER_ARCH` | Docker host architecture, or `amd64` if the host probe fails | Optional architecture override for an intentionally emulated Docker offer. |
 | `MERCATOR_API_URL` | none | CLI base URL; required for CLI mode unless `--api-url` is provided. |
 
 ## Health And Discovery

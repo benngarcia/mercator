@@ -181,61 +181,18 @@ shasum -a 256 -c checksums.txt --ignore-missing
 tar -tzf "mercator_${version}_${os}_${arch}.tar.gz" | sort
 ```
 
-## 7. Convert Starter Queue Into GitHub Issues
+## 7. Track Starter Work In GitHub
 
-Use `docs/project/contributor-starter-queue.md` as the source of truth.
+The staged contributor queue was converted into public issues on 2026-07-15.
+Each issue retains explicit acceptance criteria:
 
-Create labels:
+- [#39 Record A Longer Launch Demo From The Shot List](https://github.com/benngarcia/mercator/issues/39)
+- [#40 Add A Docker Evaluation Transcript](https://github.com/benngarcia/mercator/issues/40)
+- [#41 Add Release Archive Install Smoke Notes](https://github.com/benngarcia/mercator/issues/41)
+- [#42 Design External Sink Configuration For cmd/mercator](https://github.com/benngarcia/mercator/issues/42)
 
-```sh
-gh label create "good first issue" --description "Small, well-scoped contribution with low product risk" --color 7057ff
-gh label create "help wanted" --description "Maintainers want external help and can review the result" --color 008672
-gh label create docs --description "Documentation-only change" --color 0075ca
-gh label create cli --description "CLI behavior or reference docs" --color 5319e7
-gh label create console --description "Embedded operator console polish" --color fbca04
-gh label create release --description "Release packaging, checksums, and install docs" --color c2e0c6
-gh label create "needs-maintainer-input" --description "Blocked on a project decision before implementation" --color bfdadc
-gh label create launch --description "Open source launch preparation and evidence" --color 0e8a16
-gh label create "proof-point" --description "Public trial, integration note, benchmark, review, or case study" --color 5319e7
-gh label create question --description "First-run help or evaluation question" --color d876e3
-```
-
-Then create issues from the starter queue. Keep acceptance criteria intact so
-new contributors can tell when an issue is done.
-
-```sh
-gh issue create \
-  --title "Record a longer launch demo from the shot list" \
-  --label "good first issue" \
-  --label docs \
-  --label console \
-  --body-file docs/project/issue-drafts/longer-launch-demo.md
-```
-
-```sh
-gh issue create \
-  --title "Capture a sanitized Docker adapter evaluation transcript" \
-  --label "help wanted" \
-  --label docs \
-  --body-file docs/project/issue-drafts/docker-eval-transcript.md
-```
-
-```sh
-gh issue create \
-  --title "Verify release archive install after v0.1.0" \
-  --label "good first issue" \
-  --label docs \
-  --label release \
-  --body-file docs/project/issue-drafts/release-archive-install-smoke.md
-```
-
-```sh
-gh issue create \
-  --title "Design external sink configuration for cmd/mercator" \
-  --label "help wanted" \
-  --label "needs-maintainer-input" \
-  --body-file docs/project/issue-drafts/external-sink-configuration.md
-```
+Use GitHub issues as the source of truth for status, discussion, and future
+starter work. Do not recreate an in-repository issue staging queue.
 
 ## 8. Collect A Public Proof Point
 

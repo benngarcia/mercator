@@ -1,12 +1,9 @@
 package sinks
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"time"
+	"maps"
 
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
@@ -55,11 +52,7 @@ type ReplayRequest struct {
 }
 
 func NewManager(log EventLog, configured map[string]Sink) *Manager {
-	copied := map[string]Sink{}
-	for id, sink := range configured {
-		copied[id] = sink
-	}
-	return &Manager{log: log, sinks: copied, batchSize: 100}
+	return &Manager{log: log, sinks: maps.Clone(configured), batchSize: 100}
 }
 
 func (m *Manager) DeliverOnce(ctx context.Context, sinkID string) (Result, error) {
@@ -164,87 +157,4 @@ func (m *Manager) limit(limit int) int {
 
 func cursorID(sinkID string) string {
 	return "sink:" + sinkID
-}
-
-type WebhookSink struct {
-	endpoint string
-	client   *http.Client
-}
-
-func NewWebhookSink(endpoint string, client *http.Client) *WebhookSink {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return &WebhookSink{endpoint: endpoint, client: client}
-}
-
-func (s *WebhookSink) Deliver(ctx context.Context, event eventlog.StoredEvent) error {
-	if s.endpoint == "" {
-		return fmt.Errorf("sinks: webhook endpoint is required")
-	}
-	body, err := json.Marshal(event.CloudEvent())
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/cloudevents+json")
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("sinks: webhook returned status %d", resp.StatusCode)
-	}
-	return nil
-}
-
-type KafkaProducer interface {
-	Produce(ctx context.Context, topic string, event eventlog.CloudEvent) error
-}
-
-type KafkaSink struct {
-	topic    string
-	producer KafkaProducer
-}
-
-func NewKafkaSink(topic string, producer KafkaProducer) *KafkaSink {
-	return &KafkaSink{topic: topic, producer: producer}
-}
-
-func (s *KafkaSink) Deliver(ctx context.Context, event eventlog.StoredEvent) error {
-	if s.topic == "" || s.producer == nil {
-		return fmt.Errorf("sinks: kafka topic and producer are required")
-	}
-	return s.producer.Produce(ctx, s.topic, event.CloudEvent())
-}
-
-type PostgresWriter interface {
-	InsertEvent(ctx context.Context, event eventlog.StoredEvent) error
-}
-
-type PostgresSink struct {
-	writer PostgresWriter
-}
-
-func NewPostgresSink(writer PostgresWriter) *PostgresSink {
-	return &PostgresSink{writer: writer}
-}
-
-func (s *PostgresSink) Deliver(ctx context.Context, event eventlog.StoredEvent) error {
-	if s.writer == nil {
-		return fmt.Errorf("sinks: postgres writer is required")
-	}
-	return s.writer.InsertEvent(ctx, event)
-}
-
-type Config struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"`
-	Endpoint  string    `json:"endpoint,omitempty"`
-	Topic     string    `json:"topic,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
 }

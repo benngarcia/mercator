@@ -3,7 +3,6 @@ package runpod
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -54,16 +53,6 @@ func TestCreatePodNon2xxErrorOmitsAPIKey(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-key") {
 		t.Fatalf("error must not leak the API key: %q", err.Error())
-	}
-}
-
-func TestGetPodNotFound(t *testing.T) {
-	client := newRESTClient("k", "https://rest.test/v1", newFakeHTTPClient(func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(404, `{"error":"not found"}`), nil
-	}))
-	_, err := client.getPod(context.Background(), "pod_x")
-	if !errors.Is(err, errPodNotFound) {
-		t.Fatalf("expected errPodNotFound, got %v", err)
 	}
 }
 

@@ -96,7 +96,6 @@ docker build -t mercator:local .
 
 docker run --rm \
   -e MERCATOR_ADDR=0.0.0.0:8080 \
-  -e MERCATOR_DOCKER_ARCH=amd64 \
   -e MERCATOR_API_TOKEN=dev-token -e MERCATOR_AUTH_WORKSPACES=ws_1 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -p 8080:8080 mercator:local serve
@@ -108,7 +107,6 @@ no source checkout needed:
 ```sh
 docker run --rm \
   -e MERCATOR_ADDR=0.0.0.0:8080 \
-  -e MERCATOR_DOCKER_ARCH=amd64 \
   -e MERCATOR_API_TOKEN=dev-token -e MERCATOR_AUTH_WORKSPACES=ws_1 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -p 8080:8080 ghcr.io/benngarcia/mercator:latest serve
@@ -135,10 +133,20 @@ export MERCATOR_WORKSPACE_ID=ws_1
 docker pull -q busybox:latest >/dev/null
 IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
 
+case "$(docker info --format '{{.Architecture}}')" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) echo "unsupported Docker architecture" >&2; exit 1 ;;
+esac
+
+PAYLOAD="$(jq -nc \
+  --arg workspace "$MERCATOR_WORKSPACE_ID" --arg image "$IMAGE" --arg arch "$ARCH" \
+  '{workload:{workspace_id:$workspace,spec:{containers:[{name:"main",image:$image,platform:{os:"linux",architecture:$arch},args:["echo","hi"]}]}}}')"
+
 RUN_ID="$(curl -fsS -X POST "$MERCATOR_API_URL/v1/runs?workspace_id=$MERCATOR_WORKSPACE_ID" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN" -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: quickstart-1' \
-  -d "{\"image\":\"$IMAGE\",\"args\":[\"echo\",\"hi\"]}" | jq -r '.run_id')"
+  -d "$PAYLOAD" | jq -r '.run_id')"
 
 curl -fsS "$MERCATOR_API_URL/v1/runs/$RUN_ID?workspace_id=$MERCATOR_WORKSPACE_ID" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
@@ -185,10 +193,10 @@ reuse it:
 ```sh
 go build -o mercator ./cmd/mercator
 
-export MERCATOR_ADDR=127.0.0.1:8080 MERCATOR_DOCKER_ARCH=amd64
+export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_API_TOKEN=dev-token MERCATOR_AUTH_WORKSPACES=ws_1
 export MERCATOR_SQLITE_DSN="file:$HOME/.mercator/mercator.db" && mkdir -p "$HOME/.mercator"
-./mercator serve   # then drive it with ./mercator run create "$IMAGE" -- echo hi
+./mercator serve   # then drive it with the architecture-aware request in step 2
 ```
 
 For the full Docker runbook — preconditions, container labels, and cleanup

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"regexp"
 )
 
@@ -43,11 +44,7 @@ func WithSyntheticDigests() Option {
 }
 
 func NewStaticResolver(images map[string]ResolvedImage, options ...Option) *StaticResolver {
-	cloned := make(map[string]ResolvedImage, len(images))
-	for key, value := range images {
-		cloned[key] = value
-	}
-	r := &StaticResolver{images: cloned}
+	r := &StaticResolver{images: maps.Clone(images)}
 	for _, option := range options {
 		option(r)
 	}

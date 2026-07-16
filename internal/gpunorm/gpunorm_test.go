@@ -37,12 +37,6 @@ func TestCanonicalUnknownGPUFallsBackToDeterministicSlug(t *testing.T) {
 	if Canonical("NVIDIA", "RTX 6000 Ada Generation") != got {
 		t.Fatal("Canonical must be deterministic")
 	}
-	if Known("NVIDIA", "RTX 6000 Ada Generation") {
-		t.Error("an unseeded GPU should report Known()=false")
-	}
-	if !Known("NVIDIA", "RTX A2000") {
-		t.Error("a seeded GPU should report Known()=true")
-	}
 }
 
 func TestNormalizeVendor(t *testing.T) {

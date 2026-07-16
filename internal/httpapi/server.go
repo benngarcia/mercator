@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,7 +17,6 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
-	"github.com/benngarcia/mercator/internal/authz"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -107,6 +107,16 @@ func WithReportSigner(signer *reporting.Signer) Option {
 }
 
 type principalContextKey struct{}
+
+type principal struct {
+	Subject      string
+	WorkspaceIDs []string
+}
+
+func (p principal) allows(workspaceID string) bool {
+	return p.Subject != "" &&
+		(slices.Contains(p.WorkspaceIDs, "*") || slices.Contains(p.WorkspaceIDs, workspaceID))
+}
 
 type createRunBody struct {
 	WorkspaceID        string                  `json:"workspace_id,omitempty"`
@@ -277,8 +287,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token is required.")
 			return
 		}
-		principal := authz.Principal{Subject: "bearer", WorkspaceIDs: append([]string(nil), s.security.Workspaces...)}
-		r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal))
+		actor := principal{Subject: "bearer", WorkspaceIDs: slices.Clone(s.security.Workspaces)}
+		r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, actor))
 	}
 	// Bound every request body so no caller (operator or run-token holder) can
 	// stream an unbounded payload into a JSON decoder or the event store.
@@ -1126,7 +1136,7 @@ func (s *Server) requiredWorkspace(w http.ResponseWriter, r *http.Request) (stri
 }
 
 func (s *Server) authorizeRequestWorkspace(w http.ResponseWriter, r *http.Request, workspaceID string) bool {
-	principal, ok := r.Context().Value(principalContextKey{}).(authz.Principal)
+	actor, ok := r.Context().Value(principalContextKey{}).(principal)
 	if !ok {
 		// No principal is only legitimate when bearer auth is disabled entirely
 		// (an explicit dev/embedding mode). With auth enabled, a missing
@@ -1138,12 +1148,7 @@ func (s *Server) authorizeRequestWorkspace(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusForbidden, "FORBIDDEN", "Principal is not authorized for this workspace.")
 		return false
 	}
-	for _, allowed := range principal.WorkspaceIDs {
-		if allowed == "*" {
-			return true
-		}
-	}
-	if err := authz.New().Authorize(principal, authz.ActionRead, authz.ResourceRun, workspaceID); err != nil {
+	if !actor.allows(workspaceID) {
 		writeError(w, http.StatusForbidden, "FORBIDDEN", "Principal is not authorized for this workspace.")
 		return false
 	}

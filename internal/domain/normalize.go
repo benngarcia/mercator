@@ -1,5 +1,7 @@
 package domain
 
+import "slices"
+
 // Defaults applied by NormalizeWorkloadRevision when a caller omits a field.
 // These let a minimal create body (just an image) expand into a fully-specified,
 // validatable revision. Defaulting only ever fills omissions; it never overrides
@@ -26,8 +28,7 @@ func NormalizeWorkloadRevision(rev WorkloadRevision) WorkloadRevision {
 
 	// Container name + platform defaulting. We only touch the single-container
 	// case; multi-container input is left untouched so validation can reject it.
-	containers := make([]ContainerSpec, len(rev.Spec.Containers))
-	copy(containers, rev.Spec.Containers)
+	containers := slices.Clone(rev.Spec.Containers)
 	if len(containers) == 1 {
 		c := containers[0]
 		if c.Name == "" {

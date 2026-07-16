@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -740,9 +741,9 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		Image:                     container.Image,
 		Platform:                  container.Platform,
 		Entrypoint:                container.Entrypoint,
-		Args:                      append([]string(nil), container.Args...),
+		Args:                      slices.Clone(container.Args),
 		Environment:               env,
-		Ports:                     append([]domain.PortSpec(nil), container.Ports...),
+		Ports:                     slices.Clone(container.Ports),
 		Resources:                 requested.Workload.Spec.Resources,
 		SelectedOfferSnapshotID:   selectedOffer.ID,
 		SelectedOfferConnectionID: selectedOffer.ConnectionID,
@@ -1057,8 +1058,7 @@ func mustPrivateEvent(runID, suffix, eventType string, publicData any, privateDa
 }
 
 func scopeEventIDs(workspaceID, runID string, events []eventlog.NewEvent) []eventlog.NewEvent {
-	scoped := make([]eventlog.NewEvent, len(events))
-	copy(scoped, events)
+	scoped := slices.Clone(events)
 	unscopedPrefix := "evt_" + runID + "_"
 	scopedPrefix := "evt_" + workspaceID + "_" + runID + "_"
 	for i := range scoped {

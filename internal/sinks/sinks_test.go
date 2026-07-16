@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -71,62 +69,6 @@ func TestReplayIsBoundedObservableAndDoesNotMoveDurableCursor(t *testing.T) {
 	}
 }
 
-func TestWebhookSinkPostsCloudEvents(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	var got eventlog.CloudEvent
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Fatalf("unexpected method %s", r.Method)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Fatalf("decode webhook: %v", err)
-		}
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	t.Cleanup(server.Close)
-
-	event := eventlog.StoredEvent{
-		GlobalPosition: 1,
-		ID:             "evt_webhook",
-		WorkspaceID:    "ws_1",
-		StreamType:     "run",
-		StreamID:       "run_1",
-		StreamVersion:  1,
-		Type:           "compute.run.requested.v1",
-		SchemaVersion:  1,
-		OccurredAt:     time.Now().UTC(),
-		Visibility:     eventlog.VisibilityPublic,
-		Data:           json.RawMessage(`{"run_id":"run_1"}`),
-	}
-	if err := NewWebhookSink(server.URL, nil).Deliver(ctx, event); err != nil {
-		t.Fatalf("deliver webhook: %v", err)
-	}
-	if got.ID != "evt_webhook" || got.Type != "compute.run.requested.v1" {
-		t.Fatalf("unexpected webhook payload: %+v", got)
-	}
-}
-
-func TestKafkaAndPostgresSinksUseConfiguredBackends(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	event := eventlog.StoredEvent{ID: "evt_backend", Type: "compute.run.requested.v1", WorkspaceID: "ws_1", Data: json.RawMessage(`{}`)}
-	producer := &recordingProducer{}
-	if err := NewKafkaSink("events", producer).Deliver(ctx, event); err != nil {
-		t.Fatalf("deliver kafka: %v", err)
-	}
-	if producer.topic != "events" || producer.eventID != "evt_backend" {
-		t.Fatalf("unexpected kafka write: %+v", producer)
-	}
-	writer := &recordingWriter{}
-	if err := NewPostgresSink(writer).Deliver(ctx, event); err != nil {
-		t.Fatalf("deliver postgres: %v", err)
-	}
-	if writer.eventID != "evt_backend" {
-		t.Fatalf("unexpected postgres write: %+v", writer)
-	}
-}
-
 type recordingSink struct {
 	ids    []string
 	failOn string
@@ -137,26 +79,6 @@ func (s *recordingSink) Deliver(_ context.Context, event eventlog.StoredEvent) e
 	if event.ID == s.failOn {
 		return errors.New("sink unavailable")
 	}
-	return nil
-}
-
-type recordingProducer struct {
-	topic   string
-	eventID string
-}
-
-func (p *recordingProducer) Produce(_ context.Context, topic string, event eventlog.CloudEvent) error {
-	p.topic = topic
-	p.eventID = event.ID
-	return nil
-}
-
-type recordingWriter struct {
-	eventID string
-}
-
-func (w *recordingWriter) InsertEvent(_ context.Context, event eventlog.StoredEvent) error {
-	w.eventID = event.ID
 	return nil
 }
 
