@@ -46,6 +46,9 @@ func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequ
 	if req.Platform != "" {
 		args = append(args, "--platform", req.Platform)
 	}
+	if req.GPUCount > 0 {
+		args = append(args, "--gpus", strconv.Itoa(req.GPUCount))
+	}
 	for _, key := range sortedKeys(req.Labels) {
 		args = append(args, "--label", key+"="+req.Labels[key])
 	}
