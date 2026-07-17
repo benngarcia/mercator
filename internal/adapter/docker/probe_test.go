@@ -51,6 +51,38 @@ func TestParseDockerInfoRejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestParseDFAvailableBytesReadsRootMount(t *testing.T) {
+	// Shape emitted by busybox `df -Pk /` inside the probe container.
+	output := "Filesystem           1024-blocks    Used Available Capacity Mounted on\n" +
+		"overlay              494384795 123456789 345678901  27% /\n"
+	got, err := parseDFAvailableBytes(output)
+	if err != nil {
+		t.Fatalf("parseDFAvailableBytes: %v", err)
+	}
+	if want := int64(345678901) * 1024; got != want {
+		t.Errorf("available = %d, want %d (Available KiB * 1024)", got, want)
+	}
+}
+
+func TestParseDFAvailableBytesIgnoresNonRootMounts(t *testing.T) {
+	output := "Filesystem           1024-blocks    Used Available Capacity Mounted on\n" +
+		"tmpfs                    65536        0     65536   0% /dev\n" +
+		"overlay              100000000 40000000  60000000  40% /\n"
+	got, err := parseDFAvailableBytes(output)
+	if err != nil {
+		t.Fatalf("parseDFAvailableBytes: %v", err)
+	}
+	if want := int64(60000000) * 1024; got != want {
+		t.Errorf("available = %d, want %d (root mount only)", got, want)
+	}
+}
+
+func TestParseDFAvailableBytesRejectsGarbage(t *testing.T) {
+	if _, err := parseDFAvailableBytes("Unable to find image 'busybox:1.37' locally"); err == nil {
+		t.Fatal("expected error parsing df output with no root filesystem line")
+	}
+}
+
 func TestGlobalArgsCarryEndpoint(t *testing.T) {
 	if got := (&CLIClient{}).globalArgs(); len(got) != 0 {
 		t.Errorf("no endpoint configured: globalArgs = %v, want empty", got)

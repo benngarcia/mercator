@@ -1,6 +1,8 @@
 package docker
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -51,7 +53,7 @@ func TestStandingOfferUsesProbedCapacity(t *testing.T) {
 	id := DeriveIdentity("", "dockerhost")
 	info := HostInfo{Architecture: "x86_64", OSType: "linux", NCPU: 8, MemTotalBytes: 16 * 1024 * 1024 * 1024, Name: "dockerhost"}
 
-	offer := StandingOffer(id, "", info, now)
+	offer := StandingOffer(id, "", info, 500*1024*1024*1024, now)
 
 	if offer.AdapterType != "docker" {
 		t.Errorf("AdapterType = %q, want docker", offer.AdapterType)
@@ -71,12 +73,83 @@ func TestStandingOfferUsesProbedCapacity(t *testing.T) {
 	if offer.Resources.MemoryBytes != 16*1024*1024*1024 {
 		t.Errorf("MemoryBytes = %d, want 16GiB", offer.Resources.MemoryBytes)
 	}
+	if offer.Resources.EphemeralDiskBytes != 500*1024*1024*1024 {
+		t.Errorf("EphemeralDiskBytes = %d, want 500GiB (probed free disk)", offer.Resources.EphemeralDiskBytes)
+	}
+}
+
+func TestStandingOfferAdvertisesProbedFreeDisk(t *testing.T) {
+	// A workload asking for 25 GiB must be able to schedule on a host that
+	// really has that much free disk: the offer advertises the measured free
+	// bytes, not a hardcoded constant.
+	now := time.Unix(1_700_000_000, 0).UTC()
+	diskFree := int64(120 * 1024 * 1024 * 1024)
+
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, diskFree, now)
+
+	if offer.Resources.EphemeralDiskBytes != diskFree {
+		t.Errorf("EphemeralDiskBytes = %d, want probed %d", offer.Resources.EphemeralDiskBytes, diskFree)
+	}
+}
+
+func TestStandingOfferFallsBackWhenDiskUnmeasured(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, 0, now)
+
+	if offer.Resources.EphemeralDiskBytes != 16*1024*1024*1024 {
+		t.Errorf("EphemeralDiskBytes = %d, want conservative 16GiB fallback", offer.Resources.EphemeralDiskBytes)
+	}
+}
+
+func TestDiskFactCachesMeasurementWithinTTL(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	calls := 0
+	measure := func(context.Context) (int64, error) {
+		calls++
+		return int64(calls) * 1024, nil
+	}
+	fact := &diskFact{}
+
+	first := fact.value("loopback", measure, now)
+	within := fact.value("loopback", measure, now.Add(diskFactTTL/2))
+	after := fact.value("loopback", measure, now.Add(diskFactTTL+time.Second))
+
+	if first != 1024 || within != 1024 {
+		t.Errorf("within TTL: got %d then %d, want cached 1024", first, within)
+	}
+	if after != 2048 {
+		t.Errorf("after TTL: got %d, want fresh 2048", after)
+	}
+	if calls != 2 {
+		t.Errorf("measure calls = %d, want 2 (one probe per TTL window)", calls)
+	}
+}
+
+func TestDiskFactFailedProbeYieldsZeroAndIsCached(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	calls := 0
+	measure := func(context.Context) (int64, error) {
+		calls++
+		return 0, errors.New("endpoint down")
+	}
+	fact := &diskFact{}
+
+	if got := fact.value("loopback", measure, now); got != 0 {
+		t.Errorf("failed probe: got %d, want 0 (unmeasured)", got)
+	}
+	if got := fact.value("loopback", measure, now.Add(time.Second)); got != 0 {
+		t.Errorf("failed probe within TTL: got %d, want cached 0", got)
+	}
+	if calls != 1 {
+		t.Errorf("measure calls = %d, want 1 (failures are cached too)", calls)
+	}
 }
 
 func TestStandingOfferFallsBackWhenProbeEmpty(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
-	// Empty HostInfo simulates an unreachable endpoint / failed probe.
-	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{}, now)
+	// Empty HostInfo and zero disk simulate an unreachable endpoint / failed probe.
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{}, 0, now)
 
 	if offer.Platform.Architecture == "" {
 		t.Error("Architecture must fall back to a default, got empty")
@@ -92,7 +165,7 @@ func TestStandingOfferFallsBackWhenProbeEmpty(t *testing.T) {
 func TestStandingOfferArchOverrideWinsOverProbe(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	info := HostInfo{Architecture: "x86_64", NCPU: 4, MemTotalBytes: 1 << 30}
-	offer := StandingOffer(DeriveIdentity("", ""), "arm64", info, now)
+	offer := StandingOffer(DeriveIdentity("", ""), "arm64", info, 0, now)
 	if offer.Platform.Architecture != "arm64" {
 		t.Errorf("explicit arch override should win: got %q, want arm64", offer.Platform.Architecture)
 	}

@@ -166,6 +166,18 @@ func (c *CLIClient) run(ctx context.Context, args ...string) (string, error) {
 	return string(output), nil
 }
 
+// runSplit keeps stdout and stderr separate for commands whose stdout must be
+// parsed exactly. `docker run` writes pull progress to stderr; merging it into
+// stdout (as run does) would corrupt the parse.
+func (c *CLIClient) runSplit(ctx context.Context, args ...string) (stdout, stderr string, err error) {
+	cmd := exec.CommandContext(ctx, c.Binary, append(c.globalArgs(), args...)...)
+	var out, errOut strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+	err = cmd.Run()
+	return out.String(), errOut.String(), err
+}
+
 func sortedKeys(values map[string]string) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -71,4 +72,46 @@ func (c *CLIClient) Info(ctx context.Context) (HostInfo, error) {
 		return HostInfo{}, fmt.Errorf("docker info: %w: %s", err, strings.TrimSpace(output))
 	}
 	return parseDockerInfo([]byte(output))
+}
+
+// diskProbeImage runs the one-shot disk probe container. busybox is tiny
+// (~2 MiB, multi-arch), ships df, and is pulled once per host — subsequent
+// probes reuse the daemon's cached image.
+const diskProbeImage = "busybox:1.37"
+
+// DiskFreeBytes measures the ephemeral disk actually available to workload
+// containers on the endpoint by running a one-shot probe container and reading
+// POSIX `df` of its root filesystem. A container's `/` sits on the daemon's
+// storage-driver filesystem (the one that holds every writable layer), so its
+// Available figure is exactly the disk a workload container can consume.
+// `docker info` reports no free-disk fact for modern storage drivers, and the
+// daemon host's paths are not visible to this process (Mercator itself usually
+// runs in a container with only the Docker socket mounted, or against a remote
+// ssh://tcp:// endpoint), so a probe container is the only honest measurement
+// that works uniformly across endpoint types.
+func (c *CLIClient) DiskFreeBytes(ctx context.Context) (int64, error) {
+	stdout, stderr, err := c.runSplit(ctx,
+		"run", "--rm", "--network=none", "--label", "mercator.probe=disk_free",
+		diskProbeImage, "df", "-Pk", "/")
+	if err != nil {
+		return 0, fmt.Errorf("docker disk probe: %w: %s", err, strings.TrimSpace(stderr))
+	}
+	return parseDFAvailableBytes(stdout)
+}
+
+// parseDFAvailableBytes extracts the Available column of the root mount from
+// POSIX `df -Pk` output (KiB units) and returns it in bytes.
+func parseDFAvailableBytes(output string) (int64, error) {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 6 || fields[len(fields)-1] != "/" {
+			continue
+		}
+		kib, err := strconv.ParseInt(fields[3], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse df available column %q: %w", fields[3], err)
+		}
+		return kib * 1024, nil
+	}
+	return 0, fmt.Errorf("no root filesystem line in df output: %q", strings.TrimSpace(output))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -60,7 +61,7 @@ func endpointLabel(host, dockerContext string) string {
 // with OFFER_EXPIRED until the process restarted. A non-empty archOverride
 // wins over the probed architecture (useful for forcing emulated platforms).
 func NewOffering(client *CLIClient, id EndpointIdentity, archOverride string) adapter.Adapter {
-	return offeringAdapter{Adapter: New(client), client: client, id: id, arch: archOverride}
+	return offeringAdapter{Adapter: New(client), client: client, id: id, arch: archOverride, disk: &diskFact{}}
 }
 
 type offeringAdapter struct {
@@ -68,10 +69,47 @@ type offeringAdapter struct {
 	client *CLIClient
 	id     EndpointIdentity
 	arch   string
+	disk   *diskFact
 }
 
 func (a offeringAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	return []domain.OfferSnapshot{StandingOffer(a.id, a.arch, a.probe(), time.Now().UTC())}, nil
+	now := time.Now().UTC()
+	diskFree := a.disk.value(a.id.NativeRef, a.client.DiskFreeBytes, now)
+	return []domain.OfferSnapshot{StandingOffer(a.id, a.arch, a.probe(), diskFree, now)}, nil
+}
+
+// diskFact caches the container-probe disk measurement per endpoint. Offers
+// are otherwise rebuilt fresh on every ListOffers call (see NewOffering), but
+// the disk probe launches a one-shot container, which is too heavy to run per
+// placement decision or offers-endpoint poll. Free disk moves slowly, so a
+// short TTL keeps the offer honest without container churn. A zero value means
+// the last probe failed and StandingOffer applies its conservative fallback.
+type diskFact struct {
+	mu         sync.Mutex
+	freeBytes  int64
+	measuredAt time.Time
+}
+
+const diskFactTTL = time.Minute
+
+func (d *diskFact) value(nativeRef string, measure func(context.Context) (int64, error), now time.Time) int64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.measuredAt.IsZero() && now.Sub(d.measuredAt) < diskFactTTL {
+		return d.freeBytes
+	}
+	// Generous timeout: the first probe on a fresh host also pulls the tiny
+	// probe image.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	freeBytes, err := measure(ctx)
+	if err != nil {
+		log.Printf("docker endpoint %q disk probe failed; using fallback disk capacity: %v", nativeRef, err)
+		freeBytes = 0
+	}
+	d.freeBytes = freeBytes
+	d.measuredAt = now
+	return d.freeBytes
 }
 
 // probe queries the endpoint's `docker info` best-effort. A failed or
@@ -89,10 +127,16 @@ func (a offeringAdapter) probe() HostInfo {
 }
 
 // StandingOffer builds the offer Mercator advertises for a Docker endpoint.
-// Capacity (arch/cpu/mem) comes from the probed `docker info` when available,
+// Capacity (arch/cpu/mem/disk) comes from the probed endpoint when available,
 // falling back to conservative defaults when the probe was empty (unreachable
 // endpoint). A non-empty archOverride always wins.
-func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now time.Time) domain.OfferSnapshot {
+//
+// diskFreeBytes is the container-probed free disk (see CLIClient.DiskFreeBytes);
+// zero means unmeasured and falls back to 16 GiB. Advertising a hardcoded
+// 16 GiB regardless of the real host silently made every workload requesting
+// more infeasible ("no feasible offers") even on hosts with hundreds of free
+// GiB — bucket's model_training dispatches request >= 20 GiB.
+func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, diskFreeBytes int64, now time.Time) domain.OfferSnapshot {
 	arch := archOverride
 	if arch == "" {
 		arch = info.OCIArch()
@@ -108,6 +152,10 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now 
 	if info.MemTotalBytes > 0 {
 		memoryBytes = info.MemTotalBytes
 	}
+	ephemeralDiskBytes := int64(16 * 1024 * 1024 * 1024)
+	if diskFreeBytes > 0 {
+		ephemeralDiskBytes = diskFreeBytes
+	}
 	return domain.OfferSnapshot{
 		ID:           id.OfferID,
 		ConnectionID: id.ConnectionID,
@@ -120,7 +168,7 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now 
 		Resources: domain.ResourceInventory{
 			CPUMillis:          cpuMillis,
 			MemoryBytes:        memoryBytes,
-			EphemeralDiskBytes: 16 * 1024 * 1024 * 1024,
+			EphemeralDiskBytes: ephemeralDiskBytes,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{
