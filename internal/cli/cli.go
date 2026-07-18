@@ -52,7 +52,7 @@ func Run(ctx context.Context, cfg Config) int {
 		_, _ = io.WriteString(cfg.Stdout, text)
 		return 0
 	}
-	globalBaseURL, args, err := parseGlobalFlags(cfg.BaseURL, cfg.Args)
+	globalBaseURL, explicitURL, args, err := parseGlobalFlags(cfg.BaseURL, cfg.Args)
 	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
 		return 2
@@ -61,7 +61,13 @@ func Run(ctx context.Context, cfg Config) int {
 		writeCLIError(cfg.Stderr, "COMMAND_REQUIRED", "command is required")
 		return 2
 	}
-	// Local commands (login/logout/context) manage credentials themselves.
+	// Local commands (login/logout/context) manage credentials themselves. An
+	// explicit --api-url reaches them distinctly from the env default: context
+	// set stores only an explicit URL, never the ambient environment.
+	flagURL := ""
+	if explicitURL {
+		flagURL = globalBaseURL
+	}
 	switch args[0] {
 	case "login":
 		loginCfg := cfg
@@ -70,7 +76,7 @@ func Run(ctx context.Context, cfg Config) int {
 	case "logout":
 		return runLogout(cfg, args[1:])
 	case "context":
-		return runContext(cfg, args[1:])
+		return runContext(cfg, flagURL, args[1:])
 	}
 
 	// API commands: env wins, then the config file's current context.
@@ -84,7 +90,7 @@ func Run(ctx context.Context, cfg Config) int {
 		writeCLIError(cfg.Stderr, "BASE_URL_REQUIRED", "MERCATOR_API_URL, --api-url, or a configured context is required")
 		return 2
 	}
-	req, err := buildRequest(ctx, baseURL, workspaceID, args)
+	req, err := buildRequest(ctx, baseURL, workspaceID, cfg.Stdin, args)
 	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
 		return 2
@@ -121,17 +127,60 @@ func Run(ctx context.Context, cfg Config) int {
 	return exit
 }
 
-func parseGlobalFlags(baseURL string, args []string) (string, []string, error) {
-	fs := flag.NewFlagSet("mercator", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	apiURL := fs.String("api-url", baseURL, "Mercator API URL")
-	if err := fs.Parse(args); err != nil {
-		return "", nil, err
+// parseGlobalFlags extracts the global --api-url flag from anywhere in the
+// argument list (before or after the command), leaving every other token in
+// order. It reports whether the flag was passed explicitly, so commands that
+// treat an explicit URL differently from the environment default (context set,
+// login) can tell them apart. Scanning stops at a bare "--": everything after
+// it belongs to the workload verbatim.
+func parseGlobalFlags(baseURL string, args []string) (apiURL string, explicit bool, rest []string, err error) {
+	apiURL = baseURL
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			rest = append(rest, args[i:]...)
+			return apiURL, explicit, rest, nil
+		case arg == "--api-url":
+			if i+1 >= len(args) {
+				return "", false, nil, fmt.Errorf("--api-url requires a value")
+			}
+			i++
+			apiURL = args[i]
+			explicit = true
+		case strings.HasPrefix(arg, "--api-url="):
+			apiURL = strings.TrimPrefix(arg, "--api-url=")
+			explicit = true
+		default:
+			rest = append(rest, arg)
+		}
 	}
-	return *apiURL, fs.Args(), nil
+	return apiURL, explicit, rest, nil
 }
 
-func buildRequest(ctx context.Context, baseURL, defaultWorkspaceID string, args []string) (*http.Request, error) {
+// parseFlagsAnywhere parses fs against args accepting flags in any position:
+// each positional token is set aside and parsing resumes after it, so
+// `run create busybox --workspace-id ws_1` and
+// `run create --workspace-id ws_1 busybox` are the same command. An unknown
+// flag-looking token errors loudly instead of silently becoming a positional;
+// literal arguments that begin with "-" belong after a bare "--".
+func parseFlagsAnywhere(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return positional, nil
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
+}
+
+func buildRequest(ctx context.Context, baseURL, defaultWorkspaceID string, stdin io.Reader, args []string) (*http.Request, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("%s subcommand is required", args[0])
 	}
@@ -140,6 +189,10 @@ func buildRequest(ctx context.Context, baseURL, defaultWorkspaceID string, args 
 		return buildRunRequest(ctx, baseURL, defaultWorkspaceID, args[1:])
 	case "sink":
 		return buildSinkRequest(ctx, baseURL, args[1:])
+	case "connection":
+		return buildConnectionRequest(ctx, baseURL, defaultWorkspaceID, stdin, args[1:])
+	case "workload":
+		return buildWorkloadRequest(ctx, baseURL, defaultWorkspaceID, args[1:])
 	default:
 		return nil, fmt.Errorf("unknown command %q", args[0])
 	}
@@ -160,14 +213,19 @@ func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, ar
 	idempotencyKey := fs.String("idempotency-key", "", "idempotency key (optional on create; derived from the run when omitted)")
 	workloadJSON := fs.String("workload-json", "", "workload revision json")
 	image := fs.String("image", "", "container image shorthand (alternative to --workload-json)")
-	if err := fs.Parse(flagArgs); err != nil {
+	positional, err := parseFlagsAnywhere(fs, flagArgs)
+	if err != nil {
 		return nil, err
+	}
+	// Only create takes positionals (the image shorthand and container args);
+	// anywhere else a stray token is a mistake worth a loud error.
+	if command != "create" && len(positional) > 0 {
+		return nil, fmt.Errorf("unexpected argument %q", positional[0])
 	}
 	switch command {
 	case "create":
 		// A bare positional first arg is the image shorthand:
 		//   run create busybox -- echo hi
-		positional := fs.Args()
 		if *image == "" && len(positional) > 0 {
 			*image = positional[0]
 			positional = positional[1:]
@@ -264,8 +322,12 @@ func buildSinkRequest(ctx context.Context, baseURL string, args []string) (*http
 	from := fs.Uint64("from", 0, "exclusive global position to replay after")
 	limit := fs.Int("limit", 100, "maximum events")
 	replayID := fs.String("replay-id", "", "replay id")
-	if err := fs.Parse(args[1:]); err != nil {
+	positional, err := parseFlagsAnywhere(fs, args[1:])
+	if err != nil {
 		return nil, err
+	}
+	if len(positional) > 0 {
+		return nil, fmt.Errorf("unexpected argument %q", positional[0])
 	}
 	if *sinkID == "" {
 		return nil, fmt.Errorf("%s requires --sink-id", command)

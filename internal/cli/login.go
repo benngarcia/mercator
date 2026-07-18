@@ -27,7 +27,6 @@ func runLogin(ctx context.Context, cfg Config, args []string) int {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	contextName := fs.String("context", "", "context to store the credential in (defaults to the current context, else \"default\")")
-	apiURL := fs.String("api-url", "", "API base URL (defaults to MERCATOR_API_URL or the context's api_url)")
 	if err := fs.Parse(args); err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
 		return 2
@@ -49,10 +48,10 @@ func runLogin(ctx context.Context, cfg Config, args []string) int {
 	if target == nil {
 		target = &ContextConfig{}
 	}
-	baseURL := *apiURL
-	if baseURL == "" {
-		baseURL = cfg.BaseURL
-	}
+	// --api-url is handled by the global flag extractor and arrives via
+	// cfg.BaseURL (explicit flag or MERCATOR_API_URL); the context is the
+	// fallback.
+	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = target.APIURL
 	}

@@ -9,8 +9,10 @@ import (
 )
 
 // runContext implements `mercator context <list|use|set|delete>`. Context
-// commands never touch the network; they manage the config file.
-func runContext(cfg Config, args []string) int {
+// commands never touch the network; they manage the config file. flagURL is
+// the explicitly passed --api-url ("" when the flag was absent — the ambient
+// MERCATOR_API_URL env is deliberately not stored into contexts).
+func runContext(cfg Config, flagURL string, args []string) int {
 	if len(args) == 0 {
 		writeCLIError(cfg.Stderr, "COMMAND_REQUIRED", "context requires a subcommand: list, use, set, delete")
 		return 2
@@ -26,7 +28,7 @@ func runContext(cfg Config, args []string) int {
 	case "use":
 		return contextUse(cfg, file, args[1:])
 	case "set":
-		return contextSet(cfg, file, args[1:])
+		return contextSet(cfg, file, flagURL, args[1:])
 	case "delete":
 		return contextDelete(cfg, file, args[1:])
 	default:
@@ -95,32 +97,28 @@ func contextUse(cfg Config, file FileConfig, args []string) int {
 	return 0
 }
 
-func contextSet(cfg Config, file FileConfig, args []string) int {
-	if len(args) == 0 || args[0] == "" || args[0][0] == '-' {
-		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", "usage: mercator context set <name> [--api-url URL] [--workspace-id ID] [--token TOKEN]")
-		return 2
-	}
-	name := args[0]
+func contextSet(cfg Config, file FileConfig, flagURL string, args []string) int {
 	fs := flag.NewFlagSet("context set", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	apiURL := fs.String("api-url", "", "API base URL for this context")
 	workspaceID := fs.String("workspace-id", "", "default workspace id for this context")
 	token := fs.String("token", "", "static API token for this context")
-	if err := fs.Parse(args[1:]); err != nil {
+	positional, err := parseFlagsAnywhere(fs, args)
+	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
 		return 2
 	}
-	if len(fs.Args()) > 0 {
-		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", fmt.Sprintf("unexpected argument %q", fs.Args()[0]))
+	if len(positional) != 1 || positional[0] == "" {
+		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", "usage: mercator context set <name> [--api-url URL] [--workspace-id ID] [--token TOKEN]")
 		return 2
 	}
+	name := positional[0]
 	current := file.Contexts[name]
 	if current == nil {
 		current = &ContextConfig{}
 		file.Contexts[name] = current
 	}
-	if *apiURL != "" {
-		current.APIURL = *apiURL
+	if flagURL != "" {
+		current.APIURL = flagURL
 	}
 	if *workspaceID != "" {
 		current.WorkspaceID = *workspaceID

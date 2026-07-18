@@ -119,6 +119,43 @@ go run ./cmd/mercator sink status --sink-id audit \
 Use `--workspace-id ID` on any run command to override
 `MERCATOR_WORKSPACE_ID`.
 
+## Flag Placement
+
+Flags work in any position: `mercator run create busybox --workspace-id ws_1`
+and `mercator run create --workspace-id ws_1 busybox` are the same command,
+and the global `--api-url` may appear before or after the command. An unknown
+flag-looking token is a loud error, never a silent container argument.
+Container arguments that begin with `-` belong after a bare `--`:
+
+```sh
+mercator run create "$IMAGE" -- sh -c 'echo hi'
+```
+
+## Connection Commands
+
+Connections register provider endpoints (Docker hosts, RunPod). These
+previously required hand-written `curl` with `Idempotency-Key` headers:
+
+```sh
+mercator connection create --connection-id conn_runpod --adapter-type runpod \
+  --credential-source mercator --secret-stdin < runpod-key.txt
+mercator connection authorize --connection-id conn_runpod
+mercator connection list
+```
+
+`--config key=value` is repeatable for adapter config. Prefer `--secret-stdin`
+over `--secret` so secrets stay out of shell history. The create idempotency
+key derives from the connection id when omitted.
+
+## Workload Commands
+
+```sh
+mercator workload create --workload-id wl_train --name "trainer"
+mercator workload revision create --workload-id wl_train --revision-json "$(cat revision.json)"
+mercator workload revision list --workload-id wl_train
+mercator workload revision get --workload-id wl_train --revision-id wrev_...
+```
+
 ## Exit Codes
 
 The CLI uses a small exit-code contract so scripts can distinguish local setup
