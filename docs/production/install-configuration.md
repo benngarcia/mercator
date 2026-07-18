@@ -57,6 +57,12 @@ server path.
 | `MERCATOR_DOCKER_CONNECTION_ID` | `conn_docker_loopback` | Synthetic Docker connection ID. |
 | `MERCATOR_DOCKER_ARCH` | Docker host architecture, or `amd64` if the host probe fails | Optional architecture override for an intentionally emulated Docker offer. |
 | `MERCATOR_API_URL` | none | CLI base URL; required for CLI mode unless `--api-url` is provided. |
+| `MERCATOR_OIDC_ISSUER` | none | OIDC issuer URL for human console login. Setting any `MERCATOR_OIDC_*` variable requires the full set; see [authentication-workspaces.md](authentication-workspaces.md). |
+| `MERCATOR_OIDC_CLIENT_ID` | none | OIDC client ID. |
+| `MERCATOR_OIDC_CLIENT_SECRET` | none | OIDC client secret. |
+| `MERCATOR_OIDC_ALLOWED_DOMAIN` | none | Comma-separated email domains admitted at login (and/or `MERCATOR_OIDC_ALLOWED_EMAILS`). |
+| `MERCATOR_OIDC_ALLOWED_EMAILS` | none | Comma-separated email addresses admitted at login. |
+| `MERCATOR_SESSION_KEY` | none | Session-cookie signing key (32+ bytes, hex or base64). Required with OIDC. |
 
 ## Health And Discovery
 

@@ -269,14 +269,14 @@ func TestCancelRunAfterLaunchRecordsCancelledOutcomeAndCleansUp(t *testing.T) {
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_cancel"); err != nil {
 		t.Fatalf("advance run: %v", err)
 	}
-	record, err := orch.CancelRun(ctx, "ws_1", "run_cancel")
+	record, err := orch.CancelRun(ctx, "ws_1", "run_cancel", nil)
 	if err != nil {
 		t.Fatalf("cancel run: %v", err)
 	}
 	if !record.Closed || record.Outcome != domain.RunOutcomeCancelled || record.Cleanup != domain.CleanupConfirmed {
 		t.Fatalf("unexpected cancelled record: %+v", record)
 	}
-	again, err := orch.CancelRun(ctx, "ws_1", "run_cancel")
+	again, err := orch.CancelRun(ctx, "ws_1", "run_cancel", nil)
 	if err != nil {
 		t.Fatalf("idempotent cancel: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestCancelRunResumesAfterCancelAcceptedEvents(t *testing.T) {
 		t.Fatalf("seed cancel events: %v", err)
 	}
 
-	record, err := orch.CancelRun(ctx, "ws_1", runID)
+	record, err := orch.CancelRun(ctx, "ws_1", runID, nil)
 	if err != nil {
 		t.Fatalf("resume cancel: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestCancelRunRecordsIntentBeforeAdapterFailure(t *testing.T) {
 	if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
 		t.Fatalf("advance run: %v", err)
 	}
-	if _, err := orch.CancelRun(ctx, "ws_1", runID); !errors.Is(err, adapter.ErrRetryableFailure) {
+	if _, err := orch.CancelRun(ctx, "ws_1", runID, nil); !errors.Is(err, adapter.ErrRetryableFailure) {
 		t.Fatalf("expected retryable cancel failure, got %v", err)
 	}
 	events, err := orch.GetRunEvents(ctx, "ws_1", runID)

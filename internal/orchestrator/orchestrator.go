@@ -573,10 +573,11 @@ func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string
 	return o.GetRun(ctx, workspaceID, runID)
 }
 
-// CancelRun records the cancel request as a fact, then advances the run: the
-// advance loop cancels at the adapter, records the cancelled outcome, and
-// cleans up. Cancelling an already-closed run returns the record unchanged.
-func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
+// CancelRun records the cancel request as a fact (attributed to the acting
+// principal), then advances the run: the advance loop cancels at the adapter,
+// records the cancelled outcome, and cleans up. Cancelling an already-closed
+// run returns the record unchanged.
+func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string, actor json.RawMessage) (domain.RunRecord, error) {
 	events, err := o.GetRunEvents(ctx, workspaceID, runID)
 	if err != nil {
 		return domain.RunRecord{}, err
@@ -596,7 +597,7 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string)
 		if state.launchIntent != nil {
 			data = map[string]any{"launch_key": state.launchIntent.LaunchKey}
 		}
-		if err := o.appendEvents(ctx, workspaceID, runID, streamVersion(events), "cancel:requested", []eventlog.NewEvent{
+		if err := o.appendEventsAs(ctx, actor, workspaceID, runID, streamVersion(events), "cancel:requested", []eventlog.NewEvent{
 			mustEvent(runID, "cancel_requested", EventCancelRequested, data, o.now()),
 		}); err != nil {
 			return domain.RunRecord{}, err
@@ -864,6 +865,14 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 }
 
 func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
+	return o.appendEventsAs(ctx, nil, workspaceID, runID, expectedVersion, commandKey, events)
+}
+
+// appendEventsAs is appendEvents with an explicit envelope actor, used by the
+// human-command entry points (cancel). Advance-loop appends stay actorless:
+// their events are system observations, and the issuing command is already
+// captured on the command fact itself.
+func (o *Orchestrator) appendEventsAs(ctx context.Context, actor json.RawMessage, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
 	events = scopeEventIDs(workspaceID, runID, events)
 	requestHash, err := domain.CanonicalHash(events)
 	if err != nil {
@@ -874,6 +883,7 @@ func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID stri
 		ExpectedStreamVersion: expectedVersion,
 		CommandKey:            runID + ":" + commandKey,
 		RequestHash:           requestHash,
+		Actor:                 actor,
 		CorrelationID:         runID,
 		CausationID:           commandKey,
 		Events:                events,
@@ -896,6 +906,23 @@ type runState struct {
 	closed              bool
 	exitCode            *int
 	lastObservedPhase   adapter.ExternalPhase
+	createdBy           string
+	cancelledBy         string
+}
+
+// actorSubject extracts the audited subject from an event envelope's actor
+// ({"subject": ...}). Empty when the event was recorded without a principal.
+func actorSubject(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var actor struct {
+		Subject string `json:"subject"`
+	}
+	if err := json.Unmarshal(raw, &actor); err != nil {
+		return ""
+	}
+	return actor.Subject
 }
 
 func reduceRun(events []eventlog.StoredEvent) (runState, error) {
@@ -912,6 +939,7 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 				return runState{}, err
 			}
 			state.requested = &data
+			state.createdBy = actorSubject(event.Actor)
 		case EventAttemptCreated:
 			var data attemptData
 			if err := json.Unmarshal(event.Data, &data); err != nil {
@@ -960,6 +988,7 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 			state.launchIndeterminate = true
 		case EventCancelRequested:
 			state.cancelRequested = true
+			state.cancelledBy = actorSubject(event.Actor)
 		case EventCancelAccepted:
 			state.cancelAccepted = true
 		case EventRunOutcomeRecorded:
@@ -994,6 +1023,8 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 		WorkloadRevisionID: state.requested.Workload.ID,
 		Phase:              "requested",
 		Cleanup:            domain.CleanupNotRequired,
+		CreatedBy:          state.createdBy,
+		CancelledBy:        state.cancelledBy,
 	}
 	if state.launchIntent != nil {
 		record.Phase = "launching"

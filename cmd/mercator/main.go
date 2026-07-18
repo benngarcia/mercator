@@ -34,6 +34,7 @@ import (
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
+	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
 )
 
@@ -83,6 +84,21 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	if deps.signer != nil && deps.signer.Enabled() {
 		serverOpts = append(serverOpts, httpapi.WithReportSigner(deps.signer))
+	}
+	// Human login: fail-closed OIDC config. Absent config means no login
+	// surface (token-only, exactly as before); partial config refuses to boot;
+	// full config must reach the issuer at startup.
+	webauthCfg, err := webauth.FromEnv(env)
+	if err != nil {
+		stdlog.Fatalf("configure OIDC login: %v", err)
+	}
+	if webauthCfg.Enabled() {
+		authenticator, err := webauth.New(ctx, webauthCfg)
+		if err != nil {
+			stdlog.Fatalf("initialize OIDC login: %v", err)
+		}
+		serverOpts = append(serverOpts, httpapi.WithWebAuth(authenticator))
+		stdlog.Printf("OIDC login enabled: issuer=%s", webauthCfg.Issuer)
 	}
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
