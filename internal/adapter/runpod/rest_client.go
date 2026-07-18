@@ -76,13 +76,21 @@ type podCreateInput struct {
 }
 
 type pod struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	Image         string  `json:"image"`
-	DesiredStatus string  `json:"desiredStatus"`
-	PublicIP      string  `json:"publicIp"`
-	Env           flexEnv `json:"env"`
-	CostPerHr     float64 `json:"costPerHr"`
+	ID            string      `json:"id"`
+	Name          string      `json:"name"`
+	Image         string      `json:"image"`
+	DesiredStatus string      `json:"desiredStatus"`
+	PublicIP      string      `json:"publicIp"`
+	Env           flexEnv     `json:"env"`
+	CostPerHr     float64     `json:"costPerHr"`
+	Machine       *podMachine `json:"machine"`
+}
+
+// podMachine carries the placement facts RunPod reports for the host backing a
+// pod. SecureCloud is a pointer so an omitted field (pod not yet placed on a
+// machine) stays distinguishable from an explicit community placement.
+type podMachine struct {
+	SecureCloud *bool `json:"secureCloud"`
 }
 
 func (c *restClient) do(ctx context.Context, method, path string, body any) (int, []byte, error) {
