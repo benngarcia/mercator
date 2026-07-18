@@ -63,6 +63,7 @@ type Server struct {
 	security     securityConfig
 	reportSigner *reporting.Signer
 	webauth      WebAuth
+	manifests    func() []adapter.Manifest
 }
 
 // WebAuth is the human-login surface the server mounts at /auth/ when OIDC is
@@ -123,6 +124,12 @@ func WithReportSigner(signer *reporting.Signer) Option {
 // subject, and unauthenticated console page loads are routed into /auth/login.
 func WithWebAuth(auth WebAuth) Option {
 	return func(s *Server) { s.webauth = auth }
+}
+
+// WithAdapterManifests wires the registered adapters' onboarding manifests
+// served by GET /v1/adapters (in practice broker.Factory.Manifests).
+func WithAdapterManifests(manifests func() []adapter.Manifest) Option {
+	return func(s *Server) { s.manifests = manifests }
 }
 
 type principalContextKey struct{}
@@ -215,6 +222,10 @@ type connectionResponse struct {
 
 type connectionListResponse struct {
 	Connections []connection.Record `json:"connections"`
+}
+
+type adapterListResponse struct {
+	Adapters []adapter.Manifest `json:"adapters"`
 }
 
 type offerListResponse struct {
@@ -429,6 +440,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/connections", s.createConnection)
 	s.mux.HandleFunc("POST /v1/connections/{conn_action}", s.connectionAction)
 	s.mux.HandleFunc("GET /v1/connections", s.listConnections)
+	s.mux.HandleFunc("GET /v1/adapters", s.listAdapters)
 	s.mux.HandleFunc("GET /v1/offers", s.listOffers)
 	s.mux.HandleFunc("GET /v1/sinks/{sink_id}", s.sinkStatus)
 	s.mux.HandleFunc("POST /v1/sinks/{sink_action}", s.sinkAction)
@@ -1087,6 +1099,22 @@ func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
 		records = []connection.Record{}
 	}
 	writeJSON(w, http.StatusOK, connectionListResponse{Connections: records})
+}
+
+// listAdapters serves the registered adapters' onboarding manifests. The list
+// is static per process (registration happens once at boot) and carries no
+// workspace state, so no workspace scoping applies — but it sits behind the
+// same /v1 auth gate as everything else.
+func (s *Server) listAdapters(w http.ResponseWriter, _ *http.Request) {
+	if s.manifests == nil {
+		writeJSON(w, http.StatusOK, adapterListResponse{Adapters: []adapter.Manifest{}})
+		return
+	}
+	manifests := s.manifests()
+	if manifests == nil {
+		manifests = []adapter.Manifest{}
+	}
+	writeJSON(w, http.StatusOK, adapterListResponse{Adapters: manifests})
 }
 
 func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
