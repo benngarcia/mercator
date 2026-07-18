@@ -1,8 +1,8 @@
 # Vast.ai Provider Runbook
 
-<!-- TODO: once the adapter-manifest contract (connections branch) merges, move
-the setup steps and the secure-tier explanation below into the vast adapter
-manifest so the console wizard renders them. -->
+<!-- Deferred (tracked in issue #60): once the adapter-manifest contract
+merges, move the setup steps and the secure-tier explanation below into the
+vast adapter manifest so the console wizard renders them. -->
 
 Mercator's `vast` adapter rents container instances on Vast.ai, a marketplace
 of GPU hosts, observes them, and destroys them on cleanup. Vast's API never
