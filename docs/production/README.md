@@ -5,8 +5,8 @@ unqualified GA operation. Treat this directory as the operator entry point for
 running, testing, and auditing the current single-process OCI run broker.
 
 Mercator runs as one Go process with an embedded SQLite event log, REST/OpenAPI
-API, JSON-first CLI, embedded UI, a Docker host adapter (with RunPod added via
-connections), env-based workload
+API, JSON-first CLI, embedded UI, a Docker host adapter (with RunPod and Modal
+added via connections), env-based workload
 configuration and sink cursor/replay support. SQLite events are the source
 of truth; derived read models and sink cursors can be
 rebuilt from the event log.

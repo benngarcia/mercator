@@ -19,6 +19,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
+	modaladapter "github.com/benngarcia/mercator/internal/adapter/modal"
 	runpodadapter "github.com/benngarcia/mercator/internal/adapter/runpod"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/cli"
@@ -299,6 +300,10 @@ func buildServerDeps(values map[string]string) serverDeps {
 
 	factory.Register("runpod", func(config map[string]string, secret string) (adapter.Adapter, error) {
 		return runpodadapter.New(secret, config)
+	})
+
+	factory.Register("modal", func(config map[string]string, secret string) (adapter.Adapter, error) {
+		return modaladapter.New(secret, config)
 	})
 
 	br := broker.NewBroker(svc, factory, resolver)

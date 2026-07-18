@@ -84,7 +84,7 @@ function fieldFromPath(path: string): KnownField | null {
 
 /**
  * AddConnectionDialog creates a new adapter connection. Fields: adapter type
- * (docker | runpod), optional connection id, optional config key/value rows,
+ * (docker | modal | runpod), optional connection id, optional config key/value rows,
  * and a credential (env var ref or mercator-stored secret). Submits via
  * useCreateConnection and surfaces ApiError.details inline.
  */
@@ -261,6 +261,7 @@ export function AddConnectionDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="docker">docker</SelectItem>
+                <SelectItem value="modal">modal</SelectItem>
                 <SelectItem value="runpod">runpod</SelectItem>
               </SelectContent>
             </Select>

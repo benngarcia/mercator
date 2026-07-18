@@ -213,6 +213,7 @@ need to prove the provisionable GPU-provider flow.
 | --- | --- | --- | --- |
 | Docker adapter | Broker lifecycle, placement, public events, cleanup, CLI, HTTP interface, and console with real local container launch, observation, and labels on one host. | Go 1.25+, a running Docker daemon, a digest-pinned Linux image, `jq`, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
 | RunPod adapter | Provisionable GPU-provider flow and terminate cleanup. | RunPod API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [RunPod runbook](docs/production/runpod.md) |
+| Modal adapter | Serverless sandbox flow with provider-reported exit codes and terminate cleanup. | Modal API token pair, a real registry-pullable image, and an explicit workload command. | [Modal runbook](docs/production/modal.md) |
 
 If the broker lifecycle passes but a specific provider does not, treat that as
 adapter or environment evidence rather than broker evidence. Known gaps are
@@ -248,6 +249,7 @@ go build ./cmd/mercator
 | Security boundaries | [docs/production/security-model.md](docs/production/security-model.md) |
 | Known limitations | [docs/production/known-limitations.md](docs/production/known-limitations.md) |
 | RunPod workload examples | [examples/runpod/README.md](examples/runpod/README.md) |
+| Modal provider runbook | [docs/production/modal.md](docs/production/modal.md) |
 
 Project process — governance, compatibility, threat model, release process, and
 launch prep — lives under [docs/project/](docs/project) and
