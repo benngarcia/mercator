@@ -12,19 +12,22 @@ import (
 
 const defaultGraphQLBaseURL = "https://api.runpod.io/graphql"
 
-// gpuTypesQuery requests the GPU catalog with pricing and availability for a
-// concrete allocation size.
+// gpuTypesQuery requests the GPU catalog with pricing and per-cloud
+// availability for a concrete allocation size. Stock is a per-cloud fact:
+// `lowestPrice(input: {gpuCount, secureCloud})` is queried once per cloud via
+// aliases (GpuLowestPriceInput.secureCloud selects the cloud).
 // RunPod's `lowestPrice` field REQUIRES an input argument — querying it bare
 // returns an INTERNAL_SERVER_ERROR per gpuType.
-const gpuTypesQuery = `query GPUTypes($gpuCount: Int!) { gpuTypes { id displayName memoryInGb communityPrice securePrice lowestPrice(input: {gpuCount: $gpuCount}) { stockStatus } } }`
+const gpuTypesQuery = `query GPUTypes($gpuCount: Int!) { gpuTypes { id displayName memoryInGb communityPrice securePrice secureStock: lowestPrice(input: {gpuCount: $gpuCount, secureCloud: true}) { stockStatus } communityStock: lowestPrice(input: {gpuCount: $gpuCount, secureCloud: false}) { stockStatus } } }`
 
 type gpuType struct {
-	ID             string
-	DisplayName    string
-	MemoryInGb     int
-	CommunityPrice *float64
-	SecurePrice    *float64
-	StockStatus    string
+	ID                   string
+	DisplayName          string
+	MemoryInGb           int
+	CommunityPrice       *float64
+	SecurePrice          *float64
+	SecureStockStatus    string
+	CommunityStockStatus string
 }
 
 type graphqlClient struct {
@@ -80,9 +83,12 @@ func (c *graphqlClient) gpuTypes(ctx context.Context, gpuCount int) ([]gpuType, 
 				MemoryInGb     int      `json:"memoryInGb"`
 				CommunityPrice *float64 `json:"communityPrice"`
 				SecurePrice    *float64 `json:"securePrice"`
-				LowestPrice    struct {
+				SecureStock    struct {
 					StockStatus string `json:"stockStatus"`
-				} `json:"lowestPrice"`
+				} `json:"secureStock"`
+				CommunityStock struct {
+					StockStatus string `json:"stockStatus"`
+				} `json:"communityStock"`
 			} `json:"gpuTypes"`
 		} `json:"data"`
 		Errors []struct {
@@ -102,12 +108,13 @@ func (c *graphqlClient) gpuTypes(ctx context.Context, gpuCount int) ([]gpuType, 
 	gpus := make([]gpuType, 0, len(out.Data.GPUTypes))
 	for _, g := range out.Data.GPUTypes {
 		gpus = append(gpus, gpuType{
-			ID:             g.ID,
-			DisplayName:    g.DisplayName,
-			MemoryInGb:     g.MemoryInGb,
-			CommunityPrice: g.CommunityPrice,
-			SecurePrice:    g.SecurePrice,
-			StockStatus:    g.LowestPrice.StockStatus,
+			ID:                   g.ID,
+			DisplayName:          g.DisplayName,
+			MemoryInGb:           g.MemoryInGb,
+			CommunityPrice:       g.CommunityPrice,
+			SecurePrice:          g.SecurePrice,
+			SecureStockStatus:    g.SecureStock.StockStatus,
+			CommunityStockStatus: g.CommunityStock.StockStatus,
 		})
 	}
 	return gpus, nil

@@ -93,6 +93,8 @@ function RunDetailPage() {
               mono
             />
             <StatBlock label="Workspace" value={data.workspace_id} mono />
+            <StatBlock label="Created by" value={data.created_by ?? "—"} />
+            <StatBlock label="Cancelled by" value={data.cancelled_by ?? "—"} />
           </div>
         </CardContent>
       </Card>

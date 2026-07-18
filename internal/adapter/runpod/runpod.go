@@ -2,6 +2,7 @@ package runpod
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,12 +15,12 @@ import (
 var defaultAllowlist = []string{"NVIDIA RTX A2000", "NVIDIA RTX A4000"}
 
 type Adapter struct {
-	rest      *restClient
-	graphql   *graphqlClient
-	allowlist []string
-	cloudType string
-	diskGB    int
-	now       func() time.Time
+	rest           *restClient
+	graphql        *graphqlClient
+	allowlist      []string
+	allowCommunity bool
+	diskGB         int
+	now            func() time.Time
 }
 
 func New(secret string, config map[string]string) (*Adapter, error) {
@@ -33,9 +34,16 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 			}
 		}
 	}
-	cloud := config["cloud_type"]
-	if cloud == "" {
-		cloud = "COMMUNITY"
+	if _, ok := config["cloud_type"]; ok {
+		return nil, fmt.Errorf("runpod: config key \"cloud_type\" was removed; the adapter is secure-cloud only unless \"allow_community_cloud\" is \"true\"")
+	}
+	allowCommunity := false
+	if raw := strings.TrimSpace(config["allow_community_cloud"]); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("runpod: allow_community_cloud must be \"true\" or \"false\", got %q", raw)
+		}
+		allowCommunity = v
 	}
 	disk := 20
 	if d := strings.TrimSpace(config["container_disk_gb"]); d != "" {
@@ -44,12 +52,12 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 		}
 	}
 	return &Adapter{
-		rest:      newRESTClient(secret, config["rest_base_url"], http.DefaultClient),
-		graphql:   newGraphQLClient(secret, config["graphql_base_url"], http.DefaultClient),
-		allowlist: allow,
-		cloudType: cloud,
-		diskGB:    disk,
-		now:       time.Now,
+		rest:           newRESTClient(secret, config["rest_base_url"], http.DefaultClient),
+		graphql:        newGraphQLClient(secret, config["graphql_base_url"], http.DefaultClient),
+		allowlist:      allow,
+		allowCommunity: allowCommunity,
+		diskGB:         disk,
+		now:            time.Now,
 	}, nil
 }
 
@@ -62,18 +70,22 @@ func (a *Adapter) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]d
 		return nil, err
 	}
 	diskGB := requestedDiskGB(req.Resources, a.diskGB)
-	return buildOffers(gpus, a.allowlist, gpuCount, diskGB, a.now().UTC()), nil
+	return buildOffers(gpus, a.allowlist, gpuCount, diskGB, a.allowCommunity, a.now().UTC()), nil
 }
 
 func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	gpuID, cloud, err := a.launchCloud(req.SelectedOfferNativeRef)
+	if err != nil {
+		return adapter.LaunchReceipt{}, err
+	}
 	name := podName(req.LaunchKey)
 	in := podCreateInput{
 		Name:            name,
 		ImageName:       req.Image,
-		GPUTypeIDs:      a.gpuTypeIDs(req.SelectedOfferNativeRef),
+		GPUTypeIDs:      a.gpuTypeIDs(gpuID),
 		GPUCount:        requestedGPUCount(req.Resources),
 		ContainerDiskGB: requestedDiskGB(req.Resources, a.diskGB),
-		CloudType:       a.cloudType,
+		CloudType:       cloud,
 		Env:             a.launchEnv(req),
 		DockerStartCmd:  append([]string(nil), req.Args...),
 	}
@@ -83,6 +95,11 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 	p, err := a.rest.createPod(ctx, in)
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
+	}
+	if cloud == cloudSecure {
+		if err := a.assertSecurePlacement(ctx, p); err != nil {
+			return adapter.LaunchReceipt{}, err
+		}
 	}
 	return adapter.LaunchReceipt{
 		ExternalID:     p.ID,
@@ -173,6 +190,38 @@ func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]
 // --- helpers ---
 
 func podName(launchKey string) string { return "mercator-" + launchKey }
+
+// launchCloud resolves the selected offer to the GPU type and cloud the pod
+// must be created on, and enforces the connection's cloud posture: community
+// capacity is refused unless allow_community_cloud opted it in. Enforcing here
+// (not just in offer filtering) means a stale offer or misconfigured caller
+// cannot leak a workload onto community hardware.
+func (a *Adapter) launchCloud(nativeRef string) (gpuID, cloud string, err error) {
+	gpuID, cloud = splitNativeRef(nativeRef)
+	if cloud != cloudSecure && cloud != cloudCommunity {
+		return "", "", fmt.Errorf("runpod: offer %q names unknown cloud %q (want %s or %s)", nativeRef, cloud, cloudSecure, cloudCommunity)
+	}
+	if cloud == cloudCommunity && !a.allowCommunity {
+		return "", "", fmt.Errorf("runpod: refusing to launch on community cloud: offer %q targets community capacity but this connection is secure-cloud only (set connection config allow_community_cloud=true to opt in)", nativeRef)
+	}
+	return gpuID, cloud, nil
+}
+
+// assertSecurePlacement guards against the provider scheduling a pod onto
+// community hardware despite the explicit SECURE request. Only an explicit
+// machine.secureCloud=false counts as a violation — the machine facts may be
+// absent while the pod awaits placement, and a false positive here would
+// destroy a legitimate secure pod. On violation the pod is destroyed before
+// erroring so the workload never runs on community hardware.
+func (a *Adapter) assertSecurePlacement(ctx context.Context, p pod) error {
+	if p.Machine == nil || p.Machine.SecureCloud == nil || *p.Machine.SecureCloud {
+		return nil
+	}
+	if err := a.rest.deletePod(ctx, p.ID); err != nil {
+		return fmt.Errorf("runpod: pod %s landed on community cloud despite SECURE request and could not be destroyed (delete it manually): %w", p.ID, err)
+	}
+	return fmt.Errorf("runpod: pod %s landed on community cloud despite SECURE request; destroyed it and refusing the launch", p.ID)
+}
 
 func (a *Adapter) gpuTypeIDs(selected string) []string {
 	ids := []string{}

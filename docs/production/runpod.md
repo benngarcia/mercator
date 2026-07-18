@@ -1,5 +1,9 @@
 # RunPod Provider Runbook
 
+<!-- Deferred (tracked in issue #60): once the adapter-manifest contract
+merges, move the setup steps and the Secure vs Community explanation below
+into the runpod adapter manifest so the console wizard renders them. -->
+
 Mercator's `runpod` adapter launches container **Pods** on RunPod, observes
 them, and terminates them on cleanup. RunPod's API never exposes a container
 exit code, so the **workload self-reports its exit code** (see
@@ -34,8 +38,32 @@ outcome.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `gpu_types` | `NVIDIA RTX A2000,NVIDIA RTX A4000` | Comma-separated allow-list of GPU type ids advertised as offers. |
-| `cloud_type` | `COMMUNITY` | `COMMUNITY` or `SECURE`. |
+| `allow_community_cloud` | `false` | Opt community-cloud capacity in. See below. |
 | `container_disk_gb` | `20` | Pod container disk size. |
+
+## Secure Cloud vs Community Cloud
+
+RunPod sells two kinds of capacity. **Secure Cloud** runs in vetted partner
+datacenters (RunPod's trusted tier); **Community Cloud** runs on hardware
+operated by individual peer hosts, so your image, environment (including any
+`MERCATOR_*` tokens), and data are handled by machines RunPod does not
+operate. Community capacity is often cheaper; Secure is the safe default.
+
+Mercator's adapter is **secure-cloud only by default** and enforces it in both
+directions:
+
+- **Offers**: each offer names its cloud (`<gpu>|SECURE` / `<gpu>|COMMUNITY`)
+  and carries that cloud's own price and stock. Without the opt-in, only
+  secure-cloud offers are advertised.
+- **Launch**: pod creation always requests the offer's cloud explicitly
+  (`cloudType`), refuses any community-cloud offer — even a stale one that
+  predates a config change — unless `allow_community_cloud=true`, and if
+  RunPod reports the created pod's machine as explicitly non-secure despite a
+  SECURE request, the pod is destroyed and the launch fails loudly.
+
+Set connection config `allow_community_cloud` to `true` to additionally
+advertise community-cloud offers and permit launches on them. The removed
+`cloud_type` key is rejected at connection build time.
 
 ## How runs land on RunPod
 
@@ -61,13 +89,13 @@ NVIDIA accelerator (feasible) and is selected.
 
 ### Cost attribution
 
-When a run is launched, the adapter sends `gpuTypeIds = [selected offer's GPU] + (the rest of the allow-list as fallbacks)` to improve community-cloud scheduling odds. **RunPod may provision any GPU in that list**, so the realized GPU — and therefore the actual hourly cost — may differ from the offer the scheduler quoted and costed the run against. Operators who need realized cost to exactly match the quoted offer should set the connection config `gpu_types` to a single GPU id, which removes all fallbacks.
+When a run is launched, the adapter sends `gpuTypeIds = [selected offer's GPU] + (the rest of the allow-list as fallbacks)` to improve scheduling odds. **RunPod may provision any GPU in that list**, so the realized GPU — and therefore the actual hourly cost — may differ from the offer the scheduler quoted and costed the run against. Operators who need realized cost to exactly match the quoted offer should set the connection config `gpu_types` to a single GPU id, which removes all fallbacks.
 
 ## Live verification
 
 See `examples/runpod/` for provider validation examples. Both require the GPU
-accelerator so they land on RunPod, use the cheapest community GPU, and
-auto-terminate on their exit report. They also require a public Mercator report
+accelerator so they land on RunPod, use the cheapest allow-listed secure-cloud
+GPU, and auto-terminate on their exit report. They also require a public Mercator report
 URL and real registry-pullable image digests; the server rejects mutable tags
 at create time, and RunPod can only pull digests that actually exist in a
 registry.

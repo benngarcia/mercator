@@ -31,6 +31,11 @@ type Record struct {
 	Authorized          bool                  `json:"authorized"`
 	Config              map[string]string     `json:"config,omitempty"`
 	Credential          credential.Credential `json:"credential,omitempty"`
+	// CreatedBy and AuthorizedBy are the audited principals of the create and
+	// authorize commands, derived from the event envelopes at read time (never
+	// part of the stored event data or the idempotency hash).
+	CreatedBy    string `json:"created_by,omitempty"`
+	AuthorizedBy string `json:"authorized_by,omitempty"`
 }
 
 type CreateRequest struct {
@@ -40,12 +45,16 @@ type CreateRequest struct {
 	AuthorizationSchema map[string]string
 	Config              map[string]string
 	Credential          credential.Credential
+	// Actor is the event-envelope principal recorded on the created fact.
+	Actor json.RawMessage
 }
 
 type UpdateAuthorizationRequest struct {
 	WorkspaceID  string
 	ConnectionID string
 	Authorized   bool
+	// Actor is the event-envelope principal recorded on the authorization fact.
+	Actor json.RawMessage
 }
 
 func New(log eventlog.EventLog) *Service {
@@ -77,6 +86,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 		ExpectedStreamVersion: 0,
 		CommandKey:            "connection:create:" + req.ConnectionID,
 		RequestHash:           hash,
+		Actor:                 req.Actor,
 		CorrelationID:         req.ConnectionID,
 		CausationID:           "connection:create:" + req.ConnectionID,
 		Events: []eventlog.NewEvent{{
@@ -106,7 +116,15 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 	if err != nil {
 		return err
 	}
-	hash, err := domain.CanonicalHash(req)
+	// The idempotency hash covers WHAT was commanded, not WHO commanded it: the
+	// same authorization from a different principal (e.g. console after boot
+	// bootstrap) must replay, not conflict. The anonymous struct keeps the hash
+	// byte-identical to logs written before the Actor field existed.
+	hash, err := domain.CanonicalHash(struct {
+		WorkspaceID  string
+		ConnectionID string
+		Authorized   bool
+	}{req.WorkspaceID, req.ConnectionID, req.Authorized})
 	if err != nil {
 		return err
 	}
@@ -115,6 +133,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 		ExpectedStreamVersion: uint64(len(events)),
 		CommandKey:            fmt.Sprintf("connection:authorization:%s:%t", req.ConnectionID, req.Authorized),
 		RequestHash:           hash,
+		Actor:                 req.Actor,
 		CorrelationID:         req.ConnectionID,
 		CausationID:           "connection:authorization:" + req.ConnectionID,
 		Events: []eventlog.NewEvent{{
@@ -162,6 +181,7 @@ func reduceConnection(events []eventlog.StoredEvent) (Record, error) {
 			if err := json.Unmarshal(event.Data, &record); err != nil {
 				return Record{}, err
 			}
+			record.CreatedBy = actorSubject(event.Actor)
 		case EventConnectionAuthorizationUpdated:
 			var data struct {
 				Authorized bool `json:"authorized"`
@@ -170,12 +190,32 @@ func reduceConnection(events []eventlog.StoredEvent) (Record, error) {
 				return Record{}, err
 			}
 			record.Authorized = data.Authorized
+			if data.Authorized {
+				record.AuthorizedBy = actorSubject(event.Actor)
+			} else {
+				record.AuthorizedBy = ""
+			}
 		}
 	}
 	if record.ID == "" {
 		return Record{}, fmt.Errorf("connection: not found")
 	}
 	return record, nil
+}
+
+// actorSubject extracts the audited subject from an event envelope's actor
+// ({"subject": ...}). Empty when the event was recorded without a principal.
+func actorSubject(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var actor struct {
+		Subject string `json:"subject"`
+	}
+	if err := json.Unmarshal(raw, &actor); err != nil {
+		return ""
+	}
+	return actor.Subject
 }
 
 func connectionStream(workspaceID, connectionID string) eventlog.StreamKey {

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -61,6 +62,17 @@ type Server struct {
 	verifier     connectionVerifier
 	security     securityConfig
 	reportSigner *reporting.Signer
+	webauth      WebAuth
+}
+
+// WebAuth is the human-login surface the server mounts at /auth/ when OIDC is
+// configured: it serves the login/callback/logout/session endpoints, answers
+// which signed-in human a request's session cookie belongs to, and verifies
+// the bearer tokens `mercator login` mints for CLI users.
+type WebAuth interface {
+	http.Handler
+	SessionEmail(*http.Request) (string, bool)
+	VerifyCLIToken(token string) (string, bool)
 }
 
 // connectionVerifier is the narrow capability the server needs from the Broker
@@ -106,6 +118,13 @@ func WithReportSigner(signer *reporting.Signer) Option {
 	return func(s *Server) { s.reportSigner = signer }
 }
 
+// WithWebAuth mounts the OIDC human-login surface. Session-cookie requests are
+// then accepted by the API gate with the signed-in email as the principal
+// subject, and unauthenticated console page loads are routed into /auth/login.
+func WithWebAuth(auth WebAuth) Option {
+	return func(s *Server) { s.webauth = auth }
+}
+
 type principalContextKey struct{}
 
 type principal struct {
@@ -116,6 +135,21 @@ type principal struct {
 func (p principal) allows(workspaceID string) bool {
 	return p.Subject != "" &&
 		(slices.Contains(p.WorkspaceIDs, "*") || slices.Contains(p.WorkspaceIDs, workspaceID))
+}
+
+// requestActor marshals the request's principal into the event-envelope actor
+// recorded on human-command facts: {"subject": <email or "bearer">}. Nil when
+// auth is disabled entirely (no principal to record).
+func requestActor(r *http.Request) json.RawMessage {
+	actor, ok := r.Context().Value(principalContextKey{}).(principal)
+	if !ok || actor.Subject == "" {
+		return nil
+	}
+	encoded, err := json.Marshal(map[string]string{"subject": actor.Subject})
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 type createRunBody struct {
@@ -277,17 +311,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		strings.HasPrefix(r.URL.Path, "/v1/") &&
 		!isRunReportPath(r)
 	if operatorAuthRequired {
-		authHeader := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authHeader, "Bearer ") {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token is required.")
+		actor, ok := s.authenticate(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token or signed-in session is required.")
 			return
 		}
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.security.Token)) != 1 {
-			writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Bearer token is required.")
-			return
-		}
-		actor := principal{Subject: "bearer", WorkspaceIDs: slices.Clone(s.security.Workspaces)}
 		r = r.WithContext(context.WithValue(r.Context(), principalContextKey{}, actor))
 	}
 	// Bound every request body so no caller (operator or run-token holder) can
@@ -296,6 +324,37 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// authenticate resolves the request's principal: the machine bearer token, a
+// CLI token minted by `mercator login`, or (when webauth is mounted) a
+// signed-in human session. A presented bearer credential must verify as one of
+// the two token kinds — a wrong token fails outright rather than silently
+// downgrading to cookie auth. Every principal kind carries the same configured
+// workspace grants; they differ only in their audited subject.
+func (s *Server) authenticate(r *http.Request) (principal, bool) {
+	authHeader := r.Header.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if token == "" {
+			return principal{}, false
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.security.Token)) == 1 {
+			return principal{Subject: "bearer", WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+		}
+		if s.webauth != nil {
+			if email, ok := s.webauth.VerifyCLIToken(token); ok {
+				return principal{Subject: email, WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+			}
+		}
+		return principal{}, false
+	}
+	if s.webauth != nil {
+		if email, ok := s.webauth.SessionEmail(r); ok {
+			return principal{Subject: email, WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+		}
+	}
+	return principal{}, false
 }
 
 // maxRequestBodyBytes bounds request bodies server-wide. The largest legitimate
@@ -342,6 +401,20 @@ func (s *Server) routes() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(OpenAPIJSON))
 	})
+	// Human login surface. When OIDC is not configured, /auth/session still
+	// answers (enabled: false) so the console can pick the token fallback
+	// without probing errors; the other /auth endpoints do not exist.
+	if s.webauth != nil {
+		// Per-method registrations: a method-less "/auth/" subtree would
+		// conflict with the SPA fallback's "GET /" under ServeMux precedence.
+		s.mux.Handle("GET /auth/", s.webauth)
+		s.mux.Handle("POST /auth/", s.webauth)
+	} else {
+		s.mux.HandleFunc("GET /auth/session", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		})
+	}
 	s.mux.HandleFunc("POST /v1/runs", s.createRun)
 	s.mux.HandleFunc("GET /v1/runs", s.listRuns)
 	s.mux.HandleFunc("GET /v1/runs/{run_id}/events", s.runEvents)
@@ -374,6 +447,14 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	if isAPIPath(r.URL.Path) {
 		http.NotFound(w, r)
 		return
+	}
+	// With OIDC configured, the console is for signed-in humans: route
+	// unauthenticated page loads into the login flow, preserving the deep link.
+	if s.webauth != nil {
+		if _, ok := s.webauth.SessionEmail(r); !ok {
+			http.Redirect(w, r, "/auth/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			return
+		}
 	}
 	file, err := web.Static().Open("index.html")
 	if err != nil {
@@ -500,6 +581,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		RunID:          runID,
 		GeneratedRunID: generated,
 		IdempotencyKey: idempotencyKey,
+		Actor:          requestActor(r),
 		Workload:       workloadRevision,
 		ResolveImage:   s.resolveImageFn(),
 	})
@@ -672,7 +754,7 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, runID string)
 	if !ok {
 		return
 	}
-	record, err := s.orch.CancelRun(r.Context(), workspaceID, runID)
+	record, err := s.orch.CancelRun(r.Context(), workspaceID, runID, requestActor(r))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "CANCEL_RUN_FAILED", "Run cancellation failed.")
 		return
@@ -931,6 +1013,7 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		AdapterType:  body.AdapterType,
 		Config:       body.Config,
 		Credential:   cred,
+		Actor:        requestActor(r),
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
@@ -973,6 +1056,7 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id 
 		WorkspaceID:  workspaceID,
 		ConnectionID: id,
 		Authorized:   true,
+		Actor:        requestActor(r),
 	}); err != nil {
 		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_AUTHORIZE_FAILED", err)
 		return

@@ -145,6 +145,12 @@ func (a offeringAdapter) probe() HostInfo {
 	return info
 }
 
+// ephemeralDiskUnconstrained (1 TiB) is the docker offer's ephemeral-disk
+// inventory: an explicit "not a quota" value large enough that no sane
+// workload request is rejected at placement on a resource this adapter
+// does not actually partition.
+const ephemeralDiskUnconstrained = int64(1) << 40
+
 // StandingOffer builds the offer Mercator advertises for a Docker endpoint.
 // Capacity (arch/cpu/mem/disk) comes from the probed endpoint when available,
 // falling back to conservative defaults when the probe was empty (unreachable
@@ -189,16 +195,23 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 		ExpiresAt:    now.Add(time.Hour),
 		Platform:     domain.Platform{OS: "linux", Architecture: arch},
 		Resources: domain.ResourceInventory{
-			CPUMillis:          cpuMillis,
-			MemoryBytes:        memoryBytes,
-			EphemeralDiskBytes: ephemeralDiskBytes,
-			Accelerators:       accelerators,
+			CPUMillis:   cpuMillis,
+			MemoryBytes: memoryBytes,
+			// Docker containers share the daemon's filesystem: the adapter
+			// cannot reserve or partition disk per container, and `docker
+			// info` does not report free space, so the inventory is
+			// deliberately non-constraining. The previous fabricated 16 GiB
+			// quota rejected real workloads at placement
+			// (RESOURCE_INSUFFICIENT) that the daemon could serve fine;
+			// genuine disk exhaustion surfaces at pull/run time instead.
+			EphemeralDiskBytes: ephemeralDiskUnconstrained,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{
-				MaxContainers:       8,
-				SupportsDigestRefs:  true,
-				MaxEnvironmentBytes: 32768,
+				MaxContainers:              8,
+				SupportsDigestRefs:         true,
+				SupportsEntrypointOverride: true,
+				MaxEnvironmentBytes:        32768,
 			},
 			Lifecycle: domain.LifecycleCapabilities{
 				IdempotentLaunch: "launch_key",

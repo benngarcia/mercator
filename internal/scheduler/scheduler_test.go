@@ -72,6 +72,30 @@ func TestSchedulerReportsHardRejections(t *testing.T) {
 	assertCandidateRejected(t, decision, "off_unknown_network", "UNKNOWN_FACT", "network.download")
 }
 
+func TestSchedulerRejectsEntrypointOverrideOnIncapableOffer(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	offer := schedulerOffer("off_no_entrypoint", now, 0.01, 1)
+	offer.Capabilities.Container.SupportsEntrypointOverride = false
+	workload := schedulerRevision()
+	entrypoint := []string{"/bin/worker"}
+	workload.Spec.Containers[0].Entrypoint = &entrypoint
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{offer},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != "" {
+		t.Fatalf("an entrypoint-overriding workload must not land on an offer that cannot override entrypoints: %+v", decision)
+	}
+	assertCandidateRejected(t, decision, "off_no_entrypoint", "CAPABILITY_MISMATCH", "container.supports_entrypoint_override")
+}
+
 func TestSchedulerRejectsConservativeFactAndResourceGaps(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	rev := schedulerRevision()

@@ -2,6 +2,8 @@ import { AlertTriangle, KeyRound, RotateCw, SearchX } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { ApiError } from "@/lib/api/client";
+import { useAuthSession } from "@/lib/api/queries";
+import { signInUrl } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ServiceDisabled } from "./ServiceDisabled";
@@ -21,9 +23,19 @@ interface Presentation {
   message: string;
 }
 
-function present(error: ErrorStateProps["error"]): Presentation {
+function present(
+  error: ErrorStateProps["error"],
+  oidcEnabled: boolean,
+): Presentation {
   if (error instanceof ApiError) {
     if (error.unauthorized) {
+      if (oidcEnabled) {
+        return {
+          icon: KeyRound,
+          title: "Session expired",
+          message: "Sign in again to keep using the console.",
+        };
+      }
       return {
         icon: KeyRound,
         title: "Authentication required",
@@ -63,6 +75,7 @@ export function ErrorState({
   feature,
   className,
 }: ErrorStateProps) {
+  const auth = useAuthSession();
   if (error instanceof ApiError && error.serviceDisabled) {
     return (
       <ServiceDisabled
@@ -72,7 +85,10 @@ export function ErrorState({
     );
   }
 
-  const { icon: Icon, title, message } = present(error);
+  const oidcEnabled = Boolean(auth.data?.enabled);
+  const sessionExpired =
+    error instanceof ApiError && error.unauthorized && oidcEnabled;
+  const { icon: Icon, title, message } = present(error, oidcEnabled);
   const details = error instanceof ApiError ? error.details : undefined;
 
   return (
@@ -95,7 +111,16 @@ export function ErrorState({
       {details && details.length > 0 ? (
         <ViolationDetails violations={details} className="w-full max-w-md" />
       ) : null}
-      {onRetry ? (
+      {sessionExpired ? (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.location.assign(signInUrl())}
+        >
+          <KeyRound />
+          Sign in
+        </Button>
+      ) : onRetry ? (
         <Button variant="outline" size="sm" onClick={onRetry}>
           <RotateCw />
           Retry

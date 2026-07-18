@@ -31,9 +31,19 @@ bun dev                        # serves :3000 with HMR, proxies API → 127.0.0.
 
 Override the API target with `MERCATOR_API` and the port with `PORT`.
 
-The token (bearer) lives in `localStorage`; the workspace id is a URL search
-param defaulting from `localStorage`. Both are injected centrally by
-`@/lib/api/client` — never call `fetch()` directly from a component.
+Auth has two modes, discovered at runtime from `GET /auth/session`:
+
+- **OIDC configured on the server**: humans sign in through `/auth/login`
+  (the server redirects unauthenticated page loads there); the topbar shows
+  the signed-in email and a sign-out action, and requests authenticate with
+  the HTTP-only session cookie. No token pasting.
+- **OIDC not configured (dev / token-only)**: the topbar shows the TokenField
+  fallback; the bearer token lives in `localStorage`.
+
+The workspace id is a URL search param defaulting from `localStorage`. Token
+and workspace are injected centrally by `@/lib/api/client` — never call
+`fetch()` directly from a component (`@/lib/auth` owns the cookie-based
+`/auth` calls, which use no envelope, token, or workspace).
 
 ## Build & embed (the order matters)
 

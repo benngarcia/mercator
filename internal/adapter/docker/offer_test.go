@@ -164,6 +164,19 @@ func TestStandingOfferFallsBackWhenProbeEmpty(t *testing.T) {
 	}
 }
 
+// The docker adapter shares the daemon filesystem and cannot reserve disk,
+// so its offer must never reject a workload on ephemeral disk at placement:
+// a fabricated 16 GiB quota made every >=16 GiB request (e.g. bucket-rails
+// model-training's 20 GiB minimum) fail RESOURCE_INSUFFICIENT on an
+// otherwise healthy daemon.
+func TestStandingOfferDoesNotConstrainEphemeralDisk(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{}, now)
+	if offer.Resources.EphemeralDiskBytes != ephemeralDiskUnconstrained {
+		t.Errorf("EphemeralDiskBytes = %d, want the non-constraining %d", offer.Resources.EphemeralDiskBytes, ephemeralDiskUnconstrained)
+	}
+}
+
 func TestStandingOfferArchOverrideWinsOverProbe(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	info := HostInfo{Architecture: "x86_64", NCPU: 4, MemTotalBytes: 1 << 30}

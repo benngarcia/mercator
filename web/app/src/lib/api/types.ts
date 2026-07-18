@@ -343,6 +343,10 @@ export interface RunRecord {
   cleanup: CleanupState;
   disposition?: Disposition;
   closed: boolean;
+  // Audited principals: a signed-in operator email, or "bearer" for
+  // machine-token calls. Absent on runs recorded without a principal.
+  created_by?: string;
+  cancelled_by?: string;
 }
 
 // Alias used throughout the UI; identical shape to the wire RunRecord.
@@ -394,6 +398,20 @@ export interface ConnectionRecord {
   authorized: boolean;
   config?: Record<string, string>;
   credential?: CredentialRef;
+  // Audited principals of the create and authorize commands.
+  created_by?: string;
+  authorized_by?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Auth session (GET /auth/session)
+// ---------------------------------------------------------------------------
+
+// AuthSessionState reports whether OIDC login is configured on the server and,
+// when a valid session cookie accompanied the request, who is signed in.
+export interface AuthSessionState {
+  enabled: boolean;
+  email?: string;
 }
 
 export interface CreateConnectionRequest {

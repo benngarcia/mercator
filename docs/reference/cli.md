@@ -3,23 +3,59 @@
 The `mercator` binary has two modes:
 
 - `mercator serve` starts the HTTP API and embedded console.
-- `mercator run ...` and `mercator sink ...` call an existing Mercator API and
-  print JSON responses.
+- Every other command (`run`, `sink`, `login`, `context`, ...) targets an
+  existing Mercator API and prints JSON responses.
 
 Run `mercator --help` or `mercator help run create` for the in-binary reference.
 Help does not require a running server or `MERCATOR_API_URL`.
 
-## Environment
+## Environment And Contexts
 
-CLI commands read these variables:
+Server targeting resolves in this order: explicit flags, then environment
+variables, then the current context from the config file. Environment always
+wins over the file so CI needs no config file.
 
 | Variable | Purpose |
 | --- | --- |
 | `MERCATOR_API_URL` | API URL, for example `http://127.0.0.1:8080`. |
 | `MERCATOR_API_TOKEN` | Bearer token sent as `Authorization: Bearer ...`. |
 | `MERCATOR_WORKSPACE_ID` | Default workspace for `run` commands. |
+| `MERCATOR_CONFIG` | Config file path (default `~/.config/mercator/config.json`). |
 
 The global `--api-url URL` flag overrides `MERCATOR_API_URL`.
+
+**Contexts** name deployments so an operator can target staging or production
+by name. A context holds `api_url`, a default `workspace_id`, and a credential
+(a static API token, or a login-minted token tied to a user identity):
+
+```sh
+mercator context set staging --api-url https://staging.example.com --workspace-id ws_1
+mercator context set production --api-url https://mercator.example.com --workspace-id ws_prod
+mercator context use production
+mercator context list
+```
+
+The config file is written with owner-only permissions since it stores
+credentials.
+
+## Login
+
+When the server has OIDC configured
+([authentication-workspaces.md](../production/authentication-workspaces.md)),
+`mercator login` signs you in with the standard native-app flow: a browser
+opens to the server's login, you authenticate with the identity provider, and
+the CLI receives a token tied to your identity on a localhost redirect. The
+token is stored in the current (or `--context`-named) context, lives 30 days,
+and audits your mutations under your email instead of `bearer`:
+
+```sh
+mercator login                 # into the current context
+mercator login --context prod  # into a named context
+mercator logout                # clear the stored credential
+```
+
+`mercator login` fails with `OIDC_NOT_CONFIGURED` against a token-only server;
+static `MERCATOR_API_TOKEN` auth continues to work everywhere.
 
 ## Run Commands
 
@@ -82,6 +118,43 @@ go run ./cmd/mercator sink status --sink-id audit \
 
 Use `--workspace-id ID` on any run command to override
 `MERCATOR_WORKSPACE_ID`.
+
+## Flag Placement
+
+Flags work in any position: `mercator run create busybox --workspace-id ws_1`
+and `mercator run create --workspace-id ws_1 busybox` are the same command,
+and the global `--api-url` may appear before or after the command. An unknown
+flag-looking token is a loud error, never a silent container argument.
+Container arguments that begin with `-` belong after a bare `--`:
+
+```sh
+mercator run create "$IMAGE" -- sh -c 'echo hi'
+```
+
+## Connection Commands
+
+Connections register provider endpoints (Docker hosts, RunPod). These
+previously required hand-written `curl` with `Idempotency-Key` headers:
+
+```sh
+mercator connection create --connection-id conn_runpod --adapter-type runpod \
+  --credential-source mercator --secret-stdin < runpod-key.txt
+mercator connection authorize --connection-id conn_runpod
+mercator connection list
+```
+
+`--config key=value` is repeatable for adapter config. Prefer `--secret-stdin`
+over `--secret` so secrets stay out of shell history. The create idempotency
+key derives from the connection id when omitted.
+
+## Workload Commands
+
+```sh
+mercator workload create --workload-id wl_train --name "trainer"
+mercator workload revision create --workload-id wl_train --revision-json "$(cat revision.json)"
+mercator workload revision list --workload-id wl_train
+mercator workload revision get --workload-id wl_train --revision-id wrev_...
+```
 
 ## Exit Codes
 
