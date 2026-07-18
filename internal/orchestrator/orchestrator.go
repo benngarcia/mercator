@@ -43,11 +43,21 @@ const (
 type Orchestrator struct {
 	log                eventlog.EventLog
 	scheduler          scheduler.Scheduler
-	adapter            adapter.Adapter
+	adapter            Adapter
 	now                func() time.Time
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
 	runLocks           keyedMutex
+}
+
+type Adapter interface {
+	ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error)
+	Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error)
+	Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error)
+	Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error)
+	Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error)
+	Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error)
+	ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error)
 }
 
 // Option configures an Orchestrator.
@@ -64,7 +74,7 @@ func WithReporting(publicURL string, signer *reporting.Signer) Option {
 	}
 }
 
-func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter adapter.Adapter, opts ...Option) *Orchestrator {
+func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
 	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
 	for _, opt := range opts {
 		opt(o)

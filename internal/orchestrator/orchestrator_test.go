@@ -780,7 +780,7 @@ func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchReq
 	return c.Adapter.Launch(ctx, req)
 }
 
-func newTestOrchestrator(t *testing.T, ad adapter.Adapter) *Orchestrator {
+func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {
 	t.Helper()
 	return New(openOrchestratorLog(t), scheduler.New(), ad)
 }

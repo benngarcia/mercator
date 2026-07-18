@@ -36,12 +36,16 @@ type ImageResolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }
 
+type OfferSource interface {
+	ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error)
+}
+
 // Deps are the services the server routes to. Orchestrator, Scheduler, and
 // Adapter are required; a nil optional service disables its endpoints.
 type Deps struct {
 	Orchestrator *orchestrator.Orchestrator
 	Scheduler    scheduler.Scheduler
-	Adapter      adapter.Adapter
+	Adapter      OfferSource
 	Workloads    *workload.Service
 	Sinks        *sinkspkg.Manager
 	Connections  *connection.Service
@@ -52,7 +56,7 @@ type Server struct {
 	mux          *http.ServeMux
 	orch         *orchestrator.Orchestrator
 	scheduler    scheduler.Scheduler
-	adapter      adapter.Adapter
+	adapter      OfferSource
 	workloads    *workload.Service
 	sinks        *sinkspkg.Manager
 	conns        *connection.Service

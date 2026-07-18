@@ -314,4 +314,4 @@ func phaseFromPod(p pod) adapter.ExternalPhase {
 	}
 }
 
-var _ adapter.Adapter = (*Adapter)(nil)
+var _ adapter.Provider = (*Adapter)(nil)

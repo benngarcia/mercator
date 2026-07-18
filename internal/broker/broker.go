@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/connection"
@@ -38,7 +39,7 @@ func NewBroker(conns Connections, factory *Factory, resolver Resolver) *Broker {
 func (b *Broker) Manifests() []adapter.Manifest { return b.factory.Manifests() }
 
 // build constructs the adapter for one connection (no caching yet — YAGNI).
-func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Record) (adapter.Adapter, error) {
+func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Record) (adapter.Provider, error) {
 	secret := ""
 	if c.Credential.Source != "" {
 		s, err := b.resolver.Resolve(ctx, workspaceID, c.Credential)
@@ -54,7 +55,7 @@ func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Rec
 // Unlike ListOffers and ListOwned, this intentionally does NOT filter on Authorized.
 // Post-launch operations (Observe/Cancel/Release/Terminate) must still reach a run that was
 // launched on a connection which has since been de-authorized, so cleanup is never stranded.
-func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (connection.Record, adapter.Adapter, error) {
+func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (connection.Record, adapter.Provider, error) {
 	recs, err := b.conns.List(ctx, workspaceID)
 	if err != nil {
 		return connection.Record{}, nil, err
@@ -73,26 +74,24 @@ func (b *Broker) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]do
 	if err != nil {
 		return nil, err
 	}
+	results, failures := fanOut(ctx, b, req.WorkspaceID, recs, func(ctx context.Context, provider adapter.Provider) ([]domain.OfferSnapshot, error) {
+		return provider.ListOffers(ctx, req)
+	})
 	var all []domain.OfferSnapshot
-	for _, c := range recs {
-		if !c.Authorized {
-			continue
-		}
-		ad, err := b.build(ctx, req.WorkspaceID, c)
-		if err != nil {
-			continue // a broken connection should not sink the whole list
-		}
-		offers, err := ad.ListOffers(ctx, req)
-		if err != nil {
-			continue
-		}
-		for i := range offers {
-			offers[i].ConnectionID = c.ID
-			offers[i].AdapterType = c.AdapterType
-			all = append(all, offers[i])
+	for _, result := range results {
+		for _, offer := range result.items {
+			offer.ConnectionID = result.connection.ID
+			offer.AdapterType = result.connection.AdapterType
+			all = append(all, offer)
 		}
 	}
-	return all, nil
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].ConnectionID != all[j].ConnectionID {
+			return all[i].ConnectionID < all[j].ConnectionID
+		}
+		return all[i].ID < all[j].ID
+	})
+	return all, failures.OrNil()
 }
 
 func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
@@ -140,25 +139,23 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 	if err != nil {
 		return nil, err
 	}
+	results, failures := fanOut(ctx, b, req.WorkspaceID, recs, func(ctx context.Context, provider adapter.Provider) ([]adapter.OwnedExternalObject, error) {
+		return provider.ListOwned(ctx, req)
+	})
 	var all []adapter.OwnedExternalObject
-	for _, c := range recs {
-		if !c.Authorized {
-			continue
-		}
-		ad, err := b.build(ctx, req.WorkspaceID, c)
-		if err != nil {
-			continue
-		}
-		owned, err := ad.ListOwned(ctx, req)
-		if err != nil {
-			continue
-		}
-		for i := range owned {
-			owned[i].ConnectionID = c.ID
-			all = append(all, owned[i])
+	for _, result := range results {
+		for _, object := range result.items {
+			object.ConnectionID = result.connection.ID
+			all = append(all, object)
 		}
 	}
-	return all, nil
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].ConnectionID != all[j].ConnectionID {
+			return all[i].ConnectionID < all[j].ConnectionID
+		}
+		return all[i].ExternalID < all[j].ExternalID
+	})
+	return all, failures.OrNil()
 }
 
 // VerifyConnection builds the adapter for one connection (regardless of its
@@ -171,8 +168,3 @@ func (b *Broker) VerifyConnection(ctx context.Context, workspaceID, connectionID
 	}
 	return ad.Verify(ctx)
 }
-
-func (b *Broker) Verify(ctx context.Context) error { return nil } // per-connection verify is in Plan 1B
-
-// Compile-time assertion: *Broker must satisfy adapter.Adapter.
-var _ adapter.Adapter = (*Broker)(nil)
