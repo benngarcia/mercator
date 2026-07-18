@@ -293,6 +293,16 @@ func buildServerDeps(values map[string]string) serverDeps {
 			masterKey = b
 		}
 	}
+	// Sealed blobs are keyed by an HKDF subkey of the master key. Re-seal any
+	// pre-HKDF rows; a row no key opens means the configured MERCATOR_SECRET_KEY
+	// is not the key this store was written with — refuse to boot rather than
+	// fail at first credential use.
+	if migrated, err := store.MigrateSealKey(ctx, masterKey); err != nil {
+		stdlog.Fatalf("credential store: %v", err)
+	} else if migrated > 0 {
+		stdlog.Printf("credential store: re-sealed %d credential(s) under the derived sealing key", migrated)
+	}
+
 	resolver := credential.NewResolver(
 		func(k string) string { return values[k] },
 		store,

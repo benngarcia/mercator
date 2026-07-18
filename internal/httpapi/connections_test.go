@@ -236,12 +236,100 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("secret not stored: %v", err)
 	}
-	plain, err := credential.Open(testKey32(), blob)
+	plain, err := credential.Open(credential.DeriveSealKey(testKey32()), blob)
 	if err != nil {
 		t.Fatalf("decrypt stored secret: %v", err)
 	}
 	if string(plain) != "rp_live_key" {
 		t.Fatalf("stored secret wrong: %q", string(plain))
+	}
+}
+
+// TestSecretNeverLeavesTheServer is the credential-material audit: after a
+// mercator-source connection is created with a secret, the plaintext must not
+// appear in any API read path (connection list, offers, adapters, OpenAPI) nor
+// anywhere in the event log — including private-visibility events, which sink
+// exports may carry.
+func TestSecretNeverLeavesTheServer(t *testing.T) {
+	const secret = "rp_live_key_audit_canary"
+	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	now := time.Now().UTC()
+	ad := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", now)}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	)
+	sched := scheduler.New()
+	orch := orchestrator.New(log, sched, ad)
+	svc := connection.New(log)
+	store := credential.NewMemoryStore()
+	resolver := credential.NewResolver(nil, store, testKey32())
+	handler := New(Deps{
+		Orchestrator: orch, Scheduler: sched, Adapter: ad,
+		Workloads: workload.New(log), Connections: svc,
+		Resolver: ociresolver.NewStaticResolver(nil),
+	}, WithSecretStore(store), WithCredentialResolver(resolver), WithVerifier(&fakeVerifier{}))
+
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_audit",
+		AdapterType:  "runpod",
+		Credential:   credential.Credential{Source: "mercator"},
+		Secret:       secret,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "k-audit")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Authorize so the authorization event exists too.
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_audit:authorize?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authorize: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	for _, path := range []string{
+		"/v1/connections?workspace_id=ws_1",
+		"/v1/adapters",
+		"/v1/offers?workspace_id=ws_1",
+		"/openapi.json",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("GET %s leaks the credential plaintext", path)
+		}
+	}
+
+	events, err := log.ReadAll(context.Background(), 0, 1000, eventlog.EventFilter{})
+	if err != nil {
+		t.Fatalf("read all events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected connection events in the log")
+	}
+	for _, ev := range events {
+		if strings.Contains(string(ev.Data), secret) {
+			t.Errorf("event %s (%s) contains the credential plaintext", ev.ID, ev.Type)
+		}
+	}
+
+	// The stored blob itself is ciphertext, not the plaintext.
+	blob, err := store.Get(context.Background(), "ws_1", "conn_audit")
+	if err != nil {
+		t.Fatalf("stored blob: %v", err)
+	}
+	if strings.Contains(string(blob), secret) {
+		t.Error("stored blob contains the plaintext")
 	}
 }
 
