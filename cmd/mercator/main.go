@@ -21,6 +21,7 @@ import (
 	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
 	runpodadapter "github.com/benngarcia/mercator/internal/adapter/runpod"
 	shadeformadapter "github.com/benngarcia/mercator/internal/adapter/shadeform"
+	vastadapter "github.com/benngarcia/mercator/internal/adapter/vast"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/cli"
 	"github.com/benngarcia/mercator/internal/connection"
@@ -304,6 +305,10 @@ func buildServerDeps(values map[string]string) serverDeps {
 
 	factory.Register("shadeform", func(config map[string]string, secret string) (adapter.Adapter, error) {
 		return shadeformadapter.New(secret, config)
+  })
+
+	factory.Register("vast", func(config map[string]string, secret string) (adapter.Adapter, error) {
+		return vastadapter.New(secret, config)
 	})
 
 	br := broker.NewBroker(svc, factory, resolver)
