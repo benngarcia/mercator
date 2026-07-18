@@ -44,6 +44,10 @@ func OpenSQLite(ctx context.Context, dsn string) (*SQLiteEventLog, error) {
 	return log, nil
 }
 
+// Database exposes the shared SQLite pool to transactional collaborators.
+// Callers must not close it; SQLiteEventLog owns its lifetime.
+func (l *SQLiteEventLog) Database() *sql.DB { return l.db }
+
 func (l *SQLiteEventLog) Close() error {
 	// Stop subscription goroutines before closing the DB so none of them park
 	// on a wake signal that will never come.
@@ -54,8 +58,7 @@ func (l *SQLiteEventLog) Close() error {
 func (l *SQLiteEventLog) init(ctx context.Context) error {
 	stmts := []string{
 		`PRAGMA journal_mode=WAL`,
-		// Wait for competing writers (e.g. the secret store's pool on the same
-		// file) instead of failing instantly with SQLITE_BUSY.
+		// Wait for competing writers instead of failing instantly with SQLITE_BUSY.
 		`PRAGMA busy_timeout=5000`,
 		`CREATE TABLE IF NOT EXISTS events (
 			global_position INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -101,6 +104,20 @@ func (l *SQLiteEventLog) init(ctx context.Context) error {
 }
 
 func (l *SQLiteEventLog) Append(ctx context.Context, req AppendRequest) (AppendResult, error) {
+	return l.append(ctx, req, nil)
+}
+
+// AppendAtomic commits an event append and mutation in one SQLite transaction.
+// The mutation runs only for a new command, after event inserts succeed and
+// before the command append is recorded. Conflicts and replays never invoke it.
+func (l *SQLiteEventLog) AppendAtomic(ctx context.Context, req AppendRequest, mutation func(context.Context, *sql.Tx) error) (AppendResult, error) {
+	if mutation == nil {
+		return AppendResult{}, fmt.Errorf("eventlog: atomic mutation is required")
+	}
+	return l.append(ctx, req, mutation)
+}
+
+func (l *SQLiteEventLog) append(ctx context.Context, req AppendRequest, mutation func(context.Context, *sql.Tx) error) (AppendResult, error) {
 	if err := req.Stream.validate(); err != nil {
 		return AppendResult{}, err
 	}
@@ -193,6 +210,11 @@ func (l *SQLiteEventLog) Append(ctx context.Context, req AppendRequest) (AppendR
 			Data:           cloneJSON(event.Data),
 			PrivateData:    cloneBytes(event.PrivateData),
 		})
+	}
+	if mutation != nil {
+		if err := mutation(ctx, tx); err != nil {
+			return AppendResult{}, err
+		}
 	}
 	if len(stored) > 0 {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO command_appends (

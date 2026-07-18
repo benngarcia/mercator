@@ -57,8 +57,6 @@ type Server struct {
 	sinks        *sinkspkg.Manager
 	conns        *connection.Service
 	resolver     ImageResolver
-	secretStore  credential.SecretStore
-	credentials  *credential.Resolver
 	verifier     connectionVerifier
 	security     securityConfig
 	reportSigner *reporting.Signer
@@ -93,18 +91,6 @@ func WithBearerAuth(token string, workspaces []string) Option {
 	return func(s *Server) {
 		s.security = securityConfig{Token: token, Workspaces: append([]string(nil), workspaces...)}
 	}
-}
-
-// WithSecretStore wires the SecretStore the server uses to persist sealed
-// connection credentials.
-func WithSecretStore(store credential.SecretStore) Option {
-	return func(s *Server) { s.secretStore = store }
-}
-
-// WithCredentialResolver wires the credential.Resolver the server uses to turn
-// a {source, ref} credential into a plaintext secret.
-func WithCredentialResolver(resolver *credential.Resolver) Option {
-	return func(s *Server) { s.credentials = resolver }
 }
 
 // WithVerifier wires the connection verifier (the Broker) the server uses to
@@ -999,38 +985,26 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cred := body.Credential
-	// For mercator-source connections with a provided secret, seal the secret
-	// out-of-band and store the ciphertext in the secret store. The plaintext
-	// never enters the event log or the response.
-	if cred.Source == credential.SourceMercator && body.Secret != "" {
-		if s.credentials == nil || s.secretStore == nil {
-			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Secret store is not configured; cannot accept mercator credentials.")
-			return
-		}
-		blob, ok := s.credentials.Seal([]byte(body.Secret))
-		if !ok {
-			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Master key is not set; cannot seal mercator credentials.")
-			return
-		}
-		if err := s.secretStore.Put(r.Context(), workspaceID, body.ConnectionID, blob); err != nil {
-			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
-			return
-		}
-		cred.Ref = body.ConnectionID
-	}
-
 	record, err := s.conns.Create(r.Context(), connection.CreateRequest{
 		WorkspaceID:  workspaceID,
 		ConnectionID: body.ConnectionID,
 		AdapterType:  body.AdapterType,
 		Config:       body.Config,
-		Credential:   cred,
+		Credential:   body.Credential,
+		Secret:       []byte(body.Secret),
 		Actor:        requestActor(r),
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
 			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
+			return
+		}
+		if errors.Is(err, connection.ErrSecretStore) {
+			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
+			return
+		}
+		if errors.Is(err, connection.ErrSecretStoreDisabled) {
+			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", err.Error())
 			return
 		}
 		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_CONNECTION_FAILED"), errorMessage(err))
@@ -1086,9 +1060,8 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id 
 	writeJSON(w, http.StatusOK, connectionResponse{Connection: record})
 }
 
-// deleteConnection appends the deleted fact and removes the sealed credential
-// blob. The event stream itself is retained (append-only log); the id cannot
-// be reused — recreating means a fresh connection id.
+// deleteConnection appends the deleted fact. The event stream itself is
+// retained; the connection service removes sealed credentials atomically.
 func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	if s.conns == nil {
 		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
@@ -1110,15 +1083,6 @@ func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 		}
 		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_DELETE_FAILED", err)
 		return
-	}
-	// The blob is unreachable once the record is deleted; failing to remove it
-	// must not resurrect the connection. Retrying the (idempotent) delete
-	// re-attempts the removal.
-	if s.secretStore != nil {
-		if err := s.secretStore.Delete(r.Context(), workspaceID, id); err != nil {
-			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
-			return
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }

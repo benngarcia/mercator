@@ -9,6 +9,10 @@ import (
 
 type SQLiteStore struct{ db *sql.DB }
 
+type executor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func NewSQLiteStore(ctx context.Context, db *sql.DB) (*SQLiteStore, error) {
 	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS connection_secret (
 		workspace_id  TEXT NOT NULL,
@@ -23,7 +27,15 @@ func NewSQLiteStore(ctx context.Context, db *sql.DB) (*SQLiteStore, error) {
 }
 
 func (s *SQLiteStore) Put(ctx context.Context, ws, id string, blob []byte) error {
-	_, err := s.db.ExecContext(ctx,
+	return put(ctx, s.db, ws, id, blob)
+}
+
+func (s *SQLiteStore) PutTx(ctx context.Context, tx *sql.Tx, ws, id string, blob []byte) error {
+	return put(ctx, tx, ws, id, blob)
+}
+
+func put(ctx context.Context, db executor, ws, id string, blob []byte) error {
+	_, err := db.ExecContext(ctx,
 		`INSERT INTO connection_secret (workspace_id, connection_id, blob) VALUES (?, ?, ?)
 		 ON CONFLICT(workspace_id, connection_id) DO UPDATE SET blob = excluded.blob`,
 		ws, id, blob)
@@ -41,7 +53,15 @@ func (s *SQLiteStore) Get(ctx context.Context, ws, id string) ([]byte, error) {
 }
 
 func (s *SQLiteStore) Delete(ctx context.Context, ws, id string) error {
-	_, err := s.db.ExecContext(ctx,
+	return deleteSecret(ctx, s.db, ws, id)
+}
+
+func (s *SQLiteStore) DeleteTx(ctx context.Context, tx *sql.Tx, ws, id string) error {
+	return deleteSecret(ctx, tx, ws, id)
+}
+
+func deleteSecret(ctx context.Context, db executor, ws, id string) error {
+	_, err := db.ExecContext(ctx,
 		`DELETE FROM connection_secret WHERE workspace_id = ? AND connection_id = ?`, ws, id)
 	return err
 }

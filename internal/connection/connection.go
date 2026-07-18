@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,9 +23,29 @@ const (
 
 var ErrNotFound = fmt.Errorf("connection: not found")
 
+var ErrSecretStoreDisabled = errors.New("connection: secret store disabled")
+var ErrSecretStore = errors.New("connection: secret store failure")
+
+type atomicAppender interface {
+	eventlog.EventLog
+	AppendAtomic(context.Context, eventlog.AppendRequest, func(context.Context, *sql.Tx) error) (eventlog.AppendResult, error)
+}
+
+type credentialSealer interface {
+	Seal([]byte) ([]byte, bool)
+}
+
+type credentialStore interface {
+	PutTx(context.Context, *sql.Tx, string, string, []byte) error
+	DeleteTx(context.Context, *sql.Tx, string, string) error
+}
+
 type Service struct {
-	log eventlog.EventLog
-	now func() time.Time
+	log         eventlog.EventLog
+	atomicLog   atomicAppender
+	sealer      credentialSealer
+	credentials credentialStore
+	now         func() time.Time
 }
 
 type Record struct {
@@ -49,6 +70,9 @@ type CreateRequest struct {
 	AuthorizationSchema map[string]string
 	Config              map[string]string
 	Credential          credential.Credential
+	// Secret is write-only credential material. It is sealed before storage and
+	// never enters the connection record or event log.
+	Secret []byte
 	// Actor is the event-envelope principal recorded on the created fact.
 	Actor json.RawMessage
 }
@@ -68,8 +92,22 @@ type DeleteRequest struct {
 	Actor json.RawMessage
 }
 
-func New(log eventlog.EventLog) *Service {
-	return &Service{log: log, now: time.Now}
+type Option func(*Service)
+
+func WithCredentials(sealer credentialSealer, store credentialStore) Option {
+	return func(service *Service) {
+		service.sealer = sealer
+		service.credentials = store
+	}
+}
+
+func New(log eventlog.EventLog, options ...Option) *Service {
+	service := &Service{log: log, now: time.Now}
+	service.atomicLog, _ = log.(atomicAppender)
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error) {
@@ -84,6 +122,10 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 		Config:              maps.Clone(req.Config),
 		Credential:          req.Credential,
 	}
+	sealedSecret, err := s.prepareCredential(&record, req.Secret)
+	if err != nil {
+		return Record{}, err
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return Record{}, err
@@ -92,7 +134,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 	if err != nil {
 		return Record{}, err
 	}
-	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+	appendRequest := eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            "connection:create:" + req.ConnectionID,
@@ -108,11 +150,49 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          data,
 		}},
-	})
+	}
+	_, err = s.append(ctx, appendRequest, s.storeCredential(record, sealedSecret))
 	if err != nil {
 		return Record{}, err
 	}
 	return record, nil
+}
+
+func (s *Service) prepareCredential(record *Record, secret []byte) ([]byte, error) {
+	if record.Credential.Source != credential.SourceMercator || len(secret) == 0 {
+		return nil, nil
+	}
+	if s.sealer == nil || s.credentials == nil || s.atomicLog == nil {
+		return nil, fmt.Errorf("%w: configure MERCATOR_SECRET_KEY and transactional SQLite credential storage", ErrSecretStoreDisabled)
+	}
+	sealed, ok := s.sealer.Seal(secret)
+	if !ok {
+		return nil, fmt.Errorf("%w: configure MERCATOR_SECRET_KEY", ErrSecretStoreDisabled)
+	}
+	record.Credential.Ref = record.ID
+	return sealed, nil
+}
+
+func (s *Service) storeCredential(record Record, sealed []byte) func(context.Context, *sql.Tx) error {
+	if len(sealed) == 0 {
+		return nil
+	}
+	return func(ctx context.Context, tx *sql.Tx) error {
+		if err := s.credentials.PutTx(ctx, tx, record.WorkspaceID, record.ID, sealed); err != nil {
+			return fmt.Errorf("%w: %v", ErrSecretStore, err)
+		}
+		return nil
+	}
+}
+
+func (s *Service) append(ctx context.Context, request eventlog.AppendRequest, mutation func(context.Context, *sql.Tx) error) (eventlog.AppendResult, error) {
+	if mutation == nil {
+		return s.log.Append(ctx, request)
+	}
+	if s.atomicLog == nil {
+		return eventlog.AppendResult{}, ErrSecretStoreDisabled
+	}
+	return s.atomicLog.AppendAtomic(ctx, request, mutation)
 }
 
 func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizationRequest) error {
@@ -139,7 +219,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 	if err != nil {
 		return err
 	}
-	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+	appendRequest := eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
 		ExpectedStreamVersion: uint64(len(events)),
 		CommandKey:            fmt.Sprintf("connection:authorization:%s:%t", req.ConnectionID, req.Authorized),
@@ -155,7 +235,8 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          data,
 		}},
-	})
+	}
+	_, err = s.log.Append(ctx, appendRequest)
 	return err
 }
 
@@ -182,7 +263,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+	appendRequest := eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
 		ExpectedStreamVersion: uint64(len(events)),
 		CommandKey:            "connection:delete:" + req.ConnectionID,
@@ -198,7 +279,20 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          json.RawMessage(`{"deleted":true}`),
 		}},
-	})
+	}
+	var mutation func(context.Context, *sql.Tx) error
+	if s.credentials != nil {
+		if s.atomicLog == nil {
+			return ErrSecretStoreDisabled
+		}
+		mutation = func(ctx context.Context, tx *sql.Tx) error {
+			if err := s.credentials.DeleteTx(ctx, tx, req.WorkspaceID, req.ConnectionID); err != nil {
+				return fmt.Errorf("%w: %v", ErrSecretStore, err)
+			}
+			return nil
+		}
+	}
+	_, err = s.append(ctx, appendRequest, mutation)
 	return err
 }
 

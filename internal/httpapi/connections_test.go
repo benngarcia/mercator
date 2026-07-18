@@ -35,9 +35,8 @@ func (f *fakeVerifier) VerifyConnection(_ context.Context, _, _ string) error {
 	return f.err
 }
 
-// newHTTPTestServerWithConns builds a test server with a real connection.Service,
-// secret store, and optional credential resolver and verifier wired in.
-func newHTTPTestServerWithConns(t *testing.T, store credential.SecretStore, resolver *credential.Resolver, extraOpts ...Option) http.Handler {
+// newHTTPTestServerWithConns builds a test server with a real connection.Service.
+func newHTTPTestServerWithConns(t *testing.T, extraOpts ...Option) http.Handler {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -53,20 +52,14 @@ func newHTTPTestServerWithConns(t *testing.T, store credential.SecretStore, reso
 	orch := orchestrator.New(log, sched, ad)
 	staticResolver := ociresolver.NewStaticResolver(nil)
 	svc := connection.New(log)
-	options := []Option{WithSecretStore(store)}
-	if resolver != nil {
-		options = append(options, WithCredentialResolver(resolver))
-	}
-	options = append(options, extraOpts...)
-	return New(Deps{Orchestrator: orch, Scheduler: sched, Adapter: ad, Workloads: workload.New(log), Connections: svc, Resolver: staticResolver}, options...)
+	return New(Deps{Orchestrator: orch, Scheduler: sched, Adapter: ad, Workloads: workload.New(log), Connections: svc, Resolver: staticResolver}, extraOpts...)
 }
 
 // TestConnectionsListReflectsRegistry asserts that GET /v1/connections returns
 // connections that were registered via POST /v1/connections (the registry is
 // now the sole source of truth for the list — offer-derivation has been removed).
 func TestConnectionsListReflectsRegistry(t *testing.T) {
-	store := credential.NewMemoryStore()
-	handler := newHTTPTestServerWithConns(t, store, nil)
+	handler := newHTTPTestServerWithConns(t)
 
 	// Create a connection via the API.
 	body := mustMarshal(t, createConnectionBody{
@@ -111,9 +104,8 @@ func TestConnectionsListReflectsRegistry(t *testing.T) {
 // POST /v1/connections/{id}:authorize returns 200 with the record's
 // authorized field set to true.
 func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
-	store := credential.NewMemoryStore()
 	verifier := &fakeVerifier{err: nil} // verify always succeeds
-	handler := newHTTPTestServerWithConns(t, store, nil, WithVerifier(verifier))
+	handler := newHTTPTestServerWithConns(t, WithVerifier(verifier))
 
 	// Create an unauthorized connection.
 	body := mustMarshal(t, createConnectionBody{
@@ -150,9 +142,8 @@ func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 // carrying the adapter's real error text, and a subsequent GET shows the
 // connection is still unauthorized.
 func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
-	store := credential.NewMemoryStore()
 	verifier := &fakeVerifier{err: errors.New("dial timeout")}
-	handler := newHTTPTestServerWithConns(t, store, nil, WithVerifier(verifier))
+	handler := newHTTPTestServerWithConns(t, WithVerifier(verifier))
 
 	// Create an unauthorized connection.
 	body := mustMarshal(t, createConnectionBody{
@@ -204,9 +195,8 @@ func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 // connection with a secret stores the secret encrypted out-of-band and never
 // echoes it in the response body.
 func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
-	store := credential.NewMemoryStore()
-	resolver := credential.NewResolver(nil, store, testKey32())
-	handler := newHTTPTestServerWithConns(t, store, resolver)
+	server := newAtomicCredentialServer(t, testKey32())
+	handler := server.handler
 
 	body := mustMarshal(t, createConnectionBody{
 		WorkspaceID:  "ws_1",
@@ -236,7 +226,7 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 		t.Errorf("credential ref: got %q, want %q (credential ref must be set to connection id)", got.Credential.Ref, "conn_rp")
 	}
 	// Secret is retrievable (encrypted) and decrypts to the original.
-	blob, err := store.Get(context.Background(), "ws_1", "conn_rp")
+	blob, err := server.store.Get(context.Background(), "ws_1", "conn_rp")
 	if err != nil {
 		t.Fatalf("secret not stored: %v", err)
 	}
@@ -249,6 +239,139 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 	}
 }
 
+type atomicCredentialServer struct {
+	handler  http.Handler
+	log      *eventlog.SQLiteEventLog
+	service  *connection.Service
+	store    *credential.SQLiteStore
+	resolver *credential.Resolver
+}
+
+func newAtomicCredentialServer(t *testing.T, masterKey []byte, options ...Option) atomicCredentialServer {
+	t.Helper()
+	log, err := eventlog.OpenSQLite(t.Context(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	store, err := credential.NewSQLiteStore(t.Context(), log.Database())
+	if err != nil {
+		t.Fatalf("open credential store: %v", err)
+	}
+	resolver := credential.NewResolver(nil, store, masterKey)
+	service := connection.New(log, connection.WithCredentials(resolver, store))
+	ad := fake.New()
+	sched := scheduler.New()
+	handler := New(Deps{
+		Orchestrator: orchestrator.New(log, sched, ad),
+		Scheduler:    sched,
+		Adapter:      ad,
+		Workloads:    workload.New(log),
+		Connections:  service,
+		Resolver:     ociresolver.NewStaticResolver(nil),
+	}, options...)
+	return atomicCredentialServer{handler: handler, log: log, service: service, store: store, resolver: resolver}
+}
+
+func createMercatorConnection(t *testing.T, handler http.Handler, config map[string]string, secret string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_atomic",
+		AdapterType:  "runpod",
+		Config:       config,
+		Credential:   credential.Credential{Source: credential.SourceMercator},
+		Secret:       secret,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "create-conn-atomic")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	return response
+}
+
+func TestCreateConnectionConflictPreservesStoredCredential(t *testing.T) {
+	server := newAtomicCredentialServer(t, testKey32())
+	first := createMercatorConnection(t, server.handler, map[string]string{"region": "us-east"}, "original-secret")
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first create: status=%d body=%s", first.Code, first.Body.String())
+	}
+
+	conflict := createMercatorConnection(t, server.handler, map[string]string{"region": "us-west"}, "replacement-secret")
+
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("conflicting create: status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+	secret, err := server.resolver.Resolve(t.Context(), "ws_1", credential.Credential{Source: credential.SourceMercator, Ref: "conn_atomic"})
+	if err != nil {
+		t.Fatalf("resolve original credential: %v", err)
+	}
+	if secret != "original-secret" {
+		t.Fatalf("stored credential = %q, want original-secret", secret)
+	}
+}
+
+func TestCreateConnectionReplayDoesNotRotateCredential(t *testing.T) {
+	server := newAtomicCredentialServer(t, testKey32())
+	if response := createMercatorConnection(t, server.handler, nil, "original-secret"); response.Code != http.StatusAccepted {
+		t.Fatalf("first create: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	replay := createMercatorConnection(t, server.handler, nil, "replacement-secret")
+
+	if replay.Code != http.StatusAccepted {
+		t.Fatalf("replay: status=%d body=%s", replay.Code, replay.Body.String())
+	}
+	secret, err := server.resolver.Resolve(t.Context(), "ws_1", credential.Credential{Source: credential.SourceMercator, Ref: "conn_atomic"})
+	if err != nil {
+		t.Fatalf("resolve original credential: %v", err)
+	}
+	if secret != "original-secret" {
+		t.Fatalf("stored credential = %q, want original-secret", secret)
+	}
+}
+
+func TestCreateConnectionEventFailureRollsBackCredential(t *testing.T) {
+	server := newAtomicCredentialServer(t, testKey32())
+	if _, err := server.log.Database().ExecContext(t.Context(), `
+		CREATE TRIGGER fail_connection_event
+		BEFORE INSERT ON events
+		WHEN NEW.event_type = 'compute.connection.created.v1'
+		BEGIN SELECT RAISE(FAIL, 'event write failed'); END`); err != nil {
+		t.Fatalf("create event failure trigger: %v", err)
+	}
+
+	response := createMercatorConnection(t, server.handler, nil, "must-rollback")
+
+	if response.Code < 400 {
+		t.Fatalf("create status=%d body=%s, want failure", response.Code, response.Body.String())
+	}
+	_, err := server.resolver.Resolve(t.Context(), "ws_1", credential.Credential{Source: credential.SourceMercator, Ref: "conn_atomic"})
+	if !errors.Is(err, credential.ErrNotFound) {
+		t.Fatalf("resolve error = %v, want credential.ErrNotFound", err)
+	}
+}
+
+func TestCreateConnectionCredentialFailureRollsBackEvent(t *testing.T) {
+	server := newAtomicCredentialServer(t, testKey32())
+	if _, err := server.log.Database().ExecContext(t.Context(), `
+		CREATE TRIGGER fail_connection_secret
+		BEFORE INSERT ON connection_secret
+		BEGIN SELECT RAISE(FAIL, 'credential write failed'); END`); err != nil {
+		t.Fatalf("create credential failure trigger: %v", err)
+	}
+
+	response := createMercatorConnection(t, server.handler, nil, "must-rollback")
+
+	if response.Code < 400 {
+		t.Fatalf("create status=%d body=%s, want failure", response.Code, response.Body.String())
+	}
+	_, err := server.service.Get(t.Context(), "ws_1", "conn_atomic")
+	if !errors.Is(err, connection.ErrNotFound) {
+		t.Fatalf("connection lookup error = %v, want connection.ErrNotFound", err)
+	}
+}
+
 // TestSecretNeverLeavesTheServer is the credential-material audit: after a
 // mercator-source connection is created with a secret, the plaintext must not
 // appear in any API read path (connection list, offers, adapters, OpenAPI) nor
@@ -256,26 +379,8 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 // exports may carry.
 func TestSecretNeverLeavesTheServer(t *testing.T) {
 	const secret = "rp_live_key_audit_canary"
-	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
-	if err != nil {
-		t.Fatalf("open event log: %v", err)
-	}
-	t.Cleanup(func() { _ = log.Close() })
-	now := time.Now().UTC()
-	ad := fake.New(
-		fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", now)}),
-		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
-	)
-	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad)
-	svc := connection.New(log)
-	store := credential.NewMemoryStore()
-	resolver := credential.NewResolver(nil, store, testKey32())
-	handler := New(Deps{
-		Orchestrator: orch, Scheduler: sched, Adapter: ad,
-		Workloads: workload.New(log), Connections: svc,
-		Resolver: ociresolver.NewStaticResolver(nil),
-	}, WithSecretStore(store), WithCredentialResolver(resolver), WithVerifier(&fakeVerifier{}))
+	server := newAtomicCredentialServer(t, testKey32(), WithVerifier(&fakeVerifier{}))
+	handler := server.handler
 
 	body := mustMarshal(t, createConnectionBody{
 		WorkspaceID:  "ws_1",
@@ -314,7 +419,7 @@ func TestSecretNeverLeavesTheServer(t *testing.T) {
 		}
 	}
 
-	events, err := log.ReadAll(context.Background(), 0, 1000, eventlog.EventFilter{})
+	events, err := server.log.ReadAll(context.Background(), 0, 1000, eventlog.EventFilter{})
 	if err != nil {
 		t.Fatalf("read all events: %v", err)
 	}
@@ -328,7 +433,7 @@ func TestSecretNeverLeavesTheServer(t *testing.T) {
 	}
 
 	// The stored blob itself is ciphertext, not the plaintext.
-	blob, err := store.Get(context.Background(), "ws_1", "conn_audit")
+	blob, err := server.store.Get(context.Background(), "ws_1", "conn_audit")
 	if err != nil {
 		t.Fatalf("stored blob: %v", err)
 	}
@@ -341,10 +446,8 @@ func TestSecretNeverLeavesTheServer(t *testing.T) {
 // mercator-source connection on a server without a master key returns 400
 // SECRET_STORE_DISABLED.
 func TestCreateConnectionNoMasterKeyReturnsError(t *testing.T) {
-	store := credential.NewMemoryStore()
-	// Resolver built with nil key — no master key.
-	resolver := credential.NewResolver(nil, store, nil)
-	handler := newHTTPTestServerWithConns(t, store, resolver)
+	server := newAtomicCredentialServer(t, nil)
+	handler := server.handler
 
 	body := mustMarshal(t, createConnectionBody{
 		WorkspaceID:  "ws_1",
@@ -369,9 +472,8 @@ func TestCreateConnectionNoMasterKeyReturnsError(t *testing.T) {
 // TestDeleteConnectionRemovesRecordAndSecret: DELETE hides the connection
 // from the list and removes the sealed blob; deleting an unknown id is 404.
 func TestDeleteConnectionRemovesRecordAndSecret(t *testing.T) {
-	store := credential.NewMemoryStore()
-	resolver := credential.NewResolver(nil, store, testKey32())
-	handler := newHTTPTestServerWithConns(t, store, resolver)
+	server := newAtomicCredentialServer(t, testKey32())
+	handler := server.handler
 
 	body := mustMarshal(t, createConnectionBody{
 		WorkspaceID:  "ws_1",
@@ -402,7 +504,7 @@ func TestDeleteConnectionRemovesRecordAndSecret(t *testing.T) {
 		t.Fatalf("deleted connection still listed: %s", rec.Body.String())
 	}
 
-	if _, err := store.Get(context.Background(), "ws_1", "conn_gone"); err == nil {
+	if _, err := server.store.Get(context.Background(), "ws_1", "conn_gone"); err == nil {
 		t.Fatal("sealed blob must be removed on delete")
 	}
 
