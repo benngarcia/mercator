@@ -344,7 +344,7 @@ function SetupForm({
           <p className="text-xs font-medium text-phase-failed">
             Verification failed
           </p>
-          <p className="font-mono text-xs leading-relaxed text-foreground">
+          <p className="max-h-40 overflow-y-auto break-all font-mono text-xs leading-relaxed text-foreground">
             {phase.error}
           </p>
           <p className="text-xs text-muted-foreground">

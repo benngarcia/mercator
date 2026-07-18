@@ -208,7 +208,7 @@ function ConnectionRow({
 
       {verifyError ? (
         <div className="rounded-md border border-phase-failed/40 bg-phase-failed/5 p-2.5">
-          <p className="font-mono text-xs leading-relaxed text-foreground">
+          <p className="max-h-40 overflow-y-auto break-all font-mono text-xs leading-relaxed text-foreground">
             {verifyError}
           </p>
         </div>
