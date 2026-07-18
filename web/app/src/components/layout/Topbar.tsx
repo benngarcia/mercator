@@ -16,8 +16,8 @@ import { cn } from "@/lib/utils";
 import { useSession } from "@/hooks/useSession";
 import { useHealth } from "@/lib/api/queries";
 
+import { IdentityControls } from "./IdentityControls";
 import { ThemeToggle } from "./ThemeToggle";
-import { TokenField } from "./TokenField";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 function HealthDot() {
@@ -85,7 +85,7 @@ export function Topbar() {
       <WorkspaceSwitcher value={workspace} onChange={setWorkspace} />
       <div className="ml-auto flex items-center gap-1">
         <HealthDot />
-        <TokenField />
+        <IdentityControls />
         <ThemeToggle />
       </div>
     </header>
