@@ -172,3 +172,57 @@ func TestAuthorizationIdempotencyIgnoresActor(t *testing.T) {
 		t.Fatalf("re-authorize with a principal must replay idempotently: %v", err)
 	}
 }
+
+// Delete makes the connection invisible to Get and List while the stream
+// stays in the append-only log; a second delete is an idempotent no-op, and a
+// boot-style Create replay (same command key and hash) must NOT resurrect it.
+func TestDeleteHidesConnectionAndSurvivesBootReplay(t *testing.T) {
+	ctx := context.Background()
+	svc := New(openConnectionTestLog(t))
+
+	if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: "conn_del", AdapterType: "docker"}); err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{WorkspaceID: "ws_1", ConnectionID: "conn_del", Authorized: true}); err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+
+	if err := svc.Delete(ctx, DeleteRequest{WorkspaceID: "ws_1", ConnectionID: "conn_del", Actor: json.RawMessage(`{"subject":"operator@example.com"}`)}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := svc.Get(ctx, "ws_1", "conn_del"); err != ErrNotFound {
+		t.Fatalf("get after delete: want ErrNotFound, got %v", err)
+	}
+	records, err := svc.List(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("list after delete: expected 0 records, got %d", len(records))
+	}
+
+	// Idempotent re-delete.
+	if err := svc.Delete(ctx, DeleteRequest{WorkspaceID: "ws_1", ConnectionID: "conn_del"}); err != nil {
+		t.Fatalf("re-delete must be a no-op: %v", err)
+	}
+
+	// Boot replay: identical Create + authorize commands replay by command key
+	// without appending, so the deletion sticks across restarts.
+	if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: "conn_del", AdapterType: "docker"}); err != nil {
+		t.Fatalf("boot create replay: %v", err)
+	}
+	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{WorkspaceID: "ws_1", ConnectionID: "conn_del", Authorized: true}); err != nil {
+		t.Fatalf("boot authorize replay: %v", err)
+	}
+	if _, err := svc.Get(ctx, "ws_1", "conn_del"); err != ErrNotFound {
+		t.Fatalf("connection resurrected by boot replay: %v", err)
+	}
+}
+
+// Deleting a connection that never existed is an error, not a silent no-op.
+func TestDeleteUnknownConnectionFails(t *testing.T) {
+	svc := New(openConnectionTestLog(t))
+	if err := svc.Delete(context.Background(), DeleteRequest{WorkspaceID: "ws_1", ConnectionID: "conn_ghost"}); err != ErrNotFound {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}

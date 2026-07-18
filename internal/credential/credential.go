@@ -64,6 +64,8 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 type SecretStore interface {
 	Put(ctx context.Context, workspaceID, connectionID string, blob []byte) error
 	Get(ctx context.Context, workspaceID, connectionID string) ([]byte, error)
+	// Delete removes the sealed blob. Deleting an absent row is a no-op.
+	Delete(ctx context.Context, workspaceID, connectionID string) error
 }
 
 type MemoryStore struct {
@@ -92,6 +94,13 @@ func (s *MemoryStore) Get(_ context.Context, ws, id string) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 	return append([]byte(nil), blob...), nil
+}
+
+func (s *MemoryStore) Delete(_ context.Context, ws, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, memKey(ws, id))
+	return nil
 }
 
 type Resolver struct {

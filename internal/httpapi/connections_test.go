@@ -273,3 +273,51 @@ func TestCreateConnectionNoMasterKeyReturnsError(t *testing.T) {
 		t.Fatalf("expected SECRET_STORE_DISABLED code, got %s", rec.Body.String())
 	}
 }
+
+// TestDeleteConnectionRemovesRecordAndSecret: DELETE hides the connection
+// from the list and removes the sealed blob; deleting an unknown id is 404.
+func TestDeleteConnectionRemovesRecordAndSecret(t *testing.T) {
+	store := credential.NewMemoryStore()
+	resolver := credential.NewResolver(nil, store, testKey32())
+	handler := newHTTPTestServerWithConns(t, store, resolver)
+
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_gone",
+		AdapterType:  "runpod",
+		Credential:   credential.Credential{Source: "mercator"},
+		Secret:       "rp_delete_me",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "k-del")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/v1/connections/conn_gone?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/connections?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), "conn_gone") {
+		t.Fatalf("deleted connection still listed: %s", rec.Body.String())
+	}
+
+	if _, err := store.Get(context.Background(), "ws_1", "conn_gone"); err == nil {
+		t.Fatal("sealed blob must be removed on delete")
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/v1/connections/conn_ghost?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("delete unknown: expected 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}

@@ -147,6 +147,20 @@ const OpenAPIJSON = `{
         }
       }
     },
+    "/v1/connections/{connection_id}": {
+      "delete": {
+        "operationId": "deleteConnection",
+        "description": "Append the deleted fact and remove the sealed credential blob. The event stream is retained; the id cannot be reused — recreate under a fresh id.",
+        "parameters": [
+          {"name": "connection_id", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "workspace_id", "in": "query", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "Connection deleted", "content": {"application/json": {"schema": {"type": "object", "properties": {"deleted": {"type": "boolean"}}}}}},
+          "404": {"description": "Connection not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+        }
+      }
+    },
     "/v1/connections/{connection_id}:authorize": {
       "post": {
         "operationId": "authorizeConnection",

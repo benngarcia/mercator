@@ -37,3 +37,9 @@ func (s *SQLiteStore) Get(ctx context.Context, ws, id string) ([]byte, error) {
 	}
 	return blob, err
 }
+
+func (s *SQLiteStore) Delete(ctx context.Context, ws, id string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM connection_secret WHERE workspace_id = ? AND connection_id = ?`, ws, id)
+	return err
+}

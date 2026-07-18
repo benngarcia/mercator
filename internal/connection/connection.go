@@ -3,6 +3,7 @@ package connection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"sort"
@@ -16,7 +17,10 @@ import (
 const (
 	EventConnectionCreated              = "compute.connection.created.v1"
 	EventConnectionAuthorizationUpdated = "compute.connection.authorization_updated.v1"
+	EventConnectionDeleted              = "compute.connection.deleted.v1"
 )
+
+var ErrNotFound = fmt.Errorf("connection: not found")
 
 type Service struct {
 	log eventlog.EventLog
@@ -54,6 +58,13 @@ type UpdateAuthorizationRequest struct {
 	ConnectionID string
 	Authorized   bool
 	// Actor is the event-envelope principal recorded on the authorization fact.
+	Actor json.RawMessage
+}
+
+type DeleteRequest struct {
+	WorkspaceID  string
+	ConnectionID string
+	// Actor is the event-envelope principal recorded on the deleted fact.
 	Actor json.RawMessage
 }
 
@@ -110,7 +121,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 		return err
 	}
 	if len(events) == 0 {
-		return fmt.Errorf("connection: not found")
+		return ErrNotFound
 	}
 	data, err := json.Marshal(map[string]any{"authorized": req.Authorized})
 	if err != nil {
@@ -148,12 +159,62 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 	return err
 }
 
+// Delete appends the deleted fact. The stream (and its events) remain in the
+// log; Get and List treat a deleted connection as gone. Deleting twice is an
+// idempotent replay. A deleted connection's id cannot be reused: recreate
+// under a fresh id.
+func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
+	events, err := s.log.ReadStream(ctx, connectionStream(req.WorkspaceID, req.ConnectionID), 0, 1000)
+	if err != nil {
+		return err
+	}
+	_, deleted, err := reduceConnection(events)
+	if err != nil {
+		return err
+	}
+	if deleted {
+		return nil
+	}
+	hash, err := domain.CanonicalHash(struct {
+		WorkspaceID  string
+		ConnectionID string
+	}{req.WorkspaceID, req.ConnectionID})
+	if err != nil {
+		return err
+	}
+	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
+		ExpectedStreamVersion: uint64(len(events)),
+		CommandKey:            "connection:delete:" + req.ConnectionID,
+		RequestHash:           hash,
+		Actor:                 req.Actor,
+		CorrelationID:         req.ConnectionID,
+		CausationID:           "connection:delete:" + req.ConnectionID,
+		Events: []eventlog.NewEvent{{
+			ID:            fmt.Sprintf("evt_connection_%s_%s_deleted", req.WorkspaceID, req.ConnectionID),
+			Type:          EventConnectionDeleted,
+			SchemaVersion: 1,
+			OccurredAt:    s.now().UTC(),
+			Visibility:    eventlog.VisibilityPublic,
+			Data:          json.RawMessage(`{"deleted":true}`),
+		}},
+	})
+	return err
+}
+
 func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Record, error) {
 	events, err := s.log.ReadStream(ctx, connectionStream(workspaceID, connectionID), 0, 1000)
 	if err != nil {
 		return Record{}, err
 	}
-	return reduceConnection(events)
+	record, deleted, err := reduceConnection(events)
+	if err != nil {
+		return Record{}, err
+	}
+	if deleted {
+		return Record{}, ErrNotFound
+	}
+	return record, nil
 }
 
 func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error) {
@@ -164,6 +225,9 @@ func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error
 	records := make([]Record, 0, len(events))
 	for _, event := range events {
 		record, err := s.Get(ctx, workspaceID, event.StreamID)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -173,13 +237,15 @@ func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error
 	return records, nil
 }
 
-func reduceConnection(events []eventlog.StoredEvent) (Record, error) {
-	var record Record
+// reduceConnection folds a connection stream. deleted is reported separately
+// so Delete can distinguish "already deleted" (idempotent no-op) from "never
+// existed" (an error) — callers exposing reads map deleted to ErrNotFound.
+func reduceConnection(events []eventlog.StoredEvent) (record Record, deleted bool, err error) {
 	for _, event := range events {
 		switch event.Type {
 		case EventConnectionCreated:
 			if err := json.Unmarshal(event.Data, &record); err != nil {
-				return Record{}, err
+				return Record{}, false, err
 			}
 			record.CreatedBy = actorSubject(event.Actor)
 		case EventConnectionAuthorizationUpdated:
@@ -187,7 +253,7 @@ func reduceConnection(events []eventlog.StoredEvent) (Record, error) {
 				Authorized bool `json:"authorized"`
 			}
 			if err := json.Unmarshal(event.Data, &data); err != nil {
-				return Record{}, err
+				return Record{}, false, err
 			}
 			record.Authorized = data.Authorized
 			if data.Authorized {
@@ -195,12 +261,14 @@ func reduceConnection(events []eventlog.StoredEvent) (Record, error) {
 			} else {
 				record.AuthorizedBy = ""
 			}
+		case EventConnectionDeleted:
+			deleted = true
 		}
 	}
 	if record.ID == "" {
-		return Record{}, fmt.Errorf("connection: not found")
+		return Record{}, false, ErrNotFound
 	}
-	return record, nil
+	return record, deleted, nil
 }
 
 // actorSubject extracts the audited subject from an event envelope's actor

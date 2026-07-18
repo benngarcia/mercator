@@ -440,6 +440,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/connections", s.createConnection)
 	s.mux.HandleFunc("POST /v1/connections/{conn_action}", s.connectionAction)
 	s.mux.HandleFunc("GET /v1/connections", s.listConnections)
+	s.mux.HandleFunc("DELETE /v1/connections/{connection_id}", s.deleteConnection)
 	s.mux.HandleFunc("GET /v1/adapters", s.listAdapters)
 	s.mux.HandleFunc("GET /v1/offers", s.listOffers)
 	s.mux.HandleFunc("GET /v1/sinks/{sink_id}", s.sinkStatus)
@@ -1079,6 +1080,43 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	writeJSON(w, http.StatusOK, connectionResponse{Connection: record})
+}
+
+// deleteConnection appends the deleted fact and removes the sealed credential
+// blob. The event stream itself is retained (append-only log); the id cannot
+// be reused — recreating means a fresh connection id.
+func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
+	if s.conns == nil {
+		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
+		return
+	}
+	workspaceID, ok := s.requiredWorkspace(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("connection_id")
+	if err := s.conns.Delete(r.Context(), connection.DeleteRequest{
+		WorkspaceID:  workspaceID,
+		ConnectionID: id,
+		Actor:        requestActor(r),
+	}); err != nil {
+		if errors.Is(err, connection.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "CONNECTION_NOT_FOUND", "Connection not found.")
+			return
+		}
+		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_DELETE_FAILED", err)
+		return
+	}
+	// The blob is unreachable once the record is deleted; failing to remove it
+	// must not resurrect the connection. Retrying the (idempotent) delete
+	// re-attempts the removal.
+	if s.secretStore != nil {
+		if err := s.secretStore.Delete(r.Context(), workspaceID, id); err != nil {
+			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
 
 func (s *Server) listConnections(w http.ResponseWriter, r *http.Request) {
