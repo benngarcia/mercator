@@ -7,6 +7,8 @@ export const queryKeys = {
 
   health: () => ["mercator", "health"] as const,
 
+  authSession: () => ["mercator", "authSession"] as const,
+
   runs: (workspaceID: string) =>
     ["mercator", "runs", { workspaceID }] as const,
   run: (workspaceID: string, runID: string) =>
