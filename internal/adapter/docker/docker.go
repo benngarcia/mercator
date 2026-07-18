@@ -31,6 +31,9 @@ type CreateContainerRequest struct {
 	Env        map[string]string
 	Ports      []int
 	Labels     map[string]string
+	// GPUCount > 0 requests that many GPU devices at create time
+	// (`docker create --gpus <count>`); zero grants no GPU access.
+	GPUCount int
 }
 
 type Container struct {
@@ -84,6 +87,7 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		Env:        env,
 		Ports:      dockerPorts(req),
 		Labels:     dockerLabels(req),
+		GPUCount:   requestedAcceleratorCount(req.Resources.Accelerators),
 	})
 	duplicate := false
 	if errors.Is(err, ErrAlreadyExists) {
@@ -220,6 +224,19 @@ func dockerEnv(bindings []adapter.EnvironmentBinding) (map[string]string, error)
 		}
 	}
 	return env, nil
+}
+
+// requestedAcceleratorCount sums the GPU counts the workload requires. The
+// scheduler only places an accelerator-requiring workload on an offer whose
+// probed inventory satisfies every requirement, so at launch time the summed
+// count passes straight through to `--gpus`. A workload that requested none
+// gets no GPU access even on a GPU host.
+func requestedAcceleratorCount(requirements []domain.AcceleratorRequirement) int {
+	total := 0
+	for _, requirement := range requirements {
+		total += requirement.Count
+	}
+	return total
 }
 
 func dockerPorts(req adapter.LaunchRequest) []int {

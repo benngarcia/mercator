@@ -360,3 +360,31 @@ func (f *fakeClient) ListContainers(_ context.Context, labels map[string]string)
 func intPtr(value int) *int {
 	return &value
 }
+
+func TestLaunchPassesGPUCountForAcceleratorWorkloads(t *testing.T) {
+	client := newFakeClient()
+	ad := New(client)
+	req := launchRequest()
+	req.Resources.Accelerators = []domain.AcceleratorRequirement{{Vendor: "nvidia", ModelAnyOf: []string{"nvidia-rtx-5090"}, Count: 1}}
+
+	if _, err := ad.Launch(context.Background(), req); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	if client.created[0].GPUCount != 1 {
+		t.Fatalf("GPUCount = %d, want 1 (--gpus passthrough of the accelerator requirement)", client.created[0].GPUCount)
+	}
+}
+
+func TestLaunchGrantsNoGPUAccessWithoutAcceleratorRequirement(t *testing.T) {
+	client := newFakeClient()
+	ad := New(client)
+
+	if _, err := ad.Launch(context.Background(), launchRequest()); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	if client.created[0].GPUCount != 0 {
+		t.Fatalf("GPUCount = %d, want 0 (no GPU access unless the workload asked)", client.created[0].GPUCount)
+	}
+}

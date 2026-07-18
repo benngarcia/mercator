@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -61,7 +62,14 @@ func endpointLabel(host, dockerContext string) string {
 // with OFFER_EXPIRED until the process restarted. A non-empty archOverride
 // wins over the probed architecture (useful for forcing emulated platforms).
 func NewOffering(client *CLIClient, id EndpointIdentity, archOverride string) adapter.Adapter {
-	return offeringAdapter{Adapter: New(client), client: client, id: id, arch: archOverride, disk: &diskFact{}}
+	return offeringAdapter{
+		Adapter: New(client),
+		client:  client,
+		id:      id,
+		arch:    archOverride,
+		disk:    &probeFact[int64]{},
+		gpus:    &probeFact[[]domain.AcceleratorInventory]{},
+	}
 }
 
 type offeringAdapter struct {
@@ -69,47 +77,58 @@ type offeringAdapter struct {
 	client *CLIClient
 	id     EndpointIdentity
 	arch   string
-	disk   *diskFact
+	disk   *probeFact[int64]
+	gpus   *probeFact[[]domain.AcceleratorInventory]
 }
 
 func (a offeringAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	now := time.Now().UTC()
-	diskFree := a.disk.value(a.id.NativeRef, a.client.DiskFreeBytes, now)
-	return []domain.OfferSnapshot{StandingOffer(a.id, a.arch, a.probe(), diskFree, now)}, nil
+	info := a.probe()
+	diskFree := a.disk.value(a.id.NativeRef, "disk", a.client.DiskFreeBytes, now)
+	// Only a daemon with the NVIDIA runtime can satisfy `--gpus`, so CPU-only
+	// endpoints skip the GPU probe container entirely and advertise none.
+	var accelerators []domain.AcceleratorInventory
+	if info.HasNvidiaRuntime() {
+		accelerators = a.gpus.value(a.id.NativeRef, "gpu", a.client.AcceleratorInventory, now)
+	}
+	return []domain.OfferSnapshot{StandingOffer(a.id, a.arch, info, diskFree, accelerators, now)}, nil
 }
 
-// diskFact caches the container-probe disk measurement per endpoint. Offers
-// are otherwise rebuilt fresh on every ListOffers call (see NewOffering), but
-// the disk probe launches a one-shot container, which is too heavy to run per
-// placement decision or offers-endpoint poll. Free disk moves slowly, so a
-// short TTL keeps the offer honest without container churn. A zero value means
-// the last probe failed and StandingOffer applies its conservative fallback.
-type diskFact struct {
+// probeFact caches a container-probe measurement per endpoint. Offers are
+// otherwise rebuilt fresh on every ListOffers call (see NewOffering), but the
+// disk and GPU probes launch a one-shot container each, which is too heavy to
+// run per placement decision or offers-endpoint poll. Both facts move slowly
+// (free disk drifts, GPU inventory is fixed hardware), so a short TTL keeps
+// the offer honest without container churn. A failed probe caches the zero
+// value: StandingOffer falls back conservatively for disk, and a zero GPU
+// inventory means the offer honestly advertises no accelerators.
+type probeFact[T any] struct {
 	mu         sync.Mutex
-	freeBytes  int64
+	cached     T
 	measuredAt time.Time
 }
 
-const diskFactTTL = time.Minute
+const probeFactTTL = time.Minute
 
-func (d *diskFact) value(nativeRef string, measure func(context.Context) (int64, error), now time.Time) int64 {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.measuredAt.IsZero() && now.Sub(d.measuredAt) < diskFactTTL {
-		return d.freeBytes
+func (p *probeFact[T]) value(nativeRef, fact string, measure func(context.Context) (T, error), now time.Time) T {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.measuredAt.IsZero() && now.Sub(p.measuredAt) < probeFactTTL {
+		return p.cached
 	}
 	// Generous timeout: the first probe on a fresh host also pulls the tiny
 	// probe image.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	freeBytes, err := measure(ctx)
+	value, err := measure(ctx)
 	if err != nil {
-		log.Printf("docker endpoint %q disk probe failed; using fallback disk capacity: %v", nativeRef, err)
-		freeBytes = 0
+		log.Printf("docker endpoint %q %s probe failed; using fallback: %v", nativeRef, fact, err)
+		var zero T
+		value = zero
 	}
-	d.freeBytes = freeBytes
-	d.measuredAt = now
-	return d.freeBytes
+	p.cached = value
+	p.measuredAt = now
+	return p.cached
 }
 
 // probe queries the endpoint's `docker info` best-effort. A failed or
@@ -136,7 +155,11 @@ func (a offeringAdapter) probe() HostInfo {
 // 16 GiB regardless of the real host silently made every workload requesting
 // more infeasible ("no feasible offers") even on hosts with hundreds of free
 // GiB — bucket's model_training dispatches request >= 20 GiB.
-func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, diskFreeBytes int64, now time.Time) domain.OfferSnapshot {
+//
+// accelerators is the container-probed GPU inventory (see
+// CLIClient.AcceleratorInventory); empty means the endpoint advertises none,
+// so GPU-requiring workloads are rejected for it, never mis-scheduled.
+func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, diskFreeBytes int64, accelerators []domain.AcceleratorInventory, now time.Time) domain.OfferSnapshot {
 	arch := archOverride
 	if arch == "" {
 		arch = info.OCIArch()
@@ -169,6 +192,7 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 			CPUMillis:          cpuMillis,
 			MemoryBytes:        memoryBytes,
 			EphemeralDiskBytes: ephemeralDiskBytes,
+			Accelerators:       accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{
@@ -181,8 +205,9 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 				ListOwned:        true,
 				CancelQueued:     true,
 			},
-			Network: domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
-			Pricing: domain.PricingCapabilities{Known: true},
+			Resources: domain.ResourceCapabilities{GPUVendors: acceleratorVendors(accelerators)},
+			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
+			Pricing:   domain.PricingCapabilities{Known: true},
 		},
 		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
 			Scope:      domain.NetworkScopeRegistry,
@@ -203,4 +228,17 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 		ImageCache: domain.ImageCacheEvidence{Known: true},
 		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
+}
+
+// acceleratorVendors lists the distinct vendors present in the probed
+// inventory, preserving first-seen order (mirrors what the runpod adapter
+// advertises in Capabilities.Resources.GPUVendors).
+func acceleratorVendors(accelerators []domain.AcceleratorInventory) []string {
+	var vendors []string
+	for _, accelerator := range accelerators {
+		if !slices.Contains(vendors, accelerator.Vendor) {
+			vendors = append(vendors, accelerator.Vendor)
+		}
+	}
+	return vendors
 }

@@ -52,8 +52,11 @@ var modelAliases = map[string]string{
 	"a40":  "a40",
 	"a100": "a100", "a100-pcie": "a100", "a100-sxm": "a100", "a100-sxm4": "a100",
 	"a100-40gb": "a100", "a100-80gb": "a100", "a100-80gb-pcie": "a100",
+	// nvidia-smi spellings (as the docker adapter's GPU probe reports them).
+	"a100-sxm4-40gb": "a100", "a100-sxm4-80gb": "a100",
+	"a100-pcie-40gb": "a100", "a100-pcie-80gb": "a100",
 	"h100": "h100", "h100-pcie": "h100", "h100-sxm": "h100", "h100-sxm5": "h100",
-	"h100-nvl": "h100", "h100-80gb": "h100",
+	"h100-nvl": "h100", "h100-80gb": "h100", "h100-80gb-hbm3": "h100",
 	"h200": "h200",
 	"l4":   "l4",
 	"l40":  "l40", "l40s": "l40s",
@@ -62,11 +65,17 @@ var modelAliases = map[string]string{
 	"a10": "a10", "a10g": "a10g",
 	"4090": "rtx-4090", "rtx-4090": "rtx-4090",
 	"3090": "rtx-3090", "rtx-3090": "rtx-3090",
+	"5090": "rtx-5090", "rtx-5090": "rtx-5090",
+	"5080": "rtx-5080", "rtx-5080": "rtx-5080",
 }
 
 // canonicalModelPart resolves the canonical model token for (vendor, model).
+// The "geforce" marketing prefix is stripped: nvidia-smi reports consumer
+// cards as e.g. "NVIDIA GeForce RTX 5090" while cloud providers list the same
+// GPU as "RTX 5090", and both must land on one canonical id.
 func canonicalModelPart(vendor, model string) string {
 	key := strings.TrimPrefix(slug(model), NormalizeVendor(vendor)+"-")
+	key = strings.TrimPrefix(key, "geforce-")
 	if c, ok := modelAliases[key]; ok {
 		return c
 	}

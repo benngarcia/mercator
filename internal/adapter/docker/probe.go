@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/gpunorm"
 )
 
 // HostInfo is the subset of `docker info` we use to build an honest offer for a
@@ -18,6 +23,17 @@ type HostInfo struct {
 	MemTotalBytes int64
 	ServerVersion string
 	Name          string
+	// Runtimes are the daemon's registered OCI runtime names (sorted). A GPU
+	// host provisioned with nvidia-container-toolkit registers "nvidia".
+	Runtimes []string
+}
+
+// HasNvidiaRuntime reports whether the endpoint's daemon registered the NVIDIA
+// container runtime — the precondition for `--gpus` device requests, and the
+// gate that keeps CPU-only endpoints from ever paying for (or logging failures
+// from) the one-shot GPU probe container.
+func (h HostInfo) HasNvidiaRuntime() bool {
+	return slices.Contains(h.Runtimes, "nvidia")
 }
 
 // OCIArch returns the host's architecture normalized to the OCI platform
@@ -44,12 +60,13 @@ func normalizeArch(arch string) string {
 // parseDockerInfo decodes the JSON emitted by `docker info --format '{{json .}}'`.
 func parseDockerInfo(raw []byte) (HostInfo, error) {
 	var doc struct {
-		Architecture  string `json:"Architecture"`
-		OSType        string `json:"OSType"`
-		NCPU          int    `json:"NCPU"`
-		MemTotal      int64  `json:"MemTotal"`
-		ServerVersion string `json:"ServerVersion"`
-		Name          string `json:"Name"`
+		Architecture  string                     `json:"Architecture"`
+		OSType        string                     `json:"OSType"`
+		NCPU          int                        `json:"NCPU"`
+		MemTotal      int64                      `json:"MemTotal"`
+		ServerVersion string                     `json:"ServerVersion"`
+		Name          string                     `json:"Name"`
+		Runtimes      map[string]json.RawMessage `json:"Runtimes"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return HostInfo{}, fmt.Errorf("parse docker info: %w", err)
@@ -61,6 +78,7 @@ func parseDockerInfo(raw []byte) (HostInfo, error) {
 		MemTotalBytes: doc.MemTotal,
 		ServerVersion: doc.ServerVersion,
 		Name:          doc.Name,
+		Runtimes:      slices.Sorted(maps.Keys(doc.Runtimes)),
 	}, nil
 }
 
@@ -97,6 +115,68 @@ func (c *CLIClient) DiskFreeBytes(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("docker disk probe: %w: %s", err, strings.TrimSpace(stderr))
 	}
 	return parseDFAvailableBytes(stdout)
+}
+
+// AcceleratorInventory measures the endpoint's GPUs by running `nvidia-smi`
+// in a one-shot probe container launched with `--gpus all`. The NVIDIA
+// container runtime injects nvidia-smi and the driver libraries into any
+// container it starts, so the same tiny busybox image as the disk probe
+// suffices — no CUDA image pull. Like the disk probe, this works uniformly
+// across endpoint types (loopback socket, remote ssh:// or tcp:// over the
+// tailnet) because the measurement happens on the daemon's side. Callers
+// should gate on HostInfo.HasNvidiaRuntime(); on a host without the NVIDIA
+// runtime the launch itself fails and the error surfaces here.
+func (c *CLIClient) AcceleratorInventory(ctx context.Context) ([]domain.AcceleratorInventory, error) {
+	stdout, stderr, err := c.runSplit(ctx,
+		"run", "--rm", "--network=none", "--gpus", "all", "--label", "mercator.probe=gpu_inventory",
+		diskProbeImage, "nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits")
+	if err != nil {
+		return nil, fmt.Errorf("docker gpu probe: %w: %s", err, strings.TrimSpace(stderr))
+	}
+	return parseNvidiaSMIInventory(stdout)
+}
+
+// parseNvidiaSMIInventory groups the CSV lines of
+// `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits`
+// (one line per physical GPU, memory in MiB) into accelerator inventory:
+// identical (name, memory) GPUs collapse into one entry with a count. The
+// canonical model id comes from the same gpunorm mapping the runpod adapter
+// uses, so a workload's ModelAnyOf matches the GPU regardless of provider.
+func parseNvidiaSMIInventory(output string) ([]domain.AcceleratorInventory, error) {
+	var inventory []domain.AcceleratorInventory
+	index := map[string]int{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name, memory, ok := strings.Cut(line, ",")
+		if !ok {
+			return nil, fmt.Errorf("unexpected nvidia-smi line: %q", line)
+		}
+		name = strings.TrimSpace(name)
+		memoryMiB, err := strconv.ParseInt(strings.TrimSpace(memory), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse nvidia-smi memory.total in line %q: %w", line, err)
+		}
+		key := name + "|" + strconv.FormatInt(memoryMiB, 10)
+		if i, seen := index[key]; seen {
+			inventory[i].Count++
+			continue
+		}
+		index[key] = len(inventory)
+		inventory = append(inventory, domain.AcceleratorInventory{
+			Vendor:         "NVIDIA",
+			Model:          name,
+			CanonicalModel: gpunorm.Canonical("NVIDIA", name),
+			Count:          1,
+			MemoryBytes:    memoryMiB * 1024 * 1024,
+		})
+	}
+	if len(inventory) == 0 {
+		return nil, fmt.Errorf("no GPUs in nvidia-smi output: %q", strings.TrimSpace(output))
+	}
+	return inventory, nil
 }
 
 // parseDFAvailableBytes extracts the Available column of the root mount from
