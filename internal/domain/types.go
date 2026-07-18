@@ -203,9 +203,15 @@ type CapabilityProfile struct {
 }
 
 type ContainerCapabilities struct {
-	MaxContainers       int  `json:"max_containers"`
-	SupportsDigestRefs  bool `json:"supports_digest_refs"`
-	MaxEnvironmentBytes int  `json:"max_environment_bytes"`
+	MaxContainers      int  `json:"max_containers"`
+	SupportsDigestRefs bool `json:"supports_digest_refs"`
+	// SupportsEntrypointOverride reports whether the adapter can replace the
+	// image's entrypoint at launch. Providers whose container API has no
+	// entrypoint field (e.g. Shadeform's docker launch configuration) leave
+	// this false so the scheduler never places an entrypoint-overriding
+	// workload where the launch would be rejected.
+	SupportsEntrypointOverride bool `json:"supports_entrypoint_override"`
+	MaxEnvironmentBytes        int  `json:"max_environment_bytes"`
 }
 
 type LifecycleCapabilities struct {
@@ -390,6 +396,12 @@ type RunRecord struct {
 	// or merely release a borrowed slot. Empty until a launch intent is recorded.
 	Disposition Disposition `json:"disposition,omitempty"`
 	Closed      bool        `json:"closed"`
+	// CreatedBy and CancelledBy are the audited principals of the create and
+	// cancel commands: a signed-in operator's email, or "bearer" for
+	// machine-token calls. Empty on runs recorded before auditing existed or
+	// with auth disabled.
+	CreatedBy   string `json:"created_by,omitempty"`
+	CancelledBy string `json:"cancelled_by,omitempty"`
 }
 
 type AttemptRecord struct {

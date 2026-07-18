@@ -146,6 +146,9 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	if !offer.Capabilities.Container.SupportsDigestRefs {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})
 	}
+	if container.Entrypoint != nil && !offer.Capabilities.Container.SupportsEntrypointOverride {
+		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_entrypoint_override", Required: true, Offered: false, Message: "Offer cannot override the image entrypoint."})
+	}
 	if offer.Resources.CPUMillis < workload.Spec.Resources.CPU.MinMillis {
 		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.cpu", Required: workload.Spec.Resources.CPU.MinMillis, Offered: offer.Resources.CPUMillis, Message: "Offer has insufficient CPU."})
 	}

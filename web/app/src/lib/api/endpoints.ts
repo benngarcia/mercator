@@ -4,6 +4,7 @@
 
 import { apiFetch } from "./client";
 import type {
+  AuthSessionState,
   ConnectionListResponse,
   ConnectionResponse,
   CreateConnectionRequest,
@@ -46,6 +47,16 @@ export function getHealthLive(signal?: AbortSignal): Promise<HealthStatus> {
 
 export function getHealthReady(signal?: AbortSignal): Promise<HealthStatus> {
   return apiFetch<HealthStatus>("/health/ready", { signal });
+}
+
+// ---------------------------------------------------------------------------
+// Auth session
+// ---------------------------------------------------------------------------
+
+export function getAuthSession(
+  signal?: AbortSignal,
+): Promise<AuthSessionState> {
+  return apiFetch<AuthSessionState>("/auth/session", { signal });
 }
 
 // ---------------------------------------------------------------------------

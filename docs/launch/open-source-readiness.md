@@ -27,8 +27,10 @@ launch sequence remains recorded in `docs/launch/public-launch-runbook.md`.
 - Public repository: `https://github.com/benngarcia/mercator`.
 - Latest verified default-branch CI run:
   `https://github.com/benngarcia/mercator/actions/runs/29374419800`.
-- Tagged releases exist through `v0.2.1`, with archives and checksums published
-  through GitHub Releases.
+- Tagged releases exist through `v0.2.2`, with archives and checksums published
+  through GitHub Releases. The `v0.2.2` release notes record the container
+  image digest for deployments that pin by digest
+  (Release workflow run `29625622885`, 2026-07-18).
 - Public starter work is tracked in issues
   [#39](https://github.com/benngarcia/mercator/issues/39),
   [#40](https://github.com/benngarcia/mercator/issues/40),

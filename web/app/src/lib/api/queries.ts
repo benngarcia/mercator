@@ -19,6 +19,7 @@ import { ApiError } from "./client";
 import * as endpoints from "./endpoints";
 import { queryKeys } from "./keys";
 import type {
+  AuthSessionState,
   ConnectionRecord,
   CreateConnectionRequest,
   CreateRevisionRequest,
@@ -85,6 +86,22 @@ export function useHealth(): UseQueryResult<HealthState, ApiError> {
       };
     },
     refetchInterval: POLL.offers,
+    retry: false,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Auth session
+// ---------------------------------------------------------------------------
+
+// useAuthSession answers whether OIDC login is configured and who is signed
+// in. The answer only changes on login/logout (full page navigations), so the
+// query never refetches on its own.
+export function useAuthSession(): UseQueryResult<AuthSessionState, ApiError> {
+  return useQuery<AuthSessionState, ApiError>({
+    queryKey: queryKeys.authSession(),
+    queryFn: ({ signal }) => endpoints.getAuthSession(signal),
+    staleTime: Infinity,
     retry: false,
   });
 }

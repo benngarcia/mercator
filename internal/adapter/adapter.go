@@ -65,27 +65,31 @@ type OfferRequest struct {
 }
 
 type LaunchRequest struct {
-	OperationKey              string                      `json:"operation_key"`
-	RequestHash               string                      `json:"request_hash"`
-	WorkspaceID               string                      `json:"workspace_id"`
-	RunID                     string                      `json:"run_id"`
-	AttemptID                 string                      `json:"attempt_id"`
-	WorkloadID                string                      `json:"workload_id"`
-	WorkloadRevisionID        string                      `json:"workload_revision_id"`
-	OwnershipToken            string                      `json:"ownership_token"`
-	LaunchKey                 string                      `json:"launch_key"`
-	CleanupLocator            string                      `json:"cleanup_locator"`
-	Image                     string                      `json:"image"`
-	Platform                  domain.Platform             `json:"platform"`
-	Entrypoint                *[]string                   `json:"entrypoint,omitempty"`
-	Args                      []string                    `json:"args,omitempty"`
-	Environment               []EnvironmentBinding        `json:"environment,omitempty"`
-	Ports                     []domain.PortSpec           `json:"ports,omitempty"`
-	Resources                 domain.ResourceRequirements `json:"resources"`
-	SelectedOfferSnapshotID   string                      `json:"selected_offer_snapshot_id"`
-	SelectedOfferConnectionID string                      `json:"selected_offer_connection_id"`
-	SelectedOfferAdapterType  string                      `json:"selected_offer_adapter_type"`
-	SelectedOfferNativeRef    string                      `json:"selected_offer_native_ref"`
+	OperationKey       string                      `json:"operation_key"`
+	RequestHash        string                      `json:"request_hash"`
+	WorkspaceID        string                      `json:"workspace_id"`
+	RunID              string                      `json:"run_id"`
+	AttemptID          string                      `json:"attempt_id"`
+	WorkloadID         string                      `json:"workload_id"`
+	WorkloadRevisionID string                      `json:"workload_revision_id"`
+	OwnershipToken     string                      `json:"ownership_token"`
+	LaunchKey          string                      `json:"launch_key"`
+	CleanupLocator     string                      `json:"cleanup_locator"`
+	Image              string                      `json:"image"`
+	Platform           domain.Platform             `json:"platform"`
+	Entrypoint         *[]string                   `json:"entrypoint,omitempty"`
+	Args               []string                    `json:"args,omitempty"`
+	Environment        []EnvironmentBinding        `json:"environment,omitempty"`
+	Ports              []domain.PortSpec           `json:"ports,omitempty"`
+	Resources          domain.ResourceRequirements `json:"resources"`
+	// MaxRuntimeSeconds is the run's execution bound from the workload's
+	// ExecutionPolicy. Adapters that support provider-side reclamation (e.g.
+	// Shadeform auto_delete) derive their TTL backstop from it.
+	MaxRuntimeSeconds         int64  `json:"max_runtime_seconds,omitempty"`
+	SelectedOfferSnapshotID   string `json:"selected_offer_snapshot_id"`
+	SelectedOfferConnectionID string `json:"selected_offer_connection_id"`
+	SelectedOfferAdapterType  string `json:"selected_offer_adapter_type"`
+	SelectedOfferNativeRef    string `json:"selected_offer_native_ref"`
 	// Disposition is the RECORDED cleanup intent, derived from the selected
 	// offer's Kind at launch time (provisionable->terminate, standing->release)
 	// and persisted on the launch_intent_recorded event. Cleanup dispatches on

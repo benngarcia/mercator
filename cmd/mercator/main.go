@@ -20,6 +20,8 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
 	runpodadapter "github.com/benngarcia/mercator/internal/adapter/runpod"
+	shadeformadapter "github.com/benngarcia/mercator/internal/adapter/shadeform"
+	vastadapter "github.com/benngarcia/mercator/internal/adapter/vast"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/cli"
 	"github.com/benngarcia/mercator/internal/connection"
@@ -32,6 +34,7 @@ import (
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
+	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
 )
 
@@ -45,6 +48,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 			BaseURL:     envValue(env, "MERCATOR_API_URL", ""),
 			Token:       envValue(env, "MERCATOR_API_TOKEN", ""),
 			WorkspaceID: envValue(env, "MERCATOR_WORKSPACE_ID", ""),
+			ConfigPath:  cli.DefaultConfigPath(env),
 			Args:        args[1:],
 			Stdout:      stdout,
 			Stderr:      stderr,
@@ -81,6 +85,21 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	}
 	if deps.signer != nil && deps.signer.Enabled() {
 		serverOpts = append(serverOpts, httpapi.WithReportSigner(deps.signer))
+	}
+	// Human login: fail-closed OIDC config. Absent config means no login
+	// surface (token-only, exactly as before); partial config refuses to boot;
+	// full config must reach the issuer at startup.
+	webauthCfg, err := webauth.FromEnv(env)
+	if err != nil {
+		stdlog.Fatalf("configure OIDC login: %v", err)
+	}
+	if webauthCfg.Enabled() {
+		authenticator, err := webauth.New(ctx, webauthCfg)
+		if err != nil {
+			stdlog.Fatalf("initialize OIDC login: %v", err)
+		}
+		serverOpts = append(serverOpts, httpapi.WithWebAuth(authenticator))
+		stdlog.Printf("OIDC login enabled: issuer=%s", webauthCfg.Issuer)
 	}
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
@@ -299,6 +318,14 @@ func buildServerDeps(values map[string]string) serverDeps {
 
 	factory.Register("runpod", func(config map[string]string, secret string) (adapter.Adapter, error) {
 		return runpodadapter.New(secret, config)
+	})
+
+	factory.Register("shadeform", func(config map[string]string, secret string) (adapter.Adapter, error) {
+		return shadeformadapter.New(secret, config)
+  })
+
+	factory.Register("vast", func(config map[string]string, secret string) (adapter.Adapter, error) {
+		return vastadapter.New(secret, config)
 	})
 
 	br := broker.NewBroker(svc, factory, resolver)
