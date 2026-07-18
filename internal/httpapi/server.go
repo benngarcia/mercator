@@ -1062,7 +1062,11 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	if err := s.verifier.VerifyConnection(r.Context(), workspaceID, id); err != nil {
-		writeInternalError(w, http.StatusBadGateway, "CONNECTION_VERIFY_FAILED", err)
+		// The adapter's own error text is the operator's diagnostic (a provider
+		// 401, an unreachable daemon): return it verbatim rather than the
+		// generic internal-error message. Still logged server-side.
+		log.Printf("httpapi: 502 CONNECTION_VERIFY_FAILED: %v", err)
+		writeError(w, http.StatusBadGateway, "CONNECTION_VERIFY_FAILED", errorMessage(err))
 		return
 	}
 	if err := s.conns.UpdateAuthorization(r.Context(), connection.UpdateAuthorizationRequest{

@@ -146,8 +146,9 @@ func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 }
 
 // TestAuthorizeConnectionVerifyFailureStaysUnauthorized asserts that when the
-// verifier returns an error the authorize endpoint responds non-2xx (502) and
-// a subsequent GET shows the connection is still unauthorized.
+// verifier returns an error the authorize endpoint responds non-2xx (502)
+// carrying the adapter's real error text, and a subsequent GET shows the
+// connection is still unauthorized.
 func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	store := credential.NewMemoryStore()
 	verifier := &fakeVerifier{err: errors.New("dial timeout")}
@@ -176,6 +177,9 @@ func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	}
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("expected 502, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "dial timeout") {
+		t.Errorf("verify failure must carry the adapter's real error text, got %s", rec.Body.String())
 	}
 
 	// Follow-up GET confirms the connection is still unauthorized.

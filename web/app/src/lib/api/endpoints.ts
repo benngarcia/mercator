@@ -4,10 +4,12 @@
 
 import { apiFetch } from "./client";
 import type {
+  AdapterListResponse,
   AuthSessionState,
   ConnectionListResponse,
   ConnectionResponse,
   CreateConnectionRequest,
+  DeleteConnectionResponse,
   CreateRevisionRequest,
   CreateRunRequest,
   CreateWorkloadRequest,
@@ -195,6 +197,28 @@ export function authorizeConnection(
       workspaceId: opts.workspaceId,
     },
   );
+}
+
+export function deleteConnection(
+  connectionId: string,
+  opts: { workspaceId?: string } = {},
+): Promise<DeleteConnectionResponse> {
+  return apiFetch<DeleteConnectionResponse>(
+    `/v1/connections/${encodeURIComponent(connectionId)}`,
+    {
+      method: "DELETE",
+      workspaceId: opts.workspaceId,
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Adapter manifests
+// ---------------------------------------------------------------------------
+
+// The manifest list is static per server process and not workspace-scoped.
+export function listAdapters(signal?: AbortSignal): Promise<AdapterListResponse> {
+  return apiFetch<AdapterListResponse>("/v1/adapters", { signal });
 }
 
 // ---------------------------------------------------------------------------

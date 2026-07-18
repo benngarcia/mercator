@@ -427,6 +427,57 @@ export interface ConnectionResponse {
   connection: ConnectionRecord;
 }
 
+export interface DeleteConnectionResponse {
+  deleted: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Adapter manifests (GET /v1/adapters)
+// Source of truth: internal/adapter/manifest.go.
+// ---------------------------------------------------------------------------
+
+export type ConfigFieldType = "string" | "bool" | "int";
+
+export interface AdapterConfigField {
+  name: string;
+  label: string;
+  type: ConfigFieldType;
+  required: boolean;
+  // Mask in the UI and never echo after save.
+  secret?: boolean;
+  default?: string;
+  placeholder?: string;
+  help?: string;
+}
+
+export interface AdapterCredentialSpec {
+  required: boolean;
+  label?: string;
+  format?: string;
+}
+
+export interface AdapterSetupStep {
+  text: string;
+  url?: string;
+}
+
+// An adapter's self-description for onboarding surfaces. `logo` is a
+// well-known slug mapped to a bundled logomark (CSP forbids external images);
+// unknown slugs fall back to a typographic monogram.
+export interface AdapterManifest {
+  type: string;
+  display_name: string;
+  logo: string;
+  description: string;
+  credential: AdapterCredentialSpec;
+  config_fields: AdapterConfigField[];
+  setup_steps: AdapterSetupStep[];
+}
+
+export interface AdapterListResponse {
+  adapters: AdapterManifest[];
+}
+
 // ---------------------------------------------------------------------------
 // Sinks
 // ---------------------------------------------------------------------------
