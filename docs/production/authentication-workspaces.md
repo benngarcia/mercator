@@ -1,8 +1,20 @@
 # Authentication And Workspaces
 
-Mercator V1 uses one bearer token principal at the HTTP boundary. This is enough
-for local evaluation and single-operator hardening, but it is not a full
-multi-user identity system.
+Mercator authenticates two kinds of principals at the HTTP boundary:
+
+- **Machine clients** present the static bearer token (`MERCATOR_API_TOKEN`).
+  Workloads reporting exit codes use the separate per-run signed token minted
+  under `MERCATOR_SECRET_KEY`.
+- **Humans** sign in to the console through OIDC when a deployment configures
+  it. Without OIDC config there is no human login surface and everything
+  behaves exactly as a token-only deployment.
+
+Human-initiated mutations (run create/cancel, connection create/authorize)
+record the acting principal in the event log envelope; run and connection
+records surface it as `created_by` / `cancelled_by` / `authorized_by`. The
+principal is `"bearer"` for machine-token calls and the signed-in email for
+sessions. Actor identities never appear in public event payloads (which flow
+to sinks), only in authenticated API record reads.
 
 ## Configure The Bearer Token
 
@@ -25,6 +37,44 @@ MERCATOR_API_URL=http://127.0.0.1:8080 \
 MERCATOR_API_TOKEN="$MERCATOR_API_TOKEN" \
 ./bin/mercator run list --workspace-id ws_eval
 ```
+
+## Configure OIDC Login (Optional)
+
+Any spec-compliant OIDC issuer works; Google is one common choice. Register an
+authorization-code client with redirect URI `<public URL>/auth/callback`, then
+set the full fail-closed environment — a partial config refuses to boot:
+
+```sh
+export MERCATOR_OIDC_ISSUER='https://accounts.google.com'
+export MERCATOR_OIDC_CLIENT_ID='...'
+export MERCATOR_OIDC_CLIENT_SECRET='...'
+# Allowlist: either or both. Comma-separated.
+export MERCATOR_OIDC_ALLOWED_DOMAIN='example.com'
+export MERCATOR_OIDC_ALLOWED_EMAILS='contractor@partner.dev'
+# Signs the session cookie. 32+ random bytes, hex or base64.
+export MERCATOR_SESSION_KEY="$(openssl rand -hex 32)"
+# Externally reachable base URL; also used by run reporting.
+export MERCATOR_PUBLIC_URL='https://mercator.example.com'
+./bin/mercator serve
+```
+
+Behavior with OIDC enabled:
+
+- `GET /auth/login` starts the flow; `GET /auth/callback` validates the ID
+  token (signature, nonce, verified email) and checks the allowlist;
+  `POST /auth/logout` clears the session.
+- The session is a signed, HTTP-only, SameSite=Lax cookie valid for 24 hours.
+  It is marked Secure automatically when the request arrived over TLS — either
+  terminated locally or at a proxy that sets `X-Forwarded-Proto` (kamal-proxy
+  does).
+- Unauthenticated browser loads of the console redirect into `/auth/login`.
+- `/v1/*` requests accept the session cookie as an alternative to the bearer
+  token, carrying the same workspace grants. A wrong bearer token still fails
+  even if a valid session cookie accompanies it.
+- `GET /auth/session` reports `{"enabled": ..., "email": ...}` so clients can
+  discover whether login is available and who is signed in.
+
+The static bearer token keeps working unchanged for CI and API clients.
 
 ## Workspace Rules
 
@@ -59,7 +109,10 @@ Expected results:
 
 ## Current Limitations
 
-- There is one configured bearer token, not per-user credentials.
-- Workspace authorization is an allow-list on that bearer principal.
-- Health, OpenAPI, and the embedded UI shell are public on the listening
-  interface; do not bind Mercator directly to an untrusted network.
+- There is one configured bearer token for machine clients; OIDC sessions add
+  per-user identity for humans but no roles or per-user workspace grants —
+  every authenticated principal carries the same `MERCATOR_AUTH_WORKSPACES`
+  allow-list.
+- Recorded principals are an audit trail, not an authorization system.
+- Health, OpenAPI, and (without OIDC) the embedded UI shell are public on the
+  listening interface; do not bind Mercator directly to an untrusted network.

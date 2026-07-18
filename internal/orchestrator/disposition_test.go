@@ -104,7 +104,7 @@ func TestCleanupDispatchesOnRecordedDispositionNotLiveOffers(t *testing.T) {
 	// Offers vanish entirely. Cancel drives the run terminal and through cleanup
 	// without ever re-listing offers.
 	ad.offers = nil
-	if _, err := orch.CancelRun(ctx, "ws_1", "run_1"); err != nil {
+	if _, err := orch.CancelRun(ctx, "ws_1", "run_1", nil); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 

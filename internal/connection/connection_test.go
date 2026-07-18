@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/credential"
@@ -111,4 +112,63 @@ func openConnectionTestLog(t *testing.T) *eventlog.SQLiteEventLog {
 		}
 	})
 	return log
+}
+
+// Connection create/authorize commands record the acting principal on the
+// event envelope and surface it on the reduced record, without disturbing the
+// idempotency hashes of actorless (bootstrap) commands.
+func TestConnectionSurfacesActingPrincipals(t *testing.T) {
+	ctx := context.Background()
+	svc := New(openConnectionTestLog(t))
+
+	if _, err := svc.Create(ctx, CreateRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_audit",
+		AdapterType:  "docker",
+		Actor:        json.RawMessage(`{"subject":"operator@example.com"}`),
+	}); err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_audit",
+		Authorized:   true,
+		Actor:        json.RawMessage(`{"subject":"admin@example.com"}`),
+	}); err != nil {
+		t.Fatalf("authorize connection: %v", err)
+	}
+
+	record, err := svc.Get(ctx, "ws_1", "conn_audit")
+	if err != nil {
+		t.Fatalf("get connection: %v", err)
+	}
+	if record.CreatedBy != "operator@example.com" {
+		t.Fatalf("expected created_by=operator@example.com, got %q", record.CreatedBy)
+	}
+	if record.AuthorizedBy != "admin@example.com" {
+		t.Fatalf("expected authorized_by=admin@example.com, got %q", record.AuthorizedBy)
+	}
+}
+
+// A boot-time (actorless) authorization followed by the same authorization
+// from a signed-in principal must replay idempotently: WHO issued the command
+// is not part of WHAT was commanded.
+func TestAuthorizationIdempotencyIgnoresActor(t *testing.T) {
+	ctx := context.Background()
+	svc := New(openConnectionTestLog(t))
+
+	if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: "conn_boot", AdapterType: "docker"}); err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{WorkspaceID: "ws_1", ConnectionID: "conn_boot", Authorized: true}); err != nil {
+		t.Fatalf("bootstrap authorize: %v", err)
+	}
+	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_boot",
+		Authorized:   true,
+		Actor:        json.RawMessage(`{"subject":"operator@example.com"}`),
+	}); err != nil {
+		t.Fatalf("re-authorize with a principal must replay idempotently: %v", err)
+	}
 }

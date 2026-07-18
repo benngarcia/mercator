@@ -7,9 +7,16 @@ evaluation. It is not a GA security assurance statement.
 
 - Mercator is a single trusted process.
 - SQLite is the internal source of truth.
-- `/v1/*` API routes are protected by a configured bearer token.
-- Workspace authorization is an allow-list on that bearer principal.
-- Health, OpenAPI, and the UI shell are public on the listen interface.
+- `/v1/*` API routes are protected by a configured bearer token, or — when a
+  deployment configures OIDC — a signed HTTP-only session cookie carrying a
+  logged-in human identity. Sessions are HMAC-signed under
+  `MERCATOR_SESSION_KEY`; OIDC config is fail-closed (partial config refuses
+  to boot).
+- Workspace authorization is an allow-list shared by every authenticated
+  principal; per-user identity is recorded for audit, not authorization.
+- Health, OpenAPI, and (without OIDC) the UI shell are public on the listen
+  interface. With OIDC configured, unauthenticated console loads redirect to
+  the login flow.
 - Runtime adapters are trusted in-process code.
 - Docker runs on the local host and should be treated as part of the trusted
   evaluation environment.
@@ -49,7 +56,8 @@ go run ./cmd/mercator run events --workspace-id ws_eval --run-id run_secret_1 \
   evaluation.
 - When `MERCATOR_API_TOKEN` is unset, `serve` logs a generated token to stdout;
   operators shipping logs should set the variable explicitly.
-- There is one bearer token, not per-user auth.
+- There is one machine bearer token; OIDC sessions add per-user identity for
+  humans but no roles or per-user workspace grants.
 - Secret management is delegated to the workload/runtime. Mercator has no
   secret vault, grant API, or KMS adapter surface.
 - Registry-backed image resolution and registry credential management are not
