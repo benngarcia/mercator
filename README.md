@@ -213,6 +213,7 @@ need to prove the provisionable GPU-provider flow.
 | --- | --- | --- | --- |
 | Docker adapter | Broker lifecycle, placement, public events, cleanup, CLI, HTTP interface, and console with real local container launch, observation, and labels on one host. | Go 1.25+, a running Docker daemon, a digest-pinned Linux image, `jq`, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
 | RunPod adapter | Provisionable GPU-provider flow and terminate cleanup. | RunPod API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [RunPod runbook](docs/production/runpod.md) |
+| Shadeform adapter | The same provisionable flow across ~21 aggregated GPU clouds (Lambda, Nebius, Crusoe, …) through one API key and invoice. | Shadeform API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [Shadeform runbook](docs/production/shadeform.md) |
 | Vast.ai adapter | Marketplace-offer placement on secure-tier (certified datacenter) hosts with terminate cleanup. | Vast.ai API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [Vast.ai runbook](docs/production/vast.md) |
 
 If the broker lifecycle passes but a specific provider does not, treat that as

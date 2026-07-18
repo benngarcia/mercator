@@ -124,9 +124,10 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now 
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{
-				MaxContainers:       8,
-				SupportsDigestRefs:  true,
-				MaxEnvironmentBytes: 32768,
+				MaxContainers:              8,
+				SupportsDigestRefs:         true,
+				SupportsEntrypointOverride: true,
+				MaxEnvironmentBytes:        32768,
 			},
 			Lifecycle: domain.LifecycleCapabilities{
 				IdempotentLaunch: "launch_key",

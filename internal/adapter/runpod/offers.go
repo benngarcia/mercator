@@ -48,7 +48,7 @@ func buildOffers(gpus []gpuType, allowlist []string, gpuCount, diskGB int, now t
 				}},
 			},
 			Capabilities: domain.CapabilityProfile{
-				Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},
+				Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, SupportsEntrypointOverride: true, MaxEnvironmentBytes: 32768},
 				Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "launch_key", ListOwned: true},
 				Resources: domain.ResourceCapabilities{GPUVendors: []string{"NVIDIA"}},
 				Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkPublicPort, PublicIPv4: true},
