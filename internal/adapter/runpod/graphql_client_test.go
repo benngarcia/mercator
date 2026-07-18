@@ -15,8 +15,8 @@ func TestGPUTypesQueryAndDecode(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		return jsonResponse(200, `{"data":{"gpuTypes":[
-			{"id":"NVIDIA RTX A2000","displayName":"RTX A2000","memoryInGb":6,"communityPrice":0.12,"securePrice":0.2,"lowestPrice":{"stockStatus":"High"}},
-			{"id":"NVIDIA H100","displayName":"H100","memoryInGb":80,"communityPrice":3.5,"securePrice":4.0,"lowestPrice":{"stockStatus":null}}
+			{"id":"NVIDIA RTX A2000","displayName":"RTX A2000","memoryInGb":6,"communityPrice":0.12,"securePrice":0.2,"secureStock":{"stockStatus":"High"},"communityStock":{"stockStatus":"Low"}},
+			{"id":"NVIDIA H100","displayName":"H100","memoryInGb":80,"communityPrice":3.5,"securePrice":4.0,"secureStock":{"stockStatus":null},"communityStock":{"stockStatus":null}}
 		]}}`), nil
 	}))
 
@@ -31,17 +31,24 @@ func TestGPUTypesQueryAndDecode(t *testing.T) {
 	if !strings.Contains(gotBody, "gpuTypes") || !strings.Contains(gotBody, "lowestPrice(input:") {
 		t.Errorf("body missing query: %s", gotBody)
 	}
+	// Stock is a per-cloud fact; both clouds must be queried explicitly.
+	if !strings.Contains(gotBody, "secureCloud: true") || !strings.Contains(gotBody, "secureCloud: false") {
+		t.Errorf("body missing per-cloud stock queries: %s", gotBody)
+	}
 	if !strings.Contains(gotBody, `"variables":{"gpuCount":2}`) {
 		t.Errorf("body missing requested gpu count: %s", gotBody)
 	}
 	if len(gpus) != 2 {
 		t.Fatalf("expected 2 gpu types, got %d", len(gpus))
 	}
-	if gpus[0].ID != "NVIDIA RTX A2000" || gpus[0].MemoryInGb != 6 || gpus[0].CommunityPrice == nil || *gpus[0].CommunityPrice != 0.12 || gpus[0].StockStatus != "High" {
+	if gpus[0].ID != "NVIDIA RTX A2000" || gpus[0].MemoryInGb != 6 || gpus[0].CommunityPrice == nil || *gpus[0].CommunityPrice != 0.12 {
 		t.Errorf("gpu[0] decode = %+v", gpus[0])
 	}
-	if gpus[1].StockStatus != "" {
-		t.Errorf("null stock should decode to empty string, got %q", gpus[1].StockStatus)
+	if gpus[0].SecureStockStatus != "High" || gpus[0].CommunityStockStatus != "Low" {
+		t.Errorf("gpu[0] per-cloud stock decode = %+v", gpus[0])
+	}
+	if gpus[1].SecureStockStatus != "" || gpus[1].CommunityStockStatus != "" {
+		t.Errorf("null stock should decode to empty string, got %+v", gpus[1])
 	}
 }
 
