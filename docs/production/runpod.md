@@ -1,8 +1,8 @@
 # RunPod Provider Runbook
 
-<!-- TODO: once the adapter-manifest contract (connections branch) merges, move
-the setup steps and the Secure vs Community explanation below into the runpod
-adapter manifest so the console wizard renders them. -->
+<!-- Deferred (tracked in issue #60): once the adapter-manifest contract
+merges, move the setup steps and the Secure vs Community explanation below
+into the runpod adapter manifest so the console wizard renders them. -->
 
 Mercator's `runpod` adapter launches container **Pods** on RunPod, observes
 them, and terminates them on cleanup. RunPod's API never exposes a container
