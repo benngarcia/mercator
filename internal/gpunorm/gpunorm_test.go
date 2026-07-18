@@ -20,6 +20,13 @@ func TestCanonicalConsolidatesProviderSpellings(t *testing.T) {
 		{"NVIDIA", "A100-SXM", "nvidia-a100"},
 		{"NVIDIA", "H100", "nvidia-h100"},
 		{"NVIDIA", "H100 NVL", "nvidia-h100"},
+		// nvidia-smi marketing names (docker GPU probe) collapse onto the same
+		// id as the cloud-provider spellings.
+		{"NVIDIA", "NVIDIA GeForce RTX 5090", "nvidia-rtx-5090"},
+		{"NVIDIA", "RTX 5090", "nvidia-rtx-5090"},
+		{"NVIDIA", "NVIDIA GeForce RTX 4090", "nvidia-rtx-4090"},
+		{"NVIDIA", "NVIDIA H100 80GB HBM3", "nvidia-h100"},
+		{"NVIDIA", "NVIDIA A100-SXM4-80GB", "nvidia-a100"},
 	}
 	for _, c := range cases {
 		if got := Canonical(c.vendor, c.model); got != c.want {

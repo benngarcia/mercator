@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/url"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -60,7 +62,14 @@ func endpointLabel(host, dockerContext string) string {
 // with OFFER_EXPIRED until the process restarted. A non-empty archOverride
 // wins over the probed architecture (useful for forcing emulated platforms).
 func NewOffering(client *CLIClient, id EndpointIdentity, archOverride string) adapter.Adapter {
-	return offeringAdapter{Adapter: New(client), client: client, id: id, arch: archOverride}
+	return offeringAdapter{
+		Adapter: New(client),
+		client:  client,
+		id:      id,
+		arch:    archOverride,
+		disk:    &probeFact[int64]{},
+		gpus:    &probeFact[[]domain.AcceleratorInventory]{},
+	}
 }
 
 type offeringAdapter struct {
@@ -68,10 +77,58 @@ type offeringAdapter struct {
 	client *CLIClient
 	id     EndpointIdentity
 	arch   string
+	disk   *probeFact[int64]
+	gpus   *probeFact[[]domain.AcceleratorInventory]
 }
 
 func (a offeringAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	return []domain.OfferSnapshot{StandingOffer(a.id, a.arch, a.probe(), time.Now().UTC())}, nil
+	now := time.Now().UTC()
+	info := a.probe()
+	diskFree := a.disk.value(a.id.NativeRef, "disk", a.client.DiskFreeBytes, now)
+	// Only a daemon with the NVIDIA runtime can satisfy `--gpus`, so CPU-only
+	// endpoints skip the GPU probe container entirely and advertise none.
+	var accelerators []domain.AcceleratorInventory
+	if info.HasNvidiaRuntime() {
+		accelerators = a.gpus.value(a.id.NativeRef, "gpu", a.client.AcceleratorInventory, now)
+	}
+	return []domain.OfferSnapshot{StandingOffer(a.id, a.arch, info, diskFree, accelerators, now)}, nil
+}
+
+// probeFact caches a container-probe measurement per endpoint. Offers are
+// otherwise rebuilt fresh on every ListOffers call (see NewOffering), but the
+// disk and GPU probes launch a one-shot container each, which is too heavy to
+// run per placement decision or offers-endpoint poll. Both facts move slowly
+// (free disk drifts, GPU inventory is fixed hardware), so a short TTL keeps
+// the offer honest without container churn. A failed probe caches the zero
+// value: StandingOffer falls back conservatively for disk, and a zero GPU
+// inventory means the offer honestly advertises no accelerators.
+type probeFact[T any] struct {
+	mu         sync.Mutex
+	cached     T
+	measuredAt time.Time
+}
+
+const probeFactTTL = time.Minute
+
+func (p *probeFact[T]) value(nativeRef, fact string, measure func(context.Context) (T, error), now time.Time) T {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.measuredAt.IsZero() && now.Sub(p.measuredAt) < probeFactTTL {
+		return p.cached
+	}
+	// Generous timeout: the first probe on a fresh host also pulls the tiny
+	// probe image.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	value, err := measure(ctx)
+	if err != nil {
+		log.Printf("docker endpoint %q %s probe failed; using fallback: %v", nativeRef, fact, err)
+		var zero T
+		value = zero
+	}
+	p.cached = value
+	p.measuredAt = now
+	return p.cached
 }
 
 // probe queries the endpoint's `docker info` best-effort. A failed or
@@ -88,17 +145,21 @@ func (a offeringAdapter) probe() HostInfo {
 	return info
 }
 
-// ephemeralDiskUnconstrained (1 TiB) is the docker offer's ephemeral-disk
-// inventory: an explicit "not a quota" value large enough that no sane
-// workload request is rejected at placement on a resource this adapter
-// does not actually partition.
-const ephemeralDiskUnconstrained = int64(1) << 40
-
 // StandingOffer builds the offer Mercator advertises for a Docker endpoint.
-// Capacity (arch/cpu/mem) comes from the probed `docker info` when available,
+// Capacity (arch/cpu/mem/disk) comes from the probed endpoint when available,
 // falling back to conservative defaults when the probe was empty (unreachable
 // endpoint). A non-empty archOverride always wins.
-func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now time.Time) domain.OfferSnapshot {
+//
+// diskFreeBytes is the container-probed free disk (see CLIClient.DiskFreeBytes);
+// zero means unmeasured and falls back to 16 GiB. Advertising a hardcoded
+// 16 GiB regardless of the real host silently made every workload requesting
+// more infeasible ("no feasible offers") even on hosts with hundreds of free
+// GiB — bucket's model_training dispatches request >= 20 GiB.
+//
+// accelerators is the container-probed GPU inventory (see
+// CLIClient.AcceleratorInventory); empty means the endpoint advertises none,
+// so GPU-requiring workloads are rejected for it, never mis-scheduled.
+func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, diskFreeBytes int64, accelerators []domain.AcceleratorInventory, now time.Time) domain.OfferSnapshot {
 	arch := archOverride
 	if arch == "" {
 		arch = info.OCIArch()
@@ -114,6 +175,10 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now 
 	if info.MemTotalBytes > 0 {
 		memoryBytes = info.MemTotalBytes
 	}
+	ephemeralDiskBytes := int64(16 * 1024 * 1024 * 1024)
+	if diskFreeBytes > 0 {
+		ephemeralDiskBytes = diskFreeBytes
+	}
 	return domain.OfferSnapshot{
 		ID:           id.OfferID,
 		ConnectionID: id.ConnectionID,
@@ -124,16 +189,10 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now 
 		ExpiresAt:    now.Add(time.Hour),
 		Platform:     domain.Platform{OS: "linux", Architecture: arch},
 		Resources: domain.ResourceInventory{
-			CPUMillis:   cpuMillis,
-			MemoryBytes: memoryBytes,
-			// Docker containers share the daemon's filesystem: the adapter
-			// cannot reserve or partition disk per container, and `docker
-			// info` does not report free space, so the inventory is
-			// deliberately non-constraining. The previous fabricated 16 GiB
-			// quota rejected real workloads at placement
-			// (RESOURCE_INSUFFICIENT) that the daemon could serve fine;
-			// genuine disk exhaustion surfaces at pull/run time instead.
-			EphemeralDiskBytes: ephemeralDiskUnconstrained,
+			CPUMillis:          cpuMillis,
+			MemoryBytes:        memoryBytes,
+			EphemeralDiskBytes: ephemeralDiskBytes,
+			Accelerators:       accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{
@@ -147,8 +206,9 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now 
 				ListOwned:        true,
 				CancelQueued:     true,
 			},
-			Network: domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
-			Pricing: domain.PricingCapabilities{Known: true},
+			Resources: domain.ResourceCapabilities{GPUVendors: acceleratorVendors(accelerators)},
+			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone},
+			Pricing:   domain.PricingCapabilities{Known: true},
 		},
 		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
 			Scope:      domain.NetworkScopeRegistry,
@@ -169,4 +229,17 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, now 
 		ImageCache: domain.ImageCacheEvidence{Known: true},
 		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
+}
+
+// acceleratorVendors lists the distinct vendors present in the probed
+// inventory, preserving first-seen order (mirrors what the runpod adapter
+// advertises in Capabilities.Resources.GPUVendors).
+func acceleratorVendors(accelerators []domain.AcceleratorInventory) []string {
+	var vendors []string
+	for _, accelerator := range accelerators {
+		if !slices.Contains(vendors, accelerator.Vendor) {
+			vendors = append(vendors, accelerator.Vendor)
+		}
+	}
+	return vendors
 }
