@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -23,6 +24,12 @@ func (stubWebAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (stubWebAuth) SessionEmail(r *http.Request) (string, bool) {
 	email := r.Header.Get("X-Test-Session")
 	return email, email != ""
+}
+
+// VerifyCLIToken accepts tokens of the form "cli:<email>".
+func (stubWebAuth) VerifyCLIToken(token string) (string, bool) {
+	email, ok := strings.CutPrefix(token, "cli:")
+	return email, ok && email != ""
 }
 
 func TestSessionGrantsAPIAccessAlongsideBearer(t *testing.T) {
@@ -50,6 +57,36 @@ func TestSessionGrantsAPIAccessAlongsideBearer(t *testing.T) {
 	handler.ServeHTTP(rec, viaBearer)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("bearer expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCLITokenAuthenticatesAsItsEmail(t *testing.T) {
+	handler := newHTTPTestServerWithOptions(t,
+		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
+	req.Header.Set("Authorization", "Bearer cli:operator@example.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("CLI token expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	body := mustMarshal(t, createRunBody{RunID: "run_cli_audit", Workload: httpRevision()})
+	create := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	create.Header.Set("Idempotency-Key", "idem_cli_audit")
+	create.Header.Set("Authorization", "Bearer cli:operator@example.com")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, create)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var created runResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if created.Run.CreatedBy != "operator@example.com" {
+		t.Fatalf("CLI-token create should record the email, got %q", created.Run.CreatedBy)
 	}
 }
 

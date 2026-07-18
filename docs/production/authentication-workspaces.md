@@ -76,6 +76,15 @@ Behavior with OIDC enabled:
 
 The static bearer token keeps working unchanged for CI and API clients.
 
+CLI users sign in with `mercator login` (see
+[../reference/cli.md](../reference/cli.md)): the server hands the CLI a
+single-use code on a localhost redirect after the same OIDC + allowlist checks,
+and the CLI exchanges it at `POST /auth/cli/exchange` for a 30-day signed
+bearer token tied to the user's email. The API gate accepts that token
+wherever the static token is accepted, and mutations are audited under the
+email. CLI tokens are stateless (like sessions): logout clears the stored
+credential, and expiry bounds the remaining lifetime of a copied token.
+
 ## Workspace Rules
 
 - If `MERCATOR_AUTH_WORKSPACES` is unset or empty, the principal is allowed for
