@@ -116,11 +116,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 }
 
 func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizationRequest) error {
-	events, err := s.log.ReadStream(ctx, connectionStream(req.WorkspaceID, req.ConnectionID), 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(req.WorkspaceID, req.ConnectionID))
 	if err != nil {
 		return err
 	}
-	if len(events) == 0 {
+	if len(history.Events) == 0 {
 		return ErrNotFound
 	}
 	data, err := json.Marshal(map[string]any{"authorized": req.Authorized})
@@ -141,7 +141,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 	}
 	_, err = s.log.Append(ctx, eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
-		ExpectedStreamVersion: uint64(len(events)),
+		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            fmt.Sprintf("connection:authorization:%s:%t", req.ConnectionID, req.Authorized),
 		RequestHash:           hash,
 		Actor:                 req.Actor,
@@ -164,11 +164,11 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 // idempotent replay. A deleted connection's id cannot be reused: recreate
 // under a fresh id.
 func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
-	events, err := s.log.ReadStream(ctx, connectionStream(req.WorkspaceID, req.ConnectionID), 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(req.WorkspaceID, req.ConnectionID))
 	if err != nil {
 		return err
 	}
-	_, deleted, err := reduceConnection(events)
+	_, deleted, err := reduceConnection(history.Events)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 	}
 	_, err = s.log.Append(ctx, eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
-		ExpectedStreamVersion: uint64(len(events)),
+		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            "connection:delete:" + req.ConnectionID,
 		RequestHash:           hash,
 		Actor:                 req.Actor,
@@ -203,11 +203,11 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 }
 
 func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Record, error) {
-	events, err := s.log.ReadStream(ctx, connectionStream(workspaceID, connectionID), 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(workspaceID, connectionID))
 	if err != nil {
 		return Record{}, err
 	}
-	record, deleted, err := reduceConnection(events)
+	record, deleted, err := reduceConnection(history.Events)
 	if err != nil {
 		return Record{}, err
 	}
@@ -218,12 +218,12 @@ func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Re
 }
 
 func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error) {
-	events, err := s.log.ReadAll(ctx, 0, 1000, eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}, EventTypes: []string{EventConnectionCreated}})
+	history, err := eventlog.ScanAll(ctx, s.log, eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}, EventTypes: []string{EventConnectionCreated}})
 	if err != nil {
 		return nil, err
 	}
-	records := make([]Record, 0, len(events))
-	for _, event := range events {
+	records := make([]Record, 0, len(history.Events))
+	for _, event := range history.Events {
 		record, err := s.Get(ctx, workspaceID, event.StreamID)
 		if errors.Is(err, ErrNotFound) {
 			continue

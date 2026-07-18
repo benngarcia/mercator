@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -140,6 +141,32 @@ func TestSQLiteEventLogIdempotencyAndConcurrency(t *testing.T) {
 	_, err = log.Append(ctx, wrongVersion)
 	if !errors.Is(err, ErrConcurrencyConflict) {
 		t.Fatalf("expected concurrency conflict, got %v", err)
+	}
+}
+
+func TestCompleteHistoryReadsPastOnePage(t *testing.T) {
+	ctx := context.Background()
+	log := openTestLog(t)
+	eventIDs := make([]string, 1001)
+	for i := range eventIDs {
+		eventIDs[i] = fmt.Sprintf("evt_history_%04d", i+1)
+	}
+	appendTestEvents(t, log, "run_history", "cmd-history", eventIDs)
+
+	stream, err := ReadFullStream(ctx, log, StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_history"})
+	if err != nil {
+		t.Fatalf("read full stream: %v", err)
+	}
+	if len(stream.Events) != 1001 || stream.LastVersion != 1001 {
+		t.Fatalf("stream history = %d events at version %d, want 1001", len(stream.Events), stream.LastVersion)
+	}
+
+	global, err := ScanAll(ctx, log, EventFilter{WorkspaceID: "ws_1", StreamTypes: []string{"run"}})
+	if err != nil {
+		t.Fatalf("scan all: %v", err)
+	}
+	if len(global.Events) != 1001 || global.LastPosition != 1001 {
+		t.Fatalf("global history = %d events at position %d, want 1001", len(global.Events), global.LastPosition)
 	}
 }
 

@@ -394,20 +394,8 @@ func (o *Orchestrator) stepCancel(ctx context.Context, workspaceID, runID string
 }
 
 func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID string) ([]eventlog.StoredEvent, error) {
-	const page = 1000
-	var events []eventlog.StoredEvent
-	var after uint64
-	for {
-		batch, err := o.log.ReadStream(ctx, runStream(workspaceID, runID), after, page)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, batch...)
-		if len(batch) < page {
-			return events, nil
-		}
-		after = batch[len(batch)-1].StreamVersion
-	}
+	history, err := eventlog.ReadFullStream(ctx, o.log, runStream(workspaceID, runID))
+	return history.Events, err
 }
 
 // streamVersion is the optimistic-concurrency expectation for the next append:
@@ -436,28 +424,16 @@ func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (d
 }
 
 func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
-	// Paginate the run_requested index so busy workspaces don't silently
-	// truncate at one read page.
-	const page = 1000
-	var events []eventlog.StoredEvent
-	var after eventlog.GlobalPosition
-	for {
-		batch, err := o.log.ReadAll(ctx, after, page, eventlog.EventFilter{
-			WorkspaceID: workspaceID,
-			StreamTypes: []string{"run"},
-			EventTypes:  []string{EventRunRequested},
-		})
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, batch...)
-		if len(batch) < page {
-			break
-		}
-		after = batch[len(batch)-1].GlobalPosition
+	history, err := eventlog.ScanAll(ctx, o.log, eventlog.EventFilter{
+		WorkspaceID: workspaceID,
+		StreamTypes: []string{"run"},
+		EventTypes:  []string{EventRunRequested},
+	})
+	if err != nil {
+		return nil, err
 	}
-	records := make([]domain.RunRecord, 0, len(events))
-	for _, event := range events {
+	records := make([]domain.RunRecord, 0, len(history.Events))
+	for _, event := range history.Events {
 		record, err := o.GetRun(ctx, workspaceID, event.StreamID)
 		if err != nil {
 			return nil, err
@@ -513,31 +489,23 @@ func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context, workspaceID string) 
 // a workspace whose history is all closed runs costs one filtered index scan
 // and zero stream reads per tick.
 func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) ([]string, error) {
-	const page = 1000
 	var requested []string
 	closed := map[string]bool{}
-	var after eventlog.GlobalPosition
-	for {
-		batch, err := o.log.ReadAll(ctx, after, page, eventlog.EventFilter{
-			WorkspaceID: workspaceID,
-			StreamTypes: []string{"run"},
-			EventTypes:  []string{EventRunRequested, EventRunClosed},
-		})
-		if err != nil {
-			return nil, err
+	history, err := eventlog.ScanAll(ctx, o.log, eventlog.EventFilter{
+		WorkspaceID: workspaceID,
+		StreamTypes: []string{"run"},
+		EventTypes:  []string{EventRunRequested, EventRunClosed},
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, event := range history.Events {
+		switch event.Type {
+		case EventRunRequested:
+			requested = append(requested, event.StreamID)
+		case EventRunClosed:
+			closed[event.StreamID] = true
 		}
-		for _, event := range batch {
-			switch event.Type {
-			case EventRunRequested:
-				requested = append(requested, event.StreamID)
-			case EventRunClosed:
-				closed[event.StreamID] = true
-			}
-		}
-		if len(batch) < page {
-			break
-		}
-		after = batch[len(batch)-1].GlobalPosition
 	}
 	var open []string
 	for _, runID := range requested {
