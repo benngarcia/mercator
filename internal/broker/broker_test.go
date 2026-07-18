@@ -51,7 +51,7 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 		{ID: "conn_unauth", AdapterType: "stub", Authorized: false},
 	}}
 	f := NewFactory()
-	f.Register("stub", func(map[string]string, string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (adapter.Adapter, error) {
 		return recAdapter{id: "x"}, nil
 	})
 	b := NewBroker(conns, f, nilResolver{})
@@ -67,7 +67,7 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 func TestBrokerRoutesLaunchByConnection(t *testing.T) {
 	var launchedBy string
 	f := NewFactory()
-	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Adapter, error) {
 		return recAdapter{id: cfg["id"], launched: &launchedBy}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -108,7 +108,7 @@ func (a ownedAdapter) ListOwned(_ context.Context, _ adapter.OwnershipQuery) ([]
 
 func TestBrokerListOwnedFansOut(t *testing.T) {
 	f := NewFactory()
-	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Adapter, error) {
 		return ownedAdapter{id: cfg["id"]}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -128,7 +128,7 @@ func TestBrokerListOwnedFansOut(t *testing.T) {
 func TestBrokerRoutesObserveByConnection(t *testing.T) {
 	var observedBy string
 	f := NewFactory()
-	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Adapter, error) {
 		return recAdapter{id: cfg["id"], observed: &observedBy}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -163,7 +163,7 @@ func (a verifyAdapter) Verify(context.Context) error {
 func TestBrokerVerifyConnectionBuildsAndVerifies(t *testing.T) {
 	var verified string
 	f := NewFactory()
-	f.Register("stub", func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Adapter, error) {
 		return verifyAdapter{id: cfg["id"], verified: &verified}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{

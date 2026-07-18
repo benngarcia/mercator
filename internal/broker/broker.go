@@ -33,6 +33,10 @@ func NewBroker(conns Connections, factory *Factory, resolver Resolver) *Broker {
 	return &Broker{conns: conns, factory: factory, resolver: resolver}
 }
 
+// Manifests exposes the registered adapters' onboarding manifests for the
+// HTTP API's GET /v1/adapters.
+func (b *Broker) Manifests() []adapter.Manifest { return b.factory.Manifests() }
+
 // build constructs the adapter for one connection (no caching yet — YAGNI).
 func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Record) (adapter.Adapter, error) {
 	secret := ""

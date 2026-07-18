@@ -17,7 +17,7 @@ func (stubAdapter) Verify(context.Context) error { return nil }
 
 func TestFactoryBuildsRegisteredType(t *testing.T) {
 	f := NewFactory()
-	f.Register("stub", func(map[string]string, string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (adapter.Adapter, error) {
 		return stubAdapter{}, nil
 	})
 	if _, err := f.Build("stub", nil, ""); err != nil {

@@ -160,6 +160,15 @@ const OpenAPIJSON = `{
         }
       }
     },
+    "/v1/adapters": {
+      "get": {
+        "operationId": "listAdapters",
+        "description": "Registered provider adapters' onboarding manifests: display metadata, config fields, credential expectations, and ordered setup steps. Static per process; no workspace scoping.",
+        "responses": {
+          "200": {"description": "Adapter manifest list", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AdapterListResponse"}}}}
+        }
+      }
+    },
     "/v1/runs/{run_id}:report": {
       "post": {
         "operationId": "reportRun",
@@ -297,6 +306,8 @@ const OpenAPIJSON = `{
       "PlacementPreviewRequest": {"type": "object", "required": ["workload"], "properties": {"run_id": {"type": "string"}, "workspace_id": {"type": "string"}, "workload": {"type": "object"}}},
       "PlacementPreviewResponse": {"type": "object", "required": ["decision"], "properties": {"decision": {"type": "object"}}},
       "PlacementDecisionResponse": {"type": "object", "required": ["decision"], "properties": {"decision": {"type": "object"}}},
+      "AdapterListResponse": {"type": "object", "required": ["adapters"], "properties": {"adapters": {"type": "array", "items": {"$ref": "#/components/schemas/AdapterManifest"}}}},
+      "AdapterManifest": {"type": "object", "required": ["type", "display_name", "logo", "description", "credential", "config_fields", "setup_steps"], "description": "An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.", "properties": {"type": {"type": "string", "description": "Adapter type string used as adapter_type at connection create time."}, "display_name": {"type": "string"}, "logo": {"type": "string", "description": "Well-known slug the console maps to a bundled logomark asset; consumers fall back to a typographic monogram."}, "description": {"type": "string"}, "credential": {"type": "object", "required": ["required"], "properties": {"required": {"type": "boolean"}, "label": {"type": "string"}, "format": {"type": "string", "description": "One-line hint about the expected token shape or scope."}}}, "config_fields": {"type": "array", "items": {"type": "object", "required": ["name", "label", "type", "required"], "properties": {"name": {"type": "string"}, "label": {"type": "string"}, "type": {"type": "string", "enum": ["string", "bool", "int"]}, "required": {"type": "boolean"}, "secret": {"type": "boolean", "description": "Mask in UIs and never echo after save."}, "default": {"type": "string"}, "placeholder": {"type": "string"}, "help": {"type": "string"}}}}, "setup_steps": {"type": "array", "description": "Ordered how-do-I-get-a-credential walkthrough; text is UI copy.", "items": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}, "url": {"type": "string"}}}}}},
       "ConnectionListResponse": {"type": "object", "required": ["connections"], "properties": {"connections": {"type": "array", "items": {"type": "object"}}}},
       "CreateConnectionRequest": {"type": "object", "required": ["workspace_id", "connection_id", "adapter_type"], "properties": {"workspace_id": {"type": "string"}, "connection_id": {"type": "string"}, "adapter_type": {"type": "string"}, "config": {"type": "object", "additionalProperties": {"type": "string"}}, "credential": {"type": "object", "properties": {"source": {"type": "string"}, "ref": {"type": "string"}}}, "secret": {"type": "string", "description": "Write-only: accepted on create, sealed at rest, never echoed in any response."}}},
       "ConnectionResponse": {"type": "object", "required": ["connection"], "properties": {"connection": {"type": "object"}}},
