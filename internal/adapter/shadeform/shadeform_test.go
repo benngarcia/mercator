@@ -2,6 +2,7 @@ package shadeform
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -83,26 +84,76 @@ func TestLaunchCreatesInstanceWithDockerConfigTagsAndAutoDelete(t *testing.T) {
 			t.Errorf("env %s = %q, want %q", key, envs[key], want)
 		}
 	}
-	wantTags := map[string]bool{}
-	for _, tag := range ownershipTags(launchRequest()) {
-		wantTags[tag] = true
-	}
+	// Literal tag expectations: the tag wire format is the janitor's ownership
+	// contract on real instances, so it must be pinned independently of the
+	// helper that produces it.
+	gotTags := map[string]bool{}
 	for _, tag := range c.Tags {
-		delete(wantTags, tag)
+		gotTags[tag] = true
 	}
-	if len(wantTags) > 0 {
-		t.Errorf("create missing ownership tags: %v (got %v)", wantTags, c.Tags)
+	for _, want := range []string{
+		"mercator:launch-key=lk1",
+		"mercator:workspace=ws_1",
+		"mercator:run=run_1",
+		"mercator:attempt=att_1",
+		"mercator:ownership-token=own1",
+		"mercator:request-hash=rh_1",
+		"mercator:cleanup-locator=cl_1",
+	} {
+		if !gotTags[want] {
+			t.Errorf("create missing ownership tag %q (got %v)", want, c.Tags)
+		}
 	}
 	if c.AutoDelete == nil {
 		t.Fatal("auto_delete backstop must be set on every create")
 	}
-	// now (2026-07-17T12:00Z) + default 24h lifetime
+	// now (2026-07-17T12:00Z) + default 24h lifetime (no MaxRuntimeSeconds)
 	if c.AutoDelete.DateThreshold != "2026-07-18T12:00:00Z" {
 		t.Errorf("auto_delete date threshold = %q", c.AutoDelete.DateThreshold)
 	}
 	// 210 cents/hour × 24h = $50.40
 	if c.AutoDelete.SpendThreshold != "50.40" {
 		t.Errorf("auto_delete spend threshold = %q", c.AutoDelete.SpendThreshold)
+	}
+}
+
+func TestLaunchDerivesAutoDeleteFromRunTimeout(t *testing.T) {
+	fake := newFakeShadeform()
+	fake.types = []instanceType{vmType()}
+	a := newTestAdapter(t, fake, nil)
+	req := launchRequest()
+	req.MaxRuntimeSeconds = 3600
+
+	if _, err := a.Launch(context.Background(), req); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	ad := fake.creates[0].AutoDelete
+	// launch (2026-07-17T12:00Z) + 1h runtime + 1h slack
+	if ad.DateThreshold != "2026-07-17T14:00:00Z" {
+		t.Errorf("date threshold = %q, want launch+runtime+slack", ad.DateThreshold)
+	}
+	// 210 cents/hour × 2h = $4.20
+	if ad.SpendThreshold != "4.20" {
+		t.Errorf("spend threshold = %q", ad.SpendThreshold)
+	}
+}
+
+func TestLaunchOmitsSpendThresholdForZeroPricedInventory(t *testing.T) {
+	free := vmType()
+	free.HourlyPrice = 0
+	fake := newFakeShadeform()
+	fake.types = []instanceType{free}
+	a := newTestAdapter(t, fake, nil)
+
+	if _, err := a.Launch(context.Background(), launchRequest()); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	ad := fake.creates[0].AutoDelete
+	if ad == nil || ad.DateThreshold == "" {
+		t.Fatalf("date threshold must remain the time backstop, got %+v", ad)
+	}
+	if ad.SpendThreshold != "" {
+		t.Fatalf("a zero catalog price must omit the spend threshold (\"0.00\" semantics are undefined), got %q", ad.SpendThreshold)
 	}
 }
 
@@ -172,6 +223,37 @@ func TestLaunchFailsWhenCatalogLacksTheType(t *testing.T) {
 	}
 	if len(fake.creates) != 0 {
 		t.Fatal("must not create an instance whose spend cannot be capped")
+	}
+}
+
+func TestLaunchFailsLoudlyWithoutShadeOSImage(t *testing.T) {
+	plain := vmType()
+	plain.Configuration.OSOptions = []string{"ubuntu22.04", "ubuntu20.04"}
+	fake := newFakeShadeform()
+	fake.types = []instanceType{plain}
+	a := newTestAdapter(t, fake, nil)
+
+	_, err := a.Launch(context.Background(), launchRequest())
+	if err == nil || !strings.Contains(err.Error(), "shade_os") {
+		t.Fatalf("no shade_os image and no override must fail loudly (plain images may lack the container runtime), got %v", err)
+	}
+	if len(fake.creates) != 0 {
+		t.Fatal("must not create an instance whose container may never start")
+	}
+}
+
+func TestLaunchOSOverrideBypassesShadeOSRequirement(t *testing.T) {
+	plain := vmType()
+	plain.Configuration.OSOptions = []string{"ubuntu22.04"}
+	fake := newFakeShadeform()
+	fake.types = []instanceType{plain}
+	a := newTestAdapter(t, fake, map[string]string{"os": "ubuntu22.04"})
+
+	if _, err := a.Launch(context.Background(), launchRequest()); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if fake.creates[0].OS != "ubuntu22.04" {
+		t.Fatalf("os = %q", fake.creates[0].OS)
 	}
 }
 
@@ -260,14 +342,40 @@ func TestLaunchAdoptsInstanceAfterIndeterminateCreateFailure(t *testing.T) {
 	}
 }
 
-func TestLaunchSurfacesCreateFailureWhenNothingLanded(t *testing.T) {
+func TestLaunchIndeterminateCreateSurfacesSentinel(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}
 	fake.createStatus = 500
 	a := newTestAdapter(t, fake, nil)
 
-	if _, err := a.Launch(context.Background(), launchRequest()); err == nil || !strings.Contains(err.Error(), "500") {
-		t.Fatalf("want surfaced create failure, got %v", err)
+	_, err := a.Launch(context.Background(), launchRequest())
+	if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("a 5xx create whose instance never surfaced must be ErrLaunchIndeterminate (so the orchestrator reconciles instead of closing without cleanup), got %v", err)
+	}
+}
+
+func TestLaunchClientRejectionIsDefinitive(t *testing.T) {
+	fake := newFakeShadeform()
+	fake.types = []instanceType{vmType()}
+	fake.createStatus = 400
+	fake.createLandsAnyway = false
+	a := newTestAdapter(t, fake, nil)
+
+	_, err := a.Launch(context.Background(), launchRequest())
+	if err == nil || errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("a 4xx create was rejected before execution and must surface as a definitive error, got %v", err)
+	}
+}
+
+func TestLaunchNeverVisibleCreateIsIndeterminate(t *testing.T) {
+	fake := newFakeShadeform()
+	fake.types = []instanceType{vmType()}
+	fake.hideCreated = true
+	a := newTestAdapter(t, fake, nil)
+
+	_, err := a.Launch(context.Background(), launchRequest())
+	if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("a created instance that never appears in the list must be indeterminate, not a success receipt the next Observe would read as released, got %v", err)
 	}
 }
 
@@ -305,6 +413,23 @@ func TestObserveMissingInstanceIsReleased(t *testing.T) {
 	}
 	if obs.Phase != adapter.ExternalPhaseReleased {
 		t.Fatalf("missing instance must observe as released, got %q", obs.Phase)
+	}
+}
+
+func TestObserveTerminalIDIsDeterministic(t *testing.T) {
+	fake := newFakeShadeform()
+	// API list order is newest-first here; the reported terminal ID must be
+	// the deterministic oldest, not whatever the API lists first.
+	fake.addInstance(ownedInstance("inst_2", "lk1", "ws_1", "own1", "deleting", fake.base.Add(time.Minute)))
+	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", "deleted", fake.base))
+	a := newTestAdapter(t, fake, nil)
+
+	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if obs.Phase != adapter.ExternalPhaseReleased || obs.ExternalID != "inst_1" {
+		t.Fatalf("obs = %+v, want released with the oldest terminal record's ID", obs)
 	}
 }
 

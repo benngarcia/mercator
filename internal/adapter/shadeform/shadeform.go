@@ -12,11 +12,11 @@ package shadeform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,9 +27,9 @@ import (
 
 // Ownership metadata lives in instance tags (the only mutable, list-visible,
 // client-searchable field Shadeform offers). The tag set mirrors RunPod's
-// MERCATOR_* env contract.
+// MERCATOR_* env contract; an instance is ours iff it carries the launch-key
+// tag.
 const (
-	tagPrefix         = "mercator:"
 	tagLaunchKey      = "mercator:launch-key"
 	tagWorkspace      = "mercator:workspace"
 	tagRun            = "mercator:run"
@@ -40,6 +40,11 @@ const (
 )
 
 const defaultMaxLifetimeHours = 24
+
+// autoDeleteSlack is added on top of the run's MaxRuntimeSeconds when deriving
+// the provider-side auto_delete backstop: generous enough to never race a
+// healthy run's own cleanup, tight enough to bound a dead broker's spend.
+const autoDeleteSlack = time.Hour
 
 type Adapter struct {
 	client *client
@@ -52,10 +57,9 @@ type Adapter struct {
 	// secure-cloud story.
 	allowedClouds map[string]bool
 	osOverride    string
-	// maxLifetime bounds every instance via Shadeform's auto_delete: a date
-	// threshold at launch+maxLifetime and a spend threshold of the offer's
-	// hourly price over that window. It is the reclamation backstop for a dead
-	// broker, not the run timeout — the janitor remains the primary cleanup.
+	// maxLifetime is the auto_delete horizon used when a launch carries no
+	// MaxRuntimeSeconds. It is the reclamation backstop for a dead broker,
+	// not the run timeout — the janitor remains the primary cleanup.
 	maxLifetime time.Duration
 	regUser     string
 	regPass     string
@@ -126,7 +130,15 @@ func (a *Adapter) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]d
 // network partition), two instances survive until Observe/cleanup/janitor —
 // all of which resolve every tagged match — converge on one. auto_delete
 // bounds the worst case in money and time.
+//
+// Failure semantics: a create whose outcome is unknown (5xx/transport, or a
+// created instance that never surfaces in the list) returns
+// adapter.ErrLaunchIndeterminate so the orchestrator records the launch as
+// indeterminate and reconciles through Observe/ListOwned instead of closing
+// the run with no cleanup.
 func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	// Defense in depth: the scheduler already rejects entrypoint-overriding
+	// workloads via Capabilities.Container.SupportsEntrypointOverride=false.
 	if req.Entrypoint != nil {
 		return adapter.LaunchReceipt{}, fmt.Errorf("shadeform: docker launch configuration cannot override the image entrypoint; bake the entrypoint into the image or express it as args")
 	}
@@ -138,37 +150,41 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		return adapter.LaunchReceipt{}, fmt.Errorf("shadeform: cloud %q is not in this connection's allowed_clouds", cloud)
 	}
 
-	existing, err := a.client.listInstances(ctx)
-	if err != nil {
+	if inst, ok, err := a.findLiveOwned(ctx, req.LaunchKey, req.OwnershipToken); err != nil {
 		return adapter.LaunchReceipt{}, err
-	}
-	if inst, ok := oldestLive(matching(existing, req.LaunchKey)); ok {
-		if err := verifyOwnership(inst, req.OwnershipToken); err != nil {
-			return adapter.LaunchReceipt{}, err
-		}
+	} else if ok {
 		return a.receipt(inst.ID, inst.Status, req, true), nil
 	}
 
-	it, err := a.lookupType(ctx, cloud, shadeType)
+	create, err := a.createRequestFor(ctx, req, cloud, region, shadeType)
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
 	}
-	id, err := a.client.createInstance(ctx, a.createRequestFor(req, cloud, region, shadeType, it))
+	id, err := a.client.createInstance(ctx, create)
 	if err != nil {
-		// A 5xx/transport failure leaves the create indeterminate. Re-list and
-		// adopt the instance if it actually landed; otherwise surface the error.
-		if inst, ok := a.adoptExisting(ctx, req); ok {
+		// An indeterminate failure may still have landed the instance:
+		// re-list and adopt it; otherwise let the orchestrator reconcile.
+		if inst, ok, _ := a.findLiveOwned(ctx, req.LaunchKey, req.OwnershipToken); ok {
 			return a.receipt(inst.ID, inst.Status, req, true), nil
+		}
+		if errors.Is(err, errCreateIndeterminate) {
+			return adapter.LaunchReceipt{}, fmt.Errorf("%w: %v", adapter.ErrLaunchIndeterminate, err)
 		}
 		return adapter.LaunchReceipt{}, err
 	}
 
-	return a.reconcileDuplicates(ctx, req, id), nil
+	return a.reconcileDuplicates(ctx, req, id)
 }
 
-func (a *Adapter) createRequestFor(req adapter.LaunchRequest, cloud, region, shadeType string, it instanceType) createRequest {
-	deadline := a.now().UTC().Add(a.maxLifetime)
-	spendUSD := float64(it.HourlyPrice) / 100.0 * a.maxLifetime.Hours()
+func (a *Adapter) createRequestFor(ctx context.Context, req adapter.LaunchRequest, cloud, region, shadeType string) (createRequest, error) {
+	it, err := a.lookupType(ctx, cloud, shadeType)
+	if err != nil {
+		return createRequest{}, err
+	}
+	os, err := chooseOS(a.osOverride, it.Configuration.OSOptions)
+	if err != nil {
+		return createRequest{}, err
+	}
 	docker := &dockerConfiguration{
 		Image: req.Image,
 		Args:  shellJoin(req.Args),
@@ -183,23 +199,40 @@ func (a *Adapter) createRequestFor(req adapter.LaunchRequest, cloud, region, sha
 		ShadeInstanceType: shadeType,
 		ShadeCloud:        a.shadeCloud,
 		Name:              instanceName(req.LaunchKey),
-		OS:                chooseOS(a.osOverride, it.Configuration.OSOptions),
+		OS:                os,
 		LaunchConfiguration: &launchConfiguration{
 			Type:                "docker",
 			DockerConfiguration: docker,
 		},
-		AutoDelete: &autoDelete{
-			DateThreshold:  deadline.Format(time.RFC3339),
-			SpendThreshold: strconv.FormatFloat(spendUSD, 'f', 2, 64),
-		},
-		Tags: ownershipTags(req),
+		AutoDelete: a.autoDeleteFor(req, it),
+		Tags:       ownershipTags(req),
+	}, nil
+}
+
+// autoDeleteFor derives the provider-side reclamation backstop. The horizon is
+// the run's own execution bound plus slack when the launch carries one, else
+// the connection's max_lifetime_hours; the spend cap is the catalog price over
+// that horizon. A zero catalog price (bring-your-own-cloud inventory bills
+// through the provider, not Shadeform) omits the spend threshold: Shadeform
+// leaves "0.00" semantics undefined and a spend cap on zero spend caps
+// nothing — the date threshold still bounds the instance in time.
+func (a *Adapter) autoDeleteFor(req adapter.LaunchRequest, it instanceType) *autoDelete {
+	lifetime := a.maxLifetime
+	if req.MaxRuntimeSeconds > 0 {
+		lifetime = time.Duration(req.MaxRuntimeSeconds)*time.Second + autoDeleteSlack
 	}
+	out := &autoDelete{DateThreshold: a.now().UTC().Add(lifetime).Format(time.RFC3339)}
+	if it.HourlyPrice > 0 {
+		spendUSD := float64(it.HourlyPrice) / 100.0 * lifetime.Hours()
+		out.SpendThreshold = strconv.FormatFloat(spendUSD, 'f', 2, 64)
+	}
+	return out
 }
 
 // lookupType fetches the live catalog record for the launch triple. It is
-// required, not best-effort: without the hourly price the auto_delete spend
-// backstop cannot be derived, and launching an uncapped paid instance is the
-// worse failure.
+// required, not best-effort: without the catalog record the auto_delete
+// backstop and OS image cannot be derived, and launching an uncapped paid
+// instance is the worse failure.
 func (a *Adapter) lookupType(ctx context.Context, cloud, shadeType string) (instanceType, error) {
 	types, err := a.client.instanceTypes(ctx, url.Values{"cloud": {cloud}, "shade_instance_type": {shadeType}})
 	if err != nil {
@@ -213,41 +246,59 @@ func (a *Adapter) lookupType(ctx context.Context, cloud, shadeType string) (inst
 	return instanceType{}, fmt.Errorf("shadeform: instance type %s/%s not found in catalog; cannot derive auto_delete backstop", cloud, shadeType)
 }
 
-func (a *Adapter) adoptExisting(ctx context.Context, req adapter.LaunchRequest) (instance, bool) {
+// findLiveOwned is the single definition of "our live instance for this launch
+// key": every path (pre-scan, post-failure adoption, Observe) resolves the
+// same winner, so all participants converge on the same instance.
+func (a *Adapter) findLiveOwned(ctx context.Context, launchKey, ownershipToken string) (instance, bool, error) {
 	instances, err := a.client.listInstances(ctx)
 	if err != nil {
-		return instance{}, false
+		return instance{}, false, err
 	}
-	inst, ok := oldestLive(matching(instances, req.LaunchKey))
-	if !ok || verifyOwnership(inst, req.OwnershipToken) != nil {
-		return instance{}, false
+	inst, ok := oldest(liveMatches(matching(instances, launchKey)))
+	if !ok {
+		return instance{}, false, nil
 	}
-	return inst, true
+	if err := verifyOwnership(inst, ownershipToken); err != nil {
+		return instance{}, false, err
+	}
+	return inst, true, nil
 }
 
-func (a *Adapter) reconcileDuplicates(ctx context.Context, req adapter.LaunchRequest, createdID string) adapter.LaunchReceipt {
-	instances, err := a.client.listInstances(ctx)
-	if err != nil {
-		// Created but cannot re-list: return our receipt. Any concurrent
-		// duplicate is resolved later — Observe and cleanup act on every
-		// tagged match, and auto_delete bounds a stray.
-		return a.receipt(createdID, "creating", req, false)
-	}
-	live := liveMatches(matching(instances, req.LaunchKey))
-	winner, ok := oldestLive(live)
-	if !ok {
-		// The async create hasn't surfaced in the list yet.
-		return a.receipt(createdID, "creating", req, false)
-	}
-	for _, inst := range live {
-		if inst.ID == winner.ID {
-			continue
+// reconcileDuplicates resolves the client-side idempotency race after a
+// successful create: keep the oldest live tagged instance, delete the rest.
+// The created instance may lag the list (create is async), so the scan retries
+// briefly; a create that never surfaces is reported as indeterminate rather
+// than as success, because a success receipt for an unlisted instance would
+// make the next Observe read "released" and fail a healthy run.
+func (a *Adapter) reconcileDuplicates(ctx context.Context, req adapter.LaunchRequest, createdID string) (adapter.LaunchReceipt, error) {
+	const visibilityAttempts = 4
+	for i := range visibilityAttempts {
+		instances, err := a.client.listInstances(ctx)
+		if err != nil {
+			break
 		}
-		if err := a.client.deleteInstance(ctx, inst.ID); err != nil {
-			log.Printf("shadeform: failed to delete duplicate instance %s for launch key %s (janitor/auto_delete will reclaim): %v", inst.ID, req.LaunchKey, err)
+		live := liveMatches(matching(instances, req.LaunchKey))
+		if winner, ok := oldest(live); ok {
+			if err := verifyOwnership(winner, req.OwnershipToken); err != nil {
+				return adapter.LaunchReceipt{}, err
+			}
+			for _, inst := range live {
+				if inst.ID == winner.ID {
+					continue
+				}
+				if err := a.client.deleteInstance(ctx, inst.ID); err != nil {
+					log.Printf("shadeform: failed to delete duplicate instance %s for launch key %s (janitor/auto_delete will reclaim): %v", inst.ID, req.LaunchKey, err)
+				}
+			}
+			return a.receipt(winner.ID, winner.Status, req, winner.ID != createdID), nil
+		}
+		if i < visibilityAttempts-1 {
+			if err := a.client.wait(ctx, i); err != nil {
+				break
+			}
 		}
 	}
-	return a.receipt(winner.ID, winner.Status, req, winner.ID != createdID)
+	return adapter.LaunchReceipt{}, fmt.Errorf("%w: shadeform: created instance %s not yet visible in the instance list", adapter.ErrLaunchIndeterminate, createdID)
 }
 
 func (a *Adapter) receipt(externalID, status string, req adapter.LaunchRequest, duplicate bool) adapter.LaunchReceipt {
@@ -268,13 +319,14 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 		return adapter.ExternalObservation{}, err
 	}
 	matches := matching(instances, req.LaunchKey)
-	inst, ok := oldestLive(matches)
+	inst, ok := oldest(liveMatches(matches))
 	if !ok {
 		// No live instance: deleted, deleting, or never surfaced — released
-		// either way. Keep the ID when a terminal record is still listed.
+		// either way. Keep a deterministic ID when terminal records are still
+		// listed so successive polls agree.
 		obs := adapter.ExternalObservation{LaunchKey: req.LaunchKey, Phase: adapter.ExternalPhaseReleased, ObservedAt: a.now().UTC()}
-		if len(matches) > 0 {
-			obs.ExternalID = matches[0].ID
+		if terminal, ok := oldest(matches); ok {
+			obs.ExternalID = terminal.ID
 		}
 		return obs, nil
 	}
@@ -318,9 +370,10 @@ func (a *Adapter) Terminate(ctx context.Context, req adapter.TerminateRequest) (
 }
 
 // ListOwned is the janitor's view: the full-account instance list filtered
-// client-side (GET /instances has no query parameters) down to our tag
-// namespace. Instances already in deleting/deleted are excluded — Shadeform
-// stops billing at deleting and re-deleting them is noise.
+// client-side (GET /instances has no query parameters) down to instances
+// carrying our launch-key tag. Instances already in deleting/deleted are
+// excluded — Shadeform stops billing at deleting and re-deleting them is
+// noise.
 func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
 	instances, err := a.client.listInstances(ctx)
 	if err != nil {
@@ -368,21 +421,21 @@ func parseNativeRef(ref string) (cloud, region, shadeType string, err error) {
 	return parts[0], parts[1], parts[2], nil
 }
 
-func chooseOS(override string, options []string) string {
+// chooseOS picks the OS image for the instance. shade_os images bake in GPU
+// drivers and the container runtime the docker launch configuration depends
+// on, so without an explicit override a catalog entry offering no shade_os
+// image fails loudly: silently launching a plain OS would burn a paid VM whose
+// container never starts.
+func chooseOS(override string, options []string) (string, error) {
 	if override != "" {
-		return override
+		return override, nil
 	}
-	// shade_os images bake in GPU drivers and the container runtime the docker
-	// launch configuration depends on; prefer them over plain OS images.
 	for _, o := range options {
 		if strings.Contains(o, "shade_os") {
-			return o
+			return o, nil
 		}
 	}
-	if len(options) > 0 {
-		return options[0]
-	}
-	return ""
+	return "", fmt.Errorf("shadeform: no shade_os image among os options %v; set the connection's os config to launch on this type", options)
 }
 
 func ownershipTags(req adapter.LaunchRequest) []string {
@@ -453,22 +506,21 @@ func liveMatches(instances []instance) []instance {
 	return out
 }
 
-// oldestLive picks the deterministic winner among live instances sharing a
-// launch key: oldest created_at, instance id as tie-break. Every code path
-// (launch pre-scan, reconciliation, observe, delete) uses the same rule so all
-// participants converge on the same instance.
-func oldestLive(instances []instance) (instance, bool) {
-	liveOnly := liveMatches(instances)
-	if len(liveOnly) == 0 {
+// oldest picks the deterministic winner among instances sharing a launch key:
+// earliest created_at, instance id as tie-break. Every code path uses the same
+// rule so all participants converge on the same instance.
+func oldest(instances []instance) (instance, bool) {
+	if len(instances) == 0 {
 		return instance{}, false
 	}
-	sort.Slice(liveOnly, func(i, j int) bool {
-		if !liveOnly[i].CreatedAt.Equal(liveOnly[j].CreatedAt) {
-			return liveOnly[i].CreatedAt.Before(liveOnly[j].CreatedAt)
+	winner := instances[0]
+	for _, inst := range instances[1:] {
+		if inst.CreatedAt.Before(winner.CreatedAt) ||
+			(inst.CreatedAt.Equal(winner.CreatedAt) && inst.ID < winner.ID) {
+			winner = inst
 		}
-		return liveOnly[i].ID < liveOnly[j].ID
-	})
-	return liveOnly[0], true
+	}
+	return winner, true
 }
 
 // verifyOwnership conflicts only on a POSITIVE token mismatch (tag present and

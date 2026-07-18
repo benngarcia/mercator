@@ -29,6 +29,10 @@ type fakeShadeform struct {
 	// instance, modeling an indeterminate 5xx.
 	createStatus      int
 	createLandsAnyway bool
+	// hideCreated omits instances registered via the create endpoint from
+	// /instances responses, modeling the async create's listing lag.
+	hideCreated bool
+	createdIDs  map[string]bool
 	// beforeCreateReturns injects state right before create responds, e.g. a
 	// concurrent duplicate that the pre-scan could not have seen.
 	beforeCreateReturns func(f *fakeShadeform)
@@ -59,7 +63,16 @@ func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1")
 	switch {
 	case r.Method == http.MethodGet && path == "/instances":
-		return marshalResponse(map[string]any{"instances": f.instances})
+		visible := f.instances
+		if f.hideCreated {
+			visible = nil
+			for _, inst := range f.instances {
+				if !f.createdIDs[inst.ID] {
+					visible = append(visible, inst)
+				}
+			}
+		}
+		return marshalResponse(map[string]any{"instances": visible})
 	case r.Method == http.MethodGet && path == "/instances/types":
 		q := r.URL.Query()
 		var out []instanceType
@@ -92,6 +105,10 @@ func (f *fakeShadeform) RoundTrip(r *http.Request) (*http.Response, error) {
 		if lands {
 			f.nextID++
 			id = fmt.Sprintf("inst_%d", f.nextID)
+			if f.createdIDs == nil {
+				f.createdIDs = map[string]bool{}
+			}
+			f.createdIDs[id] = true
 			f.instances = append(f.instances, instance{
 				ID:                id,
 				Cloud:             req.Cloud,
@@ -141,7 +158,6 @@ func vmType() instanceType {
 	return instanceType{
 		Cloud:             "hyperstack",
 		ShadeInstanceType: "A6000",
-		CloudInstanceType: "gpu_1x_a6000",
 		Configuration: typeConfiguration{
 			MemoryInGB:      48,
 			StorageInGB:     256,
@@ -155,8 +171,8 @@ func vmType() instanceType {
 		HourlyPrice:    210,
 		DeploymentType: "vm",
 		Availability: []availability{
-			{Region: "canada-1", Available: true, DisplayName: "Toronto, Canada"},
-			{Region: "us-east-1", Available: false, DisplayName: "Virginia, USA"},
+			{Region: "canada-1", Available: true},
+			{Region: "us-east-1", Available: false},
 		},
 		BootTime: &bootTime{MinBootInSec: 180, MaxBootInSec: 300},
 	}

@@ -54,7 +54,7 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 		NativeRef:  nativeRef(t.Cloud, region, t.ShadeInstanceType),
 		ObservedAt: now,
 		ExpiresAt:  now.Add(5 * time.Minute),
-		Platform:   domain.Platform{OS: "linux", Architecture: "amd64"},
+		Platform:   domain.Platform{OS: domain.DefaultPlatformOS, Architecture: hostArchitecture(cfg.GPUType)},
 		Resources: domain.ResourceInventory{
 			CPUMillis:          int64(cfg.VCPUs) * 1000,
 			MemoryBytes:        int64(cfg.MemoryInGB) * gib,
@@ -62,6 +62,9 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 			Accelerators:       accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{
+			// SupportsEntrypointOverride stays false: the docker launch
+			// configuration has no entrypoint field, so the scheduler must
+			// keep entrypoint-overriding workloads off these offers.
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},
 			// ProviderTTL: every launch sets auto_delete, so the provider
 			// reclaims the instance even if the whole broker is down.
@@ -79,9 +82,12 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 			Known:              true,
 		},
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
-		// Shadeform pulls the image fresh on the provisioned host; report a
-		// known "not cached" fact so the scheduler prices in a pull instead of
-		// rejecting the offer with UNKNOWN_FACT.
+		// Shadeform pulls the image fresh on the provisioned host, but the
+		// image (and its size) is unknown at offer time and the evidence
+		// contract has no "uncached, size unknown" state: Known:true with
+		// MissingBytes 0 scores as a free pull (estimatePullSeconds returns
+		// 0), understating start latency. RunPod reports the same value; the
+		// contract gap is tracked as a follow-up issue.
 		ImageCache: domain.ImageCacheEvidence{Known: true},
 	}
 	if t.BootTime != nil && t.BootTime.MaxBootInSec > 0 {
@@ -96,6 +102,18 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 
 func nativeRef(cloud, region, shadeInstanceType string) string {
 	return cloud + "/" + region + "/" + shadeInstanceType
+}
+
+// hostArchitecture infers the host CPU architecture from the GPU type. The
+// Shadeform catalog has no architecture field, and Grace-based superchips
+// (GH200/GB200) are ARM hosts: advertising them as amd64 would let the
+// scheduler place an amd64 image that dies at exec, invisibly to Observe.
+func hostArchitecture(gpuType string) string {
+	t := strings.ToUpper(gpuType)
+	if strings.Contains(t, "GH200") || strings.Contains(t, "GB200") {
+		return "arm64"
+	}
+	return domain.DefaultPlatformArch
 }
 
 func offerSlug(s string) string {

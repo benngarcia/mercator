@@ -54,6 +54,29 @@ func TestListOffersMapsCatalogTriplesToOffers(t *testing.T) {
 	if !o.ExpiresAt.After(o.ObservedAt) {
 		t.Errorf("offer must expire after observation: %+v", o)
 	}
+	if o.Capabilities.Container.SupportsEntrypointOverride {
+		t.Error("the docker launch configuration has no entrypoint field; the offer must not advertise entrypoint override")
+	}
+	if o.Platform.OS != "linux" || o.Platform.Architecture != "amd64" {
+		t.Errorf("platform = %+v", o.Platform)
+	}
+}
+
+func TestListOffersMarksGraceHostsAsARM64(t *testing.T) {
+	gh200 := vmType()
+	gh200.ShadeInstanceType = "GH200"
+	gh200.Configuration.GPUType = "GH200"
+	fake := newFakeShadeform()
+	fake.types = []instanceType{gh200}
+	a := newTestAdapter(t, fake, nil)
+
+	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{})
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	if len(offers) != 1 || offers[0].Platform.Architecture != "arm64" {
+		t.Fatalf("GH200 (Grace superchip) hosts are ARM; advertising amd64 places images that die at exec: %+v", offers)
+	}
 }
 
 func TestListOffersExcludesNonVMDeploymentTypes(t *testing.T) {

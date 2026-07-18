@@ -50,8 +50,8 @@ setup steps + credential form) from the API instead of docs-only prose. -->
 |-----|---------|---------|
 | `shade_cloud` | `true` | `true` launches in Shadeform's managed account (one invoice); `false` uses your linked bring-your-own-cloud accounts. |
 | `allowed_clouds` | *(all)* | Comma-separated allow-list of provider cloud slugs (e.g. `lambdalabs,nebius`). When set, offers are filtered to it and launches outside it are rejected. This is the only "secure cloud" control: the API exposes no per-provider trust attributes (SOC2/Tier claims are platform-level marketing), so vetting a provider means putting it on this list. |
-| `max_lifetime_hours` | `24` | Reclamation backstop, **not** the run timeout. Every instance gets Shadeform `auto_delete` thresholds: a date at launch + this lifetime, and a spend cap of the offer's hourly price over that window. If the whole broker dies, Shadeform reclaims the instance on its own. |
-| `os` | *(auto)* | Explicit OS image. By default the adapter picks the first `*_shade_os` option for the instance type — those images bake in GPU drivers and the container runtime the docker launch configuration depends on. |
+| `max_lifetime_hours` | `24` | Reclamation backstop, **not** the run timeout. Every instance gets Shadeform `auto_delete` thresholds: a date threshold and a spend cap of the catalog hourly price over that window. When the run carries an execution bound (`max_runtime_seconds`), the horizon is that bound plus one hour of slack; this config is the horizon only for runs without one. Zero-priced catalog entries (bring-your-own-cloud inventory bills through your provider, not Shadeform) get the date threshold only — Shadeform leaves `"0.00"` spend-threshold semantics undefined. If the whole broker dies, Shadeform reclaims the instance on its own. |
+| `os` | *(auto)* | Explicit OS image. By default the adapter picks the first `*_shade_os` option for the instance type — those images bake in GPU drivers and the container runtime the docker launch configuration depends on. If a type offers no shade_os image, launches on it fail loudly rather than booting a VM whose container may never start; set this key explicitly to override. |
 | `registry_username` / `registry_password` | *(none)* | Registry credentials passed through to `docker_configuration.registry_credentials` for private images. Username/password is all Shadeform supports (no token exchange); for ghcr.io, use a GitHub PAT with `read:packages` as the password. |
 
 ## How offers work
@@ -66,6 +66,12 @@ Only `deployment_type: "vm"` inventory is offered. The docs never define what a
 docker launch configuration means on `container`- or `baremetal`-typed
 inventory; the adapter excludes those and logs the excluded count (open
 question with Shadeform support).
+
+The catalog exposes no host CPU architecture, so offers advertise `amd64`
+except Grace-superchip types (GH200/GB200), which are advertised as `arm64` —
+placing an amd64 image on a Grace host would die at exec, invisibly to the
+VM-only status. Verify the architecture of any new exotic type before relying
+on it.
 
 ## Lifecycle, ownership, and cleanup
 
@@ -94,8 +100,10 @@ question with Shadeform support).
 - **One container per run.** `launch_configuration.type: "docker"` runs exactly
   one image. Multi-container workloads are infeasible on this adapter.
 - **No entrypoint override.** Shadeform's docker configuration has no
-  entrypoint field; launches that set one are rejected loudly. Bake the
-  entrypoint into the image or express it as args.
+  entrypoint field. Offers declare this incapability, so the scheduler never
+  places an entrypoint-overriding workload here (it falls back to adapters
+  that support it); a launch that reaches the adapter anyway is rejected
+  loudly. Bake the entrypoint into the image or express it as args.
 - **Args are one shell string.** Mercator's argv is shell-quoted and joined
   before it reaches `docker_configuration.args`.
 - **No port mappings, host networking.** The adapter maps no ports and offers

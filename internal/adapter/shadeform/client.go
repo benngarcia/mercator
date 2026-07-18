@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,12 @@ import (
 )
 
 const defaultBaseURL = "https://api.shadeform.ai/v1"
+
+// errCreateIndeterminate marks a create whose outcome is unknown: a 5xx or
+// transport failure after the request may have executed. Launch translates it
+// (after failing to adopt a landed instance) into adapter.ErrLaunchIndeterminate
+// so the orchestrator keeps observing instead of closing the run cleanup-free.
+var errCreateIndeterminate = errors.New("shadeform: create outcome indeterminate")
 
 type client struct {
 	baseURL string
@@ -46,16 +53,13 @@ type instance struct {
 	ShadeCloud        bool      `json:"shade_cloud"`
 	Name              string    `json:"name"`
 	Status            string    `json:"status"`
-	StatusDetails     string    `json:"status_details,omitempty"`
-	HourlyPrice       int       `json:"hourly_price,omitempty"`
 	Tags              []string  `json:"tags,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 
 type availability struct {
-	Region      string `json:"region"`
-	Available   bool   `json:"available"`
-	DisplayName string `json:"display_name"`
+	Region    string `json:"region"`
+	Available bool   `json:"available"`
 }
 
 type bootTime struct {
@@ -69,7 +73,6 @@ type typeConfiguration struct {
 	VCPUs           int      `json:"vcpus"`
 	NumGPUs         int      `json:"num_gpus"`
 	GPUType         string   `json:"gpu_type"`
-	Interconnect    string   `json:"interconnect"`
 	VRAMPerGPUInGB  int      `json:"vram_per_gpu_in_gb"`
 	GPUManufacturer string   `json:"gpu_manufacturer"`
 	OSOptions       []string `json:"os_options"`
@@ -78,7 +81,6 @@ type typeConfiguration struct {
 type instanceType struct {
 	Cloud             string            `json:"cloud"`
 	ShadeInstanceType string            `json:"shade_instance_type"`
-	CloudInstanceType string            `json:"cloud_instance_type"`
 	Configuration     typeConfiguration `json:"configuration"`
 	HourlyPrice       int               `json:"hourly_price"`
 	DeploymentType    string            `json:"deployment_type"`
@@ -152,41 +154,22 @@ func (c *client) do(ctx context.Context, method, path string, body any) (int, []
 	return resp.StatusCode, respBody, nil
 }
 
-// doIdempotent retries 429s, 5xxs, and transport errors with exponential
-// backoff. Only safe for calls that can be repeated without side effects
-// (reads, and deletes which converge on the same terminal state). Shadeform
-// documents no rate limits; the 429 handling is conservative insurance.
-func (c *client) doIdempotent(ctx context.Context, method, path string, body any) (int, []byte, error) {
+// doRetry runs the request with exponential backoff. A 429 is always retried:
+// the request was rejected before execution, so repeating it is safe even for
+// create. 5xx and transport errors are retried only when retry5xx is set —
+// safe for reads and deletes (which converge on the same terminal state), NOT
+// for create, whose outcome after such a failure is indeterminate and must be
+// reconciled by re-listing rather than blind retry. Shadeform documents no
+// rate limits; the 429 handling is conservative insurance.
+func (c *client) doRetry(ctx context.Context, method, path string, body any, retry5xx bool) (int, []byte, error) {
 	const attempts = 4
 	var status int
 	var respBody []byte
 	var err error
 	for i := range attempts {
 		status, respBody, err = c.do(ctx, method, path, body)
-		if err == nil && status != http.StatusTooManyRequests && status < 500 {
-			return status, respBody, nil
-		}
-		if i < attempts-1 {
-			if werr := c.wait(ctx, i); werr != nil {
-				return 0, nil, werr
-			}
-		}
-	}
-	return status, respBody, err
-}
-
-// doCreate retries ONLY on 429: a throttled request was rejected before
-// execution, so repeating it cannot double-provision. A 5xx or transport error
-// leaves the create indeterminate — the caller reconciles by re-listing rather
-// than blindly retrying.
-func (c *client) doCreate(ctx context.Context, path string, body any) (int, []byte, error) {
-	const attempts = 4
-	var status int
-	var respBody []byte
-	var err error
-	for i := range attempts {
-		status, respBody, err = c.do(ctx, http.MethodPost, path, body)
-		if err != nil || status != http.StatusTooManyRequests {
+		transient := status == http.StatusTooManyRequests || (retry5xx && (err != nil || status >= 500))
+		if !transient {
 			return status, respBody, err
 		}
 		if i < attempts-1 {
@@ -221,19 +204,27 @@ func httpError(method, path string, status int, body []byte) error {
 	return fmt.Errorf("shadeform: %s %s -> %d: %s", method, path, status, snippet)
 }
 
-func (c *client) listInstances(ctx context.Context) ([]instance, error) {
-	status, body, err := c.doIdempotent(ctx, http.MethodGet, "/instances", nil)
+// getJSON performs an idempotent request and decodes the 2xx body into out.
+func (c *client) getJSON(ctx context.Context, method, path string, out any) error {
+	status, body, err := c.doRetry(ctx, method, path, nil, true)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if status < 200 || status >= 300 {
-		return nil, httpError(http.MethodGet, "/instances", status, body)
+		return httpError(method, path, status, body)
 	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("shadeform: decode %s: %w", path, err)
+	}
+	return nil
+}
+
+func (c *client) listInstances(ctx context.Context) ([]instance, error) {
 	var out struct {
 		Instances []instance `json:"instances"`
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("shadeform: decode instances: %w", err)
+	if err := c.getJSON(ctx, http.MethodGet, "/instances", &out); err != nil {
+		return nil, err
 	}
 	return out.Instances, nil
 }
@@ -243,26 +234,22 @@ func (c *client) instanceTypes(ctx context.Context, query url.Values) ([]instanc
 	if len(query) > 0 {
 		path += "?" + query.Encode()
 	}
-	status, body, err := c.doIdempotent(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, httpError(http.MethodGet, "/instances/types", status, body)
-	}
 	var out struct {
 		InstanceTypes []instanceType `json:"instance_types"`
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("shadeform: decode instance types: %w", err)
+	if err := c.getJSON(ctx, http.MethodGet, path, &out); err != nil {
+		return nil, err
 	}
 	return out.InstanceTypes, nil
 }
 
 func (c *client) createInstance(ctx context.Context, in createRequest) (string, error) {
-	status, body, err := c.doCreate(ctx, "/instances/create", in)
+	status, body, err := c.doRetry(ctx, http.MethodPost, "/instances/create", in, false)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %v", errCreateIndeterminate, err)
+	}
+	if status >= 500 {
+		return "", fmt.Errorf("%w: %v", errCreateIndeterminate, httpError(http.MethodPost, "/instances/create", status, body))
 	}
 	if status < 200 || status >= 300 {
 		return "", httpError(http.MethodPost, "/instances/create", status, body)
@@ -281,7 +268,7 @@ func (c *client) createInstance(ctx context.Context, in createRequest) (string, 
 
 func (c *client) deleteInstance(ctx context.Context, id string) error {
 	path := "/instances/" + id + "/delete"
-	status, body, err := c.doIdempotent(ctx, http.MethodPost, path, nil)
+	status, body, err := c.doRetry(ctx, http.MethodPost, path, nil, true)
 	if err != nil {
 		return err
 	}
