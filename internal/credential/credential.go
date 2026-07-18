@@ -7,7 +7,9 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +23,28 @@ const (
 )
 
 var ErrNotFound = errors.New("credential: secret not found")
+
+// sealKeyInfo is the HKDF domain-separation label for credential sealing.
+// MERCATOR_SECRET_KEY is a master key shared across purposes (reporting tokens
+// derive their own HMAC subkey); the raw key must never be used directly as a
+// cipher key. Changing this label orphans every sealed credential.
+const sealKeyInfo = "mercator/credential-seal/v1"
+
+// DeriveSealKey derives the AES-256 credential-sealing key from the master
+// key via HKDF-SHA256 under sealKeyInfo. Nil/empty master key → nil (sealing
+// disabled), matching the master key's presence semantics everywhere else.
+func DeriveSealKey(masterKey []byte) []byte {
+	if len(masterKey) == 0 {
+		return nil
+	}
+	key, err := hkdf.Key(sha256.New, masterKey, nil, sealKeyInfo, 32)
+	if err != nil {
+		// Only reachable with a broken hash or absurd length request; neither
+		// can happen with the fixed parameters above.
+		panic(fmt.Sprintf("credential: derive seal key: %v", err))
+	}
+	return key
+}
 
 type Credential struct {
 	Source string `json:"source"`
@@ -104,22 +128,24 @@ func (s *MemoryStore) Delete(_ context.Context, ws, id string) error {
 }
 
 type Resolver struct {
-	getenv    func(string) string
-	store     SecretStore
-	masterKey []byte
+	getenv  func(string) string
+	store   SecretStore
+	sealKey []byte
 }
 
+// NewResolver derives the sealing subkey from the master key immediately; the
+// raw master key is never retained here.
 func NewResolver(getenv func(string) string, store SecretStore, masterKey []byte) *Resolver {
-	return &Resolver{getenv: getenv, store: store, masterKey: masterKey}
+	return &Resolver{getenv: getenv, store: store, sealKey: DeriveSealKey(masterKey)}
 }
 
-// Seal encrypts plaintext using the resolver's master key. Returns the sealed
+// Seal encrypts plaintext under the derived sealing key. Returns the sealed
 // blob and true on success, or nil and false if no master key is configured.
 func (r *Resolver) Seal(plaintext []byte) ([]byte, bool) {
-	if len(r.masterKey) == 0 {
+	if len(r.sealKey) == 0 {
 		return nil, false
 	}
-	blob, err := Seal(r.masterKey, plaintext)
+	blob, err := Seal(r.sealKey, plaintext)
 	if err != nil {
 		return nil, false
 	}
@@ -145,14 +171,14 @@ func (r *Resolver) Resolve(ctx context.Context, workspaceID string, c Credential
 		}
 		return v, nil
 	case SourceMercator:
-		if len(r.masterKey) == 0 {
+		if len(r.sealKey) == 0 {
 			return "", errors.New("credential: mercator source disabled (set MERCATOR_SECRET_KEY)")
 		}
 		blob, err := r.store.Get(ctx, workspaceID, c.Ref)
 		if err != nil {
 			return "", err
 		}
-		plain, err := Open(r.masterKey, blob)
+		plain, err := Open(r.sealKey, blob)
 		if err != nil {
 			return "", err
 		}
