@@ -109,7 +109,7 @@ func TestRunReadListWaitDecisionAndRefreshEndpoints(t *testing.T) {
 	for _, target := range []string{
 		"/v1/runs/run_read?workspace_id=ws_1",
 		"/v1/runs?workspace_id=ws_1",
-		"/v1/runs/run_read:wait?workspace_id=ws_1",
+		"/v1/runs/run_read/wait?workspace_id=ws_1",
 		"/v1/runs/run_read/decision?workspace_id=ws_1",
 	} {
 		req = httptest.NewRequest(http.MethodGet, target, nil)
@@ -120,7 +120,7 @@ func TestRunReadListWaitDecisionAndRefreshEndpoints(t *testing.T) {
 		}
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/v1/runs/run_read:refresh?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs/run_read/refresh?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

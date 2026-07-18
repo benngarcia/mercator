@@ -1,10 +1,14 @@
-// TypeScript mirror of the Mercator domain ontology and API envelopes.
+// Handwritten Mercator domain ontology composed with generated API envelopes.
 // Source of truth: internal/domain/types.go, internal/eventlog/eventlog.go,
 // internal/connection/connection.go, internal/sinks/sinks.go,
-// internal/ociresolver/ociresolver.go, internal/httpapi/{server,openapi}.go.
+// internal/ociresolver/ociresolver.go, and internal/httpapi/openapi.json.
 //
 // Field names mirror the Go json tags EXACTLY (including the lowercase,
 // underscore-free CloudEvent fields like `globalposition`).
+
+import type { components, operations } from "./contract.gen";
+
+type ContractSchemas = components["schemas"];
 
 // ---------------------------------------------------------------------------
 // Primitives & enums
@@ -414,93 +418,42 @@ export interface AuthSessionState {
   email?: string;
 }
 
-export interface CreateConnectionRequest {
-  workspace_id?: string;
-  connection_id?: string;
-  adapter_type: string;
-  config?: Record<string, string>;
-  credential?: CredentialRef;
-  secret?: string;
-}
+export type CreateConnectionRequest = Omit<
+  ContractSchemas["CreateConnectionRequest"],
+  "credential"
+> & { credential?: CredentialRef };
 
-export interface ConnectionResponse {
-  connection: ConnectionRecord;
-}
+export type ConnectionResponse = Omit<
+  ContractSchemas["ConnectionResponse"],
+  "connection"
+> & { connection: ConnectionRecord };
 
-export interface DeleteConnectionResponse {
-  deleted: boolean;
-}
+export type DeleteConnectionResponse =
+  operations["deleteConnection"]["responses"][200]["content"]["application/json"];
 
 // ---------------------------------------------------------------------------
 // Adapter manifests (GET /v1/adapters)
 // Source of truth: internal/adapter/manifest.go.
 // ---------------------------------------------------------------------------
 
-export type ConfigFieldType = "string" | "bool" | "int";
-
-export interface AdapterConfigField {
-  name: string;
-  label: string;
-  type: ConfigFieldType;
-  required: boolean;
-  // Mask in the UI and never echo after save.
-  secret?: boolean;
-  default?: string;
-  placeholder?: string;
-  help?: string;
-}
-
-export interface AdapterCredentialSpec {
-  required: boolean;
-  label?: string;
-  format?: string;
-}
-
-export interface AdapterSetupStep {
-  text: string;
-  url?: string;
-}
+export type AdapterManifest = ContractSchemas["AdapterManifest"];
+export type ConfigFieldType = AdapterManifest["config_fields"][number]["type"];
+export type AdapterConfigField = AdapterManifest["config_fields"][number];
+export type AdapterCredentialSpec = AdapterManifest["credential"];
+export type AdapterSetupStep = AdapterManifest["setup_steps"][number];
 
 // An adapter's self-description for onboarding surfaces. `logo` is a
 // well-known slug mapped to a bundled logomark (CSP forbids external images);
 // unknown slugs fall back to a typographic monogram.
-export interface AdapterManifest {
-  type: string;
-  display_name: string;
-  logo: string;
-  description: string;
-  credential: AdapterCredentialSpec;
-  config_fields: AdapterConfigField[];
-  setup_steps: AdapterSetupStep[];
-}
-
-export interface AdapterListResponse {
-  adapters: AdapterManifest[];
-}
+export type AdapterListResponse = ContractSchemas["AdapterListResponse"];
 
 // ---------------------------------------------------------------------------
 // Sinks
 // ---------------------------------------------------------------------------
 
-export interface SinkStatus {
-  sink_id: string;
-  cursor: number;
-  has_cursor: boolean;
-}
-
-export interface SinkResult {
-  sink_id: string;
-  delivered: number;
-  last_position: number;
-  failed_event_id?: string;
-  replay_id?: string;
-}
-
-export interface ReplaySinkRequest {
-  from_exclusive?: number;
-  limit?: number;
-  replay_id?: string;
-}
+export type SinkStatus = ContractSchemas["SinkStatus"];
+export type SinkResult = ContractSchemas["SinkResult"];
+export type ReplaySinkRequest = ContractSchemas["ReplaySinkRequest"];
 
 // ---------------------------------------------------------------------------
 // Image resolution
@@ -513,95 +466,87 @@ export interface ResolvedImage {
   already_pinned?: boolean;
 }
 
-export interface ResolveImageRequest {
-  image: string;
-  platform: string;
-}
+export type ResolveImageRequest = ContractSchemas["ResolveImageRequest"];
 
 // ---------------------------------------------------------------------------
 // Request bodies
 // ---------------------------------------------------------------------------
 
-export interface CreateRunRequest {
-  workspace_id?: string;
-  run_id?: string;
-  workload_id?: string;
-  workload_revision_id?: string;
-  // Full workload revision spec. Takes precedence over the image shorthand.
+export type CreateRunRequest = Omit<
+  ContractSchemas["CreateRunRequest"],
+  "workload" | "env"
+> & {
   workload?: WorkloadRevision;
-  // Image shorthand fields.
-  image?: string;
-  args?: string[];
   env?: Record<string, EnvBinding>;
-}
+};
 
-export interface CreateWorkloadRequest {
-  workspace_id: string;
-  workload_id: string;
-  name: string;
-}
+export type CreateWorkloadRequest = ContractSchemas["CreateWorkloadRequest"];
 
-export interface CreateRevisionRequest {
-  revision: WorkloadRevision;
-}
+export type CreateRevisionRequest = Omit<
+  ContractSchemas["CreateRevisionRequest"],
+  "revision"
+> & { revision: WorkloadRevision };
 
-export interface PlacementPreviewRequest {
-  run_id?: string;
-  workspace_id?: string;
-  workload: WorkloadRevision;
-}
+export type PlacementPreviewRequest = Omit<
+  ContractSchemas["PlacementPreviewRequest"],
+  "workload"
+> & { workload: WorkloadRevision };
 
 // ---------------------------------------------------------------------------
 // Response envelopes
 // ---------------------------------------------------------------------------
 
-export interface RunResponse {
-  run_id: string;
+export type RunResponse = Omit<ContractSchemas["RunResponse"], "run"> & {
   run: RunRecord;
-  metadata?: Record<string, unknown>;
-  links?: Record<string, string>;
-  duplicate?: boolean;
-}
+};
 
-export interface RunListResponse {
-  runs: RunRecord[];
-}
+export type RunListResponse = Omit<
+  ContractSchemas["RunListResponse"],
+  "runs"
+> & { runs: RunRecord[] };
 
-export interface EventListResponse {
-  events: CloudEvent[];
-}
+export type EventListResponse = Omit<
+  ContractSchemas["EventListResponse"],
+  "events"
+> & { events: CloudEvent[] };
 
-export interface PlacementDecisionResponse {
-  decision: PlacementDecision;
-}
+export type PlacementDecisionResponse = Omit<
+  ContractSchemas["PlacementDecisionResponse"],
+  "decision"
+> & { decision: PlacementDecision };
 
-export interface PlacementPreviewResponse {
-  decision: PlacementDecision;
-}
+export type PlacementPreviewResponse = Omit<
+  ContractSchemas["PlacementPreviewResponse"],
+  "decision"
+> & { decision: PlacementDecision };
 
-export interface OfferListResponse {
-  offers: OfferSnapshot[];
-}
+export type OfferListResponse = Omit<
+  ContractSchemas["OfferListResponse"],
+  "offers"
+> & { offers: OfferSnapshot[] };
 
-export interface ConnectionListResponse {
-  connections: ConnectionRecord[];
-}
+export type ConnectionListResponse = Omit<
+  ContractSchemas["ConnectionListResponse"],
+  "connections"
+> & { connections: ConnectionRecord[] };
 
-export interface WorkloadRevisionResponse {
-  revision: WorkloadRevision;
-}
+export type WorkloadRevisionResponse = Omit<
+  ContractSchemas["WorkloadRevisionResponse"],
+  "revision"
+> & { revision: WorkloadRevision };
 
-export interface WorkloadRevisionListResponse {
-  revisions: WorkloadRevision[];
-}
+export type WorkloadRevisionListResponse = Omit<
+  ContractSchemas["WorkloadRevisionListResponse"],
+  "revisions"
+> & { revisions: WorkloadRevision[] };
 
-export interface ResolveImageResponse {
-  image: ResolvedImage;
-}
+export type ResolveImageResponse = Omit<
+  ContractSchemas["ResolveImageResponse"],
+  "image"
+> & { image: ResolvedImage };
 
-export interface CreateWorkloadResponse {
-  workload_id: string;
-}
+export type CreateWorkloadResponse =
+  operations["createWorkload"]["responses"][202]["content"]["application/json"];
 
 // ---------------------------------------------------------------------------
 // Error envelope

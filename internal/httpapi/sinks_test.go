@@ -46,7 +46,7 @@ func TestSinkReplayAPIAndFailureIsolation(t *testing.T) {
 		t.Fatalf("create run expected 202 despite failing sink, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/v1/sinks/audit:replay", strings.NewReader(`{"from_exclusive":0,"limit":1,"replay_id":"replay_api"}`))
+	req = httptest.NewRequest(http.MethodPost, "/v1/sinks/audit/replay", strings.NewReader(`{"from_exclusive":0,"limit":1,"replay_id":"replay_api"}`))
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {

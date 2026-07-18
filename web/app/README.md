@@ -89,7 +89,7 @@ cd web/app && bun run typecheck   # tsc --noEmit, strict
   authorized bit.
 - Selecting a card with no connection opens the setup modal: the manifest's
   numbered setup steps (with links) beside the form. "Save & verify" creates
-  the connection then calls `:authorize`; failure keeps the modal open with
+  the connection then calls `/authorize`; failure keeps the modal open with
   the adapter's real error text and offers verify-again or discard-and-edit
   (connection configs are immutable, so editing recreates under a fresh id).
 - Secret fields are masked and write-only: after save the UI shows presence

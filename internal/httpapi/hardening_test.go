@@ -184,7 +184,7 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 		t.Fatalf("precondition: run should be open after first advance, got %+v", created.Run)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_wait_open:wait?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_wait_open/wait?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

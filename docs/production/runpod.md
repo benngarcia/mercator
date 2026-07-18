@@ -29,7 +29,7 @@ outcome.
    ```
 3. Authorize it (runs a cheap `GET /pods` to validate the key):
    ```sh
-   curl -X POST "$MERCATOR/v1/connections/conn_runpod_main:authorize?workspace_id=ws_1" \
+   curl -X POST "$MERCATOR/v1/connections/conn_runpod_main/authorize?workspace_id=ws_1" \
      -H "Authorization: Bearer $MERCATOR_API_TOKEN"
    ```
 

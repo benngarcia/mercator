@@ -1,7 +1,7 @@
 # BusyBox Raw-HTTP Reporting
 
 Proves any minimal image can report to Mercator using only the injected env and
-a plain HTTP POST. `busybox` ships `wget`, which we use to POST the `:report`
+a plain HTTP POST. `busybox` ships `wget`, which we use to POST the `/report`
 endpoint.
 
 This is the lowest-dependency RunPod proof path. It uses ordinary HTTP to
@@ -28,7 +28,7 @@ curl -X POST "$MERCATOR/v1/runs" \
         "containers": [{
           "image": "busybox@sha256:<real-index-digest>",
           "args": ["sh","-c",
-            "set -e; URL=\"$MERCATOR_REPORT_URL/v1/runs/$MERCATOR_RUN_ID:report?workspace_id=$MERCATOR_WORKSPACE_ID\"; AUTH=\"Authorization: Bearer $MERCATOR_RUN_TOKEN\"; wget -q -O- --header \"$AUTH\" --header \"Content-Type: application/json\" --post-data \"{\\\"type\\\":\\\"progress\\\",\\\"data\\\":{\\\"pct\\\":50}}\" \"$URL\"; sleep 5; wget -q -O- --header \"$AUTH\" --header \"Content-Type: application/json\" --post-data \"{\\\"type\\\":\\\"exit\\\",\\\"exit_code\\\":0}\" \"$URL\""
+            "set -e; URL=\"$MERCATOR_REPORT_URL/v1/runs/$MERCATOR_RUN_ID/report?workspace_id=$MERCATOR_WORKSPACE_ID\"; AUTH=\"Authorization: Bearer $MERCATOR_RUN_TOKEN\"; wget -q -O- --header \"$AUTH\" --header \"Content-Type: application/json\" --post-data \"{\\\"type\\\":\\\"progress\\\",\\\"data\\\":{\\\"pct\\\":50}}\" \"$URL\"; sleep 5; wget -q -O- --header \"$AUTH\" --header \"Content-Type: application/json\" --post-data \"{\\\"type\\\":\\\"exit\\\",\\\"exit_code\\\":0}\" \"$URL\""
           ]
         }],
         "resources": { "accelerators": [ { "vendor": "NVIDIA", "count": 1 } ] }

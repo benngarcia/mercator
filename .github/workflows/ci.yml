@@ -19,6 +19,8 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
+      - run: go generate ./...
+      - run: git diff --exit-code
       - run: go test ./...
       - run: go build ./...
       - run: scripts/build-release-archives.sh v0.0.0-ci /tmp/mercator-release-dist
@@ -34,6 +36,9 @@ jobs:
           bun-version: "1.3"
       - run: bun install --frozen-lockfile
         working-directory: web/app
+      - run: bun run generate:api
+        working-directory: web/app
+      - run: git diff --exit-code
       - run: bun run check:react-effects
         working-directory: web/app
       - run: bun run typecheck

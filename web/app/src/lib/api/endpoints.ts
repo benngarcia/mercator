@@ -3,6 +3,7 @@
 // endpoints accept an optional idempotencyKey (auto-generated otherwise).
 
 import { apiFetch } from "./client";
+import type { operations } from "./contract.gen";
 import type {
   AdapterListResponse,
   AuthSessionState,
@@ -39,9 +40,8 @@ interface WorkspaceArg {
 // Health
 // ---------------------------------------------------------------------------
 
-export interface HealthStatus {
-  status: string;
-}
+export type HealthStatus =
+  operations["healthLive"]["responses"][200]["content"]["application/json"];
 
 export function getHealthLive(signal?: AbortSignal): Promise<HealthStatus> {
   return apiFetch<HealthStatus>("/health/live", { signal });
@@ -119,7 +119,7 @@ export function cancelRun(
   runID: string,
   opts: { idempotencyKey?: string; workspaceId?: string } = {},
 ): Promise<RunResponse> {
-  return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}:cancel`, {
+  return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}/cancel`, {
     method: "POST",
     idempotencyKey: opts.idempotencyKey,
     workspaceId: opts.workspaceId,
@@ -130,7 +130,7 @@ export function refreshRun(
   runID: string,
   opts: { idempotencyKey?: string; workspaceId?: string } = {},
 ): Promise<RunResponse> {
-  return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}:refresh`, {
+  return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}/refresh`, {
     method: "POST",
     idempotencyKey: opts.idempotencyKey,
     workspaceId: opts.workspaceId,
@@ -190,7 +190,7 @@ export function authorizeConnection(
   opts: { idempotencyKey?: string; workspaceId?: string } = {},
 ): Promise<ConnectionResponse> {
   return apiFetch<ConnectionResponse>(
-    `/v1/connections/${encodeURIComponent(connectionId)}:authorize`,
+    `/v1/connections/${encodeURIComponent(connectionId)}/authorize`,
     {
       method: "POST",
       idempotencyKey: opts.idempotencyKey,
@@ -307,7 +307,7 @@ export function deliverSink(
   opts: { idempotencyKey?: string } = {},
 ): Promise<SinkResult> {
   return apiFetch<SinkResult>(
-    `/v1/sinks/${encodeURIComponent(sinkID)}:deliver`,
+    `/v1/sinks/${encodeURIComponent(sinkID)}/deliver`,
     { method: "POST", idempotencyKey: opts.idempotencyKey },
   );
 }
@@ -318,7 +318,7 @@ export function replaySink(
   opts: { idempotencyKey?: string } = {},
 ): Promise<SinkResult> {
   return apiFetch<SinkResult>(
-    `/v1/sinks/${encodeURIComponent(sinkID)}:replay`,
+    `/v1/sinks/${encodeURIComponent(sinkID)}/replay`,
     { method: "POST", body, idempotencyKey: opts.idempotencyKey },
   );
 }

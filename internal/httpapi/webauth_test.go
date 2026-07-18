@@ -165,7 +165,7 @@ func TestRunRecordsActingPrincipals(t *testing.T) {
 	}
 
 	// A signed-in human's cancel records their email.
-	cancel := httptest.NewRequest(http.MethodPost, "/v1/runs/run_audit:cancel?workspace_id=ws_1", nil)
+	cancel := httptest.NewRequest(http.MethodPost, "/v1/runs/run_audit/cancel?workspace_id=ws_1", nil)
 	cancel.Header.Set("X-Test-Session", "operator@example.com")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, cancel)

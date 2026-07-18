@@ -108,7 +108,7 @@ func TestConnectionsListReflectsRegistry(t *testing.T) {
 }
 
 // TestAuthorizeConnectionMarksAuthorized asserts that a successful
-// POST /v1/connections/{id}:authorize returns 200 with the record's
+// POST /v1/connections/{id}/authorize returns 200 with the record's
 // authorized field set to true.
 func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 	store := credential.NewMemoryStore()
@@ -130,7 +130,7 @@ func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 	}
 
 	// Authorize it.
-	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_auth:authorize?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_auth/authorize?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -169,7 +169,7 @@ func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	}
 
 	// Attempt to authorize — verifier will fail.
-	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_noauth:authorize?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_noauth/authorize?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code < 400 {
@@ -288,12 +288,12 @@ func TestSecretNeverLeavesTheServer(t *testing.T) {
 	req.Header.Set("Idempotency-Key", "k-audit")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("create: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Authorize so the authorization event exists too.
-	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_audit:authorize?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_audit/authorize?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -384,8 +384,8 @@ func TestDeleteConnectionRemovesRecordAndSecret(t *testing.T) {
 	req.Header.Set("Idempotency-Key", "k-del")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("create: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodDelete, "/v1/connections/conn_gone?workspace_id=ws_1", nil)

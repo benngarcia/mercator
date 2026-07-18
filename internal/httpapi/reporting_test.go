@@ -20,21 +20,21 @@ import (
 	"github.com/benngarcia/mercator/internal/workload"
 )
 
-// TestReportEndpointExemptFromOperatorAuth verifies that POST /v1/runs/<id>:report
+// TestReportEndpointExemptFromOperatorAuth verifies that POST /v1/runs/<id>/report
 // is NOT subject to the operator-token gate (it will be authed by a per-run token
 // in a later task). Every other /v1/ path is unchanged.
 func TestReportEndpointExemptFromOperatorAuth(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("tok", []string{"*"}))
 
-	// POST /v1/runs/run_x:report without any Authorization header must NOT be
+	// POST /v1/runs/run_x/report without any Authorization header must NOT be
 	// rejected by the operator gate. Until the handler is registered it will
 	// 404 from the mux — that is fine; we only assert it was not the operator 401.
 	t.Run("report_not_rejected_by_operator_gate", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x:report", nil)
+		req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x/report", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code == http.StatusUnauthorized && strings.Contains(rec.Body.String(), "UNAUTHORIZED") {
-			t.Fatalf("operator gate must not reject POST :report; got 401 UNAUTHORIZED: %s", rec.Body.String())
+			t.Fatalf("operator gate must not reject POST /report; got 401 UNAUTHORIZED: %s", rec.Body.String())
 		}
 	})
 
@@ -51,17 +51,17 @@ func TestReportEndpointExemptFromOperatorAuth(t *testing.T) {
 		}
 	})
 
-	// Regression: POST /v1/runs/run_x:cancel without a token must still be 401.
-	// The carve-out must NOT accidentally exempt :cancel or any other action.
+	// Regression: POST /v1/runs/run_x/cancel without a token must still be 401.
+	// The carve-out must NOT accidentally exempt /cancel or any other action.
 	t.Run("cancel_still_requires_token", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x:cancel", nil)
+		req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x/cancel", nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("POST :cancel without token: expected 401, got %d body=%s", rec.Code, rec.Body.String())
+			t.Fatalf("POST /cancel without token: expected 401, got %d body=%s", rec.Code, rec.Body.String())
 		}
 		if !strings.Contains(rec.Body.String(), "UNAUTHORIZED") {
-			t.Fatalf("POST :cancel without token: expected UNAUTHORIZED body, got %s", rec.Body.String())
+			t.Fatalf("POST /cancel without token: expected UNAUTHORIZED body, got %s", rec.Body.String())
 		}
 	})
 }
@@ -123,12 +123,12 @@ func TestReportIngestEndpointRecordsEvent(t *testing.T) {
 	// Create a run so its stream exists.
 	runID := createReportingRun(t, handler, "run_report_e2e")
 
-	// POST :report with the correct run token — should 202.
+	// POST /report with the correct run token — should 202.
 	reportPayload := mustMarshal(t, map[string]any{
 		"type": "progress",
 		"data": map[string]any{"pct": 50},
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report?workspace_id=ws_1", bytes.NewReader(reportPayload))
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1", bytes.NewReader(reportPayload))
 	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -183,7 +183,7 @@ func TestReportIngestEndpointWrongToken(t *testing.T) {
 	runID := createReportingRun(t, handler, "run_report_wrong_tok")
 
 	otherRunToken := signer.Token("ws_1", "run_completely_different")
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report?workspace_id=ws_1",
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer "+otherRunToken)
 	rec := httptest.NewRecorder()
@@ -205,7 +205,7 @@ func TestReportIngestEndpointMissingWorkspaceID(t *testing.T) {
 
 	runID := createReportingRun(t, handler, "run_report_no_ws")
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report",
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
 	rec := httptest.NewRecorder()
@@ -213,8 +213,8 @@ func TestReportIngestEndpointMissingWorkspaceID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing workspace: expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "WORKSPACE_REQUIRED") {
-		t.Fatalf("expected WORKSPACE_REQUIRED, got %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "INVALID_REQUEST") {
+		t.Fatalf("expected INVALID_REQUEST, got %s", rec.Body.String())
 	}
 }
 
@@ -224,7 +224,7 @@ func TestReportIngestEndpointDisabledWithoutSigner(t *testing.T) {
 	// Build a server WITHOUT WithReportSigner.
 	handler := newHTTPTestServerWithOptions(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x:report?workspace_id=ws_1",
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/run_x/report?workspace_id=ws_1",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer sometoken")
 	rec := httptest.NewRecorder()
@@ -237,7 +237,7 @@ func TestReportIngestEndpointDisabledWithoutSigner(t *testing.T) {
 	}
 }
 
-// TestReportEndpointRejectsOperatorToken verifies that POST /v1/runs/{id}:report
+// TestReportEndpointRejectsOperatorToken verifies that POST /v1/runs/{id}/report
 // rejects the operator token and requires a valid RUN token instead.
 func TestReportEndpointRejectsOperatorToken(t *testing.T) {
 	key32 := []byte("0123456789abcdef0123456789abcdef")
@@ -245,8 +245,8 @@ func TestReportEndpointRejectsOperatorToken(t *testing.T) {
 
 	runID := createReportingRun(t, handler, "run_report_op_token_reject")
 
-	// POST :report with the operator token (not the run token) — should 401.
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+":report?workspace_id=ws_1",
+	// POST /report with the operator token (not the run token) — should 401.
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer op-token")
 	rec := httptest.NewRecorder()
@@ -259,7 +259,7 @@ func TestReportEndpointRejectsOperatorToken(t *testing.T) {
 	}
 }
 
-// TestReportEndpointRunNotFound verifies that POSTing :report for a
+// TestReportEndpointRunNotFound verifies that POSTing /report for a
 // non-existent run (with valid token and workspace_id) returns 404 RUN_NOT_FOUND.
 func TestReportEndpointRunNotFound(t *testing.T) {
 	key32 := []byte("0123456789abcdef0123456789abcdef")
@@ -269,7 +269,7 @@ func TestReportEndpointRunNotFound(t *testing.T) {
 	// Don't create a run; just try to report for a non-existent runID.
 	nonExistentRunID := "run_nonexistent_12345"
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+nonExistentRunID+":report?workspace_id=ws_1",
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+nonExistentRunID+"/report?workspace_id=ws_1",
 		bytes.NewReader([]byte(`{"type":"progress"}`)))
 	req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", nonExistentRunID))
 	rec := httptest.NewRecorder()

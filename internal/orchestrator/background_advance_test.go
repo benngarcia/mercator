@@ -14,8 +14,8 @@ import (
 
 // TestAdvanceOpenRunsClosesExitedRunWithoutClientRefresh documents the broker
 // gap the background sweep closes, red half then green half in one test. A run
-// whose container has exited stays OPEN forever unless a client calls :refresh
-// or :wait — the first assertion pins that stuck-open state (the run's final
+// whose container has exited stays OPEN forever unless a client calls /refresh
+// or /wait — the first assertion pins that stuck-open state (the run's final
 // state before this change). One AdvanceOpenRuns sweep, with zero client
 // involvement, must then observe the exit, record the outcome, confirm
 // cleanup, and close the run; a follow-up sweep must find nothing open.
@@ -37,7 +37,7 @@ func TestAdvanceOpenRunsClosesExitedRunWithoutClientRefresh(t *testing.T) {
 	}
 
 	// RED half: the container has now exited (the fake's next observation is
-	// terminal), but no client ever calls :refresh or :wait, so nothing
+	// terminal), but no client ever calls /refresh or /wait, so nothing
 	// advances the run — it is stuck open.
 	record, err := orch.GetRun(ctx, "ws_1", "run_1")
 	if err != nil {
