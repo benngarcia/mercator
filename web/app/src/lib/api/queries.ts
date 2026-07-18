@@ -19,6 +19,7 @@ import { ApiError } from "./client";
 import * as endpoints from "./endpoints";
 import { queryKeys } from "./keys";
 import type {
+  AdapterManifest,
   AuthSessionState,
   ConnectionRecord,
   CreateConnectionRequest,
@@ -232,6 +233,21 @@ export function useConnections(
     },
     enabled: Boolean(workspaceID),
     refetchInterval: POLL.connections,
+    retry: defaultRetry,
+  });
+}
+
+// useAdapters lists the registered adapters' onboarding manifests. The list
+// is static per server process (registration happens once at boot), so it is
+// fetched once and never refetched.
+export function useAdapters(): UseQueryResult<AdapterManifest[], ApiError> {
+  return useQuery<AdapterManifest[], ApiError>({
+    queryKey: queryKeys.adapters(),
+    queryFn: async ({ signal }) => {
+      const res = await endpoints.listAdapters(signal);
+      return res.adapters;
+    },
+    staleTime: Infinity,
     retry: defaultRetry,
   });
 }
@@ -472,6 +488,30 @@ export function useCreateConnection(
         workspaceId: workspaceID,
       });
       return res.connection;
+    },
+    onSuccess: () => {
+      const ws = workspaceID ?? getWorkspace() ?? "";
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.connections(ws),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.offers(ws),
+      });
+    },
+  });
+}
+
+export function useDeleteConnection(
+  workspaceOverride?: string,
+): UseMutationResult<void, ApiError, string> {
+  const queryClient = useQueryClient();
+  const { workspace } = useSession();
+  const workspaceID = workspaceOverride ?? workspace ?? undefined;
+  return useMutation<void, ApiError, string>({
+    mutationFn: async (connectionId) => {
+      await endpoints.deleteConnection(connectionId, {
+        workspaceId: workspaceID,
+      });
     },
     onSuccess: () => {
       const ws = workspaceID ?? getWorkspace() ?? "";

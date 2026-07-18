@@ -20,6 +20,7 @@ export const queryKeys = {
 
   offers: (workspaceID: string) =>
     ["mercator", "offers", { workspaceID }] as const,
+  adapters: () => ["mercator", "adapters"] as const,
   connections: (workspaceID: string) =>
     ["mercator", "connections", { workspaceID }] as const,
 

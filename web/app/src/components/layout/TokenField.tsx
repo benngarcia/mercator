@@ -5,6 +5,7 @@
 // this component only persists it.
 
 import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Check, Eye, EyeOff, KeyRound, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ import { useSession } from "@/hooks/useSession";
 
 export function TokenField() {
   const { token, hasToken, setToken } = useSession();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(token ?? "");
   const [draftSource, setDraftSource] = useState(token);
@@ -49,6 +51,9 @@ export function TokenField() {
     const next = draft.trim();
     setToken(next === "" ? null : next);
     setOpen(false);
+    // Credentials changed: previously-401'd queries (which don't retry or
+    // poll) must refetch with the new token rather than stay stuck on error.
+    void queryClient.invalidateQueries();
   };
 
   const clear = () => {

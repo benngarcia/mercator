@@ -23,7 +23,7 @@ server is configured with exactly one allowed workspace.
 | Runs | `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}:wait`, `POST /v1/runs/{run_id}:refresh`, `POST /v1/runs/{run_id}:cancel`, `GET /v1/runs/{run_id}/events`, `GET /v1/runs/{run_id}/decision` | Create runs, list/read them, wait for closure, refresh/cancel adapter state, inspect public events, and read the placement decision. |
 | Placement | `POST /v1/placements:preview` | Evaluate a workload against current offers and policy without creating a run. |
 | Workloads and images | `POST /v1/workloads`, `GET/POST /v1/workloads/{workload_id}/revisions`, `GET /v1/workloads/{workload_id}/revisions/{revision_id}`, `POST /v1/images:resolve` | Store workload names/revisions, read immutable revisions, and resolve image tags to immutable image metadata. |
-| Connections and offers | `GET /v1/adapters`, `GET /v1/connections`, `GET /v1/offers` | Discover registered adapters' onboarding manifests (display metadata, config fields, setup steps), inspect configured provider connections, and the offers visible to the placement engine for a workspace. |
+| Connections and offers | `GET /v1/adapters`, `GET /v1/connections`, `POST /v1/connections`, `POST /v1/connections/{id}:authorize`, `DELETE /v1/connections/{id}`, `GET /v1/offers` | Discover registered adapters' onboarding manifests (display metadata, config fields, setup steps), create/verify/delete provider connections, and inspect the offers visible to the placement engine for a workspace. |
 | Sinks | `GET /v1/sinks/{sink_id}`, `POST /v1/sinks/{sink_id}:deliver`, `POST /v1/sinks/{sink_id}:replay` | Read sink cursor state, deliver pending events, and replay events after a global position. |
 
 ## First Integrator Path

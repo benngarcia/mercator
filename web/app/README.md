@@ -76,3 +76,28 @@ always has a file to embed even on a fresh checkout that has not run the build
 ```sh
 cd web/app && bun run typecheck   # tsc --noEmit, strict
 ```
+
+## Connections page
+
+`/connections` is the guided provider onboarding surface:
+
+- A card per registered adapter, rendered from `GET /v1/adapters` (the
+  manifest API). Each card shows a bundled logomark (or typographic monogram —
+  see `src/components/connections/LOGO-LICENSES.md`; the CSP forbids external
+  images), a one-liner, and a quiet status: none / configured / verified /
+  verify failed. "Verify failed" is session state — the API stores only the
+  authorized bit.
+- Selecting a card with no connection opens the setup modal: the manifest's
+  numbered setup steps (with links) beside the form. "Save & verify" creates
+  the connection then calls `:authorize`; failure keeps the modal open with
+  the adapter's real error text and offers verify-again or discard-and-edit
+  (connection configs are immutable, so editing recreates under a fresh id).
+- Secret fields are masked and write-only: after save the UI shows presence
+  ("configured"), never the value; editing means re-entering.
+- Selecting a card with existing connections opens the management sheet:
+  config with manifest-declared secret fields redacted, re-verify, and delete
+  with inline confirmation (`DELETE /v1/connections/{id}`; deleted ids cannot
+  be reused).
+- The dashed "Custom connection" card keeps the raw adapter-type + key/value
+  dialog for adapters without manifests, and the dense operator table below
+  retains the full-record view.

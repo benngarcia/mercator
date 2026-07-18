@@ -146,8 +146,9 @@ func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 }
 
 // TestAuthorizeConnectionVerifyFailureStaysUnauthorized asserts that when the
-// verifier returns an error the authorize endpoint responds non-2xx (502) and
-// a subsequent GET shows the connection is still unauthorized.
+// verifier returns an error the authorize endpoint responds non-2xx (502)
+// carrying the adapter's real error text, and a subsequent GET shows the
+// connection is still unauthorized.
 func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	store := credential.NewMemoryStore()
 	verifier := &fakeVerifier{err: errors.New("dial timeout")}
@@ -176,6 +177,9 @@ func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	}
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("expected 502, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "dial timeout") {
+		t.Errorf("verify failure must carry the adapter's real error text, got %s", rec.Body.String())
 	}
 
 	// Follow-up GET confirms the connection is still unauthorized.
@@ -359,5 +363,53 @@ func TestCreateConnectionNoMasterKeyReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "SECRET_STORE_DISABLED") {
 		t.Fatalf("expected SECRET_STORE_DISABLED code, got %s", rec.Body.String())
+	}
+}
+
+// TestDeleteConnectionRemovesRecordAndSecret: DELETE hides the connection
+// from the list and removes the sealed blob; deleting an unknown id is 404.
+func TestDeleteConnectionRemovesRecordAndSecret(t *testing.T) {
+	store := credential.NewMemoryStore()
+	resolver := credential.NewResolver(nil, store, testKey32())
+	handler := newHTTPTestServerWithConns(t, store, resolver)
+
+	body := mustMarshal(t, createConnectionBody{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_gone",
+		AdapterType:  "runpod",
+		Credential:   credential.Credential{Source: "mercator"},
+		Secret:       "rp_delete_me",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "k-del")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/v1/connections/conn_gone?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/connections?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), "conn_gone") {
+		t.Fatalf("deleted connection still listed: %s", rec.Body.String())
+	}
+
+	if _, err := store.Get(context.Background(), "ws_1", "conn_gone"); err == nil {
+		t.Fatal("sealed blob must be removed on delete")
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/v1/connections/conn_ghost?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("delete unknown: expected 404, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
