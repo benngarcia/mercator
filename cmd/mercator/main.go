@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	stdlog "log"
 	"net"
@@ -29,6 +29,7 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/janitor"
+	"github.com/benngarcia/mercator/internal/keymaterial"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
@@ -66,7 +67,11 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// HandlerForSQLite's internal construction but over the SHARED event log,
 	// connection.Service, and Broker (the Broker is the adapter), plus the
 	// secret store, credential resolver, and verifier.
-	deps := buildServerDeps(env)
+	deps, err := buildServerDeps(env)
+	if err != nil {
+		stdlog.Printf("configure server: %v", err)
+		return 1
+	}
 	sched := scheduler.New()
 	orchOpts := []orchestrator.Option{}
 	if deps.signer != nil && deps.signer.Enabled() && deps.publicURL != "" {
@@ -256,13 +261,13 @@ type serverDeps struct {
 // is future work.
 //
 // serve uses the Docker host adapter; Docker is a hard requirement.
-func buildServerDeps(values map[string]string) serverDeps {
+func buildServerDeps(values map[string]string) (serverDeps, error) {
 	ctx := context.Background()
 	dsn := envValue(values, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
 
 	log, err := eventlog.OpenSQLite(ctx, dsn)
 	if err != nil {
-		stdlog.Fatalf("open event log: %v", err)
+		return serverDeps{}, fmt.Errorf("open event log: %w", err)
 	}
 	svc := connection.New(log)
 
@@ -272,26 +277,34 @@ func buildServerDeps(values map[string]string) serverDeps {
 	// a bare ?mode=memory (without shared cache) would give it an isolated, empty DB.
 	secretDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		stdlog.Fatalf("open secret store db: %v", err)
+		_ = log.Close()
+		return serverDeps{}, fmt.Errorf("open secret store db: %w", err)
 	}
+	closeStores := func() error { return errors.Join(secretDB.Close(), log.Close()) }
+	configured := false
+	defer func() {
+		if !configured {
+			_ = closeStores()
+		}
+	}()
 	// This pool shares the file with the event log's pool: serialize it and
 	// wait out the other writer instead of failing instantly with SQLITE_BUSY.
 	secretDB.SetMaxOpenConns(1)
 	if _, err := secretDB.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
-		stdlog.Fatalf("configure secret store db: %v", err)
+		return serverDeps{}, fmt.Errorf("configure secret store db: %w", err)
 	}
 	store, err := credential.NewSQLiteStore(ctx, secretDB)
 	if err != nil {
-		stdlog.Fatalf("init secret store: %v", err)
+		return serverDeps{}, fmt.Errorf("init secret store: %w", err)
 	}
 
-	// Decode master key: try hex then base64; empty env var → nil key.
+	// An absent master key disables stored credentials and reporting. A present
+	// key is configuration and therefore must decode successfully at startup.
 	var masterKey []byte
 	if raw := values["MERCATOR_SECRET_KEY"]; raw != "" {
-		if b, err := hex.DecodeString(raw); err == nil {
-			masterKey = b
-		} else if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
-			masterKey = b
+		masterKey, err = keymaterial.Decode("MERCATOR_SECRET_KEY", raw, 32)
+		if err != nil {
+			return serverDeps{}, err
 		}
 	}
 	// Sealed blobs are keyed by an HKDF subkey of the master key. Re-seal any
@@ -299,7 +312,7 @@ func buildServerDeps(values map[string]string) serverDeps {
 	// is not the key this store was written with — refuse to boot rather than
 	// fail at first credential use.
 	if migrated, err := store.MigrateSealKey(ctx, masterKey); err != nil {
-		stdlog.Fatalf("credential store: %v", err)
+		return serverDeps{}, fmt.Errorf("credential store: %w", err)
 	} else if migrated > 0 {
 		stdlog.Printf("credential store: re-sealed %d credential(s) under the derived sealing key", migrated)
 	}
@@ -361,28 +374,20 @@ func buildServerDeps(values map[string]string) serverDeps {
 			Config:       cfg,
 		}); err != nil {
 			if errors.Is(err, eventlog.ErrIdempotencyConflict) {
-				stdlog.Fatalf("register docker connection in %s: the MERCATOR_DOCKER_{BIN,HOST,CONTEXT} config changed since this database registered %q. Connection configs are immutable; set MERCATOR_DOCKER_CONNECTION_ID to a new id for the new endpoint (or point MERCATOR_SQLITE_DSN at a fresh database)", ws, id.ConnectionID)
+				return serverDeps{}, fmt.Errorf("register docker connection in %s: the MERCATOR_DOCKER_{BIN,HOST,CONTEXT} config changed since this database registered %q; connection configs are immutable, so set MERCATOR_DOCKER_CONNECTION_ID to a new id for the new endpoint or point MERCATOR_SQLITE_DSN at a fresh database", ws, id.ConnectionID)
 			}
-			stdlog.Fatalf("register docker connection in %s: %v", ws, err)
+			return serverDeps{}, fmt.Errorf("register docker connection in %s: %w", ws, err)
 		}
 		if err := svc.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
 			WorkspaceID:  ws,
 			ConnectionID: id.ConnectionID,
 			Authorized:   true,
 		}); err != nil {
-			stdlog.Fatalf("authorize docker connection in %s: %v", ws, err)
+			return serverDeps{}, fmt.Errorf("authorize docker connection in %s: %w", ws, err)
 		}
 	}
 
-	closeFn := func() error {
-		secretErr := secretDB.Close()
-		logErr := log.Close()
-		if logErr != nil {
-			return logErr
-		}
-		return secretErr
-	}
-
+	configured = true
 	return serverDeps{
 		broker:      br,
 		conns:       svc,
@@ -392,8 +397,8 @@ func buildServerDeps(values map[string]string) serverDeps {
 		secretDB:    secretDB,
 		signer:      signer,
 		publicURL:   publicURL,
-		close:       closeFn,
-	}
+		close:       closeStores,
+	}, nil
 }
 
 // bootstrapWorkspaces returns the concrete workspace ids under which the
