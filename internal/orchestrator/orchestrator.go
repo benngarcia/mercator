@@ -927,91 +927,21 @@ func actorSubject(raw json.RawMessage) string {
 
 func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 	var state runState
-	for _, event := range events {
-		switch event.Type {
-		case EventRunRequested:
-			var data runRequestedData
-			payload := event.PrivateData
-			if len(payload) == 0 {
-				payload = event.Data
-			}
-			if err := json.Unmarshal(payload, &data); err != nil {
-				return runState{}, err
-			}
-			state.requested = &data
-			state.createdBy = actorSubject(event.Actor)
-		case EventAttemptCreated:
-			var data attemptData
-			if err := json.Unmarshal(event.Data, &data); err != nil {
-				return runState{}, err
-			}
-			state.attempt = &data
-		case EventLaunchIntentRecorded:
-			var data adapter.LaunchRequest
-			payload := event.PrivateData
-			if len(payload) == 0 {
-				payload = event.Data
-			}
-			if err := json.Unmarshal(payload, &data); err != nil {
-				return runState{}, err
-			}
-			state.launchIntent = &data
-		case EventExternalStateObserved:
-			var data struct {
-				Phase    adapter.ExternalPhase `json:"phase"`
-				ExitCode *int                  `json:"exit_code"`
-			}
-			if err := json.Unmarshal(event.Data, &data); err == nil {
-				state.lastObservedPhase = data.Phase
-				// Only an exited container's code is authoritative: docker
-				// observes ExitCode 0 on running containers, and adopting it
-				// here made the next advance finalize the run and reclaim a
-				// live container. The guard also neutralizes such events
-				// already recorded in existing logs. Workload-reported codes
-				// (EventRunReported below) are trusted as-is.
-				if data.ExitCode != nil && data.Phase.Exited() {
-					code := *data.ExitCode
-					state.exitCode = &code
-				}
-			}
-		case EventRunReported:
-			var data struct {
-				ExitCode *int `json:"exit_code"`
-			}
-			if err := json.Unmarshal(event.Data, &data); err == nil && data.ExitCode != nil {
-				code := *data.ExitCode
-				state.exitCode = &code
-			}
-		case EventLaunchAccepted:
-			state.launchAccepted = true
-		case EventLaunchIndeterminate:
-			state.launchIndeterminate = true
-		case EventCancelRequested:
-			state.cancelRequested = true
-			state.cancelledBy = actorSubject(event.Actor)
-		case EventCancelAccepted:
-			state.cancelAccepted = true
-		case EventRunOutcomeRecorded:
-			state.outcomeRecorded = true
-			var data struct {
-				Outcome domain.RunOutcome `json:"outcome"`
-			}
-			if err := json.Unmarshal(event.Data, &data); err == nil {
-				state.outcome = data.Outcome
-			}
-		case EventCleanupRequested:
-			state.cleanupRequested = true
-		case EventCleanupConfirmed:
-			state.cleanupConfirmed = true
-		case EventRunClosed:
-			state.closed = true
+	for _, stored := range events {
+		event, err := decodeRunEvent(stored)
+		if err != nil {
+			return runState{}, err
 		}
+		event.apply(&state)
 	}
 	if state.requested == nil {
 		return runState{}, fmt.Errorf("orchestrator: run requested event not found")
 	}
 	if state.launchIntent == nil && state.attempt != nil {
 		return runState{}, fmt.Errorf("orchestrator: attempt exists without launch intent")
+	}
+	if state.closed && !state.outcomeRecorded {
+		return runState{}, fmt.Errorf("orchestrator: run closed without a recorded outcome")
 	}
 	return state, nil
 }
@@ -1056,9 +986,6 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 		record.Closed = true
 		if state.outcomeRecorded {
 			record.Outcome = state.outcome
-			if record.Outcome == "" {
-				record.Outcome = domain.RunOutcomeSucceeded
-			}
 		}
 	}
 	return record

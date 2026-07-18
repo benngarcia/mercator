@@ -997,7 +997,7 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 		for i := 0; i < 100; i++ {
 			filler = append(filler, eventlog.NewEvent{
 				ID:            fmt.Sprintf("evt_run_1_filler_%d_%d", batch, i),
-				Type:          "test.filler.v1",
+				Type:          EventPlacementDecided,
 				SchemaVersion: 1,
 				OccurredAt:    time.Now().UTC(),
 				Visibility:    eventlog.VisibilityPublic,
