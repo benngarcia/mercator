@@ -16,9 +16,9 @@ same pessimistic pattern as the RunPod adapter.
 
 ## Adding the connection
 
-<!-- TODO(beng/connection-wizard): once the adapter-manifest contract merges,
-serve this section as a Shadeform manifest (display metadata + setup steps +
-credential form) from the API instead of docs-only prose. -->
+<!-- Follow-up for the beng/connection-wizard branch: once the adapter-manifest
+contract merges, serve this section as a Shadeform manifest (display metadata +
+setup steps + credential form) from the API instead of docs-only prose. -->
 
 1. Mint an API key at **platform.shadeform.ai → Settings → API**. Note:
    Shadeform API keys are **admin-scoped** — there are no read-only or
