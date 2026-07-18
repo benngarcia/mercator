@@ -14,10 +14,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	pb "github.com/modal-labs/modal-client/go/proto/modal_proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -38,15 +40,10 @@ var errAlreadyExists = errors.New("modal: sandbox name already exists")
 // the wrapper cannot express the adapter's Observe contract.
 type apiClient struct {
 	pb          pb.ModalClientClient
-	conn        *grpc.ClientConn
 	tokenID     string
 	tokenSecret string
 	environment string
-	now         func() time.Time
-
-	mu        sync.Mutex
-	authToken string
-	authExp   time.Time
+	tokens      *authTokenCache
 }
 
 func newAPIClient(tokenID, tokenSecret, environment, serverURL string) (*apiClient, error) {
@@ -64,20 +61,148 @@ func newAPIClient(tokenID, tokenSecret, environment, serverURL string) (*apiClie
 	if !strings.Contains(target, ":") {
 		target += ":443"
 	}
-	// grpc.NewClient connects lazily; construction never touches the network.
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
+	conn, err := sharedConn(target)
 	if err != nil {
-		return nil, fmt.Errorf("modal: dial %s: %w", target, err)
+		return nil, err
 	}
 	return &apiClient{
 		pb:          pb.NewModalClientClient(conn),
-		conn:        conn,
 		tokenID:     tokenID,
 		tokenSecret: tokenSecret,
 		environment: environment,
-		now:         time.Now,
+		tokens:      sharedAuthTokens(target + "\x00" + tokenID + "\x00" + tokenSecret),
 	}, nil
 }
+
+// --- connection pool ---
+
+// Connections are shared per dial target for the life of the process, the
+// gRPC analogue of the http.DefaultClient transport the RunPod adapter rides:
+// the broker builds a fresh adapter per request, and a per-adapter conn would
+// leak a TLS session (plus its goroutines) on every Observe poll. Credentials
+// ride per-RPC metadata, never the conn, so one conn serves every connection.
+var connPool = struct {
+	sync.Mutex
+	conns map[string]*grpc.ClientConn
+}{conns: map[string]*grpc.ClientConn{}}
+
+// maxMessageSize mirrors the official SDK: ImageJoinStreaming responses can
+// far exceed gRPC's 4 MB default receive limit.
+const maxMessageSize = 100 * 1024 * 1024
+
+func sharedConn(target string) (*grpc.ClientConn, error) {
+	connPool.Lock()
+	defer connPool.Unlock()
+	if conn, ok := connPool.conns[target]; ok {
+		return conn, nil
+	}
+	// grpc.NewClient connects lazily; construction never touches the network.
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxMessageSize),
+			grpc.MaxCallSendMsgSize(maxMessageSize),
+		),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+		grpc.WithUnaryInterceptor(retryUnaryInterceptor),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("modal: dial %s: %w", target, err)
+	}
+	connPool.conns[target] = conn
+	return conn, nil
+}
+
+// --- retries ---
+
+// Retry behavior mirrors the official SDK: transient codes retry with backoff
+// under a stable x-idempotency-key (so the server dedupes replayed mutations
+// like SandboxCreate), and a server-directed RPCRetryPolicy (throttling) is
+// honored up to a total wait budget.
+var (
+	retryBaseDelay   = 100 * time.Millisecond
+	retryMaxDelay    = 1 * time.Second
+	maxThrottleWait  = 60 * time.Second
+	retryAttempts    = 3
+	retryableCodeSet = map[codes.Code]bool{
+		codes.DeadlineExceeded: true,
+		codes.Unavailable:      true,
+		codes.Canceled:         true,
+		codes.Internal:         true,
+		codes.Unknown:          true,
+	}
+)
+
+func retryUnaryInterceptor(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, inv grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	idempotencyKey := uuid.NewString()
+	start := time.Now()
+	delay := retryBaseDelay
+	attempt, throttleRetries := 0, 0
+	for {
+		attemptCtx := metadata.AppendToOutgoingContext(ctx,
+			"x-idempotency-key", idempotencyKey,
+			"x-retry-attempt", strconv.Itoa(attempt),
+			"x-throttle-retry-attempt", strconv.Itoa(throttleRetries),
+		)
+		err := inv(attemptCtx, method, req, reply, cc, opts...)
+		if err == nil {
+			return nil
+		}
+		if wait, ok := serverRetryDelay(err); ok {
+			if time.Since(start)+wait >= maxThrottleWait {
+				return err
+			}
+			throttleRetries++
+			if sleepCtx(ctx, wait) != nil {
+				return err
+			}
+			continue
+		}
+		if attempt >= retryAttempts || ctx.Err() != nil {
+			return err
+		}
+		if s, ok := status.FromError(err); !ok || !retryableCodeSet[s.Code()] {
+			return err
+		}
+		attempt++
+		if sleepCtx(ctx, delay) != nil {
+			return err
+		}
+		delay = min(2*delay, retryMaxDelay)
+	}
+}
+
+// serverRetryDelay extracts the retry-after delay from a server-directed
+// RPCRetryPolicy error detail (Modal's throttling channel).
+func serverRetryDelay(err error) (time.Duration, bool) {
+	s, ok := status.FromError(err)
+	if !ok {
+		return 0, false
+	}
+	for _, detail := range s.Details() {
+		if policy, ok := detail.(*pb.RPCRetryPolicy); ok {
+			return max(time.Duration(float64(policy.GetRetryAfterSecs())*float64(time.Second)), retryBaseDelay), true
+		}
+	}
+	return 0, false
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// --- auth ---
 
 // baseCtx attaches the credential headers every Modal RPC requires.
 func (c *apiClient) baseCtx(ctx context.Context) context.Context {
@@ -93,28 +218,74 @@ func (c *apiClient) baseCtx(ctx context.Context) context.Context {
 // authedCtx attaches credential headers plus the short-lived auth token the
 // server requires on every RPC except AuthTokenGet itself.
 func (c *apiClient) authedCtx(ctx context.Context) (context.Context, error) {
-	token, err := c.getAuthToken(ctx)
+	token, err := c.tokens.get(ctx, c.fetchAuthToken)
 	if err != nil {
 		return nil, err
 	}
 	return metadata.AppendToOutgoingContext(c.baseCtx(ctx), "x-modal-auth-token", token), nil
 }
 
-const authRefreshWindow = 5 * time.Minute
-
-func (c *apiClient) getAuthToken(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.authToken != "" && c.now().Before(c.authExp.Add(-authRefreshWindow)) {
-		return c.authToken, nil
-	}
+func (c *apiClient) fetchAuthToken(ctx context.Context) (string, time.Time, error) {
 	resp, err := c.pb.AuthTokenGet(c.baseCtx(ctx), pb.AuthTokenGetRequest_builder{}.Build())
 	if err != nil {
-		return "", rpcError("AuthTokenGet", err)
+		return "", time.Time{}, rpcError("AuthTokenGet", err)
 	}
-	c.authToken = resp.GetToken()
-	c.authExp = jwtExpiry(c.authToken, c.now())
-	return c.authToken, nil
+	return resp.GetToken(), jwtExpiry(resp.GetToken(), time.Now()), nil
+}
+
+const authRefreshWindow = 5 * time.Minute
+
+// authTokenCache holds one credential's exchanged auth token. Cached tokens
+// are shared process-wide (keyed by target+credential) so every broker-built
+// adapter instance reuses them instead of re-exchanging per request.
+type authTokenCache struct {
+	mu    sync.Mutex
+	token string
+	exp   time.Time
+}
+
+var authTokens = struct {
+	sync.Mutex
+	m map[string]*authTokenCache
+}{m: map[string]*authTokenCache{}}
+
+func sharedAuthTokens(key string) *authTokenCache {
+	authTokens.Lock()
+	defer authTokens.Unlock()
+	if t, ok := authTokens.m[key]; ok {
+		return t
+	}
+	t := &authTokenCache{}
+	authTokens.m[key] = t
+	return t
+}
+
+// get returns a valid token, refreshing as needed. The lock is never held
+// across the network fetch. A refresh failure inside the refresh window falls
+// back to the cached still-valid token rather than failing the caller.
+func (t *authTokenCache) get(ctx context.Context, fetch func(context.Context) (string, time.Time, error)) (string, error) {
+	t.mu.Lock()
+	token, exp := t.token, t.exp
+	t.mu.Unlock()
+	now := time.Now()
+	if token != "" && now.Before(exp.Add(-authRefreshWindow)) {
+		return token, nil
+	}
+	fresh, freshExp, err := fetch(ctx)
+	if err != nil {
+		if token != "" && now.Before(exp) {
+			return token, nil // stale-if-error: still valid, use it
+		}
+		return "", err
+	}
+	t.set(fresh, freshExp)
+	return fresh, nil
+}
+
+func (t *authTokenCache) set(token string, exp time.Time) {
+	t.mu.Lock()
+	t.token, t.exp = token, exp
+	t.mu.Unlock()
 }
 
 // jwtExpiry reads the exp claim from a JWT without verifying it (the server
@@ -147,13 +318,28 @@ func rpcError(rpc string, err error) error {
 	return fmt.Errorf("modal: %s: %w", rpc, err)
 }
 
-func (c *apiClient) verify(ctx context.Context) error {
-	_, err := c.pb.AuthTokenGet(c.baseCtx(ctx), pb.AuthTokenGetRequest_builder{}.Build())
-	if err != nil {
-		return rpcError("AuthTokenGet", err)
+// ambiguousOutcome reports whether the error leaves the RPC's server-side
+// effect unknown (the request may have been applied despite the failure).
+func ambiguousOutcome(err error) bool {
+	s, ok := status.FromError(err)
+	if !ok {
+		return true // transport-level failure without a status: unknown effect
 	}
+	return retryableCodeSet[s.Code()]
+}
+
+// verify performs a fresh credential exchange, bypassing the token cache: the
+// authorize flow must check the credentials as they are now.
+func (c *apiClient) verify(ctx context.Context) error {
+	token, exp, err := c.fetchAuthToken(ctx)
+	if err != nil {
+		return err
+	}
+	c.tokens.set(token, exp)
 	return nil
 }
+
+// --- RPC wrappers ---
 
 func (c *apiClient) appID(ctx context.Context, appName string) (string, error) {
 	ctx, err := c.authedCtx(ctx)
@@ -314,7 +500,7 @@ func (c *apiClient) createSandbox(ctx context.Context, in sandboxCreateInput) (s
 		if s, ok := status.FromError(err); ok && s.Code() == codes.AlreadyExists {
 			return "", errAlreadyExists
 		}
-		return "", rpcError("SandboxCreate", err)
+		return "", err // raw: Launch maps ambiguous outcomes to the contract's sentinels
 	}
 	return resp.GetSandboxId(), nil
 }
@@ -368,16 +554,42 @@ func (c *apiClient) listSandboxes(ctx context.Context, tags map[string]string, i
 	}
 }
 
-func (c *apiClient) sandboxTags(ctx context.Context, sandboxID string) (map[string]string, error) {
+// sandboxIDByName resolves a live sandbox by its unique in-app name. The name
+// index is consistent with create (it enforces uniqueness), so this covers the
+// window where a just-created sandbox has not reached the tag listing yet.
+func (c *apiClient) sandboxIDByName(ctx context.Context, appName, name string) (string, bool, error) {
 	ctx, err := c.authedCtx(ctx)
 	if err != nil {
-		return nil, err
+		return "", false, err
+	}
+	resp, err := c.pb.SandboxGetFromName(ctx, pb.SandboxGetFromNameRequest_builder{
+		SandboxName:     name,
+		AppName:         appName,
+		EnvironmentName: c.environment,
+	}.Build())
+	if err != nil {
+		if s, ok := status.FromError(err); ok && s.Code() == codes.NotFound {
+			return "", false, nil
+		}
+		return "", false, rpcError("SandboxGetFromName", err)
+	}
+	return resp.GetSandboxId(), true, nil
+}
+
+// sandboxTags fetches a sandbox's tags. found=false means the sandbox is gone.
+func (c *apiClient) sandboxTags(ctx context.Context, sandboxID string) (map[string]string, bool, error) {
+	ctx, err := c.authedCtx(ctx)
+	if err != nil {
+		return nil, false, err
 	}
 	resp, err := c.pb.SandboxTagsGet(ctx, pb.SandboxTagsGetRequest_builder{SandboxId: sandboxID}.Build())
 	if err != nil {
-		return nil, rpcError("SandboxTagsGet", err)
+		if s, ok := status.FromError(err); ok && s.Code() == codes.NotFound {
+			return nil, false, nil
+		}
+		return nil, false, rpcError("SandboxTagsGet", err)
 	}
-	return tagMap(resp.GetTags()), nil
+	return tagMap(resp.GetTags()), true, nil
 }
 
 // sandboxResult polls the sandbox without blocking. A nil-status result means

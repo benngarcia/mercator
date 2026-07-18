@@ -137,7 +137,7 @@ func buildOffers(gpuTypes []string, res domain.ResourceRequirements, now time.Ti
 		}
 
 		offers = append(offers, domain.OfferSnapshot{
-			ID:         "off_modal_" + offerSlug(gpuType),
+			ID:         "off_modal_" + strings.ReplaceAll(key, " ", "_"),
 			Kind:       domain.OfferKindProvisionable,
 			NativeRef:  gpuType,
 			ObservedAt: now,
@@ -172,10 +172,4 @@ func buildOffers(gpuTypes []string, res domain.ResourceRequirements, now time.Ti
 		})
 	}
 	return offers
-}
-
-func offerSlug(id string) string {
-	s := strings.ToLower(strings.TrimSpace(id))
-	s = strings.ReplaceAll(s, " ", "_")
-	return s
 }

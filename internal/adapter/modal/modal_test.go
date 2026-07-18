@@ -9,7 +9,9 @@ import (
 	"time"
 
 	pb "github.com/modal-labs/modal-client/go/proto/modal_proto"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -32,10 +34,34 @@ func launchRequest() adapter.LaunchRequest {
 	}
 }
 
+// Real launch keys are uuidv7-derived and longer than Modal's 64-char object
+// name limit; the sandbox name must stay short, deterministic, and unique.
+func TestSandboxNameFitsModalLimits(t *testing.T) {
+	longKey := "launch_att_ws_1_0198c1c9_7e5f_7c3a_b111_222233334444_abcdef123456"
+	name := sandboxName(longKey)
+	if len(name) >= 64 {
+		t.Fatalf("sandbox name %q is %d chars; Modal requires < 64", name, len(name))
+	}
+	if name != sandboxName(longKey) {
+		t.Fatalf("sandbox name must be deterministic")
+	}
+	if name == sandboxName(longKey+"x") {
+		t.Fatalf("distinct launch keys must yield distinct names")
+	}
+}
+
 func TestNewRejectsMalformedCredential(t *testing.T) {
 	for _, secret := range []string{"", "ak-only", ":as-x", "ak-x:"} {
 		if _, err := New(secret, nil); err == nil {
 			t.Errorf("New(%q) should reject a credential that is not token_id:token_secret", secret)
+		}
+	}
+}
+
+func TestNewRejectsOutOfRangeTimeout(t *testing.T) {
+	for _, raw := range []string{"0", "-5", "4294967296", "not-a-number"} {
+		if _, err := New("ak-x:as-y", map[string]string{"timeout_seconds": raw}); err == nil {
+			t.Errorf("New with timeout_seconds=%q must fail loudly", raw)
 		}
 	}
 }
@@ -209,7 +235,7 @@ func TestLaunchCreatesNamedTaggedSandbox(t *testing.T) {
 
 	create := fake.createReqs[0]
 	def := create.GetDefinition()
-	if def.GetName() != "mercator-lk1" {
+	if def.GetName() != sandboxName("lk1") {
 		t.Fatalf("sandbox name = %q", def.GetName())
 	}
 	if !reflect.DeepEqual(def.GetEntrypointArgs(), []string{"/bin/run", "sh", "-c", "echo hi"}) {
@@ -291,10 +317,54 @@ func TestLaunchRetryReturnsDuplicateReceipt(t *testing.T) {
 	}
 }
 
+// Modal frees a sandbox name once the sandbox exits, so create-time
+// AlreadyExists cannot catch a retry that arrives after the first attempt ran
+// to completion — the pre-create ownership lookup must dedupe it, or the
+// workload would run twice.
+func TestLaunchRetryAfterExitReturnsDuplicate(t *testing.T) {
+	fake := &fakeModal{}
+	finished := fake.addSandbox(&fakeSandbox{
+		name:      sandboxName("lk1"),
+		tags:      ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
+		startedAt: 42,
+		result:    resultWithStatus(pb.GenericResult_GENERIC_STATUS_SUCCESS, 0),
+	})
+	a := newTestAdapter(t, fake, nil)
+	receipt, err := a.Launch(context.Background(), launchRequest())
+	if err != nil {
+		t.Fatalf("launch retry: %v", err)
+	}
+	if !receipt.Duplicate || receipt.ExternalID != finished.id || receipt.Phase != adapter.ExternalPhaseSucceeded {
+		t.Fatalf("retry after exit must dedupe to the finished sandbox: %+v", receipt)
+	}
+	if len(fake.createReqs) != 0 || len(fake.sandboxes) != 1 {
+		t.Fatalf("retry after exit must not create a second sandbox (creates=%d sandboxes=%d)", len(fake.createReqs), len(fake.sandboxes))
+	}
+}
+
+// An ambiguous transport failure on SandboxCreate may have committed the
+// sandbox server-side; the orchestrator must reconcile, not conclude that
+// nothing external exists.
+func TestAmbiguousCreateFailureIsIndeterminate(t *testing.T) {
+	fake := &fakeModal{createErr: status.Error(codes.Unavailable, "connection reset")}
+	a := newTestAdapter(t, fake, nil)
+	_, err := a.Launch(context.Background(), launchRequest())
+	if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("ambiguous SandboxCreate failure must map to ErrLaunchIndeterminate, got %v", err)
+	}
+
+	fake = &fakeModal{createErr: status.Error(codes.InvalidArgument, "bad definition")}
+	a = newTestAdapter(t, fake, nil)
+	_, err = a.Launch(context.Background(), launchRequest())
+	if err == nil || errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("a definitive rejection must stay a plain error, got %v", err)
+	}
+}
+
 func TestLaunchNameCollisionWithForeignTokenConflicts(t *testing.T) {
 	fake := &fakeModal{}
 	fake.addSandbox(&fakeSandbox{
-		name: "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags: ownershipTagsFor("ws_1", "run_0", "att_0", "lk1", "someone-else"),
 	})
 	a := newTestAdapter(t, fake, nil)
@@ -342,7 +412,7 @@ func TestLaunchSurfacesImageBuildFailure(t *testing.T) {
 func TestObserveQueuedThenRunning(t *testing.T) {
 	fake := &fakeModal{}
 	sandbox := fake.addSandbox(&fakeSandbox{
-		name: "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags: ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
 	})
 	a := newTestAdapter(t, fake, nil)
@@ -384,7 +454,7 @@ func TestObserveExitCodesAreAuthoritative(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeModal{}
 			fake.addSandbox(&fakeSandbox{
-				name:      "mercator-lk1",
+				name: sandboxName("lk1"),
 				tags:      ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
 				startedAt: 42,
 				result:    tc.result,
@@ -413,7 +483,7 @@ func TestObserveExitCodesAreAuthoritative(t *testing.T) {
 func TestObserveFindsFinishedSandboxes(t *testing.T) {
 	fake := &fakeModal{}
 	fake.addSandbox(&fakeSandbox{
-		name:      "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags:      ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
 		startedAt: 42,
 		result:    resultWithStatus(pb.GenericResult_GENERIC_STATUS_SUCCESS, 0),
@@ -431,6 +501,30 @@ func TestObserveFindsFinishedSandboxes(t *testing.T) {
 	}
 }
 
+// The tag listing can lag a just-created sandbox; the by-name index is
+// consistent with create, so Observe must fall back to it before concluding
+// the sandbox is gone (a false "gone" reads as Released and abandons a live,
+// billing sandbox).
+func TestObserveFallsBackToNameLookupWhenListLags(t *testing.T) {
+	fake := &fakeModal{}
+	sandbox := fake.addSandbox(&fakeSandbox{
+		name:           sandboxName("lk1"),
+		tags:           ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
+		hiddenFromList: true,
+	})
+	a := newTestAdapter(t, fake, nil)
+	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if obs.Phase == adapter.ExternalPhaseReleased {
+		t.Fatalf("a sandbox resolvable by name must not be observed as released")
+	}
+	if obs.ExternalID != sandbox.id {
+		t.Fatalf("observation should carry the resolved sandbox id, got %+v", obs)
+	}
+}
+
 func TestObserveMissingSandboxIsReleased(t *testing.T) {
 	a := newTestAdapter(t, &fakeModal{}, nil)
 	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
@@ -445,7 +539,7 @@ func TestObserveMissingSandboxIsReleased(t *testing.T) {
 func TestObserveOwnershipMismatchIsConflict(t *testing.T) {
 	fake := &fakeModal{}
 	fake.addSandbox(&fakeSandbox{
-		name: "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags: ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "someone-else"),
 	})
 	a := newTestAdapter(t, fake, nil)
@@ -457,7 +551,7 @@ func TestObserveOwnershipMismatchIsConflict(t *testing.T) {
 func TestCancelTerminatesRegardlessOfOwnershipToken(t *testing.T) {
 	fake := &fakeModal{}
 	sandbox := fake.addSandbox(&fakeSandbox{
-		name: "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags: ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
 	})
 	a := newTestAdapter(t, fake, nil)
@@ -473,7 +567,7 @@ func TestCancelTerminatesRegardlessOfOwnershipToken(t *testing.T) {
 func TestReleaseAndTerminateResolveByTagAndTerminate(t *testing.T) {
 	fake := &fakeModal{}
 	sandbox := fake.addSandbox(&fakeSandbox{
-		name: "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags: ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
 	})
 	a := newTestAdapter(t, fake, nil)
@@ -510,13 +604,13 @@ func TestTerminateMissingSandboxIsIdempotent(t *testing.T) {
 func TestListOwnedMapsTagsToFields(t *testing.T) {
 	fake := &fakeModal{}
 	fake.addSandbox(&fakeSandbox{
-		name:      "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags:      ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
 		startedAt: 42,
 	})
 	fake.addSandbox(&fakeSandbox{name: "someone-elses-sandbox", tags: map[string]string{"team": "other"}})
 	fake.addSandbox(&fakeSandbox{
-		name: "mercator-lk2",
+		name: sandboxName("lk2"),
 		tags: ownershipTagsFor("ws_2", "run_2", "att_2", "lk2", "own2"),
 	})
 	a := newTestAdapter(t, fake, nil)
@@ -549,7 +643,7 @@ func TestListOwnedMapsTagsToFields(t *testing.T) {
 func TestListOwnedExcludesFinishedSandboxes(t *testing.T) {
 	fake := &fakeModal{}
 	fake.addSandbox(&fakeSandbox{
-		name:   "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags:   ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
 		result: resultWithStatus(pb.GenericResult_GENERIC_STATUS_SUCCESS, 0),
 	})
@@ -572,7 +666,7 @@ func TestListOwnedExcludesFinishedSandboxes(t *testing.T) {
 func TestFindOwnedFetchesTagsWhenListOmitsThem(t *testing.T) {
 	fake := &fakeModal{omitTagsInList: true}
 	sandbox := fake.addSandbox(&fakeSandbox{
-		name:      "mercator-lk1",
+		name: sandboxName("lk1"),
 		tags:      ownershipTagsFor("ws_1", "run_1", "att_1", "lk1", "own1"),
 		startedAt: 42,
 	})
@@ -586,6 +680,62 @@ func TestFindOwnedFetchesTagsWhenListOmitsThem(t *testing.T) {
 	}
 	if len(fake.tagsGetCalls) == 0 || fake.tagsGetCalls[0] != sandbox.id {
 		t.Fatalf("expected SandboxTagsGet fallback, calls=%v", fake.tagsGetCalls)
+	}
+}
+
+func TestRetryInterceptorRetriesTransientUnderOneIdempotencyKey(t *testing.T) {
+	calls := 0
+	var keys, attempts []string
+	inv := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		md, _ := metadata.FromOutgoingContext(ctx)
+		keys = append(keys, md.Get("x-idempotency-key")[0])
+		attempts = append(attempts, md.Get("x-retry-attempt")[0])
+		calls++
+		if calls == 1 {
+			return status.Error(codes.Unavailable, "blip")
+		}
+		return nil
+	}
+	if err := retryUnaryInterceptor(context.Background(), "/modal.client.ModalClient/SandboxList", nil, nil, nil, inv); err != nil {
+		t.Fatalf("transient failure should be retried away: %v", err)
+	}
+	if calls != 2 || keys[0] != keys[1] {
+		t.Fatalf("retry must reuse one idempotency key: calls=%d keys=%v", calls, keys)
+	}
+	if attempts[0] != "0" || attempts[1] != "1" {
+		t.Fatalf("x-retry-attempt must count attempts, got %v", attempts)
+	}
+}
+
+func TestRetryInterceptorDoesNotRetryDefinitiveErrors(t *testing.T) {
+	calls := 0
+	inv := func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		calls++
+		return status.Error(codes.InvalidArgument, "bad request")
+	}
+	if err := retryUnaryInterceptor(context.Background(), "/m", nil, nil, nil, inv); err == nil {
+		t.Fatalf("definitive error must propagate")
+	}
+	if calls != 1 {
+		t.Fatalf("definitive error must not be retried, got %d calls", calls)
+	}
+}
+
+// A refresh failure while the cached token is still valid must serve the
+// cached token instead of failing the caller's RPC.
+func TestAuthTokenCacheServesStaleOnRefreshFailure(t *testing.T) {
+	cache := &authTokenCache{token: "still-valid", exp: time.Now().Add(2 * time.Minute)} // inside refresh window
+	failing := func(context.Context) (string, time.Time, error) {
+		return "", time.Time{}, errors.New("control plane down")
+	}
+	got, err := cache.get(context.Background(), failing)
+	if err != nil || got != "still-valid" {
+		t.Fatalf("expected stale-if-error fallback, got %q err=%v", got, err)
+	}
+
+	cache = &authTokenCache{token: "expired", exp: time.Now().Add(-time.Minute)}
+	if _, err := cache.get(context.Background(), failing); err == nil {
+		t.Fatalf("an expired token with a failing refresh must error")
 	}
 }
 

@@ -8,7 +8,10 @@ package modal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -69,8 +72,8 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 	timeoutSecs := uint32(defaultTimeoutSecs)
 	if raw := strings.TrimSpace(config["timeout_seconds"]); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("modal: timeout_seconds must be a positive integer, got %q", raw)
+		if err != nil || n <= 0 || n > math.MaxUint32 {
+			return nil, fmt.Errorf("modal: timeout_seconds must be a positive integer that fits in 32 bits, got %q", raw)
 		}
 		timeoutSecs = uint32(n)
 	}
@@ -107,6 +110,24 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		// the workload.
 		return adapter.LaunchReceipt{}, fmt.Errorf("modal: workload must set an entrypoint or args; Modal sandboxes do not run the image's default command")
 	}
+	// Modal frees a sandbox name once the sandbox exits, so the create-time
+	// AlreadyExists guard only covers live duplicates. A retried launch whose
+	// sandbox already ran to completion must dedupe here or it would run the
+	// workload a second time.
+	if info, found, err := a.findOwned(ctx, req.LaunchKey, req.OwnershipToken); err != nil {
+		return adapter.LaunchReceipt{}, err
+	} else if found {
+		phase, _ := phaseFromResult(info.result, info.startedAt > 0)
+		return adapter.LaunchReceipt{
+			ExternalID:     info.id,
+			LaunchKey:      req.LaunchKey,
+			OwnershipToken: req.OwnershipToken,
+			CleanupLocator: req.CleanupLocator,
+			Phase:          phase,
+			AcceptedAt:     a.now().UTC(),
+			Duplicate:      true,
+		}, nil
+	}
 	builderVersion, err := a.api.imageBuilderVersion(ctx)
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
@@ -135,14 +156,19 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		gpuCount:    gpuCount,
 		milliCPU:    uint32(requestedCPUMillis(req.Resources)),
 		memoryMB:    uint32(requestedMemoryBytes(req.Resources) / mib),
-		diskMB:      uint32(req.Resources.EphemeralDisk.MinBytes / mib),
+		diskMB:      uint32(requestedDiskBytes(req.Resources) / mib),
 		tags:        a.ownershipTags(req),
 	})
 	if err == errAlreadyExists {
 		return a.duplicateLaunchReceipt(ctx, req)
 	}
 	if err != nil {
-		return adapter.LaunchReceipt{}, err
+		if ambiguousOutcome(err) {
+			// The create may have been applied server-side; the orchestrator
+			// must reconcile instead of concluding nothing external exists.
+			return adapter.LaunchReceipt{}, fmt.Errorf("%w: %v", adapter.ErrLaunchIndeterminate, rpcError("SandboxCreate", err))
+		}
+		return adapter.LaunchReceipt{}, rpcError("SandboxCreate", err)
 	}
 	return adapter.LaunchReceipt{
 		ExternalID:     id,
@@ -154,17 +180,19 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 	}, nil
 }
 
-// duplicateLaunchReceipt resolves a name collision on create: a previous
+// duplicateLaunchReceipt resolves a name collision on create: a concurrent
 // attempt with this launch key already created the sandbox. The unique
 // sandbox name is the idempotency guard; the ownership token distinguishes a
-// retried launch (duplicate) from a foreign squatter (conflict).
+// retried launch (duplicate) from a foreign squatter (conflict). A collision
+// we cannot resolve back to a sandbox (listing/tag lag) is indeterminate, not
+// a conflict: a false conflict would close the run and orphan a paid sandbox.
 func (a *Adapter) duplicateLaunchReceipt(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	info, found, err := a.findOwned(ctx, req.LaunchKey, req.OwnershipToken)
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
 	}
 	if !found {
-		return adapter.LaunchReceipt{}, adapter.ErrIdempotencyConflict
+		return adapter.LaunchReceipt{}, fmt.Errorf("%w: sandbox name %s exists but is not yet resolvable", adapter.ErrLaunchIndeterminate, sandboxName(req.LaunchKey))
 	}
 	phase, _ := phaseFromResult(info.result, info.startedAt > 0)
 	return adapter.LaunchReceipt{
@@ -241,12 +269,12 @@ func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]
 	}
 	owned := make([]adapter.OwnedExternalObject, 0, len(infos))
 	for _, info := range infos {
-		tags, err := a.tagsOf(ctx, info)
+		tags, found, err := a.tagsOf(ctx, info)
 		if err != nil {
 			return nil, err
 		}
-		if tags[tagLaunchKey] == "" {
-			continue // not a Mercator sandbox
+		if !found || tags[tagLaunchKey] == "" {
+			continue // vanished since listing, or not a Mercator sandbox
 		}
 		phase, _ := phaseFromResult(info.result, info.startedAt > 0)
 		owned = append(owned, adapter.OwnedExternalObject{
@@ -266,7 +294,14 @@ func (a *Adapter) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]
 
 // --- helpers ---
 
-func sandboxName(launchKey string) string { return "mercator-" + launchKey }
+// sandboxName derives the sandbox's unique in-app name from the launch key.
+// Modal object names must be shorter than 64 characters and real launch keys
+// (uuidv7-derived) exceed that, so the name carries a hash; the full launch
+// key rides on the mercator_launch_key tag.
+func sandboxName(launchKey string) string {
+	sum := sha256.Sum256([]byte(launchKey))
+	return "mercator-" + hex.EncodeToString(sum[:12])
+}
 
 func launchCommand(req adapter.LaunchRequest) []string {
 	var command []string
@@ -322,10 +357,10 @@ func (a *Adapter) launchEnv(req adapter.LaunchRequest) map[string]string {
 
 // tagsOf returns the sandbox's tags, fetching them individually when the
 // listing omitted them (the list response's tag field is newer than some
-// server deployments).
-func (a *Adapter) tagsOf(ctx context.Context, info sandboxInfo) (map[string]string, error) {
+// server deployments). found=false means the sandbox vanished since listing.
+func (a *Adapter) tagsOf(ctx context.Context, info sandboxInfo) (map[string]string, bool, error) {
 	if len(info.tags) > 0 {
-		return info.tags, nil
+		return info.tags, true, nil
 	}
 	return a.api.sandboxTags(ctx, info.id)
 }
@@ -333,34 +368,56 @@ func (a *Adapter) tagsOf(ctx context.Context, info sandboxInfo) (map[string]stri
 // findOwned locates our sandbox by launch-key tag and verifies ownership. The
 // boolean is false when no such sandbox exists (treated as released by
 // callers). Finished sandboxes are included: Modal keeps their records, and
-// Observe needs them to read authoritative exit codes.
+// Observe needs them to read authoritative exit codes. When the tag listing
+// misses (it can lag a just-created sandbox), the consistent by-name index is
+// consulted before concluding the sandbox is gone — a false "gone" here makes
+// Observe report Released for a live, billing sandbox.
 func (a *Adapter) findOwned(ctx context.Context, launchKey, ownershipToken string) (sandboxInfo, bool, error) {
 	infos, err := a.api.listSandboxes(ctx, map[string]string{tagLaunchKey: launchKey}, true)
 	if err != nil {
 		return sandboxInfo{}, false, err
 	}
 	for _, info := range infos {
-		tags, err := a.tagsOf(ctx, info)
+		tags, found, err := a.tagsOf(ctx, info)
 		if err != nil {
 			return sandboxInfo{}, false, err
 		}
-		if tags[tagLaunchKey] != launchKey {
+		if !found || tags[tagLaunchKey] != launchKey {
 			continue
 		}
-		// Ownership: the unique launch-key sandbox name/tag is the authoritative
-		// ownership signal; the token guards against reuse. We conflict only on a
-		// POSITIVE token mismatch (token present and different), never on a
-		// missing/empty token — a false conflict here would fail cleanup and
-		// orphan a paid sandbox, the worse failure.
-		if ownershipToken != "" {
-			if tok, ok := tags[tagOwnershipToken]; ok && tok != ownershipToken {
-				return sandboxInfo{}, false, adapter.ErrIdempotencyConflict
-			}
+		if err := checkOwnershipToken(tags, ownershipToken); err != nil {
+			return sandboxInfo{}, false, err
 		}
 		info.tags = tags
 		return info, true, nil
 	}
-	return sandboxInfo{}, false, nil
+	id, found, err := a.api.sandboxIDByName(ctx, a.appName, sandboxName(launchKey))
+	if err != nil || !found {
+		return sandboxInfo{}, false, err
+	}
+	tags, found, err := a.api.sandboxTags(ctx, id)
+	if err != nil || !found {
+		return sandboxInfo{}, false, err
+	}
+	if err := checkOwnershipToken(tags, ownershipToken); err != nil {
+		return sandboxInfo{}, false, err
+	}
+	// The by-name index only resolves live sandboxes, so a hit here is a
+	// just-created sandbox the tag listing has not caught up to.
+	return sandboxInfo{id: id, name: sandboxName(launchKey), tags: tags}, true, nil
+}
+
+// checkOwnershipToken conflicts only on a POSITIVE token mismatch (token
+// present and different), never on a missing/empty token — a false conflict
+// would fail cleanup and orphan a paid sandbox, the worse failure.
+func checkOwnershipToken(tags map[string]string, ownershipToken string) error {
+	if ownershipToken == "" {
+		return nil
+	}
+	if tok, ok := tags[tagOwnershipToken]; ok && tok != ownershipToken {
+		return adapter.ErrIdempotencyConflict
+	}
+	return nil
 }
 
 func (a *Adapter) deleteOwned(ctx context.Context, launchKey, ownershipToken string) (bool, error) {

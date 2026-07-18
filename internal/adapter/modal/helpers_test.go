@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,6 +40,7 @@ type fakeModal struct {
 	sandboxes      []*fakeSandbox
 	nextID         int
 	omitTagsInList bool
+	createErr      error // returned by SandboxCreate when set
 
 	createReqs   []*pb.SandboxCreateRequest
 	listReqs     []*pb.SandboxListRequest
@@ -53,6 +55,9 @@ type fakeSandbox struct {
 	startedAt float64
 	createdAt float64
 	result    *pb.GenericResult
+	// hiddenFromList simulates the tag listing lagging a just-created sandbox
+	// (it stays resolvable through SandboxGetFromName).
+	hiddenFromList bool
 }
 
 func testJWT(exp int64) string {
@@ -144,9 +149,14 @@ func (f *fakeModal) SandboxCreate(ctx context.Context, req *pb.SandboxCreateRequ
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createReqs = append(f.createReqs, req)
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	name := req.GetDefinition().GetName()
+	// Modal frees a name once its sandbox exits: uniqueness spans live
+	// sandboxes only.
 	for _, s := range f.sandboxes {
-		if s.name == name {
+		if s.name == name && s.result == nil {
 			return nil, status.Error(codes.AlreadyExists, "sandbox name already in use")
 		}
 	}
@@ -171,6 +181,9 @@ func (f *fakeModal) SandboxList(ctx context.Context, req *pb.SandboxListRequest,
 	filter := tagMap(req.GetTags())
 	matches := make([]*fakeSandbox, 0, len(f.sandboxes))
 	for _, s := range f.sandboxes {
+		if s.hiddenFromList {
+			continue
+		}
 		if s.result != nil && !req.GetIncludeFinished() {
 			continue
 		}
@@ -201,6 +214,18 @@ func (f *fakeModal) SandboxList(ctx context.Context, req *pb.SandboxListRequest,
 		}.Build())
 	}
 	return pb.SandboxListResponse_builder{Sandboxes: infos}.Build(), nil
+}
+
+func (f *fakeModal) SandboxGetFromName(ctx context.Context, req *pb.SandboxGetFromNameRequest, _ ...grpc.CallOption) (*pb.SandboxGetFromNameResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// The by-name index resolves live sandboxes only, matching Modal.
+	for _, s := range f.sandboxes {
+		if s.name == req.GetSandboxName() && s.result == nil {
+			return pb.SandboxGetFromNameResponse_builder{SandboxId: s.id}.Build(), nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "no running sandbox with that name")
 }
 
 func (f *fakeModal) SandboxTagsGet(ctx context.Context, req *pb.SandboxTagsGetRequest, _ ...grpc.CallOption) (*pb.SandboxTagsGetResponse, error) {
@@ -281,10 +306,15 @@ func ownershipTagsFor(workspace, run, attempt, launchKey, token string) map[stri
 }
 
 // newTestAdapter builds an Adapter whose gRPC client is replaced by the fake.
+// Each test gets its own server_url so the process-wide connection and
+// auth-token caches never leak state between tests.
 func newTestAdapter(t *testing.T, fake *fakeModal, config map[string]string) *Adapter {
 	t.Helper()
 	if config == nil {
 		config = map[string]string{}
+	}
+	if config["server_url"] == "" {
+		config["server_url"] = "https://" + testHost(t.Name()) + ".test:443"
 	}
 	a, err := New("ak-test:as-test", config)
 	if err != nil {
@@ -292,6 +322,18 @@ func newTestAdapter(t *testing.T, fake *fakeModal, config map[string]string) *Ad
 	}
 	a.api.pb = fake
 	return a
+}
+
+func testHost(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 // outgoingHeader reads a header the client attached to the RPC context.

@@ -79,12 +79,19 @@ then serves CPU-only workloads).
 
 ## Lifecycle, ownership, cleanup
 
-- Sandboxes are named `mercator-<launchKey>`; the name is unique within the
-  Modal App, which is what makes retried launches idempotent (a collision
-  resolves to the existing sandbox instead of creating a second one).
+- Sandboxes are named `mercator-<sha256(launchKey)>` (hashed because Modal
+  caps object names at 63 characters). The name is unique among the App's
+  *live* sandboxes, so a concurrent duplicate launch collides at create; a
+  retry arriving after the first sandbox exited is deduped by an ownership
+  lookup before create. Both resolve to the existing sandbox instead of
+  running the workload twice.
 - Ownership fields ride on sandbox **tags** (`mercator_launch_key`,
   `mercator_ownership_token`, …) and are also injected as `MERCATOR_*`
   environment variables for the workload report path.
+- Transient control-plane failures retry under a stable idempotency key
+  (mirroring Modal's official SDK); an ambiguous `SandboxCreate` failure is
+  reported as launch-indeterminate so the orchestrator reconciles instead of
+  assuming nothing was created.
 - The workload's command **must** be explicit: Modal sandboxes run the
   provided entrypoint/args and never the image's default `CMD`. A workload
   without either fails at launch rather than idling silently until the TTL.
