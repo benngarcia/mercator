@@ -20,8 +20,10 @@ ADR 0001 governs *workload* secrets only. *Connection* credentials are
 first-class and handled by a `credential_source` seam:
 
 - `env` — the connection references an env var holding the secret.
-- `mercator` — the secret is stored encrypted (AES-256-GCM under a process
-  master key `MERCATOR_SECRET_KEY`) in a dedicated table, addressed by
+- `mercator` — the secret is stored encrypted (AES-256-GCM under a sealing
+  subkey derived from the process master key `MERCATOR_SECRET_KEY` via
+  HKDF-SHA256 with info label `mercator/credential-seal/v1`; the raw master
+  key is never used as a cipher key) in a dedicated table, addressed by
   connection id. The append-only, sink-streamed event log stores only the
   reference `{source, ref}`, never the secret.
 - `vault` / external sources may be added later behind the same seam.

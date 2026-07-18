@@ -45,7 +45,7 @@ func TestResolveEnvSource(t *testing.T) {
 
 func TestResolveMercatorSource(t *testing.T) {
 	store := NewMemoryStore()
-	blob, _ := Seal(key32(), []byte("stored-secret"))
+	blob, _ := Seal(DeriveSealKey(key32()), []byte("stored-secret"))
 	if err := store.Put(context.Background(), "ws_1", "conn_x", blob); err != nil {
 		t.Fatalf("put: %v", err)
 	}
@@ -70,7 +70,10 @@ func TestResolverSealRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("Seal should succeed when master key is set")
 	}
-	plain, err := Open(key32(), blob)
+	if _, err := Open(key32(), blob); err == nil {
+		t.Fatal("resolver must not seal under the raw master key")
+	}
+	plain, err := Open(DeriveSealKey(key32()), blob)
 	if err != nil {
 		t.Fatalf("Open after Seal: %v", err)
 	}
