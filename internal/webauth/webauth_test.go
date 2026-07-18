@@ -405,3 +405,141 @@ func TestSanitizeNextConfinesRedirects(t *testing.T) {
 		}
 	}
 }
+
+// driveCLILogin runs the login round-trip as `mercator login` would: the
+// browser hits /auth/login with the CLI's loopback port and state, and after
+// issuer auth the callback redirects to 127.0.0.1 with a single-use code.
+func driveCLILogin(t *testing.T, a *Authenticator, issuer *fakeIssuer) (code, echoedState string) {
+	t.Helper()
+	loginRec := httptest.NewRecorder()
+	a.ServeHTTP(loginRec, httptest.NewRequest(http.MethodGet, "/auth/login?cli_port=43110&cli_state=cli-csrf-1", nil))
+	if loginRec.Code != http.StatusFound {
+		t.Fatalf("cli login expected 302, got %d body=%s", loginRec.Code, loginRec.Body.String())
+	}
+	authorizeURL, err := url.Parse(loginRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse authorize redirect: %v", err)
+	}
+	issuer.nonce = authorizeURL.Query().Get("nonce")
+
+	callback := httptest.NewRequest(http.MethodGet,
+		"/auth/callback?code=test-code&state="+url.QueryEscape(authorizeURL.Query().Get("state")), nil)
+	for _, cookie := range loginRec.Result().Cookies() {
+		callback.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, callback)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("cli callback expected 303, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	target, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse loopback redirect: %v", err)
+	}
+	if target.Scheme != "http" || target.Host != "127.0.0.1:43110" {
+		t.Fatalf("cli callback must redirect to the loopback listener, got %q", rec.Header().Get("Location"))
+	}
+	if cookie := sessionCookie(t, rec); cookie != nil {
+		t.Fatalf("cli login must not set a browser session cookie")
+	}
+	return target.Query().Get("code"), target.Query().Get("state")
+}
+
+func exchangeCode(t *testing.T, a *Authenticator, code string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"code": code})
+	req := httptest.NewRequest(http.MethodPost, "/auth/cli/exchange", strings.NewReader(string(body)))
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestCLILoginMintsSingleUseExchangeableToken(t *testing.T) {
+	issuer := newFakeIssuer(t, "client-1")
+	issuer.email = "operator@example.com"
+	a, err := New(context.Background(), testConfig(issuer))
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+
+	code, echoedState := driveCLILogin(t, a, issuer)
+	if echoedState != "cli-csrf-1" {
+		t.Fatalf("callback must echo the CLI state, got %q", echoedState)
+	}
+	if code == "" {
+		t.Fatalf("callback did not deliver a code")
+	}
+
+	rec := exchangeCode(t, a, code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exchange expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var granted struct {
+		Token     string `json:"token"`
+		Email     string `json:"email"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &granted); err != nil {
+		t.Fatalf("decode exchange: %v", err)
+	}
+	if granted.Email != "operator@example.com" {
+		t.Fatalf("unexpected email %q", granted.Email)
+	}
+	email, ok := a.VerifyCLIToken(granted.Token)
+	if !ok || email != "operator@example.com" {
+		t.Fatalf("minted token must verify, got %q ok=%v", email, ok)
+	}
+
+	// A code is single-use: replaying the exchange must fail.
+	if rec := exchangeCode(t, a, code); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code replay expected 401, got %d", rec.Code)
+	}
+}
+
+func TestCLIExchangeRejectsForgedAndCrossKindTokens(t *testing.T) {
+	issuer := newFakeIssuer(t, "client-1")
+	issuer.email = "operator@example.com"
+	a, err := New(context.Background(), testConfig(issuer))
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+
+	if rec := exchangeCode(t, a, "not-a-code"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("garbage code expected 401, got %d", rec.Code)
+	}
+
+	// A session cookie value must not work as a CLI token or exchange code,
+	// and a CLI code must not authenticate as a session: kinds are checked.
+	sessionValue, err := a.codec.encode(session{Kind: kindSession, Email: "operator@example.com", ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("encode session: %v", err)
+	}
+	if _, ok := a.VerifyCLIToken(sessionValue); ok {
+		t.Fatalf("a session cookie value must not verify as a CLI token")
+	}
+	if rec := exchangeCode(t, a, sessionValue); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("session value as exchange code expected 401, got %d", rec.Code)
+	}
+
+	code, _ := driveCLILogin(t, a, issuer)
+	stale := httptest.NewRequest(http.MethodGet, "/", nil)
+	stale.AddCookie(&http.Cookie{Name: sessionCookieName, Value: code})
+	if _, ok := a.SessionEmail(stale); ok {
+		t.Fatalf("a CLI code must not authenticate as a browser session")
+	}
+}
+
+func TestCLILoginRejectsInvalidPort(t *testing.T) {
+	issuer := newFakeIssuer(t, "client-1")
+	a, err := New(context.Background(), testConfig(issuer))
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+	for _, port := range []string{"80", "abc", "-1", "70000"} {
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/login?cli_port="+port, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("cli_port=%s expected 400, got %d", port, rec.Code)
+		}
+	}
+}

@@ -48,6 +48,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 			BaseURL:     envValue(env, "MERCATOR_API_URL", ""),
 			Token:       envValue(env, "MERCATOR_API_TOKEN", ""),
 			WorkspaceID: envValue(env, "MERCATOR_WORKSPACE_ID", ""),
+			ConfigPath:  cli.DefaultConfigPath(env),
 			Args:        args[1:],
 			Stdout:      stdout,
 			Stderr:      stderr,

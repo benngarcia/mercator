@@ -66,11 +66,13 @@ type Server struct {
 }
 
 // WebAuth is the human-login surface the server mounts at /auth/ when OIDC is
-// configured: it serves the login/callback/logout/session endpoints and
-// answers which signed-in human a request's session cookie belongs to.
+// configured: it serves the login/callback/logout/session endpoints, answers
+// which signed-in human a request's session cookie belongs to, and verifies
+// the bearer tokens `mercator login` mints for CLI users.
 type WebAuth interface {
 	http.Handler
 	SessionEmail(*http.Request) (string, bool)
+	VerifyCLIToken(token string) (string, bool)
 }
 
 // connectionVerifier is the narrow capability the server needs from the Broker
@@ -324,19 +326,28 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// authenticate resolves the request's principal: the machine bearer token, or
-// (when webauth is mounted) a signed-in human session. A presented bearer
-// token must match — a wrong token fails outright rather than silently
-// downgrading to cookie auth. Both principal kinds carry the same configured
-// workspace grants; sessions differ only in their audited subject (the email).
+// authenticate resolves the request's principal: the machine bearer token, a
+// CLI token minted by `mercator login`, or (when webauth is mounted) a
+// signed-in human session. A presented bearer credential must verify as one of
+// the two token kinds — a wrong token fails outright rather than silently
+// downgrading to cookie auth. Every principal kind carries the same configured
+// workspace grants; they differ only in their audited subject.
 func (s *Server) authenticate(r *http.Request) (principal, bool) {
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.security.Token)) != 1 {
+		if token == "" {
 			return principal{}, false
 		}
-		return principal{Subject: "bearer", WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.security.Token)) == 1 {
+			return principal{Subject: "bearer", WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+		}
+		if s.webauth != nil {
+			if email, ok := s.webauth.VerifyCLIToken(token); ok {
+				return principal{Subject: email, WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+			}
+		}
+		return principal{}, false
 	}
 	if s.webauth != nil {
 		if email, ok := s.webauth.SessionEmail(r); ok {
