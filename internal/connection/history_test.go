@@ -36,6 +36,35 @@ func TestServiceListsMoreThanOnePageOfConnections(t *testing.T) {
 	}
 }
 
+func TestServiceListsConnectionsWithoutReadingEveryStream(t *testing.T) {
+	ctx := context.Background()
+	log := &streamReadCountingLog{EventLog: openConnectionTestLog(t)}
+	svc := New(log)
+	for _, connectionID := range []string{"conn_1", "conn_2"} {
+		if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: connectionID, AdapterType: "docker"}); err != nil {
+			t.Fatalf("create %s: %v", connectionID, err)
+		}
+	}
+	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{WorkspaceID: "ws_1", ConnectionID: "conn_1", Authorized: true}); err != nil {
+		t.Fatalf("authorize conn_1: %v", err)
+	}
+	if err := svc.Delete(ctx, DeleteRequest{WorkspaceID: "ws_1", ConnectionID: "conn_2"}); err != nil {
+		t.Fatalf("delete conn_2: %v", err)
+	}
+	log.streamReads = 0
+
+	records, err := svc.List(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("list connections: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != "conn_1" || !records[0].Authorized {
+		t.Fatalf("listed connections = %+v, want authorized conn_1", records)
+	}
+	if log.streamReads != 0 {
+		t.Fatalf("list read %d individual streams, want 0", log.streamReads)
+	}
+}
+
 func TestServiceReadsAndUpdatesConnectionPastOneStreamPage(t *testing.T) {
 	ctx := context.Background()
 	log := openConnectionTestLog(t)
@@ -70,4 +99,14 @@ func TestServiceReadsAndUpdatesConnectionPastOneStreamPage(t *testing.T) {
 	if err := svc.UpdateAuthorization(ctx, UpdateAuthorizationRequest{WorkspaceID: "ws_1", ConnectionID: "conn_history", Authorized: true}); err != nil {
 		t.Fatalf("update connection past one page: %v", err)
 	}
+}
+
+type streamReadCountingLog struct {
+	eventlog.EventLog
+	streamReads int
+}
+
+func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
+	l.streamReads++
+	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
 }

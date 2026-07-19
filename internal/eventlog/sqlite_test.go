@@ -161,12 +161,15 @@ func TestCompleteHistoryReadsPastOnePage(t *testing.T) {
 		t.Fatalf("stream history = %d events at version %d, want 1001", len(stream.Events), stream.LastVersion)
 	}
 
-	global, err := ScanAll(ctx, log, EventFilter{WorkspaceID: "ws_1", StreamTypes: []string{"run"}})
-	if err != nil {
-		t.Fatalf("scan all: %v", err)
+	var global []StoredEvent
+	for event, err := range ScanAll(ctx, log, EventFilter{WorkspaceID: "ws_1", StreamTypes: []string{"run"}}) {
+		if err != nil {
+			t.Fatalf("scan all: %v", err)
+		}
+		global = append(global, event)
 	}
-	if len(global.Events) != 1001 || global.LastPosition != 1001 {
-		t.Fatalf("global history = %d events at position %d, want 1001", len(global.Events), global.LastPosition)
+	if len(global) != 1001 || global[len(global)-1].GlobalPosition != 1001 {
+		t.Fatalf("global history = %d events at position %d, want 1001", len(global), global[len(global)-1].GlobalPosition)
 	}
 }
 

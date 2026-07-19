@@ -218,14 +218,24 @@ func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Re
 }
 
 func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error) {
-	history, err := eventlog.ScanAll(ctx, s.log, eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}, EventTypes: []string{EventConnectionCreated}})
-	if err != nil {
-		return nil, err
+	states := make(map[string]*connectionState)
+	for event, err := range eventlog.ScanAll(ctx, s.log, eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}}) {
+		if err != nil {
+			return nil, err
+		}
+		state := states[event.StreamID]
+		if state == nil {
+			state = &connectionState{}
+			states[event.StreamID] = state
+		}
+		if err := state.apply(event); err != nil {
+			return nil, err
+		}
 	}
-	records := make([]Record, 0, len(history.Events))
-	for _, event := range history.Events {
-		record, err := s.Get(ctx, workspaceID, event.StreamID)
-		if errors.Is(err, ErrNotFound) {
+	records := make([]Record, 0, len(states))
+	for _, state := range states {
+		record, deleted, err := state.result()
+		if errors.Is(err, ErrNotFound) || deleted {
 			continue
 		}
 		if err != nil {
@@ -237,38 +247,55 @@ func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error
 	return records, nil
 }
 
+type connectionState struct {
+	record  Record
+	deleted bool
+}
+
+func (state *connectionState) apply(event eventlog.StoredEvent) error {
+	switch event.Type {
+	case EventConnectionCreated:
+		if err := json.Unmarshal(event.Data, &state.record); err != nil {
+			return err
+		}
+		state.record.CreatedBy = actorSubject(event.Actor)
+	case EventConnectionAuthorizationUpdated:
+		var data struct {
+			Authorized bool `json:"authorized"`
+		}
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return err
+		}
+		state.record.Authorized = data.Authorized
+		if data.Authorized {
+			state.record.AuthorizedBy = actorSubject(event.Actor)
+		} else {
+			state.record.AuthorizedBy = ""
+		}
+	case EventConnectionDeleted:
+		state.deleted = true
+	}
+	return nil
+}
+
+func (state connectionState) result() (Record, bool, error) {
+	if state.record.ID == "" {
+		return Record{}, false, ErrNotFound
+	}
+	return state.record, state.deleted, nil
+}
+
 // reduceConnection folds a connection stream. deleted is reported separately
 // so Delete can distinguish "already deleted" (idempotent no-op) from "never
 // existed" (an error) — callers exposing reads map deleted to ErrNotFound.
 func reduceConnection(events []eventlog.StoredEvent) (record Record, deleted bool, err error) {
+	var state connectionState
 	for _, event := range events {
-		switch event.Type {
-		case EventConnectionCreated:
-			if err := json.Unmarshal(event.Data, &record); err != nil {
-				return Record{}, false, err
-			}
-			record.CreatedBy = actorSubject(event.Actor)
-		case EventConnectionAuthorizationUpdated:
-			var data struct {
-				Authorized bool `json:"authorized"`
-			}
-			if err := json.Unmarshal(event.Data, &data); err != nil {
-				return Record{}, false, err
-			}
-			record.Authorized = data.Authorized
-			if data.Authorized {
-				record.AuthorizedBy = actorSubject(event.Actor)
-			} else {
-				record.AuthorizedBy = ""
-			}
-		case EventConnectionDeleted:
-			deleted = true
+		if err := state.apply(event); err != nil {
+			return Record{}, false, err
 		}
 	}
-	if record.ID == "" {
-		return Record{}, false, ErrNotFound
-	}
-	return record, deleted, nil
+	return state.result()
 }
 
 // actorSubject extracts the audited subject from an event envelope's actor
