@@ -5,181 +5,191 @@ import (
 	"fmt"
 
 	"github.com/benngarcia/mercator/internal/adapter"
-	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
-type decodedRunEvent interface {
-	apply(*runState)
-}
-
-type decodedRunRequested struct {
-	data      runRequestedData
-	createdBy string
-}
-
-func (event decodedRunRequested) apply(state *runState) {
-	state.requested = &event.data
-	state.createdBy = event.createdBy
-}
-
-type decodedAttemptCreated struct{ data attemptData }
-
-func (event decodedAttemptCreated) apply(state *runState) { state.attempt = &event.data }
-
-type decodedLaunchIntent struct{ data adapter.LaunchRequest }
-
-func (event decodedLaunchIntent) apply(state *runState) { state.launchIntent = &event.data }
-
-type decodedExternalObservation struct{ data adapter.ExternalObservation }
-
-func (event decodedExternalObservation) apply(state *runState) {
-	state.lastObservedPhase = event.data.Phase
-	// Only an exited container's code is authoritative. Docker observes exit
-	// code zero on running containers, while workload-reported codes are
-	// trusted independently by decodedRunReport.
-	if event.data.ExitCode != nil && event.data.Phase.Exited() {
-		code := *event.data.ExitCode
-		state.exitCode = &code
-	}
-}
-
-type decodedRunReport struct{ data runReportedData }
-
-func (event decodedRunReport) apply(state *runState) {
-	if event.data.ExitCode != nil {
-		code := *event.data.ExitCode
-		state.exitCode = &code
-	}
-}
-
-type decodedRunOutcome struct{ outcome domain.RunOutcome }
-
-func (event decodedRunOutcome) apply(state *runState) {
-	state.outcomeRecorded = true
-	state.outcome = event.outcome
-}
-
-type runSignal uint8
-
-const (
-	signalNoop runSignal = iota
-	signalLaunchAccepted
-	signalLaunchIndeterminate
-	signalCancelRequested
-	signalCancelAccepted
-	signalCleanupRequested
-	signalCleanupConfirmed
-	signalRunClosed
-)
-
-type decodedRunSignal struct {
-	signal runSignal
-	actor  string
-}
-
-func (event decodedRunSignal) apply(state *runState) {
-	switch event.signal {
-	case signalNoop:
-	case signalLaunchAccepted:
-		state.launchAccepted = true
-	case signalLaunchIndeterminate:
-		state.launchIndeterminate = true
-	case signalCancelRequested:
-		state.cancelRequested = true
-		state.cancelledBy = event.actor
-	case signalCancelAccepted:
-		state.cancelAccepted = true
-	case signalCleanupRequested:
-		state.cleanupRequested = true
-	case signalCleanupConfirmed:
-		state.cleanupConfirmed = true
-	case signalRunClosed:
-		state.closed = true
-	}
-}
-
-func decodeRunEvent(stored eventlog.StoredEvent) (decodedRunEvent, error) {
+func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 	if stored.SchemaVersion != 1 {
-		return nil, invalidRunEvent(stored, "unsupported schema version")
+		return invalidRunEvent(stored, "unsupported schema version")
 	}
-	if !json.Valid(stored.Data) {
-		return nil, invalidRunEvent(stored, "malformed public JSON")
+	if err := requireRunEventObject(stored, stored.Data, "public"); err != nil {
+		return err
 	}
 
 	switch stored.Type {
 	case EventRunRequested:
 		var data runRequestedData
 		if err := decodeRunPayload(stored, &data); err != nil {
-			return nil, err
+			return err
 		}
-		return decodedRunRequested{data: data, createdBy: actorSubject(stored.Actor)}, nil
-	case EventPlacementDecided, EventLaunchFailed:
-		return decodedRunSignal{signal: signalNoop}, nil
+		if reason := invalidRunRequested(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.requested = &data
+		state.createdBy = actorSubject(stored.Actor)
+
+	case EventPlacementDecided:
+		var data placementData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidPlacement(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+
 	case EventAttemptCreated:
 		var data attemptData
 		if err := decodePublicRunPayload(stored, &data); err != nil {
-			return nil, err
+			return err
 		}
-		return decodedAttemptCreated{data: data}, nil
+		if reason := invalidAttempt(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.attempt = &data
+
 	case EventLaunchIntentRecorded:
 		var data adapter.LaunchRequest
 		if err := decodeRunPayload(stored, &data); err != nil {
-			return nil, err
+			return err
 		}
-		return decodedLaunchIntent{data: data}, nil
+		if reason := invalidLaunchRequest(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.launchIntent = &data
+
+	case EventLaunchAccepted:
+		var data adapter.LaunchReceipt
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidLaunchReceipt(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.launchAccepted = true
+
+	case EventLaunchIndeterminate, EventLaunchFailed:
+		var data adapterErrorData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidAdapterError(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		if stored.Type == EventLaunchIndeterminate {
+			state.launchIndeterminate = true
+		}
+
+	case EventCancelRequested:
+		var data cancelRequestedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if data.Reason == "" && data.LaunchKey == "" {
+			return invalidRunEvent(stored, "reason or launch_key is required")
+		}
+		state.cancelRequested = true
+		state.cancelledBy = actorSubject(stored.Actor)
+
+	case EventCancelAccepted:
+		var data launchReferenceData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if data.LaunchKey == "" {
+			return invalidRunEvent(stored, "launch_key is required")
+		}
+		state.cancelAccepted = true
+
 	case EventExternalStateObserved:
 		var data adapter.ExternalObservation
 		if err := decodePublicRunPayload(stored, &data); err != nil {
-			return nil, err
+			return err
 		}
-		if !knownExternalPhase(data.Phase) {
-			return nil, invalidRunEvent(stored, fmt.Sprintf("unknown external phase %q", data.Phase))
+		if reason := invalidExternalObservation(data); reason != "" {
+			return invalidRunEvent(stored, reason)
 		}
-		return decodedExternalObservation{data: data}, nil
+		state.lastObservedPhase = data.Phase
+		// Only an exited container's code is authoritative. Docker observes exit
+		// code zero on running containers, while workload-reported codes are
+		// trusted independently by EventRunReported.
+		if data.ExitCode != nil && data.Phase.Exited() {
+			code := *data.ExitCode
+			state.exitCode = &code
+		}
+
 	case EventRunReported:
 		var data runReportedData
 		if err := decodePublicRunPayload(stored, &data); err != nil {
-			return nil, err
+			return err
 		}
 		if data.Type == "" {
-			return nil, invalidRunEvent(stored, "report type is required")
+			return invalidRunEvent(stored, "report type is required")
 		}
-		return decodedRunReport{data: data}, nil
+		if data.ExitCode != nil {
+			code := *data.ExitCode
+			state.exitCode = &code
+		}
+
 	case EventRunOutcomeRecorded:
-		var data struct {
-			Outcome domain.RunOutcome `json:"outcome"`
-		}
+		var data runOutcomeRecordedData
 		if err := decodePublicRunPayload(stored, &data); err != nil {
-			return nil, err
+			return err
 		}
-		if !knownRunOutcome(data.Outcome) {
-			return nil, invalidRunEvent(stored, fmt.Sprintf("unknown run outcome %q", data.Outcome))
+		if !data.Outcome.Valid() {
+			return invalidRunEvent(stored, fmt.Sprintf("unknown run outcome %q", data.Outcome))
 		}
-		return decodedRunOutcome{outcome: data.Outcome}, nil
-	case EventLaunchAccepted:
-		return decodedRunSignal{signal: signalLaunchAccepted}, nil
-	case EventLaunchIndeterminate:
-		return decodedRunSignal{signal: signalLaunchIndeterminate}, nil
-	case EventCancelRequested:
-		return decodedRunSignal{signal: signalCancelRequested, actor: actorSubject(stored.Actor)}, nil
-	case EventCancelAccepted:
-		return decodedRunSignal{signal: signalCancelAccepted}, nil
+		state.outcomeRecorded = true
+		state.outcome = data.Outcome
+
 	case EventCleanupRequested:
-		return decodedRunSignal{signal: signalCleanupRequested}, nil
+		var data launchReferenceData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if data.LaunchKey == "" {
+			return invalidRunEvent(stored, "launch_key is required")
+		}
+		state.cleanupRequested = true
+
 	case EventCleanupConfirmed:
-		return decodedRunSignal{signal: signalCleanupConfirmed}, nil
+		var data cleanupConfirmedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if data.LaunchKey == "" {
+			return invalidRunEvent(stored, "launch_key is required")
+		}
+		if !data.Disposition.Valid() {
+			return invalidRunEvent(stored, fmt.Sprintf("unknown disposition %q", data.Disposition))
+		}
+		state.cleanupConfirmed = true
+
 	case EventRunClosed:
-		return decodedRunSignal{signal: signalRunClosed}, nil
+		var data runClosedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if !data.Closed {
+			return invalidRunEvent(stored, "closed must be true")
+		}
+		state.closed = true
+
 	default:
-		return nil, invalidRunEvent(stored, "unknown event type")
+		return invalidRunEvent(stored, "unknown event type")
 	}
+
+	return nil
 }
 
 func decodeRunPayload(stored eventlog.StoredEvent, target any) error {
 	payload := stored.PrivateData
+	payloadName := "private"
 	if len(payload) == 0 {
 		payload = stored.Data
+		payloadName = "public"
+	}
+	if err := requireRunEventObject(stored, payload, payloadName); err != nil {
+		return err
 	}
 	if err := json.Unmarshal(payload, target); err != nil {
 		return invalidRunEvent(stored, err.Error())
@@ -188,6 +198,9 @@ func decodeRunPayload(stored eventlog.StoredEvent, target any) error {
 }
 
 func decodePublicRunPayload(stored eventlog.StoredEvent, target any) error {
+	if err := requireRunEventObject(stored, stored.Data, "public"); err != nil {
+		return err
+	}
 	if err := json.Unmarshal(stored.Data, target); err != nil {
 		return invalidRunEvent(stored, err.Error())
 	}
@@ -198,25 +211,10 @@ func invalidRunEvent(stored eventlog.StoredEvent, reason string) error {
 	return fmt.Errorf("orchestrator: invalid run event id=%q type=%q schema=%d: %s", stored.ID, stored.Type, stored.SchemaVersion, reason)
 }
 
-func knownExternalPhase(phase adapter.ExternalPhase) bool {
-	switch phase {
-	case adapter.ExternalPhaseQueued,
-		adapter.ExternalPhaseRunning,
-		adapter.ExternalPhaseSucceeded,
-		adapter.ExternalPhaseFailed,
-		adapter.ExternalPhaseCancelled,
-		adapter.ExternalPhaseReleased:
-		return true
-	default:
-		return false
+func requireRunEventObject(stored eventlog.StoredEvent, payload json.RawMessage, name string) error {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err != nil || object == nil {
+		return invalidRunEvent(stored, name+" payload must be a JSON object")
 	}
-}
-
-func knownRunOutcome(outcome domain.RunOutcome) bool {
-	switch outcome {
-	case domain.RunOutcomeSucceeded, domain.RunOutcomeFailed, domain.RunOutcomeCancelled:
-		return true
-	default:
-		return false
-	}
+	return nil
 }

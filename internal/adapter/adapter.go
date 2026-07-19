@@ -41,6 +41,20 @@ func (p ExternalPhase) Exited() bool {
 	return p == ExternalPhaseSucceeded || p == ExternalPhaseFailed
 }
 
+func (p ExternalPhase) Valid() bool {
+	switch p {
+	case ExternalPhaseQueued,
+		ExternalPhaseRunning,
+		ExternalPhaseSucceeded,
+		ExternalPhaseFailed,
+		ExternalPhaseCancelled,
+		ExternalPhaseReleased:
+		return true
+	default:
+		return false
+	}
+}
+
 type Adapter interface {
 	// Verify performs a cheap credential/reachability check for the authorize
 	// flow. It does not launch anything.

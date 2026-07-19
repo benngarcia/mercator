@@ -96,22 +96,6 @@ type CreateRunResult struct {
 	Duplicate bool
 }
 
-type runRequestedData struct {
-	RunID    string                  `json:"run_id"`
-	Workload domain.WorkloadRevision `json:"workload_revision"`
-}
-
-type placementData struct {
-	Decision domain.PlacementDecision `json:"decision"`
-}
-
-type attemptData struct {
-	AttemptID      string `json:"attempt_id"`
-	LaunchKey      string `json:"launch_key"`
-	OwnershipToken string `json:"ownership_token"`
-	CleanupLocator string `json:"cleanup_locator"`
-}
-
 func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
 	if req.WorkspaceID == "" || req.RunID == "" {
 		return CreateRunResult{}, fmt.Errorf("orchestrator: workspace_id and run_id are required")
@@ -293,13 +277,13 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 		// A reported exit code is authoritative: record the outcome (0 →
 		// succeeded, else failed) and request cleanup without waiting for the
 		// observation backstop to see the container exit.
-		outcome := string(domain.RunOutcomeSucceeded)
+		outcome := domain.RunOutcomeSucceeded
 		if *state.exitCode != 0 {
-			outcome = string(domain.RunOutcomeFailed)
+			outcome = domain.RunOutcomeFailed
 		}
 		return true, o.appendEvents(ctx, workspaceID, runID, version, "advance:report-finalize", []eventlog.NewEvent{
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": outcome}, o.now()),
-			mustEvent(runID, "cleanup_requested", EventCleanupRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: outcome}, o.now()),
+			mustEvent(runID, "cleanup_requested", EventCleanupRequested, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, o.now()),
 		})
 	default:
 		observation, err := o.observeLaunch(ctx, workspaceID, state)
@@ -348,8 +332,8 @@ func (o *Orchestrator) stepLaunch(ctx context.Context, workspaceID, runID string
 		// in "launching" forever.
 		if appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
 			mustEvent(runID, "launch_failed", EventLaunchFailed, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": string(domain.RunOutcomeFailed)}, o.now()),
-			mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, o.now()),
+			mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 		}); appendErr != nil {
 			return false, appendErr
 		}
@@ -369,8 +353,8 @@ func (o *Orchestrator) stepCancel(ctx context.Context, workspaceID, runID string
 		// Cancelled before placement: nothing external exists, so close
 		// terminally with no cleanup.
 		return true, o.appendEvents(ctx, workspaceID, runID, version, "cancel:close_before_launch", []eventlog.NewEvent{
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": string(domain.RunOutcomeCancelled)}, o.now()),
-			mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeCancelled}, o.now()),
+			mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 		})
 	}
 	if !state.cancelAccepted {
@@ -384,7 +368,7 @@ func (o *Orchestrator) stepCancel(ctx context.Context, workspaceID, runID string
 			return false, err
 		}
 		return true, o.appendEvents(ctx, workspaceID, runID, version, "cancel:accepted", []eventlog.NewEvent{
-			mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+			mustEvent(runID, "cancel_accepted", EventCancelAccepted, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, o.now()),
 		})
 	}
 	if !state.outcomeRecorded {
@@ -593,9 +577,9 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string,
 		return runRecordFromState(workspaceID, runID, state), nil
 	}
 	if !state.cancelRequested {
-		data := map[string]any{"reason": "user"}
+		data := cancelRequestedData{Reason: "user"}
 		if state.launchIntent != nil {
-			data = map[string]any{"launch_key": state.launchIntent.LaunchKey}
+			data = cancelRequestedData{LaunchKey: state.launchIntent.LaunchKey}
 		}
 		if err := o.appendEventsAs(ctx, actor, workspaceID, runID, streamVersion(events), "cancel:requested", []eventlog.NewEvent{
 			mustEvent(runID, "cancel_requested", EventCancelRequested, data, o.now()),
@@ -607,12 +591,6 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string,
 		return domain.RunRecord{}, err
 	}
 	return o.GetRun(ctx, workspaceID, runID)
-}
-
-type runReportedData struct {
-	Type     string          `json:"type"`
-	Data     json.RawMessage `json:"data,omitempty"`
-	ExitCode *int            `json:"exit_code,omitempty"`
 }
 
 // RecordReport appends a compute.run.reported.v1 event to the run's stream.
@@ -779,8 +757,8 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 	}
 	if isTerminal(observation.Phase) && !state.outcomeRecorded {
 		toAppend = append(toAppend,
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, map[string]any{"outcome": outcomeForPhase(observation.Phase)}, o.now()),
-			mustEvent(runID, "cleanup_requested", EventCleanupRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, o.now()),
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: outcomeForPhase(observation.Phase)}, o.now()),
+			mustEvent(runID, "cleanup_requested", EventCleanupRequested, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, o.now()),
 		)
 	}
 	if err := o.appendEvents(ctx, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), toAppend); err != nil {
@@ -859,8 +837,8 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 		}
 	}
 	return o.appendEvents(ctx, workspaceID, runID, version, "advance:cleanup", []eventlog.NewEvent{
-		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, map[string]any{"launch_key": launchReq.LaunchKey, "disposition": string(disposition)}, o.now()),
-		mustEvent(runID, "closed", EventRunClosed, map[string]any{"closed": true}, o.now()),
+		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, cleanupConfirmedData{LaunchKey: launchReq.LaunchKey, Disposition: disposition}, o.now()),
+		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 	})
 }
 
@@ -928,11 +906,9 @@ func actorSubject(raw json.RawMessage) string {
 func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 	var state runState
 	for _, stored := range events {
-		event, err := decodeRunEvent(stored)
-		if err != nil {
+		if err := applyStoredEvent(&state, stored); err != nil {
 			return runState{}, err
 		}
-		event.apply(&state)
 	}
 	if state.requested == nil {
 		return runState{}, fmt.Errorf("orchestrator: run requested event not found")
@@ -1069,14 +1045,14 @@ func isTerminal(phase adapter.ExternalPhase) bool {
 	return phase == adapter.ExternalPhaseSucceeded || phase == adapter.ExternalPhaseFailed || phase == adapter.ExternalPhaseCancelled || phase == adapter.ExternalPhaseReleased
 }
 
-func outcomeForPhase(phase adapter.ExternalPhase) string {
+func outcomeForPhase(phase adapter.ExternalPhase) domain.RunOutcome {
 	switch phase {
 	case adapter.ExternalPhaseSucceeded:
-		return string(domain.RunOutcomeSucceeded)
+		return domain.RunOutcomeSucceeded
 	case adapter.ExternalPhaseCancelled:
-		return string(domain.RunOutcomeCancelled)
+		return domain.RunOutcomeCancelled
 	default:
-		return string(domain.RunOutcomeFailed)
+		return domain.RunOutcomeFailed
 	}
 }
 
