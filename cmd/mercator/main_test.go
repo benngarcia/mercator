@@ -312,3 +312,28 @@ func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 		t.Fatalf("connection architectures = loopback:%s remote:%s, want arm64 and amd64", byConn["conn_docker_loopback"].Platform.Architecture, byConn["conn_docker_remote"].Platform.Architecture)
 	}
 }
+
+func TestDockerAdapterRejectsPartialRegistryCredentialConfiguration(t *testing.T) {
+	for name, tc := range map[string]struct {
+		config map[string]string
+		secret string
+	}{
+		"credential without metadata": {config: map[string]string{}, secret: "pull-token"},
+		"metadata without credential": {config: map[string]string{"registry_server": "docker.io", "registry_username": "bucketrobotics"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := newDockerAdapter(tc.config, tc.secret); err == nil {
+				t.Fatal("newDockerAdapter accepted partial registry credential configuration")
+			}
+		})
+	}
+	if _, err := newDockerAdapter(map[string]string{}, ""); err != nil {
+		t.Fatalf("credential-free Docker adapter: %v", err)
+	}
+	if _, err := newDockerAdapter(map[string]string{
+		"registry_server":   "docker.io",
+		"registry_username": "bucketrobotics",
+	}, "pull-token"); err != nil {
+		t.Fatalf("credentialed Docker adapter: %v", err)
+	}
+}

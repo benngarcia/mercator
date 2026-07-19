@@ -311,11 +311,8 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	// Build a fresh adapter from each connection's own config: memoizing one
 	// instance would route every docker connection to whichever endpoint was
 	// built first, silently launching containers on the wrong host.
-	factory.Register(dockeradapter.Manifest(), func(config map[string]string, _ string) (adapter.Provider, error) {
-		client := dockeradapter.NewCLIClient(config["bin"])
-		client.Host = config["host"]
-		client.Context = config["context"]
-		return dockeradapter.NewOffering(client, dockerIdentityForConfig(config), config["arch"]), nil
+	factory.Register(dockeradapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
+		return newDockerAdapter(config, secret)
 	})
 
 	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
@@ -340,6 +337,18 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 		publicURL: publicURL,
 		close:     storage.Close,
 	}, nil
+}
+
+func newDockerAdapter(config map[string]string, secret string) (adapter.Provider, error) {
+	registry, err := dockeradapter.NewRegistryCredential(config["registry_server"], config["registry_username"], secret)
+	if err != nil {
+		return nil, err
+	}
+	client := dockeradapter.NewCLIClient(config["bin"])
+	client.Host = config["host"]
+	client.Context = config["context"]
+	client.Registry = registry
+	return dockeradapter.NewOffering(client, dockerIdentityForConfig(config), config["arch"]), nil
 }
 
 // dockerIdentityForConfig derives the offer identity from the connection's

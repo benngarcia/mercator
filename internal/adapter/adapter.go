@@ -13,6 +13,7 @@ var ErrLaunchTimeout = errors.New("adapter: launch timeout")
 var ErrLaunchIndeterminate = errors.New("adapter: launch indeterminate")
 var ErrNotFound = errors.New("adapter: not found")
 var ErrRetryableFailure = errors.New("adapter: retryable failure")
+var ErrRegistryAuthentication = errors.New("adapter: registry authentication failed")
 
 // ErrTerminateUnsupported is returned by an adapter whose backing capacity is a
 // standing pool (e.g. local Docker): there is no host the broker owns to

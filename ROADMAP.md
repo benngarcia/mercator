@@ -32,7 +32,8 @@ hardening lives in [docs/production/known-limitations.md](docs/production/known-
 
 ## Next: Production Hardening
 
-- Finish registry-backed image resolution and credential handling.
+- Finish registry-backed tag resolution and credential handling beyond the
+  Docker adapter's connection-scoped pull credential.
 - Decide external sink configuration for Kafka/Postgres or keep the current
   audit sink boundary explicit.
 - Expand RunPod setup docs with a complete credential and quota checklist.

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/benngarcia/mercator/internal/adapter"
 )
 
 type CLIClient struct {
@@ -18,8 +20,9 @@ type CLIClient struct {
 	// default (the loopback socket / active context). Host maps to the global
 	// `--host` flag (unix://, tcp://, ssh://); Context maps to `--context`.
 	// Docker treats them as mutually exclusive, so Context wins when both are set.
-	Host    string
-	Context string
+	Host     string
+	Context  string
+	Registry *RegistryCredential
 }
 
 func NewCLIClient(binary string) *CLIClient {
@@ -68,10 +71,13 @@ func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequ
 		args = append(args, req.Entrypoint[1:]...)
 	}
 	args = append(args, req.Args...)
-	output, err := c.run(ctx, args...)
+	output, err := c.runAuthenticated(ctx, args...)
 	if err != nil {
 		if strings.Contains(output, "already in use") || strings.Contains(output, "Conflict.") {
 			return Container{}, ErrAlreadyExists
+		}
+		if registryAuthenticationFailed(output) {
+			return Container{}, fmt.Errorf("%w: %w: %s", adapter.ErrRegistryAuthentication, err, strings.TrimSpace(output))
 		}
 		return Container{}, fmt.Errorf("%w: %s", err, strings.TrimSpace(output))
 	}
@@ -81,6 +87,13 @@ func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequ
 		return Container{ID: id, Name: req.Name, Labels: req.Labels, State: "created", CreatedAt: time.Now().UTC()}, nil
 	}
 	return container, nil
+}
+
+func registryAuthenticationFailed(output string) bool {
+	output = strings.ToLower(output)
+	return strings.Contains(output, "pull access denied") ||
+		strings.Contains(output, "authentication required") ||
+		strings.Contains(output, "unauthorized:")
 }
 
 func (c *CLIClient) StartContainer(ctx context.Context, name string) error {
@@ -167,6 +180,21 @@ func (c *CLIClient) run(ctx context.Context, args ...string) (string, error) {
 		return string(output), err
 	}
 	return string(output), nil
+}
+
+func (c *CLIClient) runAuthenticated(ctx context.Context, args ...string) (string, error) {
+	configArgs, cleanup, err := c.registryConfigArgs()
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	globalArgs := append(configArgs, c.globalArgs()...)
+	cmd := exec.CommandContext(ctx, c.Binary, append(globalArgs, args...)...)
+	if c.Registry != nil {
+		cmd.Env = c.Registry.commandEnvironment()
+	}
+	output, err := cmd.CombinedOutput()
+	return string(output), err
 }
 
 // runSplit keeps stdout and stderr separate for commands whose stdout must be
