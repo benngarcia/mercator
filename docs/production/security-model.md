@@ -33,6 +33,10 @@ Implemented protections:
 - `secret_ref` env bindings are rejected; Mercator does not own secret storage,
   grants, KMS integration, or runtime secret materialization.
 - Sink delivery skips private events.
+- An optional Docker registry pull token is resolved as connection credential
+  material. It is written only to an operation-owned mode-0600 Docker config,
+  removed from the Docker subprocess environment, never passed in Docker argv
+  or workload env, and removed after the container create command.
 
 Operator checks:
 
@@ -61,6 +65,7 @@ go run ./cmd/mercator run events --workspace-id ws_eval --run-id run_secret_1 \
   humans but no roles or per-user workspace grants.
 - Secret management is delegated to the workload/runtime. Mercator has no
   secret vault, grant API, or KMS adapter surface.
-- Registry-backed image resolution and registry credential management are not
-  implemented.
+- Registry-backed tag resolution is not implemented. Docker connections can
+  authenticate digest-pinned private-image pulls with a pull-only connection
+  credential; other adapters retain their documented registry boundaries.
 - External Kafka/Postgres sink auth/config is not wired through the executable.

@@ -167,15 +167,17 @@ function SetupForm({
   const authorizeConnection = useAuthorizeConnection();
   const deleteConnection = useDeleteConnection();
 
-  const needsCredential = manifest.credential.required;
+  const showsCredential =
+    manifest.credential.required || Boolean(manifest.credential.label);
   const credentialLabel = manifest.credential.label ?? "API key";
+  const credentialProvided =
+    credentialSource === "mercator" ? Boolean(secret) : Boolean(envRef.trim());
 
   const missingRequired =
     manifest.config_fields.some(
       (f) => f.required && !(config[f.name] ?? "").trim(),
     ) ||
-    (needsCredential &&
-      (credentialSource === "mercator" ? !secret : !envRef.trim()));
+    (manifest.credential.required && !credentialProvided);
 
   const verify = (id: string, previousError: string) => {
     setPhase({ kind: "reverifying", connectionId: id, error: previousError });
@@ -210,13 +212,15 @@ function SetupForm({
 		connection_id: connectionId.trim(),
         adapter_type: manifest.type,
         config: Object.keys(trimmedConfig).length ? trimmedConfig : undefined,
-        credential: needsCredential
+        credential: credentialProvided
           ? credentialSource === "mercator"
             ? { source: "mercator", ref: "" }
             : { source: "env", ref: envRef.trim() }
           : undefined,
         secret:
-          needsCredential && credentialSource === "mercator" ? secret : undefined,
+          credentialProvided && credentialSource === "mercator"
+            ? secret
+            : undefined,
       },
       {
         onSuccess: (record) => verify(record.id, ""),
@@ -263,10 +267,11 @@ function SetupForm({
         />
       ))}
 
-      {needsCredential ? (
+      {showsCredential ? (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="setup-secret" className="text-xs">
             {credentialLabel}
+            {manifest.credential.required ? null : " (optional)"}
           </Label>
           {credentialSource === "mercator" ? (
             <Input

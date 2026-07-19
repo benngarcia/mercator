@@ -28,6 +28,9 @@ limits.
 - Workloads must be digest-pinned before run creation.
 - Registry-backed tag resolution is not implemented; current resolver is
   deterministic/static.
+- Docker supports one static registry credential per connection. Token
+  exchange, multiple registries on one connection, and automatic rotation are
+  outside the current contract.
 - No mounts, workdir, setup commands, stdin, TTY, host networking, sidecars, or
   arbitrary Docker flags.
 
@@ -49,7 +52,7 @@ limits.
 
 - Deployment topology with TLS/reverse proxy.
 - Key-management and rotation procedure.
-- Registry credential and digest-resolution procedure.
+- Registry digest-resolution procedure beyond pre-pinned workload images.
 - External sink configuration and incident runbooks.
 - SQLite migration, backup automation, and restore SLOs.
 - Release/version compatibility and rollback procedure.

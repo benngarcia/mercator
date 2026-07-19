@@ -11,9 +11,24 @@ func Manifest() adapter.Manifest {
 		Description: "Run workloads on a Docker engine you already have — the local daemon or a remote host over SSH.",
 		Credential: adapter.CredentialSpec{
 			Required: false,
-			Format:   "None — the broker reaches the engine through its socket, context, or an ssh:// host.",
+			Label:    "Registry pull token",
+			Format:   "Optional pull-only registry token. Configure it with registry server and username.",
 		},
 		ConfigFields: []adapter.ConfigField{
+			{
+				Name:        "registry_server",
+				Label:       "Registry server",
+				Type:        "string",
+				Placeholder: "docker.io",
+				Help:        "Required with a registry credential. Use docker.io for Docker Hub.",
+			},
+			{
+				Name:        "registry_username",
+				Label:       "Registry username",
+				Type:        "string",
+				Placeholder: "registry-user",
+				Help:        "Required with a registry credential.",
+			},
 			{
 				Name:        "host",
 				Label:       "Docker host",

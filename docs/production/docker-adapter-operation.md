@@ -54,6 +54,33 @@ go run ./cmd/mercator connection create \
   --config arch=amd64
 ```
 
+Private images use the Docker connection's optional registry credential. The
+connection config identifies the registry and username; the connection
+credential carries a pull-only token through the existing environment or
+sealed-store source:
+
+```sh
+export DOCKERHUB_PULL_TOKEN='<pull-only token>'
+
+go run ./cmd/mercator connection create \
+  --connection-id conn_docker_private \
+  --adapter-type docker \
+  --config registry_server=docker.io \
+  --config registry_username=bucketrobotics \
+  --credential-source env \
+  --credential-ref DOCKERHUB_PULL_TOKEN
+go run ./cmd/mercator connection authorize \
+  --connection-id conn_docker_private
+```
+
+The registry server, username, and credential must be configured together.
+Mercator writes the credential to a mode-0600 Docker config for each container
+create operation, passes the config directory through Docker's global
+`--config` flag, and removes the directory when the command finishes. The
+credential does not enter Docker argv, workload environment variables, or
+the Docker subprocess environment, or public events. Credential-free connections continue to pull public images
+through Docker's ambient behavior.
+
 ## Workload Requirements
 
 Docker workloads must satisfy the same V1 workload contract:

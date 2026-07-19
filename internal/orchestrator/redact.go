@@ -111,6 +111,7 @@ func envKind(value *string) string {
 // the raw error text never reaches the public stream.
 func publicAdapterError(err error, launchKey string) adapterErrorData {
 	code := "ADAPTER_ERROR"
+	message := "Adapter operation failed."
 	retryable := true
 	switch {
 	case errors.Is(err, adapter.ErrIdempotencyConflict):
@@ -122,6 +123,10 @@ func publicAdapterError(err error, launchKey string) adapterErrorData {
 		code = "ADAPTER_LAUNCH_INDETERMINATE"
 	case errors.Is(err, adapter.ErrRetryableFailure):
 		code = "ADAPTER_RETRYABLE_FAILURE"
+	case errors.Is(err, adapter.ErrRegistryAuthentication):
+		code = "ADAPTER_REGISTRY_AUTHENTICATION_FAILED"
+		message = "Registry authentication failed."
+		retryable = false
 	}
-	return adapterErrorData{Code: code, Message: "Adapter operation failed.", Retryable: retryable, LaunchKey: launchKey}
+	return adapterErrorData{Code: code, Message: message, Retryable: retryable, LaunchKey: launchKey}
 }
