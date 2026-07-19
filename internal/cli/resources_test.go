@@ -134,11 +134,20 @@ func TestConnectionCommandsBuildTheRightRequests(t *testing.T) {
 		t.Fatalf("unexpected authorize request: %+v", authorize)
 	}
 
+	code, _, errOut = runCLI(t, cfg, "connection", "delete", "--connection-id", "conn_rp")
+	if code != 0 {
+		t.Fatalf("connection delete failed: %s", errOut)
+	}
+	deleted := (*seen)[2]
+	if deleted.Method != http.MethodDelete || deleted.Path != "/v1/connections/conn_rp?workspace_id=ws_1" {
+		t.Fatalf("unexpected delete request: %+v", deleted)
+	}
+
 	code, _, errOut = runCLI(t, cfg, "connection", "list")
 	if code != 0 {
 		t.Fatalf("connection list failed: %s", errOut)
 	}
-	list := (*seen)[2]
+	list := (*seen)[3]
 	if list.Method != http.MethodGet || list.Path != "/v1/connections?workspace_id=ws_1" {
 		t.Fatalf("unexpected list request: %+v", list)
 	}

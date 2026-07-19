@@ -141,6 +141,7 @@ mercator connection create --connection-id conn_runpod --adapter-type runpod \
   --credential-source mercator --secret-stdin < runpod-key.txt
 mercator connection authorize --connection-id conn_runpod
 mercator connection list
+mercator connection delete --connection-id conn_runpod
 ```
 
 `--config key=value` is repeatable for adapter config. Prefer `--secret-stdin`
