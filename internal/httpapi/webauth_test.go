@@ -34,7 +34,7 @@ func (stubWebAuth) VerifyCLIToken(token string) (string, bool) {
 
 func TestSessionGrantsAPIAccessAlongsideBearer(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
+		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
 	unauthenticated := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
 	rec := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func TestSessionGrantsAPIAccessAlongsideBearer(t *testing.T) {
 
 func TestCLITokenAuthenticatesAsItsEmail(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
+		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
 	req.Header.Set("Authorization", "Bearer cli:operator@example.com")
@@ -92,7 +92,7 @@ func TestCLITokenAuthenticatesAsItsEmail(t *testing.T) {
 
 func TestWrongBearerDoesNotDowngradeToSession(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
+		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
 	req.Header.Set("Authorization", "Bearer wrong-token")
@@ -106,7 +106,7 @@ func TestWrongBearerDoesNotDowngradeToSession(t *testing.T) {
 
 func TestUnauthenticatedConsoleLoadRedirectsToLogin(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
+		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
 	req := httptest.NewRequest(http.MethodGet, "/runs?workspace_id=ws_1", nil)
 	rec := httptest.NewRecorder()
@@ -144,7 +144,7 @@ func TestSessionEndpointReportsDisabledWithoutWebAuth(t *testing.T) {
 
 func TestRunRecordsActingPrincipals(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
+		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
 	// A machine-token create records "bearer".
 	body := mustMarshal(t, CreateRunRequest{RunId: "run_audit", Workload: httpRevision()})
@@ -189,7 +189,7 @@ func TestRunRecordsActingPrincipals(t *testing.T) {
 
 func TestPublicRunEventsDoNotLeakActorEmails(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
-		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
+		WithBearerAuth("secret-token"), WithWebAuth(stubWebAuth{}))
 
 	body := mustMarshal(t, CreateRunRequest{RunId: "run_actor_leak", Workload: httpRevision()})
 	create := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))

@@ -85,15 +85,14 @@ type connectionVerifier interface {
 }
 
 type securityConfig struct {
-	Token      string
-	Workspaces []string
+	Token string
 }
 
 type Option func(*Server)
 
-func WithBearerAuth(token string, workspaces []string) Option {
+func WithBearerAuth(token string) Option {
 	return func(s *Server) {
-		s.security = securityConfig{Token: token, Workspaces: append([]string(nil), workspaces...)}
+		s.security = securityConfig{Token: token}
 	}
 }
 

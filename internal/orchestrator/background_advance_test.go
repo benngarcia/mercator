@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
 // TestAdvanceOpenRunsClosesExitedRunWithoutClientRefresh documents the broker
@@ -109,6 +111,28 @@ func TestAdvanceOpenRunsContinuesPastFailingRun(t *testing.T) {
 	}
 	if !record.Closed {
 		t.Fatalf("healthy run must close even when an earlier run errors: %+v", record)
+	}
+}
+
+func TestListRunWorkspacesDiscoversPersistedPartitions(t *testing.T) {
+	ctx := context.Background()
+	log, err := eventlog.OpenSQLite(ctx, "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	orch := New(log, scheduler.New(), fake.New())
+
+	seedWedgedRun(t, log, "staging-experiments", "run_exp")
+	seedWedgedRun(t, log, "staging", "run_released")
+	seedWedgedRun(t, log, "staging", "run_second")
+
+	workspaces, err := orch.ListRunWorkspaces(ctx)
+	if err != nil {
+		t.Fatalf("list run workspaces: %v", err)
+	}
+	if !slices.Equal(workspaces, []string{"staging", "staging-experiments"}) {
+		t.Fatalf("workspaces = %v, want persisted run partitions", workspaces)
 	}
 }
 

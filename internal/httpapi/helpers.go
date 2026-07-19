@@ -64,68 +64,27 @@ func internalAPIError(status int, code string, err error) ErrorResponse {
 	return apiError(code, "Internal error; see server logs for detail.")
 }
 
-// defaultWorkspace returns the single concrete workspace this server is scoped
-// to, if exactly one is configured (and it is not the "*" wildcard). It lets
-// callers omit workspace_id on a single-tenant deployment. Empty means there is
-// no unambiguous default and workspace_id must be supplied explicitly.
-func (s *Server) defaultWorkspace() string {
-	concrete := ""
-	for _, ws := range s.security.Workspaces {
-		if ws == "" || ws == "*" {
-			return ""
-		}
-		if concrete != "" && concrete != ws {
-			return ""
-		}
-		concrete = ws
-	}
-	return concrete
-}
-
 type workspaceError struct {
 	Forbidden bool
 	Response  ErrorResponse
 }
 
-// resolveWorkspace resolves the workspace ID from the body, query, or the
-// server's single configured workspace, then checks the authenticated grant.
-func (s *Server) resolveWorkspace(ctx context.Context, bodyWorkspaceID, queryWorkspaceID string) (string, *workspaceError) {
+// resolveWorkspace resolves the explicit workspace ID from the request body or
+// query. Workspace IDs partition durable event history; server configuration
+// never supplies or authorizes one on the caller's behalf.
+func (s *Server) resolveWorkspace(_ context.Context, bodyWorkspaceID, queryWorkspaceID string) (string, *workspaceError) {
 	workspaceID := bodyWorkspaceID
 	if workspaceID == "" {
 		workspaceID = queryWorkspaceID
 	}
 	if workspaceID == "" {
-		workspaceID = s.defaultWorkspace()
-	}
-	if workspaceID == "" {
 		return "", &workspaceError{Response: apiError("WORKSPACE_ID_REQUIRED", "workspace_id is required.")}
-	}
-	if err := s.authorizeRequestWorkspace(ctx, workspaceID); err != nil {
-		return "", err
 	}
 	return workspaceID, nil
 }
 
 func (s *Server) requiredWorkspace(ctx context.Context, queryWorkspaceID string) (string, *workspaceError) {
 	return s.resolveWorkspace(ctx, "", queryWorkspaceID)
-}
-
-func (s *Server) authorizeRequestWorkspace(ctx context.Context, workspaceID string) *workspaceError {
-	actor, ok := ctx.Value(principalContextKey{}).(principal)
-	if !ok {
-		// No principal is only legitimate when bearer auth is disabled entirely
-		// (an explicit dev/embedding mode). With auth enabled, a missing
-		// principal means the request somehow bypassed the token gate — deny,
-		// never fail open.
-		if s.security.Token == "" {
-			return nil
-		}
-		return &workspaceError{Forbidden: true, Response: apiError("FORBIDDEN", "Principal is not authorized for this workspace.")}
-	}
-	if !actor.allows(workspaceID) {
-		return &workspaceError{Forbidden: true, Response: apiError("FORBIDDEN", "Principal is not authorized for this workspace.")}
-	}
-	return nil
 }
 
 // newRunID mints a server-generated run identifier from a uuidv7 (time-ordered,

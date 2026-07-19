@@ -184,7 +184,7 @@ func TestRunClosesServerDependenciesWhenOIDCDiscoveryFails(t *testing.T) {
 	}
 }
 
-func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
+func TestBrokerStartsWithoutInventingAConnection(t *testing.T) {
 	deps := mustBuildServerDeps(t, map[string]string{
 		"MERCATOR_DOCKER_ARCH": "amd64",
 		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
@@ -195,26 +195,56 @@ func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
 		}
 	}()
 
-	offers, err := deps.broker.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	offers, err := deps.broker.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "staging"})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	if len(offers) != 1 || offers[0].AdapterType != "docker" || offers[0].ConnectionID == "" {
-		t.Fatalf("expected one docker offer from the registered connection, got %+v", offers)
+	if len(offers) != 0 {
+		t.Fatalf("startup offers = %+v, want none until a connection is created and authorized", offers)
 	}
 
-	conns, err := deps.conns.List(context.Background(), "ws_1")
+	conns, err := deps.conns.List(context.Background(), "staging")
 	if err != nil {
 		t.Fatalf("list conns: %v", err)
 	}
-	if len(conns) != 1 || !conns[0].Authorized {
-		t.Fatalf("expected one authorized registered connection, got %+v", conns)
+	if len(conns) != 0 {
+		t.Fatalf("startup connections = %+v, want none", conns)
+	}
+}
+
+func TestBrokerServesConnectionsCreatedThroughTheRegistry(t *testing.T) {
+	deps := mustBuildServerDeps(t, map[string]string{
+		"MERCATOR_DOCKER_ARCH": "amd64",
+		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+	})
+	defer func() {
+		if err := deps.close(); err != nil {
+			t.Fatalf("close deps: %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+	if _, err := deps.conns.Create(ctx, connection.CreateRequest{
+		WorkspaceID:  "staging",
+		ConnectionID: "conn_docker_loopback",
+		AdapterType:  "docker",
+	}); err != nil {
+		t.Fatalf("create connection: %v", err)
+	}
+	if err := deps.conns.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
+		WorkspaceID:  "staging",
+		ConnectionID: "conn_docker_loopback",
+		Authorized:   true,
+	}); err != nil {
+		t.Fatalf("authorize connection: %v", err)
 	}
 
-	// Verify the offer is backed by the registry record: the offer's ConnectionID
-	// must match the registered connection's ID.
-	if offers[0].ConnectionID != conns[0].ID {
-		t.Fatalf("offer is not backed by registry: offer.ConnectionID=%s, conn.ID=%s", offers[0].ConnectionID, conns[0].ID)
+	offers, err := deps.broker.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: "staging"})
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	if len(offers) != 1 || offers[0].ConnectionID != "conn_docker_loopback" {
+		t.Fatalf("offers = %+v, want the authorized registry connection", offers)
 	}
 }
 
@@ -233,6 +263,20 @@ func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 		}
 	}()
 	ctx := context.Background()
+	if _, err := deps.conns.Create(ctx, connection.CreateRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_docker_loopback",
+		AdapterType:  "docker",
+	}); err != nil {
+		t.Fatalf("create local docker connection: %v", err)
+	}
+	if err := deps.conns.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_docker_loopback",
+		Authorized:   true,
+	}); err != nil {
+		t.Fatalf("authorize local docker connection: %v", err)
+	}
 
 	if _, err := deps.conns.Create(ctx, connection.CreateRequest{
 		WorkspaceID:  "ws_1",

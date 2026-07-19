@@ -74,7 +74,7 @@ func TestListAdaptersEmptyWithoutWiring(t *testing.T) {
 // /v1 bearer gate as every other API route.
 func TestListAdaptersBehindAuthGate(t *testing.T) {
 	handler := newHTTPTestServerWithConns(t,
-		WithBearerAuth("test-token", []string{"ws_1"}),
+		WithBearerAuth("test-token"),
 		WithAdapterManifests(func() []adapter.Manifest { return nil }))
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/adapters", nil)
