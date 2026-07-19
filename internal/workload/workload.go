@@ -87,14 +87,14 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	if violations := domain.ValidateWorkloadRevision(revision); len(violations) > 0 {
 		return domain.WorkloadRevision{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
 	}
-	existing, err := s.log.ReadStream(ctx, workloadStream(req.WorkspaceID, req.WorkloadID), 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, s.log, workloadStream(req.WorkspaceID, req.WorkloadID))
 	if err != nil {
 		return domain.WorkloadRevision{}, err
 	}
-	if len(existing) == 0 {
+	if len(history.Events) == 0 {
 		return domain.WorkloadRevision{}, fmt.Errorf("workload: workload not found")
 	}
-	for _, event := range existing {
+	for _, event := range history.Events {
 		if event.Type != EventWorkloadRevisionCreated {
 			continue
 		}
@@ -116,7 +116,7 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	}
 	_, err = s.log.Append(ctx, eventlog.AppendRequest{
 		Stream:                workloadStream(req.WorkspaceID, req.WorkloadID),
-		ExpectedStreamVersion: uint64(len(existing)),
+		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            "workload:revision:create:" + revision.ID,
 		RequestHash:           hash,
 		CorrelationID:         req.WorkloadID,
@@ -150,12 +150,12 @@ func (s *Service) GetRevision(ctx context.Context, workspaceID, workloadID, revi
 }
 
 func (s *Service) ListRevisions(ctx context.Context, workspaceID, workloadID string) ([]domain.WorkloadRevision, error) {
-	events, err := s.log.ReadStream(ctx, workloadStream(workspaceID, workloadID), 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, s.log, workloadStream(workspaceID, workloadID))
 	if err != nil {
 		return nil, err
 	}
 	revisions := make([]domain.WorkloadRevision, 0)
-	for _, event := range events {
+	for _, event := range history.Events {
 		if event.Type != EventWorkloadRevisionCreated {
 			continue
 		}

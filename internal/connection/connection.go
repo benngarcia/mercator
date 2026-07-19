@@ -175,11 +175,11 @@ func credentialRef(record Record) (CredentialRef, bool) {
 }
 
 func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizationRequest) error {
-	events, err := s.log.ReadStream(ctx, connectionStream(req.WorkspaceID, req.ConnectionID), 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(req.WorkspaceID, req.ConnectionID))
 	if err != nil {
 		return err
 	}
-	if len(events) == 0 {
+	if len(history.Events) == 0 {
 		return ErrNotFound
 	}
 	data, err := json.Marshal(map[string]any{"authorized": req.Authorized})
@@ -200,7 +200,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 	}
 	appendRequest := eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
-		ExpectedStreamVersion: uint64(len(events)),
+		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            fmt.Sprintf("connection:authorization:%s:%t", req.ConnectionID, req.Authorized),
 		RequestHash:           hash,
 		Actor:                 req.Actor,
@@ -224,11 +224,11 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 // idempotent replay. A deleted connection's id cannot be reused: recreate
 // under a fresh id.
 func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
-	events, err := s.log.ReadStream(ctx, connectionStream(req.WorkspaceID, req.ConnectionID), 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(req.WorkspaceID, req.ConnectionID))
 	if err != nil {
 		return err
 	}
-	record, deleted, err := reduceConnection(events)
+	record, deleted, err := reduceConnection(history.Events)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 	}
 	appendRequest := eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
-		ExpectedStreamVersion: uint64(len(events)),
+		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            "connection:delete:" + req.ConnectionID,
 		RequestHash:           hash,
 		Actor:                 req.Actor,
@@ -271,11 +271,11 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 }
 
 func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Record, error) {
-	events, err := s.log.ReadStream(ctx, connectionStream(workspaceID, connectionID), 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(workspaceID, connectionID))
 	if err != nil {
 		return Record{}, err
 	}
-	record, deleted, err := reduceConnection(events)
+	record, deleted, err := reduceConnection(history.Events)
 	if err != nil {
 		return Record{}, err
 	}
@@ -286,14 +286,24 @@ func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Re
 }
 
 func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error) {
-	events, err := s.log.ReadAll(ctx, 0, 1000, eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}, EventTypes: []string{EventConnectionCreated}})
-	if err != nil {
-		return nil, err
+	states := make(map[string]*connectionState)
+	for event, err := range eventlog.ScanAll(ctx, s.log, eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}}) {
+		if err != nil {
+			return nil, err
+		}
+		state := states[event.StreamID]
+		if state == nil {
+			state = &connectionState{}
+			states[event.StreamID] = state
+		}
+		if err := state.apply(event); err != nil {
+			return nil, err
+		}
 	}
-	records := make([]Record, 0, len(events))
-	for _, event := range events {
-		record, err := s.Get(ctx, workspaceID, event.StreamID)
-		if errors.Is(err, ErrNotFound) {
+	records := make([]Record, 0, len(states))
+	for _, state := range states {
+		record, deleted, err := state.result()
+		if errors.Is(err, ErrNotFound) || deleted {
 			continue
 		}
 		if err != nil {
@@ -305,38 +315,55 @@ func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error
 	return records, nil
 }
 
+type connectionState struct {
+	record  Record
+	deleted bool
+}
+
+func (state *connectionState) apply(event eventlog.StoredEvent) error {
+	switch event.Type {
+	case EventConnectionCreated:
+		if err := json.Unmarshal(event.Data, &state.record); err != nil {
+			return err
+		}
+		state.record.CreatedBy = actorSubject(event.Actor)
+	case EventConnectionAuthorizationUpdated:
+		var data struct {
+			Authorized bool `json:"authorized"`
+		}
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			return err
+		}
+		state.record.Authorized = data.Authorized
+		if data.Authorized {
+			state.record.AuthorizedBy = actorSubject(event.Actor)
+		} else {
+			state.record.AuthorizedBy = ""
+		}
+	case EventConnectionDeleted:
+		state.deleted = true
+	}
+	return nil
+}
+
+func (state connectionState) result() (Record, bool, error) {
+	if state.record.ID == "" {
+		return Record{}, false, ErrNotFound
+	}
+	return state.record, state.deleted, nil
+}
+
 // reduceConnection folds a connection stream. deleted is reported separately
 // so Delete can distinguish "already deleted" (idempotent no-op) from "never
 // existed" (an error) — callers exposing reads map deleted to ErrNotFound.
 func reduceConnection(events []eventlog.StoredEvent) (record Record, deleted bool, err error) {
+	var state connectionState
 	for _, event := range events {
-		switch event.Type {
-		case EventConnectionCreated:
-			if err := json.Unmarshal(event.Data, &record); err != nil {
-				return Record{}, false, err
-			}
-			record.CreatedBy = actorSubject(event.Actor)
-		case EventConnectionAuthorizationUpdated:
-			var data struct {
-				Authorized bool `json:"authorized"`
-			}
-			if err := json.Unmarshal(event.Data, &data); err != nil {
-				return Record{}, false, err
-			}
-			record.Authorized = data.Authorized
-			if data.Authorized {
-				record.AuthorizedBy = actorSubject(event.Actor)
-			} else {
-				record.AuthorizedBy = ""
-			}
-		case EventConnectionDeleted:
-			deleted = true
+		if err := state.apply(event); err != nil {
+			return Record{}, false, err
 		}
 	}
-	if record.ID == "" {
-		return Record{}, false, ErrNotFound
-	}
-	return record, deleted, nil
+	return state.result()
 }
 
 // actorSubject extracts the audited subject from an event envelope's actor
