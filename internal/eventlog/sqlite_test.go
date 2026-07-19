@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -141,6 +142,50 @@ func TestSQLiteEventLogIdempotencyAndConcurrency(t *testing.T) {
 	_, err = log.Append(ctx, wrongVersion)
 	if !errors.Is(err, ErrConcurrencyConflict) {
 		t.Fatalf("expected concurrency conflict, got %v", err)
+	}
+}
+
+func TestSQLiteEventLogListsDistinctWorkspaceIDsFromEventIndex(t *testing.T) {
+	ctx := context.Background()
+	log := openTestLog(t)
+	appendWorkspaceRun := func(workspaceID, runID string) {
+		t.Helper()
+		_, err := log.Append(ctx, AppendRequest{
+			Stream:                StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
+			ExpectedStreamVersion: 0,
+			CommandKey:            "create:" + runID,
+			RequestHash:           "sha256:" + runID,
+			Events: []NewEvent{{
+				ID:            "evt_" + runID,
+				Type:          "compute.run.requested.v1",
+				SchemaVersion: 1,
+				OccurredAt:    time.Now().UTC(),
+			}},
+		})
+		if err != nil {
+			t.Fatalf("append %s: %v", runID, err)
+		}
+	}
+	appendWorkspaceRun("staging-experiments", "run_experiment")
+	appendWorkspaceRun("staging", "run_one")
+	appendWorkspaceRun("staging", "run_two")
+	_, err := log.Append(ctx, AppendRequest{
+		Stream:                StreamKey{WorkspaceID: "ignored", Type: "connection", ID: "conn_1"},
+		ExpectedStreamVersion: 0,
+		CommandKey:            "create:conn_1",
+		RequestHash:           "sha256:conn_1",
+		Events:                []NewEvent{{ID: "evt_conn_1", Type: "compute.connection.created.v1", SchemaVersion: 1, OccurredAt: time.Now().UTC()}},
+	})
+	if err != nil {
+		t.Fatalf("append connection: %v", err)
+	}
+
+	workspaceIDs, err := log.ListWorkspaceIDs(ctx, EventFilter{StreamTypes: []string{"run"}, EventTypes: []string{"compute.run.requested.v1"}})
+	if err != nil {
+		t.Fatalf("list workspace IDs: %v", err)
+	}
+	if got, want := strings.Join(workspaceIDs, ","), "staging,staging-experiments"; got != want {
+		t.Fatalf("workspace IDs = %q, want %q", got, want)
 	}
 }
 

@@ -39,9 +39,9 @@ go run ./cmd/mercator connection authorize \
 ```
 
 Mercator probes the registered Docker endpoint and advertises its native
-`linux/amd64` or `linux/arm64` platform. Set `MERCATOR_DOCKER_ARCH` only when
-you deliberately want an emulated platform, and make the workload platform and
-image digest match that override.
+`linux/amd64` or `linux/arm64` platform. To advertise an emulated platform for
+one endpoint, set that connection's `arch` config and make the workload
+platform and image digest match it.
 
 Remote endpoints and alternate binaries belong to the connection config:
 
@@ -50,7 +50,8 @@ go run ./cmd/mercator connection create \
   --connection-id conn_docker_gpu \
   --adapter-type docker \
   --config host=ssh://operator@gpu-host \
-  --config bin=/usr/local/bin/docker
+  --config bin=/usr/local/bin/docker \
+  --config arch=amd64
 ```
 
 ## Workload Requirements

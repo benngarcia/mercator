@@ -95,6 +95,7 @@ func (l *SQLiteEventLog) init(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_stream ON events(workspace_id, stream_type, stream_id, stream_version)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_global ON events(global_position)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_workspace_ids ON events(stream_type, event_type, workspace_id)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := l.db.ExecContext(ctx, stmt); err != nil {
@@ -292,6 +293,52 @@ func (l *SQLiteEventLog) ReadAll(ctx context.Context, after GlobalPosition, limi
 	}
 	defer rows.Close()
 	return scanEvents(rows)
+}
+
+// ListWorkspaceIDs returns the durable partitions that match the event index.
+// Unlike ReadAll, it never walks historical rows: SQLite answers from the
+// stream-type/event-type/workspace index, so background control loops pay for
+// live partitions rather than total event history.
+func (l *SQLiteEventLog) ListWorkspaceIDs(ctx context.Context, filter EventFilter) ([]string, error) {
+	where := make([]string, 0, 3)
+	args := make([]any, 0, 1+len(filter.StreamTypes)+len(filter.EventTypes))
+	if filter.WorkspaceID != "" {
+		where = append(where, "workspace_id = ?")
+		args = append(args, filter.WorkspaceID)
+	}
+	if len(filter.StreamTypes) > 0 {
+		where = append(where, "stream_type IN ("+placeholders(len(filter.StreamTypes))+")")
+		for _, value := range filter.StreamTypes {
+			args = append(args, value)
+		}
+	}
+	if len(filter.EventTypes) > 0 {
+		where = append(where, "event_type IN ("+placeholders(len(filter.EventTypes))+")")
+		for _, value := range filter.EventTypes {
+			args = append(args, value)
+		}
+	}
+	query := "SELECT DISTINCT workspace_id FROM events"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	rows, err := l.db.QueryContext(ctx, query+" ORDER BY workspace_id ASC", args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var workspaceIDs []string
+	for rows.Next() {
+		var workspaceID string
+		if err := rows.Scan(&workspaceID); err != nil {
+			return nil, err
+		}
+		workspaceIDs = append(workspaceIDs, workspaceID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return workspaceIDs, nil
 }
 
 func (l *SQLiteEventLog) Subscribe(ctx context.Context, req SubscriptionRequest) (<-chan Delivery, error) {

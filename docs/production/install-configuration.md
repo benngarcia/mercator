@@ -50,7 +50,6 @@ server path.
 | `MERCATOR_ADDR` | `127.0.0.1:8080` | HTTP listen address. |
 | `MERCATOR_SQLITE_DSN` | `file:/data/mercator.db` | SQLite event-log DSN. |
 | `MERCATOR_API_TOKEN` | generated at startup | Bearer token for `/v1/*`. Set explicitly for operations. |
-| `MERCATOR_DOCKER_ARCH` | Docker host architecture, or `amd64` if the host probe fails | Optional architecture override for an intentionally emulated Docker offer. |
 | `MERCATOR_SECRET_KEY` | none | Master key for stored connection credentials and workload reporting (32+ decoded bytes, hex or base64). A present malformed value stops startup. |
 | `MERCATOR_API_URL` | none | CLI base URL; required for CLI mode unless `--api-url` is provided. |
 | `MERCATOR_OIDC_ISSUER` | none | OIDC issuer URL for human console login. Setting any `MERCATOR_OIDC_*` variable requires the full set; see [authentication-workspaces.md](authentication-workspaces.md). |
