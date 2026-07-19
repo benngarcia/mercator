@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/benngarcia/mercator/internal/connection"
-	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
@@ -24,35 +23,24 @@ func (s *Server) CreateConnection(ctx context.Context, request CreateConnectionR
 		return CreateConnection400JSONResponse(workspaceErr.Response), nil
 	}
 
-	cred := body.Credential
-	// For mercator-source connections with a provided secret, seal the secret
-	// out-of-band and store the ciphertext in the secret store. The plaintext
-	// never enters the event log or the response.
-	if cred.Source == credential.SourceMercator && body.Secret != "" {
-		if s.credentials == nil || s.secretStore == nil {
-			return CreateConnection400JSONResponse(apiError("SECRET_STORE_DISABLED", "Secret store is not configured; cannot accept mercator credentials.")), nil
-		}
-		blob, ok := s.credentials.Seal([]byte(body.Secret))
-		if !ok {
-			return CreateConnection400JSONResponse(apiError("SECRET_STORE_DISABLED", "Master key is not set; cannot seal mercator credentials.")), nil
-		}
-		if err := s.secretStore.Put(ctx, workspaceID, body.ConnectionId, blob); err != nil {
-			return CreateConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "SECRET_STORE_FAILED", err)), nil
-		}
-		cred.Ref = body.ConnectionId
-	}
-
 	record, err := s.conns.Create(ctx, connection.CreateRequest{
 		WorkspaceID:  workspaceID,
 		ConnectionID: body.ConnectionId,
 		AdapterType:  body.AdapterType,
 		Config:       body.Config,
-		Credential:   cred,
+		Credential:   body.Credential,
+		Secret:       []byte(body.Secret),
 		Actor:        requestActor(ctx),
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
 			return CreateConnection409JSONResponse(apiError("IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")), nil
+		}
+		if errors.Is(err, connection.ErrSecretStore) {
+			return CreateConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "SECRET_STORE_FAILED", err)), nil
+		}
+		if errors.Is(err, connection.ErrSecretStoreDisabled) {
+			return CreateConnection400JSONResponse(apiError("SECRET_STORE_DISABLED", err.Error())), nil
 		}
 		return CreateConnection400JSONResponse(apiError(errorCode(err, "CREATE_CONNECTION_FAILED"), errorMessage(err))), nil
 	}
@@ -95,9 +83,8 @@ func (s *Server) AuthorizeConnection(ctx context.Context, request AuthorizeConne
 	return AuthorizeConnection200JSONResponse{Connection: record}, nil
 }
 
-// deleteConnection appends the deleted fact and removes the sealed credential
-// blob. The event stream itself is retained (append-only log); the id cannot
-// be reused — recreating means a fresh connection id.
+// DeleteConnection appends the deleted fact. The event stream itself is
+// retained; the connection service removes sealed credentials atomically.
 func (s *Server) DeleteConnection(ctx context.Context, request DeleteConnectionRequestObject) (DeleteConnectionResponseObject, error) {
 	if s.conns == nil {
 		return DeleteConnection501JSONResponse(apiError("CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")), nil
@@ -118,14 +105,6 @@ func (s *Server) DeleteConnection(ctx context.Context, request DeleteConnectionR
 			return DeleteConnection404JSONResponse(apiError("CONNECTION_NOT_FOUND", "Connection not found.")), nil
 		}
 		return DeleteConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "CONNECTION_DELETE_FAILED", err)), nil
-	}
-	// The blob is unreachable once the record is deleted; failing to remove it
-	// must not resurrect the connection. Retrying the (idempotent) delete
-	// re-attempts the removal.
-	if s.secretStore != nil {
-		if err := s.secretStore.Delete(ctx, workspaceID, request.ConnectionId); err != nil {
-			return DeleteConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "SECRET_STORE_FAILED", err)), nil
-		}
 	}
 	return DeleteConnection200JSONResponse{Deleted: true}, nil
 }

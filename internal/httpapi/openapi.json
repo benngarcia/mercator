@@ -2581,16 +2581,42 @@
           }
         }
       },
+      "ConnectionFailure": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "adapter_type",
+          "message"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "adapter_type": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "OfferListResponse": {
         "type": "object",
         "required": [
-          "offers"
+          "offers",
+          "failures"
         ],
         "properties": {
           "offers": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/OfferSnapshot"
+            }
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionFailure"
             }
           }
         }
@@ -3772,8 +3798,7 @@
           "id",
           "workspace_id",
           "adapter_type",
-          "authorized",
-          "credential"
+          "authorized"
         ],
         "properties": {
           "id": {

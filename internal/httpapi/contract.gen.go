@@ -243,6 +243,13 @@ type CollectionReport struct {
 	ExcludedConnections  []string `json:"excluded_connections,omitempty"`
 }
 
+// ConnectionFailure defines model for ConnectionFailure.
+type ConnectionFailure struct {
+	AdapterType  string `json:"adapter_type"`
+	ConnectionId string `json:"connection_id"`
+	Message      string `json:"message"`
+}
+
 // ConnectionListResponse defines model for ConnectionListResponse.
 type ConnectionListResponse struct {
 	Connections []ConnectionRecord `json:"connections"`
@@ -439,7 +446,8 @@ type ObservabilityCapabilities struct {
 
 // OfferListResponse defines model for OfferListResponse.
 type OfferListResponse struct {
-	Offers []OfferSnapshot `json:"offers"`
+	Failures []ConnectionFailure `json:"failures"`
+	Offers   []OfferSnapshot     `json:"offers"`
 }
 
 // OfferSnapshot defines model for OfferSnapshot.

@@ -49,6 +49,38 @@ func TestCreateRunIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestListRunsDoesNotReadEveryStream(t *testing.T) {
+	ctx := context.Background()
+	log := &streamReadCountingLog{EventLog: openOrchestratorLog(t)}
+	orch := New(log, scheduler.New(), fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	))
+	for _, runID := range []string{"run_1", "run_2"} {
+		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
+			t.Fatalf("create %s: %v", runID, err)
+		}
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("advance run_1: %v", err)
+	}
+	log.streamReads = 0
+
+	records, err := orch.ListRuns(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("listed %d runs, want 2", len(records))
+	}
+	if records[0].ID != "run_1" || !records[0].Closed || records[0].Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("run_1 projection = %+v, want closed successful run", records[0])
+	}
+	if log.streamReads != 0 {
+		t.Fatalf("list read %d individual streams, want 0", log.streamReads)
+	}
+}
+
 func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
 	ctx := context.Background()
 	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
@@ -379,8 +411,8 @@ func TestCancelRunResumesAfterCancelAcceptedEvents(t *testing.T) {
 		t.Fatalf("seed adapter cancel: %v", err)
 	}
 	if err := orch.appendEvents(ctx, "ws_1", runID, uint64(len(events)), "cancel:accepted", []eventlog.NewEvent{
-		mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, time.Now()),
-		mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, time.Now()),
+		mustEvent(runID, "cancel_requested", EventCancelRequested, cancelRequestedData{LaunchKey: state.launchIntent.LaunchKey}, time.Now()),
+		mustEvent(runID, "cancel_accepted", EventCancelAccepted, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, time.Now()),
 	}); err != nil {
 		t.Fatalf("seed cancel events: %v", err)
 	}
@@ -780,9 +812,19 @@ func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchReq
 	return c.Adapter.Launch(ctx, req)
 }
 
-func newTestOrchestrator(t *testing.T, ad adapter.Adapter) *Orchestrator {
+func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {
 	t.Helper()
 	return New(openOrchestratorLog(t), scheduler.New(), ad)
+}
+
+type streamReadCountingLog struct {
+	eventlog.EventLog
+	streamReads int
+}
+
+func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
+	l.streamReads++
+	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
 }
 
 func openOrchestratorLog(t *testing.T) *eventlog.SQLiteEventLog {
@@ -991,17 +1033,26 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 	orch := New(log, scheduler.New(), ad)
 	createRun(t, ctx, orch)
 
+	fillerData, err := json.Marshal(adapterErrorData{
+		Code:      "TEST_PAGINATION_FILLER",
+		Message:   "Pagination filler.",
+		Retryable: false,
+		LaunchKey: "launch_pagination_filler",
+	})
+	if err != nil {
+		t.Fatalf("marshal pagination filler: %v", err)
+	}
 	version := uint64(1) // run_requested
 	for batch := 0; batch < 11; batch++ {
 		var filler []eventlog.NewEvent
 		for i := 0; i < 100; i++ {
 			filler = append(filler, eventlog.NewEvent{
 				ID:            fmt.Sprintf("evt_run_1_filler_%d_%d", batch, i),
-				Type:          "test.filler.v1",
+				Type:          EventLaunchFailed,
 				SchemaVersion: 1,
 				OccurredAt:    time.Now().UTC(),
 				Visibility:    eventlog.VisibilityPublic,
-				Data:          json.RawMessage(`{}`),
+				Data:          fillerData,
 			})
 		}
 		if _, err := log.Append(ctx, eventlog.AppendRequest{

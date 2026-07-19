@@ -544,8 +544,14 @@ export interface components {
             /** @description Terminal exit code; when present the broker records the authoritative outcome and requests cleanup. */
             exit_code?: number;
         };
+        ConnectionFailure: {
+            connection_id: string;
+            adapter_type: string;
+            message: string;
+        };
         OfferListResponse: {
             offers: components["schemas"]["OfferSnapshot"][];
+            failures: components["schemas"]["ConnectionFailure"][];
         };
         ReplaySinkRequest: {
             from_exclusive?: number;
@@ -886,7 +892,7 @@ export interface components {
             config?: {
                 [key: string]: string;
             };
-            credential: components["schemas"]["Credential"];
+            credential?: components["schemas"]["Credential"];
             created_by?: string;
             authorized_by?: string;
         };

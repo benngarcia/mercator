@@ -10,7 +10,7 @@ short-lived, run-scoped bearer token derived from the master key.
 
 | Variable | Required | Description |
 |---|---|---|
-| `MERCATOR_SECRET_KEY` | Yes (for reporting) | Master key, hex- or base64-encoded. Used to derive the report-token signing key. Also the input for the HKDF-derived subkey that encrypts stored credentials (the raw key itself never encrypts anything). |
+| `MERCATOR_SECRET_KEY` | Yes (for reporting) | Master key of at least 32 decoded bytes, hex- or base64-encoded. Used to derive the report-token signing key. Also the input for the HKDF-derived subkey that encrypts stored credentials (the raw key itself never encrypts anything). A present malformed or short value stops startup. |
 | `MERCATOR_PUBLIC_URL` | Yes (for reporting) | The publicly reachable base URL of this Mercator instance (e.g. `https://mercator.example.com`). Injected into containers as the report endpoint base. Both this and `MERCATOR_SECRET_KEY` must be set for reporting to be enabled. |
 
 Reporting is **disabled** unless both `MERCATOR_SECRET_KEY` and

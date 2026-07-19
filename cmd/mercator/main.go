@@ -3,10 +3,9 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	stdlog "log"
 	"net"
@@ -29,11 +28,13 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/janitor"
+	"github.com/benngarcia/mercator/internal/keymaterial"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
+	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
 )
@@ -57,16 +58,34 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	addr := envValue(env, "MERCATOR_ADDR", "127.0.0.1:8080")
 	apiToken, generatedToken, err := apiTokenFromEnv(env)
 	if err != nil {
-		stdlog.Fatalf("load api token: %v", err)
+		stdlog.Printf("load api token: %v", err)
+		return 1
 	}
 	if generatedToken {
 		stdlog.Printf("generated MERCATOR_API_TOKEN for this server process: %s", apiToken)
+	}
+	// Human login: fail-closed OIDC config. Absent config means no login
+	// surface (token-only, exactly as before); partial config refuses to boot;
+	// full config must reach the issuer at startup.
+	webauthCfg, err := webauth.FromEnv(env)
+	if err != nil {
+		stdlog.Printf("configure OIDC login: %v", err)
+		return 1
 	}
 	// serve always runs the registry-backed Docker broker path. Mirror
 	// HandlerForSQLite's internal construction but over the SHARED event log,
 	// connection.Service, and Broker (the Broker is the adapter), plus the
 	// secret store, credential resolver, and verifier.
-	deps := buildServerDeps(env)
+	deps, err := buildServerDeps(env)
+	if err != nil {
+		stdlog.Printf("configure server: %v", err)
+		return 1
+	}
+	defer func() {
+		if err := deps.close(); err != nil {
+			stdlog.Printf("close event log: %v", err)
+		}
+	}()
 	sched := scheduler.New()
 	orchOpts := []orchestrator.Option{}
 	if deps.signer != nil && deps.signer.Enabled() && deps.publicURL != "" {
@@ -79,25 +98,17 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	imageResolver := ociresolver.NewStaticResolver(nil)
 	serverOpts := []httpapi.Option{
 		httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
-		httpapi.WithSecretStore(deps.secretStore),
-		httpapi.WithCredentialResolver(deps.resolver),
 		httpapi.WithVerifier(deps.broker),
 		httpapi.WithAdapterManifests(deps.broker.Manifests),
 	}
 	if deps.signer != nil && deps.signer.Enabled() {
 		serverOpts = append(serverOpts, httpapi.WithReportSigner(deps.signer))
 	}
-	// Human login: fail-closed OIDC config. Absent config means no login
-	// surface (token-only, exactly as before); partial config refuses to boot;
-	// full config must reach the issuer at startup.
-	webauthCfg, err := webauth.FromEnv(env)
-	if err != nil {
-		stdlog.Fatalf("configure OIDC login: %v", err)
-	}
 	if webauthCfg.Enabled() {
 		authenticator, err := webauth.New(ctx, webauthCfg)
 		if err != nil {
-			stdlog.Fatalf("initialize OIDC login: %v", err)
+			stdlog.Printf("initialize OIDC login: %v", err)
+			return 1
 		}
 		serverOpts = append(serverOpts, httpapi.WithWebAuth(authenticator))
 		stdlog.Printf("OIDC login enabled: issuer=%s", webauthCfg.Issuer)
@@ -105,19 +116,12 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
 		Scheduler:    sched,
-		Adapter:      deps.broker,
+		Offers:       deps.broker,
 		Workloads:    workload.New(deps.log),
 		Sinks:        sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  deps.conns,
 		Resolver:     imageResolver,
 	}, serverOpts...)
-	closeFn := deps.close
-	defer func() {
-		if err := closeFn(); err != nil {
-			stdlog.Printf("close event log: %v", err)
-		}
-	}()
-
 	// Background reconciliation: each tick advances every open run's lifecycle
 	// (observe container exits, record terminal outcomes, request and confirm
 	// cleanup, close the run) and then reclaims orphaned external objects, so
@@ -225,15 +229,12 @@ func warnIfNonLoopback(addr string) {
 // serverDeps holds the shared backing services for the docker server path. The
 // Broker's connection registry and the HTTP server's connection.Service are the
 // SAME service over the SAME event log, so offers served by the Broker and
-// connections listed by the server stay consistent. The secret store is a
-// SECOND *sql.DB opened on the same DSN (the event log's *sql.DB is private).
+// connections listed by the server stay consistent. Connection events and
+// sealed credentials share the event log's SQLite transaction boundary.
 type serverDeps struct {
-	broker      *broker.Broker
-	conns       *connection.Service
-	secretStore credential.SecretStore
-	resolver    *credential.Resolver
-	log         eventlog.EventLog
-	secretDB    *sql.DB
+	broker *broker.Broker
+	conns  *connection.Service
+	log    eventlog.EventLog
 	// signer is non-nil when MERCATOR_SECRET_KEY is set. It signs per-run
 	// reporting tokens using a domain-separated subkey derived from the master key.
 	signer *reporting.Signer
@@ -256,51 +257,41 @@ type serverDeps struct {
 // is future work.
 //
 // serve uses the Docker host adapter; Docker is a hard requirement.
-func buildServerDeps(values map[string]string) serverDeps {
+func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	ctx := context.Background()
 	dsn := envValue(values, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
 
-	log, err := eventlog.OpenSQLite(ctx, dsn)
+	storage, err := sqlitestore.Open(ctx, dsn)
 	if err != nil {
-		stdlog.Fatalf("open event log: %v", err)
+		return serverDeps{}, fmt.Errorf("open sqlite storage: %w", err)
 	}
-	svc := connection.New(log)
+	defer func() {
+		if err != nil {
+			_ = storage.Close()
+		}
+	}()
+	log := storage.EventLog()
+	store := storage.CredentialStore()
 
-	// Second *sql.DB on the same DSN for the secret store; the event log's
-	// *sql.DB is private and not shared. This second *sql.DB must see the same data
-	// as the event log. This works for on-disk DSNs and ?mode=memory&cache=shared, but
-	// a bare ?mode=memory (without shared cache) would give it an isolated, empty DB.
-	secretDB, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		stdlog.Fatalf("open secret store db: %v", err)
-	}
-	// This pool shares the file with the event log's pool: serialize it and
-	// wait out the other writer instead of failing instantly with SQLITE_BUSY.
-	secretDB.SetMaxOpenConns(1)
-	if _, err := secretDB.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
-		stdlog.Fatalf("configure secret store db: %v", err)
-	}
-	store, err := credential.NewSQLiteStore(ctx, secretDB)
-	if err != nil {
-		stdlog.Fatalf("init secret store: %v", err)
-	}
-
-	// Decode master key: try hex then base64; empty env var → nil key.
+	// An absent master key disables stored credentials and reporting. A present
+	// key is configuration and therefore must decode successfully at startup.
 	var masterKey []byte
 	if raw := values["MERCATOR_SECRET_KEY"]; raw != "" {
-		if b, err := hex.DecodeString(raw); err == nil {
-			masterKey = b
-		} else if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
-			masterKey = b
+		masterKey, err = keymaterial.Decode("MERCATOR_SECRET_KEY", raw, 32)
+		if err != nil {
+			return serverDeps{}, err
 		}
 	}
 	// Sealed blobs are keyed by an HKDF subkey of the master key. Re-seal any
 	// pre-HKDF rows; a row no key opens means the configured MERCATOR_SECRET_KEY
 	// is not the key this store was written with — refuse to boot rather than
 	// fail at first credential use.
-	if migrated, err := store.MigrateSealKey(ctx, masterKey); err != nil {
-		stdlog.Fatalf("credential store: %v", err)
-	} else if migrated > 0 {
+	var migrated int
+	migrated, err = store.MigrateSealKey(ctx, masterKey)
+	if err != nil {
+		return serverDeps{}, fmt.Errorf("credential store: %w", err)
+	}
+	if migrated > 0 {
 		stdlog.Printf("credential store: re-sealed %d credential(s) under the derived sealing key", migrated)
 	}
 
@@ -309,6 +300,11 @@ func buildServerDeps(values map[string]string) serverDeps {
 		store,
 		masterKey,
 	)
+	connections, err := storage.Connections(resolver)
+	if err != nil {
+		return serverDeps{}, fmt.Errorf("init connection storage: %w", err)
+	}
+	svc := connection.NewWithCredentials(connections)
 
 	// Build the report-token signer from a domain-separated subkey. The signer
 	// is always constructed (so its Enabled() reflects key presence); the
@@ -320,22 +316,22 @@ func buildServerDeps(values map[string]string) serverDeps {
 	// Build a fresh adapter from each connection's own config: memoizing one
 	// instance would route every docker connection to whichever endpoint was
 	// built first, silently launching containers on the wrong host.
-	factory.Register(dockeradapter.Manifest(), func(config map[string]string, _ string) (adapter.Adapter, error) {
+	factory.Register(dockeradapter.Manifest(), func(config map[string]string, _ string) (adapter.Provider, error) {
 		client := dockeradapter.NewCLIClient(config["bin"])
 		client.Host = config["host"]
 		client.Context = config["context"]
 		return dockeradapter.NewOffering(client, dockerIdentityForConfig(values, config), values["MERCATOR_DOCKER_ARCH"]), nil
 	})
 
-	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (adapter.Adapter, error) {
+	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
 		return runpodadapter.New(secret, config)
 	})
 
-	factory.Register(shadeformadapter.Manifest(), func(config map[string]string, secret string) (adapter.Adapter, error) {
+	factory.Register(shadeformadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
 		return shadeformadapter.New(secret, config)
 	})
 
-	factory.Register(vastadapter.Manifest(), func(config map[string]string, secret string) (adapter.Adapter, error) {
+	factory.Register(vastadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
 		return vastadapter.New(secret, config)
 	})
 
@@ -354,46 +350,36 @@ func buildServerDeps(values map[string]string) serverDeps {
 		"context": values["MERCATOR_DOCKER_CONTEXT"],
 	}
 	for _, ws := range bootstrapWorkspaces(values) {
-		if _, err := svc.Create(ctx, connection.CreateRequest{
+		_, err = svc.Create(ctx, connection.CreateRequest{
 			WorkspaceID:  ws,
 			ConnectionID: id.ConnectionID,
 			AdapterType:  "docker",
 			Config:       cfg,
-		}); err != nil {
+		})
+		if err != nil {
 			if errors.Is(err, eventlog.ErrIdempotencyConflict) {
-				stdlog.Fatalf("register docker connection in %s: the MERCATOR_DOCKER_{BIN,HOST,CONTEXT} config changed since this database registered %q. Connection configs are immutable; set MERCATOR_DOCKER_CONNECTION_ID to a new id for the new endpoint (or point MERCATOR_SQLITE_DSN at a fresh database)", ws, id.ConnectionID)
+				return serverDeps{}, fmt.Errorf("register docker connection in %s: the MERCATOR_DOCKER_{BIN,HOST,CONTEXT} config changed since this database registered %q; connection configs are immutable, so set MERCATOR_DOCKER_CONNECTION_ID to a new id for the new endpoint or point MERCATOR_SQLITE_DSN at a fresh database", ws, id.ConnectionID)
 			}
-			stdlog.Fatalf("register docker connection in %s: %v", ws, err)
+			return serverDeps{}, fmt.Errorf("register docker connection in %s: %w", ws, err)
 		}
-		if err := svc.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
+		err = svc.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
 			WorkspaceID:  ws,
 			ConnectionID: id.ConnectionID,
 			Authorized:   true,
-		}); err != nil {
-			stdlog.Fatalf("authorize docker connection in %s: %v", ws, err)
+		})
+		if err != nil {
+			return serverDeps{}, fmt.Errorf("authorize docker connection in %s: %w", ws, err)
 		}
-	}
-
-	closeFn := func() error {
-		secretErr := secretDB.Close()
-		logErr := log.Close()
-		if logErr != nil {
-			return logErr
-		}
-		return secretErr
 	}
 
 	return serverDeps{
-		broker:      br,
-		conns:       svc,
-		secretStore: store,
-		resolver:    resolver,
-		log:         log,
-		secretDB:    secretDB,
-		signer:      signer,
-		publicURL:   publicURL,
-		close:       closeFn,
-	}
+		broker:    br,
+		conns:     svc,
+		log:       log,
+		signer:    signer,
+		publicURL: publicURL,
+		close:     storage.Close,
+	}, nil
 }
 
 // bootstrapWorkspaces returns the concrete workspace ids under which the

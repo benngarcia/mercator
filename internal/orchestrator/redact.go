@@ -109,7 +109,7 @@ func envKind(value *string) string {
 
 // publicAdapterError maps an adapter failure to a stable public error payload;
 // the raw error text never reaches the public stream.
-func publicAdapterError(err error, launchKey string) map[string]any {
+func publicAdapterError(err error, launchKey string) adapterErrorData {
 	code := "ADAPTER_ERROR"
 	retryable := true
 	switch {
@@ -123,5 +123,5 @@ func publicAdapterError(err error, launchKey string) map[string]any {
 	case errors.Is(err, adapter.ErrRetryableFailure):
 		code = "ADAPTER_RETRYABLE_FAILURE"
 	}
-	return map[string]any{"code": code, "message": "Adapter operation failed.", "retryable": retryable, "launch_key": launchKey}
+	return adapterErrorData{Code: code, Message: "Adapter operation failed.", Retryable: retryable, LaunchKey: launchKey}
 }

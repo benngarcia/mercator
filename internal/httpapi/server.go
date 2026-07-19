@@ -5,8 +5,9 @@ import (
 	"net/http"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
-	"github.com/benngarcia/mercator/internal/credential"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
@@ -20,12 +21,31 @@ type ImageResolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }
 
+type OfferAggregator interface {
+	AggregateOffers(context.Context, adapter.OfferRequest) (broker.OfferAggregation, error)
+}
+
+// singleProviderOffers adapts the fake-mode provider used by HandlerForSQLite
+// to the aggregate contract. A single provider cannot produce connection-level
+// partial failures.
+type singleProviderOffers struct {
+	provider adapter.Provider
+}
+
+func (s singleProviderOffers) AggregateOffers(ctx context.Context, request adapter.OfferRequest) (broker.OfferAggregation, error) {
+	offers, err := s.provider.ListOffers(ctx, request)
+	if offers == nil {
+		offers = []domain.OfferSnapshot{}
+	}
+	return broker.OfferAggregation{Offers: offers, Failures: broker.ConnectionErrors{}}, err
+}
+
 // Deps are the services the server routes to. Orchestrator, Scheduler, and
-// Adapter are required; a nil optional service disables its endpoints.
+// Offers are required; a nil optional service disables its endpoints.
 type Deps struct {
 	Orchestrator *orchestrator.Orchestrator
 	Scheduler    scheduler.Scheduler
-	Adapter      adapter.Adapter
+	Offers       OfferAggregator
 	Workloads    *workload.Service
 	Sinks        *sinkspkg.Manager
 	Connections  *connection.Service
@@ -36,13 +56,11 @@ type Server struct {
 	mux          *http.ServeMux
 	orch         *orchestrator.Orchestrator
 	scheduler    scheduler.Scheduler
-	adapter      adapter.Adapter
+	offers       OfferAggregator
 	workloads    *workload.Service
 	sinks        *sinkspkg.Manager
 	conns        *connection.Service
 	resolver     ImageResolver
-	secretStore  credential.SecretStore
-	credentials  *credential.Resolver
 	verifier     connectionVerifier
 	security     securityConfig
 	reportSigner *reporting.Signer
@@ -79,18 +97,6 @@ func WithBearerAuth(token string, workspaces []string) Option {
 	}
 }
 
-// WithSecretStore wires the SecretStore the server uses to persist sealed
-// connection credentials.
-func WithSecretStore(store credential.SecretStore) Option {
-	return func(s *Server) { s.secretStore = store }
-}
-
-// WithCredentialResolver wires the credential.Resolver the server uses to turn
-// a {source, ref} credential into a plaintext secret.
-func WithCredentialResolver(resolver *credential.Resolver) Option {
-	return func(s *Server) { s.credentials = resolver }
-}
-
 // WithVerifier wires the connection verifier (the Broker) the server uses to
 // validate a connection during the authorize flow.
 func WithVerifier(verifier connectionVerifier) Option {
@@ -121,7 +127,7 @@ func New(deps Deps, options ...Option) http.Handler {
 		mux:       http.NewServeMux(),
 		orch:      deps.Orchestrator,
 		scheduler: deps.Scheduler,
-		adapter:   deps.Adapter,
+		offers:    deps.Offers,
 		workloads: deps.Workloads,
 		sinks:     deps.Sinks,
 		conns:     deps.Connections,

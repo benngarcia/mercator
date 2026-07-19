@@ -205,7 +205,7 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	handler := New(Deps{
 		Orchestrator: orchestrator.New(log, sched, ad),
 		Scheduler:    sched,
-		Adapter:      ad,
+		Offers:       singleProviderOffers{provider: ad},
 		Workloads:    workload.New(log),
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
 		Connections:  connection.New(log),

@@ -366,4 +366,4 @@ func phaseFromInstance(i instance) adapter.ExternalPhase {
 	}
 }
 
-var _ adapter.Adapter = (*Adapter)(nil)
+var _ adapter.Provider = (*Adapter)(nil)

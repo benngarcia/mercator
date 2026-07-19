@@ -26,17 +26,20 @@ func (s *Server) PreviewPlacement(ctx context.Context, request PreviewPlacementR
 	if violations := domain.ValidateWorkloadRevision(body.Workload); len(violations) > 0 {
 		return PreviewPlacement400JSONResponse(apiErrorWithDetails(violations[0].Code, violations[0].Message, violations)), nil
 	}
-	offers, err := s.adapter.ListOffers(ctx, adapter.OfferRequest{
+	aggregation, err := s.offers.AggregateOffers(ctx, adapter.OfferRequest{
 		WorkspaceID: workspaceID,
 		Resources:   body.Workload.Spec.Resources,
 	})
 	if err != nil {
 		return PreviewPlacement502JSONResponse(internalAPIError(http.StatusBadGateway, "OFFER_QUERY_FAILED", err)), nil
 	}
+	if err := aggregation.Failures.OrNil(); err != nil {
+		return PreviewPlacement502JSONResponse(internalAPIError(http.StatusBadGateway, "OFFER_QUERY_FAILED", err)), nil
+	}
 	decision, err := s.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
 		RunID:        body.RunId,
 		Workload:     body.Workload,
-		Offers:       offers,
+		Offers:       aggregation.Offers,
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  time.Now().UTC(),
 	})

@@ -3,14 +3,65 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/connection"
 )
+
+func TestBuildServerDepsValidatesSecretKey(t *testing.T) {
+	validBase64 := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	tests := []struct {
+		name    string
+		key     string
+		wantErr string
+	}{
+		{name: "absent"},
+		{name: "malformed", key: "definitely-not-a-key", wantErr: "MERCATOR_SECRET_KEY must be hex or base64"},
+		{name: "too short", key: "abcd", wantErr: "MERCATOR_SECRET_KEY must decode to at least 32 bytes"},
+		{name: "hex", key: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"},
+		{name: "base64", key: validBase64},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deps, err := buildServerDeps(map[string]string{
+				"MERCATOR_DOCKER_ARCH": "amd64",
+				"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+				"MERCATOR_SECRET_KEY":  test.key,
+			})
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("buildServerDeps() error = %v, want containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildServerDeps(): %v", err)
+			}
+			t.Cleanup(func() {
+				if err := deps.close(); err != nil {
+					t.Fatalf("close dependencies: %v", err)
+				}
+			})
+		})
+	}
+}
+
+func mustBuildServerDeps(t *testing.T, values map[string]string) serverDeps {
+	t.Helper()
+	deps, err := buildServerDeps(values)
+	if err != nil {
+		t.Fatalf("buildServerDeps(): %v", err)
+	}
+	return deps
+}
 
 // TestBuildServerDepsReportingSigner verifies that buildServerDeps populates the
 // signer and publicURL fields correctly.
@@ -19,7 +70,7 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 	hexKey := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
 
 	t.Run("with_key_and_public_url_signer_enabled", func(t *testing.T) {
-		deps := buildServerDeps(map[string]string{
+		deps := mustBuildServerDeps(t, map[string]string{
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			"MERCATOR_SECRET_KEY":  hexKey,
@@ -38,7 +89,7 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 	})
 
 	t.Run("without_public_url_signer_still_built_but_reporting_off", func(t *testing.T) {
-		deps := buildServerDeps(map[string]string{
+		deps := mustBuildServerDeps(t, map[string]string{
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			"MERCATOR_SECRET_KEY":  hexKey,
@@ -58,7 +109,7 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 	})
 
 	t.Run("without_secret_key_signer_disabled", func(t *testing.T) {
-		deps := buildServerDeps(map[string]string{
+		deps := mustBuildServerDeps(t, map[string]string{
 			"MERCATOR_DOCKER_ARCH": "amd64",
 			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 			// No MERCATOR_SECRET_KEY, no MERCATOR_PUBLIC_URL
@@ -97,8 +148,44 @@ func TestRunDelegatesJSONCLICommands(t *testing.T) {
 	}
 }
 
+func TestRunClosesServerDependenciesWhenOIDCDiscoveryFails(t *testing.T) {
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "discovery unavailable", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(issuer.Close)
+
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	code := run(context.Background(), []string{"mercator", "serve"}, map[string]string{
+		"MERCATOR_API_TOKEN":           "operator-token",
+		"MERCATOR_DOCKER_ARCH":         "amd64",
+		"MERCATOR_SQLITE_DSN":          dsn,
+		"MERCATOR_OIDC_ISSUER":         issuer.URL,
+		"MERCATOR_OIDC_CLIENT_ID":      "client-id",
+		"MERCATOR_OIDC_CLIENT_SECRET":  "client-secret",
+		"MERCATOR_OIDC_ALLOWED_DOMAIN": "example.com",
+		"MERCATOR_SESSION_KEY":         "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+		"MERCATOR_PUBLIC_URL":          "https://mercator.example.com",
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 1 {
+		t.Fatalf("run() = %d, want 1", code)
+	}
+
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open database after run: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	var tables int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table'`).Scan(&tables); err != nil {
+		t.Fatalf("inspect database after run: %v", err)
+	}
+	if tables != 0 {
+		t.Fatalf("database retained %d tables after run returned; server dependencies are still open", tables)
+	}
+}
+
 func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
-	deps := buildServerDeps(map[string]string{
+	deps := mustBuildServerDeps(t, map[string]string{
 		"MERCATOR_DOCKER_ARCH": "amd64",
 		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 	})
@@ -136,7 +223,7 @@ func TestBrokerServesRegisteredDockerConnection(t *testing.T) {
 // advertise its own offer identity (and thus route launches to its own
 // endpoint), not relabel the first connection's.
 func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
-	deps := buildServerDeps(map[string]string{
+	deps := mustBuildServerDeps(t, map[string]string{
 		"MERCATOR_DOCKER_ARCH": "amd64",
 		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
 	})
