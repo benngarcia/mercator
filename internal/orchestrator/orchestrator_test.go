@@ -49,6 +49,38 @@ func TestCreateRunIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestListRunsDoesNotReadEveryStream(t *testing.T) {
+	ctx := context.Background()
+	log := &streamReadCountingLog{EventLog: openOrchestratorLog(t)}
+	orch := New(log, scheduler.New(), fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
+	))
+	for _, runID := range []string{"run_1", "run_2"} {
+		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
+			t.Fatalf("create %s: %v", runID, err)
+		}
+	}
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("advance run_1: %v", err)
+	}
+	log.streamReads = 0
+
+	records, err := orch.ListRuns(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("listed %d runs, want 2", len(records))
+	}
+	if records[0].ID != "run_1" || !records[0].Closed || records[0].Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("run_1 projection = %+v, want closed successful run", records[0])
+	}
+	if log.streamReads != 0 {
+		t.Fatalf("list read %d individual streams, want 0", log.streamReads)
+	}
+}
+
 func TestCreateRunPublicEventRedactsEnvironmentBindings(t *testing.T) {
 	ctx := context.Background()
 	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
@@ -783,6 +815,16 @@ func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchReq
 func newTestOrchestrator(t *testing.T, ad adapter.Adapter) *Orchestrator {
 	t.Helper()
 	return New(openOrchestratorLog(t), scheduler.New(), ad)
+}
+
+type streamReadCountingLog struct {
+	eventlog.EventLog
+	streamReads int
+}
+
+func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
+	l.streamReads++
+	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
 }
 
 func openOrchestratorLog(t *testing.T) *eventlog.SQLiteEventLog {

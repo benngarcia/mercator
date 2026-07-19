@@ -378,20 +378,8 @@ func (o *Orchestrator) stepCancel(ctx context.Context, workspaceID, runID string
 }
 
 func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID string) ([]eventlog.StoredEvent, error) {
-	const page = 1000
-	var events []eventlog.StoredEvent
-	var after uint64
-	for {
-		batch, err := o.log.ReadStream(ctx, runStream(workspaceID, runID), after, page)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, batch...)
-		if len(batch) < page {
-			return events, nil
-		}
-		after = batch[len(batch)-1].StreamVersion
-	}
+	history, err := eventlog.ReadFullStream(ctx, o.log, runStream(workspaceID, runID))
+	return history.Events, err
 }
 
 // streamVersion is the optimistic-concurrency expectation for the next append:
@@ -420,33 +408,29 @@ func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (d
 }
 
 func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
-	// Paginate the run_requested index so busy workspaces don't silently
-	// truncate at one read page.
-	const page = 1000
-	var events []eventlog.StoredEvent
-	var after eventlog.GlobalPosition
-	for {
-		batch, err := o.log.ReadAll(ctx, after, page, eventlog.EventFilter{
-			WorkspaceID: workspaceID,
-			StreamTypes: []string{"run"},
-			EventTypes:  []string{EventRunRequested},
-		})
+	states := make(map[string]*runState)
+	for event, err := range eventlog.ScanAll(ctx, o.log, eventlog.EventFilter{
+		WorkspaceID: workspaceID,
+		StreamTypes: []string{"run"},
+	}) {
 		if err != nil {
 			return nil, err
 		}
-		events = append(events, batch...)
-		if len(batch) < page {
-			break
+		state := states[event.StreamID]
+		if state == nil {
+			state = &runState{}
+			states[event.StreamID] = state
 		}
-		after = batch[len(batch)-1].GlobalPosition
+		if err := applyStoredEvent(state, event); err != nil {
+			return nil, err
+		}
 	}
-	records := make([]domain.RunRecord, 0, len(events))
-	for _, event := range events {
-		record, err := o.GetRun(ctx, workspaceID, event.StreamID)
-		if err != nil {
+	records := make([]domain.RunRecord, 0, len(states))
+	for runID, state := range states {
+		if err := state.validate(); err != nil {
 			return nil, err
 		}
-		records = append(records, record)
+		records = append(records, runRecordFromState(workspaceID, runID, *state))
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
 	return records, nil
@@ -497,31 +481,22 @@ func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context, workspaceID string) 
 // a workspace whose history is all closed runs costs one filtered index scan
 // and zero stream reads per tick.
 func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) ([]string, error) {
-	const page = 1000
 	var requested []string
 	closed := map[string]bool{}
-	var after eventlog.GlobalPosition
-	for {
-		batch, err := o.log.ReadAll(ctx, after, page, eventlog.EventFilter{
-			WorkspaceID: workspaceID,
-			StreamTypes: []string{"run"},
-			EventTypes:  []string{EventRunRequested, EventRunClosed},
-		})
+	for event, err := range eventlog.ScanAll(ctx, o.log, eventlog.EventFilter{
+		WorkspaceID: workspaceID,
+		StreamTypes: []string{"run"},
+		EventTypes:  []string{EventRunRequested, EventRunClosed},
+	}) {
 		if err != nil {
 			return nil, err
 		}
-		for _, event := range batch {
-			switch event.Type {
-			case EventRunRequested:
-				requested = append(requested, event.StreamID)
-			case EventRunClosed:
-				closed[event.StreamID] = true
-			}
+		switch event.Type {
+		case EventRunRequested:
+			requested = append(requested, event.StreamID)
+		case EventRunClosed:
+			closed[event.StreamID] = true
 		}
-		if len(batch) < page {
-			break
-		}
-		after = batch[len(batch)-1].GlobalPosition
 	}
 	var open []string
 	for _, runID := range requested {
@@ -910,16 +885,23 @@ func reduceRun(events []eventlog.StoredEvent) (runState, error) {
 			return runState{}, err
 		}
 	}
-	if state.requested == nil {
-		return runState{}, fmt.Errorf("orchestrator: run requested event not found")
-	}
-	if state.launchIntent == nil && state.attempt != nil {
-		return runState{}, fmt.Errorf("orchestrator: attempt exists without launch intent")
-	}
-	if state.closed && !state.outcomeRecorded {
-		return runState{}, fmt.Errorf("orchestrator: run closed without a recorded outcome")
+	if err := state.validate(); err != nil {
+		return runState{}, err
 	}
 	return state, nil
+}
+
+func (state runState) validate() error {
+	if state.requested == nil {
+		return fmt.Errorf("orchestrator: run requested event not found")
+	}
+	if state.launchIntent == nil && state.attempt != nil {
+		return fmt.Errorf("orchestrator: attempt exists without launch intent")
+	}
+	if state.closed && !state.outcomeRecorded {
+		return fmt.Errorf("orchestrator: run closed without a recorded outcome")
+	}
+	return nil
 }
 
 func runRecordFromState(workspaceID, runID string, state runState) domain.RunRecord {
