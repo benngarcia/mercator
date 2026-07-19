@@ -315,7 +315,7 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 		client := dockeradapter.NewCLIClient(config["bin"])
 		client.Host = config["host"]
 		client.Context = config["context"]
-		return dockeradapter.NewOffering(client, dockerIdentityForConfig(config), values["MERCATOR_DOCKER_ARCH"]), nil
+		return dockeradapter.NewOffering(client, dockerIdentityForConfig(config), config["arch"]), nil
 	})
 
 	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {

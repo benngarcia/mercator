@@ -13,6 +13,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/connection"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 func TestBuildServerDepsValidatesSecretKey(t *testing.T) {
@@ -32,9 +33,8 @@ func TestBuildServerDepsValidatesSecretKey(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			deps, err := buildServerDeps(map[string]string{
-				"MERCATOR_DOCKER_ARCH": "amd64",
-				"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
-				"MERCATOR_SECRET_KEY":  test.key,
+				"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
+				"MERCATOR_SECRET_KEY": test.key,
 			})
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
@@ -71,10 +71,9 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("with_key_and_public_url_signer_enabled", func(t *testing.T) {
 		deps := mustBuildServerDeps(t, map[string]string{
-			"MERCATOR_DOCKER_ARCH": "amd64",
-			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
-			"MERCATOR_SECRET_KEY":  hexKey,
-			"MERCATOR_PUBLIC_URL":  "http://127.0.0.1:8080",
+			"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
+			"MERCATOR_SECRET_KEY": hexKey,
+			"MERCATOR_PUBLIC_URL": "http://127.0.0.1:8080",
 		})
 		defer deps.close()
 		if deps.signer == nil {
@@ -90,9 +89,8 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("without_public_url_signer_still_built_but_reporting_off", func(t *testing.T) {
 		deps := mustBuildServerDeps(t, map[string]string{
-			"MERCATOR_DOCKER_ARCH": "amd64",
-			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
-			"MERCATOR_SECRET_KEY":  hexKey,
+			"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
+			"MERCATOR_SECRET_KEY": hexKey,
 			// No MERCATOR_PUBLIC_URL
 		})
 		defer deps.close()
@@ -110,8 +108,7 @@ func TestBuildServerDepsReportingSigner(t *testing.T) {
 
 	t.Run("without_secret_key_signer_disabled", func(t *testing.T) {
 		deps := mustBuildServerDeps(t, map[string]string{
-			"MERCATOR_DOCKER_ARCH": "amd64",
-			"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+			"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
 			// No MERCATOR_SECRET_KEY, no MERCATOR_PUBLIC_URL
 		})
 		defer deps.close()
@@ -157,7 +154,6 @@ func TestRunClosesServerDependenciesWhenOIDCDiscoveryFails(t *testing.T) {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	code := run(context.Background(), []string{"mercator", "serve"}, map[string]string{
 		"MERCATOR_API_TOKEN":           "operator-token",
-		"MERCATOR_DOCKER_ARCH":         "amd64",
 		"MERCATOR_SQLITE_DSN":          dsn,
 		"MERCATOR_OIDC_ISSUER":         issuer.URL,
 		"MERCATOR_OIDC_CLIENT_ID":      "client-id",
@@ -186,8 +182,7 @@ func TestRunClosesServerDependenciesWhenOIDCDiscoveryFails(t *testing.T) {
 
 func TestBrokerStartsWithoutInventingAConnection(t *testing.T) {
 	deps := mustBuildServerDeps(t, map[string]string{
-		"MERCATOR_DOCKER_ARCH": "amd64",
-		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+		"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
 	})
 	defer func() {
 		if err := deps.close(); err != nil {
@@ -214,8 +209,7 @@ func TestBrokerStartsWithoutInventingAConnection(t *testing.T) {
 
 func TestBrokerServesConnectionsCreatedThroughTheRegistry(t *testing.T) {
 	deps := mustBuildServerDeps(t, map[string]string{
-		"MERCATOR_DOCKER_ARCH": "amd64",
-		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+		"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
 	})
 	defer func() {
 		if err := deps.close(); err != nil {
@@ -254,8 +248,7 @@ func TestBrokerServesConnectionsCreatedThroughTheRegistry(t *testing.T) {
 // endpoint), not relabel the first connection's.
 func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 	deps := mustBuildServerDeps(t, map[string]string{
-		"MERCATOR_DOCKER_ARCH": "amd64",
-		"MERCATOR_SQLITE_DSN":  "file:" + t.Name() + "?mode=memory&cache=shared",
+		"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
 	})
 	defer func() {
 		if err := deps.close(); err != nil {
@@ -267,6 +260,7 @@ func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 		WorkspaceID:  "ws_1",
 		ConnectionID: "conn_docker_loopback",
 		AdapterType:  "docker",
+		Config:       map[string]string{"arch": "arm64"},
 	}); err != nil {
 		t.Fatalf("create local docker connection: %v", err)
 	}
@@ -282,7 +276,7 @@ func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 		WorkspaceID:  "ws_1",
 		ConnectionID: "conn_docker_remote",
 		AdapterType:  "docker",
-		Config:       map[string]string{"host": "tcp://gpu-2:2375"},
+		Config:       map[string]string{"host": "tcp://gpu-2:2375", "arch": "amd64"},
 	}); err != nil {
 		t.Fatalf("create second docker connection: %v", err)
 	}
@@ -301,17 +295,20 @@ func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 	if len(offers) != 2 {
 		t.Fatalf("expected one offer per docker connection, got %+v", offers)
 	}
-	byConn := map[string]string{}
+	byConn := map[string]domain.OfferSnapshot{}
 	for _, offer := range offers {
-		byConn[offer.ConnectionID] = offer.ID
+		byConn[offer.ConnectionID] = offer
 	}
-	if byConn["conn_docker_loopback"] == "" || byConn["conn_docker_remote"] == "" {
+	if byConn["conn_docker_loopback"].ID == "" || byConn["conn_docker_remote"].ID == "" {
 		t.Fatalf("expected offers for both connections, got %+v", byConn)
 	}
-	if byConn["conn_docker_loopback"] == byConn["conn_docker_remote"] {
-		t.Fatalf("both connections advertise the same offer id %q: adapter is shared", byConn["conn_docker_loopback"])
+	if byConn["conn_docker_loopback"].ID == byConn["conn_docker_remote"].ID {
+		t.Fatalf("both connections advertise the same offer id %q: adapter is shared", byConn["conn_docker_loopback"].ID)
 	}
-	if byConn["conn_docker_remote"] != "offer_docker_gpu-2" {
-		t.Fatalf("remote offer id = %q, want offer_docker_gpu-2 derived from its own endpoint", byConn["conn_docker_remote"])
+	if byConn["conn_docker_remote"].ID != "offer_docker_gpu-2" {
+		t.Fatalf("remote offer id = %q, want offer_docker_gpu-2 derived from its own endpoint", byConn["conn_docker_remote"].ID)
+	}
+	if byConn["conn_docker_loopback"].Platform.Architecture != "arm64" || byConn["conn_docker_remote"].Platform.Architecture != "amd64" {
+		t.Fatalf("connection architectures = loopback:%s remote:%s, want arm64 and amd64", byConn["conn_docker_loopback"].Platform.Architecture, byConn["conn_docker_remote"].Platform.Architecture)
 	}
 }

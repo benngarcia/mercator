@@ -35,6 +35,13 @@ func Manifest() adapter.Manifest {
 				Placeholder: "/usr/local/bin/docker",
 				Help:        "Path to the docker CLI on the broker host. Empty resolves from PATH.",
 			},
+			{
+				Name:        "arch",
+				Label:       "Architecture override",
+				Type:        "string",
+				Placeholder: "arm64",
+				Help:        "Optional OCI architecture for this endpoint when Docker deliberately runs emulated workloads. Empty uses Docker's reported architecture.",
+			},
 		},
 		SetupSteps: []adapter.SetupStep{
 			{

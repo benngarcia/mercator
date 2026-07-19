@@ -447,27 +447,15 @@ func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string) ([]doma
 }
 
 // ListRunWorkspaces returns the durable event-log partitions that have owned a
-// run. Workspace ids are data carried by run facts, not server configuration;
-// the background reconciler uses this index so every persisted run continues
-// to converge after restart without an environment allow-list.
+// run. Workspace IDs are data carried by run facts, not server configuration;
+// the background reconciler reads the event log's distinct-partition index so
+// every persisted run continues to converge after restart without repeatedly
+// scanning historical run facts.
 func (o *Orchestrator) ListRunWorkspaces(ctx context.Context) ([]string, error) {
-	seen := map[string]struct{}{}
-	filter := eventlog.EventFilter{
+	return o.log.ListWorkspaceIDs(ctx, eventlog.EventFilter{
 		StreamTypes: []string{"run"},
 		EventTypes:  []string{EventRunRequested},
-	}
-	for event, err := range eventlog.ScanAll(ctx, o.log, filter) {
-		if err != nil {
-			return nil, err
-		}
-		seen[event.WorkspaceID] = struct{}{}
-	}
-	workspaces := make([]string, 0, len(seen))
-	for workspaceID := range seen {
-		workspaces = append(workspaces, workspaceID)
-	}
-	sort.Strings(workspaces)
-	return workspaces, nil
+	})
 }
 
 // AdvanceOpenRunsResult summarizes one background advancement sweep of a
