@@ -33,7 +33,7 @@ type Deps struct {
 }
 
 type Server struct {
-	mux          *serverMux
+	mux          *http.ServeMux
 	orch         *orchestrator.Orchestrator
 	scheduler    scheduler.Scheduler
 	adapter      adapter.Adapter
@@ -48,25 +48,6 @@ type Server struct {
 	reportSigner *reporting.Signer
 	webauth      WebAuth
 	manifests    func() []adapter.Manifest
-}
-
-type serverMux struct {
-	*http.ServeMux
-	patterns []string
-}
-
-func newServerMux() *serverMux {
-	return &serverMux{ServeMux: http.NewServeMux()}
-}
-
-func (m *serverMux) Handle(pattern string, handler http.Handler) {
-	m.patterns = append(m.patterns, pattern)
-	m.ServeMux.Handle(pattern, handler)
-}
-
-func (m *serverMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	m.patterns = append(m.patterns, pattern)
-	m.ServeMux.HandleFunc(pattern, handler)
 }
 
 // WebAuth is the human-login surface the server mounts at /auth/ when OIDC is
@@ -137,7 +118,7 @@ func WithAdapterManifests(manifests func() []adapter.Manifest) Option {
 
 func New(deps Deps, options ...Option) http.Handler {
 	s := &Server{
-		mux:       newServerMux(),
+		mux:       http.NewServeMux(),
 		orch:      deps.Orchestrator,
 		scheduler: deps.Scheduler,
 		adapter:   deps.Adapter,

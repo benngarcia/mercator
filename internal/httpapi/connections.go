@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -10,28 +11,17 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
-func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request, _ CreateConnectionParams) {
+func (s *Server) CreateConnection(ctx context.Context, request CreateConnectionRequestObject) (CreateConnectionResponseObject, error) {
 	if s.conns == nil {
-		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
-		return
+		return CreateConnection501JSONResponse(apiError("CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")), nil
 	}
-	if r.Header.Get("Idempotency-Key") == "" {
-		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
-		return
-	}
-	var body createConnectionBody
-	if !decodeJSONBody(w, r, &body) {
-		return
-	}
-	workspaceID := body.WorkspaceID
-	if workspaceID == "" {
-		workspaceID = r.URL.Query().Get("workspace_id")
-	}
-	if workspaceID == "" {
-		workspaceID = s.defaultWorkspace()
-	}
-	if !s.authorizeRequestWorkspace(w, r, workspaceID) {
-		return
+	body := request.Body
+	workspaceID, workspaceErr := s.resolveWorkspace(ctx, body.WorkspaceId, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return CreateConnection403JSONResponse(workspaceErr.Response), nil
+		}
+		return CreateConnection400JSONResponse(workspaceErr.Response), nil
 	}
 
 	cred := body.Credential
@@ -40,130 +30,123 @@ func (s *Server) CreateConnection(w http.ResponseWriter, r *http.Request, _ Crea
 	// never enters the event log or the response.
 	if cred.Source == credential.SourceMercator && body.Secret != "" {
 		if s.credentials == nil || s.secretStore == nil {
-			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Secret store is not configured; cannot accept mercator credentials.")
-			return
+			return CreateConnection400JSONResponse(apiError("SECRET_STORE_DISABLED", "Secret store is not configured; cannot accept mercator credentials.")), nil
 		}
 		blob, ok := s.credentials.Seal([]byte(body.Secret))
 		if !ok {
-			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Master key is not set; cannot seal mercator credentials.")
-			return
+			return CreateConnection400JSONResponse(apiError("SECRET_STORE_DISABLED", "Master key is not set; cannot seal mercator credentials.")), nil
 		}
-		if err := s.secretStore.Put(r.Context(), workspaceID, body.ConnectionID, blob); err != nil {
-			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
-			return
+		if err := s.secretStore.Put(ctx, workspaceID, body.ConnectionId, blob); err != nil {
+			return CreateConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "SECRET_STORE_FAILED", err)), nil
 		}
-		cred.Ref = body.ConnectionID
+		cred.Ref = body.ConnectionId
 	}
 
-	record, err := s.conns.Create(r.Context(), connection.CreateRequest{
+	record, err := s.conns.Create(ctx, connection.CreateRequest{
 		WorkspaceID:  workspaceID,
-		ConnectionID: body.ConnectionID,
+		ConnectionID: body.ConnectionId,
 		AdapterType:  body.AdapterType,
 		Config:       body.Config,
 		Credential:   cred,
-		Actor:        requestActor(r),
+		Actor:        requestActor(ctx),
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
-			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
-			return
+			return CreateConnection409JSONResponse(apiError("IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")), nil
 		}
-		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_CONNECTION_FAILED"), errorMessage(err))
-		return
+		return CreateConnection400JSONResponse(apiError(errorCode(err, "CREATE_CONNECTION_FAILED"), errorMessage(err))), nil
 	}
-	writeJSON(w, http.StatusCreated, connectionResponse{Connection: record})
+	return CreateConnection201JSONResponse{Connection: record}, nil
 }
 
-func (s *Server) AuthorizeConnection(w http.ResponseWriter, r *http.Request, id string, _ AuthorizeConnectionParams) {
+func (s *Server) AuthorizeConnection(ctx context.Context, request AuthorizeConnectionRequestObject) (AuthorizeConnectionResponseObject, error) {
 	if s.conns == nil {
-		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
-		return
+		return AuthorizeConnection501JSONResponse(apiError("CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")), nil
 	}
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return AuthorizeConnection403JSONResponse(workspaceErr.Response), nil
+		}
+		return AuthorizeConnection400JSONResponse(workspaceErr.Response), nil
 	}
 	if s.verifier == nil {
-		writeError(w, http.StatusNotImplemented, "CONNECTION_VERIFY_DISABLED", "Connection verification is not configured.")
-		return
+		return AuthorizeConnection501JSONResponse(apiError("CONNECTION_VERIFY_DISABLED", "Connection verification is not configured.")), nil
 	}
-	if err := s.verifier.VerifyConnection(r.Context(), workspaceID, id); err != nil {
+	if err := s.verifier.VerifyConnection(ctx, workspaceID, request.ConnectionId); err != nil {
 		// The adapter's own error text is the operator's diagnostic (a provider
 		// 401, an unreachable daemon): return it verbatim rather than the
 		// generic internal-error message. Still logged server-side.
 		log.Printf("httpapi: 502 CONNECTION_VERIFY_FAILED: %v", err)
-		writeError(w, http.StatusBadGateway, "CONNECTION_VERIFY_FAILED", errorMessage(err))
-		return
+		return AuthorizeConnection502JSONResponse(apiError("CONNECTION_VERIFY_FAILED", errorMessage(err))), nil
 	}
-	if err := s.conns.UpdateAuthorization(r.Context(), connection.UpdateAuthorizationRequest{
+	if err := s.conns.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
 		WorkspaceID:  workspaceID,
-		ConnectionID: id,
+		ConnectionID: request.ConnectionId,
 		Authorized:   true,
-		Actor:        requestActor(r),
+		Actor:        requestActor(ctx),
 	}); err != nil {
-		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_AUTHORIZE_FAILED", err)
-		return
+		return AuthorizeConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "CONNECTION_AUTHORIZE_FAILED", err)), nil
 	}
-	record, err := s.conns.Get(r.Context(), workspaceID, id)
+	record, err := s.conns.Get(ctx, workspaceID, request.ConnectionId)
 	if err != nil {
-		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_NOT_FOUND", err)
-		return
+		return AuthorizeConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "CONNECTION_NOT_FOUND", err)), nil
 	}
-	writeJSON(w, http.StatusOK, connectionResponse{Connection: record})
+	return AuthorizeConnection200JSONResponse{Connection: record}, nil
 }
 
 // deleteConnection appends the deleted fact and removes the sealed credential
 // blob. The event stream itself is retained (append-only log); the id cannot
 // be reused — recreating means a fresh connection id.
-func (s *Server) DeleteConnection(w http.ResponseWriter, r *http.Request, id string, _ DeleteConnectionParams) {
+func (s *Server) DeleteConnection(ctx context.Context, request DeleteConnectionRequestObject) (DeleteConnectionResponseObject, error) {
 	if s.conns == nil {
-		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
-		return
+		return DeleteConnection501JSONResponse(apiError("CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")), nil
 	}
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return DeleteConnection403JSONResponse(workspaceErr.Response), nil
+		}
+		return DeleteConnection400JSONResponse(workspaceErr.Response), nil
 	}
-	if err := s.conns.Delete(r.Context(), connection.DeleteRequest{
+	if err := s.conns.Delete(ctx, connection.DeleteRequest{
 		WorkspaceID:  workspaceID,
-		ConnectionID: id,
-		Actor:        requestActor(r),
+		ConnectionID: request.ConnectionId,
+		Actor:        requestActor(ctx),
 	}); err != nil {
 		if errors.Is(err, connection.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "CONNECTION_NOT_FOUND", "Connection not found.")
-			return
+			return DeleteConnection404JSONResponse(apiError("CONNECTION_NOT_FOUND", "Connection not found.")), nil
 		}
-		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_DELETE_FAILED", err)
-		return
+		return DeleteConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "CONNECTION_DELETE_FAILED", err)), nil
 	}
 	// The blob is unreachable once the record is deleted; failing to remove it
 	// must not resurrect the connection. Retrying the (idempotent) delete
 	// re-attempts the removal.
 	if s.secretStore != nil {
-		if err := s.secretStore.Delete(r.Context(), workspaceID, id); err != nil {
-			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
-			return
+		if err := s.secretStore.Delete(ctx, workspaceID, request.ConnectionId); err != nil {
+			return DeleteConnection500JSONResponse(internalAPIError(http.StatusInternalServerError, "SECRET_STORE_FAILED", err)), nil
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+	return DeleteConnection200JSONResponse{Deleted: true}, nil
 }
 
-func (s *Server) ListConnections(w http.ResponseWriter, r *http.Request, _ ListConnectionsParams) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+func (s *Server) ListConnections(ctx context.Context, request ListConnectionsRequestObject) (ListConnectionsResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return ListConnections403JSONResponse(workspaceErr.Response), nil
+		}
+		return ListConnections400JSONResponse(workspaceErr.Response), nil
 	}
 	if s.conns == nil {
-		writeJSON(w, http.StatusOK, connectionListResponse{Connections: []connection.Record{}})
-		return
+		return ListConnections200JSONResponse{Connections: []connection.Record{}}, nil
 	}
-	records, err := s.conns.List(r.Context(), workspaceID)
+	records, err := s.conns.List(ctx, workspaceID)
 	if err != nil {
-		writeInternalError(w, http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err)
-		return
+		return ListConnections500JSONResponse(internalAPIError(http.StatusInternalServerError, "LIST_CONNECTIONS_FAILED", err)), nil
 	}
 	if records == nil {
 		records = []connection.Record{}
 	}
-	writeJSON(w, http.StatusOK, connectionListResponse{Connections: records})
+	return ListConnections200JSONResponse{Connections: records}, nil
 }

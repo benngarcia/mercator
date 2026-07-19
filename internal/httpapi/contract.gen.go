@@ -7,116 +7,176 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
+	adapter "github.com/benngarcia/mercator/internal/adapter"
+	connection "github.com/benngarcia/mercator/internal/connection"
+	credential "github.com/benngarcia/mercator/internal/credential"
+	domain "github.com/benngarcia/mercator/internal/domain"
+	eventlog "github.com/benngarcia/mercator/internal/eventlog"
+	ociresolver "github.com/benngarcia/mercator/internal/ociresolver"
+	sinks "github.com/benngarcia/mercator/internal/sinks"
 	"github.com/oapi-codegen/runtime"
+	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
 )
 
 const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
-// Defines values for AdapterManifestConfigFieldsType.
+// Defines values for CapabilityProfileOfferKinds.
 const (
-	Bool   AdapterManifestConfigFieldsType = "bool"
-	Int    AdapterManifestConfigFieldsType = "int"
-	String AdapterManifestConfigFieldsType = "string"
+	Provisionable CapabilityProfileOfferKinds = "provisionable"
+	Standing      CapabilityProfileOfferKinds = "standing"
 )
 
-// Valid indicates whether the value is a known member of the AdapterManifestConfigFieldsType enum.
-func (e AdapterManifestConfigFieldsType) Valid() bool {
+// Valid indicates whether the value is a known member of the CapabilityProfileOfferKinds enum.
+func (e CapabilityProfileOfferKinds) Valid() bool {
 	switch e {
-	case Bool:
+	case Provisionable:
 		return true
-	case Int:
-		return true
-	case String:
+	case Standing:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for CreateConnectionRequestCredentialSource.
+// Defines values for NetworkCapabilitiesInbound.
 const (
-	Env      CreateConnectionRequestCredentialSource = "env"
-	Mercator CreateConnectionRequestCredentialSource = "mercator"
+	NetworkCapabilitiesInboundNone       NetworkCapabilitiesInbound = "none"
+	NetworkCapabilitiesInboundPublicPort NetworkCapabilitiesInbound = "public_port"
 )
 
-// Valid indicates whether the value is a known member of the CreateConnectionRequestCredentialSource enum.
-func (e CreateConnectionRequestCredentialSource) Valid() bool {
+// Valid indicates whether the value is a known member of the NetworkCapabilitiesInbound enum.
+func (e NetworkCapabilitiesInbound) Valid() bool {
 	switch e {
-	case Env:
+	case NetworkCapabilitiesInboundNone:
 		return true
-	case Mercator:
+	case NetworkCapabilitiesInboundPublicPort:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for RunCleanup.
+// Defines values for NetworkDownloadRequirementScope.
 const (
-	Blocked     RunCleanup = "blocked"
-	Confirmed   RunCleanup = "confirmed"
-	NotRequired RunCleanup = "not_required"
-	Pending     RunCleanup = "pending"
+	NetworkDownloadRequirementScopePublicInternet NetworkDownloadRequirementScope = "public_internet"
+	NetworkDownloadRequirementScopeRegistry       NetworkDownloadRequirementScope = "registry"
 )
 
-// Valid indicates whether the value is a known member of the RunCleanup enum.
-func (e RunCleanup) Valid() bool {
+// Valid indicates whether the value is a known member of the NetworkDownloadRequirementScope enum.
+func (e NetworkDownloadRequirementScope) Valid() bool {
 	switch e {
-	case Blocked:
+	case NetworkDownloadRequirementScopePublicInternet:
 		return true
-	case Confirmed:
-		return true
-	case NotRequired:
-		return true
-	case Pending:
+	case NetworkDownloadRequirementScopeRegistry:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for RunDisposition.
+// Defines values for NetworkFactScope.
 const (
-	Release   RunDisposition = "release"
-	Terminate RunDisposition = "terminate"
+	NetworkFactScopePublicInternet NetworkFactScope = "public_internet"
+	NetworkFactScopeRegistry       NetworkFactScope = "registry"
 )
 
-// Valid indicates whether the value is a known member of the RunDisposition enum.
-func (e RunDisposition) Valid() bool {
+// Valid indicates whether the value is a known member of the NetworkFactScope enum.
+func (e NetworkFactScope) Valid() bool {
 	switch e {
-	case Release:
+	case NetworkFactScopePublicInternet:
 		return true
-	case Terminate:
+	case NetworkFactScopeRegistry:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for RunOutcome.
+// Defines values for NetworkRequirementsInbound.
 const (
-	Cancelled RunOutcome = "cancelled"
-	Failed    RunOutcome = "failed"
-	Succeeded RunOutcome = "succeeded"
+	NetworkRequirementsInboundNone       NetworkRequirementsInbound = "none"
+	NetworkRequirementsInboundPublicPort NetworkRequirementsInbound = "public_port"
 )
 
-// Valid indicates whether the value is a known member of the RunOutcome enum.
-func (e RunOutcome) Valid() bool {
+// Valid indicates whether the value is a known member of the NetworkRequirementsInbound enum.
+func (e NetworkRequirementsInbound) Valid() bool {
 	switch e {
-	case Cancelled:
+	case NetworkRequirementsInboundNone:
 		return true
-	case Failed:
-		return true
-	case Succeeded:
+	case NetworkRequirementsInboundPublicPort:
 		return true
 	default:
 		return false
 	}
+}
+
+// Defines values for PlacementPolicyObjective.
+const (
+	Balanced          PlacementPolicyObjective = "balanced"
+	Cheapest          PlacementPolicyObjective = "cheapest"
+	FastestCompletion PlacementPolicyObjective = "fastest_completion"
+	FastestStart      PlacementPolicyObjective = "fastest_start"
+)
+
+// Valid indicates whether the value is a known member of the PlacementPolicyObjective enum.
+func (e PlacementPolicyObjective) Valid() bool {
+	switch e {
+	case Balanced:
+		return true
+	case Cheapest:
+		return true
+	case FastestCompletion:
+		return true
+	case FastestStart:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PortSpecExposure.
+const (
+	None    PortSpecExposure = "none"
+	Private PortSpecExposure = "private"
+	Public  PortSpecExposure = "public"
+)
+
+// Valid indicates whether the value is a known member of the PortSpecExposure enum.
+func (e PortSpecExposure) Valid() bool {
+	switch e {
+	case None:
+		return true
+	case Private:
+		return true
+	case Public:
+		return true
+	default:
+		return false
+	}
+}
+
+// AcceleratorInventory defines model for AcceleratorInventory.
+type AcceleratorInventory struct {
+	CanonicalModel string `json:"canonical_model,omitempty"`
+	Count          int    `json:"count"`
+	MemoryBytes    int64  `json:"memory_bytes"`
+	Model          string `json:"model"`
+	Vendor         string `json:"vendor"`
+}
+
+// AcceleratorRequirement defines model for AcceleratorRequirement.
+type AcceleratorRequirement struct {
+	Count          int      `json:"count"`
+	MemoryMinBytes int64    `json:"memory_min_bytes"`
+	ModelAnyOf     []string `json:"model_any_of,omitempty"`
+	Vendor         string   `json:"vendor"`
 }
 
 // AdapterListResponse defines model for AdapterListResponse.
@@ -125,98 +185,132 @@ type AdapterListResponse struct {
 }
 
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
-type AdapterManifest struct {
-	ConfigFields []struct {
-		Default     *string `json:"default,omitempty"`
-		Help        *string `json:"help,omitempty"`
-		Label       string  `json:"label"`
-		Name        string  `json:"name"`
-		Placeholder *string `json:"placeholder,omitempty"`
-		Required    bool    `json:"required"`
+type AdapterManifest = adapter.Manifest
 
-		// Secret Mask in UIs and never echo after save.
-		Secret *bool                           `json:"secret,omitempty"`
-		Type   AdapterManifestConfigFieldsType `json:"type"`
-	} `json:"config_fields"`
-	Credential struct {
-		// Format One-line hint about the expected token shape or scope.
-		Format   *string `json:"format,omitempty"`
-		Label    *string `json:"label,omitempty"`
-		Required bool    `json:"required"`
-	} `json:"credential"`
-	Description string `json:"description"`
-	DisplayName string `json:"display_name"`
-
-	// Logo Well-known slug the console maps to a bundled logomark asset; consumers fall back to a typographic monogram.
-	Logo string `json:"logo"`
-
-	// SetupSteps Ordered how-do-I-get-a-credential walkthrough; text is UI copy.
-	SetupSteps []struct {
-		Text string  `json:"text"`
-		Url  *string `json:"url,omitempty"`
-	} `json:"setup_steps"`
-
-	// Type Adapter type string used as adapter_type at connection create time.
-	Type string `json:"type"`
+// CPURequirement defines model for CPURequirement.
+type CPURequirement struct {
+	MinMillis int64 `json:"min_millis"`
 }
 
-// AdapterManifestConfigFieldsType defines model for AdapterManifest.ConfigFields.Type.
-type AdapterManifestConfigFieldsType string
+// CandidateDecision defines model for CandidateDecision.
+type CandidateDecision struct {
+	AdapterType     string             `json:"adapter_type,omitempty"`
+	ConnectionId    string             `json:"connection_id,omitempty"`
+	Estimates       CandidateEstimates `json:"estimates"`
+	Feasible        bool               `json:"feasible"`
+	NativeRef       string             `json:"native_ref,omitempty"`
+	OfferSnapshotId string             `json:"offer_snapshot_id"`
+	Rejections      []Violation        `json:"rejections,omitempty"`
+	ScoreUsd        float64            `json:"score_usd,omitempty"`
+}
+
+// CandidateEstimates defines model for CandidateEstimates.
+type CandidateEstimates struct {
+	CostUsd          Estimate `json:"cost_usd"`
+	ProvisionSeconds Estimate `json:"provision_seconds"`
+	PullSeconds      Estimate `json:"pull_seconds"`
+	QueueSeconds     Estimate `json:"queue_seconds"`
+	StartSeconds     Estimate `json:"start_seconds"`
+}
+
+// CapabilityProfile defines model for CapabilityProfile.
+type CapabilityProfile struct {
+	Container     ContainerCapabilities         `json:"container"`
+	Lifecycle     LifecycleCapabilities         `json:"lifecycle"`
+	Network       NetworkCapabilities           `json:"network"`
+	Observability ObservabilityCapabilities     `json:"observability"`
+	OfferKinds    []CapabilityProfileOfferKinds `json:"offer_kinds,omitempty"`
+	Pricing       PricingCapabilities           `json:"pricing"`
+	Resources     ResourceCapabilities          `json:"resources"`
+}
+
+// CapabilityProfileOfferKinds defines model for CapabilityProfile.OfferKinds.
+type CapabilityProfileOfferKinds string
+
+// CapacityEvidence defines model for CapacityEvidence.
+type CapacityEvidence struct {
+	Available  bool    `json:"available"`
+	Confidence float64 `json:"confidence"`
+}
+
+// CloudEvent defines model for CloudEvent.
+type CloudEvent = eventlog.CloudEvent
+
+// CollectionReport defines model for CollectionReport.
+type CollectionReport struct {
+	ConnectionsFromCache []string `json:"connections_from_cache,omitempty"`
+	ConnectionsQueried   []string `json:"connections_queried,omitempty"`
+	ExcludedConnections  []string `json:"excluded_connections,omitempty"`
+}
 
 // ConnectionListResponse defines model for ConnectionListResponse.
 type ConnectionListResponse struct {
-	Connections []map[string]interface{} `json:"connections"`
+	Connections []ConnectionRecord `json:"connections"`
 }
+
+// ConnectionRecord defines model for ConnectionRecord.
+type ConnectionRecord = connection.Record
 
 // ConnectionResponse defines model for ConnectionResponse.
 type ConnectionResponse struct {
-	Connection map[string]interface{} `json:"connection"`
+	Connection ConnectionRecord `json:"connection"`
+}
+
+// ContainerCapabilities defines model for ContainerCapabilities.
+type ContainerCapabilities struct {
+	MaxContainers              int  `json:"max_containers"`
+	MaxEnvironmentBytes        int  `json:"max_environment_bytes"`
+	SupportsDigestRefs         bool `json:"supports_digest_refs"`
+	SupportsEntrypointOverride bool `json:"supports_entrypoint_override"`
+}
+
+// ContainerSpec defines model for ContainerSpec.
+type ContainerSpec struct {
+	Args       []string              `json:"args,omitempty"`
+	Entrypoint []string              `json:"entrypoint,omitempty"`
+	Env        map[string]EnvBinding `json:"env,omitempty"`
+	Image      string                `json:"image"`
+	Name       string                `json:"name"`
+	Platform   Platform              `json:"platform"`
+	Ports      []PortSpec            `json:"ports,omitempty"`
 }
 
 // CreateConnectionRequest defines model for CreateConnectionRequest.
 type CreateConnectionRequest struct {
-	AdapterType  string             `json:"adapter_type"`
-	Config       *map[string]string `json:"config,omitempty"`
-	ConnectionId string             `json:"connection_id"`
-	Credential   *struct {
-		Ref    *string                                  `json:"ref,omitempty"`
-		Source *CreateConnectionRequestCredentialSource `json:"source,omitempty"`
-	} `json:"credential,omitempty"`
+	AdapterType  string            `json:"adapter_type"`
+	Config       map[string]string `json:"config,omitempty"`
+	ConnectionId string            `json:"connection_id"`
+	Credential   Credential        `json:"credential,omitempty"`
 
 	// Secret Write-only: accepted on create, sealed at rest, never echoed in any response.
-	Secret *string `json:"secret,omitempty"`
+	Secret string `json:"secret,omitempty"`
 
 	// WorkspaceId Optional. Defaults to the request's authorized workspace.
-	WorkspaceId *string `json:"workspace_id,omitempty"`
+	WorkspaceId string `json:"workspace_id,omitempty"`
 }
-
-// CreateConnectionRequestCredentialSource defines model for CreateConnectionRequest.Credential.Source.
-type CreateConnectionRequestCredentialSource string
 
 // CreateRevisionRequest defines model for CreateRevisionRequest.
 type CreateRevisionRequest struct {
-	Revision map[string]interface{} `json:"revision"`
+	Revision WorkloadRevision `json:"revision"`
 }
 
 // CreateRunRequest Create a run. The only required input is an image (top-level shorthand) or a full workload spec. run_id is optional and server-generated (uuidv7) when omitted; an Idempotency-Key header is required for retry-safe replay.
 type CreateRunRequest struct {
 	// Args Container args for the image shorthand.
-	Args *[]string `json:"args,omitempty"`
+	Args []string `json:"args,omitempty"`
 
 	// Env Run-level literal env bindings. For stored or explicit workload specs, these override or add to the workload container env for this run only. For image shorthand, these become the synthesized container env.
-	Env *map[string]EnvBinding `json:"env,omitempty"`
+	Env map[string]EnvBinding `json:"env,omitempty"`
 
 	// Image Top-level image shorthand. Synthesizes the single container when no full workload spec is supplied. Ignored when an explicit workload spec is present.
-	Image *string `json:"image,omitempty"`
+	Image string `json:"image,omitempty"`
 
 	// RunId Optional. When omitted the server generates a uuidv7-based run id and returns it.
-	RunId *string `json:"run_id,omitempty"`
-
-	// Workload Full workload revision spec. Takes precedence over the image shorthand when both are supplied.
-	Workload           *map[string]interface{} `json:"workload,omitempty"`
-	WorkloadId         *string                 `json:"workload_id,omitempty"`
-	WorkloadRevisionId *string                 `json:"workload_revision_id,omitempty"`
-	WorkspaceId        *string                 `json:"workspace_id,omitempty"`
+	RunId              string           `json:"run_id,omitempty"`
+	Workload           WorkloadRevision `json:"workload,omitempty"`
+	WorkloadId         string           `json:"workload_id,omitempty"`
+	WorkloadRevisionId string           `json:"workload_revision_id,omitempty"`
+	WorkspaceId        string           `json:"workspace_id,omitempty"`
 }
 
 // CreateWorkloadRequest defines model for CreateWorkloadRequest.
@@ -226,54 +320,218 @@ type CreateWorkloadRequest struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
-// EnvBinding defines model for EnvBinding.
-type EnvBinding struct {
-	Value *string `json:"value,omitempty"`
+// Credential defines model for Credential.
+type Credential = credential.Credential
+
+// DiskRequirement defines model for DiskRequirement.
+type DiskRequirement struct {
+	MinBytes int64 `json:"min_bytes"`
 }
+
+// EnvBinding defines model for EnvBinding.
+type EnvBinding = domain.EnvBinding
 
 // ErrorResponse defines model for ErrorResponse.
 type ErrorResponse struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code    string      `json:"code"`
+	Details []Violation `json:"details,omitempty"`
+	Message string      `json:"message"`
+}
+
+// Estimate defines model for Estimate.
+type Estimate struct {
+	Confidence   float64 `json:"confidence,omitempty"`
+	Expected     float64 `json:"expected,omitempty"`
+	ModelVersion string  `json:"model_version,omitempty"`
+	P50          float64 `json:"p50,omitempty"`
+	P90          float64 `json:"p90,omitempty"`
+	SampleCount  int     `json:"sample_count,omitempty"`
+	Source       string  `json:"source,omitempty"`
 }
 
 // EventListResponse defines model for EventListResponse.
 type EventListResponse struct {
-	Events []map[string]interface{} `json:"events"`
+	Events []CloudEvent `json:"events"`
+}
+
+// ExecutionPolicy defines model for ExecutionPolicy.
+type ExecutionPolicy struct {
+	MaxPreStartAttempts int   `json:"max_pre_start_attempts"`
+	MaxRuntimeSeconds   int64 `json:"max_runtime_seconds"`
+}
+
+// ImageCacheEvidence defines model for ImageCacheEvidence.
+type ImageCacheEvidence struct {
+	Known          bool  `json:"known"`
+	ManifestCached bool  `json:"manifest_cached"`
+	MissingBytes   int64 `json:"missing_bytes"`
+}
+
+// LifecycleCapabilities defines model for LifecycleCapabilities.
+type LifecycleCapabilities struct {
+	CancelQueued     bool   `json:"cancel_queued"`
+	IdempotentLaunch string `json:"idempotent_launch"`
+	ListOwned        bool   `json:"list_owned"`
+	ProviderTtl      bool   `json:"provider_ttl"`
+}
+
+// MemoryRequirement defines model for MemoryRequirement.
+type MemoryRequirement struct {
+	MinBytes int64 `json:"min_bytes"`
+}
+
+// NetworkCapabilities defines model for NetworkCapabilities.
+type NetworkCapabilities struct {
+	Inbound    NetworkCapabilitiesInbound `json:"inbound"`
+	Protocols  []string                   `json:"protocols,omitempty"`
+	PublicIpv4 bool                       `json:"public_ipv4"`
+}
+
+// NetworkCapabilitiesInbound defines model for NetworkCapabilities.Inbound.
+type NetworkCapabilitiesInbound string
+
+// NetworkDownloadRequirement defines model for NetworkDownloadRequirement.
+type NetworkDownloadRequirement struct {
+	AllowUnknown             bool                            `json:"allow_unknown"`
+	MaxMeasurementAgeSeconds int64                           `json:"max_measurement_age_seconds"`
+	MinP10Mbps               float64                         `json:"min_p10_mbps"`
+	Scope                    NetworkDownloadRequirementScope `json:"scope"`
+}
+
+// NetworkDownloadRequirementScope defines model for NetworkDownloadRequirement.Scope.
+type NetworkDownloadRequirementScope string
+
+// NetworkFact defines model for NetworkFact.
+type NetworkFact struct {
+	Confidence  float64          `json:"confidence"`
+	ObservedAt  time.Time        `json:"observed_at"`
+	SampleCount int              `json:"sample_count"`
+	Scope       NetworkFactScope `json:"scope"`
+	Source      string           `json:"source"`
+	Statistic   string           `json:"statistic"`
+	ValidUntil  time.Time        `json:"valid_until"`
+	ValueMbps   float64          `json:"value_mbps"`
+}
+
+// NetworkFactScope defines model for NetworkFact.Scope.
+type NetworkFactScope string
+
+// NetworkFacts defines model for NetworkFacts.
+type NetworkFacts struct {
+	Download []NetworkFact `json:"download,omitempty"`
+}
+
+// NetworkRequirements defines model for NetworkRequirements.
+type NetworkRequirements struct {
+	Download NetworkDownloadRequirement `json:"download,omitempty"`
+	Inbound  NetworkRequirementsInbound `json:"inbound"`
+}
+
+// NetworkRequirementsInbound defines model for NetworkRequirements.Inbound.
+type NetworkRequirementsInbound string
+
+// ObservabilityCapabilities defines model for ObservabilityCapabilities.
+type ObservabilityCapabilities struct {
+	Logs    string `json:"logs"`
+	Metrics string `json:"metrics"`
+	Shell   string `json:"shell"`
 }
 
 // OfferListResponse defines model for OfferListResponse.
 type OfferListResponse struct {
-	Offers []map[string]interface{} `json:"offers"`
+	Offers []OfferSnapshot `json:"offers"`
 }
+
+// OfferSnapshot defines model for OfferSnapshot.
+type OfferSnapshot = domain.OfferSnapshot
+
+// PlacementDecision defines model for PlacementDecision.
+type PlacementDecision = domain.PlacementDecision
 
 // PlacementDecisionResponse defines model for PlacementDecisionResponse.
 type PlacementDecisionResponse struct {
-	Decision map[string]interface{} `json:"decision"`
+	Decision PlacementDecision `json:"decision"`
 }
+
+// PlacementPolicy defines model for PlacementPolicy.
+type PlacementPolicy struct {
+	AllowUnknownPricing    bool                     `json:"allow_unknown_pricing,omitempty"`
+	ExpectedRuntimeSeconds float64                  `json:"expected_runtime_seconds,omitempty"`
+	MaxExpectedCostUsd     float64                  `json:"max_expected_cost_usd,omitempty"`
+	MaxP90StartSeconds     float64                  `json:"max_p90_start_seconds,omitempty"`
+	Objective              PlacementPolicyObjective `json:"objective"`
+}
+
+// PlacementPolicyObjective defines model for PlacementPolicy.Objective.
+type PlacementPolicyObjective string
 
 // PlacementPreviewRequest defines model for PlacementPreviewRequest.
 type PlacementPreviewRequest struct {
-	RunId       *string                `json:"run_id,omitempty"`
-	Workload    map[string]interface{} `json:"workload"`
-	WorkspaceId *string                `json:"workspace_id,omitempty"`
+	RunId       string           `json:"run_id,omitempty"`
+	Workload    WorkloadRevision `json:"workload"`
+	WorkspaceId string           `json:"workspace_id,omitempty"`
 }
 
 // PlacementPreviewResponse defines model for PlacementPreviewResponse.
 type PlacementPreviewResponse struct {
-	Decision map[string]interface{} `json:"decision"`
+	Decision PlacementDecision `json:"decision"`
+}
+
+// Platform defines model for Platform.
+type Platform struct {
+	Architecture string `json:"architecture"`
+	Os           string `json:"os"`
+}
+
+// PortSpec defines model for PortSpec.
+type PortSpec struct {
+	ContainerPort int              `json:"container_port"`
+	Exposure      PortSpecExposure `json:"exposure"`
+	Name          string           `json:"name"`
+	Protocol      string           `json:"protocol"`
+}
+
+// PortSpecExposure defines model for PortSpec.Exposure.
+type PortSpecExposure string
+
+// PriceModel defines model for PriceModel.
+type PriceModel struct {
+	Currency             string  `json:"currency"`
+	GranularitySeconds   int64   `json:"granularity_seconds"`
+	Known                bool    `json:"known"`
+	MinimumChargeSeconds int64   `json:"minimum_charge_seconds"`
+	RatePerSecondUsd     float64 `json:"rate_per_second_usd"`
+	SetupFeeUsd          float64 `json:"setup_fee_usd"`
+}
+
+// PricingCapabilities defines model for PricingCapabilities.
+type PricingCapabilities struct {
+	Known bool `json:"known"`
+}
+
+// QueueSnapshot defines model for QueueSnapshot.
+type QueueSnapshot struct {
+	ActiveSlots       int     `json:"active_slots"`
+	QueuedWorkSeconds float64 `json:"queued_work_seconds"`
+}
+
+// ReliabilityEvidence defines model for ReliabilityEvidence.
+type ReliabilityEvidence struct {
+	Confidence       float64 `json:"confidence,omitempty"`
+	InterruptionRate float64 `json:"interruption_rate,omitempty"`
+	StartFailureRate float64 `json:"start_failure_rate,omitempty"`
 }
 
 // ReplaySinkRequest defines model for ReplaySinkRequest.
 type ReplaySinkRequest struct {
-	FromExclusive *int    `json:"from_exclusive,omitempty"`
-	Limit         *int    `json:"limit,omitempty"`
-	ReplayId      *string `json:"replay_id,omitempty"`
+	FromExclusive int    `json:"from_exclusive,omitempty"`
+	Limit         int    `json:"limit,omitempty"`
+	ReplayId      string `json:"replay_id,omitempty"`
 }
 
 // ReportRunRequest defines model for ReportRunRequest.
 type ReportRunRequest struct {
-	Data *map[string]interface{} `json:"data,omitempty"`
+	Data json.RawMessage `json:"data,omitempty"`
 
 	// ExitCode Terminal exit code; when present the broker records the authoritative outcome and requests cleanup.
 	ExitCode *int   `json:"exit_code,omitempty"`
@@ -288,39 +546,35 @@ type ResolveImageRequest struct {
 
 // ResolveImageResponse defines model for ResolveImageResponse.
 type ResolveImageResponse struct {
-	Image map[string]interface{} `json:"image"`
+	Image ResolvedImage `json:"image"`
+}
+
+// ResolvedImage defines model for ResolvedImage.
+type ResolvedImage = ociresolver.ResolvedImage
+
+// ResourceCapabilities defines model for ResourceCapabilities.
+type ResourceCapabilities struct {
+	GpuVendors []string `json:"gpu_vendors,omitempty"`
+}
+
+// ResourceInventory defines model for ResourceInventory.
+type ResourceInventory struct {
+	Accelerators       []AcceleratorInventory `json:"accelerators,omitempty"`
+	CpuMillis          int64                  `json:"cpu_millis"`
+	EphemeralDiskBytes int64                  `json:"ephemeral_disk_bytes"`
+	MemoryBytes        int64                  `json:"memory_bytes"`
+}
+
+// ResourceRequirements defines model for ResourceRequirements.
+type ResourceRequirements struct {
+	Accelerators  []AcceleratorRequirement `json:"accelerators,omitempty"`
+	Cpu           CPURequirement           `json:"cpu"`
+	EphemeralDisk DiskRequirement          `json:"ephemeral_disk"`
+	Memory        MemoryRequirement        `json:"memory"`
 }
 
 // Run defines model for Run.
-type Run struct {
-	// CancelledBy Audited principal of the cancel command. Absent unless a principal-attributed cancel was recorded.
-	CancelledBy *string    `json:"cancelled_by,omitempty"`
-	Cleanup     RunCleanup `json:"cleanup"`
-	Closed      bool       `json:"closed"`
-
-	// CreatedBy Audited principal of the create command: a signed-in operator email, or bearer for machine-token calls. Absent on runs recorded without a principal.
-	CreatedBy *string `json:"created_by,omitempty"`
-
-	// Disposition Recorded cleanup disposition. terminate: the run provisioned a host we own that is destroyed on cleanup. release: the run borrowed a slot in a standing pool we do not own; cleanup removes only our job. Recorded at launch time and dispatched on the recorded value, never re-inferred at cleanup time. Absent until a launch intent is recorded.
-	Disposition *RunDisposition `json:"disposition,omitempty"`
-
-	// ExitCode Container exit code, surfaced once observed. Absent until a terminal observation is recorded.
-	ExitCode           *int        `json:"exit_code,omitempty"`
-	Id                 string      `json:"id"`
-	Outcome            *RunOutcome `json:"outcome,omitempty"`
-	Phase              string      `json:"phase"`
-	WorkloadRevisionId *string     `json:"workload_revision_id,omitempty"`
-	WorkspaceId        string      `json:"workspace_id"`
-}
-
-// RunCleanup defines model for Run.Cleanup.
-type RunCleanup string
-
-// RunDisposition Recorded cleanup disposition. terminate: the run provisioned a host we own that is destroyed on cleanup. release: the run borrowed a slot in a standing pool we do not own; cleanup removes only our job. Recorded at launch time and dispatched on the recorded value, never re-inferred at cleanup time. Absent until a launch intent is recorded.
-type RunDisposition string
-
-// RunOutcome defines model for Run.Outcome.
-type RunOutcome string
+type Run = domain.RunRecord
 
 // RunListResponse defines model for RunListResponse.
 type RunListResponse struct {
@@ -330,111 +584,128 @@ type RunListResponse struct {
 // RunResponse defines model for RunResponse.
 type RunResponse struct {
 	// Duplicate True when this create was a safe idempotent replay of an existing run.
-	Duplicate *bool              `json:"duplicate,omitempty"`
-	Links     *map[string]string `json:"links,omitempty"`
+	Duplicate bool              `json:"duplicate,omitempty"`
+	Links     map[string]string `json:"links,omitempty"`
 
 	// Metadata Reserved for per-response metadata.
-	Metadata *map[string]interface{} `json:"metadata,omitempty"`
-	Run      Run                     `json:"run"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	Run      Run                    `json:"run"`
 
 	// RunId Convenience top-level run identifier, equal to run.id. Returned on every run response alongside the full run record.
 	RunId string `json:"run_id"`
 }
 
 // SinkResult defines model for SinkResult.
-type SinkResult struct {
-	Delivered     int     `json:"delivered"`
-	FailedEventId *string `json:"failed_event_id,omitempty"`
-	LastPosition  int     `json:"last_position"`
-	ReplayId      *string `json:"replay_id,omitempty"`
-	SinkId        string  `json:"sink_id"`
-}
+type SinkResult = sinks.Result
 
 // SinkStatus defines model for SinkStatus.
-type SinkStatus struct {
-	Cursor    int    `json:"cursor"`
-	HasCursor bool   `json:"has_cursor"`
-	SinkId    string `json:"sink_id"`
-}
+type SinkStatus = sinks.Status
+
+// Violation defines model for Violation.
+type Violation = domain.Violation
+
+// WorkloadRevision defines model for WorkloadRevision.
+type WorkloadRevision = domain.WorkloadRevision
 
 // WorkloadRevisionListResponse defines model for WorkloadRevisionListResponse.
 type WorkloadRevisionListResponse struct {
-	Revisions []map[string]interface{} `json:"revisions"`
+	Revisions []WorkloadRevision `json:"revisions"`
 }
 
 // WorkloadRevisionResponse defines model for WorkloadRevisionResponse.
 type WorkloadRevisionResponse struct {
-	Revision map[string]interface{} `json:"revision"`
+	Revision WorkloadRevision `json:"revision"`
+}
+
+// WorkloadSpec defines model for WorkloadSpec.
+type WorkloadSpec struct {
+	Containers []ContainerSpec        `json:"containers"`
+	Execution  ExecutionPolicy        `json:"execution"`
+	Metadata   map[string]string      `json:"metadata,omitempty"`
+	Network    NetworkRequirements    `json:"network"`
+	Placement  PlacementPolicy        `json:"placement"`
+	Raw        map[string]interface{} `json:"raw,omitempty"`
+	Resources  ResourceRequirements   `json:"resources"`
 }
 
 // ListConnectionsParams defines parameters for ListConnections.
 type ListConnectionsParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // CreateConnectionParams defines parameters for CreateConnection.
 type CreateConnectionParams struct {
+	WorkspaceId    string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
 // DeleteConnectionParams defines parameters for DeleteConnection.
 type DeleteConnectionParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // AuthorizeConnectionParams defines parameters for AuthorizeConnection.
 type AuthorizeConnectionParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // ListOffersParams defines parameters for ListOffers.
 type ListOffersParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+}
+
+// PreviewPlacementParams defines parameters for PreviewPlacement.
+type PreviewPlacementParams struct {
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // ListRunsParams defines parameters for ListRuns.
 type ListRunsParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // CreateRunParams defines parameters for CreateRun.
 type CreateRunParams struct {
+	WorkspaceId    string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
 // GetRunParams defines parameters for GetRun.
 type GetRunParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // CancelRunParams defines parameters for CancelRun.
 type CancelRunParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // GetRunDecisionParams defines parameters for GetRunDecision.
 type GetRunDecisionParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // ListRunEventsParams defines parameters for ListRunEvents.
 type ListRunEventsParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // RefreshRunParams defines parameters for RefreshRun.
 type RefreshRunParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // ReportRunParams defines parameters for ReportRun.
 type ReportRunParams struct {
 	WorkspaceId string `form:"workspace_id" json:"workspace_id"`
+
+	// Authorization Per-run bearer token issued in the launch reporting environment.
+	Authorization string `json:"Authorization,omitempty"`
 }
 
 // WaitRunParams defines parameters for WaitRun.
 type WaitRunParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // CreateWorkloadParams defines parameters for CreateWorkload.
@@ -444,18 +715,18 @@ type CreateWorkloadParams struct {
 
 // ListWorkloadRevisionsParams defines parameters for ListWorkloadRevisions.
 type ListWorkloadRevisionsParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // CreateWorkloadRevisionParams defines parameters for CreateWorkloadRevision.
 type CreateWorkloadRevisionParams struct {
-	WorkspaceId    *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-	IdempotencyKey string  `json:"Idempotency-Key"`
+	WorkspaceId    string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	IdempotencyKey string `json:"Idempotency-Key"`
 }
 
 // GetWorkloadRevisionParams defines parameters for GetWorkloadRevision.
 type GetWorkloadRevisionParams struct {
-	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // CreateConnectionJSONRequestBody defines body for CreateConnection for application/json ContentType.
@@ -516,7 +787,7 @@ type ServerInterface interface {
 	ListOffers(w http.ResponseWriter, r *http.Request, params ListOffersParams)
 
 	// (POST /v1/placements:preview)
-	PreviewPlacement(w http.ResponseWriter, r *http.Request)
+	PreviewPlacement(w http.ResponseWriter, r *http.Request, params PreviewPlacementParams)
 
 	// (GET /v1/runs)
 	ListRuns(w http.ResponseWriter, r *http.Request, params ListRunsParams)
@@ -684,6 +955,14 @@ func (siw *ServerInterfaceWrapper) CreateConnection(w http.ResponseWriter, r *ht
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params CreateConnectionParams
+
+	// ------------- Optional query parameter "workspace_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
 
 	headers := r.Header
 
@@ -861,14 +1140,27 @@ func (siw *ServerInterfaceWrapper) ListOffers(w http.ResponseWriter, r *http.Req
 // PreviewPlacement operation middleware
 func (siw *ServerInterfaceWrapper) PreviewPlacement(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+
 	ctx := r.Context()
 
 	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
 
 	r = r.WithContext(ctx)
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PreviewPlacementParams
+
+	// ------------- Optional query parameter "workspace_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.PreviewPlacement(w, r)
+		siw.Handler.PreviewPlacement(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -924,6 +1216,14 @@ func (siw *ServerInterfaceWrapper) CreateRun(w http.ResponseWriter, r *http.Requ
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params CreateRunParams
+
+	// ------------- Optional query parameter "workspace_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
 
 	headers := r.Header
 
@@ -1185,12 +1485,6 @@ func (siw *ServerInterfaceWrapper) ReportRun(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ReportRunParams
 
@@ -1207,6 +1501,27 @@ func (siw *ServerInterfaceWrapper) ReportRun(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
 		return
+	}
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Authorization" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Authorization")]; found {
+		var Authorization string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Authorization", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Authorization", valueList[0], &Authorization, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Authorization", Err: err})
+			return
+		}
+
+		params.Authorization = Authorization
+
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1714,4 +2029,2372 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("GET "+options.BaseURL+"/v1/workloads/{workload_id}/revisions/{revision_id}", wrapper.GetWorkloadRevision)
 
 	return m
+}
+
+type HealthLiveRequestObject struct {
+}
+
+type HealthLiveResponseObject interface {
+	VisitHealthLiveResponse(w http.ResponseWriter) error
+}
+
+type HealthLive200JSONResponse struct {
+	Status string `json:"status"`
+}
+
+func (response HealthLive200JSONResponse) VisitHealthLiveResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type HealthReadyRequestObject struct {
+}
+
+type HealthReadyResponseObject interface {
+	VisitHealthReadyResponse(w http.ResponseWriter) error
+}
+
+type HealthReady200JSONResponse struct {
+	Status string `json:"status"`
+}
+
+func (response HealthReady200JSONResponse) VisitHealthReadyResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetOpenAPIRequestObject struct {
+}
+
+type GetOpenAPIResponseObject interface {
+	VisitGetOpenAPIResponse(w http.ResponseWriter) error
+}
+
+type GetOpenAPI200JSONResponse map[string]interface{}
+
+func (response GetOpenAPI200JSONResponse) VisitGetOpenAPIResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListAdaptersRequestObject struct {
+}
+
+type ListAdaptersResponseObject interface {
+	VisitListAdaptersResponse(w http.ResponseWriter) error
+}
+
+type ListAdapters200JSONResponse AdapterListResponse
+
+func (response ListAdapters200JSONResponse) VisitListAdaptersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListAdapters401JSONResponse ErrorResponse
+
+func (response ListAdapters401JSONResponse) VisitListAdaptersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListConnectionsRequestObject struct {
+	Params ListConnectionsParams
+}
+
+type ListConnectionsResponseObject interface {
+	VisitListConnectionsResponse(w http.ResponseWriter) error
+}
+
+type ListConnections200JSONResponse ConnectionListResponse
+
+func (response ListConnections200JSONResponse) VisitListConnectionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListConnections400JSONResponse ErrorResponse
+
+func (response ListConnections400JSONResponse) VisitListConnectionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListConnections401JSONResponse ErrorResponse
+
+func (response ListConnections401JSONResponse) VisitListConnectionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListConnections403JSONResponse ErrorResponse
+
+func (response ListConnections403JSONResponse) VisitListConnectionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListConnections500JSONResponse ErrorResponse
+
+func (response ListConnections500JSONResponse) VisitListConnectionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateConnectionRequestObject struct {
+	Params CreateConnectionParams
+	Body   *CreateConnectionJSONRequestBody
+}
+
+type CreateConnectionResponseObject interface {
+	VisitCreateConnectionResponse(w http.ResponseWriter) error
+}
+
+type CreateConnection201JSONResponse ConnectionResponse
+
+func (response CreateConnection201JSONResponse) VisitCreateConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateConnection400JSONResponse ErrorResponse
+
+func (response CreateConnection400JSONResponse) VisitCreateConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateConnection401JSONResponse ErrorResponse
+
+func (response CreateConnection401JSONResponse) VisitCreateConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateConnection403JSONResponse ErrorResponse
+
+func (response CreateConnection403JSONResponse) VisitCreateConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateConnection409JSONResponse ErrorResponse
+
+func (response CreateConnection409JSONResponse) VisitCreateConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateConnection413JSONResponse ErrorResponse
+
+func (response CreateConnection413JSONResponse) VisitCreateConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateConnection500JSONResponse ErrorResponse
+
+func (response CreateConnection500JSONResponse) VisitCreateConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateConnection501JSONResponse ErrorResponse
+
+func (response CreateConnection501JSONResponse) VisitCreateConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteConnectionRequestObject struct {
+	ConnectionId string `json:"connection_id"`
+	Params       DeleteConnectionParams
+}
+
+type DeleteConnectionResponseObject interface {
+	VisitDeleteConnectionResponse(w http.ResponseWriter) error
+}
+
+type DeleteConnection200JSONResponse struct {
+	Deleted bool `json:"deleted"`
+}
+
+func (response DeleteConnection200JSONResponse) VisitDeleteConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteConnection400JSONResponse ErrorResponse
+
+func (response DeleteConnection400JSONResponse) VisitDeleteConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteConnection401JSONResponse ErrorResponse
+
+func (response DeleteConnection401JSONResponse) VisitDeleteConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteConnection403JSONResponse ErrorResponse
+
+func (response DeleteConnection403JSONResponse) VisitDeleteConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteConnection404JSONResponse ErrorResponse
+
+func (response DeleteConnection404JSONResponse) VisitDeleteConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteConnection500JSONResponse ErrorResponse
+
+func (response DeleteConnection500JSONResponse) VisitDeleteConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteConnection501JSONResponse ErrorResponse
+
+func (response DeleteConnection501JSONResponse) VisitDeleteConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AuthorizeConnectionRequestObject struct {
+	ConnectionId string `json:"connection_id"`
+	Params       AuthorizeConnectionParams
+}
+
+type AuthorizeConnectionResponseObject interface {
+	VisitAuthorizeConnectionResponse(w http.ResponseWriter) error
+}
+
+type AuthorizeConnection200JSONResponse ConnectionResponse
+
+func (response AuthorizeConnection200JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AuthorizeConnection400JSONResponse ErrorResponse
+
+func (response AuthorizeConnection400JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AuthorizeConnection401JSONResponse ErrorResponse
+
+func (response AuthorizeConnection401JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AuthorizeConnection403JSONResponse ErrorResponse
+
+func (response AuthorizeConnection403JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AuthorizeConnection500JSONResponse ErrorResponse
+
+func (response AuthorizeConnection500JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AuthorizeConnection501JSONResponse ErrorResponse
+
+func (response AuthorizeConnection501JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type AuthorizeConnection502JSONResponse ErrorResponse
+
+func (response AuthorizeConnection502JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ResolveImageRequestObject struct {
+	Body *ResolveImageJSONRequestBody
+}
+
+type ResolveImageResponseObject interface {
+	VisitResolveImageResponse(w http.ResponseWriter) error
+}
+
+type ResolveImage200JSONResponse ResolveImageResponse
+
+func (response ResolveImage200JSONResponse) VisitResolveImageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ResolveImage400JSONResponse ErrorResponse
+
+func (response ResolveImage400JSONResponse) VisitResolveImageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ResolveImage401JSONResponse ErrorResponse
+
+func (response ResolveImage401JSONResponse) VisitResolveImageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ResolveImage413JSONResponse ErrorResponse
+
+func (response ResolveImage413JSONResponse) VisitResolveImageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ResolveImage501JSONResponse ErrorResponse
+
+func (response ResolveImage501JSONResponse) VisitResolveImageResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListOffersRequestObject struct {
+	Params ListOffersParams
+}
+
+type ListOffersResponseObject interface {
+	VisitListOffersResponse(w http.ResponseWriter) error
+}
+
+type ListOffers200JSONResponse OfferListResponse
+
+func (response ListOffers200JSONResponse) VisitListOffersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListOffers400JSONResponse ErrorResponse
+
+func (response ListOffers400JSONResponse) VisitListOffersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListOffers401JSONResponse ErrorResponse
+
+func (response ListOffers401JSONResponse) VisitListOffersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListOffers403JSONResponse ErrorResponse
+
+func (response ListOffers403JSONResponse) VisitListOffersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListOffers502JSONResponse ErrorResponse
+
+func (response ListOffers502JSONResponse) VisitListOffersResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreviewPlacementRequestObject struct {
+	Params PreviewPlacementParams
+	Body   *PreviewPlacementJSONRequestBody
+}
+
+type PreviewPlacementResponseObject interface {
+	VisitPreviewPlacementResponse(w http.ResponseWriter) error
+}
+
+type PreviewPlacement200JSONResponse PlacementPreviewResponse
+
+func (response PreviewPlacement200JSONResponse) VisitPreviewPlacementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreviewPlacement400JSONResponse ErrorResponse
+
+func (response PreviewPlacement400JSONResponse) VisitPreviewPlacementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreviewPlacement401JSONResponse ErrorResponse
+
+func (response PreviewPlacement401JSONResponse) VisitPreviewPlacementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreviewPlacement403JSONResponse ErrorResponse
+
+func (response PreviewPlacement403JSONResponse) VisitPreviewPlacementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreviewPlacement413JSONResponse ErrorResponse
+
+func (response PreviewPlacement413JSONResponse) VisitPreviewPlacementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PreviewPlacement502JSONResponse ErrorResponse
+
+func (response PreviewPlacement502JSONResponse) VisitPreviewPlacementResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRunsRequestObject struct {
+	Params ListRunsParams
+}
+
+type ListRunsResponseObject interface {
+	VisitListRunsResponse(w http.ResponseWriter) error
+}
+
+type ListRuns200JSONResponse RunListResponse
+
+func (response ListRuns200JSONResponse) VisitListRunsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRuns400JSONResponse ErrorResponse
+
+func (response ListRuns400JSONResponse) VisitListRunsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRuns401JSONResponse ErrorResponse
+
+func (response ListRuns401JSONResponse) VisitListRunsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRuns403JSONResponse ErrorResponse
+
+func (response ListRuns403JSONResponse) VisitListRunsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRuns500JSONResponse ErrorResponse
+
+func (response ListRuns500JSONResponse) VisitListRunsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRunRequestObject struct {
+	Params CreateRunParams
+	Body   *CreateRunJSONRequestBody
+}
+
+type CreateRunResponseObject interface {
+	VisitCreateRunResponse(w http.ResponseWriter) error
+}
+
+type CreateRun202JSONResponse RunResponse
+
+func (response CreateRun202JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRun400JSONResponse ErrorResponse
+
+func (response CreateRun400JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRun401JSONResponse ErrorResponse
+
+func (response CreateRun401JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRun403JSONResponse ErrorResponse
+
+func (response CreateRun403JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRun404JSONResponse ErrorResponse
+
+func (response CreateRun404JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRun409JSONResponse ErrorResponse
+
+func (response CreateRun409JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRun413JSONResponse ErrorResponse
+
+func (response CreateRun413JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRun500JSONResponse ErrorResponse
+
+func (response CreateRun500JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateRun502JSONResponse ErrorResponse
+
+func (response CreateRun502JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRunRequestObject struct {
+	RunId  string `json:"run_id"`
+	Params GetRunParams
+}
+
+type GetRunResponseObject interface {
+	VisitGetRunResponse(w http.ResponseWriter) error
+}
+
+type GetRun200JSONResponse RunResponse
+
+func (response GetRun200JSONResponse) VisitGetRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRun400JSONResponse ErrorResponse
+
+func (response GetRun400JSONResponse) VisitGetRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRun401JSONResponse ErrorResponse
+
+func (response GetRun401JSONResponse) VisitGetRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRun403JSONResponse ErrorResponse
+
+func (response GetRun403JSONResponse) VisitGetRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRun404JSONResponse ErrorResponse
+
+func (response GetRun404JSONResponse) VisitGetRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelRunRequestObject struct {
+	RunId  string `json:"run_id"`
+	Params CancelRunParams
+}
+
+type CancelRunResponseObject interface {
+	VisitCancelRunResponse(w http.ResponseWriter) error
+}
+
+type CancelRun200JSONResponse RunResponse
+
+func (response CancelRun200JSONResponse) VisitCancelRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelRun400JSONResponse ErrorResponse
+
+func (response CancelRun400JSONResponse) VisitCancelRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelRun401JSONResponse ErrorResponse
+
+func (response CancelRun401JSONResponse) VisitCancelRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelRun403JSONResponse ErrorResponse
+
+func (response CancelRun403JSONResponse) VisitCancelRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CancelRun502JSONResponse ErrorResponse
+
+func (response CancelRun502JSONResponse) VisitCancelRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRunDecisionRequestObject struct {
+	RunId  string `json:"run_id"`
+	Params GetRunDecisionParams
+}
+
+type GetRunDecisionResponseObject interface {
+	VisitGetRunDecisionResponse(w http.ResponseWriter) error
+}
+
+type GetRunDecision200JSONResponse PlacementDecisionResponse
+
+func (response GetRunDecision200JSONResponse) VisitGetRunDecisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRunDecision400JSONResponse ErrorResponse
+
+func (response GetRunDecision400JSONResponse) VisitGetRunDecisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRunDecision401JSONResponse ErrorResponse
+
+func (response GetRunDecision401JSONResponse) VisitGetRunDecisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRunDecision403JSONResponse ErrorResponse
+
+func (response GetRunDecision403JSONResponse) VisitGetRunDecisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetRunDecision404JSONResponse ErrorResponse
+
+func (response GetRunDecision404JSONResponse) VisitGetRunDecisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRunEventsRequestObject struct {
+	RunId  string `json:"run_id"`
+	Params ListRunEventsParams
+}
+
+type ListRunEventsResponseObject interface {
+	VisitListRunEventsResponse(w http.ResponseWriter) error
+}
+
+type ListRunEvents200JSONResponse EventListResponse
+
+func (response ListRunEvents200JSONResponse) VisitListRunEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRunEvents400JSONResponse ErrorResponse
+
+func (response ListRunEvents400JSONResponse) VisitListRunEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRunEvents401JSONResponse ErrorResponse
+
+func (response ListRunEvents401JSONResponse) VisitListRunEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRunEvents403JSONResponse ErrorResponse
+
+func (response ListRunEvents403JSONResponse) VisitListRunEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListRunEvents500JSONResponse ErrorResponse
+
+func (response ListRunEvents500JSONResponse) VisitListRunEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RefreshRunRequestObject struct {
+	RunId  string `json:"run_id"`
+	Params RefreshRunParams
+}
+
+type RefreshRunResponseObject interface {
+	VisitRefreshRunResponse(w http.ResponseWriter) error
+}
+
+type RefreshRun200JSONResponse RunResponse
+
+func (response RefreshRun200JSONResponse) VisitRefreshRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RefreshRun400JSONResponse ErrorResponse
+
+func (response RefreshRun400JSONResponse) VisitRefreshRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RefreshRun401JSONResponse ErrorResponse
+
+func (response RefreshRun401JSONResponse) VisitRefreshRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RefreshRun403JSONResponse ErrorResponse
+
+func (response RefreshRun403JSONResponse) VisitRefreshRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type RefreshRun502JSONResponse ErrorResponse
+
+func (response RefreshRun502JSONResponse) VisitRefreshRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReportRunRequestObject struct {
+	RunId  string `json:"run_id"`
+	Params ReportRunParams
+	Body   *ReportRunJSONRequestBody
+}
+
+type ReportRunResponseObject interface {
+	VisitReportRunResponse(w http.ResponseWriter) error
+}
+
+type ReportRun202JSONResponse struct {
+	Recorded bool `json:"recorded"`
+}
+
+func (response ReportRun202JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReportRun400JSONResponse ErrorResponse
+
+func (response ReportRun400JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReportRun401JSONResponse ErrorResponse
+
+func (response ReportRun401JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReportRun404JSONResponse ErrorResponse
+
+func (response ReportRun404JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReportRun413JSONResponse ErrorResponse
+
+func (response ReportRun413JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReportRun501JSONResponse ErrorResponse
+
+func (response ReportRun501JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReportRun502JSONResponse ErrorResponse
+
+func (response ReportRun502JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WaitRunRequestObject struct {
+	RunId  string `json:"run_id"`
+	Params WaitRunParams
+}
+
+type WaitRunResponseObject interface {
+	VisitWaitRunResponse(w http.ResponseWriter) error
+}
+
+type WaitRun200JSONResponse RunResponse
+
+func (response WaitRun200JSONResponse) VisitWaitRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WaitRun202JSONResponse RunResponse
+
+func (response WaitRun202JSONResponse) VisitWaitRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WaitRun400JSONResponse ErrorResponse
+
+func (response WaitRun400JSONResponse) VisitWaitRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WaitRun401JSONResponse ErrorResponse
+
+func (response WaitRun401JSONResponse) VisitWaitRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WaitRun403JSONResponse ErrorResponse
+
+func (response WaitRun403JSONResponse) VisitWaitRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WaitRun404JSONResponse ErrorResponse
+
+func (response WaitRun404JSONResponse) VisitWaitRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WaitRun408JSONResponse ErrorResponse
+
+func (response WaitRun408JSONResponse) VisitWaitRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(408)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSinkStatusRequestObject struct {
+	SinkId string `json:"sink_id"`
+}
+
+type GetSinkStatusResponseObject interface {
+	VisitGetSinkStatusResponse(w http.ResponseWriter) error
+}
+
+type GetSinkStatus200JSONResponse SinkStatus
+
+func (response GetSinkStatus200JSONResponse) VisitGetSinkStatusResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSinkStatus401JSONResponse ErrorResponse
+
+func (response GetSinkStatus401JSONResponse) VisitGetSinkStatusResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSinkStatus404JSONResponse ErrorResponse
+
+func (response GetSinkStatus404JSONResponse) VisitGetSinkStatusResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetSinkStatus501JSONResponse ErrorResponse
+
+func (response GetSinkStatus501JSONResponse) VisitGetSinkStatusResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeliverSinkRequestObject struct {
+	SinkId string `json:"sink_id"`
+}
+
+type DeliverSinkResponseObject interface {
+	VisitDeliverSinkResponse(w http.ResponseWriter) error
+}
+
+type DeliverSink202JSONResponse SinkResult
+
+func (response DeliverSink202JSONResponse) VisitDeliverSinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeliverSink401JSONResponse ErrorResponse
+
+func (response DeliverSink401JSONResponse) VisitDeliverSinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeliverSink501JSONResponse ErrorResponse
+
+func (response DeliverSink501JSONResponse) VisitDeliverSinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeliverSink502JSONResponse ErrorResponse
+
+func (response DeliverSink502JSONResponse) VisitDeliverSinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReplaySinkRequestObject struct {
+	SinkId string `json:"sink_id"`
+	Body   *ReplaySinkJSONRequestBody
+}
+
+type ReplaySinkResponseObject interface {
+	VisitReplaySinkResponse(w http.ResponseWriter) error
+}
+
+type ReplaySink202JSONResponse SinkResult
+
+func (response ReplaySink202JSONResponse) VisitReplaySinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReplaySink400JSONResponse ErrorResponse
+
+func (response ReplaySink400JSONResponse) VisitReplaySinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReplaySink401JSONResponse ErrorResponse
+
+func (response ReplaySink401JSONResponse) VisitReplaySinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReplaySink413JSONResponse ErrorResponse
+
+func (response ReplaySink413JSONResponse) VisitReplaySinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReplaySink501JSONResponse ErrorResponse
+
+func (response ReplaySink501JSONResponse) VisitReplaySinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReplaySink502JSONResponse ErrorResponse
+
+func (response ReplaySink502JSONResponse) VisitReplaySinkResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkloadRequestObject struct {
+	Params CreateWorkloadParams
+	Body   *CreateWorkloadJSONRequestBody
+}
+
+type CreateWorkloadResponseObject interface {
+	VisitCreateWorkloadResponse(w http.ResponseWriter) error
+}
+
+type CreateWorkload202JSONResponse struct {
+	WorkloadId string `json:"workload_id"`
+}
+
+func (response CreateWorkload202JSONResponse) VisitCreateWorkloadResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkload400JSONResponse ErrorResponse
+
+func (response CreateWorkload400JSONResponse) VisitCreateWorkloadResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkload401JSONResponse ErrorResponse
+
+func (response CreateWorkload401JSONResponse) VisitCreateWorkloadResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkload403JSONResponse ErrorResponse
+
+func (response CreateWorkload403JSONResponse) VisitCreateWorkloadResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkload413JSONResponse ErrorResponse
+
+func (response CreateWorkload413JSONResponse) VisitCreateWorkloadResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkload501JSONResponse ErrorResponse
+
+func (response CreateWorkload501JSONResponse) VisitCreateWorkloadResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkloadRevisionsRequestObject struct {
+	WorkloadId string `json:"workload_id"`
+	Params     ListWorkloadRevisionsParams
+}
+
+type ListWorkloadRevisionsResponseObject interface {
+	VisitListWorkloadRevisionsResponse(w http.ResponseWriter) error
+}
+
+type ListWorkloadRevisions200JSONResponse WorkloadRevisionListResponse
+
+func (response ListWorkloadRevisions200JSONResponse) VisitListWorkloadRevisionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkloadRevisions400JSONResponse ErrorResponse
+
+func (response ListWorkloadRevisions400JSONResponse) VisitListWorkloadRevisionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkloadRevisions401JSONResponse ErrorResponse
+
+func (response ListWorkloadRevisions401JSONResponse) VisitListWorkloadRevisionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkloadRevisions403JSONResponse ErrorResponse
+
+func (response ListWorkloadRevisions403JSONResponse) VisitListWorkloadRevisionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkloadRevisions500JSONResponse ErrorResponse
+
+func (response ListWorkloadRevisions500JSONResponse) VisitListWorkloadRevisionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkloadRevisions501JSONResponse ErrorResponse
+
+func (response ListWorkloadRevisions501JSONResponse) VisitListWorkloadRevisionsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkloadRevisionRequestObject struct {
+	WorkloadId string `json:"workload_id"`
+	Params     CreateWorkloadRevisionParams
+	Body       *CreateWorkloadRevisionJSONRequestBody
+}
+
+type CreateWorkloadRevisionResponseObject interface {
+	VisitCreateWorkloadRevisionResponse(w http.ResponseWriter) error
+}
+
+type CreateWorkloadRevision202JSONResponse WorkloadRevisionResponse
+
+func (response CreateWorkloadRevision202JSONResponse) VisitCreateWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkloadRevision400JSONResponse ErrorResponse
+
+func (response CreateWorkloadRevision400JSONResponse) VisitCreateWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkloadRevision401JSONResponse ErrorResponse
+
+func (response CreateWorkloadRevision401JSONResponse) VisitCreateWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkloadRevision403JSONResponse ErrorResponse
+
+func (response CreateWorkloadRevision403JSONResponse) VisitCreateWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkloadRevision413JSONResponse ErrorResponse
+
+func (response CreateWorkloadRevision413JSONResponse) VisitCreateWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkloadRevision501JSONResponse ErrorResponse
+
+func (response CreateWorkloadRevision501JSONResponse) VisitCreateWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkloadRevisionRequestObject struct {
+	WorkloadId string `json:"workload_id"`
+	RevisionId string `json:"revision_id"`
+	Params     GetWorkloadRevisionParams
+}
+
+type GetWorkloadRevisionResponseObject interface {
+	VisitGetWorkloadRevisionResponse(w http.ResponseWriter) error
+}
+
+type GetWorkloadRevision200JSONResponse WorkloadRevisionResponse
+
+func (response GetWorkloadRevision200JSONResponse) VisitGetWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkloadRevision400JSONResponse ErrorResponse
+
+func (response GetWorkloadRevision400JSONResponse) VisitGetWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkloadRevision401JSONResponse ErrorResponse
+
+func (response GetWorkloadRevision401JSONResponse) VisitGetWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkloadRevision403JSONResponse ErrorResponse
+
+func (response GetWorkloadRevision403JSONResponse) VisitGetWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkloadRevision404JSONResponse ErrorResponse
+
+func (response GetWorkloadRevision404JSONResponse) VisitGetWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWorkloadRevision501JSONResponse ErrorResponse
+
+func (response GetWorkloadRevision501JSONResponse) VisitGetWorkloadRevisionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+// StrictServerInterface represents all server handlers.
+type StrictServerInterface interface {
+
+	// (GET /health/live)
+	HealthLive(ctx context.Context, request HealthLiveRequestObject) (HealthLiveResponseObject, error)
+
+	// (GET /health/ready)
+	HealthReady(ctx context.Context, request HealthReadyRequestObject) (HealthReadyResponseObject, error)
+
+	// (GET /openapi.json)
+	GetOpenAPI(ctx context.Context, request GetOpenAPIRequestObject) (GetOpenAPIResponseObject, error)
+
+	// (GET /v1/adapters)
+	ListAdapters(ctx context.Context, request ListAdaptersRequestObject) (ListAdaptersResponseObject, error)
+
+	// (GET /v1/connections)
+	ListConnections(ctx context.Context, request ListConnectionsRequestObject) (ListConnectionsResponseObject, error)
+
+	// (POST /v1/connections)
+	CreateConnection(ctx context.Context, request CreateConnectionRequestObject) (CreateConnectionResponseObject, error)
+
+	// (DELETE /v1/connections/{connection_id})
+	DeleteConnection(ctx context.Context, request DeleteConnectionRequestObject) (DeleteConnectionResponseObject, error)
+
+	// (POST /v1/connections/{connection_id}/authorize)
+	AuthorizeConnection(ctx context.Context, request AuthorizeConnectionRequestObject) (AuthorizeConnectionResponseObject, error)
+
+	// (POST /v1/images:resolve)
+	ResolveImage(ctx context.Context, request ResolveImageRequestObject) (ResolveImageResponseObject, error)
+
+	// (GET /v1/offers)
+	ListOffers(ctx context.Context, request ListOffersRequestObject) (ListOffersResponseObject, error)
+
+	// (POST /v1/placements:preview)
+	PreviewPlacement(ctx context.Context, request PreviewPlacementRequestObject) (PreviewPlacementResponseObject, error)
+
+	// (GET /v1/runs)
+	ListRuns(ctx context.Context, request ListRunsRequestObject) (ListRunsResponseObject, error)
+
+	// (POST /v1/runs)
+	CreateRun(ctx context.Context, request CreateRunRequestObject) (CreateRunResponseObject, error)
+
+	// (GET /v1/runs/{run_id})
+	GetRun(ctx context.Context, request GetRunRequestObject) (GetRunResponseObject, error)
+
+	// (POST /v1/runs/{run_id}/cancel)
+	CancelRun(ctx context.Context, request CancelRunRequestObject) (CancelRunResponseObject, error)
+
+	// (GET /v1/runs/{run_id}/decision)
+	GetRunDecision(ctx context.Context, request GetRunDecisionRequestObject) (GetRunDecisionResponseObject, error)
+
+	// (GET /v1/runs/{run_id}/events)
+	ListRunEvents(ctx context.Context, request ListRunEventsRequestObject) (ListRunEventsResponseObject, error)
+
+	// (POST /v1/runs/{run_id}/refresh)
+	RefreshRun(ctx context.Context, request RefreshRunRequestObject) (RefreshRunResponseObject, error)
+
+	// (POST /v1/runs/{run_id}/report)
+	ReportRun(ctx context.Context, request ReportRunRequestObject) (ReportRunResponseObject, error)
+
+	// (GET /v1/runs/{run_id}/wait)
+	WaitRun(ctx context.Context, request WaitRunRequestObject) (WaitRunResponseObject, error)
+
+	// (GET /v1/sinks/{sink_id})
+	GetSinkStatus(ctx context.Context, request GetSinkStatusRequestObject) (GetSinkStatusResponseObject, error)
+
+	// (POST /v1/sinks/{sink_id}/deliver)
+	DeliverSink(ctx context.Context, request DeliverSinkRequestObject) (DeliverSinkResponseObject, error)
+
+	// (POST /v1/sinks/{sink_id}/replay)
+	ReplaySink(ctx context.Context, request ReplaySinkRequestObject) (ReplaySinkResponseObject, error)
+
+	// (POST /v1/workloads)
+	CreateWorkload(ctx context.Context, request CreateWorkloadRequestObject) (CreateWorkloadResponseObject, error)
+
+	// (GET /v1/workloads/{workload_id}/revisions)
+	ListWorkloadRevisions(ctx context.Context, request ListWorkloadRevisionsRequestObject) (ListWorkloadRevisionsResponseObject, error)
+
+	// (POST /v1/workloads/{workload_id}/revisions)
+	CreateWorkloadRevision(ctx context.Context, request CreateWorkloadRevisionRequestObject) (CreateWorkloadRevisionResponseObject, error)
+
+	// (GET /v1/workloads/{workload_id}/revisions/{revision_id})
+	GetWorkloadRevision(ctx context.Context, request GetWorkloadRevisionRequestObject) (GetWorkloadRevisionResponseObject, error)
+}
+
+type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
+type StrictMiddlewareFunc = strictnethttp.StrictHTTPMiddlewareFunc
+
+type StrictHTTPServerOptions struct {
+	RequestErrorHandlerFunc  func(w http.ResponseWriter, r *http.Request, err error)
+	ResponseErrorHandlerFunc func(w http.ResponseWriter, r *http.Request, err error)
+}
+
+func NewStrictHandler(ssi StrictServerInterface, middlewares []StrictMiddlewareFunc) ServerInterface {
+	return &strictHandler{ssi: ssi, middlewares: middlewares, options: StrictHTTPServerOptions{
+		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		},
+		ResponseErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		},
+	}}
+}
+
+func NewStrictHandlerWithOptions(ssi StrictServerInterface, middlewares []StrictMiddlewareFunc, options StrictHTTPServerOptions) ServerInterface {
+	return &strictHandler{ssi: ssi, middlewares: middlewares, options: options}
+}
+
+type strictHandler struct {
+	ssi         StrictServerInterface
+	middlewares []StrictMiddlewareFunc
+	options     StrictHTTPServerOptions
+}
+
+// HealthLive operation middleware
+func (sh *strictHandler) HealthLive(w http.ResponseWriter, r *http.Request) {
+	var request HealthLiveRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.HealthLive(ctx, request.(HealthLiveRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "HealthLive")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(HealthLiveResponseObject); ok {
+		if err := validResponse.VisitHealthLiveResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// HealthReady operation middleware
+func (sh *strictHandler) HealthReady(w http.ResponseWriter, r *http.Request) {
+	var request HealthReadyRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.HealthReady(ctx, request.(HealthReadyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "HealthReady")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(HealthReadyResponseObject); ok {
+		if err := validResponse.VisitHealthReadyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetOpenAPI operation middleware
+func (sh *strictHandler) GetOpenAPI(w http.ResponseWriter, r *http.Request) {
+	var request GetOpenAPIRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetOpenAPI(ctx, request.(GetOpenAPIRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetOpenAPI")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetOpenAPIResponseObject); ok {
+		if err := validResponse.VisitGetOpenAPIResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListAdapters operation middleware
+func (sh *strictHandler) ListAdapters(w http.ResponseWriter, r *http.Request) {
+	var request ListAdaptersRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListAdapters(ctx, request.(ListAdaptersRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListAdapters")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListAdaptersResponseObject); ok {
+		if err := validResponse.VisitListAdaptersResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListConnections operation middleware
+func (sh *strictHandler) ListConnections(w http.ResponseWriter, r *http.Request, params ListConnectionsParams) {
+	var request ListConnectionsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListConnections(ctx, request.(ListConnectionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListConnections")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListConnectionsResponseObject); ok {
+		if err := validResponse.VisitListConnectionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateConnection operation middleware
+func (sh *strictHandler) CreateConnection(w http.ResponseWriter, r *http.Request, params CreateConnectionParams) {
+	var request CreateConnectionRequestObject
+
+	request.Params = params
+
+	var body CreateConnectionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateConnection(ctx, request.(CreateConnectionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateConnection")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateConnectionResponseObject); ok {
+		if err := validResponse.VisitCreateConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteConnection operation middleware
+func (sh *strictHandler) DeleteConnection(w http.ResponseWriter, r *http.Request, connectionId string, params DeleteConnectionParams) {
+	var request DeleteConnectionRequestObject
+
+	request.ConnectionId = connectionId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteConnection(ctx, request.(DeleteConnectionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteConnection")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteConnectionResponseObject); ok {
+		if err := validResponse.VisitDeleteConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AuthorizeConnection operation middleware
+func (sh *strictHandler) AuthorizeConnection(w http.ResponseWriter, r *http.Request, connectionId string, params AuthorizeConnectionParams) {
+	var request AuthorizeConnectionRequestObject
+
+	request.ConnectionId = connectionId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AuthorizeConnection(ctx, request.(AuthorizeConnectionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AuthorizeConnection")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AuthorizeConnectionResponseObject); ok {
+		if err := validResponse.VisitAuthorizeConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResolveImage operation middleware
+func (sh *strictHandler) ResolveImage(w http.ResponseWriter, r *http.Request) {
+	var request ResolveImageRequestObject
+
+	var body ResolveImageJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResolveImage(ctx, request.(ResolveImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResolveImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResolveImageResponseObject); ok {
+		if err := validResponse.VisitResolveImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListOffers operation middleware
+func (sh *strictHandler) ListOffers(w http.ResponseWriter, r *http.Request, params ListOffersParams) {
+	var request ListOffersRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListOffers(ctx, request.(ListOffersRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListOffers")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListOffersResponseObject); ok {
+		if err := validResponse.VisitListOffersResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PreviewPlacement operation middleware
+func (sh *strictHandler) PreviewPlacement(w http.ResponseWriter, r *http.Request, params PreviewPlacementParams) {
+	var request PreviewPlacementRequestObject
+
+	request.Params = params
+
+	var body PreviewPlacementJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PreviewPlacement(ctx, request.(PreviewPlacementRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PreviewPlacement")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PreviewPlacementResponseObject); ok {
+		if err := validResponse.VisitPreviewPlacementResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListRuns operation middleware
+func (sh *strictHandler) ListRuns(w http.ResponseWriter, r *http.Request, params ListRunsParams) {
+	var request ListRunsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListRuns(ctx, request.(ListRunsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListRuns")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListRunsResponseObject); ok {
+		if err := validResponse.VisitListRunsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateRun operation middleware
+func (sh *strictHandler) CreateRun(w http.ResponseWriter, r *http.Request, params CreateRunParams) {
+	var request CreateRunRequestObject
+
+	request.Params = params
+
+	var body CreateRunJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateRun(ctx, request.(CreateRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateRunResponseObject); ok {
+		if err := validResponse.VisitCreateRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetRun operation middleware
+func (sh *strictHandler) GetRun(w http.ResponseWriter, r *http.Request, runId string, params GetRunParams) {
+	var request GetRunRequestObject
+
+	request.RunId = runId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetRun(ctx, request.(GetRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetRunResponseObject); ok {
+		if err := validResponse.VisitGetRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelRun operation middleware
+func (sh *strictHandler) CancelRun(w http.ResponseWriter, r *http.Request, runId string, params CancelRunParams) {
+	var request CancelRunRequestObject
+
+	request.RunId = runId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelRun(ctx, request.(CancelRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelRunResponseObject); ok {
+		if err := validResponse.VisitCancelRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetRunDecision operation middleware
+func (sh *strictHandler) GetRunDecision(w http.ResponseWriter, r *http.Request, runId string, params GetRunDecisionParams) {
+	var request GetRunDecisionRequestObject
+
+	request.RunId = runId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetRunDecision(ctx, request.(GetRunDecisionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetRunDecision")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetRunDecisionResponseObject); ok {
+		if err := validResponse.VisitGetRunDecisionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListRunEvents operation middleware
+func (sh *strictHandler) ListRunEvents(w http.ResponseWriter, r *http.Request, runId string, params ListRunEventsParams) {
+	var request ListRunEventsRequestObject
+
+	request.RunId = runId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListRunEvents(ctx, request.(ListRunEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListRunEvents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListRunEventsResponseObject); ok {
+		if err := validResponse.VisitListRunEventsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RefreshRun operation middleware
+func (sh *strictHandler) RefreshRun(w http.ResponseWriter, r *http.Request, runId string, params RefreshRunParams) {
+	var request RefreshRunRequestObject
+
+	request.RunId = runId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RefreshRun(ctx, request.(RefreshRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RefreshRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RefreshRunResponseObject); ok {
+		if err := validResponse.VisitRefreshRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ReportRun operation middleware
+func (sh *strictHandler) ReportRun(w http.ResponseWriter, r *http.Request, runId string, params ReportRunParams) {
+	var request ReportRunRequestObject
+
+	request.RunId = runId
+	request.Params = params
+
+	var body ReportRunJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReportRun(ctx, request.(ReportRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReportRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReportRunResponseObject); ok {
+		if err := validResponse.VisitReportRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// WaitRun operation middleware
+func (sh *strictHandler) WaitRun(w http.ResponseWriter, r *http.Request, runId string, params WaitRunParams) {
+	var request WaitRunRequestObject
+
+	request.RunId = runId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.WaitRun(ctx, request.(WaitRunRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "WaitRun")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(WaitRunResponseObject); ok {
+		if err := validResponse.VisitWaitRunResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSinkStatus operation middleware
+func (sh *strictHandler) GetSinkStatus(w http.ResponseWriter, r *http.Request, sinkId string) {
+	var request GetSinkStatusRequestObject
+
+	request.SinkId = sinkId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSinkStatus(ctx, request.(GetSinkStatusRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSinkStatus")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSinkStatusResponseObject); ok {
+		if err := validResponse.VisitGetSinkStatusResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeliverSink operation middleware
+func (sh *strictHandler) DeliverSink(w http.ResponseWriter, r *http.Request, sinkId string) {
+	var request DeliverSinkRequestObject
+
+	request.SinkId = sinkId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeliverSink(ctx, request.(DeliverSinkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeliverSink")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeliverSinkResponseObject); ok {
+		if err := validResponse.VisitDeliverSinkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ReplaySink operation middleware
+func (sh *strictHandler) ReplaySink(w http.ResponseWriter, r *http.Request, sinkId string) {
+	var request ReplaySinkRequestObject
+
+	request.SinkId = sinkId
+
+	var body ReplaySinkJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReplaySink(ctx, request.(ReplaySinkRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReplaySink")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReplaySinkResponseObject); ok {
+		if err := validResponse.VisitReplaySinkResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateWorkload operation middleware
+func (sh *strictHandler) CreateWorkload(w http.ResponseWriter, r *http.Request, params CreateWorkloadParams) {
+	var request CreateWorkloadRequestObject
+
+	request.Params = params
+
+	var body CreateWorkloadJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateWorkload(ctx, request.(CreateWorkloadRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateWorkload")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateWorkloadResponseObject); ok {
+		if err := validResponse.VisitCreateWorkloadResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListWorkloadRevisions operation middleware
+func (sh *strictHandler) ListWorkloadRevisions(w http.ResponseWriter, r *http.Request, workloadId string, params ListWorkloadRevisionsParams) {
+	var request ListWorkloadRevisionsRequestObject
+
+	request.WorkloadId = workloadId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListWorkloadRevisions(ctx, request.(ListWorkloadRevisionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListWorkloadRevisions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListWorkloadRevisionsResponseObject); ok {
+		if err := validResponse.VisitListWorkloadRevisionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateWorkloadRevision operation middleware
+func (sh *strictHandler) CreateWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadId string, params CreateWorkloadRevisionParams) {
+	var request CreateWorkloadRevisionRequestObject
+
+	request.WorkloadId = workloadId
+	request.Params = params
+
+	var body CreateWorkloadRevisionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateWorkloadRevision(ctx, request.(CreateWorkloadRevisionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateWorkloadRevision")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateWorkloadRevisionResponseObject); ok {
+		if err := validResponse.VisitCreateWorkloadRevisionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetWorkloadRevision operation middleware
+func (sh *strictHandler) GetWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadId string, revisionId string, params GetWorkloadRevisionParams) {
+	var request GetWorkloadRevisionRequestObject
+
+	request.WorkloadId = workloadId
+	request.RevisionId = revisionId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWorkloadRevision(ctx, request.(GetWorkloadRevisionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWorkloadRevision")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWorkloadRevisionResponseObject); ok {
+		if err := validResponse.VisitGetWorkloadRevisionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }

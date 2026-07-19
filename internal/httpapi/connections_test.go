@@ -69,9 +69,9 @@ func TestConnectionsListReflectsRegistry(t *testing.T) {
 	handler := newHTTPTestServerWithConns(t, store, nil)
 
 	// Create a connection via the API.
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_registry",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_registry",
 		AdapterType:  "fake",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
@@ -89,7 +89,7 @@ func TestConnectionsListReflectsRegistry(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list connections expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp connectionListResponse
+	var resp ConnectionListResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -116,9 +116,9 @@ func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 	handler := newHTTPTestServerWithConns(t, store, nil, WithVerifier(verifier))
 
 	// Create an unauthorized connection.
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_auth",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_auth",
 		AdapterType:  "fake",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
@@ -136,7 +136,7 @@ func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("authorize expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp connectionResponse
+	var resp ConnectionResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode authorize response: %v", err)
 	}
@@ -155,9 +155,9 @@ func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	handler := newHTTPTestServerWithConns(t, store, nil, WithVerifier(verifier))
 
 	// Create an unauthorized connection.
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_noauth",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_noauth",
 		AdapterType:  "fake",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
@@ -189,7 +189,7 @@ func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp connectionListResponse
+	var resp ConnectionListResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
@@ -208,9 +208,9 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 	resolver := credential.NewResolver(nil, store, testKey32())
 	handler := newHTTPTestServerWithConns(t, store, resolver)
 
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_rp",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_rp",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},
 		Secret:       "rp_live_key",
@@ -227,7 +227,7 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 		t.Fatal("response must not echo the secret")
 	}
 	// Decode the response body and verify that credential.ref is set correctly.
-	var resp connectionResponse
+	var resp ConnectionResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
@@ -277,9 +277,9 @@ func TestSecretNeverLeavesTheServer(t *testing.T) {
 		Resolver: ociresolver.NewStaticResolver(nil),
 	}, WithSecretStore(store), WithCredentialResolver(resolver), WithVerifier(&fakeVerifier{}))
 
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_audit",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_audit",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},
 		Secret:       secret,
@@ -346,9 +346,9 @@ func TestCreateConnectionNoMasterKeyReturnsError(t *testing.T) {
 	resolver := credential.NewResolver(nil, store, nil)
 	handler := newHTTPTestServerWithConns(t, store, resolver)
 
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_rp2",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_rp2",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},
 		Secret:       "rp_live_key",
@@ -373,9 +373,9 @@ func TestDeleteConnectionRemovesRecordAndSecret(t *testing.T) {
 	resolver := credential.NewResolver(nil, store, testKey32())
 	handler := newHTTPTestServerWithConns(t, store, resolver)
 
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_gone",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_gone",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},
 		Secret:       "rp_delete_me",

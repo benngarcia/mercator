@@ -410,29 +410,22 @@ export interface components {
             env?: {
                 [key: string]: components["schemas"]["EnvBinding"];
             };
-            /** @description Full workload revision spec. Takes precedence over the image shorthand when both are supplied. */
-            workload?: Record<string, never>;
+            workload?: components["schemas"]["WorkloadRevision"];
         };
         Run: {
             id: string;
             workspace_id: string;
-            workload_revision_id?: string;
+            workload_revision_id: string;
             phase: string;
             /** @enum {string} */
             outcome?: "succeeded" | "failed" | "cancelled";
-            /** @description Container exit code, surfaced once observed. Absent until a terminal observation is recorded. */
             exit_code?: number;
             /** @enum {string} */
             cleanup: "not_required" | "pending" | "confirmed" | "blocked";
-            /**
-             * @description Recorded cleanup disposition. terminate: the run provisioned a host we own that is destroyed on cleanup. release: the run borrowed a slot in a standing pool we do not own; cleanup removes only our job. Recorded at launch time and dispatched on the recorded value, never re-inferred at cleanup time. Absent until a launch intent is recorded.
-             * @enum {string}
-             */
+            /** @enum {string} */
             disposition?: "release" | "terminate";
             closed: boolean;
-            /** @description Audited principal of the create command: a signed-in operator email, or bearer for machine-token calls. Absent on runs recorded without a principal. */
             created_by?: string;
-            /** @description Audited principal of the cancel command. Absent unless a principal-attributed cancel was recorded. */
             cancelled_by?: string;
         };
         CreateWorkloadRequest: {
@@ -441,20 +434,20 @@ export interface components {
             name: string;
         };
         CreateRevisionRequest: {
-            revision: Record<string, never>;
+            revision: components["schemas"]["WorkloadRevision"];
         };
         WorkloadRevisionResponse: {
-            revision: Record<string, never>;
+            revision: components["schemas"]["WorkloadRevision"];
         };
         WorkloadRevisionListResponse: {
-            revisions: Record<string, never>[];
+            revisions: components["schemas"]["WorkloadRevision"][];
         };
         ResolveImageRequest: {
             image: string;
             platform: string;
         };
         ResolveImageResponse: {
-            image: Record<string, never>;
+            image: components["schemas"]["ResolvedImage"];
         };
         EnvBinding: {
             value?: string;
@@ -477,18 +470,18 @@ export interface components {
             runs: components["schemas"]["Run"][];
         };
         EventListResponse: {
-            events: Record<string, never>[];
+            events: components["schemas"]["CloudEvent"][];
         };
         PlacementPreviewRequest: {
             run_id?: string;
             workspace_id?: string;
-            workload: Record<string, never>;
+            workload: components["schemas"]["WorkloadRevision"];
         };
         PlacementPreviewResponse: {
-            decision: Record<string, never>;
+            decision: components["schemas"]["PlacementDecision"];
         };
         PlacementDecisionResponse: {
-            decision: Record<string, never>;
+            decision: components["schemas"]["PlacementDecision"];
         };
         AdapterListResponse: {
             adapters: components["schemas"]["AdapterManifest"][];
@@ -526,7 +519,7 @@ export interface components {
             }[];
         };
         ConnectionListResponse: {
-            connections: Record<string, never>[];
+            connections: components["schemas"]["ConnectionRecord"][];
         };
         CreateConnectionRequest: {
             /** @description Optional. Defaults to the request's authorized workspace. */
@@ -536,16 +529,12 @@ export interface components {
             config?: {
                 [key: string]: string;
             };
-            credential?: {
-                /** @enum {string} */
-                source?: "env" | "mercator";
-                ref?: string;
-            };
+            credential?: components["schemas"]["Credential"];
             /** @description Write-only: accepted on create, sealed at rest, never echoed in any response. */
             secret?: string;
         };
         ConnectionResponse: {
-            connection: Record<string, never>;
+            connection: components["schemas"]["ConnectionRecord"];
         };
         ReportRunRequest: {
             type: string;
@@ -556,7 +545,7 @@ export interface components {
             exit_code?: number;
         };
         OfferListResponse: {
-            offers: Record<string, never>[];
+            offers: components["schemas"]["OfferSnapshot"][];
         };
         ReplaySinkRequest: {
             from_exclusive?: number;
@@ -578,6 +567,334 @@ export interface components {
         ErrorResponse: {
             code: string;
             message: string;
+            details?: components["schemas"]["Violation"][];
+        };
+        Platform: {
+            os: string;
+            architecture: string;
+        };
+        PortSpec: {
+            name: string;
+            container_port: number;
+            protocol: string;
+            /** @enum {string} */
+            exposure: "none" | "public" | "private";
+        };
+        ContainerSpec: {
+            name: string;
+            image: string;
+            platform: components["schemas"]["Platform"];
+            entrypoint?: string[];
+            args?: string[];
+            env?: {
+                [key: string]: components["schemas"]["EnvBinding"];
+            };
+            ports?: components["schemas"]["PortSpec"][];
+        };
+        CPURequirement: {
+            /** Format: int64 */
+            min_millis: number;
+        };
+        MemoryRequirement: {
+            /** Format: int64 */
+            min_bytes: number;
+        };
+        DiskRequirement: {
+            /** Format: int64 */
+            min_bytes: number;
+        };
+        AcceleratorRequirement: {
+            vendor: string;
+            model_any_of?: string[];
+            count: number;
+            /** Format: int64 */
+            memory_min_bytes: number;
+        };
+        ResourceRequirements: {
+            cpu: components["schemas"]["CPURequirement"];
+            memory: components["schemas"]["MemoryRequirement"];
+            accelerators?: components["schemas"]["AcceleratorRequirement"][];
+            ephemeral_disk: components["schemas"]["DiskRequirement"];
+        };
+        NetworkDownloadRequirement: {
+            /** @enum {string} */
+            scope: "registry" | "public_internet";
+            /** Format: double */
+            min_p10_mbps: number;
+            /** Format: int64 */
+            max_measurement_age_seconds: number;
+            allow_unknown: boolean;
+        };
+        NetworkRequirements: {
+            /** @enum {string} */
+            inbound: "none" | "public_port";
+            download?: components["schemas"]["NetworkDownloadRequirement"];
+        };
+        PlacementPolicy: {
+            /** @enum {string} */
+            objective: "cheapest" | "fastest_start" | "fastest_completion" | "balanced";
+            /** Format: double */
+            max_p90_start_seconds?: number;
+            /** Format: double */
+            expected_runtime_seconds?: number;
+            /** Format: double */
+            max_expected_cost_usd?: number;
+            allow_unknown_pricing?: boolean;
+        };
+        ExecutionPolicy: {
+            /** Format: int64 */
+            max_runtime_seconds: number;
+            max_pre_start_attempts: number;
+        };
+        WorkloadSpec: {
+            containers: components["schemas"]["ContainerSpec"][];
+            resources: components["schemas"]["ResourceRequirements"];
+            network: components["schemas"]["NetworkRequirements"];
+            placement: components["schemas"]["PlacementPolicy"];
+            execution: components["schemas"]["ExecutionPolicy"];
+            metadata?: {
+                [key: string]: string;
+            };
+            raw?: {
+                [key: string]: unknown;
+            };
+        };
+        WorkloadRevision: {
+            id: string;
+            workspace_id: string;
+            workload_id: string;
+            digest: string;
+            spec: components["schemas"]["WorkloadSpec"];
+        };
+        Violation: {
+            code: string;
+            path: string;
+            required?: unknown;
+            offered?: unknown;
+            message: string;
+        };
+        AcceleratorInventory: {
+            vendor: string;
+            model: string;
+            canonical_model?: string;
+            count: number;
+            /** Format: int64 */
+            memory_bytes: number;
+        };
+        ResourceInventory: {
+            /** Format: int64 */
+            cpu_millis: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            /** Format: int64 */
+            ephemeral_disk_bytes: number;
+            accelerators?: components["schemas"]["AcceleratorInventory"][];
+        };
+        ContainerCapabilities: {
+            max_containers: number;
+            supports_digest_refs: boolean;
+            supports_entrypoint_override: boolean;
+            max_environment_bytes: number;
+        };
+        LifecycleCapabilities: {
+            idempotent_launch: string;
+            list_owned: boolean;
+            provider_ttl: boolean;
+            cancel_queued: boolean;
+        };
+        ResourceCapabilities: {
+            gpu_vendors?: string[];
+        };
+        NetworkCapabilities: {
+            /** @enum {string} */
+            inbound: "none" | "public_port";
+            protocols?: string[];
+            public_ipv4: boolean;
+        };
+        PricingCapabilities: {
+            known: boolean;
+        };
+        ObservabilityCapabilities: {
+            logs: string;
+            metrics: string;
+            shell: string;
+        };
+        CapabilityProfile: {
+            offer_kinds?: ("standing" | "provisionable")[];
+            container: components["schemas"]["ContainerCapabilities"];
+            lifecycle: components["schemas"]["LifecycleCapabilities"];
+            resources: components["schemas"]["ResourceCapabilities"];
+            network: components["schemas"]["NetworkCapabilities"];
+            pricing: components["schemas"]["PricingCapabilities"];
+            observability: components["schemas"]["ObservabilityCapabilities"];
+        };
+        NetworkFact: {
+            /** @enum {string} */
+            scope: "registry" | "public_internet";
+            statistic: string;
+            /** Format: double */
+            value_mbps: number;
+            source: string;
+            sample_count: number;
+            /** Format: date-time */
+            observed_at: string;
+            /** Format: date-time */
+            valid_until: string;
+            /** Format: double */
+            confidence: number;
+        };
+        NetworkFacts: {
+            download?: components["schemas"]["NetworkFact"][];
+        };
+        PriceModel: {
+            currency: string;
+            /** Format: double */
+            setup_fee_usd: number;
+            /** Format: double */
+            rate_per_second_usd: number;
+            /** Format: int64 */
+            minimum_charge_seconds: number;
+            /** Format: int64 */
+            granularity_seconds: number;
+            known: boolean;
+        };
+        QueueSnapshot: {
+            /** Format: double */
+            queued_work_seconds: number;
+            active_slots: number;
+        };
+        Estimate: {
+            /** Format: double */
+            p50?: number;
+            /** Format: double */
+            p90?: number;
+            /** Format: double */
+            expected?: number;
+            /** Format: double */
+            confidence?: number;
+            source?: string;
+            sample_count?: number;
+            model_version?: string;
+        };
+        ImageCacheEvidence: {
+            manifest_cached: boolean;
+            /** Format: int64 */
+            missing_bytes: number;
+            known: boolean;
+        };
+        CapacityEvidence: {
+            available: boolean;
+            /** Format: double */
+            confidence: number;
+        };
+        ReliabilityEvidence: {
+            /** Format: double */
+            start_failure_rate?: number;
+            /** Format: double */
+            interruption_rate?: number;
+            /** Format: double */
+            confidence?: number;
+        };
+        OfferSnapshot: {
+            id: string;
+            connection_id: string;
+            adapter_type: string;
+            /** @enum {string} */
+            kind: "standing" | "provisionable";
+            native_ref: string;
+            /** Format: date-time */
+            observed_at: string;
+            /** Format: date-time */
+            expires_at: string;
+            platform: components["schemas"]["Platform"];
+            resources: components["schemas"]["ResourceInventory"];
+            capabilities: components["schemas"]["CapabilityProfile"];
+            network: components["schemas"]["NetworkFacts"];
+            pricing: components["schemas"]["PriceModel"];
+            queue?: components["schemas"]["QueueSnapshot"];
+            provisioning?: components["schemas"]["Estimate"];
+            image_cache: components["schemas"]["ImageCacheEvidence"];
+            capacity: components["schemas"]["CapacityEvidence"];
+            reliability: components["schemas"]["ReliabilityEvidence"];
+        };
+        CollectionReport: {
+            connections_queried?: string[];
+            connections_from_cache?: string[];
+            excluded_connections?: string[];
+        };
+        CandidateEstimates: {
+            queue_seconds: components["schemas"]["Estimate"];
+            provision_seconds: components["schemas"]["Estimate"];
+            pull_seconds: components["schemas"]["Estimate"];
+            start_seconds: components["schemas"]["Estimate"];
+            cost_usd: components["schemas"]["Estimate"];
+        };
+        CandidateDecision: {
+            offer_snapshot_id: string;
+            connection_id?: string;
+            adapter_type?: string;
+            native_ref?: string;
+            feasible: boolean;
+            rejections?: components["schemas"]["Violation"][];
+            estimates: components["schemas"]["CandidateEstimates"];
+            /** Format: double */
+            score_usd?: number;
+        };
+        PlacementDecision: {
+            id: string;
+            run_id?: string;
+            workload_revision_digest: string;
+            /** Format: date-time */
+            evaluated_at: string;
+            model_version: string;
+            policy: components["schemas"]["PlacementPolicy"];
+            collection_report: components["schemas"]["CollectionReport"];
+            candidates: components["schemas"]["CandidateDecision"][];
+            selected_offer_snapshot_id?: string;
+            selection_reason_codes: string[];
+        };
+        CloudEvent: {
+            specversion: string;
+            id: string;
+            source: string;
+            type: string;
+            subject: string;
+            /** Format: date-time */
+            time: string;
+            workspaceid: string;
+            /** Format: int64 */
+            streamversion: number;
+            /** Format: int64 */
+            globalposition: number;
+            correlationid?: string;
+            causationid?: string;
+            data: unknown;
+        };
+        Credential: {
+            /** @enum {string} */
+            source: "env" | "mercator";
+            ref: string;
+        };
+        ConnectionRecord: {
+            id: string;
+            workspace_id: string;
+            adapter_type: string;
+            authorization_schema?: {
+                [key: string]: string;
+            };
+            authorized: boolean;
+            config?: {
+                [key: string]: string;
+            };
+            credential: components["schemas"]["Credential"];
+            created_by?: string;
+            authorized_by?: string;
+        };
+        ResolvedImage: {
+            image: string;
+            digest: string;
+            platform: string;
+            already_pinned?: boolean;
         };
     };
     responses: never;
@@ -646,7 +963,11 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
             };
         };
     };
@@ -679,25 +1000,40 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 500 */
+            /** @description Error response */
             500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
     createRun: {
         parameters: {
-            query?: never;
+            query?: {
+                workspace_id?: string;
+            };
             header: {
                 "Idempotency-Key": string;
             };
@@ -728,19 +1064,32 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 404 */
+            /** @description Error response */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description IdempotencyConflict */
             409: {
@@ -751,26 +1100,32 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 413 */
+            /** @description Error response */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 500 */
+            /** @description Error response */
             500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 502 */
+            /** @description Error response */
             502: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -796,19 +1151,32 @@ export interface operations {
                     "application/json": components["schemas"]["RunResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Run not found */
             404: {
@@ -843,40 +1211,59 @@ export interface operations {
                     "application/json": components["schemas"]["RunResponse"];
                 };
             };
-            /** @description HTTP 202 */
+            /** @description Error response */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RunResponse"];
+                };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 404 */
+            /** @description Error response */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 408 */
+            /** @description Error response */
             408: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -902,26 +1289,41 @@ export interface operations {
                     "application/json": components["schemas"]["RunResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 502 */
+            /** @description Error response */
             502: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -947,26 +1349,41 @@ export interface operations {
                     "application/json": components["schemas"]["RunResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 502 */
+            /** @description Error response */
             502: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -992,26 +1409,41 @@ export interface operations {
                     "application/json": components["schemas"]["EventListResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 500 */
+            /** @description Error response */
             500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1037,32 +1469,49 @@ export interface operations {
                     "application/json": components["schemas"]["PlacementDecisionResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 404 */
+            /** @description Error response */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
     previewPlacement: {
         parameters: {
-            query?: never;
+            query?: {
+                workspace_id?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1109,12 +1558,14 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 413 */
+            /** @description Error response */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Offer query failed */
             502: {
@@ -1156,25 +1607,40 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 500 */
+            /** @description Error response */
             500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
     createConnection: {
         parameters: {
-            query?: never;
+            query?: {
+                workspace_id?: string;
+            };
             header: {
                 "Idempotency-Key": string;
             };
@@ -1205,12 +1671,23 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Idempotency conflict */
             409: {
@@ -1221,26 +1698,32 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 413 */
+            /** @description Error response */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 500 */
+            /** @description Error response */
             500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1268,19 +1751,32 @@ export interface operations {
                     };
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Connection not found */
             404: {
@@ -1291,19 +1787,23 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 500 */
+            /** @description Error response */
             500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1329,33 +1829,50 @@ export interface operations {
                     "application/json": components["schemas"]["ConnectionResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 500 */
+            /** @description Error response */
             500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Connection verification failed */
             502: {
@@ -1386,6 +1903,15 @@ export interface operations {
                     "application/json": components["schemas"]["AdapterListResponse"];
                 };
             };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     reportRun: {
@@ -1393,7 +1919,10 @@ export interface operations {
             query: {
                 workspace_id: string;
             };
-            header?: never;
+            header?: {
+                /** @description Per-run bearer token issued in the launch reporting environment. */
+                Authorization?: string;
+            };
             path: {
                 run_id: string;
             };
@@ -1416,12 +1945,14 @@ export interface operations {
                     };
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Invalid run token */
             401: {
@@ -1441,26 +1972,32 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 413 */
+            /** @description Error response */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 502 */
+            /** @description Error response */
             502: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1493,19 +2030,32 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 502 */
+            /** @description Error response */
             502: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1544,26 +2094,41 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 413 */
+            /** @description Error response */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1589,33 +2154,50 @@ export interface operations {
                     "application/json": components["schemas"]["WorkloadRevisionListResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 500 */
+            /** @description Error response */
             500: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1647,33 +2229,50 @@ export interface operations {
                     "application/json": components["schemas"]["WorkloadRevisionResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 413 */
+            /** @description Error response */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1700,33 +2299,50 @@ export interface operations {
                     "application/json": components["schemas"]["WorkloadRevisionResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 403 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 404 */
+            /** @description Error response */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1752,26 +2368,41 @@ export interface operations {
                     "application/json": components["schemas"]["ResolveImageResponse"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 413 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1795,6 +2426,15 @@ export interface operations {
                     "application/json": components["schemas"]["SinkStatus"];
                 };
             };
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Sink not found */
             404: {
                 headers: {
@@ -1804,12 +2444,14 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -1833,12 +2475,23 @@ export interface operations {
                     "application/json": components["schemas"]["SinkResult"];
                 };
             };
-            /** @description HTTP 501 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Sink delivery failed */
             502: {
@@ -1875,26 +2528,41 @@ export interface operations {
                     "application/json": components["schemas"]["SinkResult"];
                 };
             };
-            /** @description HTTP 400 */
+            /** @description Error response */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 413 */
+            /** @description Authentication failed */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error response */
             413: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description HTTP 501 */
+            /** @description Error response */
             501: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Sink replay failed */
             502: {

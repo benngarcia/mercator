@@ -3,7 +3,9 @@
 Mercator serves its OpenAPI 3.0 contract at `/openapi.json`. The checked-in
 `internal/httpapi/openapi.json` file generates the Go router and the console's
 private transport types. Run `scripts/generate-api-contracts.sh` after editing
-it; CI rejects stale generated code.
+it; CI rejects stale generated code. Go handlers implement the generated strict
+interface, so request decoding and status-specific response serialization stay
+inside the generated transport seam.
 
 ```sh
 curl -fsS "$MERCATOR_API_URL/openapi.json" | jq '.info'

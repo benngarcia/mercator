@@ -68,7 +68,15 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "OpenAPI document"
+            "description": "OpenAPI document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
           }
         }
       }
@@ -107,11 +115,35 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "500": {
-            "description": "HTTP 500"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -122,6 +154,14 @@
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -158,11 +198,35 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": "HTTP 404"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
             "description": "IdempotencyConflict",
@@ -175,13 +239,34 @@
             }
           },
           "413": {
-            "description": "HTTP 413"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "500": {
-            "description": "HTTP 500"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
-            "description": "HTTP 502"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -219,10 +304,34 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Run not found",
@@ -270,19 +379,64 @@
             }
           },
           "202": {
-            "description": "HTTP 202"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": "HTTP 404"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "408": {
-            "description": "HTTP 408"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -320,13 +474,44 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
-            "description": "HTTP 502"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -364,13 +549,44 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
-            "description": "HTTP 502"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -408,13 +624,44 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "500": {
-            "description": "HTTP 500"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -452,13 +699,44 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": "HTTP 404"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -466,6 +744,16 @@
     "/v1/placements:preview": {
       "post": {
         "operationId": "previewPlacement",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -518,7 +806,14 @@
             }
           },
           "413": {
-            "description": "HTTP 413"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
             "description": "Offer query failed",
@@ -567,11 +862,35 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "500": {
-            "description": "HTTP 500"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -582,6 +901,14 @@
             "name": "Idempotency-Key",
             "in": "header",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -618,8 +945,25 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
             "description": "Idempotency conflict",
@@ -632,13 +976,34 @@
             }
           },
           "413": {
-            "description": "HTTP 413"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "500": {
-            "description": "HTTP 500"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -685,10 +1050,34 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Connection not found",
@@ -701,10 +1090,24 @@
             }
           },
           "500": {
-            "description": "HTTP 500"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -742,16 +1145,54 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "500": {
-            "description": "HTTP 500"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
             "description": "Connection verification failed",
@@ -780,6 +1221,16 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -788,6 +1239,7 @@
       "post": {
         "operationId": "reportRun",
         "description": "Workload-facing report ingest. Authenticated with the per-run bearer token injected as MERCATOR_RUN_TOKEN (not the operator token).",
+        "security": [],
         "parameters": [
           {
             "name": "run_id",
@@ -804,6 +1256,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Per-run bearer token issued in the launch reporting environment."
           }
         ],
         "requestBody": {
@@ -836,7 +1297,14 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Invalid run token",
@@ -859,13 +1327,34 @@
             }
           },
           "413": {
-            "description": "HTTP 413"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
-            "description": "HTTP 502"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -904,11 +1393,35 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
-            "description": "HTTP 502"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -965,14 +1478,45 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "413": {
-            "description": "HTTP 413"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1010,16 +1554,54 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "500": {
-            "description": "HTTP 500"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -1073,16 +1655,54 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "413": {
-            "description": "HTTP 413"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1128,16 +1748,54 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "403": {
-            "description": "HTTP 403"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": "HTTP 404"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1167,13 +1825,44 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "413": {
-            "description": "HTTP 413"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1202,6 +1891,16 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Sink not found",
             "content": {
@@ -1213,7 +1912,14 @@
             }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1242,8 +1948,25 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
             "description": "Sink delivery failed",
@@ -1293,13 +2016,44 @@
             }
           },
           "400": {
-            "description": "HTTP 400"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "413": {
-            "description": "HTTP 413"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "501": {
-            "description": "HTTP 501"
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "502": {
             "description": "Sink replay failed",
@@ -1359,8 +2113,7 @@
             }
           },
           "workload": {
-            "type": "object",
-            "description": "Full workload revision spec. Takes precedence over the image shorthand when both are supplied."
+            "$ref": "#/components/schemas/WorkloadRevision"
           }
         }
       },
@@ -1369,6 +2122,7 @@
         "required": [
           "id",
           "workspace_id",
+          "workload_revision_id",
           "phase",
           "cleanup",
           "closed"
@@ -1395,8 +2149,7 @@
             ]
           },
           "exit_code": {
-            "type": "integer",
-            "description": "Container exit code, surfaced once observed. Absent until a terminal observation is recorded."
+            "type": "integer"
           },
           "cleanup": {
             "type": "string",
@@ -1412,20 +2165,22 @@
             "enum": [
               "release",
               "terminate"
-            ],
-            "description": "Recorded cleanup disposition. terminate: the run provisioned a host we own that is destroyed on cleanup. release: the run borrowed a slot in a standing pool we do not own; cleanup removes only our job. Recorded at launch time and dispatched on the recorded value, never re-inferred at cleanup time. Absent until a launch intent is recorded."
+            ]
           },
           "closed": {
             "type": "boolean"
           },
           "created_by": {
-            "type": "string",
-            "description": "Audited principal of the create command: a signed-in operator email, or bearer for machine-token calls. Absent on runs recorded without a principal."
+            "type": "string"
           },
           "cancelled_by": {
-            "type": "string",
-            "description": "Audited principal of the cancel command. Absent unless a principal-attributed cancel was recorded."
+            "type": "string"
           }
+        },
+        "x-go-type": "domain.RunRecord",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
         }
       },
       "CreateWorkloadRequest": {
@@ -1454,7 +2209,7 @@
         ],
         "properties": {
           "revision": {
-            "type": "object"
+            "$ref": "#/components/schemas/WorkloadRevision"
           }
         }
       },
@@ -1465,7 +2220,7 @@
         ],
         "properties": {
           "revision": {
-            "type": "object"
+            "$ref": "#/components/schemas/WorkloadRevision"
           }
         }
       },
@@ -1478,7 +2233,7 @@
           "revisions": {
             "type": "array",
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/WorkloadRevision"
             }
           }
         }
@@ -1505,7 +2260,7 @@
         ],
         "properties": {
           "image": {
-            "type": "object"
+            "$ref": "#/components/schemas/ResolvedImage"
           }
         }
       },
@@ -1515,6 +2270,11 @@
           "value": {
             "type": "string"
           }
+        },
+        "x-go-type": "domain.EnvBinding",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
         }
       },
       "RunResponse": {
@@ -1571,7 +2331,7 @@
           "events": {
             "type": "array",
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/CloudEvent"
             }
           }
         }
@@ -1589,7 +2349,7 @@
             "type": "string"
           },
           "workload": {
-            "type": "object"
+            "$ref": "#/components/schemas/WorkloadRevision"
           }
         }
       },
@@ -1600,7 +2360,7 @@
         ],
         "properties": {
           "decision": {
-            "type": "object"
+            "$ref": "#/components/schemas/PlacementDecision"
           }
         }
       },
@@ -1611,7 +2371,7 @@
         ],
         "properties": {
           "decision": {
-            "type": "object"
+            "$ref": "#/components/schemas/PlacementDecision"
           }
         }
       },
@@ -1736,6 +2496,11 @@
               }
             }
           }
+        },
+        "x-go-type": "adapter.Manifest",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/adapter",
+          "name": "adapter"
         }
       },
       "ConnectionListResponse": {
@@ -1747,7 +2512,7 @@
           "connections": {
             "type": "array",
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/ConnectionRecord"
             }
           }
         }
@@ -1776,19 +2541,7 @@
             }
           },
           "credential": {
-            "type": "object",
-            "properties": {
-              "source": {
-                "type": "string",
-                "enum": [
-                  "env",
-                  "mercator"
-                ]
-              },
-              "ref": {
-                "type": "string"
-              }
-            }
+            "$ref": "#/components/schemas/Credential"
           },
           "secret": {
             "type": "string",
@@ -1803,7 +2556,7 @@
         ],
         "properties": {
           "connection": {
-            "type": "object"
+            "$ref": "#/components/schemas/ConnectionRecord"
           }
         }
       },
@@ -1818,11 +2571,13 @@
           },
           "data": {
             "type": "object",
-            "additionalProperties": true
+            "additionalProperties": true,
+            "x-go-type": "json.RawMessage"
           },
           "exit_code": {
             "type": "integer",
-            "description": "Terminal exit code; when present the broker records the authoritative outcome and requests cleanup."
+            "description": "Terminal exit code; when present the broker records the authoritative outcome and requests cleanup.",
+            "x-go-type-skip-optional-pointer": false
           }
         }
       },
@@ -1835,7 +2590,7 @@
           "offers": {
             "type": "array",
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/OfferSnapshot"
             }
           }
         }
@@ -1879,6 +2634,11 @@
           "replay_id": {
             "type": "string"
           }
+        },
+        "x-go-type": "sinks.Result",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/sinks",
+          "name": "sinks"
         }
       },
       "SinkStatus": {
@@ -1898,6 +2658,11 @@
           "has_cursor": {
             "type": "boolean"
           }
+        },
+        "x-go-type": "sinks.Status",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/sinks",
+          "name": "sinks"
         }
       },
       "ErrorResponse": {
@@ -1912,7 +2677,1170 @@
           },
           "message": {
             "type": "string"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Violation"
+            }
           }
+        }
+      },
+      "Platform": {
+        "type": "object",
+        "required": [
+          "os",
+          "architecture"
+        ],
+        "properties": {
+          "os": {
+            "type": "string"
+          },
+          "architecture": {
+            "type": "string"
+          }
+        }
+      },
+      "PortSpec": {
+        "type": "object",
+        "required": [
+          "name",
+          "container_port",
+          "protocol",
+          "exposure"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "container_port": {
+            "type": "integer"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "exposure": {
+            "type": "string",
+            "enum": [
+              "none",
+              "public",
+              "private"
+            ]
+          }
+        }
+      },
+      "ContainerSpec": {
+        "type": "object",
+        "required": [
+          "name",
+          "image",
+          "platform"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "entrypoint": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EnvBinding"
+            }
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortSpec"
+            }
+          }
+        }
+      },
+      "CPURequirement": {
+        "type": "object",
+        "required": [
+          "min_millis"
+        ],
+        "properties": {
+          "min_millis": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "MemoryRequirement": {
+        "type": "object",
+        "required": [
+          "min_bytes"
+        ],
+        "properties": {
+          "min_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DiskRequirement": {
+        "type": "object",
+        "required": [
+          "min_bytes"
+        ],
+        "properties": {
+          "min_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AcceleratorRequirement": {
+        "type": "object",
+        "required": [
+          "vendor",
+          "count",
+          "memory_min_bytes"
+        ],
+        "properties": {
+          "vendor": {
+            "type": "string"
+          },
+          "model_any_of": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "memory_min_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ResourceRequirements": {
+        "type": "object",
+        "required": [
+          "cpu",
+          "memory",
+          "ephemeral_disk"
+        ],
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/CPURequirement"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MemoryRequirement"
+          },
+          "accelerators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AcceleratorRequirement"
+            }
+          },
+          "ephemeral_disk": {
+            "$ref": "#/components/schemas/DiskRequirement"
+          }
+        }
+      },
+      "NetworkDownloadRequirement": {
+        "type": "object",
+        "required": [
+          "scope",
+          "min_p10_mbps",
+          "max_measurement_age_seconds",
+          "allow_unknown"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "registry",
+              "public_internet"
+            ]
+          },
+          "min_p10_mbps": {
+            "type": "number",
+            "format": "double"
+          },
+          "max_measurement_age_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "allow_unknown": {
+            "type": "boolean"
+          }
+        }
+      },
+      "NetworkRequirements": {
+        "type": "object",
+        "required": [
+          "inbound"
+        ],
+        "properties": {
+          "inbound": {
+            "type": "string",
+            "enum": [
+              "none",
+              "public_port"
+            ]
+          },
+          "download": {
+            "$ref": "#/components/schemas/NetworkDownloadRequirement"
+          }
+        }
+      },
+      "PlacementPolicy": {
+        "type": "object",
+        "required": [
+          "objective"
+        ],
+        "properties": {
+          "objective": {
+            "type": "string",
+            "enum": [
+              "cheapest",
+              "fastest_start",
+              "fastest_completion",
+              "balanced"
+            ]
+          },
+          "max_p90_start_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "expected_runtime_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "max_expected_cost_usd": {
+            "type": "number",
+            "format": "double"
+          },
+          "allow_unknown_pricing": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ExecutionPolicy": {
+        "type": "object",
+        "required": [
+          "max_runtime_seconds",
+          "max_pre_start_attempts"
+        ],
+        "properties": {
+          "max_runtime_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "max_pre_start_attempts": {
+            "type": "integer"
+          }
+        }
+      },
+      "WorkloadSpec": {
+        "type": "object",
+        "required": [
+          "containers",
+          "resources",
+          "network",
+          "placement",
+          "execution"
+        ],
+        "properties": {
+          "containers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerSpec"
+            }
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceRequirements"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkRequirements"
+          },
+          "placement": {
+            "$ref": "#/components/schemas/PlacementPolicy"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionPolicy"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "raw": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "WorkloadRevision": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspace_id",
+          "workload_id",
+          "digest",
+          "spec"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "workload_id": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/WorkloadSpec"
+          }
+        },
+        "x-go-type": "domain.WorkloadRevision",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
+        }
+      },
+      "Violation": {
+        "type": "object",
+        "required": [
+          "code",
+          "path",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "required": {},
+          "offered": {},
+          "message": {
+            "type": "string"
+          }
+        },
+        "x-go-type": "domain.Violation",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
+        }
+      },
+      "AcceleratorInventory": {
+        "type": "object",
+        "required": [
+          "vendor",
+          "model",
+          "count",
+          "memory_bytes"
+        ],
+        "properties": {
+          "vendor": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "canonical_model": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ResourceInventory": {
+        "type": "object",
+        "required": [
+          "cpu_millis",
+          "memory_bytes",
+          "ephemeral_disk_bytes"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ephemeral_disk_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "accelerators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AcceleratorInventory"
+            }
+          }
+        }
+      },
+      "ContainerCapabilities": {
+        "type": "object",
+        "required": [
+          "max_containers",
+          "supports_digest_refs",
+          "supports_entrypoint_override",
+          "max_environment_bytes"
+        ],
+        "properties": {
+          "max_containers": {
+            "type": "integer"
+          },
+          "supports_digest_refs": {
+            "type": "boolean"
+          },
+          "supports_entrypoint_override": {
+            "type": "boolean"
+          },
+          "max_environment_bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "LifecycleCapabilities": {
+        "type": "object",
+        "required": [
+          "idempotent_launch",
+          "list_owned",
+          "provider_ttl",
+          "cancel_queued"
+        ],
+        "properties": {
+          "idempotent_launch": {
+            "type": "string"
+          },
+          "list_owned": {
+            "type": "boolean"
+          },
+          "provider_ttl": {
+            "type": "boolean"
+          },
+          "cancel_queued": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ResourceCapabilities": {
+        "type": "object",
+        "properties": {
+          "gpu_vendors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "NetworkCapabilities": {
+        "type": "object",
+        "required": [
+          "inbound",
+          "public_ipv4"
+        ],
+        "properties": {
+          "inbound": {
+            "type": "string",
+            "enum": [
+              "none",
+              "public_port"
+            ]
+          },
+          "protocols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "public_ipv4": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PricingCapabilities": {
+        "type": "object",
+        "required": [
+          "known"
+        ],
+        "properties": {
+          "known": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ObservabilityCapabilities": {
+        "type": "object",
+        "required": [
+          "logs",
+          "metrics",
+          "shell"
+        ],
+        "properties": {
+          "logs": {
+            "type": "string"
+          },
+          "metrics": {
+            "type": "string"
+          },
+          "shell": {
+            "type": "string"
+          }
+        }
+      },
+      "CapabilityProfile": {
+        "type": "object",
+        "required": [
+          "container",
+          "lifecycle",
+          "resources",
+          "network",
+          "pricing",
+          "observability"
+        ],
+        "properties": {
+          "offer_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "standing",
+                "provisionable"
+              ]
+            }
+          },
+          "container": {
+            "$ref": "#/components/schemas/ContainerCapabilities"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/LifecycleCapabilities"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceCapabilities"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkCapabilities"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/PricingCapabilities"
+          },
+          "observability": {
+            "$ref": "#/components/schemas/ObservabilityCapabilities"
+          }
+        }
+      },
+      "NetworkFact": {
+        "type": "object",
+        "required": [
+          "scope",
+          "statistic",
+          "value_mbps",
+          "source",
+          "sample_count",
+          "observed_at",
+          "valid_until",
+          "confidence"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "registry",
+              "public_internet"
+            ]
+          },
+          "statistic": {
+            "type": "string"
+          },
+          "value_mbps": {
+            "type": "number",
+            "format": "double"
+          },
+          "source": {
+            "type": "string"
+          },
+          "sample_count": {
+            "type": "integer"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "NetworkFacts": {
+        "type": "object",
+        "properties": {
+          "download": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NetworkFact"
+            }
+          }
+        }
+      },
+      "PriceModel": {
+        "type": "object",
+        "required": [
+          "currency",
+          "setup_fee_usd",
+          "rate_per_second_usd",
+          "minimum_charge_seconds",
+          "granularity_seconds",
+          "known"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "setup_fee_usd": {
+            "type": "number",
+            "format": "double"
+          },
+          "rate_per_second_usd": {
+            "type": "number",
+            "format": "double"
+          },
+          "minimum_charge_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "granularity_seconds": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "known": {
+            "type": "boolean"
+          }
+        }
+      },
+      "QueueSnapshot": {
+        "type": "object",
+        "required": [
+          "queued_work_seconds",
+          "active_slots"
+        ],
+        "properties": {
+          "queued_work_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "active_slots": {
+            "type": "integer"
+          }
+        }
+      },
+      "Estimate": {
+        "type": "object",
+        "properties": {
+          "p50": {
+            "type": "number",
+            "format": "double"
+          },
+          "p90": {
+            "type": "number",
+            "format": "double"
+          },
+          "expected": {
+            "type": "number",
+            "format": "double"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "source": {
+            "type": "string"
+          },
+          "sample_count": {
+            "type": "integer"
+          },
+          "model_version": {
+            "type": "string"
+          }
+        }
+      },
+      "ImageCacheEvidence": {
+        "type": "object",
+        "required": [
+          "manifest_cached",
+          "missing_bytes",
+          "known"
+        ],
+        "properties": {
+          "manifest_cached": {
+            "type": "boolean"
+          },
+          "missing_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "known": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CapacityEvidence": {
+        "type": "object",
+        "required": [
+          "available",
+          "confidence"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "ReliabilityEvidence": {
+        "type": "object",
+        "properties": {
+          "start_failure_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "interruption_rate": {
+            "type": "number",
+            "format": "double"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "OfferSnapshot": {
+        "type": "object",
+        "required": [
+          "id",
+          "connection_id",
+          "adapter_type",
+          "kind",
+          "native_ref",
+          "observed_at",
+          "expires_at",
+          "platform",
+          "resources",
+          "capabilities",
+          "network",
+          "pricing",
+          "image_cache",
+          "capacity",
+          "reliability"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "adapter_type": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "standing",
+              "provisionable"
+            ]
+          },
+          "native_ref": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/Platform"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceInventory"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/CapabilityProfile"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkFacts"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/PriceModel"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/QueueSnapshot"
+          },
+          "provisioning": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "image_cache": {
+            "$ref": "#/components/schemas/ImageCacheEvidence"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/CapacityEvidence"
+          },
+          "reliability": {
+            "$ref": "#/components/schemas/ReliabilityEvidence"
+          }
+        },
+        "x-go-type": "domain.OfferSnapshot",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
+        }
+      },
+      "CollectionReport": {
+        "type": "object",
+        "properties": {
+          "connections_queried": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "connections_from_cache": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "excluded_connections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CandidateEstimates": {
+        "type": "object",
+        "required": [
+          "queue_seconds",
+          "provision_seconds",
+          "pull_seconds",
+          "start_seconds",
+          "cost_usd"
+        ],
+        "properties": {
+          "queue_seconds": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "provision_seconds": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "pull_seconds": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "start_seconds": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "cost_usd": {
+            "$ref": "#/components/schemas/Estimate"
+          }
+        }
+      },
+      "CandidateDecision": {
+        "type": "object",
+        "required": [
+          "offer_snapshot_id",
+          "feasible",
+          "estimates"
+        ],
+        "properties": {
+          "offer_snapshot_id": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "adapter_type": {
+            "type": "string"
+          },
+          "native_ref": {
+            "type": "string"
+          },
+          "feasible": {
+            "type": "boolean"
+          },
+          "rejections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Violation"
+            }
+          },
+          "estimates": {
+            "$ref": "#/components/schemas/CandidateEstimates"
+          },
+          "score_usd": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "PlacementDecision": {
+        "type": "object",
+        "required": [
+          "id",
+          "workload_revision_digest",
+          "evaluated_at",
+          "model_version",
+          "policy",
+          "collection_report",
+          "candidates",
+          "selection_reason_codes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "workload_revision_digest": {
+            "type": "string"
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "model_version": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/PlacementPolicy"
+          },
+          "collection_report": {
+            "$ref": "#/components/schemas/CollectionReport"
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandidateDecision"
+            }
+          },
+          "selected_offer_snapshot_id": {
+            "type": "string"
+          },
+          "selection_reason_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "x-go-type": "domain.PlacementDecision",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
+        }
+      },
+      "CloudEvent": {
+        "type": "object",
+        "required": [
+          "specversion",
+          "id",
+          "source",
+          "type",
+          "subject",
+          "time",
+          "workspaceid",
+          "streamversion",
+          "globalposition",
+          "data"
+        ],
+        "properties": {
+          "specversion": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "workspaceid": {
+            "type": "string"
+          },
+          "streamversion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "globalposition": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "correlationid": {
+            "type": "string"
+          },
+          "causationid": {
+            "type": "string"
+          },
+          "data": {}
+        },
+        "x-go-type": "eventlog.CloudEvent",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/eventlog",
+          "name": "eventlog"
+        }
+      },
+      "Credential": {
+        "type": "object",
+        "required": [
+          "source",
+          "ref"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "env",
+              "mercator"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          }
+        },
+        "x-go-type": "credential.Credential",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/credential",
+          "name": "credential"
+        }
+      },
+      "ConnectionRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspace_id",
+          "adapter_type",
+          "authorized",
+          "credential"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "adapter_type": {
+            "type": "string"
+          },
+          "authorization_schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "authorized": {
+            "type": "boolean"
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "credential": {
+            "$ref": "#/components/schemas/Credential"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "authorized_by": {
+            "type": "string"
+          }
+        },
+        "x-go-type": "connection.Record",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/connection",
+          "name": "connection"
+        }
+      },
+      "ResolvedImage": {
+        "type": "object",
+        "required": [
+          "image",
+          "digest",
+          "platform"
+        ],
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "already_pinned": {
+            "type": "boolean"
+          }
+        },
+        "x-go-type": "ociresolver.ResolvedImage",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/ociresolver",
+          "name": "ociresolver"
         }
       }
     }

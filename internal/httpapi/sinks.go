@@ -1,50 +1,48 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/benngarcia/mercator/internal/eventlog"
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
 )
 
-func (s *Server) GetSinkStatus(w http.ResponseWriter, r *http.Request, sinkID string) {
+func (s *Server) GetSinkStatus(ctx context.Context, request GetSinkStatusRequestObject) (GetSinkStatusResponseObject, error) {
 	if s.sinks == nil {
-		writeError(w, http.StatusNotImplemented, "SINKS_DISABLED", "Sink manager is not configured.")
-		return
+		return GetSinkStatus501JSONResponse(apiError("SINKS_DISABLED", "Sink manager is not configured.")), nil
 	}
-	status, err := s.sinks.Status(r.Context(), sinkID)
+	status, err := s.sinks.Status(ctx, request.SinkId)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "SINK_NOT_FOUND", err.Error())
-		return
+		return GetSinkStatus404JSONResponse(apiError("SINK_NOT_FOUND", err.Error())), nil
 	}
-	writeJSON(w, http.StatusOK, status)
+	return GetSinkStatus200JSONResponse(status), nil
 }
 
-func (s *Server) DeliverSink(w http.ResponseWriter, r *http.Request, sinkID string) {
+func (s *Server) DeliverSink(ctx context.Context, request DeliverSinkRequestObject) (DeliverSinkResponseObject, error) {
 	if s.sinks == nil {
-		writeError(w, http.StatusNotImplemented, "SINKS_DISABLED", "Sink manager is not configured.")
-		return
+		return DeliverSink501JSONResponse(apiError("SINKS_DISABLED", "Sink manager is not configured.")), nil
 	}
-	result, err := s.sinks.DeliverOnce(r.Context(), sinkID)
+	result, err := s.sinks.DeliverOnce(ctx, request.SinkId)
 	if err != nil {
-		writeInternalError(w, http.StatusBadGateway, "SINK_DELIVERY_FAILED", err)
-		return
+		return DeliverSink502JSONResponse(internalAPIError(http.StatusBadGateway, "SINK_DELIVERY_FAILED", err)), nil
 	}
-	writeJSON(w, http.StatusAccepted, result)
+	return DeliverSink202JSONResponse(result), nil
 }
 
-func (s *Server) ReplaySink(w http.ResponseWriter, r *http.Request, sinkID string) {
+func (s *Server) ReplaySink(ctx context.Context, request ReplaySinkRequestObject) (ReplaySinkResponseObject, error) {
 	if s.sinks == nil {
-		writeError(w, http.StatusNotImplemented, "SINKS_DISABLED", "Sink manager is not configured.")
-		return
+		return ReplaySink501JSONResponse(apiError("SINKS_DISABLED", "Sink manager is not configured.")), nil
 	}
-	var body replaySinkBody
-	if !decodeJSONBody(w, r, &body) {
-		return
-	}
-	result, err := s.sinks.Replay(r.Context(), sinkspkg.ReplayRequest{SinkID: sinkID, FromExclusive: body.FromExclusive, Limit: body.Limit, ReplayID: body.ReplayID})
+	body := request.Body
+	result, err := s.sinks.Replay(ctx, sinkspkg.ReplayRequest{
+		SinkID:        request.SinkId,
+		FromExclusive: eventlog.GlobalPosition(body.FromExclusive),
+		Limit:         body.Limit,
+		ReplayID:      body.ReplayId,
+	})
 	if err != nil {
-		writeInternalError(w, http.StatusBadGateway, "SINK_REPLAY_FAILED", err)
-		return
+		return ReplaySink502JSONResponse(internalAPIError(http.StatusBadGateway, "SINK_REPLAY_FAILED", err)), nil
 	}
-	writeJSON(w, http.StatusAccepted, result)
+	return ReplaySink202JSONResponse(result), nil
 }

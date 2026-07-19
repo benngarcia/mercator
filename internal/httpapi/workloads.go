@@ -1,89 +1,79 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/benngarcia/mercator/internal/workload"
 )
 
-func (s *Server) CreateWorkload(w http.ResponseWriter, r *http.Request, _ CreateWorkloadParams) {
+func (s *Server) CreateWorkload(ctx context.Context, request CreateWorkloadRequestObject) (CreateWorkloadResponseObject, error) {
 	if s.workloads == nil {
-		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
-		return
+		return CreateWorkload501JSONResponse(apiError("WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")), nil
 	}
-	if r.Header.Get("Idempotency-Key") == "" {
-		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
-		return
+	body := request.Body
+	if body.WorkspaceId == "" {
+		return CreateWorkload400JSONResponse(apiError("WORKSPACE_ID_REQUIRED", "workspace_id is required.")), nil
 	}
-	var body createWorkloadBody
-	if !decodeJSONBody(w, r, &body) {
-		return
+	if workspaceErr := s.authorizeRequestWorkspace(ctx, body.WorkspaceId); workspaceErr != nil {
+		return CreateWorkload403JSONResponse(workspaceErr.Response), nil
 	}
-	if !s.authorizeRequestWorkspace(w, r, body.WorkspaceID) {
-		return
+	if err := s.workloads.CreateWorkload(ctx, workload.CreateWorkloadRequest{WorkspaceID: body.WorkspaceId, WorkloadID: body.WorkloadId, Name: body.Name}); err != nil {
+		return CreateWorkload400JSONResponse(apiError(errorCode(err, "CREATE_WORKLOAD_FAILED"), errorMessage(err))), nil
 	}
-	if err := s.workloads.CreateWorkload(r.Context(), workload.CreateWorkloadRequest{WorkspaceID: body.WorkspaceID, WorkloadID: body.WorkloadID, Name: body.Name}); err != nil {
-		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_WORKLOAD_FAILED"), errorMessage(err))
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"workload_id": body.WorkloadID})
+	return CreateWorkload202JSONResponse{WorkloadId: body.WorkloadId}, nil
 }
 
-func (s *Server) CreateWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadID string, _ CreateWorkloadRevisionParams) {
+func (s *Server) CreateWorkloadRevision(ctx context.Context, request CreateWorkloadRevisionRequestObject) (CreateWorkloadRevisionResponseObject, error) {
 	if s.workloads == nil {
-		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
-		return
+		return CreateWorkloadRevision501JSONResponse(apiError("WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")), nil
 	}
-	if r.Header.Get("Idempotency-Key") == "" {
-		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
-		return
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return CreateWorkloadRevision403JSONResponse(workspaceErr.Response), nil
+		}
+		return CreateWorkloadRevision400JSONResponse(workspaceErr.Response), nil
 	}
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
-	}
-	var body createRevisionBody
-	if !decodeJSONBody(w, r, &body) {
-		return
-	}
-	revision, err := s.workloads.CreateRevision(r.Context(), workload.CreateRevisionRequest{WorkspaceID: workspaceID, WorkloadID: workloadID, Revision: body.Revision})
+	revision, err := s.workloads.CreateRevision(ctx, workload.CreateRevisionRequest{WorkspaceID: workspaceID, WorkloadID: request.WorkloadId, Revision: request.Body.Revision})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_REVISION_FAILED"), errorMessage(err))
-		return
+		return CreateWorkloadRevision400JSONResponse(apiError(errorCode(err, "CREATE_REVISION_FAILED"), errorMessage(err))), nil
 	}
-	writeJSON(w, http.StatusAccepted, workloadRevisionResponse{Revision: revision})
+	return CreateWorkloadRevision202JSONResponse{Revision: revision}, nil
 }
 
-func (s *Server) ListWorkloadRevisions(w http.ResponseWriter, r *http.Request, workloadID string, _ ListWorkloadRevisionsParams) {
+func (s *Server) ListWorkloadRevisions(ctx context.Context, request ListWorkloadRevisionsRequestObject) (ListWorkloadRevisionsResponseObject, error) {
 	if s.workloads == nil {
-		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
-		return
+		return ListWorkloadRevisions501JSONResponse(apiError("WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")), nil
 	}
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return ListWorkloadRevisions403JSONResponse(workspaceErr.Response), nil
+		}
+		return ListWorkloadRevisions400JSONResponse(workspaceErr.Response), nil
 	}
-	revisions, err := s.workloads.ListRevisions(r.Context(), workspaceID, workloadID)
+	revisions, err := s.workloads.ListRevisions(ctx, workspaceID, request.WorkloadId)
 	if err != nil {
-		writeInternalError(w, http.StatusInternalServerError, "LIST_REVISIONS_FAILED", err)
-		return
+		return ListWorkloadRevisions500JSONResponse(internalAPIError(http.StatusInternalServerError, "LIST_REVISIONS_FAILED", err)), nil
 	}
-	writeJSON(w, http.StatusOK, workloadRevisionListResponse{Revisions: revisions})
+	return ListWorkloadRevisions200JSONResponse{Revisions: revisions}, nil
 }
 
-func (s *Server) GetWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadID, revisionID string, _ GetWorkloadRevisionParams) {
+func (s *Server) GetWorkloadRevision(ctx context.Context, request GetWorkloadRevisionRequestObject) (GetWorkloadRevisionResponseObject, error) {
 	if s.workloads == nil {
-		writeError(w, http.StatusNotImplemented, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
-		return
+		return GetWorkloadRevision501JSONResponse(apiError("WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")), nil
 	}
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return GetWorkloadRevision403JSONResponse(workspaceErr.Response), nil
+		}
+		return GetWorkloadRevision400JSONResponse(workspaceErr.Response), nil
 	}
-	revision, err := s.workloads.GetRevision(r.Context(), workspaceID, workloadID, revisionID)
+	revision, err := s.workloads.GetRevision(ctx, workspaceID, request.WorkloadId, request.RevisionId)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "REVISION_NOT_FOUND", err.Error())
-		return
+		return GetWorkloadRevision404JSONResponse(apiError("REVISION_NOT_FOUND", err.Error())), nil
 	}
-	writeJSON(w, http.StatusOK, workloadRevisionResponse{Revision: revision})
+	return GetWorkloadRevision200JSONResponse{Revision: revision}, nil
 }

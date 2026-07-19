@@ -98,7 +98,7 @@ func newReportingTestServer(t *testing.T, signerKey []byte, extra ...Option) htt
 // The server must be wired with operator bearer auth "op-token".
 func createReportingRun(t *testing.T, handler http.Handler, runID string) string {
 	t.Helper()
-	body := mustMarshal(t, createRunBody{RunID: runID, Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: runID, Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_report_"+runID)
 	req.Header.Set("Authorization", "Bearer op-token")
@@ -107,7 +107,7 @@ func createReportingRun(t *testing.T, handler http.Handler, runID string) string
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create run: expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp runResponse
+	var resp RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode create run response: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestReportIngestEndpointRecordsEvent(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get events: expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var listed eventListResponse
+	var listed EventListResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode events: %v", err)
 	}

@@ -72,7 +72,7 @@ func TestCLITokenAuthenticatesAsItsEmail(t *testing.T) {
 		t.Fatalf("CLI token expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	body := mustMarshal(t, createRunBody{RunID: "run_cli_audit", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_cli_audit", Workload: httpRevision()})
 	create := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	create.Header.Set("Idempotency-Key", "idem_cli_audit")
 	create.Header.Set("Authorization", "Bearer cli:operator@example.com")
@@ -81,7 +81,7 @@ func TestCLITokenAuthenticatesAsItsEmail(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var created runResponse
+	var created RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestRunRecordsActingPrincipals(t *testing.T) {
 		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
 
 	// A machine-token create records "bearer".
-	body := mustMarshal(t, createRunBody{RunID: "run_audit", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_audit", Workload: httpRevision()})
 	create := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	create.Header.Set("Idempotency-Key", "idem_audit")
 	create.Header.Set("Authorization", "Bearer secret-token")
@@ -156,7 +156,7 @@ func TestRunRecordsActingPrincipals(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var created runResponse
+	var created RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestRunRecordsActingPrincipals(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("cancel expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var cancelled runResponse
+	var cancelled RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &cancelled); err != nil {
 		t.Fatalf("decode cancel: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestPublicRunEventsDoNotLeakActorEmails(t *testing.T) {
 	handler := newHTTPTestServerWithOptions(t,
 		WithBearerAuth("secret-token", []string{"ws_1"}), WithWebAuth(stubWebAuth{}))
 
-	body := mustMarshal(t, createRunBody{RunID: "run_actor_leak", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_actor_leak", Workload: httpRevision()})
 	create := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	create.Header.Set("Idempotency-Key", "idem_actor_leak")
 	create.Header.Set("X-Test-Session", "operator@example.com")

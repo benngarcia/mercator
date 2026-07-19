@@ -36,7 +36,7 @@ func TestCreateRunMinimalImageShorthandSucceeds(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var created runResponse
+	var created RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestCreateRunMinimalImageShorthandSucceeds(t *testing.T) {
 func TestCreateRunReplaySameKeyReturnsOriginalRunID(t *testing.T) {
 	handler := newMinimalCreateServer(t, adapter.ExternalPhaseSucceeded)
 
-	post := func() runResponse {
+	post := func() RunResponse {
 		body := []byte(`{"image":"busybox"}`)
 		req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
 		req.Header.Set("Idempotency-Key", "idem_replay_http")
@@ -74,7 +74,7 @@ func TestCreateRunReplaySameKeyReturnsOriginalRunID(t *testing.T) {
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 		}
-		var resp runResponse
+		var resp RunResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
@@ -111,7 +111,7 @@ func TestCreateRunFailedExitPath(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var got runResponse
+	var got RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

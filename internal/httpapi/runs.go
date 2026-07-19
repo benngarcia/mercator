@@ -1,7 +1,7 @@
 package httpapi
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -12,49 +12,37 @@ import (
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
-func (s *Server) CreateRun(w http.ResponseWriter, r *http.Request, _ CreateRunParams) {
-	idempotencyKey := r.Header.Get("Idempotency-Key")
-	if idempotencyKey == "" {
-		writeError(w, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Mutation requests require Idempotency-Key.")
-		return
+func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) (CreateRunResponseObject, error) {
+	body := request.Body
+	bodyWS := body.WorkspaceId
+	if bodyWS == "" {
+		bodyWS = body.Workload.WorkspaceID
 	}
-	var body createRunBody
-	if !decodeJSONBody(w, r, &body) {
-		return
-	}
-	workspaceID := body.WorkspaceID
-	if workspaceID == "" {
-		workspaceID = body.Workload.WorkspaceID
-	}
-	if workspaceID == "" {
-		workspaceID = r.URL.Query().Get("workspace_id")
-	}
-	if workspaceID == "" {
-		workspaceID = s.defaultWorkspace()
-	}
-	if !s.authorizeRequestWorkspace(w, r, workspaceID) {
-		return
+	workspaceID, workspaceErr := s.resolveWorkspace(ctx, bodyWS, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return CreateRun403JSONResponse(workspaceErr.Response), nil
+		}
+		return CreateRun400JSONResponse(workspaceErr.Response), nil
 	}
 	workloadRevision := body.Workload
-	if body.WorkloadRevisionID != "" {
+	if body.WorkloadRevisionId != "" {
 		if s.workloads == nil {
-			writeError(w, http.StatusBadRequest, "WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")
-			return
+			return CreateRun400JSONResponse(apiError("WORKLOAD_SERVICE_DISABLED", "Workload service is not configured.")), nil
 		}
-		revision, err := s.workloads.GetRevision(r.Context(), workspaceID, body.WorkloadID, body.WorkloadRevisionID)
+		revision, err := s.workloads.GetRevision(ctx, workspaceID, body.WorkloadId, body.WorkloadRevisionId)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "WORKLOAD_REVISION_NOT_FOUND", err.Error())
-			return
+			return CreateRun404JSONResponse(apiError("WORKLOAD_REVISION_NOT_FOUND", err.Error())), nil
 		}
 		workloadRevision = revision
-	} else if !body.hasWorkloadSpec() && body.Image != "" {
+	} else if !hasWorkloadSpec(body.Workload) && body.Image != "" {
 		// Top-level image shorthand: synthesize the single container from the
 		// top-level fields. Defaulting (container name, platform, resources, etc.)
 		// is applied server-side during CreateRun's normalize pass. An explicit
 		// full workload spec always takes precedence over shorthand.
 		workloadRevision = domain.WorkloadRevision{
 			WorkspaceID: workspaceID,
-			WorkloadID:  body.WorkloadID,
+			WorkloadID:  body.WorkloadId,
 			Spec: domain.WorkloadSpec{
 				Containers: []domain.ContainerSpec{{
 					Image: body.Image,
@@ -67,7 +55,7 @@ func (s *Server) CreateRun(w http.ResponseWriter, r *http.Request, _ CreateRunPa
 
 	// run_id is optional: generate a uuidv7 when omitted and use it as the
 	// stream/run identifier returned to the caller.
-	runID := body.RunID
+	runID := body.RunId
 	generated := false
 	if runID == "" {
 		generated = true
@@ -75,35 +63,44 @@ func (s *Server) CreateRun(w http.ResponseWriter, r *http.Request, _ CreateRunPa
 	}
 
 	workloadRevision = applyRunEnvOverrides(workloadRevision, body.Env)
-	result, err := s.orch.CreateRun(r.Context(), orchestrator.CreateRunRequest{
+	result, err := s.orch.CreateRun(ctx, orchestrator.CreateRunRequest{
 		WorkspaceID:    workspaceID,
 		RunID:          runID,
 		GeneratedRunID: generated,
-		IdempotencyKey: idempotencyKey,
-		Actor:          requestActor(r),
+		IdempotencyKey: request.Params.IdempotencyKey,
+		Actor:          requestActor(ctx),
 		Workload:       workloadRevision,
 		ResolveImage:   s.resolveImageFn(),
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
-			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
-			return
+			return CreateRun409JSONResponse(apiError("IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")), nil
 		}
-		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_RUN_FAILED"), errorMessage(err))
-		return
+		return CreateRun400JSONResponse(apiError(errorCode(err, "CREATE_RUN_FAILED"), errorMessage(err))), nil
 	}
 	// result.RunID is the canonical run identifier (the ORIGINAL run_id on a
 	// replay, even if this request generated a fresh one).
-	if err := s.orch.AdvanceRun(r.Context(), workspaceID, result.RunID); err != nil {
-		writeError(w, http.StatusBadGateway, "ADVANCE_RUN_FAILED", "Run advancement failed; inspect public run events for the stable failure code.")
-		return
+	if err := s.orch.AdvanceRun(ctx, workspaceID, result.RunID); err != nil {
+		return CreateRun502JSONResponse(apiError("ADVANCE_RUN_FAILED", "Run advancement failed; inspect public run events for the stable failure code.")), nil
 	}
-	record, err := s.orch.GetRun(r.Context(), workspaceID, result.RunID)
+	record, err := s.orch.GetRun(ctx, workspaceID, result.RunID)
 	if err != nil {
-		writeInternalError(w, http.StatusInternalServerError, "RUN_NOT_FOUND", err)
-		return
+		return CreateRun500JSONResponse(internalAPIError(http.StatusInternalServerError, "RUN_NOT_FOUND", err)), nil
 	}
-	writeJSON(w, http.StatusAccepted, newRunResponse(workspaceID, record, result.Duplicate))
+	return CreateRun202JSONResponse(newRunResponse(workspaceID, record, result.Duplicate)), nil
+}
+
+func hasWorkloadSpec(revision domain.WorkloadRevision) bool {
+	return len(revision.Spec.Containers) > 0
+}
+
+func newRunResponse(workspaceID string, record domain.RunRecord, duplicate bool) RunResponse {
+	return RunResponse{
+		RunId:     record.ID,
+		Run:       record,
+		Links:     runLinks(workspaceID, record.ID),
+		Duplicate: duplicate,
+	}
 }
 
 func applyRunEnvOverrides(revision domain.WorkloadRevision, runEnv map[string]domain.EnvBinding) domain.WorkloadRevision {
@@ -122,15 +119,17 @@ func applyRunEnvOverrides(revision domain.WorkloadRevision, runEnv map[string]do
 	return revision
 }
 
-func (s *Server) ListRunEvents(w http.ResponseWriter, r *http.Request, runID string, _ ListRunEventsParams) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+func (s *Server) ListRunEvents(ctx context.Context, request ListRunEventsRequestObject) (ListRunEventsResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return ListRunEvents403JSONResponse(workspaceErr.Response), nil
+		}
+		return ListRunEvents400JSONResponse(workspaceErr.Response), nil
 	}
-	events, err := s.orch.GetRunEvents(r.Context(), workspaceID, runID)
+	events, err := s.orch.GetRunEvents(ctx, workspaceID, request.RunId)
 	if err != nil {
-		writeInternalError(w, http.StatusInternalServerError, "READ_EVENTS_FAILED", err)
-		return
+		return ListRunEvents500JSONResponse(internalAPIError(http.StatusInternalServerError, "READ_EVENTS_FAILED", err)), nil
 	}
 	public := make([]eventlog.CloudEvent, 0, len(events))
 	for _, event := range events {
@@ -139,11 +138,22 @@ func (s *Server) ListRunEvents(w http.ResponseWriter, r *http.Request, runID str
 		}
 		public = append(public, event.CloudEvent())
 	}
-	writeJSON(w, http.StatusOK, eventListResponse{Events: public})
+	return ListRunEvents200JSONResponse{Events: public}, nil
 }
 
-func (s *Server) GetRun(w http.ResponseWriter, r *http.Request, runID string, _ GetRunParams) {
-	s.writeRun(w, r, runID)
+func (s *Server) GetRun(ctx context.Context, request GetRunRequestObject) (GetRunResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return GetRun403JSONResponse(workspaceErr.Response), nil
+		}
+		return GetRun400JSONResponse(workspaceErr.Response), nil
+	}
+	record, err := s.orch.GetRun(ctx, workspaceID, request.RunId)
+	if err != nil {
+		return GetRun404JSONResponse(apiError("RUN_NOT_FOUND", err.Error())), nil
+	}
+	return GetRun200JSONResponse(newRunResponse(workspaceID, record, false)), nil
 }
 
 // waitDeadline bounds how long waitRun will long-poll for a terminal state.
@@ -154,149 +164,127 @@ var waitDeadline = 30 * time.Second
 // a terminal state. Overridable in tests.
 var waitPollInterval = 100 * time.Millisecond
 
-func (s *Server) WaitRun(w http.ResponseWriter, r *http.Request, runID string, _ WaitRunParams) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+func (s *Server) WaitRun(ctx context.Context, request WaitRunRequestObject) (WaitRunResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return WaitRun403JSONResponse(workspaceErr.Response), nil
+		}
+		return WaitRun400JSONResponse(workspaceErr.Response), nil
 	}
 	// Confirm the run exists (and the caller is authorized) before looping.
-	record, err := s.orch.GetRun(r.Context(), workspaceID, runID)
+	record, err := s.orch.GetRun(ctx, workspaceID, request.RunId)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
-		return
+		return WaitRun404JSONResponse(apiError("RUN_NOT_FOUND", err.Error())), nil
 	}
 	deadline := time.Now().Add(waitDeadline)
 	for {
 		if record.Closed {
-			writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
-			return
+			return WaitRun200JSONResponse(newRunResponse(workspaceID, record, false)), nil
 		}
 		if !time.Now().Before(deadline) {
 			// Bounded-deadline timeout: return the latest open run with a clean
 			// 202 signal so the caller can decide to re-issue the wait.
-			writeJSON(w, http.StatusAccepted, newRunResponse(workspaceID, record, false))
-			return
+			return WaitRun202JSONResponse(newRunResponse(workspaceID, record, false)), nil
 		}
 		select {
-		case <-r.Context().Done():
-			writeError(w, http.StatusRequestTimeout, "WAIT_CANCELLED", "Wait request was cancelled.")
-			return
+		case <-ctx.Done():
+			return WaitRun408JSONResponse(apiError("WAIT_CANCELLED", "Wait request was cancelled.")), nil
 		case <-time.After(waitPollInterval):
 		}
 		// Actively drive the run toward terminal rather than passively re-reading
 		// stale state. RefreshRun advances the run then returns the latest record.
-		next, err := s.orch.RefreshRun(r.Context(), workspaceID, runID)
+		next, err := s.orch.RefreshRun(ctx, workspaceID, request.RunId)
 		if err != nil {
 			// Advancement may legitimately error mid-flight (e.g. indeterminate
 			// launch); fall back to the last readable state and keep waiting.
-			next, err = s.orch.GetRun(r.Context(), workspaceID, runID)
+			next, err = s.orch.GetRun(ctx, workspaceID, request.RunId)
 			if err != nil {
-				writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
-				return
+				return WaitRun404JSONResponse(apiError("RUN_NOT_FOUND", err.Error())), nil
 			}
 		}
 		record = next
 	}
 }
 
-func (s *Server) writeRun(w http.ResponseWriter, r *http.Request, runID string) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
-	}
-	record, err := s.orch.GetRun(r.Context(), workspaceID, runID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
-}
-
-func (s *Server) ListRuns(w http.ResponseWriter, r *http.Request, _ ListRunsParams) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
-	}
-	records, err := s.orch.ListRuns(r.Context(), workspaceID)
-	if err != nil {
-		writeInternalError(w, http.StatusInternalServerError, "LIST_RUNS_FAILED", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, runListResponse{Runs: records})
-}
-
-func (s *Server) CancelRun(w http.ResponseWriter, r *http.Request, runID string, _ CancelRunParams) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
-	}
-	record, err := s.orch.CancelRun(r.Context(), workspaceID, runID, requestActor(r))
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "CANCEL_RUN_FAILED", "Run cancellation failed.")
-		return
-	}
-	writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
-}
-
-func (s *Server) RefreshRun(w http.ResponseWriter, r *http.Request, runID string, _ RefreshRunParams) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
-	}
-	record, err := s.orch.RefreshRun(r.Context(), workspaceID, runID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "REFRESH_RUN_FAILED", "Run refresh failed.")
-		return
-	}
-	writeJSON(w, http.StatusOK, newRunResponse(workspaceID, record, false))
-}
-
-type reportBody struct {
-	Type     string          `json:"type"`
-	Data     json.RawMessage `json:"data,omitempty"`
-	ExitCode *int            `json:"exit_code,omitempty"`
-}
-
-func (s *Server) ReportRun(w http.ResponseWriter, r *http.Request, runID string, _ ReportRunParams) {
-	if s.reportSigner == nil || !s.reportSigner.Enabled() {
-		writeError(w, http.StatusNotImplemented, "REPORTING_DISABLED", "Reporting is not configured.")
-		return
-	}
-	workspaceID := r.URL.Query().Get("workspace_id")
-	if workspaceID == "" {
-		writeError(w, http.StatusBadRequest, "WORKSPACE_REQUIRED", "workspace_id query parameter is required.")
-		return
-	}
-	authHeader := r.Header.Get("Authorization")
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if !s.reportSigner.Verify(workspaceID, runID, token) {
-		writeError(w, http.StatusUnauthorized, "INVALID_RUN_TOKEN", "Invalid or missing run token.")
-		return
-	}
-	var body reportBody
-	if !decodeJSONBody(w, r, &body) {
-		return
-	}
-	if err := s.orch.RecordReport(r.Context(), workspaceID, runID, body.Type, body.Data, body.ExitCode); err != nil {
-		if errors.Is(err, orchestrator.ErrRunNotFound) {
-			writeError(w, http.StatusNotFound, "RUN_NOT_FOUND", "Run not found.")
-			return
+func (s *Server) ListRuns(ctx context.Context, request ListRunsRequestObject) (ListRunsResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return ListRuns403JSONResponse(workspaceErr.Response), nil
 		}
-		writeInternalError(w, http.StatusBadGateway, "REPORT_FAILED", err)
-		return
+		return ListRuns400JSONResponse(workspaceErr.Response), nil
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"recorded": true})
+	records, err := s.orch.ListRuns(ctx, workspaceID)
+	if err != nil {
+		return ListRuns500JSONResponse(internalAPIError(http.StatusInternalServerError, "LIST_RUNS_FAILED", err)), nil
+	}
+	return ListRuns200JSONResponse{Runs: records}, nil
 }
 
-func (s *Server) GetRunDecision(w http.ResponseWriter, r *http.Request, runID string, _ GetRunDecisionParams) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+func (s *Server) CancelRun(ctx context.Context, request CancelRunRequestObject) (CancelRunResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return CancelRun403JSONResponse(workspaceErr.Response), nil
+		}
+		return CancelRun400JSONResponse(workspaceErr.Response), nil
 	}
-	decision, err := s.orch.GetPlacementDecision(r.Context(), workspaceID, runID)
+	record, err := s.orch.CancelRun(ctx, workspaceID, request.RunId, requestActor(ctx))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "DECISION_NOT_FOUND", err.Error())
-		return
+		return CancelRun502JSONResponse(apiError("CANCEL_RUN_FAILED", "Run cancellation failed.")), nil
 	}
-	writeJSON(w, http.StatusOK, placementDecisionResponse{Decision: decision})
+	return CancelRun200JSONResponse(newRunResponse(workspaceID, record, false)), nil
+}
+
+func (s *Server) RefreshRun(ctx context.Context, request RefreshRunRequestObject) (RefreshRunResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return RefreshRun403JSONResponse(workspaceErr.Response), nil
+		}
+		return RefreshRun400JSONResponse(workspaceErr.Response), nil
+	}
+	record, err := s.orch.RefreshRun(ctx, workspaceID, request.RunId)
+	if err != nil {
+		return RefreshRun502JSONResponse(apiError("REFRESH_RUN_FAILED", "Run refresh failed.")), nil
+	}
+	return RefreshRun200JSONResponse(newRunResponse(workspaceID, record, false)), nil
+}
+
+func (s *Server) ReportRun(ctx context.Context, request ReportRunRequestObject) (ReportRunResponseObject, error) {
+	if s.reportSigner == nil || !s.reportSigner.Enabled() {
+		return ReportRun501JSONResponse(apiError("REPORTING_DISABLED", "Reporting is not configured.")), nil
+	}
+	workspaceID := request.Params.WorkspaceId
+	if workspaceID == "" {
+		return ReportRun400JSONResponse(apiError("WORKSPACE_REQUIRED", "workspace_id query parameter is required.")), nil
+	}
+	token := strings.TrimPrefix(request.Params.Authorization, "Bearer ")
+	if !s.reportSigner.Verify(workspaceID, request.RunId, token) {
+		return ReportRun401JSONResponse(apiError("INVALID_RUN_TOKEN", "Invalid or missing run token.")), nil
+	}
+	body := request.Body
+	if err := s.orch.RecordReport(ctx, workspaceID, request.RunId, body.Type, body.Data, body.ExitCode); err != nil {
+		if errors.Is(err, orchestrator.ErrRunNotFound) {
+			return ReportRun404JSONResponse(apiError("RUN_NOT_FOUND", "Run not found.")), nil
+		}
+		return ReportRun502JSONResponse(internalAPIError(http.StatusBadGateway, "REPORT_FAILED", err)), nil
+	}
+	return ReportRun202JSONResponse{Recorded: true}, nil
+}
+
+func (s *Server) GetRunDecision(ctx context.Context, request GetRunDecisionRequestObject) (GetRunDecisionResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return GetRunDecision403JSONResponse(workspaceErr.Response), nil
+		}
+		return GetRunDecision400JSONResponse(workspaceErr.Response), nil
+	}
+	decision, err := s.orch.GetPlacementDecision(ctx, workspaceID, request.RunId)
+	if err != nil {
+		return GetRunDecision404JSONResponse(apiError("DECISION_NOT_FOUND", err.Error())), nil
+	}
+	return GetRunDecision200JSONResponse{Decision: decision}, nil
 }

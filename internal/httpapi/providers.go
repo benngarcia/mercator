@@ -1,7 +1,7 @@
 package httpapi
 
 import (
-	"net/http"
+	"context"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 )
@@ -9,27 +9,28 @@ import (
 // ListAdapters serves the registered adapters' onboarding manifests. The list
 // is static per process and carries no workspace state, but it sits behind the
 // same /v1 auth gate as everything else.
-func (s *Server) ListAdapters(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) ListAdapters(context.Context, ListAdaptersRequestObject) (ListAdaptersResponseObject, error) {
 	if s.manifests == nil {
-		writeJSON(w, http.StatusOK, adapterListResponse{Adapters: []adapter.Manifest{}})
-		return
+		return ListAdapters200JSONResponse{Adapters: []adapter.Manifest{}}, nil
 	}
 	manifests := s.manifests()
 	if manifests == nil {
 		manifests = []adapter.Manifest{}
 	}
-	writeJSON(w, http.StatusOK, adapterListResponse{Adapters: manifests})
+	return ListAdapters200JSONResponse{Adapters: manifests}, nil
 }
 
-func (s *Server) ListOffers(w http.ResponseWriter, r *http.Request, _ ListOffersParams) {
-	workspaceID, ok := s.requiredWorkspace(w, r)
-	if !ok {
-		return
+func (s *Server) ListOffers(ctx context.Context, request ListOffersRequestObject) (ListOffersResponseObject, error) {
+	workspaceID, workspaceErr := s.requiredWorkspace(ctx, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return ListOffers403JSONResponse(workspaceErr.Response), nil
+		}
+		return ListOffers400JSONResponse(workspaceErr.Response), nil
 	}
-	records, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
+	records, err := s.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
 	if err != nil {
-		writeInternalError(w, http.StatusBadGateway, "LIST_OFFERS_FAILED", err)
-		return
+		return ListOffers502JSONResponse(internalAPIError(502, "LIST_OFFERS_FAILED", err)), nil
 	}
-	writeJSON(w, http.StatusOK, offerListResponse{Offers: records})
+	return ListOffers200JSONResponse{Offers: records}, nil
 }

@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
+	"log"
 	"net/http"
 
 	"github.com/benngarcia/mercator/web"
@@ -33,7 +36,21 @@ func (s *Server) routes() {
 			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 		})
 	}
-	HandlerWithOptions(s, StdHTTPServerOptions{
+	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
+		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				writeError(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "Request body exceeds the 1 MiB limit.")
+				return
+			}
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		},
+		ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
+			log.Printf("httpapi: strict response: %v", err)
+			writeError(w, http.StatusInternalServerError, "INVALID_RESPONSE", "Internal error; see server logs for detail.")
+		},
+	})
+	HandlerWithOptions(strict, StdHTTPServerOptions{
 		BaseRouter: s.mux,
 		ErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
@@ -41,17 +58,16 @@ func (s *Server) routes() {
 	})
 }
 
-func (s *Server) HealthLive(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) HealthLive(context.Context, HealthLiveRequestObject) (HealthLiveResponseObject, error) {
+	return HealthLive200JSONResponse{Status: "ok"}, nil
 }
 
-func (s *Server) HealthReady(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+func (s *Server) HealthReady(context.Context, HealthReadyRequestObject) (HealthReadyResponseObject, error) {
+	return HealthReady200JSONResponse{Status: "ready"}, nil
 }
 
-func (s *Server) GetOpenAPI(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(openAPIJSON)
+func (s *Server) GetOpenAPI(context.Context, GetOpenAPIRequestObject) (GetOpenAPIResponseObject, error) {
+	return GetOpenAPI200JSONResponse(openAPIDocument), nil
 }
 
-var _ ServerInterface = (*Server)(nil)
+var _ StrictServerInterface = (*Server)(nil)

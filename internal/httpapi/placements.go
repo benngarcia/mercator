@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -9,40 +10,38 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
-func (s *Server) PreviewPlacement(w http.ResponseWriter, r *http.Request) {
-	var body placementPreviewBody
-	if !decodeJSONBody(w, r, &body) {
-		return
+func (s *Server) PreviewPlacement(ctx context.Context, request PreviewPlacementRequestObject) (PreviewPlacementResponseObject, error) {
+	body := request.Body
+	bodyWS := body.WorkspaceId
+	if bodyWS == "" {
+		bodyWS = body.Workload.WorkspaceID
 	}
-	workspaceID := body.WorkspaceID
-	if workspaceID == "" {
-		workspaceID = body.Workload.WorkspaceID
-	}
-	if !s.authorizeRequestWorkspace(w, r, workspaceID) {
-		return
+	workspaceID, workspaceErr := s.resolveWorkspace(ctx, bodyWS, request.Params.WorkspaceId)
+	if workspaceErr != nil {
+		if workspaceErr.Forbidden {
+			return PreviewPlacement403JSONResponse(workspaceErr.Response), nil
+		}
+		return PreviewPlacement400JSONResponse(workspaceErr.Response), nil
 	}
 	if violations := domain.ValidateWorkloadRevision(body.Workload); len(violations) > 0 {
-		writeError(w, http.StatusBadRequest, violations[0].Code, violations[0].Message)
-		return
+		return PreviewPlacement400JSONResponse(apiErrorWithDetails(violations[0].Code, violations[0].Message, violations)), nil
 	}
-	offers, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{
+	offers, err := s.adapter.ListOffers(ctx, adapter.OfferRequest{
 		WorkspaceID: workspaceID,
 		Resources:   body.Workload.Spec.Resources,
 	})
 	if err != nil {
-		writeInternalError(w, http.StatusBadGateway, "OFFER_QUERY_FAILED", err)
-		return
+		return PreviewPlacement502JSONResponse(internalAPIError(http.StatusBadGateway, "OFFER_QUERY_FAILED", err)), nil
 	}
-	decision, err := s.scheduler.Evaluate(r.Context(), scheduler.SchedulingInput{
-		RunID:        body.RunID,
+	decision, err := s.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
+		RunID:        body.RunId,
 		Workload:     body.Workload,
 		Offers:       offers,
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  time.Now().UTC(),
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "PLACEMENT_FAILED", err.Error())
-		return
+		return PreviewPlacement400JSONResponse(apiError("PLACEMENT_FAILED", err.Error())), nil
 	}
-	writeJSON(w, http.StatusOK, placementPreviewResponse{Decision: decision})
+	return PreviewPlacement200JSONResponse{Decision: decision}, nil
 }

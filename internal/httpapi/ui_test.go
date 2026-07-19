@@ -129,7 +129,7 @@ func TestImmutableCacheHeaderOnServe(t *testing.T) {
 // still win over the catch-all SPA fallback under Go 1.22+ mux precedence.
 func TestAPIRoutesUnaffectedBySPAFallback(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	body := mustMarshal(t, createRunBody{RunID: "run_ui", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_ui", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_ui")
 	rec := httptest.NewRecorder()

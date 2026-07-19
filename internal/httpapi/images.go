@@ -1,24 +1,19 @@
 package httpapi
 
 import (
-	"net/http"
+	"context"
 
 	"github.com/benngarcia/mercator/internal/ociresolver"
 )
 
-func (s *Server) ResolveImage(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ResolveImage(ctx context.Context, request ResolveImageRequestObject) (ResolveImageResponseObject, error) {
 	if s.resolver == nil {
-		writeError(w, http.StatusNotImplemented, "IMAGE_RESOLVER_DISABLED", "Image resolver is not configured.")
-		return
+		return ResolveImage501JSONResponse(apiError("IMAGE_RESOLVER_DISABLED", "Image resolver is not configured.")), nil
 	}
-	var body resolveImageBody
-	if !decodeJSONBody(w, r, &body) {
-		return
-	}
-	resolved, err := s.resolver.Resolve(r.Context(), ociresolver.ResolveRequest{Image: body.Image, Platform: body.Platform})
+	body := request.Body
+	resolved, err := s.resolver.Resolve(ctx, ociresolver.ResolveRequest{Image: body.Image, Platform: body.Platform})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "IMAGE_RESOLUTION_FAILED", err.Error())
-		return
+		return ResolveImage400JSONResponse(apiError("IMAGE_RESOLUTION_FAILED", err.Error())), nil
 	}
-	writeJSON(w, http.StatusOK, resolveImageResponse{Image: resolved})
+	return ResolveImage200JSONResponse{Image: resolved}, nil
 }

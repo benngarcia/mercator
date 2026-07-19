@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -22,11 +21,11 @@ func (p principal) allows(workspaceID string) bool {
 		(slices.Contains(p.WorkspaceIDs, "*") || slices.Contains(p.WorkspaceIDs, workspaceID))
 }
 
-// requestActor marshals the request's principal into the event-envelope actor
+// requestActor marshals the request principal into the event-envelope actor
 // recorded on human-command facts: {"subject": <email or "bearer">}. Nil when
 // auth is disabled entirely (no principal to record).
-func requestActor(r *http.Request) json.RawMessage {
-	actor, ok := r.Context().Value(principalContextKey{}).(principal)
+func requestActor(ctx context.Context) json.RawMessage {
+	actor, ok := ctx.Value(principalContextKey{}).(principal)
 	if !ok || actor.Subject == "" {
 		return nil
 	}
@@ -36,6 +35,10 @@ func requestActor(r *http.Request) json.RawMessage {
 	}
 	return encoded
 }
+
+// maxRequestBodyBytes bounds request bodies server-wide. The largest legitimate
+// payloads are well under 1 MiB.
+const maxRequestBodyBytes = 1 << 20
 
 // isRunReportPath reports whether the request is the run-report endpoint, which
 // is exempted from the operator-token gate because it authenticates with a
@@ -97,25 +100,4 @@ func (s *Server) authenticate(r *http.Request) (principal, bool) {
 		}
 	}
 	return principal{}, false
-}
-
-// maxRequestBodyBytes bounds request bodies server-wide. The largest legitimate
-// payloads (full workload revisions, run reports) are well under 1 MiB; the
-// container env budget alone is capped at 32 KiB by capability validation.
-const maxRequestBodyBytes = 1 << 20
-
-// decodeJSONBody decodes a request body into v, writing the appropriate error
-// response (413 for an over-limit body, 400 otherwise) and returning false on
-// failure.
-func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "Request body exceeds the 1 MiB limit.")
-			return false
-		}
-		writeError(w, http.StatusBadRequest, "INVALID_JSON", err.Error())
-		return false
-	}
-	return true
 }
