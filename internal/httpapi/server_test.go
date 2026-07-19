@@ -140,8 +140,8 @@ func TestRunEndpointsRequireExplicitWorkspace(t *testing.T) {
 	}
 }
 
-func TestBearerAuthEnforcesWorkspaceScope(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("test-token", []string{"ws_1"}))
+func TestBearerAuthProtectsEveryExplicitWorkspace(t *testing.T) {
+	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("test-token"))
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/runs?workspace_id=ws_1", nil)
 	rec := httptest.NewRecorder()
@@ -162,8 +162,8 @@ func TestBearerAuthEnforcesWorkspaceScope(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("forbidden workspace expected 403, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second explicit workspace expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

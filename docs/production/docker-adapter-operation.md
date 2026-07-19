@@ -20,23 +20,37 @@ The live integration test is guarded by `MERCATOR_DOCKER_INTEGRATION=1`.
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator-docker.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
-export MERCATOR_AUTH_WORKSPACES='ws_eval'
 
 go run ./cmd/mercator serve
 ```
 
-Mercator probes the configured Docker endpoint and advertises its native
+In another shell, register and verify the local Docker endpoint in the
+workspace that should place runs there:
+
+```sh
+export MERCATOR_API_URL=http://127.0.0.1:8080
+export MERCATOR_API_TOKEN='<same token>'
+export MERCATOR_WORKSPACE_ID=ws_eval
+
+go run ./cmd/mercator connection create \
+  --connection-id conn_docker_loopback --adapter-type docker
+go run ./cmd/mercator connection authorize \
+  --connection-id conn_docker_loopback
+```
+
+Mercator probes the registered Docker endpoint and advertises its native
 `linux/amd64` or `linux/arm64` platform. Set `MERCATOR_DOCKER_ARCH` only when
 you deliberately want an emulated platform, and make the workload platform and
 image digest match that override.
 
-Optional Docker offer identity variables:
+Remote endpoints and alternate binaries belong to the connection config:
 
 ```sh
-export MERCATOR_DOCKER_BIN=/usr/local/bin/docker
-export MERCATOR_DOCKER_NATIVE_REF=loopback
-export MERCATOR_DOCKER_OFFER_ID=offer_docker_loopback
-export MERCATOR_DOCKER_CONNECTION_ID=conn_docker_loopback
+go run ./cmd/mercator connection create \
+  --connection-id conn_docker_gpu \
+  --adapter-type docker \
+  --config host=ssh://operator@gpu-host \
+  --config bin=/usr/local/bin/docker
 ```
 
 ## Workload Requirements

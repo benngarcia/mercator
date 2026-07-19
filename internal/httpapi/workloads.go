@@ -15,9 +15,6 @@ func (s *Server) CreateWorkload(ctx context.Context, request CreateWorkloadReque
 	if body.WorkspaceId == "" {
 		return CreateWorkload400JSONResponse(apiError("WORKSPACE_ID_REQUIRED", "workspace_id is required.")), nil
 	}
-	if workspaceErr := s.authorizeRequestWorkspace(ctx, body.WorkspaceId); workspaceErr != nil {
-		return CreateWorkload403JSONResponse(workspaceErr.Response), nil
-	}
 	if err := s.workloads.CreateWorkload(ctx, workload.CreateWorkloadRequest{WorkspaceID: body.WorkspaceId, WorkloadID: body.WorkloadId, Name: body.Name}); err != nil {
 		return CreateWorkload400JSONResponse(apiError(errorCode(err, "CREATE_WORKLOAD_FAILED"), errorMessage(err))), nil
 	}

@@ -54,7 +54,7 @@ func TestReconcileWorkspacesClosesExitedRunWithoutClients(t *testing.T) {
 		t.Fatalf("run closed before any reconcile tick; precondition did not hold: %+v", record)
 	}
 
-	reconcileWorkspaces(ctx, orch, janitor.New(ad, janitor.WithEventLog(log)), []string{"ws_1"})
+	reconcileWorkspaces(ctx, orch, janitor.New(ad, janitor.WithEventLog(log)))
 
 	record, err = orch.GetRun(ctx, "ws_1", "run_1")
 	if err != nil {

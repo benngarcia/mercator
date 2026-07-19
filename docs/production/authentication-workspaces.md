@@ -20,7 +20,6 @@ to sinks), only in authenticated API record reads.
 
 ```sh
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
-export MERCATOR_AUTH_WORKSPACES='ws_eval,ws_ci'
 ./bin/mercator serve
 ```
 
@@ -69,7 +68,7 @@ Behavior with OIDC enabled:
   does).
 - Unauthenticated browser loads of the console redirect into `/auth/login`.
 - `/v1/*` requests accept the session cookie as an alternative to the bearer
-  token, carrying the same workspace grants. A wrong bearer token still fails
+  token, carrying the same instance-wide operator authority. A wrong bearer token still fails
   even if a valid session cookie accompanies it.
 - `GET /auth/session` reports `{"enabled": ..., "email": ...}` so clients can
   discover whether login is available and who is signed in.
@@ -87,12 +86,16 @@ credential, and expiry bounds the remaining lifetime of a copied token.
 
 ## Workspace Rules
 
-- If `MERCATOR_AUTH_WORKSPACES` is unset or empty, the principal is allowed for
-  all workspaces through `*`.
-- If it is set, use a comma-separated allow list such as `ws_eval,ws_ci`.
 - Run, workload, secret, connection, and offer requests require an explicit
   `workspace_id` in the query or request body where the route expects one.
-- A request outside the allow list returns `FORBIDDEN`.
+- A workspace id is an event-log partition carried by domain records. It is not
+  process configuration and Mercator does not maintain a separate workspace
+  catalog.
+- Every authenticated principal administers the Mercator instance. Workspaces
+  isolate stored runs, connections, offers, and events from accidental
+  cross-partition queries; they are not per-user authorization boundaries.
+- Connections are created and authorized through `/v1/connections`. Server
+  startup never creates or places a connection from environment variables.
 
 ## Quick Checks
 
@@ -105,23 +108,20 @@ curl -i \
   -H "Authorization: Bearer wrong" \
   "$MERCATOR_API_URL/v1/runs?workspace_id=ws_eval"
 
-curl -i \
-  -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
-  "$MERCATOR_API_URL/v1/runs?workspace_id=not_allowed"
+curl -i -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
+  "$MERCATOR_API_URL/v1/runs"
 ```
 
 Expected results:
 
-- Valid token plus allowed workspace returns JSON.
+- Valid token plus an explicit workspace returns JSON.
 - Wrong token returns `401` with code `UNAUTHORIZED`.
-- Valid token plus disallowed workspace returns `403` with code `FORBIDDEN`.
+- Missing `workspace_id` returns `400` with code `WORKSPACE_ID_REQUIRED`.
 
 ## Current Limitations
 
 - There is one configured bearer token for machine clients; OIDC sessions add
-  per-user identity for humans but no roles or per-user workspace grants —
-  every authenticated principal carries the same `MERCATOR_AUTH_WORKSPACES`
-  allow-list.
+  per-user identity for humans but no roles or per-user workspace grants.
 - Recorded principals are an audit trail, not an authorization system.
 - Health, OpenAPI, and (without OIDC) the embedded UI shell are public on the
   listening interface; do not bind Mercator directly to an untrusted network.

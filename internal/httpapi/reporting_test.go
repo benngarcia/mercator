@@ -24,7 +24,7 @@ import (
 // is NOT subject to the operator-token gate (it will be authed by a per-run token
 // in a later task). Every other /v1/ path is unchanged.
 func TestReportEndpointExemptFromOperatorAuth(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("tok", []string{"*"}))
+	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("tok"))
 
 	// POST /v1/runs/run_x/report without any Authorization header must NOT be
 	// rejected by the operator gate. Until the handler is registered it will
@@ -89,7 +89,7 @@ func newReportingTestServer(t *testing.T, signerKey []byte, extra ...Option) htt
 	signer := reporting.NewSigner(signerKey)
 	opts := append([]Option{
 		WithReportSigner(signer),
-		WithBearerAuth("op-token", []string{"*"}),
+		WithBearerAuth("op-token"),
 	}, extra...)
 	return New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log)}, opts...)
 }

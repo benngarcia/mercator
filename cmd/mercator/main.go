@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -97,7 +96,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// silently rewritten to a fabricated digest the daemon can't pull.
 	imageResolver := ociresolver.NewStaticResolver(nil)
 	serverOpts := []httpapi.Option{
-		httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
+		httpapi.WithBearerAuth(apiToken),
 		httpapi.WithVerifier(deps.broker),
 		httpapi.WithAdapterManifests(deps.broker.Manifests),
 	}
@@ -128,7 +127,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// runs converge to closed even if no client ever polls them again.
 	reconcileCtx, stopReconcile := context.WithCancel(ctx)
 	defer stopReconcile()
-	go runReconcileSweeps(reconcileCtx, orch, janitor.New(deps.broker, janitor.WithEventLog(deps.log)), bootstrapWorkspaces(env))
+	go runReconcileSweeps(reconcileCtx, orch, janitor.New(deps.broker, janitor.WithEventLog(deps.log)))
 
 	warnIfNonLoopback(addr)
 	server := &http.Server{
@@ -164,12 +163,12 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	return 0
 }
 
-// runReconcileSweeps converges every bootstrap workspace on a fixed cadence
+// runReconcileSweeps converges every workspace recorded in run history on a fixed cadence
 // until ctx is cancelled. Sweep errors are logged, never fatal: the next tick
 // retries. Run advancement shares the janitor's one-minute cadence: both are
 // backstops for the same convergence loop, and a second timer would only add a
 // knob without making either sweep more correct.
-func runReconcileSweeps(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor, workspaces []string) {
+func runReconcileSweeps(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor) {
 	const interval = time.Minute
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -178,7 +177,7 @@ func runReconcileSweeps(ctx context.Context, orch *orchestrator.Orchestrator, ja
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			reconcileWorkspaces(ctx, orch, jan, workspaces)
+			reconcileWorkspaces(ctx, orch, jan)
 		}
 	}
 }
@@ -189,7 +188,12 @@ func runReconcileSweeps(ctx context.Context, orch *orchestrator.Orchestrator, ja
 // for objects whose runs cannot advance (or lost their run entirely). A line is
 // logged per workspace only when something closed, was reclaimed, or errored,
 // so an idle broker does not spam its own log every tick.
-func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor, workspaces []string) {
+func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor) {
+	workspaces, err := orch.ListRunWorkspaces(ctx)
+	if err != nil {
+		stdlog.Printf("discover run workspaces: %v", err)
+		return
+	}
 	for _, ws := range workspaces {
 		advanced, err := orch.AdvanceOpenRuns(ctx, ws)
 		if err != nil {
@@ -246,17 +250,8 @@ type serverDeps struct {
 
 // buildServerDeps composes the registry-backed Broker, the shared
 // connection.Service over one event log, the SQLite secret store, and the
-// credential resolver for the docker server path. It registers and authorizes
-// the bootstrap docker connection into the service idempotently (Create is
-// keyed on connection:create:<id>, so calling it on every boot is safe).
-//
-// Workspace decision: connections are workspace-scoped but the docker offer is
-// global. The bootstrap connection is registered under each concrete workspace
-// in authWorkspaces. When auth is the "*" wildcard (any workspace), it is
-// registered under the default workspace "ws_1"; full multi-workspace bootstrap
-// is future work.
-//
-// serve uses the Docker host adapter; Docker is a hard requirement.
+// credential resolver. Connections are event-sourced domain records created
+// and authorized through the API; process startup never invents one.
 func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	ctx := context.Background()
 	dsn := envValue(values, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
@@ -320,7 +315,7 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 		client := dockeradapter.NewCLIClient(config["bin"])
 		client.Host = config["host"]
 		client.Context = config["context"]
-		return dockeradapter.NewOffering(client, dockerIdentityForConfig(values, config), values["MERCATOR_DOCKER_ARCH"]), nil
+		return dockeradapter.NewOffering(client, dockerIdentityForConfig(config), values["MERCATOR_DOCKER_ARCH"]), nil
 	})
 
 	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
@@ -337,41 +332,6 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 
 	br := broker.NewBroker(svc, factory, resolver)
 
-	// Register + authorize the bootstrap docker connection under each workspace.
-	// Create is idempotent by command key, so re-registering on every boot is safe.
-	// However, if the docker connection config (bin/host/context) CHANGES between boots,
-	// the request hash differs under the same command key → ErrIdempotencyConflict
-	// (the server will fatal). This is intentional event-sourced semantics: you cannot
-	// silently mutate a connection's config via Create.
-	id := dockerIdentity(values)
-	cfg := map[string]string{
-		"bin":     values["MERCATOR_DOCKER_BIN"],
-		"host":    values["MERCATOR_DOCKER_HOST"],
-		"context": values["MERCATOR_DOCKER_CONTEXT"],
-	}
-	for _, ws := range bootstrapWorkspaces(values) {
-		_, err = svc.Create(ctx, connection.CreateRequest{
-			WorkspaceID:  ws,
-			ConnectionID: id.ConnectionID,
-			AdapterType:  "docker",
-			Config:       cfg,
-		})
-		if err != nil {
-			if errors.Is(err, eventlog.ErrIdempotencyConflict) {
-				return serverDeps{}, fmt.Errorf("register docker connection in %s: the MERCATOR_DOCKER_{BIN,HOST,CONTEXT} config changed since this database registered %q; connection configs are immutable, so set MERCATOR_DOCKER_CONNECTION_ID to a new id for the new endpoint or point MERCATOR_SQLITE_DSN at a fresh database", ws, id.ConnectionID)
-			}
-			return serverDeps{}, fmt.Errorf("register docker connection in %s: %w", ws, err)
-		}
-		err = svc.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
-			WorkspaceID:  ws,
-			ConnectionID: id.ConnectionID,
-			Authorized:   true,
-		})
-		if err != nil {
-			return serverDeps{}, fmt.Errorf("authorize docker connection in %s: %w", ws, err)
-		}
-	}
-
 	return serverDeps{
 		broker:    br,
 		conns:     svc,
@@ -382,45 +342,10 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	}, nil
 }
 
-// bootstrapWorkspaces returns the concrete workspace ids under which the
-// bootstrap docker connection is registered. Concrete ids from authWorkspaces
-// are used directly; the "*" wildcard maps to the default workspace "ws_1".
-func bootstrapWorkspaces(values map[string]string) []string {
-	var out []string
-	for _, ws := range authWorkspaces(values) {
-		if ws == "*" {
-			continue
-		}
-		out = append(out, ws)
-	}
-	if len(out) == 0 {
-		return []string{"ws_1"}
-	}
-	return out
-}
-
-// dockerIdentityForConfig derives the offer identity for one docker
-// connection's config. The bootstrap endpoint (registered from MERCATOR_DOCKER_*
-// env on boot) keeps its env-driven identity, including the explicit
-// MERCATOR_DOCKER_{CONNECTION_ID,OFFER_ID,NATIVE_REF} overrides; any other
-// docker connection (added later via POST /v1/connections) derives its identity
-// from its own endpoint so two connections never share an offer id.
-func dockerIdentityForConfig(values, config map[string]string) dockeradapter.EndpointIdentity {
-	if config["host"] == values["MERCATOR_DOCKER_HOST"] && config["context"] == values["MERCATOR_DOCKER_CONTEXT"] {
-		return dockerIdentity(values)
-	}
+// dockerIdentityForConfig derives the offer identity from the connection's
+// endpoint, so distinct Docker connections cannot advertise the same offer.
+func dockerIdentityForConfig(config map[string]string) dockeradapter.EndpointIdentity {
 	return dockeradapter.DeriveIdentity(config["host"], config["context"])
-}
-
-// dockerIdentity derives the bootstrap endpoint's identity from the
-// MERCATOR_DOCKER_{HOST,CONTEXT} env, honoring the explicit
-// MERCATOR_DOCKER_{CONNECTION_ID,OFFER_ID,NATIVE_REF} overrides.
-func dockerIdentity(values map[string]string) dockeradapter.EndpointIdentity {
-	id := dockeradapter.DeriveIdentity(values["MERCATOR_DOCKER_HOST"], values["MERCATOR_DOCKER_CONTEXT"])
-	id.ConnectionID = envValue(values, "MERCATOR_DOCKER_CONNECTION_ID", id.ConnectionID)
-	id.OfferID = envValue(values, "MERCATOR_DOCKER_OFFER_ID", id.OfferID)
-	id.NativeRef = envValue(values, "MERCATOR_DOCKER_NATIVE_REF", id.NativeRef)
-	return id
 }
 
 func apiTokenFromEnv(values map[string]string) (string, bool, error) {
@@ -432,24 +357,6 @@ func apiTokenFromEnv(values map[string]string) (string, bool, error) {
 		return "", false, err
 	}
 	return hex.EncodeToString(bytes), true, nil
-}
-
-func authWorkspaces(values map[string]string) []string {
-	raw := values["MERCATOR_AUTH_WORKSPACES"]
-	if raw == "" {
-		return []string{"*"}
-	}
-	var workspaces []string
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			workspaces = append(workspaces, part)
-		}
-	}
-	if len(workspaces) == 0 {
-		return []string{"*"}
-	}
-	return workspaces
 }
 
 func environ() map[string]string {

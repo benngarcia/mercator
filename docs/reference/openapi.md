@@ -15,8 +15,7 @@ curl -fsS "$MERCATOR_API_URL/openapi.json" | jq -r '.paths | keys[]'
 Health, OpenAPI, and the UI shell are public on the configured listen
 interface. The OpenAPI-listed `/v1/*` operator routes require bearer auth with
 `Authorization: Bearer $MERCATOR_API_TOKEN`; workspace-scoped reads and writes
-also require a `workspace_id` query parameter or request field unless the
-server is configured with exactly one allowed workspace.
+also require an explicit `workspace_id` query parameter or request field.
 
 ## Route Families
 

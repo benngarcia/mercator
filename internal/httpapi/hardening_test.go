@@ -205,10 +205,10 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 	}
 }
 
-// Item 6: when exactly one concrete workspace is configured on the bearer
-// token, the server defaults workspace_id so callers need not repeat it.
-func TestSingleConfiguredWorkspaceDefaultsWorkspaceID(t *testing.T) {
-	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("test-token", []string{"ws_1"}))
+// Item 6: workspace-scoped requests always name their durable partition;
+// authentication never supplies a default workspace.
+func TestAuthenticatedRequestsRequireExplicitWorkspaceID(t *testing.T) {
+	handler := newHTTPTestServerWithOptions(t, WithBearerAuth("test-token"))
 
 	// Create without any workspace_id (not in query, body, or nested workload).
 	rev := httpRevision()
@@ -219,8 +219,8 @@ func TestSingleConfiguredWorkspaceDefaultsWorkspaceID(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("create with defaulted workspace expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("create without workspace expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// GET without workspace_id should resolve to the same single workspace.
@@ -228,15 +228,8 @@ func TestSingleConfiguredWorkspaceDefaultsWorkspaceID(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("get with defaulted workspace expected 200, got %d body=%s", rec.Code, rec.Body.String())
-	}
-	var got RunResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.Run.WorkspaceID != "ws_1" {
-		t.Fatalf("expected run resolved in ws_1, got %q", got.Run.WorkspaceID)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("get without workspace expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

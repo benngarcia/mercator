@@ -12,8 +12,9 @@ evaluation. It is not a GA security assurance statement.
   logged-in human identity. Sessions are HMAC-signed under
   `MERCATOR_SESSION_KEY`; OIDC config is fail-closed (partial config refuses
   to boot).
-- Workspace authorization is an allow-list shared by every authenticated
-  principal; per-user identity is recorded for audit, not authorization.
+- Every authenticated principal administers the instance. Workspace ids scope
+  stored records and queries; per-user identity is recorded for audit, not
+  authorization.
 - Health, OpenAPI, and (without OIDC) the UI shell are public on the listen
   interface. With OIDC configured, unauthenticated console loads redirect to
   the login flow.

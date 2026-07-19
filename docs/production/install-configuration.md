@@ -28,11 +28,11 @@ after restart:
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/var/lib/mercator/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
-export MERCATOR_AUTH_WORKSPACES='ws_eval'
 ```
 
-`serve` always uses the Docker host adapter, so a running Docker daemon is a
-hard requirement for a first run.
+`serve` registers the Docker adapter type but starts with no connections.
+Create and authorize each local or remote Docker endpoint through the
+connection API before launching a run.
 
 Then start the server:
 
@@ -50,11 +50,6 @@ server path.
 | `MERCATOR_ADDR` | `127.0.0.1:8080` | HTTP listen address. |
 | `MERCATOR_SQLITE_DSN` | `file:/data/mercator.db` | SQLite event-log DSN. |
 | `MERCATOR_API_TOKEN` | generated at startup | Bearer token for `/v1/*`. Set explicitly for operations. |
-| `MERCATOR_AUTH_WORKSPACES` | `*` | Comma-separated workspace allow list for the bearer principal. |
-| `MERCATOR_DOCKER_BIN` | `docker` lookup behavior in CLI client | Docker executable path. |
-| `MERCATOR_DOCKER_NATIVE_REF` | `loopback` | Native reference in the synthetic Docker offer. |
-| `MERCATOR_DOCKER_OFFER_ID` | `offer_docker_loopback` | Synthetic Docker offer ID. |
-| `MERCATOR_DOCKER_CONNECTION_ID` | `conn_docker_loopback` | Synthetic Docker connection ID. |
 | `MERCATOR_DOCKER_ARCH` | Docker host architecture, or `amd64` if the host probe fails | Optional architecture override for an intentionally emulated Docker offer. |
 | `MERCATOR_SECRET_KEY` | none | Master key for stored connection credentials and workload reporting (32+ decoded bytes, hex or base64). A present malformed value stops startup. |
 | `MERCATOR_API_URL` | none | CLI base URL; required for CLI mode unless `--api-url` is provided. |

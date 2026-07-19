@@ -14,7 +14,8 @@ limits.
 
 ## Security
 
-- One bearer token principal with workspace allow-list, not per-user auth.
+- One bearer token principal plus audited OIDC identities, with no roles or
+  per-user workspace authorization.
 - No built-in TLS.
 - No Mercator-managed secret vault, grant API, KMS integration, or key rotation
   flow exists. Workloads/runtimes own their secret-management backend.

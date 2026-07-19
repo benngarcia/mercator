@@ -24,8 +24,8 @@ rebuilt from the event log.
 
 - [install-configuration.md](install-configuration.md): build, server start,
   environment variables, health checks, OpenAPI, and UI.
-- [authentication-workspaces.md](authentication-workspaces.md): bearer token and
-  workspace allow-list behavior.
+- [authentication-workspaces.md](authentication-workspaces.md): authenticated
+  operator identities and explicit workspace partitions.
 - [docker-adapter-operation.md](docker-adapter-operation.md): Docker host adapter
   setup, labels, lifecycle, and cleanup checks.
 - [../reference/openapi.md](../reference/openapi.md): OpenAPI discovery,
@@ -55,7 +55,6 @@ go test ./...
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_SQLITE_DSN='file:/tmp/mercator.db'
 export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
-export MERCATOR_AUTH_WORKSPACES='ws_eval'
 
 go run ./cmd/mercator serve
 ```

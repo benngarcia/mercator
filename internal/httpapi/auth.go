@@ -5,20 +5,13 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
-	"slices"
 	"strings"
 )
 
 type principalContextKey struct{}
 
 type principal struct {
-	Subject      string
-	WorkspaceIDs []string
-}
-
-func (p principal) allows(workspaceID string) bool {
-	return p.Subject != "" &&
-		(slices.Contains(p.WorkspaceIDs, "*") || slices.Contains(p.WorkspaceIDs, workspaceID))
+	Subject string
 }
 
 // requestActor marshals the request principal into the event-envelope actor
@@ -75,8 +68,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // CLI token minted by `mercator login`, or (when webauth is mounted) a
 // signed-in human session. A presented bearer credential must verify as one of
 // the two token kinds — a wrong token fails outright rather than silently
-// downgrading to cookie auth. Every principal kind carries the same configured
-// workspace grants; they differ only in their audited subject.
+// downgrading to cookie auth. Every principal kind carries the same
+// instance-wide authority; they differ only in their audited subject.
 func (s *Server) authenticate(r *http.Request) (principal, bool) {
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
@@ -85,18 +78,18 @@ func (s *Server) authenticate(r *http.Request) (principal, bool) {
 			return principal{}, false
 		}
 		if subtle.ConstantTimeCompare([]byte(token), []byte(s.security.Token)) == 1 {
-			return principal{Subject: "bearer", WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+			return principal{Subject: "bearer"}, true
 		}
 		if s.webauth != nil {
 			if email, ok := s.webauth.VerifyCLIToken(token); ok {
-				return principal{Subject: email, WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+				return principal{Subject: email}, true
 			}
 		}
 		return principal{}, false
 	}
 	if s.webauth != nil {
 		if email, ok := s.webauth.SessionEmail(r); ok {
-			return principal{Subject: email, WorkspaceIDs: slices.Clone(s.security.Workspaces)}, true
+			return principal{Subject: email}, true
 		}
 	}
 	return principal{}, false
