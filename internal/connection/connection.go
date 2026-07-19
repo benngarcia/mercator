@@ -120,7 +120,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 	if err != nil {
 		return Record{}, err
 	}
-	hash, err := domain.CanonicalHash(record)
+	requestHashes, err := createRequestHashes(record)
 	if err != nil {
 		return Record{}, err
 	}
@@ -128,7 +128,6 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            "connection:create:" + req.ConnectionID,
-		RequestHash:           hash,
 		Actor:                 req.Actor,
 		CorrelationID:         req.ConnectionID,
 		CausationID:           "connection:create:" + req.ConnectionID,
@@ -141,15 +140,61 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 			Data:          data,
 		}},
 	}
-	if len(credentialWrite.Secret) == 0 {
-		_, err = s.log.Append(ctx, appendRequest)
-	} else {
-		_, err = s.credentials.CreateCredential(ctx, appendRequest, credentialWrite)
+	for _, requestHash := range requestHashes {
+		appendRequest.RequestHash = requestHash
+		err = s.appendCreate(ctx, appendRequest, credentialWrite)
+		if !errors.Is(err, eventlog.ErrIdempotencyConflict) {
+			break
+		}
 	}
 	if err != nil {
 		return Record{}, err
 	}
 	return record, nil
+}
+
+func (s *Service) appendCreate(ctx context.Context, request eventlog.AppendRequest, credentialWrite CredentialWrite) error {
+	if len(credentialWrite.Secret) == 0 {
+		_, err := s.log.Append(ctx, request)
+		return err
+	}
+	_, err := s.credentials.CreateCredential(ctx, request, credentialWrite)
+	return err
+}
+
+// createRequestHashes keeps the durable command hash independent of Record's
+// presentation tags. v0.4.0 briefly hashed Record after its zero credential
+// changed from `omitempty` to `omitzero`, so accept that transitional hash
+// after trying the stable pre-v0.4 shape used for new commands.
+func createRequestHashes(record Record) ([]string, error) {
+	stable, err := domain.CanonicalHash(struct {
+		ID                  string                `json:"id"`
+		WorkspaceID         string                `json:"workspace_id"`
+		AdapterType         string                `json:"adapter_type"`
+		AuthorizationSchema map[string]string     `json:"authorization_schema,omitempty"`
+		Authorized          bool                  `json:"authorized"`
+		Config              map[string]string     `json:"config,omitempty"`
+		Credential          credential.Credential `json:"credential"`
+	}{
+		ID:                  record.ID,
+		WorkspaceID:         record.WorkspaceID,
+		AdapterType:         record.AdapterType,
+		AuthorizationSchema: record.AuthorizationSchema,
+		Authorized:          record.Authorized,
+		Config:              record.Config,
+		Credential:          record.Credential,
+	})
+	if err != nil {
+		return nil, err
+	}
+	transitional, err := domain.CanonicalHash(record)
+	if err != nil {
+		return nil, err
+	}
+	if stable == transitional {
+		return []string{stable}, nil
+	}
+	return []string{stable, transitional}, nil
 }
 
 func (s *Service) prepareCredential(record *Record, secret []byte) (CredentialWrite, error) {
