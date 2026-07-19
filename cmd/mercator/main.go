@@ -33,6 +33,7 @@ import (
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
+	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
 )
@@ -254,14 +255,12 @@ func buildServerDeps(values map[string]string) serverDeps {
 	ctx := context.Background()
 	dsn := envValue(values, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
 
-	log, err := eventlog.OpenSQLite(ctx, dsn)
+	storage, err := sqlitestore.Open(ctx, dsn)
 	if err != nil {
-		stdlog.Fatalf("open event log: %v", err)
+		stdlog.Fatalf("open sqlite storage: %v", err)
 	}
-	store, err := credential.NewSQLiteStore(ctx, log.Database())
-	if err != nil {
-		stdlog.Fatalf("init secret store: %v", err)
-	}
+	log := storage.EventLog()
+	store := storage.CredentialStore()
 
 	// Decode master key: try hex then base64; empty env var → nil key.
 	var masterKey []byte
@@ -287,7 +286,11 @@ func buildServerDeps(values map[string]string) serverDeps {
 		store,
 		masterKey,
 	)
-	svc := connection.New(log, connection.WithCredentials(resolver, store))
+	connections, err := storage.Connections(resolver)
+	if err != nil {
+		stdlog.Fatalf("init connection storage: %v", err)
+	}
+	svc := connection.NewWithCredentials(connections)
 
 	// Build the report-token signer from a domain-separated subkey. The signer
 	// is always constructed (so its Enabled() reflects key presence); the
@@ -359,7 +362,7 @@ func buildServerDeps(values map[string]string) serverDeps {
 		log:       log,
 		signer:    signer,
 		publicURL: publicURL,
-		close:     log.Close,
+		close:     storage.Close,
 	}
 }
 

@@ -2,7 +2,6 @@ package connection
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,25 +25,26 @@ var ErrNotFound = fmt.Errorf("connection: not found")
 var ErrSecretStoreDisabled = errors.New("connection: secret store disabled")
 var ErrSecretStore = errors.New("connection: secret store failure")
 
-type atomicAppender interface {
+type CredentialWrite struct {
+	WorkspaceID  string
+	ConnectionID string
+	Secret       []byte
+}
+
+type CredentialRef struct {
+	WorkspaceID  string
+	ConnectionID string
+}
+
+type CredentialRepository interface {
 	eventlog.EventLog
-	AppendAtomic(context.Context, eventlog.AppendRequest, func(context.Context, *sql.Tx) error) (eventlog.AppendResult, error)
-}
-
-type credentialSealer interface {
-	Seal([]byte) ([]byte, bool)
-}
-
-type credentialStore interface {
-	PutTx(context.Context, *sql.Tx, string, string, []byte) error
-	DeleteTx(context.Context, *sql.Tx, string, string) error
+	CreateCredential(context.Context, eventlog.AppendRequest, CredentialWrite) (eventlog.AppendResult, error)
+	DeleteCredential(context.Context, eventlog.AppendRequest, CredentialRef) (eventlog.AppendResult, error)
 }
 
 type Service struct {
 	log         eventlog.EventLog
-	atomicLog   atomicAppender
-	sealer      credentialSealer
-	credentials credentialStore
+	credentials CredentialRepository
 	now         func() time.Time
 }
 
@@ -92,22 +92,12 @@ type DeleteRequest struct {
 	Actor json.RawMessage
 }
 
-type Option func(*Service)
-
-func WithCredentials(sealer credentialSealer, store credentialStore) Option {
-	return func(service *Service) {
-		service.sealer = sealer
-		service.credentials = store
-	}
+func New(log eventlog.EventLog) *Service {
+	return &Service{log: log, now: time.Now}
 }
 
-func New(log eventlog.EventLog, options ...Option) *Service {
-	service := &Service{log: log, now: time.Now}
-	service.atomicLog, _ = log.(atomicAppender)
-	for _, option := range options {
-		option(service)
-	}
-	return service
+func NewWithCredentials(repository CredentialRepository) *Service {
+	return &Service{log: repository, credentials: repository, now: time.Now}
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error) {
@@ -122,7 +112,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 		Config:              maps.Clone(req.Config),
 		Credential:          req.Credential,
 	}
-	sealedSecret, err := s.prepareCredential(&record, req.Secret)
+	credentialWrite, err := s.prepareCredential(&record, req.Secret)
 	if err != nil {
 		return Record{}, err
 	}
@@ -151,48 +141,37 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 			Data:          data,
 		}},
 	}
-	_, err = s.append(ctx, appendRequest, s.storeCredential(record, sealedSecret))
+	if len(credentialWrite.Secret) == 0 {
+		_, err = s.log.Append(ctx, appendRequest)
+	} else {
+		_, err = s.credentials.CreateCredential(ctx, appendRequest, credentialWrite)
+	}
 	if err != nil {
 		return Record{}, err
 	}
 	return record, nil
 }
 
-func (s *Service) prepareCredential(record *Record, secret []byte) ([]byte, error) {
+func (s *Service) prepareCredential(record *Record, secret []byte) (CredentialWrite, error) {
 	if record.Credential.Source != credential.SourceMercator || len(secret) == 0 {
-		return nil, nil
+		return CredentialWrite{}, nil
 	}
-	if s.sealer == nil || s.credentials == nil || s.atomicLog == nil {
-		return nil, fmt.Errorf("%w: configure MERCATOR_SECRET_KEY and transactional SQLite credential storage", ErrSecretStoreDisabled)
-	}
-	sealed, ok := s.sealer.Seal(secret)
-	if !ok {
-		return nil, fmt.Errorf("%w: configure MERCATOR_SECRET_KEY", ErrSecretStoreDisabled)
+	if s.credentials == nil {
+		return CredentialWrite{}, fmt.Errorf("%w: configure MERCATOR_SECRET_KEY and transactional SQLite credential storage", ErrSecretStoreDisabled)
 	}
 	record.Credential.Ref = record.ID
-	return sealed, nil
+	return CredentialWrite{
+		WorkspaceID:  record.WorkspaceID,
+		ConnectionID: record.ID,
+		Secret:       secret,
+	}, nil
 }
 
-func (s *Service) storeCredential(record Record, sealed []byte) func(context.Context, *sql.Tx) error {
-	if len(sealed) == 0 {
-		return nil
+func credentialRef(record Record) (CredentialRef, bool) {
+	if record.Credential.Source != credential.SourceMercator || record.Credential.Ref == "" {
+		return CredentialRef{}, false
 	}
-	return func(ctx context.Context, tx *sql.Tx) error {
-		if err := s.credentials.PutTx(ctx, tx, record.WorkspaceID, record.ID, sealed); err != nil {
-			return fmt.Errorf("%w: %v", ErrSecretStore, err)
-		}
-		return nil
-	}
-}
-
-func (s *Service) append(ctx context.Context, request eventlog.AppendRequest, mutation func(context.Context, *sql.Tx) error) (eventlog.AppendResult, error) {
-	if mutation == nil {
-		return s.log.Append(ctx, request)
-	}
-	if s.atomicLog == nil {
-		return eventlog.AppendResult{}, ErrSecretStoreDisabled
-	}
-	return s.atomicLog.AppendAtomic(ctx, request, mutation)
+	return CredentialRef{WorkspaceID: record.WorkspaceID, ConnectionID: record.ID}, true
 }
 
 func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizationRequest) error {
@@ -249,7 +228,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 	if err != nil {
 		return err
 	}
-	_, deleted, err := reduceConnection(events)
+	record, deleted, err := reduceConnection(events)
 	if err != nil {
 		return err
 	}
@@ -280,19 +259,14 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 			Data:          json.RawMessage(`{"deleted":true}`),
 		}},
 	}
-	var mutation func(context.Context, *sql.Tx) error
-	if s.credentials != nil {
-		if s.atomicLog == nil {
+	if ref, ok := credentialRef(record); ok {
+		if s.credentials == nil {
 			return ErrSecretStoreDisabled
 		}
-		mutation = func(ctx context.Context, tx *sql.Tx) error {
-			if err := s.credentials.DeleteTx(ctx, tx, req.WorkspaceID, req.ConnectionID); err != nil {
-				return fmt.Errorf("%w: %v", ErrSecretStore, err)
-			}
-			return nil
-		}
+		_, err = s.credentials.DeleteCredential(ctx, appendRequest, ref)
+	} else {
+		_, err = s.log.Append(ctx, appendRequest)
 	}
-	_, err = s.append(ctx, appendRequest, mutation)
 	return err
 }
 

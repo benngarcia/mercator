@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scheduler"
+	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
 )
 
@@ -241,25 +243,33 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 
 type atomicCredentialServer struct {
 	handler  http.Handler
+	db       *sql.DB
 	log      *eventlog.SQLiteEventLog
 	service  *connection.Service
 	store    *credential.SQLiteStore
 	resolver *credential.Resolver
+	storage  *sqlitestore.Storage
 }
 
 func newAtomicCredentialServer(t *testing.T, masterKey []byte, options ...Option) atomicCredentialServer {
 	t.Helper()
-	log, err := eventlog.OpenSQLite(t.Context(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
-		t.Fatalf("open event log: %v", err)
+		t.Fatalf("open sqlite: %v", err)
 	}
-	t.Cleanup(func() { _ = log.Close() })
-	store, err := credential.NewSQLiteStore(t.Context(), log.Database())
+	storage, err := sqlitestore.New(t.Context(), db)
 	if err != nil {
-		t.Fatalf("open credential store: %v", err)
+		t.Fatalf("open storage: %v", err)
 	}
+	t.Cleanup(func() { _ = storage.Close() })
+	log := storage.EventLog()
+	store := storage.CredentialStore()
 	resolver := credential.NewResolver(nil, store, masterKey)
-	service := connection.New(log, connection.WithCredentials(resolver, store))
+	connections, err := storage.Connections(resolver)
+	if err != nil {
+		t.Fatalf("open connection storage: %v", err)
+	}
+	service := connection.NewWithCredentials(connections)
 	ad := fake.New()
 	sched := scheduler.New()
 	handler := New(Deps{
@@ -270,7 +280,27 @@ func newAtomicCredentialServer(t *testing.T, masterKey []byte, options ...Option
 		Connections:  service,
 		Resolver:     ociresolver.NewStaticResolver(nil),
 	}, options...)
-	return atomicCredentialServer{handler: handler, log: log, service: service, store: store, resolver: resolver}
+	return atomicCredentialServer{handler: handler, db: db, log: log, service: service, store: store, resolver: resolver, storage: storage}
+}
+
+func (s atomicCredentialServer) handlerWithMasterKey(t *testing.T, masterKey []byte) http.Handler {
+	t.Helper()
+	resolver := credential.NewResolver(nil, s.store, masterKey)
+	connections, err := s.storage.Connections(resolver)
+	if err != nil {
+		t.Fatalf("open connection storage: %v", err)
+	}
+	service := connection.NewWithCredentials(connections)
+	ad := fake.New()
+	sched := scheduler.New()
+	return New(Deps{
+		Orchestrator: orchestrator.New(s.log, sched, ad),
+		Scheduler:    sched,
+		Adapter:      ad,
+		Workloads:    workload.New(s.log),
+		Connections:  service,
+		Resolver:     ociresolver.NewStaticResolver(nil),
+	})
 }
 
 func createMercatorConnection(t *testing.T, handler http.Handler, config map[string]string, secret string) *httptest.ResponseRecorder {
@@ -331,9 +361,27 @@ func TestCreateConnectionReplayDoesNotRotateCredential(t *testing.T) {
 	}
 }
 
+func TestCreateConnectionReplayAndConflictDoNotRequireTheSealKey(t *testing.T) {
+	server := newAtomicCredentialServer(t, testKey32())
+	if response := createMercatorConnection(t, server.handler, nil, "original-secret"); response.Code != http.StatusAccepted {
+		t.Fatalf("first create: status=%d body=%s", response.Code, response.Body.String())
+	}
+	handlerWithoutKey := server.handlerWithMasterKey(t, nil)
+
+	replay := createMercatorConnection(t, handlerWithoutKey, nil, "original-secret")
+	if replay.Code != http.StatusAccepted {
+		t.Fatalf("replay without seal key: status=%d body=%s", replay.Code, replay.Body.String())
+	}
+
+	conflict := createMercatorConnection(t, handlerWithoutKey, map[string]string{"region": "us-west"}, "replacement-secret")
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("conflict without seal key: status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+}
+
 func TestCreateConnectionEventFailureRollsBackCredential(t *testing.T) {
 	server := newAtomicCredentialServer(t, testKey32())
-	if _, err := server.log.Database().ExecContext(t.Context(), `
+	if _, err := server.db.ExecContext(t.Context(), `
 		CREATE TRIGGER fail_connection_event
 		BEFORE INSERT ON events
 		WHEN NEW.event_type = 'compute.connection.created.v1'
@@ -354,7 +402,7 @@ func TestCreateConnectionEventFailureRollsBackCredential(t *testing.T) {
 
 func TestCreateConnectionCredentialFailureRollsBackEvent(t *testing.T) {
 	server := newAtomicCredentialServer(t, testKey32())
-	if _, err := server.log.Database().ExecContext(t.Context(), `
+	if _, err := server.db.ExecContext(t.Context(), `
 		CREATE TRIGGER fail_connection_secret
 		BEFORE INSERT ON connection_secret
 		BEGIN SELECT RAISE(FAIL, 'credential write failed'); END`); err != nil {

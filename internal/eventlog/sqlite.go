@@ -35,6 +35,11 @@ func OpenSQLite(ctx context.Context, dsn string) (*SQLiteEventLog, error) {
 	if err != nil {
 		return nil, err
 	}
+	return NewSQLite(ctx, db)
+}
+
+// NewSQLite takes ownership of db. Closing the event log closes the database.
+func NewSQLite(ctx context.Context, db *sql.DB) (*SQLiteEventLog, error) {
 	db.SetMaxOpenConns(1)
 	log := &SQLiteEventLog{db: db, subs: map[*subscription]struct{}{}, done: make(chan struct{})}
 	if err := log.init(ctx); err != nil {
@@ -43,10 +48,6 @@ func OpenSQLite(ctx context.Context, dsn string) (*SQLiteEventLog, error) {
 	}
 	return log, nil
 }
-
-// Database exposes the shared SQLite pool to transactional collaborators.
-// Callers must not close it; SQLiteEventLog owns its lifetime.
-func (l *SQLiteEventLog) Database() *sql.DB { return l.db }
 
 func (l *SQLiteEventLog) Close() error {
 	// Stop subscription goroutines before closing the DB so none of them park
