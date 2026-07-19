@@ -26,7 +26,7 @@ func (c configFlag) Set(value string) error {
 	return nil
 }
 
-// buildConnectionRequest implements `mercator connection <list|create|authorize>`,
+// buildConnectionRequest implements `mercator connection <list|create|authorize|delete>`,
 // covering the /v1/connections surface that previously required hand-written
 // curl with Idempotency-Key headers.
 func buildConnectionRequest(ctx context.Context, baseURL, defaultWorkspaceID string, stdin io.Reader, args []string) (*http.Request, error) {
@@ -111,6 +111,12 @@ func buildConnectionRequest(ctx context.Context, baseURL, defaultWorkspaceID str
 		}
 		path := "/v1/connections/" + url.PathEscape(*connectionID) + "/authorize"
 		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
+	case "delete":
+		if *workspaceID == "" || *connectionID == "" {
+			return nil, fmt.Errorf("delete requires --workspace-id and --connection-id")
+		}
+		path := "/v1/connections/" + url.PathEscape(*connectionID)
+		return http.NewRequestWithContext(ctx, http.MethodDelete, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
 	default:
 		return nil, fmt.Errorf("unknown connection command %q", command)
 	}

@@ -265,6 +265,7 @@ Connection commands:
   list        List connections in a workspace
   create      Register a provider connection
   authorize   Verify and authorize a connection
+  delete      Delete a connection
 
 Flags:
   --workspace-id ID          Workspace id; defaults to MERCATOR_WORKSPACE_ID
