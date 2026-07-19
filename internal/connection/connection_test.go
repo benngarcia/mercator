@@ -3,9 +3,12 @@ package connection
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/credential"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
@@ -66,6 +69,80 @@ func TestCreateRoundTripsConfigAndCredential(t *testing.T) {
 	if got.Credential.Source != "mercator" || got.Credential.Ref != "conn_rp" {
 		t.Errorf("credential not round-tripped: %+v", got.Credential)
 	}
+}
+
+func TestCreateReplaysConnectionsAcrossCredentialPresentationChange(t *testing.T) {
+	for _, fixture := range []string{
+		"v0_3_docker_connection_created.json",
+		"v0_4_docker_connection_created.json",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			ctx := context.Background()
+			log := arrangeConnectionCreateFixture(t, fixture)
+
+			_, err := New(log).Create(ctx, CreateRequest{
+				WorkspaceID:  "staging",
+				ConnectionID: "conn_docker_loopback",
+				AdapterType:  "docker",
+				Config:       map[string]string{"bin": "", "context": "", "host": ""},
+			})
+
+			if err != nil {
+				t.Fatalf("replay %s connection: %v", fixture, err)
+			}
+			events, err := log.ReadStream(ctx, connectionStream("staging", "conn_docker_loopback"), 0, 10)
+			if err != nil {
+				t.Fatalf("read replayed connection: %v", err)
+			}
+			if len(events) != 1 {
+				t.Fatalf("replay appended %d events, want the original event only", len(events))
+			}
+		})
+	}
+}
+
+func TestCreateRejectsDifferentLegacyConnectionConfig(t *testing.T) {
+	log := arrangeConnectionCreateFixture(t, "v0_3_docker_connection_created.json")
+
+	_, err := New(log).Create(context.Background(), CreateRequest{
+		WorkspaceID:  "staging",
+		ConnectionID: "conn_docker_loopback",
+		AdapterType:  "docker",
+		Config:       map[string]string{"host": "ssh://different-host"},
+	})
+
+	if !errors.Is(err, eventlog.ErrIdempotencyConflict) {
+		t.Fatalf("different config error = %v, want idempotency conflict", err)
+	}
+}
+
+func arrangeConnectionCreateFixture(t *testing.T, fixture string) *eventlog.SQLiteEventLog {
+	t.Helper()
+	createdEvent, err := os.ReadFile("testdata/" + fixture)
+	if err != nil {
+		t.Fatalf("read connection fixture: %v", err)
+	}
+	requestHash, err := domain.CanonicalHash(json.RawMessage(createdEvent))
+	if err != nil {
+		t.Fatalf("hash connection fixture: %v", err)
+	}
+	log := openConnectionTestLog(t)
+	_, err = log.Append(context.Background(), eventlog.AppendRequest{
+		Stream:                connectionStream("staging", "conn_docker_loopback"),
+		ExpectedStreamVersion: 0,
+		CommandKey:            "connection:create:conn_docker_loopback",
+		RequestHash:           requestHash,
+		Events: []eventlog.NewEvent{{
+			ID:            "evt_connection_staging_conn_docker_loopback_created",
+			Type:          EventConnectionCreated,
+			SchemaVersion: 1,
+			Data:          createdEvent,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("arrange connection fixture: %v", err)
+	}
+	return log
 }
 
 func TestSameConnectionIDCanExistInMultipleWorkspaces(t *testing.T) {
