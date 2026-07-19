@@ -196,12 +196,11 @@ mercator run list
 ```sh
 export MERCATOR_API_URL=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_WORKSPACE_ID=ws_nope
-# Server was started with MERCATOR_AUTH_WORKSPACES=ws_1.
+unset MERCATOR_WORKSPACE_ID
 
 mercator run list
 # stderr, exit 1:
-# {"code":"FORBIDDEN","message":"Principal is not authorized for this workspace."}
+# workspace id is required; pass --workspace-id or set MERCATOR_WORKSPACE_ID
 ```
 
 ## Workload JSON

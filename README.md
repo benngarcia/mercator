@@ -96,7 +96,7 @@ docker build -t mercator:local .
 
 docker run --rm \
   -e MERCATOR_ADDR=0.0.0.0:8080 \
-  -e MERCATOR_API_TOKEN=dev-token -e MERCATOR_AUTH_WORKSPACES=ws_1 \
+  -e MERCATOR_API_TOKEN=dev-token \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -p 8080:8080 mercator:local serve
 ```
@@ -107,7 +107,7 @@ no source checkout needed:
 ```sh
 docker run --rm \
   -e MERCATOR_ADDR=0.0.0.0:8080 \
-  -e MERCATOR_API_TOKEN=dev-token -e MERCATOR_AUTH_WORKSPACES=ws_1 \
+  -e MERCATOR_API_TOKEN=dev-token \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -p 8080:8080 ghcr.io/benngarcia/mercator:latest serve
 ```
@@ -118,7 +118,7 @@ your host Docker — and grants the container root-equivalent control of that
 daemon, which is fine on a machine you own for local evaluation but not on an
 untrusted host.
 
-### 2. Create a run and read the result
+### 2. Register Docker, create a run, and read the result
 
 In another shell. On the Docker adapter a workload must reference a
 **digest-pinned image** — a mutable tag like `busybox:latest` is rejected, and
@@ -129,6 +129,14 @@ first:
 export MERCATOR_API_URL=http://127.0.0.1:8080
 export MERCATOR_API_TOKEN=dev-token
 export MERCATOR_WORKSPACE_ID=ws_1
+
+curl -fsS -X POST "$MERCATOR_API_URL/v1/connections" \
+  -H "Authorization: Bearer $MERCATOR_API_TOKEN" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: quickstart-docker' \
+  -d '{"workspace_id":"ws_1","connection_id":"conn_docker_loopback","adapter_type":"docker"}'
+curl -fsS -X POST \
+  "$MERCATOR_API_URL/v1/connections/conn_docker_loopback:authorize?workspace_id=$MERCATOR_WORKSPACE_ID" \
+  -H "Authorization: Bearer $MERCATOR_API_TOKEN"
 
 docker pull -q busybox:latest >/dev/null
 IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
@@ -194,7 +202,7 @@ reuse it:
 go build -o mercator ./cmd/mercator
 
 export MERCATOR_ADDR=127.0.0.1:8080
-export MERCATOR_API_TOKEN=dev-token MERCATOR_AUTH_WORKSPACES=ws_1
+export MERCATOR_API_TOKEN=dev-token
 export MERCATOR_SQLITE_DSN="file:$HOME/.mercator/mercator.db" && mkdir -p "$HOME/.mercator"
 ./mercator serve   # then drive it with the architecture-aware request in step 2
 ```

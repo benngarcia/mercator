@@ -6,7 +6,7 @@
 #
 #   docker run --rm \
 #     -e MERCATOR_ADDR=0.0.0.0:8080 \
-#     -e MERCATOR_API_TOKEN=dev-token -e MERCATOR_AUTH_WORKSPACES=ws_1 \
+#     -e MERCATOR_API_TOKEN=dev-token \
 #     -v /var/run/docker.sock:/var/run/docker.sock \
 #     -p 8080:8080 mercator:local serve
 #

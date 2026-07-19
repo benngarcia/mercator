@@ -48,7 +48,7 @@ Out of scope for the current implementation:
 | Boundary | Trusted Side | Less-Trusted Side | Notes |
 | --- | --- | --- | --- |
 | HTTP API | Mercator process | Any client with network access | Bearer token required for `/v1/*`; health/OpenAPI/UI shell are public on the bind address. |
-| Workspace authorization | Allowed workspace list | Caller-supplied workspace IDs | Reads and writes must remain workspace-scoped. |
+| Workspace partition | Stored workspace ID | Caller-supplied workspace IDs | Reads and writes must remain scoped to the explicit partition. |
 | Public events | Redacted/public event data | Private command payloads and workload env values | Public API and sinks must not expose private events. |
 | Adapter calls | Mercator adapter contract | Provider APIs and local Docker daemon | Adapters are trusted code but provider responses are external facts. |
 | Reporting endpoint | One run's reporter token | Workload process | Report token must not authorize operator API access or other runs. |
@@ -74,8 +74,8 @@ operator token.
 Mitigations:
 
 - `/v1/*` routes use bearer-token auth.
-- Workspace allow-list checks gate workspace-scoped API behavior.
-- Security tests cover invalid token and disallowed workspace responses.
+- Explicit workspace ids scope every stored record and query.
+- Security tests cover invalid tokens and missing workspace ids.
 
 Remaining work:
 
@@ -95,8 +95,8 @@ Mitigations:
 
 Remaining work:
 
-- Workspace membership is attached to the bearer principal, not users/groups.
-- Connection bootstrap behavior for wildcard workspaces remains narrow.
+- Authenticated principals are trusted instance administrators. Mercator does
+  not provide roles, user/group membership, or tenant isolation between them.
 
 ### Secret Or Env Leakage In Public Events
 

@@ -11,17 +11,17 @@ environment.
 - [ ] `/health/live`, `/health/ready`, and `/openapi.json` return expected JSON.
 - [ ] UI loads at `/` on the intended bind address.
 
-## Auth And Workspace Isolation
+## Auth And Workspace Partitioning
 
-- [ ] Valid bearer token can access an allowed workspace.
+- [ ] Valid bearer token can access an explicit workspace.
 - [ ] Invalid bearer token returns `UNAUTHORIZED`.
-- [ ] Disallowed workspace returns `FORBIDDEN`.
+- [ ] Missing workspace returns `WORKSPACE_ID_REQUIRED`.
 - [ ] All run reads use explicit `workspace_id`.
 
 ## Docker Adapter Quickstart
 
-- [ ] `serve` exposes the configured Docker offer (`offer_docker_loopback` by
-  default).
+- [ ] `serve` starts with no connections or offers.
+- [ ] Creating and authorizing a local Docker connection exposes its offer.
 - [ ] A Docker run created from a digest-pinned image reaches `closed: true`.
 - [ ] Cleanup is `confirmed` before closure.
 - [ ] Replaying the same idempotency key with identical payload is safe.
