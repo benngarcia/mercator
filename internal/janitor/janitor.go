@@ -121,16 +121,16 @@ func (j *Janitor) releasable(ctx context.Context, object adapter.OwnedExternalOb
 	if object.RunID == "" {
 		return true, domain.DispositionRelease, nil
 	}
-	events, err := j.log.ReadStream(ctx, eventlog.StreamKey{WorkspaceID: object.WorkspaceID, Type: "run", ID: object.RunID}, 0, 1000)
+	history, err := eventlog.ReadFullStream(ctx, j.log, eventlog.StreamKey{WorkspaceID: object.WorkspaceID, Type: "run", ID: object.RunID})
 	if err != nil {
 		return false, "", err
 	}
-	if len(events) == 0 {
+	if len(history.Events) == 0 {
 		return true, domain.DispositionRelease, nil
 	}
 	disposition := domain.DispositionRelease
 	reclaim := false
-	for _, event := range events {
+	for _, event := range history.Events {
 		switch event.Type {
 		case "compute.run.launch_intent_recorded.v1":
 			payload := event.PrivateData
