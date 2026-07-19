@@ -1,0 +1,9 @@
+package: httpapi
+output: contract.gen.go
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+output-options:
+  prefer-skip-optional-pointer: true
+  skip-prune: true

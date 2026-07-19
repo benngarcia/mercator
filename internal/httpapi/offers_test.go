@@ -38,14 +38,14 @@ func TestListOffersExposesPartialResultsAndConnectionFailures(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	var response offerListResponse
+	var response OfferListResponse
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(response.Offers) != 1 || response.Offers[0].ID != "offer_good" {
 		t.Fatalf("offers = %#v, want offer_good", response.Offers)
 	}
-	if len(response.Failures) != 1 || response.Failures[0].ConnectionID != "conn_bad" || response.Failures[0].Message != "Provider offer query failed." {
+	if len(response.Failures) != 1 || response.Failures[0].ConnectionId != "conn_bad" || response.Failures[0].Message != "Provider offer query failed." {
 		t.Fatalf("failures = %#v, want conn_bad provider failure", response.Failures)
 	}
 }
@@ -58,7 +58,7 @@ func TestPreviewPlacementRejectsPartialOfferSet(t *testing.T) {
 			Failures: broker.ConnectionErrors{failure},
 		}},
 	})
-	body := mustMarshal(t, placementPreviewBody{RunID: "run_1", WorkspaceID: "ws_1", Workload: httpRevision()})
+	body := mustMarshal(t, PlacementPreviewRequest{RunId: "run_1", WorkspaceId: "ws_1", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/placements:preview", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 

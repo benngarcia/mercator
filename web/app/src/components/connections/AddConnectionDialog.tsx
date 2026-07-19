@@ -176,7 +176,7 @@ export function AddConnectionDialog({
       createConnection.mutate(
         {
           workspace_id: workspaceId ?? "",
-          connection_id: connectionId.trim() || undefined,
+			connection_id: connectionId.trim(),
           adapter_type: adapterType,
           config: rowsToRecord(configRows),
           credential,

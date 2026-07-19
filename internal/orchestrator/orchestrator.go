@@ -458,7 +458,7 @@ type AdvanceOpenRunsResult struct {
 // through AdvanceRun so runs converge to closed with zero client involvement:
 // observing container exits, recording terminal outcomes, and confirming
 // cleanup is the broker's job, not something every client must poll for via
-// :refresh or :wait. An error on one run never stops advancement of the
+// /refresh or /wait. An error on one run never stops advancement of the
 // others; per-run errors are joined into the returned error alongside the
 // sweep result, which stays valid either way.
 func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context, workspaceID string) (AdvanceOpenRunsResult, error) {

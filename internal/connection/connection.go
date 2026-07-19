@@ -55,7 +55,7 @@ type Record struct {
 	AuthorizationSchema map[string]string     `json:"authorization_schema,omitempty"`
 	Authorized          bool                  `json:"authorized"`
 	Config              map[string]string     `json:"config,omitempty"`
-	Credential          credential.Credential `json:"credential,omitempty"`
+	Credential          credential.Credential `json:"credential,omitzero"`
 	// CreatedBy and AuthorizedBy are the audited principals of the create and
 	// authorize commands, derived from the event envelopes at read time (never
 	// part of the stored event data or the idempotency hash).

@@ -109,7 +109,7 @@ func buildConnectionRequest(ctx context.Context, baseURL, defaultWorkspaceID str
 		if *workspaceID == "" || *connectionID == "" {
 			return nil, fmt.Errorf("authorize requires --workspace-id and --connection-id")
 		}
-		path := "/v1/connections/" + url.PathEscape(*connectionID) + ":authorize"
+		path := "/v1/connections/" + url.PathEscape(*connectionID) + "/authorize"
 		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
 	default:
 		return nil, fmt.Errorf("unknown connection command %q", command)

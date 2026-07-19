@@ -7,6 +7,7 @@
     "dev": "bun run dev.ts",
     "build": "bun run build.ts",
     "check:react-effects": "test/architecture/no-direct-react-effects",
+    "generate:api": "openapi-typescript ../../internal/httpapi/openapi.json -o src/lib/api/contract.gen.ts",
     "record:demo": "node scripts/record-demo.mjs",
     "typecheck": "tsc --noEmit"
   },
@@ -34,6 +35,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "bun-plugin-tailwind": "^0.0.15",
+    "openapi-typescript": "^7.13.0",
     "playwright": "^1.61.1",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.3"

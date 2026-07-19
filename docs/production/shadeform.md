@@ -40,7 +40,7 @@ setup steps + credential form) from the API instead of docs-only prose. -->
    ```
 3. Authorize it (runs a cheap `GET /instances` to validate the key):
    ```sh
-   curl -X POST "$MERCATOR/v1/connections/conn_shadeform_main:authorize?workspace_id=ws_1" \
+   curl -X POST "$MERCATOR/v1/connections/conn_shadeform_main/authorize?workspace_id=ws_1" \
      -H "Authorization: Bearer $MERCATOR_API_TOKEN"
    ```
 

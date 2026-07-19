@@ -130,7 +130,7 @@ func TestConnectionCommandsBuildTheRightRequests(t *testing.T) {
 		t.Fatalf("connection authorize failed: %s", errOut)
 	}
 	authorize := (*seen)[1]
-	if authorize.Method != http.MethodPost || authorize.Path != "/v1/connections/conn_rp:authorize?workspace_id=ws_1" {
+	if authorize.Method != http.MethodPost || authorize.Path != "/v1/connections/conn_rp/authorize?workspace_id=ws_1" {
 		t.Fatalf("unexpected authorize request: %+v", authorize)
 	}
 

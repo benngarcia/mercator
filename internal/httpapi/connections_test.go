@@ -64,18 +64,19 @@ func TestConnectionsListReflectsRegistry(t *testing.T) {
 	handler := newHTTPTestServerWithConns(t)
 
 	// Create a connection via the API.
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_registry",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_registry",
 		AdapterType:  "fake",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "k-registry")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted && rec.Code != http.StatusCreated {
-		t.Fatalf("create connection expected 201/202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create connection expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	assertResponseOmitsCredential(t, rec.Body.Bytes(), "connection")
 
 	// List and confirm the created connection appears.
 	req = httptest.NewRequest(http.MethodGet, "/v1/connections?workspace_id=ws_1", nil)
@@ -84,7 +85,8 @@ func TestConnectionsListReflectsRegistry(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list connections expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp connectionListResponse
+	assertListedConnectionOmitsCredential(t, rec.Body.Bytes(), "conn_registry")
+	var resp ConnectionListResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -102,35 +104,78 @@ func TestConnectionsListReflectsRegistry(t *testing.T) {
 	}
 }
 
+func assertResponseOmitsCredential(t *testing.T, body []byte, field string) {
+	t.Helper()
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	assertRecordOmitsCredential(t, response[field])
+}
+
+func assertListedConnectionOmitsCredential(t *testing.T, body []byte, connectionID string) {
+	t.Helper()
+	var response struct {
+		Connections []json.RawMessage `json:"connections"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode connection list: %v", err)
+	}
+	for _, record := range response.Connections {
+		var identity struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(record, &identity); err != nil {
+			t.Fatalf("decode connection identity: %v", err)
+		}
+		if identity.ID == connectionID {
+			assertRecordOmitsCredential(t, record)
+			return
+		}
+	}
+	t.Fatalf("connection %q absent from response", connectionID)
+}
+
+func assertRecordOmitsCredential(t *testing.T, raw json.RawMessage) {
+	t.Helper()
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decode connection record: %v", err)
+	}
+	if credential, present := record["credential"]; present {
+		t.Fatalf("credential-free connection serialized credential %s", credential)
+	}
+}
+
 // TestAuthorizeConnectionMarksAuthorized asserts that a successful
-// POST /v1/connections/{id}:authorize returns 200 with the record's
+// POST /v1/connections/{id}/authorize returns 200 with the record's
 // authorized field set to true.
 func TestAuthorizeConnectionMarksAuthorized(t *testing.T) {
 	verifier := &fakeVerifier{err: nil} // verify always succeeds
 	handler := newHTTPTestServerWithConns(t, WithVerifier(verifier))
 
 	// Create an unauthorized connection.
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_auth",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_auth",
 		AdapterType:  "fake",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "k-auth-create")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted && rec.Code != http.StatusCreated {
-		t.Fatalf("create connection expected 201/202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create connection expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Authorize it.
-	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_auth:authorize?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_auth/authorize?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("authorize expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp connectionResponse
+	var resp ConnectionResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode authorize response: %v", err)
 	}
@@ -148,21 +193,21 @@ func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	handler := newHTTPTestServerWithConns(t, WithVerifier(verifier))
 
 	// Create an unauthorized connection.
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_noauth",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_noauth",
 		AdapterType:  "fake",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/connections", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "k-noauth-create")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted && rec.Code != http.StatusCreated {
-		t.Fatalf("create connection expected 201/202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create connection expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Attempt to authorize — verifier will fail.
-	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_noauth:authorize?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_noauth/authorize?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code < 400 {
@@ -182,7 +227,7 @@ func TestAuthorizeConnectionVerifyFailureStaysUnauthorized(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp connectionListResponse
+	var resp ConnectionListResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
@@ -200,9 +245,9 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 	server := newAtomicCredentialServer(t, testKey32())
 	handler := server.handler
 
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_rp",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_rp",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},
 		Secret:       "rp_live_key",
@@ -212,14 +257,14 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusAccepted && rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201/202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if strings.Contains(rec.Body.String(), "rp_live_key") {
 		t.Fatal("response must not echo the secret")
 	}
 	// Decode the response body and verify that credential.ref is set correctly.
-	var resp connectionResponse
+	var resp ConnectionResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
@@ -305,9 +350,9 @@ func (s atomicCredentialServer) handlerWithMasterKey(t *testing.T, masterKey []b
 
 func createMercatorConnection(t *testing.T, handler http.Handler, config map[string]string, secret string) *httptest.ResponseRecorder {
 	t.Helper()
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_atomic",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_atomic",
 		AdapterType:  "runpod",
 		Config:       config,
 		Credential:   credential.Credential{Source: credential.SourceMercator},
@@ -323,7 +368,7 @@ func createMercatorConnection(t *testing.T, handler http.Handler, config map[str
 func TestCreateConnectionConflictPreservesStoredCredential(t *testing.T) {
 	server := newAtomicCredentialServer(t, testKey32())
 	first := createMercatorConnection(t, server.handler, map[string]string{"region": "us-east"}, "original-secret")
-	if first.Code != http.StatusAccepted {
+	if first.Code != http.StatusCreated {
 		t.Fatalf("first create: status=%d body=%s", first.Code, first.Body.String())
 	}
 
@@ -343,13 +388,13 @@ func TestCreateConnectionConflictPreservesStoredCredential(t *testing.T) {
 
 func TestCreateConnectionReplayDoesNotRotateCredential(t *testing.T) {
 	server := newAtomicCredentialServer(t, testKey32())
-	if response := createMercatorConnection(t, server.handler, nil, "original-secret"); response.Code != http.StatusAccepted {
+	if response := createMercatorConnection(t, server.handler, nil, "original-secret"); response.Code != http.StatusCreated {
 		t.Fatalf("first create: status=%d body=%s", response.Code, response.Body.String())
 	}
 
 	replay := createMercatorConnection(t, server.handler, nil, "replacement-secret")
 
-	if replay.Code != http.StatusAccepted {
+	if replay.Code != http.StatusCreated {
 		t.Fatalf("replay: status=%d body=%s", replay.Code, replay.Body.String())
 	}
 	secret, err := server.resolver.Resolve(t.Context(), "ws_1", credential.Credential{Source: credential.SourceMercator, Ref: "conn_atomic"})
@@ -363,13 +408,13 @@ func TestCreateConnectionReplayDoesNotRotateCredential(t *testing.T) {
 
 func TestCreateConnectionReplayAndConflictDoNotRequireTheSealKey(t *testing.T) {
 	server := newAtomicCredentialServer(t, testKey32())
-	if response := createMercatorConnection(t, server.handler, nil, "original-secret"); response.Code != http.StatusAccepted {
+	if response := createMercatorConnection(t, server.handler, nil, "original-secret"); response.Code != http.StatusCreated {
 		t.Fatalf("first create: status=%d body=%s", response.Code, response.Body.String())
 	}
 	handlerWithoutKey := server.handlerWithMasterKey(t, nil)
 
 	replay := createMercatorConnection(t, handlerWithoutKey, nil, "original-secret")
-	if replay.Code != http.StatusAccepted {
+	if replay.Code != http.StatusCreated {
 		t.Fatalf("replay without seal key: status=%d body=%s", replay.Code, replay.Body.String())
 	}
 
@@ -430,9 +475,9 @@ func TestSecretNeverLeavesTheServer(t *testing.T) {
 	server := newAtomicCredentialServer(t, testKey32(), WithVerifier(&fakeVerifier{}))
 	handler := server.handler
 
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_audit",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_audit",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},
 		Secret:       secret,
@@ -441,12 +486,12 @@ func TestSecretNeverLeavesTheServer(t *testing.T) {
 	req.Header.Set("Idempotency-Key", "k-audit")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("create: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Authorize so the authorization event exists too.
-	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_audit:authorize?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodPost, "/v1/connections/conn_audit/authorize?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -497,9 +542,9 @@ func TestCreateConnectionNoMasterKeyReturnsError(t *testing.T) {
 	server := newAtomicCredentialServer(t, nil)
 	handler := server.handler
 
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_rp2",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_rp2",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},
 		Secret:       "rp_live_key",
@@ -523,9 +568,9 @@ func TestDeleteConnectionRemovesRecordAndSecret(t *testing.T) {
 	server := newAtomicCredentialServer(t, testKey32())
 	handler := server.handler
 
-	body := mustMarshal(t, createConnectionBody{
-		WorkspaceID:  "ws_1",
-		ConnectionID: "conn_gone",
+	body := mustMarshal(t, CreateConnectionRequest{
+		WorkspaceId:  "ws_1",
+		ConnectionId: "conn_gone",
 		AdapterType:  "runpod",
 		Credential:   credential.Credential{Source: "mercator"},
 		Secret:       "rp_delete_me",
@@ -534,8 +579,8 @@ func TestDeleteConnectionRemovesRecordAndSecret(t *testing.T) {
 	req.Header.Set("Idempotency-Key", "k-del")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("create: expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodDelete, "/v1/connections/conn_gone?workspace_id=ws_1", nil)

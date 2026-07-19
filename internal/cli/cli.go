@@ -297,7 +297,7 @@ func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, ar
 		}
 		path := "/v1/runs/" + url.PathEscape(*runID)
 		if command == "wait" {
-			path += ":wait"
+			path += "/wait"
 		}
 		if command == "events" || command == "decision" {
 			path += "/" + command
@@ -307,7 +307,7 @@ func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, ar
 		if *workspaceID == "" || *runID == "" {
 			return nil, fmt.Errorf("%s requires --workspace-id and --run-id", command)
 		}
-		path := "/v1/runs/" + url.PathEscape(*runID) + ":" + command
+		path := "/v1/runs/" + url.PathEscape(*runID) + "/" + command
 		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
 	default:
 		return nil, fmt.Errorf("unknown run command %q", command)
@@ -336,7 +336,7 @@ func buildSinkRequest(ctx context.Context, baseURL string, args []string) (*http
 	case "status":
 		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/sinks/"+url.PathEscape(*sinkID), nil), nil)
 	case "deliver":
-		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, "/v1/sinks/"+url.PathEscape(*sinkID)+":deliver", nil), nil)
+		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, "/v1/sinks/"+url.PathEscape(*sinkID)+"/deliver", nil), nil)
 	case "replay":
 		body, err := json.Marshal(map[string]any{
 			"from_exclusive": *from,
@@ -346,7 +346,7 @@ func buildSinkRequest(ctx context.Context, baseURL string, args []string) (*http
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, "/v1/sinks/"+url.PathEscape(*sinkID)+":replay", nil), bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, "/v1/sinks/"+url.PathEscape(*sinkID)+"/replay", nil), bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}

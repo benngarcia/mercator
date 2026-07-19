@@ -11,7 +11,7 @@ import (
 
 func TestSinkReplayCommandEmitsJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/sinks/audit:replay" {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/sinks/audit/replay" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
 		}
 		w.Header().Set("Content-Type", "application/json")

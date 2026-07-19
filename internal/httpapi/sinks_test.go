@@ -37,7 +37,7 @@ func TestSinkReplayAPIAndFailureIsolation(t *testing.T) {
 	orch := orchestrator.New(log, sched, ad)
 	handler := New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Sinks: sinks.NewManager(log, map[string]sinks.Sink{"audit": failingSink{}}), Resolver: ociresolver.NewStaticResolver(nil)})
 
-	body := mustMarshal(t, createRunBody{RunID: "run_sink_api", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_sink_api", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_sink_api")
 	rec := httptest.NewRecorder()
@@ -46,13 +46,13 @@ func TestSinkReplayAPIAndFailureIsolation(t *testing.T) {
 		t.Fatalf("create run expected 202 despite failing sink, got %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/v1/sinks/audit:replay", strings.NewReader(`{"from_exclusive":0,"limit":1,"replay_id":"replay_api"}`))
+	req = httptest.NewRequest(http.MethodPost, "/v1/sinks/audit/replay", strings.NewReader(`{"from_exclusive":0,"limit":1,"replay_id":"replay_api"}`))
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("failing replay expected 502, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var decoded errorResponse
+	var decoded ErrorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}

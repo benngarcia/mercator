@@ -24,7 +24,7 @@ import (
 // metadata object. run_id must equal run.id.
 func TestCreateRunReturnsUnifiedEnvelope(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	body := mustMarshal(t, createRunBody{RunID: "run_env", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_env", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_env")
 	rec := httptest.NewRecorder()
@@ -47,28 +47,28 @@ func TestCreateRunReturnsUnifiedEnvelope(t *testing.T) {
 	if _, ok := bare["run_id"]; !ok {
 		t.Fatalf("create response missing convenience top-level run_id: %s", rec.Body.String())
 	}
-	var resp runResponse
+	var resp RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode envelope: %v", err)
 	}
 	if resp.Run.ID != "run_env" {
 		t.Fatalf("unexpected run id: %+v", resp.Run)
 	}
-	if resp.RunID != resp.Run.ID {
-		t.Fatalf("top-level run_id %q must equal run.id %q", resp.RunID, resp.Run.ID)
+	if resp.RunId != resp.Run.ID {
+		t.Fatalf("top-level run_id %q must equal run.id %q", resp.RunId, resp.Run.ID)
 	}
 }
 
 // Item 1 (HTTP): exit_code present on the create envelope and on GET.
 func TestCreateAndGetRunExposeExitCode(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	body := mustMarshal(t, createRunBody{RunID: "run_exitcode", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_exitcode", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_exitcode")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	var created runResponse
+	var created RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestCreateAndGetRunExposeExitCode(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_exitcode?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	var got runResponse
+	var got RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode get: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestCreateAndGetRunExposeExitCode(t *testing.T) {
 // Item 3: no public event payload may expose a PascalCase key.
 func TestPublicEventPayloadsAreSnakeCase(t *testing.T) {
 	handler := newHTTPTestServer(t)
-	body := mustMarshal(t, createRunBody{RunID: "run_casing", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_casing", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_casing")
 	rec := httptest.NewRecorder()
@@ -109,7 +109,7 @@ func TestPublicEventPayloadsAreSnakeCase(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var listed eventListResponse
+	var listed EventListResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode events: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 	})
 
 	handler := newHTTPTestServerWithOpenObservations(t, 3)
-	body := mustMarshal(t, createRunBody{RunID: "run_wait_open", Workload: httpRevision()})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_wait_open", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_wait_open")
 	rec := httptest.NewRecorder()
@@ -176,7 +176,7 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	// After create+advance the run must still be open (stayed past first poll).
-	var created runResponse
+	var created RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
@@ -184,13 +184,13 @@ func TestWaitRunDrivesOpenRunToTerminal(t *testing.T) {
 		t.Fatalf("precondition: run should be open after first advance, got %+v", created.Run)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_wait_open:wait?workspace_id=ws_1", nil)
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_wait_open/wait?workspace_id=ws_1", nil)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("wait should reach terminal with 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var waited runResponse
+	var waited RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &waited); err != nil {
 		t.Fatalf("decode wait: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestSingleConfiguredWorkspaceDefaultsWorkspaceID(t *testing.T) {
 	// Create without any workspace_id (not in query, body, or nested workload).
 	rev := httpRevision()
 	rev.WorkspaceID = ""
-	body := mustMarshal(t, createRunBody{RunID: "run_default_ws", Workload: rev})
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_default_ws", Workload: rev})
 	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
 	req.Header.Set("Idempotency-Key", "idem_default_ws")
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -231,7 +231,7 @@ func TestSingleConfiguredWorkspaceDefaultsWorkspaceID(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get with defaulted workspace expected 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var got runResponse
+	var got RunResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

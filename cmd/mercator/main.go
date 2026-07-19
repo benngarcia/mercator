@@ -136,7 +136,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		// WriteTimeout must comfortably exceed the 30s :wait long-poll window.
+		// WriteTimeout must comfortably exceed the 30s /wait long-poll window.
 		WriteTimeout: 90 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}

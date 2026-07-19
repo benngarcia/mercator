@@ -35,7 +35,7 @@ export interface ConnectionsTableProps {
 }
 
 /**
- * AuthorizeButton calls :authorize for a single connection. It is shown only
+ * AuthorizeButton calls /authorize for a single connection. It is shown only
  * when the connection is not yet authorized. Pending state disables the button;
  * errors surface via a toast (matching the app-wide feedback pattern).
  */

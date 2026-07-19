@@ -207,7 +207,7 @@ function SetupForm({
     }
     createConnection.mutate(
       {
-        connection_id: connectionId.trim() || undefined,
+		connection_id: connectionId.trim(),
         adapter_type: manifest.type,
         config: Object.keys(trimmedConfig).length ? trimmedConfig : undefined,
         credential: needsCredential

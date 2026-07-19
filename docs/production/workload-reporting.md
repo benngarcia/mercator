@@ -46,19 +46,19 @@ Three additional vars are also injected:
 | Container Var | Value |
 |---|---|
 | `MERCATOR_RUN_ID` | The run's UUID (e.g. `run_019ef...`) |
-| `MERCATOR_WORKSPACE_ID` | The run's workspace ID; required as the `workspace_id` query parameter on `:report` |
-| `MERCATOR_REPORT_URL` | The base URL (`<MERCATOR_PUBLIC_URL>`); clients append `/v1/runs/<run_id>:report` |
+| `MERCATOR_WORKSPACE_ID` | The run's workspace ID; required as the `workspace_id` query parameter on `/report` |
+| `MERCATOR_REPORT_URL` | The base URL (`<MERCATOR_PUBLIC_URL>`); clients append `/v1/runs/<run_id>/report` |
 | `MERCATOR_RUN_TOKEN` | The per-run HMAC token |
 
 Note that `MERCATOR_REPORT_URL` is the **base URL only**. The orchestrator does
-not inject the full `:report` path. Workloads build the full endpoint by appending
-`/v1/runs/<MERCATOR_RUN_ID>:report?workspace_id=<MERCATOR_WORKSPACE_ID>`.
+not inject the full `/report` path. Workloads build the full endpoint by appending
+`/v1/runs/<MERCATOR_RUN_ID>/report?workspace_id=<MERCATOR_WORKSPACE_ID>`.
 
 ---
 
-## The `:report` Endpoint
+## The `/report` Endpoint
 
-**`POST /v1/runs/{run_id}:report?workspace_id=<ws>`**
+**`POST /v1/runs/{run_id}/report?workspace_id=<ws>`**
 
 - **Auth**: `Authorization: Bearer <MERCATOR_RUN_TOKEN>` — the run-scoped
   token, NOT the operator token. The operator token is explicitly rejected.
@@ -95,16 +95,9 @@ MERCATOR_PUBLIC_URL=https://<random>.trycloudflare.com \
   go run ./cmd/mercator
 ```
 
-POST `:report` works correctly through both quick tunnels and named cloudflare
+POST `/report` works correctly through both quick tunnels and named cloudflare
 tunnels (verified end-to-end against a named tunnel with a custom domain). For a
 stable dev/prod tunnel, prefer a named cloudflare tunnel with a custom domain.
-
-**Shell gotcha (zsh):** when testing `:report` by hand, always brace the run-id
-variable — `"${RUN_ID}:report"`, not `"$RUN_ID:report"`. In zsh the unbraced
-form applies the `:r` history modifier to `$RUN_ID` and silently eats the `:r`
-of `:report`, producing `…<id>eport` and a spurious operator-`401`.
-
----
 
 ## Production
 
@@ -120,7 +113,7 @@ No tunnel needed. The injected container vars point directly at the
 
 Containers launched by a run-pod provider (e.g. RunPod) will use
 `MERCATOR_REPORT_URL` as the base URL — appending
-`/v1/runs/<run_id>:report` — to POST progress and result events back during
+`/v1/runs/<run_id>/report` — to POST progress and result events back during
 execution.
 
 ---
@@ -133,5 +126,5 @@ execution.
   token as well.
 - The signer is disabled (and the server returns `501`) when `MERCATOR_SECRET_KEY`
   is absent — no silent no-op.
-- The operator token is explicitly rejected on the `:report` endpoint; only a
+- The operator token is explicitly rejected on the `/report` endpoint; only a
   valid run token is accepted.

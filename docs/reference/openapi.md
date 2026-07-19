@@ -1,8 +1,11 @@
 # OpenAPI And HTTP Route Overview
 
-Mercator serves a hand-written OpenAPI 3.1 document at `/openapi.json`. Use it
-as the machine-readable contract for generated clients, schema inspection, and
-route discovery.
+Mercator serves its OpenAPI 3.0 contract at `/openapi.json`. The checked-in
+`internal/httpapi/openapi.json` file generates the Go router and the console's
+private transport types. Run `scripts/generate-api-contracts.sh` after editing
+it; CI rejects stale generated code. Go handlers implement the generated strict
+interface, so request decoding and status-specific response serialization stay
+inside the generated transport seam.
 
 ```sh
 curl -fsS "$MERCATOR_API_URL/openapi.json" | jq '.info'
@@ -20,11 +23,11 @@ server is configured with exactly one allowed workspace.
 | Family | Routes | Use |
 | --- | --- | --- |
 | Health and discovery | `GET /health/live`, `GET /health/ready`, `GET /openapi.json`, `GET /` | Process liveness/readiness, OpenAPI discovery, and the embedded console shell. These are public on the listen interface. |
-| Runs | `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}:wait`, `POST /v1/runs/{run_id}:refresh`, `POST /v1/runs/{run_id}:cancel`, `GET /v1/runs/{run_id}/events`, `GET /v1/runs/{run_id}/decision` | Create runs, list/read them, wait for closure, refresh/cancel adapter state, inspect public events, and read the placement decision. |
+| Runs | `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/wait`, `POST /v1/runs/{run_id}/refresh`, `POST /v1/runs/{run_id}/cancel`, `POST /v1/runs/{run_id}/report`, `GET /v1/runs/{run_id}/events`, `GET /v1/runs/{run_id}/decision` | Create runs, list/read them, wait for closure, refresh/cancel adapter state, ingest workload reports, inspect public events, and read the placement decision. |
 | Placement | `POST /v1/placements:preview` | Evaluate a workload against current offers and policy without creating a run. |
 | Workloads and images | `POST /v1/workloads`, `GET/POST /v1/workloads/{workload_id}/revisions`, `GET /v1/workloads/{workload_id}/revisions/{revision_id}`, `POST /v1/images:resolve` | Store workload names/revisions, read immutable revisions, and resolve image tags to immutable image metadata. |
-| Connections and offers | `GET /v1/adapters`, `GET /v1/connections`, `POST /v1/connections`, `POST /v1/connections/{id}:authorize`, `DELETE /v1/connections/{id}`, `GET /v1/offers` | Discover registered adapters' onboarding manifests (display metadata, config fields, setup steps), create/verify/delete provider connections, and inspect the offers visible to the placement engine for a workspace. |
-| Sinks | `GET /v1/sinks/{sink_id}`, `POST /v1/sinks/{sink_id}:deliver`, `POST /v1/sinks/{sink_id}:replay` | Read sink cursor state, deliver pending events, and replay events after a global position. |
+| Connections and offers | `GET /v1/adapters`, `GET /v1/connections`, `POST /v1/connections`, `POST /v1/connections/{id}/authorize`, `DELETE /v1/connections/{id}`, `GET /v1/offers` | Discover registered adapters' onboarding manifests (display metadata, config fields, setup steps), create/verify/delete provider connections, and inspect the offers visible to the placement engine for a workspace. |
+| Sinks | `GET /v1/sinks/{sink_id}`, `POST /v1/sinks/{sink_id}/deliver`, `POST /v1/sinks/{sink_id}/replay` | Read sink cursor state, deliver pending events, and replay events after a global position. |
 
 ## First Integrator Path
 
