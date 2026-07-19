@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -35,6 +34,7 @@ import (
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
+	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
 )
@@ -98,8 +98,6 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	imageResolver := ociresolver.NewStaticResolver(nil)
 	serverOpts := []httpapi.Option{
 		httpapi.WithBearerAuth(apiToken, authWorkspaces(env)),
-		httpapi.WithSecretStore(deps.secretStore),
-		httpapi.WithCredentialResolver(deps.resolver),
 		httpapi.WithVerifier(deps.broker),
 		httpapi.WithAdapterManifests(deps.broker.Manifests),
 	}
@@ -231,15 +229,12 @@ func warnIfNonLoopback(addr string) {
 // serverDeps holds the shared backing services for the docker server path. The
 // Broker's connection registry and the HTTP server's connection.Service are the
 // SAME service over the SAME event log, so offers served by the Broker and
-// connections listed by the server stay consistent. The secret store is a
-// SECOND *sql.DB opened on the same DSN (the event log's *sql.DB is private).
+// connections listed by the server stay consistent. Connection events and
+// sealed credentials share the event log's SQLite transaction boundary.
 type serverDeps struct {
-	broker      *broker.Broker
-	conns       *connection.Service
-	secretStore credential.SecretStore
-	resolver    *credential.Resolver
-	log         eventlog.EventLog
-	secretDB    *sql.DB
+	broker *broker.Broker
+	conns  *connection.Service
+	log    eventlog.EventLog
 	// signer is non-nil when MERCATOR_SECRET_KEY is set. It signs per-run
 	// reporting tokens using a domain-separated subkey derived from the master key.
 	signer *reporting.Signer
@@ -266,40 +261,17 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	ctx := context.Background()
 	dsn := envValue(values, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
 
-	log, err := eventlog.OpenSQLite(ctx, dsn)
+	storage, err := sqlitestore.Open(ctx, dsn)
 	if err != nil {
-		return serverDeps{}, fmt.Errorf("open event log: %w", err)
+		return serverDeps{}, fmt.Errorf("open sqlite storage: %w", err)
 	}
 	defer func() {
 		if err != nil {
-			_ = log.Close()
+			_ = storage.Close()
 		}
 	}()
-	svc := connection.New(log)
-
-	// Second *sql.DB on the same DSN for the secret store; the event log's
-	// *sql.DB is private and not shared. This second *sql.DB must see the same data
-	// as the event log. This works for on-disk DSNs and ?mode=memory&cache=shared, but
-	// a bare ?mode=memory (without shared cache) would give it an isolated, empty DB.
-	secretDB, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return serverDeps{}, fmt.Errorf("open secret store db: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			_ = secretDB.Close()
-		}
-	}()
-	// This pool shares the file with the event log's pool: serialize it and
-	// wait out the other writer instead of failing instantly with SQLITE_BUSY.
-	secretDB.SetMaxOpenConns(1)
-	if _, err = secretDB.ExecContext(ctx, `PRAGMA busy_timeout=5000`); err != nil {
-		return serverDeps{}, fmt.Errorf("configure secret store db: %w", err)
-	}
-	store, err := credential.NewSQLiteStore(ctx, secretDB)
-	if err != nil {
-		return serverDeps{}, fmt.Errorf("init secret store: %w", err)
-	}
+	log := storage.EventLog()
+	store := storage.CredentialStore()
 
 	// An absent master key disables stored credentials and reporting. A present
 	// key is configuration and therefore must decode successfully at startup.
@@ -328,6 +300,11 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 		store,
 		masterKey,
 	)
+	connections, err := storage.Connections(resolver)
+	if err != nil {
+		return serverDeps{}, fmt.Errorf("init connection storage: %w", err)
+	}
+	svc := connection.NewWithCredentials(connections)
 
 	// Build the report-token signer from a domain-separated subkey. The signer
 	// is always constructed (so its Enabled() reflects key presence); the
@@ -395,17 +372,13 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 		}
 	}
 
-	closeStores := func() error { return errors.Join(secretDB.Close(), log.Close()) }
 	return serverDeps{
-		broker:      br,
-		conns:       svc,
-		secretStore: store,
-		resolver:    resolver,
-		log:         log,
-		secretDB:    secretDB,
-		signer:      signer,
-		publicURL:   publicURL,
-		close:       closeStores,
+		broker:    br,
+		conns:     svc,
+		log:       log,
+		signer:    signer,
+		publicURL: publicURL,
+		close:     storage.Close,
 	}, nil
 }
 
