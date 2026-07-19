@@ -3,7 +3,9 @@ package broker
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/connection"
@@ -21,9 +23,182 @@ func (nilResolver) Resolve(context.Context, string, credential.Credential) (stri
 	return "secret", nil
 }
 
+type fanoutAdapter struct {
+	adapter.Provider
+	listOffers func(context.Context) ([]domain.OfferSnapshot, error)
+	listOwned  func(context.Context) ([]adapter.OwnedExternalObject, error)
+}
+
+func (a fanoutAdapter) ListOffers(ctx context.Context, _ adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	return a.listOffers(ctx)
+}
+
+func (a fanoutAdapter) ListOwned(ctx context.Context, _ adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+	return a.listOwned(ctx)
+}
+
+func fanoutBroker(t *testing.T, adapters map[string]adapter.Provider) *Broker {
+	t.Helper()
+	factory := NewFactory()
+	factory.Register(adapter.Manifest{Type: "stub"}, func(config map[string]string, _ string) (adapter.Provider, error) {
+		return adapters[config["id"]], nil
+	})
+	records := make([]connection.Record, 0, len(adapters))
+	for id := range adapters {
+		records = append(records, connection.Record{ID: "conn_" + id, AdapterType: "stub", Authorized: true, Config: map[string]string{"id": id}})
+	}
+	return NewBroker(fakeConns{recs: records}, factory, nilResolver{})
+}
+
+func TestBrokerAggregateOffersReturnsPartialResultsAndConnectionErrors(t *testing.T) {
+	providerErr := errors.New("provider unavailable")
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"good": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return []domain.OfferSnapshot{{ID: "offer_good"}}, nil
+		}},
+		"bad": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return nil, providerErr
+		}},
+	})
+
+	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+
+	if err != nil {
+		t.Fatalf("aggregate offers: %v", err)
+	}
+	if len(aggregation.Offers) != 1 || aggregation.Offers[0].ID != "offer_good" {
+		t.Fatalf("offers = %#v, want the successful connection's offer", aggregation.Offers)
+	}
+	if len(aggregation.Failures) != 1 || aggregation.Failures[0].ConnectionID != "conn_bad" || !errors.Is(aggregation.Failures[0], providerErr) {
+		t.Fatalf("connection errors = %#v, want conn_bad provider error", aggregation.Failures)
+	}
+}
+
+func TestBrokerListOffersRejectsPartialResults(t *testing.T) {
+	providerErr := errors.New("provider unavailable")
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"good": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return []domain.OfferSnapshot{{ID: "offer_good"}}, nil
+		}},
+		"bad": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return nil, providerErr
+		}},
+	})
+
+	offers, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+
+	if offers != nil {
+		t.Fatalf("offers = %#v, want no incomplete offer set", offers)
+	}
+	var connectionErrors ConnectionErrors
+	if !errors.As(err, &connectionErrors) || !errors.Is(err, providerErr) {
+		t.Fatalf("error = %#v, want typed provider failure", err)
+	}
+}
+
+func TestBrokerListOffersQueriesConnectionsConcurrently(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	query := func(id string) func(context.Context) ([]domain.OfferSnapshot, error) {
+		return func(context.Context) ([]domain.OfferSnapshot, error) {
+			started <- id
+			<-release
+			return []domain.OfferSnapshot{{ID: "offer_" + id}}, nil
+		}
+	}
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"a": fanoutAdapter{listOffers: query("a")},
+		"b": fanoutAdapter{listOffers: query("b")},
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+		done <- err
+	}()
+
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("provider queries were serialized")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+}
+
+func TestBrokerListOffersSortsConcurrentResultsDeterministically(t *testing.T) {
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"b": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return []domain.OfferSnapshot{{ID: "offer_z"}, {ID: "offer_a"}}, nil
+		}},
+		"a": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return []domain.OfferSnapshot{{ID: "offer_m"}}, nil
+		}},
+	})
+
+	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	got := make([]string, len(aggregation.Offers))
+	for i, offer := range aggregation.Offers {
+		got[i] = offer.ConnectionID + "/" + offer.ID
+	}
+	want := []string{"conn_a/offer_m", "conn_b/offer_a", "conn_b/offer_z"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("offers = %v, want %v", got, want)
+	}
+}
+
+func TestBrokerListOffersPropagatesCancellation(t *testing.T) {
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"slow": fanoutAdapter{listOffers: func(ctx context.Context) ([]domain.OfferSnapshot, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}},
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	aggregation, err := broker.AggregateOffers(ctx, adapter.OfferRequest{WorkspaceID: "ws_1"})
+
+	if err != nil {
+		t.Fatalf("aggregate offers: %v", err)
+	}
+	if !errors.Is(aggregation.Failures.OrNil(), context.Canceled) {
+		t.Fatalf("failures = %v, want context.Canceled", aggregation.Failures)
+	}
+}
+
+func TestBrokerListOwnedRejectsPartialResultsWithConnectionErrors(t *testing.T) {
+	providerErr := errors.New("ownership lookup failed")
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"good": fanoutAdapter{listOwned: func(context.Context) ([]adapter.OwnedExternalObject, error) {
+			return []adapter.OwnedExternalObject{{ExternalID: "external_good"}}, nil
+		}},
+		"bad": fanoutAdapter{listOwned: func(context.Context) ([]adapter.OwnedExternalObject, error) {
+			return nil, providerErr
+		}},
+	})
+
+	objects, err := broker.ListOwned(t.Context(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+
+	if objects != nil {
+		t.Fatalf("objects = %#v, want no incomplete ownership set", objects)
+	}
+	var connectionErrors ConnectionErrors
+	if !errors.As(err, &connectionErrors) || len(connectionErrors) != 1 || connectionErrors[0].ConnectionID != "conn_bad" {
+		t.Fatalf("error = %#v, want conn_bad ConnectionError", err)
+	}
+}
+
 // recording adapter that reports which connection launched or observed.
 type recAdapter struct {
-	adapter.Adapter
+	adapter.Provider
 	id       string
 	launched *string
 	observed *string
@@ -51,7 +226,7 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 		{ID: "conn_unauth", AdapterType: "stub", Authorized: false},
 	}}
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (adapter.Provider, error) {
 		return recAdapter{id: "x"}, nil
 	})
 	b := NewBroker(conns, f, nilResolver{})
@@ -67,7 +242,7 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 func TestBrokerRoutesLaunchByConnection(t *testing.T) {
 	var launchedBy string
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Provider, error) {
 		return recAdapter{id: cfg["id"], launched: &launchedBy}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -98,7 +273,7 @@ func TestBrokerLaunchUnknownConnectionErrors(t *testing.T) {
 
 // ownedAdapter is a stub adapter whose ListOwned returns one object tagged with its id.
 type ownedAdapter struct {
-	adapter.Adapter
+	adapter.Provider
 	id string
 }
 
@@ -108,7 +283,7 @@ func (a ownedAdapter) ListOwned(_ context.Context, _ adapter.OwnershipQuery) ([]
 
 func TestBrokerListOwnedFansOut(t *testing.T) {
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Provider, error) {
 		return ownedAdapter{id: cfg["id"]}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -128,7 +303,7 @@ func TestBrokerListOwnedFansOut(t *testing.T) {
 func TestBrokerRoutesObserveByConnection(t *testing.T) {
 	var observedBy string
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Provider, error) {
 		return recAdapter{id: cfg["id"], observed: &observedBy}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -150,7 +325,7 @@ func TestBrokerRoutesObserveByConnection(t *testing.T) {
 
 // verifyAdapter is a stub adapter that records which connection had its Verify called.
 type verifyAdapter struct {
-	adapter.Adapter
+	adapter.Provider
 	id       string
 	verified *string
 }
@@ -163,7 +338,7 @@ func (a verifyAdapter) Verify(context.Context) error {
 func TestBrokerVerifyConnectionBuildsAndVerifies(t *testing.T) {
 	var verified string
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Adapter, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Provider, error) {
 		return verifyAdapter{id: cfg["id"], verified: &verified}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{

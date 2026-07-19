@@ -54,7 +54,7 @@ func newHTTPTestServerWithConns(t *testing.T, extraOpts ...Option) http.Handler 
 	orch := orchestrator.New(log, sched, ad)
 	staticResolver := ociresolver.NewStaticResolver(nil)
 	svc := connection.New(log)
-	return New(Deps{Orchestrator: orch, Scheduler: sched, Adapter: ad, Workloads: workload.New(log), Connections: svc, Resolver: staticResolver}, extraOpts...)
+	return New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Connections: svc, Resolver: staticResolver}, extraOpts...)
 }
 
 // TestConnectionsListReflectsRegistry asserts that GET /v1/connections returns
@@ -275,7 +275,7 @@ func newAtomicCredentialServer(t *testing.T, masterKey []byte, options ...Option
 	handler := New(Deps{
 		Orchestrator: orchestrator.New(log, sched, ad),
 		Scheduler:    sched,
-		Adapter:      ad,
+		Offers:       singleProviderOffers{provider: ad},
 		Workloads:    workload.New(log),
 		Connections:  service,
 		Resolver:     ociresolver.NewStaticResolver(nil),
@@ -296,7 +296,7 @@ func (s atomicCredentialServer) handlerWithMasterKey(t *testing.T, masterKey []b
 	return New(Deps{
 		Orchestrator: orchestrator.New(s.log, sched, ad),
 		Scheduler:    sched,
-		Adapter:      ad,
+		Offers:       singleProviderOffers{provider: ad},
 		Workloads:    workload.New(s.log),
 		Connections:  service,
 		Resolver:     ociresolver.NewStaticResolver(nil),

@@ -574,4 +574,4 @@ func phaseFromStatus(status string) adapter.ExternalPhase {
 	}
 }
 
-var _ adapter.Adapter = (*Adapter)(nil)
+var _ adapter.Provider = (*Adapter)(nil)

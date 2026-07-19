@@ -116,7 +116,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
 		Scheduler:    sched,
-		Adapter:      deps.broker,
+		Offers:       deps.broker,
 		Workloads:    workload.New(deps.log),
 		Sinks:        sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  deps.conns,
@@ -316,22 +316,22 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	// Build a fresh adapter from each connection's own config: memoizing one
 	// instance would route every docker connection to whichever endpoint was
 	// built first, silently launching containers on the wrong host.
-	factory.Register(dockeradapter.Manifest(), func(config map[string]string, _ string) (adapter.Adapter, error) {
+	factory.Register(dockeradapter.Manifest(), func(config map[string]string, _ string) (adapter.Provider, error) {
 		client := dockeradapter.NewCLIClient(config["bin"])
 		client.Host = config["host"]
 		client.Context = config["context"]
 		return dockeradapter.NewOffering(client, dockerIdentityForConfig(values, config), values["MERCATOR_DOCKER_ARCH"]), nil
 	})
 
-	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (adapter.Adapter, error) {
+	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
 		return runpodadapter.New(secret, config)
 	})
 
-	factory.Register(shadeformadapter.Manifest(), func(config map[string]string, secret string) (adapter.Adapter, error) {
+	factory.Register(shadeformadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
 		return shadeformadapter.New(secret, config)
 	})
 
-	factory.Register(vastadapter.Manifest(), func(config map[string]string, secret string) (adapter.Adapter, error) {
+	factory.Register(vastadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
 		return vastadapter.New(secret, config)
 	})
 
