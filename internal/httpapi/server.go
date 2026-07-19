@@ -18,6 +18,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -36,12 +37,31 @@ type ImageResolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }
 
+type OfferAggregator interface {
+	AggregateOffers(ctx context.Context, req adapter.OfferRequest) (broker.OfferAggregation, error)
+}
+
+// singleProviderOffers adapts the fake-mode provider used by HandlerForSQLite
+// to the aggregate contract. A single provider cannot produce connection-level
+// partial failures.
+type singleProviderOffers struct {
+	provider adapter.Provider
+}
+
+func (s singleProviderOffers) AggregateOffers(ctx context.Context, req adapter.OfferRequest) (broker.OfferAggregation, error) {
+	offers, err := s.provider.ListOffers(ctx, req)
+	if offers == nil {
+		offers = []domain.OfferSnapshot{}
+	}
+	return broker.OfferAggregation{Offers: offers, Failures: broker.ConnectionErrors{}}, err
+}
+
 // Deps are the services the server routes to. Orchestrator, Scheduler, and
-// Adapter are required; a nil optional service disables its endpoints.
+// Offers are required; a nil optional service disables its endpoints.
 type Deps struct {
 	Orchestrator *orchestrator.Orchestrator
 	Scheduler    scheduler.Scheduler
-	Adapter      adapter.Adapter
+	Offers       OfferAggregator
 	Workloads    *workload.Service
 	Sinks        *sinkspkg.Manager
 	Connections  *connection.Service
@@ -52,7 +72,7 @@ type Server struct {
 	mux          *http.ServeMux
 	orch         *orchestrator.Orchestrator
 	scheduler    scheduler.Scheduler
-	adapter      adapter.Adapter
+	offers       OfferAggregator
 	workloads    *workload.Service
 	sinks        *sinkspkg.Manager
 	conns        *connection.Service
@@ -229,7 +249,14 @@ type adapterListResponse struct {
 }
 
 type offerListResponse struct {
-	Offers []domain.OfferSnapshot `json:"offers"`
+	Offers   []domain.OfferSnapshot      `json:"offers"`
+	Failures []connectionFailureResponse `json:"failures"`
+}
+
+type connectionFailureResponse struct {
+	ConnectionID string `json:"connection_id"`
+	AdapterType  string `json:"adapter_type"`
+	Message      string `json:"message"`
 }
 
 type replaySinkBody struct {
@@ -293,7 +320,7 @@ func New(deps Deps, options ...Option) http.Handler {
 		mux:       http.NewServeMux(),
 		orch:      deps.Orchestrator,
 		scheduler: deps.Scheduler,
-		adapter:   deps.Adapter,
+		offers:    deps.Offers,
 		workloads: deps.Workloads,
 		sinks:     deps.Sinks,
 		conns:     deps.Connections,
@@ -854,7 +881,7 @@ func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, violations[0].Code, violations[0].Message)
 		return
 	}
-	offers, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{
+	aggregation, err := s.offers.AggregateOffers(r.Context(), adapter.OfferRequest{
 		WorkspaceID: workspaceID,
 		Resources:   body.Workload.Spec.Resources,
 	})
@@ -862,10 +889,14 @@ func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, http.StatusBadGateway, "OFFER_QUERY_FAILED", err)
 		return
 	}
+	if err := aggregation.Failures.OrNil(); err != nil {
+		writeInternalError(w, http.StatusBadGateway, "OFFER_QUERY_FAILED", err)
+		return
+	}
 	decision, err := s.scheduler.Evaluate(r.Context(), scheduler.SchedulingInput{
 		RunID:        body.RunID,
 		Workload:     body.Workload,
-		Offers:       offers,
+		Offers:       aggregation.Offers,
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  time.Now().UTC(),
 	})
@@ -1164,12 +1195,30 @@ func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	records, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
+	aggregation, err := s.offers.AggregateOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
 	if err != nil {
 		writeInternalError(w, http.StatusBadGateway, "LIST_OFFERS_FAILED", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, offerListResponse{Offers: records})
+	if len(aggregation.Failures) > 0 {
+		log.Printf("list offers partial failure: %v", aggregation.Failures)
+	}
+	writeJSON(w, http.StatusOK, offerListResponse{
+		Offers:   aggregation.Offers,
+		Failures: connectionFailureResponses(aggregation.Failures),
+	})
+}
+
+func connectionFailureResponses(failures broker.ConnectionErrors) []connectionFailureResponse {
+	responses := make([]connectionFailureResponse, len(failures))
+	for i, failure := range failures {
+		responses[i] = connectionFailureResponse{
+			ConnectionID: failure.ConnectionID,
+			AdapterType:  failure.AdapterType,
+			Message:      "Provider offer query failed.",
+		}
+	}
+	return responses
 }
 
 func (s *Server) sinkStatus(w http.ResponseWriter, r *http.Request) {
@@ -1386,7 +1435,7 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	handler := New(Deps{
 		Orchestrator: orchestrator.New(log, sched, ad),
 		Scheduler:    sched,
-		Adapter:      ad,
+		Offers:       singleProviderOffers{provider: ad},
 		Workloads:    workload.New(log),
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
 		Connections:  connection.New(log),
