@@ -7,11 +7,11 @@
 package webauth
 
 import (
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/benngarcia/mercator/internal/keymaterial"
 )
 
 // Config carries the OIDC + session settings for human login. The zero value
@@ -76,7 +76,13 @@ func FromEnv(values map[string]string) (Config, error) {
 	if cfg.PublicURL == "" {
 		missing = append(missing, "MERCATOR_PUBLIC_URL (needed for the OIDC redirect URI)")
 	}
-	key, keyErr := decodeSessionKey(values["MERCATOR_SESSION_KEY"])
+	var key []byte
+	var keyErr error
+	if values["MERCATOR_SESSION_KEY"] == "" {
+		keyErr = errors.New("MERCATOR_SESSION_KEY (32+ random bytes, hex or base64)")
+	} else {
+		key, keyErr = keymaterial.Decode("MERCATOR_SESSION_KEY", values["MERCATOR_SESSION_KEY"], 32)
+	}
 	if keyErr != nil {
 		missing = append(missing, keyErr.Error())
 	}
@@ -85,26 +91,6 @@ func FromEnv(values map[string]string) (Config, error) {
 		return Config{}, fmt.Errorf("webauth: OIDC login is partially configured; fix: %s", strings.Join(missing, "; "))
 	}
 	return cfg, nil
-}
-
-// decodeSessionKey accepts a hex- or base64-encoded key and requires at least
-// 32 decoded bytes, mirroring how MERCATOR_SECRET_KEY is supplied.
-func decodeSessionKey(raw string) ([]byte, error) {
-	if raw == "" {
-		return nil, errors.New("MERCATOR_SESSION_KEY (32+ random bytes, hex or base64)")
-	}
-	var key []byte
-	if b, err := hex.DecodeString(raw); err == nil {
-		key = b
-	} else if b, err := base64.StdEncoding.DecodeString(raw); err == nil {
-		key = b
-	} else {
-		return nil, errors.New("MERCATOR_SESSION_KEY must be hex or base64")
-	}
-	if len(key) < 32 {
-		return nil, errors.New("MERCATOR_SESSION_KEY must decode to at least 32 bytes")
-	}
-	return key, nil
 }
 
 // emailAllowed reports whether an authenticated email passes the allowlist.

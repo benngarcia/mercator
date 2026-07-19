@@ -56,6 +56,7 @@ server path.
 | `MERCATOR_DOCKER_OFFER_ID` | `offer_docker_loopback` | Synthetic Docker offer ID. |
 | `MERCATOR_DOCKER_CONNECTION_ID` | `conn_docker_loopback` | Synthetic Docker connection ID. |
 | `MERCATOR_DOCKER_ARCH` | Docker host architecture, or `amd64` if the host probe fails | Optional architecture override for an intentionally emulated Docker offer. |
+| `MERCATOR_SECRET_KEY` | none | Master key for stored connection credentials and workload reporting (32+ decoded bytes, hex or base64). A present malformed value stops startup. |
 | `MERCATOR_API_URL` | none | CLI base URL; required for CLI mode unless `--api-url` is provided. |
 | `MERCATOR_OIDC_ISSUER` | none | OIDC issuer URL for human console login. Setting any `MERCATOR_OIDC_*` variable requires the full set; see [authentication-workspaces.md](authentication-workspaces.md). |
 | `MERCATOR_OIDC_CLIENT_ID` | none | OIDC client ID. |
