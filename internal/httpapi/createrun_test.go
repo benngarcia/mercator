@@ -174,5 +174,5 @@ func newMinimalCreateServer(t *testing.T, outcome adapter.ExternalPhase, extra .
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
 	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests())
-	return New(Deps{Orchestrator: orch, Scheduler: sched, Adapter: ad, Workloads: workload.New(log), Resolver: resolver})
+	return New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver})
 }

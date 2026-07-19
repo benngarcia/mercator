@@ -10,7 +10,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 )
 
-type FactoryFunc func(config map[string]string, secret string) (adapter.Adapter, error)
+type FactoryFunc func(config map[string]string, secret string) (adapter.Provider, error)
 
 type Factory struct {
 	mu        sync.RWMutex
@@ -35,7 +35,7 @@ func (f *Factory) Register(m adapter.Manifest, fn FactoryFunc) {
 	f.manifests[m.Type] = m
 }
 
-func (f *Factory) Build(adapterType string, config map[string]string, secret string) (adapter.Adapter, error) {
+func (f *Factory) Build(adapterType string, config map[string]string, secret string) (adapter.Provider, error) {
 	f.mu.RLock()
 	fn, ok := f.fns[adapterType]
 	f.mu.RUnlock()

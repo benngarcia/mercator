@@ -22,9 +22,30 @@ const (
 
 var ErrNotFound = fmt.Errorf("connection: not found")
 
+var ErrSecretStoreDisabled = errors.New("connection: secret store disabled")
+var ErrSecretStore = errors.New("connection: secret store failure")
+
+type CredentialWrite struct {
+	WorkspaceID  string
+	ConnectionID string
+	Secret       []byte
+}
+
+type CredentialRef struct {
+	WorkspaceID  string
+	ConnectionID string
+}
+
+type CredentialRepository interface {
+	eventlog.EventLog
+	CreateCredential(context.Context, eventlog.AppendRequest, CredentialWrite) (eventlog.AppendResult, error)
+	DeleteCredential(context.Context, eventlog.AppendRequest, CredentialRef) (eventlog.AppendResult, error)
+}
+
 type Service struct {
-	log eventlog.EventLog
-	now func() time.Time
+	log         eventlog.EventLog
+	credentials CredentialRepository
+	now         func() time.Time
 }
 
 type Record struct {
@@ -49,6 +70,9 @@ type CreateRequest struct {
 	AuthorizationSchema map[string]string
 	Config              map[string]string
 	Credential          credential.Credential
+	// Secret is write-only credential material. It is sealed before storage and
+	// never enters the connection record or event log.
+	Secret []byte
 	// Actor is the event-envelope principal recorded on the created fact.
 	Actor json.RawMessage
 }
@@ -72,6 +96,10 @@ func New(log eventlog.EventLog) *Service {
 	return &Service{log: log, now: time.Now}
 }
 
+func NewWithCredentials(repository CredentialRepository) *Service {
+	return &Service{log: repository, credentials: repository, now: time.Now}
+}
+
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error) {
 	if req.WorkspaceID == "" || req.ConnectionID == "" || req.AdapterType == "" {
 		return Record{}, fmt.Errorf("connection: workspace_id, connection_id, and adapter_type are required")
@@ -84,6 +112,10 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 		Config:              maps.Clone(req.Config),
 		Credential:          req.Credential,
 	}
+	credentialWrite, err := s.prepareCredential(&record, req.Secret)
+	if err != nil {
+		return Record{}, err
+	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return Record{}, err
@@ -92,7 +124,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 	if err != nil {
 		return Record{}, err
 	}
-	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+	appendRequest := eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            "connection:create:" + req.ConnectionID,
@@ -108,11 +140,38 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          data,
 		}},
-	})
+	}
+	if len(credentialWrite.Secret) == 0 {
+		_, err = s.log.Append(ctx, appendRequest)
+	} else {
+		_, err = s.credentials.CreateCredential(ctx, appendRequest, credentialWrite)
+	}
 	if err != nil {
 		return Record{}, err
 	}
 	return record, nil
+}
+
+func (s *Service) prepareCredential(record *Record, secret []byte) (CredentialWrite, error) {
+	if record.Credential.Source != credential.SourceMercator || len(secret) == 0 {
+		return CredentialWrite{}, nil
+	}
+	if s.credentials == nil {
+		return CredentialWrite{}, fmt.Errorf("%w: configure MERCATOR_SECRET_KEY and transactional SQLite credential storage", ErrSecretStoreDisabled)
+	}
+	record.Credential.Ref = record.ID
+	return CredentialWrite{
+		WorkspaceID:  record.WorkspaceID,
+		ConnectionID: record.ID,
+		Secret:       secret,
+	}, nil
+}
+
+func credentialRef(record Record) (CredentialRef, bool) {
+	if record.Credential.Source != credential.SourceMercator || record.Credential.Ref == "" {
+		return CredentialRef{}, false
+	}
+	return CredentialRef{WorkspaceID: record.WorkspaceID, ConnectionID: record.ID}, true
 }
 
 func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizationRequest) error {
@@ -139,7 +198,7 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 	if err != nil {
 		return err
 	}
-	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+	appendRequest := eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
 		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            fmt.Sprintf("connection:authorization:%s:%t", req.ConnectionID, req.Authorized),
@@ -155,7 +214,8 @@ func (s *Service) UpdateAuthorization(ctx context.Context, req UpdateAuthorizati
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          data,
 		}},
-	})
+	}
+	_, err = s.log.Append(ctx, appendRequest)
 	return err
 }
 
@@ -168,7 +228,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 	if err != nil {
 		return err
 	}
-	_, deleted, err := reduceConnection(history.Events)
+	record, deleted, err := reduceConnection(history.Events)
 	if err != nil {
 		return err
 	}
@@ -182,7 +242,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+	appendRequest := eventlog.AppendRequest{
 		Stream:                connectionStream(req.WorkspaceID, req.ConnectionID),
 		ExpectedStreamVersion: history.LastVersion,
 		CommandKey:            "connection:delete:" + req.ConnectionID,
@@ -198,7 +258,15 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest) error {
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          json.RawMessage(`{"deleted":true}`),
 		}},
-	})
+	}
+	if ref, ok := credentialRef(record); ok {
+		if s.credentials == nil {
+			return ErrSecretStoreDisabled
+		}
+		_, err = s.credentials.DeleteCredential(ctx, appendRequest, ref)
+	} else {
+		_, err = s.log.Append(ctx, appendRequest)
+	}
 	return err
 }
 

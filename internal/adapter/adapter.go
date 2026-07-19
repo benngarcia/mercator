@@ -55,7 +55,10 @@ func (p ExternalPhase) Valid() bool {
 	}
 }
 
-type Adapter interface {
+// Provider is the complete contract implemented by one configured provider
+// connection. Aggregates across connections expose consumer-owned subsets of
+// these capabilities instead of pretending to be a Provider.
+type Provider interface {
 	// Verify performs a cheap credential/reachability check for the authorize
 	// flow. It does not launch anything.
 	Verify(ctx context.Context) error

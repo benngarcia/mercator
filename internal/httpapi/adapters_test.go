@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/adapter"
-	"github.com/benngarcia/mercator/internal/credential"
 )
 
 // TestListAdaptersServesManifests asserts GET /v1/adapters returns the wired
@@ -27,7 +26,7 @@ func TestListAdaptersServesManifests(t *testing.T) {
 			{Text: "Copy the API key."},
 		},
 	}}
-	handler := newHTTPTestServerWithConns(t, credential.NewMemoryStore(), nil,
+	handler := newHTTPTestServerWithConns(t,
 		WithAdapterManifests(func() []adapter.Manifest { return manifests }))
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/adapters", nil)
@@ -58,7 +57,7 @@ func TestListAdaptersServesManifests(t *testing.T) {
 // TestListAdaptersEmptyWithoutWiring asserts the endpoint degrades to an empty
 // list when no manifests are wired (never a 500 or nil).
 func TestListAdaptersEmptyWithoutWiring(t *testing.T) {
-	handler := newHTTPTestServerWithConns(t, credential.NewMemoryStore(), nil)
+	handler := newHTTPTestServerWithConns(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/adapters", nil)
 	rec := httptest.NewRecorder()
@@ -74,7 +73,7 @@ func TestListAdaptersEmptyWithoutWiring(t *testing.T) {
 // TestListAdaptersBehindAuthGate asserts the new route sits behind the same
 // /v1 bearer gate as every other API route.
 func TestListAdaptersBehindAuthGate(t *testing.T) {
-	handler := newHTTPTestServerWithConns(t, credential.NewMemoryStore(), nil,
+	handler := newHTTPTestServerWithConns(t,
 		WithBearerAuth("test-token", []string{"ws_1"}),
 		WithAdapterManifests(func() []adapter.Manifest { return nil }))
 

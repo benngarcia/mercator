@@ -18,6 +18,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -36,12 +37,31 @@ type ImageResolver interface {
 	Resolve(context.Context, ociresolver.ResolveRequest) (ociresolver.ResolvedImage, error)
 }
 
+type OfferAggregator interface {
+	AggregateOffers(ctx context.Context, req adapter.OfferRequest) (broker.OfferAggregation, error)
+}
+
+// singleProviderOffers adapts the fake-mode provider used by HandlerForSQLite
+// to the aggregate contract. A single provider cannot produce connection-level
+// partial failures.
+type singleProviderOffers struct {
+	provider adapter.Provider
+}
+
+func (s singleProviderOffers) AggregateOffers(ctx context.Context, req adapter.OfferRequest) (broker.OfferAggregation, error) {
+	offers, err := s.provider.ListOffers(ctx, req)
+	if offers == nil {
+		offers = []domain.OfferSnapshot{}
+	}
+	return broker.OfferAggregation{Offers: offers, Failures: broker.ConnectionErrors{}}, err
+}
+
 // Deps are the services the server routes to. Orchestrator, Scheduler, and
-// Adapter are required; a nil optional service disables its endpoints.
+// Offers are required; a nil optional service disables its endpoints.
 type Deps struct {
 	Orchestrator *orchestrator.Orchestrator
 	Scheduler    scheduler.Scheduler
-	Adapter      adapter.Adapter
+	Offers       OfferAggregator
 	Workloads    *workload.Service
 	Sinks        *sinkspkg.Manager
 	Connections  *connection.Service
@@ -52,13 +72,11 @@ type Server struct {
 	mux          *http.ServeMux
 	orch         *orchestrator.Orchestrator
 	scheduler    scheduler.Scheduler
-	adapter      adapter.Adapter
+	offers       OfferAggregator
 	workloads    *workload.Service
 	sinks        *sinkspkg.Manager
 	conns        *connection.Service
 	resolver     ImageResolver
-	secretStore  credential.SecretStore
-	credentials  *credential.Resolver
 	verifier     connectionVerifier
 	security     securityConfig
 	reportSigner *reporting.Signer
@@ -93,18 +111,6 @@ func WithBearerAuth(token string, workspaces []string) Option {
 	return func(s *Server) {
 		s.security = securityConfig{Token: token, Workspaces: append([]string(nil), workspaces...)}
 	}
-}
-
-// WithSecretStore wires the SecretStore the server uses to persist sealed
-// connection credentials.
-func WithSecretStore(store credential.SecretStore) Option {
-	return func(s *Server) { s.secretStore = store }
-}
-
-// WithCredentialResolver wires the credential.Resolver the server uses to turn
-// a {source, ref} credential into a plaintext secret.
-func WithCredentialResolver(resolver *credential.Resolver) Option {
-	return func(s *Server) { s.credentials = resolver }
 }
 
 // WithVerifier wires the connection verifier (the Broker) the server uses to
@@ -229,7 +235,14 @@ type adapterListResponse struct {
 }
 
 type offerListResponse struct {
-	Offers []domain.OfferSnapshot `json:"offers"`
+	Offers   []domain.OfferSnapshot      `json:"offers"`
+	Failures []connectionFailureResponse `json:"failures"`
+}
+
+type connectionFailureResponse struct {
+	ConnectionID string `json:"connection_id"`
+	AdapterType  string `json:"adapter_type"`
+	Message      string `json:"message"`
 }
 
 type replaySinkBody struct {
@@ -293,7 +306,7 @@ func New(deps Deps, options ...Option) http.Handler {
 		mux:       http.NewServeMux(),
 		orch:      deps.Orchestrator,
 		scheduler: deps.Scheduler,
-		adapter:   deps.Adapter,
+		offers:    deps.Offers,
 		workloads: deps.Workloads,
 		sinks:     deps.Sinks,
 		conns:     deps.Connections,
@@ -854,7 +867,7 @@ func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, violations[0].Code, violations[0].Message)
 		return
 	}
-	offers, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{
+	aggregation, err := s.offers.AggregateOffers(r.Context(), adapter.OfferRequest{
 		WorkspaceID: workspaceID,
 		Resources:   body.Workload.Spec.Resources,
 	})
@@ -862,10 +875,14 @@ func (s *Server) previewPlacement(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w, http.StatusBadGateway, "OFFER_QUERY_FAILED", err)
 		return
 	}
+	if err := aggregation.Failures.OrNil(); err != nil {
+		writeInternalError(w, http.StatusBadGateway, "OFFER_QUERY_FAILED", err)
+		return
+	}
 	decision, err := s.scheduler.Evaluate(r.Context(), scheduler.SchedulingInput{
 		RunID:        body.RunID,
 		Workload:     body.Workload,
-		Offers:       offers,
+		Offers:       aggregation.Offers,
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  time.Now().UTC(),
 	})
@@ -999,38 +1016,26 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cred := body.Credential
-	// For mercator-source connections with a provided secret, seal the secret
-	// out-of-band and store the ciphertext in the secret store. The plaintext
-	// never enters the event log or the response.
-	if cred.Source == credential.SourceMercator && body.Secret != "" {
-		if s.credentials == nil || s.secretStore == nil {
-			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Secret store is not configured; cannot accept mercator credentials.")
-			return
-		}
-		blob, ok := s.credentials.Seal([]byte(body.Secret))
-		if !ok {
-			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", "Master key is not set; cannot seal mercator credentials.")
-			return
-		}
-		if err := s.secretStore.Put(r.Context(), workspaceID, body.ConnectionID, blob); err != nil {
-			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
-			return
-		}
-		cred.Ref = body.ConnectionID
-	}
-
 	record, err := s.conns.Create(r.Context(), connection.CreateRequest{
 		WorkspaceID:  workspaceID,
 		ConnectionID: body.ConnectionID,
 		AdapterType:  body.AdapterType,
 		Config:       body.Config,
-		Credential:   cred,
+		Credential:   body.Credential,
+		Secret:       []byte(body.Secret),
 		Actor:        requestActor(r),
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
 			writeError(w, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")
+			return
+		}
+		if errors.Is(err, connection.ErrSecretStore) {
+			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
+			return
+		}
+		if errors.Is(err, connection.ErrSecretStoreDisabled) {
+			writeError(w, http.StatusBadRequest, "SECRET_STORE_DISABLED", err.Error())
 			return
 		}
 		writeError(w, http.StatusBadRequest, errorCode(err, "CREATE_CONNECTION_FAILED"), errorMessage(err))
@@ -1086,9 +1091,8 @@ func (s *Server) authorizeConnection(w http.ResponseWriter, r *http.Request, id 
 	writeJSON(w, http.StatusOK, connectionResponse{Connection: record})
 }
 
-// deleteConnection appends the deleted fact and removes the sealed credential
-// blob. The event stream itself is retained (append-only log); the id cannot
-// be reused — recreating means a fresh connection id.
+// deleteConnection appends the deleted fact. The event stream itself is
+// retained; the connection service removes sealed credentials atomically.
 func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	if s.conns == nil {
 		writeError(w, http.StatusNotImplemented, "CONNECTION_SERVICE_DISABLED", "Connection service is not configured.")
@@ -1110,15 +1114,6 @@ func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 		}
 		writeInternalError(w, http.StatusInternalServerError, "CONNECTION_DELETE_FAILED", err)
 		return
-	}
-	// The blob is unreachable once the record is deleted; failing to remove it
-	// must not resurrect the connection. Retrying the (idempotent) delete
-	// re-attempts the removal.
-	if s.secretStore != nil {
-		if err := s.secretStore.Delete(r.Context(), workspaceID, id); err != nil {
-			writeInternalError(w, http.StatusInternalServerError, "SECRET_STORE_FAILED", err)
-			return
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
@@ -1164,12 +1159,30 @@ func (s *Server) listOffers(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	records, err := s.adapter.ListOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
+	aggregation, err := s.offers.AggregateOffers(r.Context(), adapter.OfferRequest{WorkspaceID: workspaceID})
 	if err != nil {
 		writeInternalError(w, http.StatusBadGateway, "LIST_OFFERS_FAILED", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, offerListResponse{Offers: records})
+	if len(aggregation.Failures) > 0 {
+		log.Printf("list offers partial failure: %v", aggregation.Failures)
+	}
+	writeJSON(w, http.StatusOK, offerListResponse{
+		Offers:   aggregation.Offers,
+		Failures: connectionFailureResponses(aggregation.Failures),
+	})
+}
+
+func connectionFailureResponses(failures broker.ConnectionErrors) []connectionFailureResponse {
+	responses := make([]connectionFailureResponse, len(failures))
+	for i, failure := range failures {
+		responses[i] = connectionFailureResponse{
+			ConnectionID: failure.ConnectionID,
+			AdapterType:  failure.AdapterType,
+			Message:      "Provider offer query failed.",
+		}
+	}
+	return responses
 }
 
 func (s *Server) sinkStatus(w http.ResponseWriter, r *http.Request) {
@@ -1386,7 +1399,7 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	handler := New(Deps{
 		Orchestrator: orchestrator.New(log, sched, ad),
 		Scheduler:    sched,
-		Adapter:      ad,
+		Offers:       singleProviderOffers{provider: ad},
 		Workloads:    workload.New(log),
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
 		Connections:  connection.New(log),
