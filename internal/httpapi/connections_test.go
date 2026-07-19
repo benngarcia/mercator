@@ -58,7 +58,7 @@ func newHTTPTestServerWithConns(t *testing.T, store credential.SecretStore, reso
 		options = append(options, WithCredentialResolver(resolver))
 	}
 	options = append(options, extraOpts...)
-	return New(Deps{Orchestrator: orch, Scheduler: sched, Adapter: ad, Workloads: workload.New(log), Connections: svc, Resolver: staticResolver}, options...)
+	return New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Connections: svc, Resolver: staticResolver}, options...)
 }
 
 // TestConnectionsListReflectsRegistry asserts that GET /v1/connections returns
@@ -272,7 +272,7 @@ func TestSecretNeverLeavesTheServer(t *testing.T) {
 	store := credential.NewMemoryStore()
 	resolver := credential.NewResolver(nil, store, testKey32())
 	handler := New(Deps{
-		Orchestrator: orch, Scheduler: sched, Adapter: ad,
+		Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad},
 		Workloads: workload.New(log), Connections: svc,
 		Resolver: ociresolver.NewStaticResolver(nil),
 	}, WithSecretStore(store), WithCredentialResolver(resolver), WithVerifier(&fakeVerifier{}))

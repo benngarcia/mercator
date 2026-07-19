@@ -70,28 +70,51 @@ func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string)
 }
 
 func (b *Broker) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	recs, err := b.conns.List(ctx, req.WorkspaceID)
+	aggregation, err := b.AggregateOffers(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	results, failures := fanOut(ctx, b, req.WorkspaceID, recs, func(ctx context.Context, provider adapter.Provider) ([]domain.OfferSnapshot, error) {
+	if err := aggregation.Failures.OrNil(); err != nil {
+		return nil, err
+	}
+	return aggregation.Offers, nil
+}
+
+func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) (OfferAggregation, error) {
+	recs, err := b.conns.List(ctx, req.WorkspaceID)
+	if err != nil {
+		return OfferAggregation{}, err
+	}
+	results := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]domain.OfferSnapshot, error) {
+		provider, err := b.build(ctx, req.WorkspaceID, c)
+		if err != nil {
+			return nil, err
+		}
 		return provider.ListOffers(ctx, req)
 	})
-	var all []domain.OfferSnapshot
-	for _, result := range results {
-		for _, offer := range result.items {
-			offer.ConnectionID = result.connection.ID
-			offer.AdapterType = result.connection.AdapterType
-			all = append(all, offer)
-		}
+	aggregation := OfferAggregation{
+		Offers:   []domain.OfferSnapshot{},
+		Failures: ConnectionErrors{},
 	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].ConnectionID != all[j].ConnectionID {
-			return all[i].ConnectionID < all[j].ConnectionID
+	for _, result := range results {
+		if result.err != nil {
+			aggregation.Failures = append(aggregation.Failures, connectionError(result))
+			continue
 		}
-		return all[i].ID < all[j].ID
+		for i := range result.items {
+			result.items[i].ConnectionID = result.connection.ID
+			result.items[i].AdapterType = result.connection.AdapterType
+		}
+		aggregation.Offers = append(aggregation.Offers, result.items...)
+	}
+	sort.Slice(aggregation.Offers, func(i, j int) bool {
+		if aggregation.Offers[i].ConnectionID != aggregation.Offers[j].ConnectionID {
+			return aggregation.Offers[i].ConnectionID < aggregation.Offers[j].ConnectionID
+		}
+		return aggregation.Offers[i].ID < aggregation.Offers[j].ID
 	})
-	return all, failures.OrNil()
+	sortConnectionErrors(aggregation.Failures)
+	return aggregation, nil
 }
 
 func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
@@ -139,15 +162,28 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 	if err != nil {
 		return nil, err
 	}
-	results, failures := fanOut(ctx, b, req.WorkspaceID, recs, func(ctx context.Context, provider adapter.Provider) ([]adapter.OwnedExternalObject, error) {
+	results := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]adapter.OwnedExternalObject, error) {
+		provider, err := b.build(ctx, req.WorkspaceID, c)
+		if err != nil {
+			return nil, err
+		}
 		return provider.ListOwned(ctx, req)
 	})
 	var all []adapter.OwnedExternalObject
+	var failures ConnectionErrors
 	for _, result := range results {
-		for _, object := range result.items {
-			object.ConnectionID = result.connection.ID
-			all = append(all, object)
+		if result.err != nil {
+			failures = append(failures, connectionError(result))
+			continue
 		}
+		for i := range result.items {
+			result.items[i].ConnectionID = result.connection.ID
+		}
+		all = append(all, result.items...)
+	}
+	sortConnectionErrors(failures)
+	if err := failures.OrNil(); err != nil {
+		return nil, err
 	}
 	sort.Slice(all, func(i, j int) bool {
 		if all[i].ConnectionID != all[j].ConnectionID {
@@ -155,7 +191,19 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 		}
 		return all[i].ExternalID < all[j].ExternalID
 	})
-	return all, failures.OrNil()
+	return all, nil
+}
+
+func connectionError[T any](result fanoutResult[T]) ConnectionError {
+	return ConnectionError{
+		ConnectionID: result.connection.ID,
+		AdapterType:  result.connection.AdapterType,
+		Err:          result.err,
+	}
+}
+
+func sortConnectionErrors(failures ConnectionErrors) {
+	sort.Slice(failures, func(i, j int) bool { return failures[i].ConnectionID < failures[j].ConnectionID })
 }
 
 // VerifyConnection builds the adapter for one connection (regardless of its

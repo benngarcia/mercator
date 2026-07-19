@@ -50,7 +50,31 @@ func fanoutBroker(t *testing.T, adapters map[string]adapter.Provider) *Broker {
 	return NewBroker(fakeConns{recs: records}, factory, nilResolver{})
 }
 
-func TestBrokerListOffersReturnsPartialResultsAndConnectionErrors(t *testing.T) {
+func TestBrokerAggregateOffersReturnsPartialResultsAndConnectionErrors(t *testing.T) {
+	providerErr := errors.New("provider unavailable")
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"good": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return []domain.OfferSnapshot{{ID: "offer_good"}}, nil
+		}},
+		"bad": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return nil, providerErr
+		}},
+	})
+
+	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+
+	if err != nil {
+		t.Fatalf("aggregate offers: %v", err)
+	}
+	if len(aggregation.Offers) != 1 || aggregation.Offers[0].ID != "offer_good" {
+		t.Fatalf("offers = %#v, want the successful connection's offer", aggregation.Offers)
+	}
+	if len(aggregation.Failures) != 1 || aggregation.Failures[0].ConnectionID != "conn_bad" || !errors.Is(aggregation.Failures[0], providerErr) {
+		t.Fatalf("connection errors = %#v, want conn_bad provider error", aggregation.Failures)
+	}
+}
+
+func TestBrokerListOffersRejectsPartialResults(t *testing.T) {
 	providerErr := errors.New("provider unavailable")
 	broker := fanoutBroker(t, map[string]adapter.Provider{
 		"good": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
@@ -63,15 +87,12 @@ func TestBrokerListOffersReturnsPartialResultsAndConnectionErrors(t *testing.T) 
 
 	offers, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
 
-	if len(offers) != 1 || offers[0].ID != "offer_good" {
-		t.Fatalf("offers = %#v, want the successful connection's offer", offers)
+	if offers != nil {
+		t.Fatalf("offers = %#v, want no incomplete offer set", offers)
 	}
 	var connectionErrors ConnectionErrors
-	if !errors.As(err, &connectionErrors) {
-		t.Fatalf("error = %v, want ConnectionErrors", err)
-	}
-	if len(connectionErrors) != 1 || connectionErrors[0].ConnectionID != "conn_bad" || !errors.Is(connectionErrors[0], providerErr) {
-		t.Fatalf("connection errors = %#v, want conn_bad provider error", connectionErrors)
+	if !errors.As(err, &connectionErrors) || !errors.Is(err, providerErr) {
+		t.Fatalf("error = %#v, want typed provider failure", err)
 	}
 }
 
@@ -91,7 +112,7 @@ func TestBrokerListOffersQueriesConnectionsConcurrently(t *testing.T) {
 	})
 	done := make(chan error, 1)
 	go func() {
-		_, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+		_, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
 		done <- err
 	}()
 
@@ -118,13 +139,13 @@ func TestBrokerListOffersSortsConcurrentResultsDeterministically(t *testing.T) {
 		}},
 	})
 
-	offers, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
 
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	got := make([]string, len(offers))
-	for i, offer := range offers {
+	got := make([]string, len(aggregation.Offers))
+	for i, offer := range aggregation.Offers {
 		got[i] = offer.ConnectionID + "/" + offer.ID
 	}
 	want := []string{"conn_a/offer_m", "conn_b/offer_a", "conn_b/offer_z"}
@@ -143,14 +164,17 @@ func TestBrokerListOffersPropagatesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err := broker.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: "ws_1"})
+	aggregation, err := broker.AggregateOffers(ctx, adapter.OfferRequest{WorkspaceID: "ws_1"})
 
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, want context.Canceled", err)
+	if err != nil {
+		t.Fatalf("aggregate offers: %v", err)
+	}
+	if !errors.Is(aggregation.Failures.OrNil(), context.Canceled) {
+		t.Fatalf("failures = %v, want context.Canceled", aggregation.Failures)
 	}
 }
 
-func TestBrokerListOwnedReturnsPartialResultsAndConnectionErrors(t *testing.T) {
+func TestBrokerListOwnedRejectsPartialResultsWithConnectionErrors(t *testing.T) {
 	providerErr := errors.New("ownership lookup failed")
 	broker := fanoutBroker(t, map[string]adapter.Provider{
 		"good": fanoutAdapter{listOwned: func(context.Context) ([]adapter.OwnedExternalObject, error) {
@@ -163,8 +187,8 @@ func TestBrokerListOwnedReturnsPartialResultsAndConnectionErrors(t *testing.T) {
 
 	objects, err := broker.ListOwned(t.Context(), adapter.OwnershipQuery{WorkspaceID: "ws_1"})
 
-	if len(objects) != 1 || objects[0].ExternalID != "external_good" || objects[0].ConnectionID != "conn_good" {
-		t.Fatalf("objects = %#v, want the successful connection's object", objects)
+	if objects != nil {
+		t.Fatalf("objects = %#v, want no incomplete ownership set", objects)
 	}
 	var connectionErrors ConnectionErrors
 	if !errors.As(err, &connectionErrors) || len(connectionErrors) != 1 || connectionErrors[0].ConnectionID != "conn_bad" {

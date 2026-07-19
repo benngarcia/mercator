@@ -105,7 +105,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
 		Scheduler:    sched,
-		Adapter:      deps.broker,
+		Offers:       deps.broker,
 		Workloads:    workload.New(deps.log),
 		Sinks:        sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  deps.conns,

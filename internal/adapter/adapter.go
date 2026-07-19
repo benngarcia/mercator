@@ -41,17 +41,14 @@ func (p ExternalPhase) Exited() bool {
 	return p == ExternalPhaseSucceeded || p == ExternalPhaseFailed
 }
 
-type Verifier interface {
+// Provider is the complete contract implemented by one configured provider
+// connection. Aggregates across connections expose consumer-owned subsets of
+// these capabilities instead of pretending to be a Provider.
+type Provider interface {
 	// Verify performs a cheap credential/reachability check for the authorize
 	// flow. It does not launch anything.
 	Verify(ctx context.Context) error
-}
-
-type OfferSource interface {
 	ListOffers(ctx context.Context, req OfferRequest) ([]domain.OfferSnapshot, error)
-}
-
-type RunBackend interface {
 	Launch(ctx context.Context, req LaunchRequest) (LaunchReceipt, error)
 	Observe(ctx context.Context, req ObserveRequest) (ExternalObservation, error)
 	Cancel(ctx context.Context, req CancelRequest) (CancelReceipt, error)
@@ -62,20 +59,7 @@ type RunBackend interface {
 	// for disposition=terminate. Standing-pool adapters return
 	// ErrTerminateUnsupported.
 	Terminate(ctx context.Context, req TerminateRequest) (TerminateReceipt, error)
-}
-
-type OwnershipSource interface {
 	ListOwned(ctx context.Context, req OwnershipQuery) ([]OwnedExternalObject, error)
-}
-
-// Provider is the complete contract implemented by one configured provider
-// connection. Aggregates across connections expose consumer-owned subsets of
-// these capabilities instead of pretending to be a Provider.
-type Provider interface {
-	Verifier
-	OfferSource
-	RunBackend
-	OwnershipSource
 }
 
 type OfferRequest struct {
