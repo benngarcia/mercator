@@ -343,6 +343,15 @@ const (
 	RunOutcomeCancelled RunOutcome = "cancelled"
 )
 
+func (outcome RunOutcome) Valid() bool {
+	switch outcome {
+	case RunOutcomeSucceeded, RunOutcomeFailed, RunOutcomeCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 type CleanupState string
 
 const (
@@ -369,6 +378,10 @@ const (
 	DispositionRelease   Disposition = "release"
 	DispositionTerminate Disposition = "terminate"
 )
+
+func (disposition Disposition) Valid() bool {
+	return disposition == DispositionRelease || disposition == DispositionTerminate
+}
 
 // DispositionForOfferKind maps the natural source of disposition — the selected
 // offer's Kind — to the cleanup disposition. A provisionable offer means we

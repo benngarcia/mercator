@@ -41,6 +41,20 @@ func (p ExternalPhase) Exited() bool {
 	return p == ExternalPhaseSucceeded || p == ExternalPhaseFailed
 }
 
+func (p ExternalPhase) Valid() bool {
+	switch p {
+	case ExternalPhaseQueued,
+		ExternalPhaseRunning,
+		ExternalPhaseSucceeded,
+		ExternalPhaseFailed,
+		ExternalPhaseCancelled,
+		ExternalPhaseReleased:
+		return true
+	default:
+		return false
+	}
+}
+
 // Provider is the complete contract implemented by one configured provider
 // connection. Aggregates across connections expose consumer-owned subsets of
 // these capabilities instead of pretending to be a Provider.

@@ -411,8 +411,8 @@ func TestCancelRunResumesAfterCancelAcceptedEvents(t *testing.T) {
 		t.Fatalf("seed adapter cancel: %v", err)
 	}
 	if err := orch.appendEvents(ctx, "ws_1", runID, uint64(len(events)), "cancel:accepted", []eventlog.NewEvent{
-		mustEvent(runID, "cancel_requested", EventCancelRequested, map[string]any{"launch_key": state.launchIntent.LaunchKey}, time.Now()),
-		mustEvent(runID, "cancel_accepted", EventCancelAccepted, map[string]any{"launch_key": state.launchIntent.LaunchKey}, time.Now()),
+		mustEvent(runID, "cancel_requested", EventCancelRequested, cancelRequestedData{LaunchKey: state.launchIntent.LaunchKey}, time.Now()),
+		mustEvent(runID, "cancel_accepted", EventCancelAccepted, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, time.Now()),
 	}); err != nil {
 		t.Fatalf("seed cancel events: %v", err)
 	}
@@ -1033,17 +1033,26 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 	orch := New(log, scheduler.New(), ad)
 	createRun(t, ctx, orch)
 
+	fillerData, err := json.Marshal(adapterErrorData{
+		Code:      "TEST_PAGINATION_FILLER",
+		Message:   "Pagination filler.",
+		Retryable: false,
+		LaunchKey: "launch_pagination_filler",
+	})
+	if err != nil {
+		t.Fatalf("marshal pagination filler: %v", err)
+	}
 	version := uint64(1) // run_requested
 	for batch := 0; batch < 11; batch++ {
 		var filler []eventlog.NewEvent
 		for i := 0; i < 100; i++ {
 			filler = append(filler, eventlog.NewEvent{
 				ID:            fmt.Sprintf("evt_run_1_filler_%d_%d", batch, i),
-				Type:          "test.filler.v1",
+				Type:          EventLaunchFailed,
 				SchemaVersion: 1,
 				OccurredAt:    time.Now().UTC(),
 				Visibility:    eventlog.VisibilityPublic,
-				Data:          json.RawMessage(`{}`),
+				Data:          fillerData,
 			})
 		}
 		if _, err := log.Append(ctx, eventlog.AppendRequest{

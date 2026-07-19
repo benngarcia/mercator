@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -39,8 +40,10 @@ func TestObservedRunningExitCodeDoesNotFinalizeRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read stream: %v", err)
 	}
+	launchKey := launchKeyFromEvents(t, events)
 	err = orch.appendEvents(ctx, "ws_1", "run_1", uint64(len(events)), "test:poisoned-observation", []eventlog.NewEvent{
 		mustEvent("run_1", "poisoned_running_observation", EventExternalStateObserved, map[string]any{
+			"launch_key":  launchKey,
 			"phase":       "running",
 			"exit_code":   0,
 			"observed_at": time.Now().UTC(),
@@ -84,4 +87,20 @@ func TestObservedRunningExitCodeDoesNotFinalizeRun(t *testing.T) {
 	if ad.ReleaseCount() != 1 {
 		t.Fatalf("exited container not released, release count=%d", ad.ReleaseCount())
 	}
+}
+
+func launchKeyFromEvents(t *testing.T, events []eventlog.StoredEvent) string {
+	t.Helper()
+	for _, event := range events {
+		if event.Type != EventLaunchAccepted {
+			continue
+		}
+		var receipt adapter.LaunchReceipt
+		if err := json.Unmarshal(event.Data, &receipt); err != nil {
+			t.Fatalf("decode launch receipt: %v", err)
+		}
+		return receipt.LaunchKey
+	}
+	t.Fatal("launch accepted event not found")
+	return ""
 }
