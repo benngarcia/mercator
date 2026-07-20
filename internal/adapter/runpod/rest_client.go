@@ -63,16 +63,17 @@ func (e *flexEnv) UnmarshalJSON(b []byte) error {
 }
 
 type podCreateInput struct {
-	Name             string            `json:"name"`
-	ImageName        string            `json:"imageName"`
-	GPUTypeIDs       []string          `json:"gpuTypeIds,omitempty"`
-	GPUCount         int               `json:"gpuCount,omitempty"`
-	ContainerDiskGB  int               `json:"containerDiskInGb,omitempty"`
-	CloudType        string            `json:"cloudType,omitempty"`
-	Env              map[string]string `json:"env,omitempty"`
-	Ports            []string          `json:"ports,omitempty"`
-	DockerEntrypoint []string          `json:"dockerEntrypoint,omitempty"`
-	DockerStartCmd   []string          `json:"dockerStartCmd,omitempty"`
+	Name                    string            `json:"name"`
+	ImageName               string            `json:"imageName"`
+	GPUTypeIDs              []string          `json:"gpuTypeIds,omitempty"`
+	GPUCount                int               `json:"gpuCount,omitempty"`
+	ContainerDiskGB         int               `json:"containerDiskInGb,omitempty"`
+	ContainerRegistryAuthID string            `json:"containerRegistryAuthId,omitempty"`
+	CloudType               string            `json:"cloudType,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
 }
 
 type pod struct {

@@ -16,6 +16,13 @@ func Manifest() adapter.Manifest {
 		},
 		ConfigFields: []adapter.ConfigField{
 			{
+				Name:        "container_registry_auth_id",
+				Label:       "Container registry auth ID",
+				Type:        "string",
+				Placeholder: "c...",
+				Help:        "RunPod saved registry credential ID used to pull private container images. Leave empty for public images.",
+			},
+			{
 				Name:        "gpu_types",
 				Label:       "GPU allowlist",
 				Type:        "string",
@@ -49,6 +56,10 @@ func Manifest() adapter.Manifest {
 			},
 			{
 				Text: "Create an API key with read and write permission and copy it — RunPod shows it only once.",
+			},
+			{
+				Text: "For private images, save the registry credential in RunPod and copy its ID into the connection config.",
+				URL:  "https://www.runpod.io/console/user/settings",
 			},
 			{
 				Text: "Paste the key into the form and verify.",

@@ -20,6 +20,7 @@ type Adapter struct {
 	allowlist      []string
 	allowCommunity bool
 	diskGB         int
+	registryAuthID string
 	now            func() time.Time
 }
 
@@ -57,6 +58,7 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 		allowlist:      allow,
 		allowCommunity: allowCommunity,
 		diskGB:         disk,
+		registryAuthID: strings.TrimSpace(config["container_registry_auth_id"]),
 		now:            time.Now,
 	}, nil
 }
@@ -80,14 +82,15 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 	}
 	name := podName(req.LaunchKey)
 	in := podCreateInput{
-		Name:            name,
-		ImageName:       req.Image,
-		GPUTypeIDs:      a.gpuTypeIDs(gpuID),
-		GPUCount:        requestedGPUCount(req.Resources),
-		ContainerDiskGB: requestedDiskGB(req.Resources, a.diskGB),
-		CloudType:       cloud,
-		Env:             a.launchEnv(req),
-		DockerStartCmd:  append([]string(nil), req.Args...),
+		Name:                    name,
+		ImageName:               req.Image,
+		GPUTypeIDs:              a.gpuTypeIDs(gpuID),
+		GPUCount:                requestedGPUCount(req.Resources),
+		ContainerDiskGB:         requestedDiskGB(req.Resources, a.diskGB),
+		ContainerRegistryAuthID: a.registryAuthID,
+		CloudType:               cloud,
+		Env:                     a.launchEnv(req),
+		DockerStartCmd:          append([]string(nil), req.Args...),
 	}
 	if req.Entrypoint != nil {
 		in.DockerEntrypoint = append([]string(nil), (*req.Entrypoint)...)

@@ -2,6 +2,7 @@ package runpod
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"reflect"
@@ -188,6 +189,44 @@ func TestLaunchPostsPodWithOwnershipEnvAndName(t *testing.T) {
 	// dockerStartCmd carries the args
 	if !strings.Contains(body, `"dockerStartCmd":["sh","-c","echo hi"]`) {
 		t.Errorf("missing dockerStartCmd: %s", body)
+	}
+}
+
+func TestLaunchUsesConfiguredContainerRegistryAuthentication(t *testing.T) {
+	var createRequest struct {
+		ContainerRegistryAuthID string `json:"containerRegistryAuthId"`
+	}
+	a, err := New("secret", map[string]string{
+		"rest_base_url":              "https://rest.test/v1",
+		"graphql_base_url":           "https://gql.test/graphql",
+		"container_registry_auth_id": "registry_auth_1",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	a.rest.http = newFakeHTTPClient(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&createRequest); err != nil {
+			t.Fatalf("decode pod create request: %v", err)
+		}
+		return jsonResponse(201, `{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING"}`), nil
+	})
+
+	_, err = a.Launch(context.Background(), adapter.LaunchRequest{
+		WorkspaceID:            "ws_1",
+		RunID:                  "run_1",
+		AttemptID:              "att_1",
+		LaunchKey:              "lk1",
+		OwnershipToken:         "own1",
+		RequestHash:            "rh1",
+		CleanupLocator:         "cl1",
+		Image:                  "docker.io/acme/private@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		SelectedOfferNativeRef: "NVIDIA RTX A2000|SECURE",
+	})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if createRequest.ContainerRegistryAuthID != "registry_auth_1" {
+		t.Fatalf("container registry auth id = %q, want registry_auth_1", createRequest.ContainerRegistryAuthID)
 	}
 }
 
