@@ -1,9 +1,5 @@
 # RunPod Provider Runbook
 
-<!-- Deferred (tracked in issue #60): once the adapter-manifest contract
-merges, move the setup steps and the Secure vs Community explanation below
-into the runpod adapter manifest so the console wizard renders them. -->
-
 Mercator's `runpod` adapter launches container **Pods** on RunPod, observes
 them, and terminates them on cleanup. RunPod's API never exposes a container
 exit code, so the **workload self-reports its exit code** (see
@@ -37,6 +33,7 @@ outcome.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
+| `container_registry_auth_id` | unset | RunPod saved registry credential ID sent as `containerRegistryAuthId` for private-image pulls. Public images do not need it. |
 | `gpu_types` | `NVIDIA RTX A2000,NVIDIA RTX A4000` | Comma-separated allow-list of GPU type ids advertised as offers. |
 | `allow_community_cloud` | `false` | Opt community-cloud capacity in. See below. |
 | `container_disk_gb` | `20` | Pod container disk size. |
@@ -99,6 +96,12 @@ GPU, and auto-terminate on their exit report. They also require a public Mercato
 URL and real registry-pullable image digests; the server rejects mutable tags
 at create time, and RunPod can only pull digests that actually exist in a
 registry.
+
+For a private image, first save its pull credential under **Settings →
+Container Registry Auth** in RunPod. Put that provider-owned credential ID in
+the Mercator connection's `container_registry_auth_id` config. Mercator sends
+the opaque ID with every Pod create request and never receives or stores the
+registry password itself.
 
 The BusyBox example reports progress and exit through ordinary HTTP using the
 injected `MERCATOR_*` environment. Rotate the API key after testing.
