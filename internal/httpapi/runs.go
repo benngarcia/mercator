@@ -35,63 +35,30 @@ func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) 
 			return CreateRun404JSONResponse(apiError("WORKLOAD_REVISION_NOT_FOUND", err.Error())), nil
 		}
 		workloadRevision = revision
-	} else if !hasWorkloadSpec(body.Workload) && body.Image != "" {
-		// Top-level image shorthand: synthesize the single container from the
-		// top-level fields. Defaulting (container name, platform, resources, etc.)
-		// is applied server-side during CreateRun's normalize pass. An explicit
-		// full workload spec always takes precedence over shorthand.
-		workloadRevision = domain.WorkloadRevision{
-			WorkspaceID: workspaceID,
-			WorkloadID:  body.WorkloadId,
-			Spec: domain.WorkloadSpec{
-				Containers: []domain.ContainerSpec{{
-					Image: body.Image,
-					Args:  body.Args,
-					Env:   body.Env,
-				}},
-			},
-		}
 	}
 
-	// run_id is optional: generate a uuidv7 when omitted and use it as the
-	// stream/run identifier returned to the caller.
-	runID := body.RunId
-	generated := false
-	if runID == "" {
-		generated = true
-		runID = newRunID()
-	}
-
-	workloadRevision = applyRunEnvOverrides(workloadRevision, body.Env)
-	result, err := s.orch.CreateRun(ctx, orchestrator.CreateRunRequest{
+	result, err := s.orch.Intake(ctx, orchestrator.IntakeRequest{
 		WorkspaceID:    workspaceID,
-		RunID:          runID,
-		GeneratedRunID: generated,
+		RunID:          body.RunId,
 		IdempotencyKey: request.Params.IdempotencyKey,
 		Actor:          requestActor(ctx),
 		Workload:       workloadRevision,
+		WorkloadID:     body.WorkloadId,
+		Image:          body.Image,
+		Args:           body.Args,
+		Env:            body.Env,
 		ResolveImage:   s.resolveImageFn(),
 	})
 	if err != nil {
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
 			return CreateRun409JSONResponse(apiError("IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")), nil
 		}
+		if errors.Is(err, orchestrator.ErrAdvanceFailed) {
+			return CreateRun502JSONResponse(apiError("ADVANCE_RUN_FAILED", "Run advancement failed; inspect public run events for the stable failure code.")), nil
+		}
 		return CreateRun400JSONResponse(apiError(errorCode(err, "CREATE_RUN_FAILED"), errorMessage(err))), nil
 	}
-	// result.RunID is the canonical run identifier (the ORIGINAL run_id on a
-	// replay, even if this request generated a fresh one).
-	if err := s.orch.AdvanceRun(ctx, workspaceID, result.RunID); err != nil {
-		return CreateRun502JSONResponse(apiError("ADVANCE_RUN_FAILED", "Run advancement failed; inspect public run events for the stable failure code.")), nil
-	}
-	record, err := s.orch.GetRun(ctx, workspaceID, result.RunID)
-	if err != nil {
-		return CreateRun500JSONResponse(internalAPIError(http.StatusInternalServerError, "RUN_NOT_FOUND", err)), nil
-	}
-	return CreateRun202JSONResponse(newRunResponse(workspaceID, record, result.Duplicate)), nil
-}
-
-func hasWorkloadSpec(revision domain.WorkloadRevision) bool {
-	return len(revision.Spec.Containers) > 0
+	return CreateRun202JSONResponse(newRunResponse(workspaceID, result.Run, result.Duplicate)), nil
 }
 
 func newRunResponse(workspaceID string, record domain.RunRecord, duplicate bool) RunResponse {
@@ -101,22 +68,6 @@ func newRunResponse(workspaceID string, record domain.RunRecord, duplicate bool)
 		Links:     runLinks(workspaceID, record.ID),
 		Duplicate: duplicate,
 	}
-}
-
-func applyRunEnvOverrides(revision domain.WorkloadRevision, runEnv map[string]domain.EnvBinding) domain.WorkloadRevision {
-	if len(runEnv) == 0 || len(revision.Spec.Containers) == 0 {
-		return revision
-	}
-	container := &revision.Spec.Containers[0]
-	merged := make(map[string]domain.EnvBinding, len(container.Env)+len(runEnv))
-	for key, binding := range container.Env {
-		merged[key] = binding
-	}
-	for key, binding := range runEnv {
-		merged[key] = binding
-	}
-	container.Env = merged
-	return revision
 }
 
 func (s *Server) ListRunEvents(ctx context.Context, request ListRunEventsRequestObject) (ListRunEventsResponseObject, error) {

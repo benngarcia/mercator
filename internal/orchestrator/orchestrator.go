@@ -649,34 +649,6 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 	return fmt.Errorf("orchestrator: append report event: concurrency conflict after retry")
 }
 
-func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
-	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
-		WorkspaceID: requested.Workload.WorkspaceID,
-		Resources:   requested.Workload.Spec.Resources,
-	})
-	if err != nil {
-		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
-	}
-	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
-		RunID:        runID,
-		Workload:     requested.Workload,
-		Offers:       offers,
-		ModelVersion: "latency-v1",
-		EvaluatedAt:  o.now().UTC(),
-	})
-	if err != nil {
-		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
-	}
-	if decision.SelectedOfferSnapshotID == "" {
-		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: no feasible offers")
-	}
-	selectedOffer, ok := selectedOfferByID(offers, decision.SelectedOfferSnapshotID)
-	if !ok {
-		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: selected offer %s not found", decision.SelectedOfferSnapshotID)
-	}
-	return decision, newAttempt(workspaceID, runID), selectedOffer, nil
-}
-
 // newAttempt mints the run's attempt identity. There is ONE identity — the
 // attempt id — and three fixed derivations of it that adapters use for
 // different jobs: LaunchKey names the external object, OwnershipToken labels

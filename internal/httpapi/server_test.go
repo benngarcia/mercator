@@ -480,7 +480,7 @@ func TestCreateRunEnvOverridesStoredWorkloadRevision(t *testing.T) {
 	)}
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	handler := New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: ociresolver.NewStaticResolver(nil)})
+	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: ociresolver.NewStaticResolver(nil)})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_env", Name: "env"})))
 	req.Header.Set("Idempotency-Key", "idem_workload_env")
@@ -581,7 +581,7 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 			Platform: "linux/amd64",
 		},
 	})
-	return New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver}, options...)
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver}, options...)
 }
 
 func httpRevision() domain.WorkloadRevision {

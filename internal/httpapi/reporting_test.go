@@ -91,7 +91,7 @@ func newReportingTestServer(t *testing.T, signerKey []byte, extra ...Option) htt
 		WithReportSigner(signer),
 		WithBearerAuth("op-token"),
 	}, extra...)
-	return New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log)}, opts...)
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log)}, opts...)
 }
 
 // createReportingRun creates a run via POST /v1/runs and returns its run_id.
