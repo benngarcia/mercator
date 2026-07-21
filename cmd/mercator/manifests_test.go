@@ -4,11 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/benngarcia/mercator/internal/adapter"
-	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
-	runpodadapter "github.com/benngarcia/mercator/internal/adapter/runpod"
-	shadeformadapter "github.com/benngarcia/mercator/internal/adapter/shadeform"
-	vastadapter "github.com/benngarcia/mercator/internal/adapter/vast"
+	"github.com/benngarcia/mercator/internal/providers"
 )
 
 // TestShippedManifestsAreWellFormed guards the onboarding contract every
@@ -16,12 +12,7 @@ import (
 // ordered setup steps with https links, and config fields typed for the
 // console's form renderer.
 func TestShippedManifestsAreWellFormed(t *testing.T) {
-	manifests := []adapter.Manifest{
-		dockeradapter.Manifest(),
-		runpodadapter.Manifest(),
-		shadeformadapter.Manifest(),
-		vastadapter.Manifest(),
-	}
+	manifests := providers.Default().Factory().Manifests()
 	validTypes := map[string]bool{"string": true, "bool": true, "int": true}
 	seen := map[string]bool{}
 	for _, m := range manifests {

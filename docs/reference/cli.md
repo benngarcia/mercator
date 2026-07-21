@@ -1,8 +1,9 @@
 # CLI Reference
 
-The `mercator` binary has two modes:
+The `mercator` binary has three modes:
 
 - `mercator serve` starts the HTTP API and embedded console.
+- `mercator verify connection` runs an isolated provider Conformance Trial.
 - Every other command (`run`, `sink`, `login`, `context`, ...) targets an
   existing Mercator API and prints JSON responses.
 
@@ -230,6 +231,59 @@ mercator sink replay --sink-id audit --from 0 --limit 100 --replay-id replay_1
 ```
 
 Sink commands also print JSON.
+
+## Provider Conformance
+
+`mercator verify connection` starts an isolated Mercator runtime, creates and
+authorizes one temporary Connection, exercises a Run through the authenticated
+HTTP lifecycle, cleans up every owned provider object, and prints one JSON
+Evidence Bundle. The command never accepts credential material as an argument;
+`--credential-env` names the environment variable it reads.
+
+Verify a local Docker engine with the success scenario:
+
+```sh
+mercator verify connection \
+  --adapter docker \
+  --image 'ghcr.io/acme/mercator-conformance@sha256:<digest>' \
+  --mode probe \
+  --json
+```
+
+Local Docker derives its workload callback as
+`http://host.docker.internal:<ephemeral-port>`. A remote Docker engine and every
+cloud adapter require a fixed embedded listener plus a workload-reachable public
+URL. Start the tunnel or reverse proxy first, then pass both ends explicitly:
+
+```sh
+export RUNPOD_API_KEY='...'
+
+mercator verify connection \
+  --adapter runpod \
+  --credential-env RUNPOD_API_KEY \
+  --listen-address 127.0.0.1:8091 \
+  --public-url https://mercator-conformance.example.com \
+  --image 'ghcr.io/acme/mercator-conformance@sha256:<digest>' \
+  --config 'gpu_types=NVIDIA RTX A4000' \
+  --config allow_community_cloud=false \
+  --mode launch-cancel \
+  --max-expected-cost-usd 0.50 \
+  --timeout 12m \
+  --json
+```
+
+`probe` requires a zero exit code, a succeeded terminal Run, confirmed cleanup,
+and empty final provider inventory. `launch-cancel` launches the blocking probe,
+cancels it through the public Run endpoint, and requires a cancelled terminal
+Run with the same cleanup and inventory proof. Every exit path uses an
+independent cleanup deadline, including scenario timeout and evidence-read
+failures.
+
+The JSON report includes the selected Placement, the terminal Run, every public
+lifecycle event, scenario and Trial timings, final owned-object count, and a
+stable failure code when the Trial is blocked. Exit `0` means the verdict passed,
+exit `1` means the Trial ran and failed or was blocked, and exit `2` means local
+arguments or configuration were invalid before the Trial started.
 
 ## Local Smoke Test
 

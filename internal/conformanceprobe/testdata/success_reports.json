@@ -1,0 +1,4 @@
+[
+  {"type":"ready","data":{"scenario":"success"}},
+  {"type":"exit","exit_code":0}
+]

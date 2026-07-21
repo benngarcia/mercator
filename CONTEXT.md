@@ -26,3 +26,23 @@ _Avoid_: Account, integration, provider config
 **Placement**:
 The decision that selects an Offer for a Run (or preview) under the scheduler model.
 _Avoid_: Scheduling result (as a noun for the decision)
+
+**Conformance Trial**:
+An isolated verification of one Connection through Mercator's public run lifecycle.
+It owns its temporary workspace, Runs, evidence, and provider cleanup.
+_Avoid_: Provider test, integration test
+
+**Scenario**:
+One expected lifecycle inside a Conformance Trial, such as successful completion,
+failed completion, or cancellation.
+_Avoid_: Test case
+
+**Evidence Bundle**:
+The sanitized record of a Conformance Trial's placements, lifecycle events,
+terminal Runs, timings, and final provider inventory.
+_Avoid_: Logs, debug output
+
+**Verdict**:
+The Conformance Trial's passed, failed, or blocked conclusion derived from its
+Evidence Bundle.
+_Avoid_: Status (alone), result (alone)

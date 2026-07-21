@@ -99,6 +99,27 @@ POST `/report` works correctly through both quick tunnels and named cloudflare
 tunnels (verified end-to-end against a named tunnel with a custom domain). For a
 stable dev/prod tunnel, prefer a named cloudflare tunnel with a custom domain.
 
+The embedded provider Conformance Trial uses the same reporting path. For a
+cloud provider or remote Docker engine, point the tunnel at a fixed local
+listener and pass the matching values to `mercator verify connection`:
+
+```sh
+cloudflared tunnel --url http://127.0.0.1:8091
+
+mercator verify connection \
+  --adapter runpod \
+  --credential-env RUNPOD_API_KEY \
+  --listen-address 127.0.0.1:8091 \
+  --public-url https://<random>.trycloudflare.com \
+  --image 'ghcr.io/acme/mercator-conformance@sha256:<digest>' \
+  --json
+```
+
+Mercator requires both topology values before it contacts the provider, so
+missing callback configuration cannot launch billable infrastructure. The
+operator remains responsible for confirming that the public URL reaches the
+fixed listener through the tunnel or reverse proxy.
+
 ## Production
 
 In production, Mercator just needs to be reachable at a public URL. Set:

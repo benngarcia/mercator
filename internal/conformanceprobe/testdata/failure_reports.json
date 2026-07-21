@@ -1,0 +1,4 @@
+[
+  {"type":"ready","data":{"scenario":"failure"}},
+  {"type":"exit","exit_code":42}
+]
