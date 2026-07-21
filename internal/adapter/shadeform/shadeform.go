@@ -12,7 +12,6 @@ package shadeform
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -166,9 +165,6 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		// re-list and adopt it; otherwise let the orchestrator reconcile.
 		if inst, ok, _ := a.findLiveOwned(ctx, req.LaunchKey, req.OwnershipToken); ok {
 			return a.receipt(inst.ID, inst.Status, req, true), nil
-		}
-		if errors.Is(err, errCreateIndeterminate) {
-			return adapter.LaunchReceipt{}, fmt.Errorf("%w: %v", adapter.ErrLaunchIndeterminate, err)
 		}
 		return adapter.LaunchReceipt{}, err
 	}
