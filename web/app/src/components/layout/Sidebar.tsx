@@ -1,15 +1,12 @@
 // Sidebar: primary console navigation. Active-route highlighting uses TanStack
 // Router's <Link> active state (activeProps + activeOptions) rather than a
 // hand-rolled pathname compare, so it stays correct under nested routes (e.g.
-// /runs/:runId keeps "Runs" active while /runs/new is its own entry). The
-// Mercator wordmark sits at the top; nav items carry a lucide glyph + label.
+// /runs/:runId keeps "Runs" active). The Mercator wordmark sits at the top;
+// nav items carry a lucide glyph + label.
 
 import {
-  Boxes,
   GitBranch,
-  Compass,
   PlugZap,
-  Plus,
   Radio,
   ScrollText,
   Tags,
@@ -23,16 +20,10 @@ interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
-  // exact pins active state to this path only (used for index/sibling routes
-  // like /runs vs /runs/new that share a prefix).
-  exact?: boolean;
 }
 
 const NAV: NavItem[] = [
-  { to: "/runs", label: "Runs", icon: ScrollText, exact: true },
-  { to: "/runs/new", label: "Create Run", icon: Plus },
-  { to: "/preview", label: "Preview", icon: Compass },
-  { to: "/workloads", label: "Workloads", icon: Boxes },
+  { to: "/runs", label: "Runs", icon: ScrollText },
   { to: "/offers", label: "Offers", icon: Tags },
   { to: "/connections", label: "Connections", icon: PlugZap },
   { to: "/sinks", label: "Sinks", icon: Radio },
@@ -46,7 +37,6 @@ function NavLink({ item }: { item: NavItem }) {
       // concern); cast the literal path so this layout component stays
       // decoupled from the generated route union without resorting to `any`.
       to={item.to as never}
-      activeOptions={{ exact: item.exact ?? false }}
       className={cn(
         "group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors",
         "hover:bg-foreground/[0.04] hover:text-foreground",

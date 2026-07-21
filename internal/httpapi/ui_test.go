@@ -53,7 +53,7 @@ func TestBuiltIndexReferencesAbsoluteAssets(t *testing.T) {
 func TestSPAFallbackServesIndex(t *testing.T) {
 	handler := newHTTPTestServer(t)
 
-	for _, path := range []string{"/", "/runs", "/runs/run_anything", "/preview", "/offers"} {
+	for _, path := range []string{"/", "/runs", "/runs/run_anything", "/unknown-client-path", "/offers"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)

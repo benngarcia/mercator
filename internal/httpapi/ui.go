@@ -11,7 +11,7 @@ import (
 // with a no-cache header so clients always re-validate the entry document and
 // pick up new hashed asset references after a deploy. It handles any
 // unmatched non-API GET path, letting the client-side router own routes like
-// /runs, /runs/{id}, /preview, /offers, etc. The /v1, /health, /openapi.json
+// /runs, /runs/{id}, /offers, and unknown client paths. The /v1, /health, /openapi.json
 // and /assets/ patterns are registered more specifically and take precedence.
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	// Only non-API paths fall back to the SPA. An unmatched /v1, /health,

@@ -1,41 +1,26 @@
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { Rocket, Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import type {
   CreateRunRequest,
   EnvBinding,
-  PlacementObjective,
   WorkloadRevision,
 } from "@/lib/api/types";
-import { ApiError } from "@/lib/api/client";
 import { useCreateRun } from "@/lib/api/queries";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { WorkloadSpecEditor } from "@/components/placements";
 import { EnvEditor } from "./EnvEditor";
 
 export interface CreateRunFormProps {
   mode: "image" | "spec";
+  onCreated: (runId: string) => void;
+  onPendingChange: (pending: boolean) => void;
   className?: string;
 }
-
-const OBJECTIVES: Array<{ value: PlacementObjective; label: string }> = [
-  { value: "cheapest", label: "Cheapest" },
-  { value: "fastest_start", label: "Fastest start" },
-  { value: "fastest_completion", label: "Fastest completion" },
-  { value: "balanced", label: "Balanced" },
-];
 
 // A starter document for spec mode so the operator has a valid shape to edit
 // rather than a blank buffer. Kept minimal but structurally complete.
@@ -65,51 +50,45 @@ const SPEC_TEMPLATE = JSON.stringify(
   2,
 );
 
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.message || error.code;
-  if (error instanceof Error) return error.message;
-  return "Request failed.";
-}
-
 /**
  * CreateRunForm submits a new run in one of two modes:
  *
- *  - "image": the shorthand — image ref, args, literal env (EnvEditor), and a
- *    placement objective. The server materializes a single-container workload.
+ *  - "image": the shorthand — image ref, args, and literal env (EnvEditor).
+ *    The server materializes a single-container workload.
  *  - "spec": full control via a JSON workload revision document
  *    (WorkloadSpecEditor), sent verbatim as the run's `workload`.
  *
- * The Idempotency-Key is generated centrally by apiFetch. On success the form
- * navigates to the new run's detail page to watch it progress. Server
- * Violations are surfaced inline (spec mode) or as a toast.
+ * The form owns drafts, validation, and the public create-run mutation. The
+ * containing run-intake workflow owns navigation after receiving the run ID.
  */
-export function CreateRunForm({ mode, className }: CreateRunFormProps) {
-  const navigate = useNavigate();
+export function CreateRunForm({
+  mode,
+  onCreated,
+  onPendingChange,
+  className,
+}: CreateRunFormProps) {
   const createRun = useCreateRun();
-
-  // Shared
-  const [submitError, setSubmitError] = React.useState<ApiError | null>(null);
-
   // --- image mode state ---
   const [image, setImage] = React.useState("");
   const [args, setArgs] = React.useState<string[]>([]);
   const [env, setEnv] = React.useState<Record<string, EnvBinding>>({});
-  const [objective, setObjective] =
-    React.useState<PlacementObjective>("balanced");
-
   // --- spec mode state ---
   const [specText, setSpecText] = React.useState(SPEC_TEMPLATE);
 
-  const pending = createRun.isPending;
-
-  const succeed = (runId: string) => {
-    toast.success("Run created", { description: runId });
-    void navigate({ to: "/runs/$runId", params: { runId } });
-  };
-
-  const fail = (error: unknown) => {
-    if (error instanceof ApiError) setSubmitError(error);
-    toast.error("Could not create run", { description: errorMessage(error) });
+  const submit = (request: CreateRunRequest) => {
+    onPendingChange(true);
+    createRun.mutate(request, {
+      onSuccess: (response) => {
+        toast.success("Run created", { description: response.run_id });
+        onCreated(response.run_id);
+      },
+      onError: (error) => {
+        toast.error("Could not create run", {
+          description: error.message || error.code,
+        });
+      },
+      onSettled: () => onPendingChange(false),
+    });
   };
 
   const buildImageBody = (): CreateRunRequest => {
@@ -122,20 +101,15 @@ export function CreateRunForm({ mode, className }: CreateRunFormProps) {
 
   const submitImage = (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitError(null);
     if (!image.trim()) {
       toast.error("Image is required");
       return;
     }
-    createRun.mutate(buildImageBody(), {
-      onSuccess: (res) => succeed(res.run_id),
-      onError: fail,
-    });
+    submit(buildImageBody());
   };
 
   const submitSpec = (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitError(null);
     let workload: WorkloadRevision;
     try {
       workload = JSON.parse(specText) as WorkloadRevision;
@@ -145,28 +119,29 @@ export function CreateRunForm({ mode, className }: CreateRunFormProps) {
       });
       return;
     }
-    createRun.mutate(
-      { workload },
-      {
-        onSuccess: (res) => succeed(res.run_id),
-        onError: fail,
-      },
-    );
+    submit({ workload });
   };
 
   if (mode === "spec") {
     return (
-      <form onSubmit={submitSpec} className={cn("flex flex-col gap-4", className)}>
+      <form
+        onSubmit={submitSpec}
+        className={cn("flex flex-col gap-4", className)}
+      >
         <WorkloadSpecEditor
           value={specText}
           onChange={setSpecText}
-          error={submitError}
-          disabled={pending}
+          error={createRun.error ?? undefined}
+          disabled={createRun.isPending}
           label="Workload revision JSON"
         />
         <div className="flex justify-end">
-          <Button type="submit" disabled={pending}>
-            {pending ? <Loader2 className="animate-spin" /> : <Rocket />}
+          <Button type="submit" disabled={createRun.isPending}>
+            {createRun.isPending ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <Rocket />
+            )}
             Create run
           </Button>
         </div>
@@ -175,7 +150,10 @@ export function CreateRunForm({ mode, className }: CreateRunFormProps) {
   }
 
   return (
-    <form onSubmit={submitImage} className={cn("flex flex-col gap-5", className)}>
+    <form
+      onSubmit={submitImage}
+      className={cn("flex flex-col gap-5", className)}
+    >
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="run-image">Image</Label>
         <Input
@@ -187,46 +165,31 @@ export function CreateRunForm({ mode, className }: CreateRunFormProps) {
           autoCapitalize="off"
           autoCorrect="off"
           className="font-mono text-sm"
-          disabled={pending}
+          disabled={createRun.isPending}
         />
         <p className="text-xs text-muted-foreground">
           A container image reference. Tags are resolved to a digest at launch.
         </p>
       </div>
 
-      <ArgsEditor value={args} onChange={setArgs} disabled={pending} />
+      <ArgsEditor
+        value={args}
+        onChange={setArgs}
+        disabled={createRun.isPending}
+      />
 
       <div className="flex flex-col gap-1.5">
         <Label>Environment</Label>
         <EnvEditor value={env} onChange={setEnv} />
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="run-objective">Placement objective</Label>
-        <Select
-          value={objective}
-          onValueChange={(v) => setObjective(v as PlacementObjective)}
-          disabled={pending}
-        >
-          <SelectTrigger id="run-objective" className="w-full sm:w-64">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {OBJECTIVES.map((o) => (
-              <SelectItem key={o.value} value={o.value}>
-                {o.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">
-          How the broker ranks candidate offers for this run.
-        </p>
-      </div>
-
       <div className="flex justify-end">
-        <Button type="submit" disabled={pending || !image.trim()}>
-          {pending ? <Loader2 className="animate-spin" /> : <Rocket />}
+        <Button type="submit" disabled={createRun.isPending || !image.trim()}>
+          {createRun.isPending ? (
+            <Loader2 className="animate-spin" />
+          ) : (
+            <Rocket />
+          )}
           Create run
         </Button>
       </div>

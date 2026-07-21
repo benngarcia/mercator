@@ -13,11 +13,19 @@
 # Mounting the Docker socket grants this container root-equivalent control of
 # the host Docker daemon. That is fine for local evaluation on a machine you
 # own; do not do it on an untrusted host.
+FROM oven/bun:1.3 AS console
+WORKDIR /src/web/app
+COPY web/app/package.json web/app/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY web/app ./
+RUN bun run build
+
 FROM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=console /src/web/static ./web/static
 RUN CGO_ENABLED=0 go build -trimpath -o /out/mercator ./cmd/mercator
 
 FROM docker:29-cli

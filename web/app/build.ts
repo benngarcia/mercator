@@ -39,8 +39,8 @@ const result = await Bun.build({
   splitting: true,
   minify: true,
   // No sourcemap in the embedded production bundle: it would bake a multi-MB
-  // .map into the Go binary and into git. The dev server (bun dev) keeps inline
-  // maps for debugging.
+  // .map into every Go binary and release archive. The dev server (bun dev)
+  // keeps inline maps for debugging.
   sourcemap: "none",
   naming: {
     entry: "[dir]/[name].[ext]",

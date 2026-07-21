@@ -8,11 +8,7 @@ import { createRouter } from "@tanstack/react-router";
 import { rootRoute } from "./root";
 import { indexRoute } from "./index";
 import { runsRoute } from "./runs";
-import { runsNewRoute } from "./runs.new";
 import { runsDetailRoute } from "./runs.detail";
-import { previewRoute } from "./preview";
-import { workloadsRoute } from "./workloads";
-import { workloadsDetailRoute } from "./workloads.detail";
 import { offersRoute } from "./offers";
 import { connectionsRoute } from "./connections";
 import { sinksRoute } from "./sinks";
@@ -20,11 +16,7 @@ import { sinksRoute } from "./sinks";
 const routeTree = rootRoute.addChildren([
   indexRoute,
   runsRoute,
-  runsNewRoute,
   runsDetailRoute,
-  previewRoute,
-  workloadsRoute,
-  workloadsDetailRoute,
   offersRoute,
   connectionsRoute,
   sinksRoute,

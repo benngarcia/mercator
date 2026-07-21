@@ -31,6 +31,11 @@ __pycache__/
 # Local verification artifacts (screenshots, traces)
 /output/
 
+# Generated embedded console assets. Shipping builds regenerate these before
+# compiling Go; only web/static/.gitkeep is source-controlled.
+/web/static/assets/
+/web/static/index.html
+
 # Subagent-driven-development scratch (ledger, briefs, reports, diffs)
 /.superpowers/
 

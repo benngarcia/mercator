@@ -12,11 +12,13 @@
 import { useRef } from "react";
 import {
   createRootRoute,
+  Link,
   useNavigate,
   useSearch,
 } from "@tanstack/react-router";
 
 import { AppShell } from "@/components/layout";
+import { Button } from "@/components/ui/button";
 import { getWorkspace } from "@/lib/session";
 import { useSession } from "@/hooks/useSession";
 import { useMountEffect } from "@/hooks/useMountEffect";
@@ -99,7 +101,26 @@ function WorkspaceSync() {
 export const rootRoute = createRootRoute({
   validateSearch,
   component: RootComponent,
+  notFoundComponent: NotFoundPage,
 });
+
+function NotFoundPage() {
+  return (
+    <div className="flex min-h-full items-center justify-center p-6">
+      <div className="flex max-w-md flex-col items-center gap-3 text-center">
+        <h1 className="text-xl font-semibold tracking-tight">Page not found</h1>
+        <p className="text-sm text-muted-foreground">
+          This console destination does not exist.
+        </p>
+        <Button asChild size="sm">
+          <Link to="/runs" search={true}>
+            Return to Runs
+          </Link>
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function RootComponent() {
   return (

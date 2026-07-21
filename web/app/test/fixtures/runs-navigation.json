@@ -1,0 +1,48 @@
+{
+  "workspace_id": "ws_runs_navigation",
+  "token": "runs-navigation-token",
+  "image": {
+    "reference": "busybox:latest",
+    "args": ["echo", "created from Runs"],
+    "env": {
+      "MERCATOR_FLOW": "runs-navigation"
+    }
+  },
+  "workload": {
+    "workload_id": "wrk_runs_navigation",
+    "spec": {
+      "containers": [
+        {
+          "name": "main",
+          "image": "busybox:latest",
+          "platform": {
+            "os": "linux",
+            "architecture": "amd64"
+          },
+          "args": ["echo", "created from immutable spec"]
+        }
+      ],
+      "resources": {
+        "cpu": {
+          "min_millis": 500
+        },
+        "memory": {
+          "min_bytes": 134217728
+        },
+        "ephemeral_disk": {
+          "min_bytes": 1073741824
+        }
+      },
+      "network": {
+        "inbound": "none"
+      },
+      "placement": {
+        "objective": "balanced"
+      },
+      "execution": {
+        "max_runtime_seconds": 300,
+        "max_pre_start_attempts": 3
+      }
+    }
+  }
+}
