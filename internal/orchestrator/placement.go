@@ -56,7 +56,7 @@ func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested
 		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
 	}
 	if decision.SelectedOfferSnapshotID == "" {
-		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, ErrNoFeasibleOffers
+		return decision, attemptData{}, domain.OfferSnapshot{}, nil
 	}
 	selectedOffer, ok := selectedOfferByID(offers, decision.SelectedOfferSnapshotID)
 	if !ok {

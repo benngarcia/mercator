@@ -147,6 +147,9 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	if publicFailure["code"] != "PROVIDER_CAPACITY_UNAVAILABLE" || publicFailure["retryable"] != true || publicFailure["side_effect"] != "none" {
 		t.Fatalf("public failure = %#v", publicFailure)
 	}
+	if _, exposed := publicFailure["provider_kind"]; exposed {
+		t.Fatalf("public failure exposed canonical private classification: %#v", publicFailure)
+	}
 	record, err := orch.GetRun(t.Context(), "ws_1", "run_out_of_stock")
 	if err != nil {
 		t.Fatalf("get run: %v", err)

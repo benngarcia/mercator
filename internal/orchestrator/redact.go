@@ -7,7 +7,6 @@ package orchestrator
 
 import (
 	"encoding/json"
-	"errors"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -105,38 +104,6 @@ func envKind(value *string) string {
 		return "literal"
 	}
 	return "empty"
-}
-
-// publicAdapterError maps an adapter failure to a stable public error payload;
-// the raw error text never reaches the public stream.
-func publicAdapterError(err error, launchKey string) adapterErrorData {
-	var providerFailure *adapter.ProviderFailure
-	if errors.As(err, &providerFailure) {
-		code, message := publicProviderFailure(providerFailure.Kind)
-		return adapterErrorData{Code: code, Message: message, Retryable: providerFailure.Retryable, SideEffect: providerFailure.SideEffect, LaunchKey: launchKey}
-	}
-	code := "ADAPTER_ERROR"
-	message := "Adapter operation failed."
-	retryable := true
-	sideEffect := adapter.SideEffectCertainty("")
-	switch {
-	case errors.Is(err, adapter.ErrIdempotencyConflict):
-		code = "ADAPTER_IDEMPOTENCY_CONFLICT"
-		retryable = false
-	case errors.Is(err, adapter.ErrLaunchTimeout):
-		code = "ADAPTER_LAUNCH_TIMEOUT"
-		sideEffect = adapter.SideEffectIndeterminate
-	case errors.Is(err, adapter.ErrLaunchIndeterminate):
-		code = "ADAPTER_LAUNCH_INDETERMINATE"
-		sideEffect = adapter.SideEffectIndeterminate
-	case errors.Is(err, adapter.ErrRetryableFailure):
-		code = "ADAPTER_RETRYABLE_FAILURE"
-	case errors.Is(err, adapter.ErrRegistryAuthentication):
-		code = "ADAPTER_REGISTRY_AUTHENTICATION_FAILED"
-		message = "Registry authentication failed."
-		retryable = false
-	}
-	return adapterErrorData{Code: code, Message: message, Retryable: retryable, SideEffect: sideEffect, LaunchKey: launchKey}
 }
 
 func publicProviderFailure(kind adapter.ProviderFailureKind) (string, string) {

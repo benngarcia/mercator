@@ -7,9 +7,9 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 )
 
-func TestPublicAdapterErrorRedactsRegistryAuthenticationFailure(t *testing.T) {
+func TestLaunchFailurePublicDataRedactsRegistryAuthenticationFailure(t *testing.T) {
 	err := fmt.Errorf("%w: unauthorized: secret-token", adapter.ErrRegistryAuthentication)
-	got := publicAdapterError(err, "launch_1")
+	got := launchFailureFrom(err, "launch_1").publicData()
 	if got.Code != "ADAPTER_REGISTRY_AUTHENTICATION_FAILED" {
 		t.Fatalf("code = %q, want ADAPTER_REGISTRY_AUTHENTICATION_FAILED", got.Code)
 	}
@@ -21,7 +21,7 @@ func TestPublicAdapterErrorRedactsRegistryAuthenticationFailure(t *testing.T) {
 	}
 }
 
-func TestPublicAdapterErrorMapsProviderKindsWithoutPrivateDiagnostics(t *testing.T) {
+func TestLaunchFailurePublicDataMapsProviderKindsWithoutPrivateDiagnostics(t *testing.T) {
 	tests := []struct {
 		kind adapter.ProviderFailureKind
 		code string
@@ -43,7 +43,7 @@ func TestPublicAdapterErrorMapsProviderKindsWithoutPrivateDiagnostics(t *testing
 				ResponseBody: `{"private":"provider body"}`,
 			}
 
-			got := publicAdapterError(err, "launch_1")
+			got := launchFailureFrom(err, "launch_1").publicData()
 
 			if got.Code != test.code || !got.Retryable || got.LaunchKey != "launch_1" {
 				t.Fatalf("public error = %+v", got)

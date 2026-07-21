@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -16,19 +17,18 @@ import (
 
 func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 	ctx := t.Context()
-	now := time.Now().UTC()
-	stale := replacementOffer("off_stale", "conn_stale", "hyperstack/canada-1/A6000", 0.0001, now)
-	alternate := replacementOffer("off_alternate", "conn_alternate", stale.NativeRef, 0.0002, now)
+	offers := replacementOffers(t, "same_native_ref")
+	stale, alternate := offers[0], offers[1]
 	provider := newReplacementProvider([]domain.OfferSnapshot{stale, alternate}, map[string]error{
 		stale.ID: capacityUnavailable(),
 	})
-	log := openOrchestratorLog(t)
+	var orch *Orchestrator
 	provider.beforeLaunch = func(req adapter.LaunchRequest) {
-		events, err := eventlog.ReadFullStream(ctx, log, runStream(req.WorkspaceID, req.RunID))
+		events, err := orch.GetRunEvents(ctx, req.WorkspaceID, req.RunID)
 		if err != nil {
 			t.Fatalf("read launch intent: %v", err)
 		}
-		for _, event := range events.Events {
+		for _, event := range events {
 			if event.Type != EventLaunchIntentRecorded {
 				continue
 			}
@@ -42,7 +42,7 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 		}
 		t.Fatalf("provider launch %q happened before its durable intent", req.LaunchKey)
 	}
-	orch := New(log, scheduler.New(), provider)
+	orch = newReplacementOrchestrator(t, provider)
 	createReplacementRun(t, orch, 2)
 
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_replacement"); err != nil {
@@ -77,9 +77,8 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 }
 
 func TestAdvanceRunClosesWithRetryExhaustedAfterBoundedAttempts(t *testing.T) {
-	now := time.Now().UTC()
-	first := replacementOffer("off_first", "conn_1", "cloud/region/A6000", 0.0001, now)
-	second := replacementOffer("off_second", "conn_2", "cloud/region/L40S", 0.0002, now)
+	offers := replacementOffers(t, "bounded_exhaustion")
+	first, second := offers[0], offers[1]
 	provider := newReplacementProvider([]domain.OfferSnapshot{first, second}, map[string]error{
 		first.ID:  capacityUnavailable(),
 		second.ID: capacityUnavailable(),
@@ -105,10 +104,32 @@ func TestAdvanceRunClosesWithRetryExhaustedAfterBoundedAttempts(t *testing.T) {
 	assertClosedReason(t, orch, "run_replacement", "RETRY_EXHAUSTED")
 }
 
+func TestAdvanceRunRecordsTheDecisionThatExhaustsEligibleOffers(t *testing.T) {
+	stale := replacementOffers(t, "single_stale")[0]
+	provider := newReplacementProvider([]domain.OfferSnapshot{stale}, map[string]error{
+		stale.ID: capacityUnavailable(),
+	})
+	orch := newReplacementOrchestrator(t, provider)
+	createReplacementRun(t, orch, 3)
+
+	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
+		t.Fatalf("exhaust eligible offers: %v", err)
+	}
+
+	decision, err := orch.GetPlacementDecision(t.Context(), "ws_1", "run_replacement")
+	if err != nil {
+		t.Fatalf("get exhausted placement: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != "" {
+		t.Fatalf("exhausted placement selected %q", decision.SelectedOfferSnapshotID)
+	}
+	assertOfferRejected(t, decision, stale.ID, "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE")
+	assertClosedReason(t, orch, "run_replacement", "RETRY_EXHAUSTED")
+}
+
 func TestAdvanceRunResumesReplacementFromDurableAttemptHistory(t *testing.T) {
-	now := time.Now().UTC()
-	stale := replacementOffer("off_stale", "conn_1", "cloud/region/A6000", 0.0001, now)
-	alternate := replacementOffer("off_alternate", "conn_2", "cloud/region/L40S", 0.0002, now)
+	offers := replacementOffers(t, "alternate_capacity")
+	stale, alternate := offers[0], offers[1]
 	log := openOrchestratorLog(t)
 	beforeRestart := newReplacementProvider([]domain.OfferSnapshot{stale, alternate}, map[string]error{stale.ID: capacityUnavailable()})
 	beforeRestart.listOffersErrAfter = 1
@@ -134,6 +155,34 @@ func TestAdvanceRunResumesReplacementFromDurableAttemptHistory(t *testing.T) {
 	assertCompleteAttemptHistory(t, orch, "run_replacement", 2, 1, 1)
 }
 
+func TestCancelRunClosesLocallyAfterSideEffectFreeLaunchFailure(t *testing.T) {
+	offers := replacementOffers(t, "alternate_capacity")
+	stale, alternate := offers[0], offers[1]
+	provider := newReplacementProvider([]domain.OfferSnapshot{stale, alternate}, map[string]error{
+		stale.ID: capacityUnavailable(),
+	})
+	provider.listOffersErrAfter = 1
+	provider.listOffersErr = errors.New("catalog unavailable")
+	provider.cancelErr = errors.New("provider unavailable")
+	orch := newReplacementOrchestrator(t, provider)
+	createReplacementRun(t, orch, 2)
+
+	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); !errors.Is(err, ErrOfferQuery) {
+		t.Fatalf("interrupted replacement = %v, want offer query error", err)
+	}
+	record, err := orch.CancelRun(t.Context(), "ws_1", "run_replacement", nil)
+	if err != nil {
+		t.Fatalf("cancel side-effect-free attempt: %v", err)
+	}
+
+	if !record.Closed || record.Outcome != domain.RunOutcomeCancelled || record.Cleanup != domain.CleanupNotRequired {
+		t.Fatalf("cancelled replacement = %+v", record)
+	}
+	if provider.cancelCalls != 0 {
+		t.Fatalf("provider cancel calls = %d, want 0 for known-absent object", provider.cancelCalls)
+	}
+}
+
 func TestAdvanceRunLeavesNonCapacityFailuresTerminal(t *testing.T) {
 	tests := []struct {
 		name string
@@ -147,7 +196,7 @@ func TestAdvanceRunLeavesNonCapacityFailuresTerminal(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			offer := replacementOffer("off_only", "conn_1", "cloud/region/A6000", 0.0001, time.Now().UTC())
+			offer := replacementOffers(t, "single_terminal")[0]
 			provider := newReplacementProvider([]domain.OfferSnapshot{offer}, map[string]error{offer.ID: test.err})
 			orch := newReplacementOrchestrator(t, provider)
 			createReplacementRun(t, orch, 3)
@@ -172,7 +221,7 @@ func TestAdvanceRunLeavesNonCapacityFailuresTerminal(t *testing.T) {
 }
 
 func TestAdvanceRunReconcilesIndeterminateCreateWithoutReplacement(t *testing.T) {
-	offer := replacementOffer("off_indeterminate", "conn_1", "cloud/region/A6000", 0.0001, time.Now().UTC())
+	offer := replacementOffers(t, "single_indeterminate")[0]
 	provider := &indeterminateCreateProvider{
 		Adapter: fake.New(
 			fake.WithOffers([]domain.OfferSnapshot{offer}),
@@ -229,6 +278,8 @@ type replacementProvider struct {
 	listOffersCalls    int
 	listOffersErrAfter int
 	listOffersErr      error
+	cancelCalls        int
+	cancelErr          error
 }
 
 func newReplacementProvider(offers []domain.OfferSnapshot, failures map[string]error) *replacementProvider {
@@ -256,6 +307,14 @@ func (p *replacementProvider) Launch(ctx context.Context, req adapter.LaunchRequ
 		return adapter.LaunchReceipt{}, err
 	}
 	return p.Adapter.Launch(ctx, req)
+}
+
+func (p *replacementProvider) Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error) {
+	p.cancelCalls++
+	if p.cancelErr != nil {
+		return adapter.CancelReceipt{}, p.cancelErr
+	}
+	return p.Adapter.Cancel(ctx, req)
 }
 
 type indeterminateCreateProvider struct {
@@ -288,6 +347,35 @@ func replacementOffer(id, connectionID, nativeRef string, rate float64, now time
 	offer.NativeRef = nativeRef
 	offer.Pricing.RatePerSecondUSD = rate
 	return offer
+}
+
+type replacementOfferSpec struct {
+	ID           string  `json:"id"`
+	ConnectionID string  `json:"connection_id"`
+	NativeRef    string  `json:"native_ref"`
+	Rate         float64 `json:"rate"`
+}
+
+func replacementOffers(t *testing.T, scenario string) []domain.OfferSnapshot {
+	t.Helper()
+	data, err := os.ReadFile("testdata/replacement_offers.json")
+	if err != nil {
+		t.Fatalf("read replacement Offer fixtures: %v", err)
+	}
+	var fixtures map[string][]replacementOfferSpec
+	if err := json.Unmarshal(data, &fixtures); err != nil {
+		t.Fatalf("decode replacement Offer fixtures: %v", err)
+	}
+	specs, ok := fixtures[scenario]
+	if !ok {
+		t.Fatalf("replacement Offer fixture %q not found", scenario)
+	}
+	now := time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)
+	offers := make([]domain.OfferSnapshot, 0, len(specs))
+	for _, spec := range specs {
+		offers = append(offers, replacementOffer(spec.ID, spec.ConnectionID, spec.NativeRef, spec.Rate, now))
+	}
+	return offers
 }
 
 func capacityUnavailable() error {

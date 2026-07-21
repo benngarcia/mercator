@@ -33,6 +33,18 @@ Connection and the adapter-local capacity identity. The IDs are stable and
 unique within a workspace, including when two Connections expose the same
 provider catalog item.
 
+`GET /v1/runs/{run_id}/decision` returns the latest recorded placement
+decision. A stale-Offer replacement therefore supersedes the initial decision.
+If every remaining Offer is infeasible, the latest decision has no
+`selected_offer_snapshot_id`, records `NO_FEASIBLE_OFFERS`, and retains each
+candidate rejection before the Run closes with `reason=RETRY_EXHAUSTED`.
+
+The public `compute.run.launch_failed.v1` event exposes the provider-neutral
+`code`, `retryable`, and `side_effect` fields. A replacement requires
+`code=PROVIDER_CAPACITY_UNAVAILABLE`, `retryable=true`, and
+`side_effect=none`. Other definitive failures close the Run, while an
+indeterminate side effect keeps reconciliation on the original launch key.
+
 ## First Integrator Path
 
 For the smallest HTTP integration, start with the Docker adapter and use the
