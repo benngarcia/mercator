@@ -20,7 +20,15 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
-var ErrRunNotFound = errors.New("orchestrator: run not found")
+var (
+	ErrRunNotFound = errors.New("orchestrator: run not found")
+	// ErrRunRequestPersistence marks failure to durably record the acceptance
+	// event, before Mercator owns the Run lifecycle.
+	ErrRunRequestPersistence = errors.New("orchestrator: persist run request")
+	// ErrAcceptedRunUnavailable marks failure to read the current record after
+	// the acceptance event was durably recorded.
+	ErrAcceptedRunUnavailable = errors.New("orchestrator: read accepted run")
+)
 
 const (
 	EventRunRequested          = "compute.run.requested.v1"
@@ -186,6 +194,9 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 		}},
 	})
 	if err != nil {
+		if !errors.Is(err, eventlog.ErrIdempotencyConflict) && !errors.Is(err, eventlog.ErrConcurrencyConflict) {
+			return CreateRunResult{}, fmt.Errorf("%w: %w", ErrRunRequestPersistence, err)
+		}
 		return CreateRunResult{}, err
 	}
 	runID := req.RunID
