@@ -69,6 +69,8 @@ not inject the full `/report` path. Workloads build the full endpoint by appendi
   is durable. Cleanup runs after the response through normal reconciliation.
 - **Errors**:
   - `400 WORKSPACE_REQUIRED`: `workspace_id` query param missing.
+  - `400 INVALID_REPORT`: an `exit` report omitted `exit_code`, or a
+    nonterminal report included one.
   - `401 INVALID_RUN_TOKEN`: token wrong, missing, or for a different run.
   - `409 TERMINAL_REPORT_CONFLICT`: a different terminal report is already
     recorded for the run.

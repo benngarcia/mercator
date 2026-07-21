@@ -1002,7 +1002,7 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 	orch := New(log, scheduler.New(), ad)
 	createRun(t, ctx, orch)
 
-	fillerData, err := json.Marshal(adapterErrorData{
+	fillerData, err := json.Marshal(domain.ProviderError{
 		Code:      "TEST_PAGINATION_FILLER",
 		Message:   "Pagination filler.",
 		Retryable: false,

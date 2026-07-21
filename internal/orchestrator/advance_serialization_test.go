@@ -85,7 +85,7 @@ func TestTerminalReportWaitsForRunAdvancement(t *testing.T) {
 	reportErr := make(chan error, 1)
 	go func() {
 		close(reportStarted)
-		reportErr <- orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(0))
+		reportErr <- orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0)))
 	}()
 	<-reportStarted
 	select {

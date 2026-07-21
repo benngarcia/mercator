@@ -22,6 +22,7 @@ import (
 
 var (
 	ErrRunNotFound            = errors.New("orchestrator: run not found")
+	ErrInvalidReport          = errors.New("orchestrator: invalid run report")
 	ErrTerminalReportConflict = errors.New("orchestrator: terminal report conflict")
 	// ErrRunRequestPersistence marks failure to durably record the acceptance
 	// event, before Mercator owns the Run lifecycle.
@@ -573,11 +574,14 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string,
 // RecordReport appends a compute.run.reported.v1 fact and returns before
 // cleanup. Terminal reports use one semantic command per run, so an exact
 // replay is idempotent and conflicting terminal data fails explicitly.
-func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, reportType string, data json.RawMessage, exitCode *int) error {
+func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID string, report RunReport) error {
+	if report == nil {
+		return fmt.Errorf("%w: report is required", ErrInvalidReport)
+	}
+	payload := report.payload()
 	unlock := o.runLocks.Lock(workspaceID + "/" + runID)
 	defer unlock()
 
-	payload := runReportedData{Type: reportType, Data: data, ExitCode: exitCode}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("orchestrator: marshal report data: %w", err)
@@ -595,7 +599,7 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 		suffix := fmt.Sprintf("reported_%d", version+1)
 		commandKey := runID + ":report:" + suffix
 		requestHash := ""
-		if exitCode != nil {
+		if payload.terminal() {
 			suffix = "reported_terminal"
 			commandKey = runID + ":report:terminal"
 			requestHash, err = domain.CanonicalHash(payload)
@@ -629,7 +633,7 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 		if appendErr == nil {
 			return nil
 		}
-		if exitCode != nil && errors.Is(appendErr, eventlog.ErrIdempotencyConflict) {
+		if payload.terminal() && errors.Is(appendErr, eventlog.ErrIdempotencyConflict) {
 			return fmt.Errorf("%w: %v", ErrTerminalReportConflict, appendErr)
 		}
 		if errors.Is(appendErr, eventlog.ErrConcurrencyConflict) && attempt == 0 {
@@ -771,31 +775,46 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 	if !disposition.Valid() {
 		return fmt.Errorf("orchestrator: cleanup requires a valid recorded disposition, got %q", disposition)
 	}
-	if disposition == domain.DispositionTerminate {
-		terminateReq := adapter.TerminateRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
-		hash, err := domain.CanonicalHash(terminateReq)
-		if err != nil {
-			return err
-		}
-		terminateReq.RequestHash = hash
-		if _, err := o.adapter.Terminate(ctx, terminateReq); err != nil {
-			return o.recordCleanupFailure(ctx, workspaceID, runID, version, launchReq.LaunchKey, disposition, err)
-		}
-	} else {
-		releaseReq := adapter.ReleaseRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
-		hash, err := domain.CanonicalHash(releaseReq)
-		if err != nil {
-			return err
-		}
-		releaseReq.RequestHash = hash
-		if _, err := o.adapter.Release(ctx, releaseReq); err != nil {
-			return o.recordCleanupFailure(ctx, workspaceID, runID, version, launchReq.LaunchKey, disposition, err)
-		}
+	if err := o.cleanup(ctx, workspaceID, launchReq); err != nil {
+		return o.recordCleanupFailure(ctx, workspaceID, runID, version, launchReq.LaunchKey, disposition, err)
 	}
 	return o.appendEvents(ctx, workspaceID, runID, version, "advance:cleanup", []eventlog.NewEvent{
 		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, cleanupConfirmedData{LaunchKey: launchReq.LaunchKey, Disposition: disposition}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 	})
+}
+
+func (o *Orchestrator) cleanup(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
+	switch launchReq.Disposition {
+	case domain.DispositionTerminate:
+		return o.terminate(ctx, workspaceID, launchReq)
+	case domain.DispositionRelease:
+		return o.release(ctx, workspaceID, launchReq)
+	default:
+		return fmt.Errorf("orchestrator: unknown cleanup disposition %q", launchReq.Disposition)
+	}
+}
+
+func (o *Orchestrator) terminate(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
+	request := adapter.TerminateRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+	hash, err := domain.CanonicalHash(request)
+	if err != nil {
+		return err
+	}
+	request.RequestHash = hash
+	_, err = o.adapter.Terminate(ctx, request)
+	return err
+}
+
+func (o *Orchestrator) release(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
+	request := adapter.ReleaseRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+	hash, err := domain.CanonicalHash(request)
+	if err != nil {
+		return err
+	}
+	request.RequestHash = hash
+	_, err = o.adapter.Release(ctx, request)
+	return err
 }
 
 func (o *Orchestrator) recordCleanupFailure(ctx context.Context, workspaceID, runID string, version uint64, launchKey string, disposition domain.Disposition, cleanupErr error) error {

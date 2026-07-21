@@ -571,9 +571,11 @@ type ReplaySinkRequest struct {
 type ReportRunRequest struct {
 	Data json.RawMessage `json:"data,omitempty"`
 
-	// ExitCode Terminal exit code; when present the broker records the authoritative outcome and requests cleanup.
-	ExitCode *int   `json:"exit_code,omitempty"`
-	Type     string `json:"type"`
+	// ExitCode Required when type is exit and forbidden for every other report type. The broker records the authoritative outcome and requests cleanup.
+	ExitCode *int `json:"exit_code,omitempty"`
+
+	// Type Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code.
+	Type string `json:"type"`
 }
 
 // ResolveImageRequest defines model for ResolveImageRequest.

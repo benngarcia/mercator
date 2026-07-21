@@ -2601,7 +2601,8 @@
         ],
         "properties": {
           "type": {
-            "type": "string"
+            "type": "string",
+            "description": "Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code."
           },
           "data": {
             "type": "object",
@@ -2610,7 +2611,7 @@
           },
           "exit_code": {
             "type": "integer",
-            "description": "Terminal exit code; when present the broker records the authoritative outcome and requests cleanup.",
+            "description": "Required when type is exit and forbidden for every other report type. The broker records the authoritative outcome and requests cleanup.",
             "x-go-type-skip-optional-pointer": false
           }
         }

@@ -362,12 +362,39 @@ const (
 	CleanupBlocked     CleanupState = "blocked"
 )
 
+type ProviderError struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Retryable bool   `json:"retryable"`
+	LaunchKey string `json:"launch_key"`
+}
+
+func (providerError ProviderError) Validate() error {
+	switch {
+	case providerError.Code == "":
+		return fmt.Errorf("code is required")
+	case providerError.Message == "":
+		return fmt.Errorf("message is required")
+	case providerError.LaunchKey == "":
+		return fmt.Errorf("launch_key is required")
+	default:
+		return nil
+	}
+}
+
 type CleanupError struct {
-	Code        string      `json:"code"`
-	Message     string      `json:"message"`
-	Retryable   bool        `json:"retryable"`
-	LaunchKey   string      `json:"launch_key"`
+	ProviderError
 	Disposition Disposition `json:"disposition"`
+}
+
+func (cleanupError CleanupError) Validate() error {
+	if err := cleanupError.ProviderError.Validate(); err != nil {
+		return err
+	}
+	if !cleanupError.Disposition.Valid() {
+		return fmt.Errorf("unknown disposition %q", cleanupError.Disposition)
+	}
+	return nil
 }
 
 // Disposition is the cost-safety discriminator that records, at launch time,

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,6 +208,36 @@ func TestReportIngestEndpointRecordsEvent(t *testing.T) {
 	}
 }
 
+func TestReportIngestRejectsContradictoryReportShapes(t *testing.T) {
+	key32 := []byte("0123456789abcdef0123456789abcdef")
+	signer := reporting.NewSigner(key32)
+	harness := newReportingTestHarness(t, key32)
+	runID := createReportingRun(t, harness.handler, "run_report_shape")
+
+	for _, fixture := range []string{"progress_with_exit_code.json", "exit_without_code.json"} {
+		t.Run(fixture, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/runs/"+runID+"/report?workspace_id=ws_1", bytes.NewReader(reportFixture(t, fixture)))
+			req.Header.Set("Authorization", "Bearer "+signer.Token("ws_1", runID))
+			rec := httptest.NewRecorder()
+			harness.handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "INVALID_REPORT") {
+				t.Fatalf("report: expected 400 INVALID_REPORT, got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+
+	events, err := harness.orch.GetRunEvents(t.Context(), "ws_1", runID)
+	if err != nil {
+		t.Fatalf("get run events: %v", err)
+	}
+	for _, event := range events {
+		if event.Type == orchestrator.EventRunReported {
+			t.Fatalf("invalid report appended event: %+v", event)
+		}
+	}
+}
+
 func TestTerminalReportReturnsBeforeCleanupAndReconciles(t *testing.T) {
 	key32 := []byte("0123456789abcdef0123456789abcdef")
 	signer := reporting.NewSigner(key32)
@@ -323,9 +354,23 @@ func TestTerminalReportReplayIsIdempotentAndConflictIsRejected(t *testing.T) {
 		return rec
 	}
 
-	for attempt := 1; attempt <= 2; attempt++ {
-		if rec := postReport("exit_succeeded.json"); rec.Code != http.StatusAccepted {
-			t.Fatalf("identical report %d: expected 202, got %d body=%s", attempt, rec.Code, rec.Body.String())
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	var reports sync.WaitGroup
+	for range 2 {
+		reports.Add(1)
+		go func() {
+			defer reports.Done()
+			<-start
+			responses <- postReport("exit_succeeded.json")
+		}()
+	}
+	close(start)
+	reports.Wait()
+	close(responses)
+	for rec := range responses {
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("concurrent identical report: expected 202, got %d body=%s", rec.Code, rec.Body.String())
 		}
 	}
 	conflict := postReport("exit_failed_7.json")

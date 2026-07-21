@@ -35,7 +35,7 @@ func TestExitReportZeroRecordsSucceededAndTerminates(t *testing.T) {
 	ctx := context.Background()
 	orch, ad := runningProvisionableRun(t, ctx)
 
-	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(0)); err != nil {
+	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0))); err != nil {
 		t.Fatalf("record report: %v", err)
 	}
 	if _, err := orch.AdvanceOpenRuns(ctx, "ws_1"); err != nil {
@@ -61,7 +61,7 @@ func TestExitReportNonzeroRecordsFailed(t *testing.T) {
 	ctx := context.Background()
 	orch, ad := runningProvisionableRun(t, ctx)
 
-	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(2)); err != nil {
+	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(2))); err != nil {
 		t.Fatalf("record report: %v", err)
 	}
 	if _, err := orch.AdvanceOpenRuns(ctx, "ws_1"); err != nil {
@@ -83,7 +83,7 @@ func TestProgressReportDoesNotFinalize(t *testing.T) {
 	ctx := context.Background()
 	orch, ad := runningProvisionableRun(t, ctx)
 
-	if err := orch.RecordReport(ctx, "ws_1", "run_1", "progress", []byte(`{"pct":50}`), nil); err != nil {
+	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "progress", []byte(`{"pct":50}`), nil)); err != nil {
 		t.Fatalf("record report: %v", err)
 	}
 	record, err := orch.GetRun(ctx, "ws_1", "run_1")
@@ -102,7 +102,7 @@ func TestFirstTerminalFactDeterminesOutcome(t *testing.T) {
 	ctx := context.Background()
 	orch, ad := runningProvisionableRun(t, ctx)
 
-	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(0)); err != nil {
+	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0))); err != nil {
 		t.Fatalf("record report: %v", err)
 	}
 	record, err := orch.CancelRun(ctx, "ws_1", "run_1", nil)
@@ -130,7 +130,7 @@ func TestCleanupFailureIsDurableBlockedEvidenceAndRefreshRetries(t *testing.T) {
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
 		t.Fatalf("advance to running: %v", err)
 	}
-	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(0)); err != nil {
+	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0))); err != nil {
 		t.Fatalf("record report: %v", err)
 	}
 
@@ -199,7 +199,7 @@ func TestExitReportAfterRunClosedIsNoop(t *testing.T) {
 	beforeTerm := ad.TerminateCount()
 
 	// A late exit report must not double-finalize or double-terminate.
-	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(0)); err != nil {
+	if err := orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0))); err != nil {
 		t.Fatalf("late report: %v", err)
 	}
 	if ad.TerminateCount() != beforeTerm {
@@ -212,6 +212,15 @@ func TestExitReportAfterRunClosedIsNoop(t *testing.T) {
 	if record.Outcome != domain.RunOutcomeSucceeded {
 		t.Fatalf("late report must not change already-recorded outcome: got %q, want %q", record.Outcome, domain.RunOutcomeSucceeded)
 	}
+}
+
+func mustRunReport(t *testing.T, reportType string, data json.RawMessage, exitCode *int) RunReport {
+	t.Helper()
+	report, err := NewRunReport(reportType, data, exitCode)
+	if err != nil {
+		t.Fatalf("construct run report: %v", err)
+	}
+	return report
 }
 
 type terminateFailsOnceAdapter struct {

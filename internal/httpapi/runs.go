@@ -216,7 +216,11 @@ func (s *Server) ReportRun(ctx context.Context, request ReportRunRequestObject) 
 		return ReportRun401JSONResponse(apiError("INVALID_RUN_TOKEN", "Invalid or missing run token.")), nil
 	}
 	body := request.Body
-	if err := s.orch.RecordReport(ctx, workspaceID, request.RunId, body.Type, body.Data, body.ExitCode); err != nil {
+	report, err := orchestrator.NewRunReport(body.Type, body.Data, body.ExitCode)
+	if err != nil {
+		return ReportRun400JSONResponse(apiError("INVALID_REPORT", err.Error())), nil
+	}
+	if err := s.orch.RecordReport(ctx, workspaceID, request.RunId, report); err != nil {
 		switch {
 		case errors.Is(err, orchestrator.ErrRunNotFound):
 			return ReportRun404JSONResponse(apiError("RUN_NOT_FOUND", "Run not found.")), nil

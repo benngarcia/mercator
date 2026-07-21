@@ -69,12 +69,12 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		state.launchAccepted = true
 
 	case EventLaunchIndeterminate, EventLaunchFailed:
-		var data adapterErrorData
+		var data domain.ProviderError
 		if err := decodePublicRunPayload(stored, &data); err != nil {
 			return err
 		}
-		if reason := invalidAdapterError(data); reason != "" {
-			return invalidRunEvent(stored, reason)
+		if err := data.Validate(); err != nil {
+			return invalidRunEvent(stored, err.Error())
 		}
 		if stored.Type == EventLaunchIndeterminate {
 			state.launchIndeterminate = true
@@ -128,10 +128,10 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if err := decodePublicRunPayload(stored, &data); err != nil {
 			return err
 		}
-		if data.Type == "" {
-			return invalidRunEvent(stored, "report type is required")
+		if err := data.validate(); err != nil {
+			return invalidRunEvent(stored, err.Error())
 		}
-		if data.ExitCode != nil && state.firstTerminal == nil {
+		if data.terminal() && state.firstTerminal == nil {
 			code := *data.ExitCode
 			state.exitCode = &code
 			outcome := domain.RunOutcomeSucceeded
@@ -167,8 +167,8 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if err := decodePublicRunPayload(stored, &data); err != nil {
 			return err
 		}
-		if reason := invalidCleanupError(data); reason != "" {
-			return invalidRunEvent(stored, reason)
+		if err := data.Validate(); err != nil {
+			return invalidRunEvent(stored, err.Error())
 		}
 		state.cleanupFailure = &data
 
