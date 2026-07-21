@@ -1,7 +1,14 @@
 // Package gpunorm maps each provider's native GPU vendor/model strings onto a
 // stable canonical id, so a workload's accelerator requirement matches the same
 // GPU regardless of which provider advertises it. The canonical model id is
-// "<vendor>-<model>" in kebab-case, e.g. "nvidia-rtx-a2000".
+// "<vendor>-<model>" in kebab-case, e.g. "nvidia-a6000".
+//
+// The canonical vocabulary is anchored to Shadeform's cross-cloud catalog:
+// when Shadeform lists a card, the canonical model part is the slug of their
+// identifier (they already did the work of standardizing names across
+// providers, so our ids stay copyable from their catalog — e.g. their
+// "A6000", not NVIDIA's "RTX A6000"). A card absent from their catalog
+// (e.g. RTX 5090) canonicalizes to the slug of its NVIDIA marketing name.
 //
 // Granularity is model-level: memory/SKU variants of one marketing model share
 // a single id (e.g. A100 40GB and 80GB both map to "nvidia-a100"); callers
@@ -45,28 +52,56 @@ func NormalizeVendor(vendor string) string {
 // vendor prefix stripped) to the canonical model part. It consolidates provider
 // spellings and memory/SKU variants onto one id.
 var modelAliases = map[string]string{
-	"a2000": "rtx-a2000", "rtx-a2000": "rtx-a2000", "rtx-a2000-6gb": "rtx-a2000",
-	"a4000": "rtx-a4000", "rtx-a4000": "rtx-a4000",
-	"a5000": "rtx-a5000", "rtx-a5000": "rtx-a5000",
-	"a6000": "rtx-a6000", "rtx-a6000": "rtx-a6000",
+	// Ampere workstation cards: Shadeform names these bare, without NVIDIA's
+	// RTX marketing prefix.
+	"a2000": "a2000", "rtx-a2000": "a2000", "rtx-a2000-6gb": "a2000",
+	"a4000": "a4000", "rtx-a4000": "a4000",
+	"a5000": "a5000", "rtx-a5000": "a5000",
+	"a6000": "a6000", "rtx-a6000": "a6000",
+	"a16":  "a16",
+	"a30":  "a30",
 	"a40":  "a40",
 	"a100": "a100", "a100-pcie": "a100", "a100-sxm": "a100", "a100-sxm4": "a100",
 	"a100-40gb": "a100", "a100-80gb": "a100", "a100-80gb-pcie": "a100",
+	// Shadeform's API spelling of the 80GB variant (A100_80G).
+	"a100-80g": "a100",
 	// nvidia-smi spellings (as the docker adapter's GPU probe reports them).
 	"a100-sxm4-40gb": "a100", "a100-sxm4-80gb": "a100",
 	"a100-pcie-40gb": "a100", "a100-pcie-80gb": "a100",
 	"h100": "h100", "h100-pcie": "h100", "h100-sxm": "h100", "h100-sxm5": "h100",
 	"h100-nvl": "h100", "h100-80gb": "h100", "h100-80gb-hbm3": "h100",
-	"h200": "h200",
-	"l4":   "l4",
-	"l40":  "l40", "l40s": "l40s",
+	"h200":  "h200",
+	"gh200": "gh200",
+	"b200":  "b200",
+	"b300":  "b300",
+	"l4":    "l4",
+	"l40":   "l40", "l40s": "l40s",
 	"t4":   "t4",
-	"v100": "v100", "v100-sxm2": "v100",
+	"v100": "v100", "v100-sxm2": "v100", "v100-32gb": "v100",
 	"a10": "a10", "a10g": "a10g",
-	"4090": "rtx-4090", "rtx-4090": "rtx-4090",
-	"3090": "rtx-3090", "rtx-3090": "rtx-3090",
-	"5090": "rtx-5090", "rtx-5090": "rtx-5090",
-	"5080": "rtx-5080", "rtx-5080": "rtx-5080",
+	"4090": "rtx-4090", "rtx-4090": "rtx-4090", "rtx4090": "rtx-4090",
+	"3090": "rtx-3090", "rtx-3090": "rtx-3090", "rtx3090": "rtx-3090",
+	"5090": "rtx-5090", "rtx-5090": "rtx-5090", "rtx5090": "rtx-5090",
+	"5080": "rtx-5080", "rtx-5080": "rtx-5080", "rtx5080": "rtx-5080",
+	// Workstation Ada/Blackwell cards. Providers spell these with and without
+	// separators and with SKU-edition suffixes; every spelling of one
+	// marketing model lands on one id.
+	"rtx-4000-ada": "rtx-4000-ada", "4000-ada": "rtx-4000-ada",
+	"rtx4000ada": "rtx-4000-ada", "rtx-4000-ada-generation": "rtx-4000-ada",
+	"rtx-6000-ada": "rtx-6000-ada", "6000-ada": "rtx-6000-ada",
+	"rtx6000ada": "rtx-6000-ada", "rtx-6000ada": "rtx-6000-ada",
+	"rtx-6000-ada-generation": "rtx-6000-ada",
+	// The pre-Ada Quadro RTX 6000 is a distinct card from the RTX 6000 Ada.
+	"rtx-6000": "rtx-6000", "quadro-rtx-6000": "rtx-6000",
+	"rtx-pro-6000":           "rtx-pro-6000",
+	"pro-6000":               "rtx-pro-6000",
+	"rtxpro6000":             "rtx-pro-6000",
+	"pro6000":                "rtx-pro-6000",
+	"rtx-pro-6000-blackwell": "rtx-pro-6000",
+	"rtx-pro-6000-blackwell-workstation-edition":       "rtx-pro-6000",
+	"rtx-pro-6000-blackwell-server-edition":            "rtx-pro-6000",
+	"rtx-pro-6000-blackwell-max-q-workstation-edition": "rtx-pro-6000",
+	"rtx-pro-6000-max-q":                               "rtx-pro-6000",
 }
 
 // canonicalModelPart resolves the canonical model token for (vendor, model).
@@ -83,7 +118,7 @@ func canonicalModelPart(vendor, model string) string {
 }
 
 // Canonical returns the canonical GPU id "<vendor>-<model>" (e.g.
-// "nvidia-rtx-a2000"). An unseeded GPU resolves to a stable slug rather than
+// "nvidia-a6000"). An unseeded GPU resolves to a stable slug rather than
 // failing, so matching still works within a provider.
 func Canonical(vendor, model string) string {
 	cv := NormalizeVendor(vendor)

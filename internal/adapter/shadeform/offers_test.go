@@ -31,7 +31,7 @@ func TestListOffersMapsCatalogTriplesToOffers(t *testing.T) {
 		t.Errorf("resources = %+v", o.Resources)
 	}
 	acc := o.Resources.Accelerators
-	if len(acc) != 1 || acc[0].Count != 1 || acc[0].CanonicalModel != "nvidia-rtx-a6000" || acc[0].MemoryBytes != 48*gib {
+	if len(acc) != 1 || acc[0].Count != 1 || acc[0].CanonicalModel != "nvidia-a6000" || acc[0].MemoryBytes != 48*gib {
 		t.Errorf("accelerators = %+v", acc)
 	}
 	// 210 cents/hour → dollars per second

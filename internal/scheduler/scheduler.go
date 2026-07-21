@@ -289,13 +289,17 @@ func acceleratorRequirementsSatisfied(requirements []domain.AcceleratorRequireme
 		}
 		matched := 0
 		for _, inventory := range offer.Resources.Accelerators {
-			// Vendor is normalized on both sides so provider casing/aliases
-			// ("NVIDIA" vs "Nvidia") align; the model is matched on the
-			// provider-agnostic canonical id, not the raw provider string.
+			// Both sides are normalized through gpunorm so provider spellings
+			// and requirement spellings align: the inventory carries a
+			// canonical id, and each ModelAnyOf entry is canonicalized before
+			// comparison so a requirement written as "RTX 5090" or
+			// "nvidia-rtx5090" names the same card as "nvidia-rtx-5090".
 			if req.Vendor != "" && gpunorm.NormalizeVendor(inventory.Vendor) != gpunorm.NormalizeVendor(req.Vendor) {
 				continue
 			}
-			if len(req.ModelAnyOf) > 0 && !slices.Contains(req.ModelAnyOf, inventory.CanonicalModel) {
+			if len(req.ModelAnyOf) > 0 && !slices.ContainsFunc(req.ModelAnyOf, func(model string) bool {
+				return gpunorm.Canonical(inventory.Vendor, model) == inventory.CanonicalModel
+			}) {
 				continue
 			}
 			if req.MemoryMinBytes > 0 && inventory.MemoryBytes < req.MemoryMinBytes {
