@@ -63,24 +63,26 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 			// swept workspace; requests need it to route through the broker.
 			object.WorkspaceID = workspaceID
 		}
-		releasable, disposition, err := j.releasable(ctx, object)
+		plan, err := j.planCleanup(ctx, object)
 		if err != nil {
 			return result, err
 		}
-		if !releasable {
+		if !plan.Reclaim {
 			continue
 		}
 		// Reclaim via the RECORDED disposition: a run that provisioned a host we
 		// own (terminate) must have that host destroyed, while a borrowed standing
 		// slot (release) only loses our job. An orphan with no recorded intent
 		// defaults to release, the safe option that never destroys a host.
-		if disposition == domain.DispositionTerminate {
+		if plan.Disposition == domain.DispositionTerminate {
 			req := adapter.TerminateRequest{
-				ProviderOperationContext: cleanupContext(object),
-				OperationKey:             "janitor:terminate:" + object.LaunchKey,
-				LaunchKey:                object.LaunchKey,
-				OwnershipToken:           object.OwnershipToken,
-				LaunchRequestHash:        object.RequestHash,
+				WorkspaceID:       object.WorkspaceID,
+				ConnectionID:      object.ConnectionID,
+				DiagnosticContext: plan.DiagnosticContext,
+				OperationKey:      "janitor:terminate:" + object.LaunchKey,
+				LaunchKey:         object.LaunchKey,
+				OwnershipToken:    object.OwnershipToken,
+				LaunchRequestHash: object.RequestHash,
 			}
 			hash, err := domain.CanonicalHash(req)
 			if err != nil {
@@ -92,11 +94,13 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 			}
 		} else {
 			req := adapter.ReleaseRequest{
-				ProviderOperationContext: cleanupContext(object),
-				OperationKey:             "janitor:release:" + object.LaunchKey,
-				LaunchKey:                object.LaunchKey,
-				OwnershipToken:           object.OwnershipToken,
-				LaunchRequestHash:        object.RequestHash,
+				WorkspaceID:       object.WorkspaceID,
+				ConnectionID:      object.ConnectionID,
+				DiagnosticContext: plan.DiagnosticContext,
+				OperationKey:      "janitor:release:" + object.LaunchKey,
+				LaunchKey:         object.LaunchKey,
+				OwnershipToken:    object.OwnershipToken,
+				LaunchRequestHash: object.RequestHash,
 			}
 			hash, err := domain.CanonicalHash(req)
 			if err != nil {
@@ -112,6 +116,12 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 	return result, nil
 }
 
+type cleanupPlan struct {
+	Reclaim           bool
+	Disposition       domain.Disposition
+	DiagnosticContext adapter.ProviderOperationContext
+}
+
 func cleanupContext(object adapter.OwnedExternalObject) adapter.ProviderOperationContext {
 	return adapter.ProviderOperationContext{
 		WorkspaceID:  object.WorkspaceID,
@@ -122,22 +132,26 @@ func cleanupContext(object adapter.OwnedExternalObject) adapter.ProviderOperatio
 	}
 }
 
-// releasable reports whether an owned object should be reclaimed and, if so, the
-// RECORDED cleanup disposition to reclaim it with (defaulting to release when no
-// launch intent was recorded — an orphan or a pre-change event log).
-func (j *Janitor) releasable(ctx context.Context, object adapter.OwnedExternalObject) (bool, domain.Disposition, error) {
+// planCleanup derives cleanup disposition and provider correlation from the
+// recorded launch intent. Orphans and pre-change streams default to release
+// with whatever correlation the provider-owned object retained.
+func (j *Janitor) planCleanup(ctx context.Context, object adapter.OwnedExternalObject) (cleanupPlan, error) {
+	plan := cleanupPlan{
+		Reclaim:           true,
+		Disposition:       domain.DispositionRelease,
+		DiagnosticContext: cleanupContext(object),
+	}
 	if object.RunID == "" {
-		return true, domain.DispositionRelease, nil
+		return plan, nil
 	}
 	history, err := eventlog.ReadFullStream(ctx, j.log, eventlog.StreamKey{WorkspaceID: object.WorkspaceID, Type: "run", ID: object.RunID})
 	if err != nil {
-		return false, "", err
+		return cleanupPlan{}, err
 	}
 	if len(history.Events) == 0 {
-		return true, domain.DispositionRelease, nil
+		return plan, nil
 	}
-	disposition := domain.DispositionRelease
-	reclaim := false
+	plan.Reclaim = false
 	for _, event := range history.Events {
 		switch event.Type {
 		case "compute.run.launch_intent_recorded.v1":
@@ -145,15 +159,16 @@ func (j *Janitor) releasable(ctx context.Context, object adapter.OwnedExternalOb
 			if len(payload) == 0 {
 				payload = event.Data
 			}
-			var intent struct {
-				Disposition domain.Disposition `json:"disposition"`
-			}
-			if err := json.Unmarshal(payload, &intent); err == nil && intent.Disposition != "" {
-				disposition = intent.Disposition
+			var intent adapter.LaunchRequest
+			if err := json.Unmarshal(payload, &intent); err == nil {
+				if intent.Disposition != "" {
+					plan.Disposition = intent.Disposition
+				}
+				plan.DiagnosticContext = intent.ProviderOperationContext()
 			}
 		case "compute.run.cleanup_requested.v1", "compute.run.cleanup_confirmed.v1":
-			reclaim = true
+			plan.Reclaim = true
 		}
 	}
-	return reclaim, disposition, nil
+	return plan, nil
 }

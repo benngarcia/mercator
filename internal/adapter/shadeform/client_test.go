@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -18,6 +19,15 @@ func newTestClient(fn roundTripFunc) *client {
 	c := newClient("secret-key", "https://shadeform.test/v1", &http.Client{Transport: fn})
 	c.backoff = 0
 	return c
+}
+
+func fixture(t *testing.T, name string) string {
+	t.Helper()
+	body, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	return string(body)
 }
 
 func TestClientSendsAPIKeyHeader(t *testing.T) {
@@ -75,8 +85,8 @@ func TestReadFailuresRetainProviderClassification(t *testing.T) {
 		wantKind  adapter.ProviderFailureKind
 		wantRetry bool
 	}{
-		{name: "authentication", status: http.StatusUnauthorized, body: `{"code":"UNAUTHORIZED"}`, wantKind: adapter.ProviderFailureAuthentication},
-		{name: "invalid payload", status: http.StatusOK, body: `{"instances":`, wantKind: adapter.ProviderFailureInternal},
+		{name: "authentication", status: http.StatusUnauthorized, body: fixture(t, "read_unauthorized.json"), wantKind: adapter.ProviderFailureAuthentication},
+		{name: "invalid payload", status: http.StatusOK, body: fixture(t, "read_invalid.json"), wantKind: adapter.ProviderFailureInternal},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -145,7 +155,7 @@ func TestCreateClassifiesProviderFailures(t *testing.T) {
 		wantEffect  adapter.SideEffectCertainty
 		wantRetries int
 	}{
-		{name: "out of stock", status: 409, body: `{"error":{"code":"OUT_OF_STOCK"}}`, wantKind: adapter.ProviderFailureCapacityUnavailable, wantRetry: true, wantEffect: adapter.SideEffectNone},
+		{name: "exhausted capacity", status: 409, body: fixture(t, "create_out_of_stock.json"), wantKind: adapter.ProviderFailureCapacityUnavailable, wantRetry: true, wantEffect: adapter.SideEffectNone, wantRetries: 3},
 		{name: "invalid request", status: 400, body: `{"code":"INVALID_ARGUMENT"}`, wantKind: adapter.ProviderFailureInvalidRequest, wantEffect: adapter.SideEffectNone},
 		{name: "authentication", status: 401, body: `{"message":"Invalid API key"}`, wantKind: adapter.ProviderFailureAuthentication, wantEffect: adapter.SideEffectNone},
 		{name: "exhausted throttling", status: 429, body: `{"code":"RATE_LIMITED"}`, wantKind: adapter.ProviderFailureRateLimited, wantRetry: true, wantEffect: adapter.SideEffectNone, wantRetries: 3},
@@ -219,7 +229,7 @@ func TestDeleteExhaustionReturnsSanitizedProviderFailure(t *testing.T) {
 	calls := 0
 	c := newTestClient(func(*http.Request) (*http.Response, error) {
 		calls++
-		return jsonResponse(http.StatusServiceUnavailable, `{"code":"UPSTREAM_UNAVAILABLE","authorization":"secret-key"}`), nil
+		return jsonResponse(http.StatusServiceUnavailable, fixture(t, "delete_unavailable.json")), nil
 	})
 
 	err := c.deleteInstance(t.Context(), "inst_1")

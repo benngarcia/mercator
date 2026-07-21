@@ -65,7 +65,11 @@ func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested
 func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, workload domain.WorkloadRevision) (domain.PlacementDecision, []domain.OfferSnapshot, error) {
 	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
 		WorkspaceID: workload.WorkspaceID,
-		Resources:   workload.Spec.Resources,
+		DiagnosticContext: adapter.ProviderOperationContext{
+			WorkspaceID: workload.WorkspaceID,
+			RunID:       runID,
+		},
+		Resources: workload.Spec.Resources,
 	})
 	if err != nil {
 		return domain.PlacementDecision{}, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)

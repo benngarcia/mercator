@@ -37,7 +37,7 @@ func (a fanoutAdapter) ListOwned(ctx context.Context, _ adapter.OwnershipQuery) 
 	return a.listOwned(ctx)
 }
 
-func fanoutBroker(t *testing.T, adapters map[string]adapter.Provider) *Broker {
+func fanoutBroker(t *testing.T, adapters map[string]adapter.Provider, options ...Option) *Broker {
 	t.Helper()
 	factory := NewFactory()
 	factory.Register(adapter.Manifest{Type: "stub"}, func(config map[string]string, _ string) (adapter.Provider, error) {
@@ -47,7 +47,7 @@ func fanoutBroker(t *testing.T, adapters map[string]adapter.Provider) *Broker {
 	for id := range adapters {
 		records = append(records, connection.Record{ID: "conn_" + id, AdapterType: "stub", Authorized: true, Config: map[string]string{"id": id}})
 	}
-	return NewBroker(fakeConns{recs: records}, factory, nilResolver{})
+	return NewBroker(fakeConns{recs: records}, factory, nilResolver{}, options...)
 }
 
 func TestBrokerAggregateOffersReturnsPartialResultsAndConnectionErrors(t *testing.T) {
@@ -93,6 +93,41 @@ func TestBrokerListOffersRejectsPartialResults(t *testing.T) {
 	var connectionErrors ConnectionErrors
 	if !errors.As(err, &connectionErrors) || !errors.Is(err, providerErr) {
 		t.Fatalf("error = %#v, want typed provider failure", err)
+	}
+}
+
+func TestBrokerReportsTypedOfferCollectionFailure(t *testing.T) {
+	failure := &adapter.ProviderFailure{
+		Kind:         adapter.ProviderFailureAuthentication,
+		Status:       401,
+		ProviderCode: "UNAUTHORIZED",
+		SideEffect:   adapter.SideEffectNone,
+	}
+	recorder := &failureDiagnosticRecorder{}
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"bad": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return nil, failure
+		}},
+	}, WithFailureReporter(recorder))
+
+	aggregation, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{
+		WorkspaceID: "ws_1",
+		DiagnosticContext: adapter.ProviderOperationContext{
+			RunID: "run_1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("aggregate offers: %v", err)
+	}
+	if !errors.Is(aggregation.Failures.OrNil(), failure) {
+		t.Fatalf("failures = %v, want provider failure", aggregation.Failures)
+	}
+	if len(recorder.diagnostics) != 1 {
+		t.Fatalf("reported diagnostics = %d, want 1", len(recorder.diagnostics))
+	}
+	got := recorder.diagnostics[0]
+	if got.Operation != "list_offers" || got.WorkspaceID != "ws_1" || got.RunID != "run_1" || got.ConnectionID != "conn_bad" {
+		t.Fatalf("offer diagnostic = %+v", got)
 	}
 }
 
@@ -237,6 +272,42 @@ func TestBrokerListOwnedRejectsPartialResultsWithConnectionErrors(t *testing.T) 
 	}
 }
 
+func TestBrokerReportsTypedOwnedObjectDiscoveryFailure(t *testing.T) {
+	failure := &adapter.ProviderFailure{
+		Kind:         adapter.ProviderFailureInternal,
+		Status:       503,
+		ProviderCode: "UPSTREAM_UNAVAILABLE",
+		Retryable:    true,
+		SideEffect:   adapter.SideEffectNone,
+	}
+	recorder := &failureDiagnosticRecorder{}
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"bad": fanoutAdapter{listOwned: func(context.Context) ([]adapter.OwnedExternalObject, error) {
+			return nil, failure
+		}},
+	}, WithFailureReporter(recorder))
+
+	objects, err := broker.ListOwned(t.Context(), adapter.OwnershipQuery{
+		WorkspaceID: "ws_1",
+		DiagnosticContext: adapter.ProviderOperationContext{
+			RunID:           "run_1",
+			AttemptID:       "att_1",
+			OfferSnapshotID: "off_1",
+			OfferNativeRef:  "cloud/region/type",
+		},
+	})
+	if objects != nil || !errors.Is(err, failure) {
+		t.Fatalf("objects/error = %#v/%v, want provider failure", objects, err)
+	}
+	if len(recorder.diagnostics) != 1 {
+		t.Fatalf("reported diagnostics = %d, want 1", len(recorder.diagnostics))
+	}
+	got := recorder.diagnostics[0]
+	if got.Operation != "list_owned" || got.RunID != "run_1" || got.ConnectionID != "conn_bad" || got.OfferSnapshotID != "off_1" {
+		t.Fatalf("owned-object diagnostic = %+v", got)
+	}
+}
+
 // recording adapter that reports which connection launched or observed.
 type recAdapter struct {
 	adapter.Provider
@@ -330,7 +401,9 @@ func TestBrokerReportsTerminateFailureWithRunCorrelation(t *testing.T) {
 	}}}, factory, nilResolver{}, WithFailureReporter(recorder))
 
 	_, err := b.Terminate(t.Context(), adapter.TerminateRequest{
-		ProviderOperationContext: adapter.ProviderOperationContext{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_shadeform",
+		DiagnosticContext: adapter.ProviderOperationContext{
 			WorkspaceID:     "ws_1",
 			RunID:           "run_1",
 			AttemptID:       "att_1",
@@ -353,6 +426,31 @@ func TestBrokerReportsTerminateFailureWithRunCorrelation(t *testing.T) {
 	}
 	if got.OfferSnapshotID != "off_1" || got.OfferNativeRef != "lambdalabs/us-west/rtx6000ada" {
 		t.Fatalf("terminate offer correlation = %+v", got)
+	}
+}
+
+func TestBrokerDoesNotReportUntypedTerminateFailureAsProviderFailure(t *testing.T) {
+	factory := NewFactory()
+	factory.Register(adapter.Manifest{Type: "shadeform"}, func(map[string]string, string) (adapter.Provider, error) {
+		return terminateFailureAdapter{failure: errors.New("connection setup failed")}, nil
+	})
+	recorder := &failureDiagnosticRecorder{}
+	b := NewBroker(fakeConns{recs: []connection.Record{{
+		ID:          "conn_shadeform",
+		AdapterType: "shadeform",
+	}}}, factory, nilResolver{}, WithFailureReporter(recorder))
+
+	_, err := b.Terminate(t.Context(), adapter.TerminateRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_shadeform",
+		OperationKey: "terminate_att_1",
+		LaunchKey:    "launch_att_1",
+	})
+	if err == nil {
+		t.Fatal("terminate error = nil, want connection setup failure")
+	}
+	if len(recorder.diagnostics) != 0 {
+		t.Fatalf("reported diagnostics = %d, want untyped error kept out of provider-failure reporter", len(recorder.diagnostics))
 	}
 }
 
@@ -425,6 +523,54 @@ func TestBrokerRoutesObserveByConnection(t *testing.T) {
 	}
 }
 
+func TestBrokerReportsTypedObserveFailureWithRunCorrelation(t *testing.T) {
+	failure := &adapter.ProviderFailure{
+		Kind:         adapter.ProviderFailureAuthentication,
+		Status:       401,
+		ProviderCode: "UNAUTHORIZED",
+		SideEffect:   adapter.SideEffectNone,
+	}
+	factory := NewFactory()
+	factory.Register(adapter.Manifest{Type: "shadeform"}, func(map[string]string, string) (adapter.Provider, error) {
+		return observeFailureAdapter{failure: failure}, nil
+	})
+	recorder := &failureDiagnosticRecorder{}
+	b := NewBroker(fakeConns{recs: []connection.Record{{
+		ID:          "conn_shadeform",
+		AdapterType: "shadeform",
+	}}}, factory, nilResolver{}, WithFailureReporter(recorder))
+
+	_, err := b.Observe(t.Context(), adapter.ObserveRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_shadeform",
+		DiagnosticContext: adapter.ProviderOperationContext{
+			RunID:           "run_1",
+			AttemptID:       "att_1",
+			OfferSnapshotID: "off_1",
+			OfferNativeRef:  "lambdalabs/us-west/rtx6000ada",
+		},
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("observe error = %v, want provider failure", err)
+	}
+	if len(recorder.diagnostics) != 1 {
+		t.Fatalf("reported diagnostics = %d, want 1", len(recorder.diagnostics))
+	}
+	got := recorder.diagnostics[0]
+	if got.Operation != "observe" || got.RunID != "run_1" || got.AdapterType != "shadeform" || got.OfferSnapshotID != "off_1" {
+		t.Fatalf("observe diagnostic = %+v", got)
+	}
+}
+
+type observeFailureAdapter struct {
+	adapter.Provider
+	failure error
+}
+
+func (a observeFailureAdapter) Observe(context.Context, adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	return adapter.ExternalObservation{}, a.failure
+}
+
 // verifyAdapter is a stub adapter that records which connection had its Verify called.
 type verifyAdapter struct {
 	adapter.Provider
@@ -457,3 +603,40 @@ func TestBrokerVerifyConnectionBuildsAndVerifies(t *testing.T) {
 		t.Fatalf("expected ErrConnectionNotFound, got %v", err)
 	}
 }
+
+func TestBrokerReportsTypedVerificationFailure(t *testing.T) {
+	failure := &adapter.ProviderFailure{
+		Kind:         adapter.ProviderFailureAuthentication,
+		Status:       401,
+		ProviderCode: "UNAUTHORIZED",
+		SideEffect:   adapter.SideEffectNone,
+	}
+	factory := NewFactory()
+	factory.Register(adapter.Manifest{Type: "shadeform"}, func(map[string]string, string) (adapter.Provider, error) {
+		return verifyFailureAdapter{failure: failure}, nil
+	})
+	recorder := &failureDiagnosticRecorder{}
+	b := NewBroker(fakeConns{recs: []connection.Record{{
+		ID:          "conn_shadeform",
+		AdapterType: "shadeform",
+	}}}, factory, nilResolver{}, WithFailureReporter(recorder))
+
+	err := b.VerifyConnection(t.Context(), "ws_1", "conn_shadeform")
+	if !errors.Is(err, failure) {
+		t.Fatalf("verify error = %v, want provider failure", err)
+	}
+	if len(recorder.diagnostics) != 1 {
+		t.Fatalf("reported diagnostics = %d, want 1", len(recorder.diagnostics))
+	}
+	got := recorder.diagnostics[0]
+	if got.Operation != "verify" || got.WorkspaceID != "ws_1" || got.ConnectionID != "conn_shadeform" || got.AdapterType != "shadeform" {
+		t.Fatalf("verify diagnostic = %+v", got)
+	}
+}
+
+type verifyFailureAdapter struct {
+	adapter.Provider
+	failure error
+}
+
+func (a verifyFailureAdapter) Verify(context.Context) error { return a.failure }

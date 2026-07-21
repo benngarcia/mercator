@@ -198,8 +198,15 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	if !reflect.DeepEqual(ad.offerRequest.Resources, rev.Spec.Resources) {
 		t.Fatalf("offer request resources = %+v, want %+v", ad.offerRequest.Resources, rev.Spec.Resources)
 	}
+	if ad.offerRequest.DiagnosticContext.WorkspaceID != "ws_1" || ad.offerRequest.DiagnosticContext.RunID != "run_contract" {
+		t.Fatalf("offer request diagnostic context = %+v, want workspace and Run correlation", ad.offerRequest.DiagnosticContext)
+	}
 	if req.SelectedOfferSnapshotID != "off_1" || req.SelectedOfferNativeRef != "native-offer-1" {
 		t.Fatalf("launch request missing selected offer context: %+v", req)
+	}
+	observeContext := ad.observeRequest.DiagnosticContext
+	if observeContext.RunID != "run_contract" || observeContext.AttemptID != req.AttemptID || observeContext.OfferSnapshotID != "off_1" || observeContext.OfferNativeRef != "native-offer-1" {
+		t.Fatalf("observe request diagnostic context = %+v, want complete Run and Offer correlation", observeContext)
 	}
 	if req.CleanupLocator == "" || req.OwnershipToken == "" || req.LaunchKey == "" || req.RequestHash == "" {
 		t.Fatalf("launch request missing side-effect identity fields: %+v", req)
@@ -798,8 +805,9 @@ func (o *ownedIndeterminateLaunchAdapter) ListOwned(context.Context, adapter.Own
 
 type captureLaunchAdapter struct {
 	*fake.Adapter
-	offerRequest  adapter.OfferRequest
-	launchRequest adapter.LaunchRequest
+	offerRequest   adapter.OfferRequest
+	launchRequest  adapter.LaunchRequest
+	observeRequest adapter.ObserveRequest
 }
 
 func (c *captureLaunchAdapter) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
@@ -810,6 +818,11 @@ func (c *captureLaunchAdapter) ListOffers(ctx context.Context, req adapter.Offer
 func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	c.launchRequest = req
 	return c.Adapter.Launch(ctx, req)
+}
+
+func (c *captureLaunchAdapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	c.observeRequest = req
+	return c.Adapter.Observe(ctx, req)
 }
 
 func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {

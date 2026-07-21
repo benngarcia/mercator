@@ -126,7 +126,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		"provider_code":      "OUT_OF_STOCK",
 		"retryable":          true,
 		"side_effect":        "none",
-		"retry_count":        float64(0),
+		"retry_count":        float64(3),
 		"response_truncated": false,
 	} {
 		if got := diagnostic[key]; got != want {
@@ -147,6 +147,9 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	recorded := transport.Events()
 	if len(recorded) != 1 {
 		t.Fatalf("Sentry events = %d, want exactly one", len(recorded))
+	}
+	if recorded[0].Level != sentry.LevelError {
+		t.Errorf("Sentry exhausted-capacity level = %q, want error", recorded[0].Level)
 	}
 	if got := recorded[0].Contexts["provider_failure"]["run_id"]; got != "run_out_of_stock" {
 		t.Errorf("Sentry run_id = %#v, want run_out_of_stock", got)
@@ -183,6 +186,85 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		if strings.Contains(string(publicJSON), private) {
 			t.Fatalf("public events leaked %q: %s", private, publicJSON)
 		}
+	}
+}
+
+func TestShadeformProviderCodeCannotExposeConnectionCredential(t *testing.T) {
+	const apiKey = "shadeform-api-secret"
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/instances":
+			_, _ = io.WriteString(w, `{"instances":[]}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/instances/types":
+			_, _ = w.Write(readFixture(t, "testdata/shadeform_a6000_catalog.json"))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/instances/create":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write(readFixture(t, "testdata/shadeform_secret_provider_code.json"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(provider.Close)
+
+	transport := &sentry.MockTransport{}
+	reporter, err := sentryreporter.New(map[string]string{
+		"SENTRY_DSN":         "https://public@example.com/1",
+		"SENTRY_ENVIRONMENT": "test",
+		"SENTRY_RELEASE":     "mercator@test",
+	}, sentryreporter.WithTransport(transport))
+	if err != nil {
+		t.Fatalf("configure Sentry reporter: %v", err)
+	}
+	t.Cleanup(reporter.Close)
+	factory := NewFactory()
+	factory.Register(shadeform.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
+		return shadeform.New(secret, config)
+	})
+	connections := fakeConns{recs: []connection.Record{{
+		ID:          "conn_shadeform",
+		WorkspaceID: "ws_1",
+		AdapterType: "shadeform",
+		Authorized:  true,
+		Config:      map[string]string{"base_url": provider.URL + "/v1"},
+		Credential:  credential.Credential{Source: credential.SourceEnv, Ref: "SHADEFORM_API_KEY"},
+	}}}
+	br := NewBroker(connections, factory, resolverFunc(func(context.Context, string, credential.Credential) (string, error) {
+		return apiKey, nil
+	}), WithFailureReporter(reporter))
+	log, err := eventlog.OpenSQLite(t.Context(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	orch := orchestrator.New(log, scheduler.New(), br)
+	workloadSecret := "workload-secret"
+	workload := providerFailureWorkload(&workloadSecret)
+
+	_, err = orch.CreateRun(t.Context(), orchestrator.CreateRunRequest{
+		WorkspaceID: "ws_1",
+		RunID:       "run_secret_code",
+		CommandKey:  "create_run_secret_code",
+		Workload:    workload,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	_ = orch.AdvanceRun(t.Context(), "ws_1", "run_secret_code")
+
+	recorded := transport.Events()
+	if len(recorded) != 1 {
+		t.Fatalf("Sentry events = %d, want exactly one", len(recorded))
+	}
+	if got := recorded[0].Contexts["provider_failure"]["provider_code"]; got != "" {
+		t.Errorf("Sentry provider_code = %#v, want secret value removed", got)
+	}
+	recordedJSON, err := json.Marshal(recorded[0])
+	if err != nil {
+		t.Fatalf("marshal Sentry event: %v", err)
+	}
+	if strings.Contains(string(recordedJSON), apiKey) {
+		t.Fatalf("Sentry event exposed connection credential: %s", recordedJSON)
 	}
 }
 

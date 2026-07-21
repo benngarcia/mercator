@@ -380,7 +380,9 @@ func (o *Orchestrator) stepCancel(ctx context.Context, workspaceID, runID string
 	}
 	if !state.cancelAccepted {
 		cancelReq := adapter.CancelRequest{
-			ProviderOperationContext: adapter.ProviderOperationContext{
+			WorkspaceID:  workspaceID,
+			ConnectionID: state.launchIntent.SelectedOfferConnectionID,
+			DiagnosticContext: adapter.ProviderOperationContext{
 				WorkspaceID:     workspaceID,
 				RunID:           runID,
 				AttemptID:       state.launchIntent.AttemptID,
@@ -761,11 +763,12 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 
 func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, state runState) (adapter.ExternalObservation, error) {
 	observation, err := o.adapter.Observe(ctx, adapter.ObserveRequest{
-		WorkspaceID:    workspaceID,
-		ConnectionID:   state.launchIntent.SelectedOfferConnectionID,
-		LaunchKey:      state.launchIntent.LaunchKey,
-		OwnershipToken: state.launchIntent.OwnershipToken,
-		RequestHash:    state.launchIntent.RequestHash,
+		WorkspaceID:       workspaceID,
+		ConnectionID:      state.launchIntent.SelectedOfferConnectionID,
+		DiagnosticContext: state.launchIntent.ProviderOperationContext(),
+		LaunchKey:         state.launchIntent.LaunchKey,
+		OwnershipToken:    state.launchIntent.OwnershipToken,
+		RequestHash:       state.launchIntent.RequestHash,
 	})
 	if err != nil {
 		return adapter.ExternalObservation{}, err
@@ -773,7 +776,10 @@ func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, st
 	if observation.Phase != adapter.ExternalPhaseReleased || !state.launchIndeterminate {
 		return observation, nil
 	}
-	owned, err := o.adapter.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: workspaceID})
+	owned, err := o.adapter.ListOwned(ctx, adapter.OwnershipQuery{
+		WorkspaceID:       workspaceID,
+		DiagnosticContext: state.launchIntent.ProviderOperationContext(),
+	})
 	if err != nil {
 		return adapter.ExternalObservation{}, err
 	}
@@ -809,11 +815,13 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 	}
 	if disposition == domain.DispositionTerminate {
 		terminateReq := adapter.TerminateRequest{
-			ProviderOperationContext: providerOperationContext(workspaceID, runID, launchReq),
-			OperationKey:             "terminate_" + launchReq.AttemptID,
-			LaunchKey:                launchReq.LaunchKey,
-			OwnershipToken:           launchReq.OwnershipToken,
-			LaunchRequestHash:        launchReq.RequestHash,
+			WorkspaceID:       workspaceID,
+			ConnectionID:      launchReq.SelectedOfferConnectionID,
+			DiagnosticContext: launchReq.ProviderOperationContext(),
+			OperationKey:      "terminate_" + launchReq.AttemptID,
+			LaunchKey:         launchReq.LaunchKey,
+			OwnershipToken:    launchReq.OwnershipToken,
+			LaunchRequestHash: launchReq.RequestHash,
 		}
 		hash, err := domain.CanonicalHash(terminateReq)
 		if err != nil {
@@ -825,11 +833,13 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 		}
 	} else {
 		releaseReq := adapter.ReleaseRequest{
-			ProviderOperationContext: providerOperationContext(workspaceID, runID, launchReq),
-			OperationKey:             "release_" + launchReq.AttemptID,
-			LaunchKey:                launchReq.LaunchKey,
-			OwnershipToken:           launchReq.OwnershipToken,
-			LaunchRequestHash:        launchReq.RequestHash,
+			WorkspaceID:       workspaceID,
+			ConnectionID:      launchReq.SelectedOfferConnectionID,
+			DiagnosticContext: launchReq.ProviderOperationContext(),
+			OperationKey:      "release_" + launchReq.AttemptID,
+			LaunchKey:         launchReq.LaunchKey,
+			OwnershipToken:    launchReq.OwnershipToken,
+			LaunchRequestHash: launchReq.RequestHash,
 		}
 		hash, err := domain.CanonicalHash(releaseReq)
 		if err != nil {
@@ -844,18 +854,6 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, cleanupConfirmedData{LaunchKey: launchReq.LaunchKey, Disposition: disposition}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 	})
-}
-
-func providerOperationContext(workspaceID, runID string, launchReq *adapter.LaunchRequest) adapter.ProviderOperationContext {
-	return adapter.ProviderOperationContext{
-		WorkspaceID:     workspaceID,
-		RunID:           runID,
-		AttemptID:       launchReq.AttemptID,
-		ConnectionID:    launchReq.SelectedOfferConnectionID,
-		AdapterType:     launchReq.SelectedOfferAdapterType,
-		OfferSnapshotID: launchReq.SelectedOfferSnapshotID,
-		OfferNativeRef:  launchReq.SelectedOfferNativeRef,
-	}
 }
 
 func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {

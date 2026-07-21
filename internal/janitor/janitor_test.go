@@ -167,12 +167,65 @@ func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
 	}
 }
 
+func TestJanitorCarriesRecordedOfferIdentityIntoCleanup(t *testing.T) {
+	t.Parallel()
+	cleanup := &captureCleanupAdapter{object: adapter.OwnedExternalObject{
+		ExternalID:     "ext_1",
+		WorkspaceID:    "ws_1",
+		ConnectionID:   "conn_1",
+		AdapterType:    "shadeform",
+		RunID:          "run_term",
+		AttemptID:      "att_run_term",
+		OwnershipToken: "own_term",
+		LaunchKey:      "launch_run_term",
+		RequestHash:    "sha256:launch",
+	}}
+	log := openJanitorTestLog(t)
+	appendLaunchIntent(t, log, "ws_1", "run_term", domain.DispositionTerminate)
+
+	result, err := New(cleanup, WithEventLog(log)).Sweep(t.Context(), "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Released != 1 || cleanup.terminateRequest == nil {
+		t.Fatalf("cleanup result/request = %+v/%+v, want one termination", result, cleanup.terminateRequest)
+	}
+	context := cleanup.terminateRequest.DiagnosticContext
+	if context.OfferSnapshotID != "off_run_term" || context.OfferNativeRef != "cloud/region/run_term" {
+		t.Fatalf("cleanup diagnostic context = %+v, want recorded Offer identity", context)
+	}
+}
+
+type captureCleanupAdapter struct {
+	object           adapter.OwnedExternalObject
+	terminateRequest *adapter.TerminateRequest
+}
+
+func (a *captureCleanupAdapter) ListOwned(context.Context, adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+	return []adapter.OwnedExternalObject{a.object}, nil
+}
+
+func (a *captureCleanupAdapter) Release(context.Context, adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
+	return adapter.ReleaseReceipt{}, nil
+}
+
+func (a *captureCleanupAdapter) Terminate(_ context.Context, request adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	a.terminateRequest = &request
+	return adapter.TerminateReceipt{Terminated: true}, nil
+}
+
 func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
 	t.Helper()
 	intent := adapter.LaunchRequest{
-		AttemptID:   "att_" + runID,
-		LaunchKey:   "launch_" + runID,
-		Disposition: disposition,
+		WorkspaceID:               workspaceID,
+		RunID:                     runID,
+		AttemptID:                 "att_" + runID,
+		LaunchKey:                 "launch_" + runID,
+		SelectedOfferConnectionID: "conn_1",
+		SelectedOfferSnapshotID:   "off_" + runID,
+		SelectedOfferNativeRef:    "cloud/region/" + runID,
+		SelectedOfferAdapterType:  "shadeform",
+		Disposition:               disposition,
 	}
 	private, err := json.Marshal(intent)
 	if err != nil {

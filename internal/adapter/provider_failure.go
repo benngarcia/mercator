@@ -56,8 +56,8 @@ type ProviderFailureDiagnostic struct {
 	Failure         ProviderFailure
 }
 
-// ProviderOperationContext carries the stable Run and provider correlation
-// shared by cancellation and cleanup requests.
+// ProviderOperationContext carries stable Run and provider correlation beside
+// an operation request without participating in that request's identity.
 type ProviderOperationContext struct {
 	WorkspaceID     string
 	RunID           string

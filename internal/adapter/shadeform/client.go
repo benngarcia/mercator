@@ -160,9 +160,10 @@ func (c *client) do(ctx context.Context, method, path string, body any) (httpRes
 	return httpResult{status: resp.StatusCode, body: respBody, bodyTruncated: truncated}, nil
 }
 
-// doRetry runs the request with exponential backoff. A 429 is always retried:
-// the request was rejected before execution, so repeating it is safe even for
-// create. 5xx and transport errors are retried only when retry5xx is set —
+// doRetry runs the request with exponential backoff. A 429 or an explicit
+// OUT_OF_STOCK rejection is always retried: the provider rejected the request
+// before execution, so repeating it is safe even for create. 5xx and transport
+// errors are retried only when retry5xx is set —
 // safe for reads and deletes (which converge on the same terminal state), NOT
 // for create, whose outcome after such a failure is indeterminate and must be
 // reconciled by re-listing rather than blind retry. Shadeform documents no
@@ -174,7 +175,7 @@ func (c *client) doRetry(ctx context.Context, method, path string, body any, ret
 	for i := range attempts {
 		result, err = c.do(ctx, method, path, body)
 		result.retryCount = i
-		transient := result.status == http.StatusTooManyRequests || (retry5xx && (err != nil || result.status >= 500))
+		transient := retryableRejection(result) || (retry5xx && (err != nil || result.status >= 500))
 		if !transient {
 			return result, err
 		}
@@ -185,6 +186,11 @@ func (c *client) doRetry(ctx context.Context, method, path string, body any, ret
 		}
 	}
 	return result, err
+}
+
+func retryableRejection(result httpResult) bool {
+	return result.status == http.StatusTooManyRequests ||
+		result.status == http.StatusConflict && strings.EqualFold(providerCode(result.body, nil), "OUT_OF_STOCK")
 }
 
 func (c *client) wait(ctx context.Context, attempt int) error {

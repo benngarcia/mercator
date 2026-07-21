@@ -21,7 +21,7 @@ func (c *client) operationFailure(result httpResult, secrets []string) *adapter.
 	failure := &adapter.ProviderFailure{
 		Kind:              adapter.ProviderFailureInternal,
 		Status:            result.status,
-		ProviderCode:      providerCode(result.body),
+		ProviderCode:      providerCode(result.body, secrets),
 		Retryable:         true,
 		SideEffect:        adapter.SideEffectIndeterminate,
 		ResponseBody:      body,
@@ -65,11 +65,12 @@ func (c *client) invalidReadResponse(result httpResult) *adapter.ProviderFailure
 }
 
 func (c *client) invalidCreateResponse(request createRequest, result httpResult) *adapter.ProviderFailure {
-	body, truncated := sanitizedResponseBody(result, requestSecrets(c.apiKey, request))
+	secrets := requestSecrets(c.apiKey, request)
+	body, truncated := sanitizedResponseBody(result, secrets)
 	return &adapter.ProviderFailure{
 		Kind:              adapter.ProviderFailureInternal,
 		Status:            result.status,
-		ProviderCode:      providerCode(result.body),
+		ProviderCode:      providerCode(result.body, secrets),
 		Retryable:         true,
 		SideEffect:        adapter.SideEffectIndeterminate,
 		ResponseBody:      body,
@@ -169,12 +170,16 @@ func sensitiveResponseKey(key string) bool {
 	}
 }
 
-func providerCode(body []byte) string {
+func providerCode(body []byte, secrets []string) string {
 	var value any
 	if json.Unmarshal(body, &value) != nil {
 		return ""
 	}
-	return findProviderCode(value)
+	code := findProviderCode(value)
+	if redactResponseString(code, secrets) != code {
+		return ""
+	}
+	return code
 }
 
 func findProviderCode(value any) string {
