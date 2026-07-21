@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,11 +14,7 @@ import (
 
 const defaultBaseURL = "https://api.shadeform.ai/v1"
 
-// errCreateIndeterminate marks a create whose outcome is unknown: a 5xx or
-// transport failure after the request may have executed. Launch translates it
-// (after failing to adopt a landed instance) into adapter.ErrLaunchIndeterminate
-// so the orchestrator keeps observing instead of closing the run cleanup-free.
-var errCreateIndeterminate = errors.New("shadeform: create outcome indeterminate")
+const maxProviderResponseReadBytes = 64 * 1024
 
 type client struct {
 	baseURL string
@@ -127,31 +122,42 @@ type createRequest struct {
 	Tags                []string             `json:"tags,omitempty"`
 }
 
-func (c *client) do(ctx context.Context, method, path string, body any) (int, []byte, error) {
+type httpResult struct {
+	status        int
+	body          []byte
+	retryCount    int
+	bodyTruncated bool
+}
+
+func (c *client) do(ctx context.Context, method, path string, body any) (httpResult, error) {
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return 0, nil, fmt.Errorf("shadeform: marshal request: %w", err)
+			return httpResult{}, fmt.Errorf("shadeform: marshal request: %w", err)
 		}
 		reader = bytes.NewReader(encoded)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
-		return 0, nil, err
+		return httpResult{}, err
 	}
 	req.Header.Set("X-API-KEY", c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return 0, nil, fmt.Errorf("shadeform: %s %s: %w", method, path, err)
+		return httpResult{}, fmt.Errorf("shadeform: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxProviderResponseReadBytes+1))
 	if err != nil {
-		return resp.StatusCode, nil, err
+		return httpResult{status: resp.StatusCode}, err
 	}
-	return resp.StatusCode, respBody, nil
+	truncated := len(respBody) > maxProviderResponseReadBytes
+	if truncated {
+		respBody = respBody[:maxProviderResponseReadBytes]
+	}
+	return httpResult{status: resp.StatusCode, body: respBody, bodyTruncated: truncated}, nil
 }
 
 // doRetry runs the request with exponential backoff. A 429 is always retried:
@@ -161,24 +167,24 @@ func (c *client) do(ctx context.Context, method, path string, body any) (int, []
 // for create, whose outcome after such a failure is indeterminate and must be
 // reconciled by re-listing rather than blind retry. Shadeform documents no
 // rate limits; the 429 handling is conservative insurance.
-func (c *client) doRetry(ctx context.Context, method, path string, body any, retry5xx bool) (int, []byte, error) {
+func (c *client) doRetry(ctx context.Context, method, path string, body any, retry5xx bool) (httpResult, error) {
 	const attempts = 4
-	var status int
-	var respBody []byte
+	var result httpResult
 	var err error
 	for i := range attempts {
-		status, respBody, err = c.do(ctx, method, path, body)
-		transient := status == http.StatusTooManyRequests || (retry5xx && (err != nil || status >= 500))
+		result, err = c.do(ctx, method, path, body)
+		result.retryCount = i
+		transient := result.status == http.StatusTooManyRequests || (retry5xx && (err != nil || result.status >= 500))
 		if !transient {
-			return status, respBody, err
+			return result, err
 		}
 		if i < attempts-1 {
 			if werr := c.wait(ctx, i); werr != nil {
-				return 0, nil, werr
+				return result, werr
 			}
 		}
 	}
-	return status, respBody, err
+	return result, err
 }
 
 func (c *client) wait(ctx context.Context, attempt int) error {
@@ -194,26 +200,22 @@ func (c *client) wait(ctx context.Context, attempt int) error {
 	}
 }
 
-// httpError formats a non-2xx response WITHOUT ever including the request's
-// X-API-KEY header. Bodies are truncated to keep logs/errors bounded.
-func httpError(method, path string, status int, body []byte) error {
-	snippet := string(body)
-	if len(snippet) > 300 {
-		snippet = snippet[:300]
-	}
-	return fmt.Errorf("shadeform: %s %s -> %d: %s", method, path, status, snippet)
+// httpError omits response bodies because read/list/delete failures can flow to
+// general process logs without the launch failure sanitizer.
+func httpError(method, path string, result httpResult) error {
+	return fmt.Errorf("shadeform: %s %s -> %d", method, path, result.status)
 }
 
 // getJSON performs an idempotent request and decodes the 2xx body into out.
 func (c *client) getJSON(ctx context.Context, method, path string, out any) error {
-	status, body, err := c.doRetry(ctx, method, path, nil, true)
+	result, err := c.doRetry(ctx, method, path, nil, true)
 	if err != nil {
 		return err
 	}
-	if status < 200 || status >= 300 {
-		return httpError(method, path, status, body)
+	if result.status < 200 || result.status >= 300 {
+		return httpError(method, path, result)
 	}
-	if err := json.Unmarshal(body, out); err != nil {
+	if err := json.Unmarshal(result.body, out); err != nil {
 		return fmt.Errorf("shadeform: decode %s: %w", path, err)
 	}
 	return nil
@@ -244,36 +246,33 @@ func (c *client) instanceTypes(ctx context.Context, query url.Values) ([]instanc
 }
 
 func (c *client) createInstance(ctx context.Context, in createRequest) (string, error) {
-	status, body, err := c.doRetry(ctx, http.MethodPost, "/instances/create", in, false)
+	result, err := c.doRetry(ctx, http.MethodPost, "/instances/create", in, false)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", errCreateIndeterminate, err)
+		return "", c.createFailure(in, result)
 	}
-	if status >= 500 {
-		return "", fmt.Errorf("%w: %v", errCreateIndeterminate, httpError(http.MethodPost, "/instances/create", status, body))
-	}
-	if status < 200 || status >= 300 {
-		return "", httpError(http.MethodPost, "/instances/create", status, body)
+	if result.status < 200 || result.status >= 300 {
+		return "", c.createFailure(in, result)
 	}
 	var out struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return "", fmt.Errorf("shadeform: decode create response: %w", err)
+	if err := json.Unmarshal(result.body, &out); err != nil {
+		return "", c.invalidCreateResponse(in, result)
 	}
 	if out.ID == "" {
-		return "", fmt.Errorf("shadeform: create response missing instance id")
+		return "", c.invalidCreateResponse(in, result)
 	}
 	return out.ID, nil
 }
 
 func (c *client) deleteInstance(ctx context.Context, id string) error {
 	path := "/instances/" + id + "/delete"
-	status, body, err := c.doRetry(ctx, http.MethodPost, path, nil, true)
+	result, err := c.doRetry(ctx, http.MethodPost, path, nil, true)
 	if err != nil {
 		return err
 	}
-	if status == http.StatusNotFound || (status >= 200 && status < 300) {
+	if result.status == http.StatusNotFound || (result.status >= 200 && result.status < 300) {
 		return nil
 	}
-	return httpError(http.MethodPost, path, status, body)
+	return httpError(http.MethodPost, path, result)
 }

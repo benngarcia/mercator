@@ -2,9 +2,12 @@ package shadeform
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/benngarcia/mercator/internal/adapter"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -95,6 +98,78 @@ func TestCreateDoesNotRetryOn5xx(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("calls = %d; a 5xx create is indeterminate and must not be retried", calls)
+	}
+}
+
+func TestCreateClassifiesProviderFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		body        string
+		transport   error
+		wantKind    adapter.ProviderFailureKind
+		wantRetry   bool
+		wantEffect  adapter.SideEffectCertainty
+		wantRetries int
+	}{
+		{name: "out of stock", status: 409, body: `{"error":{"code":"OUT_OF_STOCK"}}`, wantKind: adapter.ProviderFailureCapacityUnavailable, wantRetry: true, wantEffect: adapter.SideEffectNone},
+		{name: "invalid request", status: 400, body: `{"code":"INVALID_ARGUMENT"}`, wantKind: adapter.ProviderFailureInvalidRequest, wantEffect: adapter.SideEffectNone},
+		{name: "authentication", status: 401, body: `{"message":"Invalid API key"}`, wantKind: adapter.ProviderFailureAuthentication, wantEffect: adapter.SideEffectNone},
+		{name: "exhausted throttling", status: 429, body: `{"code":"RATE_LIMITED"}`, wantKind: adapter.ProviderFailureRateLimited, wantRetry: true, wantEffect: adapter.SideEffectNone, wantRetries: 3},
+		{name: "transport", transport: errors.New("connection reset"), wantKind: adapter.ProviderFailureTransport, wantRetry: true, wantEffect: adapter.SideEffectIndeterminate},
+		{name: "provider internal", status: 503, body: `{"code":"UPSTREAM_UNAVAILABLE"}`, wantKind: adapter.ProviderFailureInternal, wantRetry: true, wantEffect: adapter.SideEffectIndeterminate},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := newTestClient(func(*http.Request) (*http.Response, error) {
+				if test.transport != nil {
+					return nil, test.transport
+				}
+				return jsonResponse(test.status, test.body), nil
+			})
+
+			_, err := c.createInstance(t.Context(), createRequest{})
+
+			var failure *adapter.ProviderFailure
+			if !errors.As(err, &failure) {
+				t.Fatalf("error = %v, want ProviderFailure", err)
+			}
+			if failure.Kind != test.wantKind || failure.Retryable != test.wantRetry || failure.SideEffect != test.wantEffect {
+				t.Fatalf("failure = %+v", failure)
+			}
+			if failure.Status != test.status || failure.RetryCount != test.wantRetries {
+				t.Fatalf("status/retries = %d/%d, want %d/%d", failure.Status, failure.RetryCount, test.status, test.wantRetries)
+			}
+		})
+	}
+}
+
+func TestCreateFailureSanitizesAndBoundsResponseBody(t *testing.T) {
+	request := createRequest{LaunchConfiguration: &launchConfiguration{
+		Type: "docker",
+		DockerConfiguration: &dockerConfiguration{
+			Envs:                []envVar{{Name: "TOKEN", Value: "workload-secret"}},
+			RegistryCredentials: &registryCredentials{Username: "registry-user", Password: "registry-secret"},
+		},
+	}}
+	body := `{"code":"INVALID_ARGUMENT","message":"secret-key workload-secret registry-secret registry-user","request":{"launch_configuration":"provider request payload"},"detail":"` + strings.Repeat("x", maxProviderResponseBodyBytes*2) + `"}`
+	c := newTestClient(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusBadRequest, body), nil
+	})
+
+	_, err := c.createInstance(t.Context(), request)
+
+	var failure *adapter.ProviderFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error = %v, want ProviderFailure", err)
+	}
+	if !failure.ResponseTruncated || len(failure.ResponseBody) > maxProviderResponseBodyBytes {
+		t.Fatalf("response body was not bounded: len=%d truncated=%v", len(failure.ResponseBody), failure.ResponseTruncated)
+	}
+	for _, secret := range []string{"secret-key", "workload-secret", "registry-secret", "registry-user", "provider request payload"} {
+		if strings.Contains(failure.ResponseBody, secret) {
+			t.Fatalf("sanitized response contains %q: %s", secret, failure.ResponseBody)
+		}
 	}
 }
 
