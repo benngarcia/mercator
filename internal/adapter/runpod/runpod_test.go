@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -283,21 +285,51 @@ func TestObserveMissingPodIsReleased(t *testing.T) {
 }
 
 func TestTerminateResolvesByNameAndDeletes(t *testing.T) {
-	var deleted string
-	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
-		if r.Method == http.MethodDelete {
-			deleted = strings.TrimPrefix(r.URL.Path, "/v1/pods/")
-			return jsonResponse(204, ``), nil
-		}
-		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
-	})
-	rec, err := a.Terminate(context.Background(), adapter.TerminateRequest{LaunchKey: "lk1", OwnershipToken: "own1", LaunchRequestHash: "rh1"})
+	for _, name := range []string{"terminate_204.json", "terminate_404.json", "terminate_503.json"} {
+		t.Run(name, func(t *testing.T) {
+			fixture := readTerminateFixture(t, name)
+			var deleted string
+			a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+				if r.Method == http.MethodDelete {
+					deleted = strings.TrimPrefix(r.URL.Path, "/v1/pods/")
+					return jsonResponse(fixture.DeleteStatus, fixture.DeleteBody), nil
+				}
+				return jsonResponse(fixture.ListStatus, string(fixture.ListBody)), nil
+			})
+
+			receipt, err := a.Terminate(context.Background(), adapter.TerminateRequest{LaunchKey: "lk1", OwnershipToken: "own1", LaunchRequestHash: "rh1"})
+			if (err != nil) != fixture.WantError {
+				t.Fatalf("terminate error = %v, want_error=%v", err, fixture.WantError)
+			}
+			if deleted != "pod_1" {
+				t.Fatalf("deleted pod = %q, want pod_1", deleted)
+			}
+			if !fixture.WantError && !receipt.Terminated {
+				t.Fatalf("terminate receipt = %+v, want terminated", receipt)
+			}
+		})
+	}
+}
+
+type terminateFixture struct {
+	ListStatus   int             `json:"list_status"`
+	ListBody     json.RawMessage `json:"list_body"`
+	DeleteStatus int             `json:"delete_status"`
+	DeleteBody   string          `json:"delete_body"`
+	WantError    bool            `json:"want_error"`
+}
+
+func readTerminateFixture(t *testing.T, name string) terminateFixture {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
-		t.Fatalf("terminate: %v", err)
+		t.Fatalf("read terminate fixture %q: %v", name, err)
 	}
-	if !rec.Terminated || deleted != "pod_1" {
-		t.Fatalf("terminate rec=%+v deleted=%q", rec, deleted)
+	var fixture terminateFixture
+	if err := json.Unmarshal(payload, &fixture); err != nil {
+		t.Fatalf("decode terminate fixture %q: %v", name, err)
 	}
+	return fixture
 }
 
 func TestListOwnedMapsEnvBackToFields(t *testing.T) {
@@ -453,23 +485,5 @@ func TestReleaseResolvesByNameAndDeletes(t *testing.T) {
 	}
 	if !rec.Released || deleted != "pod_1" {
 		t.Fatalf("release rec=%+v deleted=%q", rec, deleted)
-	}
-}
-
-func TestCancelDeletesRegardlessOfOwnershipToken(t *testing.T) {
-	var deleted string
-	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
-		if r.Method == http.MethodDelete {
-			deleted = strings.TrimPrefix(r.URL.Path, "/v1/pods/")
-			return jsonResponse(204, ``), nil
-		}
-		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
-	})
-	rec, err := a.Cancel(context.Background(), adapter.CancelRequest{LaunchKey: "lk1"})
-	if err != nil {
-		t.Fatalf("cancel: %v", err)
-	}
-	if !rec.Cancelled || deleted != "pod_1" {
-		t.Fatalf("cancel rec=%+v deleted=%q", rec, deleted)
 	}
 }

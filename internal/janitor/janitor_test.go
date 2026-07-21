@@ -167,6 +167,36 @@ func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
 	}
 }
 
+func TestJanitorRejectsCleanupWithoutRecordedDisposition(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := fake.New()
+	_, err := ad.Launch(ctx, adapter.LaunchRequest{
+		OperationKey:       "launch_missing_disposition",
+		RequestHash:        "sha256:missing_disposition",
+		WorkspaceID:        "ws_1",
+		RunID:              "run_missing_disposition",
+		AttemptID:          "att_missing_disposition",
+		OwnershipToken:     "own_missing_disposition",
+		LaunchKey:          "launch_missing_disposition",
+		CleanupLocator:     "cleanup_missing_disposition",
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+	})
+	if err != nil {
+		t.Fatalf("seed owned resource: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	appendLaunchIntent(t, log, "ws_1", "run_missing_disposition", "")
+
+	if _, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1"); err == nil {
+		t.Fatal("janitor accepted cleanup without a recorded disposition")
+	}
+	if ad.ReleaseCount() != 0 || ad.TerminateCount() != 0 {
+		t.Fatalf("invalid disposition reached provider cleanup: release=%d terminate=%d", ad.ReleaseCount(), ad.TerminateCount())
+	}
+}
+
 func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
 	t.Helper()
 	intent := adapter.LaunchRequest{

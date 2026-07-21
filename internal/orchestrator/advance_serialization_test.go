@@ -65,6 +65,54 @@ func TestAdvanceRunSerializesConcurrentLaunchForSameRun(t *testing.T) {
 	}
 }
 
+func TestTerminalReportWaitsForRunAdvancement(t *testing.T) {
+	ctx := context.Background()
+	ad := newBlockingLaunchAdapter(fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+
+	advanceErr := make(chan error, 1)
+	go func() {
+		advanceErr <- orch.AdvanceRun(ctx, "ws_1", "run_1")
+	}()
+	select {
+	case <-ad.firstLaunchStarted:
+	case <-time.After(time.Second):
+		t.Fatal("AdvanceRun did not enter adapter Launch")
+	}
+
+	reportStarted := make(chan struct{})
+	reportErr := make(chan error, 1)
+	go func() {
+		close(reportStarted)
+		reportErr <- orch.RecordReport(ctx, "ws_1", "run_1", mustRunReport(t, "exit", nil, intPtr(0)))
+	}()
+	<-reportStarted
+	select {
+	case err := <-reportErr:
+		t.Fatalf("terminal report returned while launch advancement owned the run: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(ad.releaseFirstLaunch)
+	if err := <-advanceErr; err != nil {
+		t.Fatalf("advance run: %v", err)
+	}
+	if err := <-reportErr; err != nil {
+		t.Fatalf("record terminal report: %v", err)
+	}
+	if _, err := orch.AdvanceOpenRuns(ctx, "ws_1"); err != nil {
+		t.Fatalf("reconcile terminal report: %v", err)
+	}
+	record, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if !record.Closed || record.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("run = %+v, want closed successful run", record)
+	}
+}
+
 type blockingLaunchAdapter struct {
 	*fake.Adapter
 	inFlight           atomic.Int32

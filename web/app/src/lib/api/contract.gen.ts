@@ -412,6 +412,14 @@ export interface components {
             };
             workload?: components["schemas"]["WorkloadRevision"];
         };
+        CleanupError: {
+            code: string;
+            message: string;
+            retryable: boolean;
+            launch_key: string;
+            /** @enum {string} */
+            disposition: "release" | "terminate";
+        };
         Run: {
             id: string;
             workspace_id: string;
@@ -424,6 +432,7 @@ export interface components {
             cleanup: "not_required" | "pending" | "confirmed" | "blocked";
             /** @enum {string} */
             disposition?: "release" | "terminate";
+            cleanup_error?: components["schemas"]["CleanupError"];
             closed: boolean;
             created_by?: string;
             cancelled_by?: string;
@@ -537,11 +546,12 @@ export interface components {
             connection: components["schemas"]["ConnectionRecord"];
         };
         ReportRunRequest: {
+            /** @description Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code. */
             type: string;
             data?: {
                 [key: string]: unknown;
             };
-            /** @description Terminal exit code; when present the broker records the authoritative outcome and requests cleanup. */
+            /** @description Required when type is exit and forbidden for every other report type. The broker records the authoritative outcome and requests cleanup. */
             exit_code?: number;
         };
         ConnectionFailure: {
@@ -1962,6 +1972,15 @@ export interface operations {
             };
             /** @description Run not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Terminal report conflicts with the report already recorded for this run */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

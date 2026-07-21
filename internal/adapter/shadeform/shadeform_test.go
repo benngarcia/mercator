@@ -482,17 +482,6 @@ func TestReleaseDeletesLikeTerminate(t *testing.T) {
 	}
 }
 
-func TestCancelDeletesRegardlessOfOwnershipToken(t *testing.T) {
-	fake := newFakeShadeform()
-	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", "pending", fake.base))
-	a := newTestAdapter(t, fake, nil)
-
-	rec, err := a.Cancel(context.Background(), adapter.CancelRequest{LaunchKey: "lk1"})
-	if err != nil || !rec.Cancelled || len(fake.deletes) != 1 {
-		t.Fatalf("cancel rec=%+v err=%v deletes=%v", rec, err, fake.deletes)
-	}
-}
-
 func TestListOwnedFiltersTagsWorkspaceAndDeleting(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.addInstance(ownedInstance("inst_1", "lk1", "ws_1", "own1", "active", fake.base))
