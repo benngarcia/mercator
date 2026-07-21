@@ -52,10 +52,10 @@ func newHTTPTestServerWithConns(t *testing.T, extraOpts ...Option) http.Handler 
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad, activeTestWorkspaces)
+	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
 	staticResolver := ociresolver.NewStaticResolver(nil)
-	svc := connection.New(log, activeTestWorkspaces)
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log, activeTestWorkspaces), Connections: svc, Resolver: staticResolver}, extraOpts...)
+	svc := connection.New(workspaceTestLog{EventLog: log})
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Connections: svc, Resolver: staticResolver}, extraOpts...)
 }
 
 // TestConnectionsListReflectsRegistry asserts that GET /v1/connections returns
@@ -290,7 +290,7 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 type atomicCredentialServer struct {
 	handler  http.Handler
 	db       *sql.DB
-	log      *eventlog.SQLiteEventLog
+	log      eventlog.WorkspaceEventLog
 	service  *connection.Service
 	store    *credential.SQLiteStore
 	resolver *credential.Resolver
@@ -323,13 +323,13 @@ func newAtomicCredentialServer(t *testing.T, masterKey []byte, options ...Option
 	if err != nil {
 		t.Fatalf("open connection storage: %v", err)
 	}
-	service := connection.NewWithCredentials(connections, storage.Workspaces())
+	service := connection.NewWithCredentials(connections)
 	ad := fake.New()
 	sched := scheduler.New()
 	handler := New(Deps{
-		Orchestrator: orchestrator.New(log, sched, ad, storage.Workspaces()),
+		Orchestrator: orchestrator.New(log, sched, ad),
 		Offers:       singleProviderOffers{provider: ad},
-		Workloads:    workload.New(log, storage.Workspaces()),
+		Workloads:    workload.New(log),
 		Connections:  service,
 		Resolver:     ociresolver.NewStaticResolver(nil),
 	}, options...)
@@ -343,13 +343,13 @@ func (s atomicCredentialServer) handlerWithMasterKey(t *testing.T, masterKey []b
 	if err != nil {
 		t.Fatalf("open connection storage: %v", err)
 	}
-	service := connection.NewWithCredentials(connections, s.storage.Workspaces())
+	service := connection.NewWithCredentials(connections)
 	ad := fake.New()
 	sched := scheduler.New()
 	return New(Deps{
-		Orchestrator: orchestrator.New(s.log, sched, ad, s.storage.Workspaces()),
+		Orchestrator: orchestrator.New(s.log, sched, ad),
 		Offers:       singleProviderOffers{provider: ad},
-		Workloads:    workload.New(s.log, s.storage.Workspaces()),
+		Workloads:    workload.New(s.log),
 		Connections:  service,
 		Resolver:     ociresolver.NewStaticResolver(nil),
 	})

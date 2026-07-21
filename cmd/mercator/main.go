@@ -91,7 +91,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	if deps.signer != nil && deps.signer.Enabled() && deps.publicURL != "" {
 		orchOpts = append(orchOpts, orchestrator.WithReporting(deps.publicURL, deps.signer))
 	}
-	orch := orchestrator.New(deps.log, sched, deps.broker, deps.workspaces, orchOpts...)
+	orch := orchestrator.New(deps.log, sched, deps.broker, orchOpts...)
 	// No synthetic digests in the served path: a mutable tag must be rejected
 	// at create time (registry tag resolution is not implemented), never
 	// silently rewritten to a fabricated digest the daemon can't pull.
@@ -116,7 +116,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
 		Offers:       deps.broker,
-		Workloads:    workload.New(deps.log, deps.workspaces),
+		Workloads:    workload.New(deps.log),
 		Sinks:        sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  deps.conns,
 		Resolver:     imageResolver,
@@ -239,7 +239,7 @@ func warnIfNonLoopback(addr string) {
 type serverDeps struct {
 	broker     *broker.Broker
 	conns      *connection.Service
-	log        eventlog.EventLog
+	log        eventlog.WorkspaceEventLog
 	workspaces *workspace.SQLiteCatalog
 	// signer is non-nil when MERCATOR_SECRET_KEY is set. It signs per-run
 	// reporting tokens using a domain-separated subkey derived from the master key.
@@ -301,7 +301,7 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	if err != nil {
 		return serverDeps{}, fmt.Errorf("init connection storage: %w", err)
 	}
-	svc := connection.NewWithCredentials(connections, storage.Workspaces())
+	svc := connection.NewWithCredentials(connections)
 
 	// Build the report-token signer from a domain-separated subkey. The signer
 	// is always constructed (so its Enabled() reflects key presence); the

@@ -14,7 +14,7 @@ import (
 func TestServiceSeesWorkloadRevisionBeyondOneStreamPage(t *testing.T) {
 	ctx := context.Background()
 	log := openWorkloadTestLog(t)
-	svc := New(log, activeTestWorkspace)
+	svc := New(log)
 	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_history", Name: "history"}); err != nil {
 		t.Fatalf("create workload: %v", err)
 	}

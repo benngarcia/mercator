@@ -1,11 +1,15 @@
 package httpapi
 
-import "context"
+import (
+	"context"
 
-type activeTestWorkspaceCatalog struct{}
+	"github.com/benngarcia/mercator/internal/eventlog"
+)
 
-func (activeTestWorkspaceCatalog) RequireActive(context.Context, string) error {
-	return nil
+type workspaceTestLog struct {
+	eventlog.EventLog
 }
 
-var activeTestWorkspaces = activeTestWorkspaceCatalog{}
+func (l workspaceTestLog) AppendNew(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}

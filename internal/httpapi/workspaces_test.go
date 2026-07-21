@@ -66,6 +66,27 @@ func TestWorkspaceHTTPFlowPersistsListsAndArchives(t *testing.T) {
 	}
 }
 
+func TestCreateWorkspaceWithoutPrincipalReturnsUnauthorized(t *testing.T) {
+	handler, closeHandler, err := HandlerForSQLite(
+		t.Context(),
+		"file:"+filepath.Join(t.TempDir(), "mercator.db"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("open handler: %v", err)
+	}
+	t.Cleanup(func() { _ = closeHandler() })
+	request := httptest.NewRequest(http.MethodPost, "/v1/workspaces", bytes.NewBufferString(`{"display_name":"Production"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized || !bytes.Contains(recorder.Body.Bytes(), []byte(`"code":"UNAUTHORIZED"`)) {
+		t.Fatalf("create workspace status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func requestWorkspace(t *testing.T, handler http.Handler, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, target, bytes.NewBufferString(body))

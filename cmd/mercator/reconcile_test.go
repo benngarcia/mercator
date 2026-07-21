@@ -14,9 +14,13 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
-type activeTestWorkspaceCatalog struct{}
+type activeTestWorkspaceLog struct {
+	eventlog.EventLog
+}
 
-func (activeTestWorkspaceCatalog) RequireActive(context.Context, string) error { return nil }
+func (l activeTestWorkspaceLog) AppendNew(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}
 
 // TestReconcileWorkspacesClosesExitedRunWithoutClients drives the serve path's
 // reconcile tick body directly (no ticker, no sleeps) against the fake adapter:
@@ -36,7 +40,7 @@ func TestReconcileWorkspacesClosesExitedRunWithoutClients(t *testing.T) {
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 		fake.WithOpenObservations(1),
 	)
-	orch := orchestrator.New(log, scheduler.New(), ad, activeTestWorkspaceCatalog{})
+	orch := orchestrator.New(activeTestWorkspaceLog{EventLog: log}, scheduler.New(), ad)
 	if _, err := orch.CreateRun(ctx, orchestrator.CreateRunRequest{
 		WorkspaceID:    "ws_1",
 		RunID:          "run_1",

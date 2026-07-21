@@ -85,13 +85,13 @@ func newReportingTestServer(t *testing.T, signerKey []byte, extra ...Option) htt
 		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
 	)
 	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad, activeTestWorkspaces)
+	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
 	signer := reporting.NewSigner(signerKey)
 	opts := append([]Option{
 		WithReportSigner(signer),
 		WithBearerAuth("op-token"),
 	}, extra...)
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log, activeTestWorkspaces)}, opts...)
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log})}, opts...)
 }
 
 // createReportingRun creates a run via POST /v1/runs and returns its run_id.

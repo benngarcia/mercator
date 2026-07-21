@@ -71,7 +71,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := orchestrator.New(log, scheduler.New(), broker, activeWorkspaceCatalog{})
+	orch := orchestrator.New(activeWorkspaceLog{EventLog: log}, scheduler.New(), broker)
 	value := workloadSecret
 	workload := providerFailureWorkload(&value)
 
@@ -158,9 +158,13 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	}
 }
 
-type activeWorkspaceCatalog struct{}
+type activeWorkspaceLog struct {
+	eventlog.EventLog
+}
 
-func (activeWorkspaceCatalog) RequireActive(context.Context, string) error { return nil }
+func (l activeWorkspaceLog) AppendNew(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}
 
 func readFixture(t *testing.T, path string) []byte {
 	t.Helper()

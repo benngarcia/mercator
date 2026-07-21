@@ -146,3 +146,10 @@ type EventLog interface {
 	Subscribe(ctx context.Context, req SubscriptionRequest) (<-chan Delivery, error)
 	Ack(ctx context.Context, subscriptionID string, position GlobalPosition) error
 }
+
+// WorkspaceEventLog appends new workspace-owned facts only while their
+// workspace is active. Exact command replays resolve before that check.
+type WorkspaceEventLog interface {
+	EventLog
+	AppendNew(ctx context.Context, req AppendRequest) (AppendResult, error)
+}

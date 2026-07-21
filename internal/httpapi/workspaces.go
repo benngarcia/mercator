@@ -12,8 +12,8 @@ import (
 )
 
 func (s *Server) ListWorkspaces(ctx context.Context, request ListWorkspacesRequestObject) (ListWorkspacesResponseObject, error) {
-	if _, ok := requestPrincipal(ctx); !ok {
-		return ListWorkspaces401JSONResponse(apiError("UNAUTHORIZED", "An authenticated principal is required.")), nil
+	if _, authError := requirePrincipal(ctx); authError != nil {
+		return ListWorkspaces401JSONResponse(*authError), nil
 	}
 	if s.workspaces == nil {
 		return ListWorkspaces500JSONResponse(internalAPIError(http.StatusInternalServerError, "WORKSPACE_CATALOG_DISABLED", errors.New("workspace catalog is not configured"))), nil
@@ -32,9 +32,9 @@ func (s *Server) CreateWorkspace(ctx context.Context, request CreateWorkspaceReq
 	if s.workspaces == nil {
 		return CreateWorkspace500JSONResponse(internalAPIError(http.StatusInternalServerError, "WORKSPACE_CATALOG_DISABLED", errors.New("workspace catalog is not configured"))), nil
 	}
-	createdBy, ok := requestPrincipal(ctx)
-	if !ok {
-		return CreateWorkspace400JSONResponse(apiError("PRINCIPAL_REQUIRED", "An authenticated principal is required.")), nil
+	createdBy, authError := requirePrincipal(ctx)
+	if authError != nil {
+		return CreateWorkspace401JSONResponse(*authError), nil
 	}
 	id, err := newWorkspaceID()
 	if err != nil {
@@ -56,8 +56,8 @@ func (s *Server) CreateWorkspace(ctx context.Context, request CreateWorkspaceReq
 }
 
 func (s *Server) ArchiveWorkspace(ctx context.Context, request ArchiveWorkspaceRequestObject) (ArchiveWorkspaceResponseObject, error) {
-	if _, ok := requestPrincipal(ctx); !ok {
-		return ArchiveWorkspace401JSONResponse(apiError("UNAUTHORIZED", "An authenticated principal is required.")), nil
+	if _, authError := requirePrincipal(ctx); authError != nil {
+		return ArchiveWorkspace401JSONResponse(*authError), nil
 	}
 	if s.workspaces == nil {
 		return ArchiveWorkspace500JSONResponse(internalAPIError(http.StatusInternalServerError, "WORKSPACE_CATALOG_DISABLED", errors.New("workspace catalog is not configured"))), nil

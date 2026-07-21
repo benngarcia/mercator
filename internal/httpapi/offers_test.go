@@ -60,7 +60,7 @@ func TestPreviewPlacementRejectsOfferQueryFailure(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	ad := fake.New(fake.WithListOffersError(errors.New("provider unavailable")))
-	orch := orchestrator.New(log, scheduler.New(), ad, activeTestWorkspaces)
+	orch := orchestrator.New(workspaceTestLog{EventLog: log}, scheduler.New(), ad)
 	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}})
 	body := mustMarshal(t, PlacementPreviewRequest{RunId: "run_1", WorkspaceId: "ws_1", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/placements:preview", bytes.NewReader(body))

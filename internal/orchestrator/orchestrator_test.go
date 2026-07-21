@@ -18,6 +18,14 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
+type workspaceTestLog struct {
+	eventlog.EventLog
+}
+
+func (l workspaceTestLog) AppendNew(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}
+
 func TestCreateRunIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
@@ -51,11 +59,11 @@ func TestCreateRunIsIdempotent(t *testing.T) {
 
 func TestListRunsDoesNotReadEveryStream(t *testing.T) {
 	ctx := context.Background()
-	log := &streamReadCountingLog{EventLog: openOrchestratorLog(t)}
+	log := &streamReadCountingLog{WorkspaceEventLog: openOrchestratorLog(t)}
 	orch := New(log, scheduler.New(), fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
-	), activeTestWorkspace)
+	))
 	for _, runID := range []string{"run_1", "run_2"} {
 		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
 			t.Fatalf("create %s: %v", runID, err)
@@ -136,7 +144,7 @@ func TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter(t *testing.T) {
 	ctx := context.Background()
 	log := openOrchestratorLog(t)
 	spy := &spyAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})), log: log}
-	orch := New(log, scheduler.New(), spy, activeTestWorkspace)
+	orch := New(log, scheduler.New(), spy)
 	createRun(t, ctx, orch)
 
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
@@ -219,7 +227,7 @@ func TestAdvanceRunInjectsReportingEnvWhenConfigured(t *testing.T) {
 	offer := orchOffer("off_reporting", time.Now().UTC())
 	ad := &captureLaunchAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}))}
 	log := openOrchestratorLog(t)
-	orch := New(log, scheduler.New(), ad, activeTestWorkspace, WithReporting(publicURL, signer))
+	orch := New(log, scheduler.New(), ad, WithReporting(publicURL, signer))
 
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
 		WorkspaceID:    "ws_1",
@@ -814,20 +822,20 @@ func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchReq
 
 func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {
 	t.Helper()
-	return New(openOrchestratorLog(t), scheduler.New(), ad, activeTestWorkspace)
+	return New(openOrchestratorLog(t), scheduler.New(), ad)
 }
 
 type streamReadCountingLog struct {
-	eventlog.EventLog
+	eventlog.WorkspaceEventLog
 	streamReads int
 }
 
 func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
 	l.streamReads++
-	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
+	return l.WorkspaceEventLog.ReadStream(ctx, stream, afterVersion, limit)
 }
 
-func openOrchestratorLog(t *testing.T) *eventlog.SQLiteEventLog {
+func openOrchestratorLog(t *testing.T) eventlog.WorkspaceEventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -838,7 +846,7 @@ func openOrchestratorLog(t *testing.T) *eventlog.SQLiteEventLog {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return log
+	return workspaceTestLog{EventLog: log}
 }
 
 func createRun(t *testing.T, ctx context.Context, orch *Orchestrator) {
@@ -1030,7 +1038,7 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
-	orch := New(log, scheduler.New(), ad, activeTestWorkspace)
+	orch := New(log, scheduler.New(), ad)
 	createRun(t, ctx, orch)
 
 	fillerData, err := json.Marshal(adapterErrorData{

@@ -2,7 +2,7 @@
 // apiFetch; auth + workspace_id are injected centrally by the client. Mutating
 // endpoints accept an optional idempotencyKey (auto-generated otherwise).
 
-import { apiFetch } from "./client";
+import { apiFetch, type WorkspaceScope } from "./client";
 import type { operations } from "./contract.gen";
 import type {
   AdapterListResponse,
@@ -39,6 +39,10 @@ interface WorkspaceArg {
   signal?: AbortSignal;
 }
 
+function requestWorkspaceScope(workspaceId: string | undefined): WorkspaceScope {
+  return workspaceId === undefined ? "session" : { workspaceId };
+}
+
 // ---------------------------------------------------------------------------
 // Health
 // ---------------------------------------------------------------------------
@@ -73,7 +77,7 @@ export function listWorkspaces(
   signal?: AbortSignal,
 ): Promise<WorkspaceListResponse> {
   return apiFetch<WorkspaceListResponse>("/v1/workspaces", {
-    workspaceId: "",
+    workspaceScope: "none",
     searchParams: { include_archived: includeArchived },
     signal,
   });
@@ -85,14 +89,14 @@ export function createWorkspace(
   return apiFetch<WorkspaceResponse>("/v1/workspaces", {
     method: "POST",
     body,
-    workspaceId: "",
+    workspaceScope: "none",
   });
 }
 
 export function archiveWorkspace(workspaceID: string): Promise<WorkspaceResponse> {
   return apiFetch<WorkspaceResponse>(
     `/v1/workspaces/${encodeURIComponent(workspaceID)}/archive`,
-    { method: "POST", workspaceId: "" },
+    { method: "POST", workspaceScope: "none" },
   );
 }
 
@@ -102,7 +106,7 @@ export function archiveWorkspace(workspaceID: string): Promise<WorkspaceResponse
 
 export function listRuns(arg: WorkspaceArg = {}): Promise<RunListResponse> {
   return apiFetch<RunListResponse>("/v1/runs", {
-    workspaceId: arg.workspaceId,
+    workspaceScope: requestWorkspaceScope(arg.workspaceId),
     signal: arg.signal,
   });
 }
@@ -112,7 +116,7 @@ export function getRun(
   arg: WorkspaceArg = {},
 ): Promise<RunResponse> {
   return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}`, {
-    workspaceId: arg.workspaceId,
+    workspaceScope: requestWorkspaceScope(arg.workspaceId),
     signal: arg.signal,
   });
 }
@@ -123,7 +127,7 @@ export function getRunEvents(
 ): Promise<EventListResponse> {
   return apiFetch<EventListResponse>(
     `/v1/runs/${encodeURIComponent(runID)}/events`,
-    { workspaceId: arg.workspaceId, signal: arg.signal },
+    { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
   );
 }
 
@@ -133,7 +137,7 @@ export function getRunDecision(
 ): Promise<PlacementDecisionResponse> {
   return apiFetch<PlacementDecisionResponse>(
     `/v1/runs/${encodeURIComponent(runID)}/decision`,
-    { workspaceId: arg.workspaceId, signal: arg.signal },
+    { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
   );
 }
 
@@ -145,7 +149,7 @@ export function createRun(
     method: "POST",
     body,
     idempotencyKey: opts.idempotencyKey,
-    workspaceId: opts.workspaceId,
+    workspaceScope: requestWorkspaceScope(opts.workspaceId),
   });
 }
 
@@ -157,7 +161,7 @@ export function cancelRun(
   return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}/cancel`, {
     method: "POST",
     idempotencyKey: opts.idempotencyKey,
-    workspaceId: opts.workspaceId,
+    workspaceScope: requestWorkspaceScope(opts.workspaceId),
   });
 }
 
@@ -168,7 +172,7 @@ export function refreshRun(
   return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}/refresh`, {
     method: "POST",
     idempotencyKey: opts.idempotencyKey,
-    workspaceId: opts.workspaceId,
+    workspaceScope: requestWorkspaceScope(opts.workspaceId),
   });
 }
 
@@ -184,7 +188,7 @@ export function previewPlacement(
     method: "POST",
     body,
     idempotencyKey: opts.idempotencyKey,
-    workspaceId: opts.workspaceId,
+    workspaceScope: requestWorkspaceScope(opts.workspaceId),
   });
 }
 
@@ -194,7 +198,7 @@ export function previewPlacement(
 
 export function listOffers(arg: WorkspaceArg = {}): Promise<OfferListResponse> {
   return apiFetch<OfferListResponse>("/v1/offers", {
-    workspaceId: arg.workspaceId,
+    workspaceScope: requestWorkspaceScope(arg.workspaceId),
     signal: arg.signal,
   });
 }
@@ -203,7 +207,7 @@ export function listConnections(
   arg: WorkspaceArg = {},
 ): Promise<ConnectionListResponse> {
   return apiFetch<ConnectionListResponse>("/v1/connections", {
-    workspaceId: arg.workspaceId,
+    workspaceScope: requestWorkspaceScope(arg.workspaceId),
     signal: arg.signal,
   });
 }
@@ -216,7 +220,7 @@ export function createConnection(
     method: "POST",
     body,
     idempotencyKey: opts.idempotencyKey,
-    workspaceId: opts.workspaceId,
+    workspaceScope: requestWorkspaceScope(opts.workspaceId),
   });
 }
 
@@ -229,7 +233,7 @@ export function authorizeConnection(
     {
       method: "POST",
       idempotencyKey: opts.idempotencyKey,
-      workspaceId: opts.workspaceId,
+      workspaceScope: requestWorkspaceScope(opts.workspaceId),
     },
   );
 }
@@ -242,7 +246,7 @@ export function deleteConnection(
     `/v1/connections/${encodeURIComponent(connectionId)}`,
     {
       method: "DELETE",
-      workspaceId: opts.workspaceId,
+      workspaceScope: requestWorkspaceScope(opts.workspaceId),
     },
   );
 }
@@ -266,7 +270,7 @@ export function listWorkloadRevisions(
 ): Promise<WorkloadRevisionListResponse> {
   return apiFetch<WorkloadRevisionListResponse>(
     `/v1/workloads/${encodeURIComponent(workloadID)}/revisions`,
-    { workspaceId: arg.workspaceId, signal: arg.signal },
+    { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
   );
 }
 
@@ -277,7 +281,7 @@ export function getWorkloadRevision(
 ): Promise<WorkloadRevisionResponse> {
   return apiFetch<WorkloadRevisionResponse>(
     `/v1/workloads/${encodeURIComponent(workloadID)}/revisions/${encodeURIComponent(revisionID)}`,
-    { workspaceId: arg.workspaceId, signal: arg.signal },
+    { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
   );
 }
 
@@ -289,7 +293,7 @@ export function createWorkload(
     method: "POST",
     body,
     idempotencyKey: opts.idempotencyKey,
-    workspaceId: opts.workspaceId,
+    workspaceScope: requestWorkspaceScope(opts.workspaceId),
   });
 }
 
@@ -304,7 +308,7 @@ export function createRevision(
       method: "POST",
       body,
       idempotencyKey: opts.idempotencyKey,
-      workspaceId: opts.workspaceId,
+      workspaceScope: requestWorkspaceScope(opts.workspaceId),
     },
   );
 }

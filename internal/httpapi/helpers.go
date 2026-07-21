@@ -164,11 +164,11 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	// deterministic digest with no network, keeping fake mode end-to-end
 	// exercisable without a pre-pinned image.
 	handler := New(Deps{
-		Orchestrator: orchestrator.New(log, sched, ad, workspaces),
+		Orchestrator: orchestrator.New(log, sched, ad),
 		Offers:       singleProviderOffers{provider: ad},
-		Workloads:    workload.New(log, workspaces),
+		Workloads:    workload.New(log),
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
-		Connections:  connection.New(log, workspaces),
+		Connections:  connection.New(log),
 		Resolver:     ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests()),
 		Workspaces:   workspaces,
 	}, options...)

@@ -12,53 +12,12 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-const missingWorkspaceConstraint = "MERCATOR_WORKSPACE_NOT_FOUND"
-
 type SQLiteCatalog struct {
 	db *sql.DB
 }
 
-func NewSQLiteCatalog(ctx context.Context, db *sql.DB) (*SQLiteCatalog, error) {
-	if db == nil {
-		return nil, fmt.Errorf("workspace: sqlite database is required")
-	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("workspace: begin migration: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, statement := range workspaceMigration {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return nil, fmt.Errorf("workspace: migrate sqlite catalog: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("workspace: commit migration: %w", err)
-	}
-	return &SQLiteCatalog{db: db}, nil
-}
-
-var workspaceMigration = []string{
-	`CREATE TABLE IF NOT EXISTS workspaces (
-		workspace_id TEXT PRIMARY KEY,
-		display_name TEXT NOT NULL CHECK (length(trim(display_name)) > 0),
-		created_at TEXT NOT NULL,
-		created_by TEXT NOT NULL CHECK (length(trim(created_by)) > 0),
-		archived_at TEXT
-	)`,
-	`INSERT INTO workspaces (workspace_id, display_name, created_at, created_by)
-	 SELECT workspace_id, workspace_id, MIN(occurred_at), '` + MigrationPrincipal + `'
-	 FROM events
-	 GROUP BY workspace_id
-	 ON CONFLICT(workspace_id) DO NOTHING`,
-	`CREATE TRIGGER IF NOT EXISTS events_require_workspace
-	 BEFORE INSERT ON events
-	 WHEN NOT EXISTS (
-		SELECT 1 FROM workspaces WHERE workspace_id = NEW.workspace_id
-	 )
-	 BEGIN
-		SELECT RAISE(ABORT, '` + missingWorkspaceConstraint + `');
-	 END`,
+func NewSQLiteCatalog(db *sql.DB) *SQLiteCatalog {
+	return &SQLiteCatalog{db: db}
 }
 
 func (c *SQLiteCatalog) Create(ctx context.Context, command Create) (Workspace, error) {
@@ -103,17 +62,6 @@ func (c *SQLiteCatalog) List(ctx context.Context, options ListOptions) ([]Worksp
 func (c *SQLiteCatalog) Find(ctx context.Context, id string) (Workspace, error) {
 	return scanWorkspace(c.db.QueryRowContext(ctx, `SELECT workspace_id, display_name, created_at, created_by, archived_at
 		FROM workspaces WHERE workspace_id = ?`, id))
-}
-
-func (c *SQLiteCatalog) RequireActive(ctx context.Context, id string) error {
-	item, err := c.Find(ctx, id)
-	if err != nil {
-		return err
-	}
-	if item.ArchivedAt != nil {
-		return fmt.Errorf("%w: %s", ErrArchived, id)
-	}
-	return nil
 }
 
 func (c *SQLiteCatalog) Archive(ctx context.Context, id string, at time.Time) (Workspace, error) {
@@ -171,13 +119,6 @@ func scanWorkspace(row scanner) (Workspace, error) {
 
 func formatTime(value time.Time) string {
 	return value.UTC().Format(time.RFC3339Nano)
-}
-
-func IsNotFoundConstraint(err error) bool {
-	var sqliteError *sqlite.Error
-	return errors.As(err, &sqliteError) &&
-		sqliteError.Code() == sqlite3.SQLITE_CONSTRAINT_TRIGGER &&
-		strings.Contains(err.Error(), missingWorkspaceConstraint)
 }
 
 func isConstraintViolation(err error) bool {

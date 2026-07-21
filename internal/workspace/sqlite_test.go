@@ -3,12 +3,12 @@ package workspace_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workspace"
 	_ "modernc.org/sqlite"
 )
@@ -17,10 +17,11 @@ func TestOpenMigratesLegacyWorkspacePartitions(t *testing.T) {
 	ctx := context.Background()
 	db := openFixtureDatabase(t, "legacy_partitions.sql")
 
-	catalog, err := workspace.NewSQLiteCatalog(ctx, db)
+	store, err := sqlitestore.New(ctx, db)
 	if err != nil {
-		t.Fatalf("open workspace catalog: %v", err)
+		t.Fatalf("open storage: %v", err)
 	}
+	catalog := store.Workspaces()
 
 	workspaces, err := catalog.List(ctx, workspace.ListOptions{IncludeArchived: true})
 	if err != nil {
@@ -36,20 +37,22 @@ func TestOpenMigratesLegacyWorkspacePartitions(t *testing.T) {
 func TestOpenKeepsWorkspaceMigrationIdempotent(t *testing.T) {
 	ctx := context.Background()
 	db := openFixtureDatabase(t, "legacy_partitions.sql")
-	catalog, err := workspace.NewSQLiteCatalog(ctx, db)
+	store, err := sqlitestore.New(ctx, db)
 	if err != nil {
-		t.Fatalf("open workspace catalog: %v", err)
+		t.Fatalf("open storage: %v", err)
 	}
+	catalog := store.Workspaces()
 	archivedAt := mustTime(t, "2026-07-20T12:00:00Z")
 	archived, err := catalog.Archive(ctx, "staging", archivedAt)
 	if err != nil {
 		t.Fatalf("archive workspace: %v", err)
 	}
 
-	reopened, err := workspace.NewSQLiteCatalog(ctx, db)
+	reopenedStore, err := sqlitestore.New(ctx, db)
 	if err != nil {
-		t.Fatalf("reopen workspace catalog: %v", err)
+		t.Fatalf("reopen storage: %v", err)
 	}
+	reopened := reopenedStore.Workspaces()
 	workspaces, err := reopened.List(ctx, workspace.ListOptions{IncludeArchived: true})
 	if err != nil {
 		t.Fatalf("list workspaces: %v", err)
@@ -65,10 +68,11 @@ func TestOpenKeepsWorkspaceMigrationIdempotent(t *testing.T) {
 func TestWorkspaceCatalogCreatesListsAndArchives(t *testing.T) {
 	ctx := context.Background()
 	db := openFixtureDatabase(t, "legacy_partitions.sql")
-	catalog, err := workspace.NewSQLiteCatalog(ctx, db)
+	store, err := sqlitestore.New(ctx, db)
 	if err != nil {
-		t.Fatalf("open workspace catalog: %v", err)
+		t.Fatalf("open storage: %v", err)
 	}
+	catalog := store.Workspaces()
 	createdAt := mustTime(t, "2026-07-20T10:00:00Z")
 
 	created, err := catalog.Create(ctx, workspace.Create{
@@ -98,12 +102,6 @@ func TestWorkspaceCatalogCreatesListsAndArchives(t *testing.T) {
 	}
 	if archived.ArchivedAt == nil || repeated.ArchivedAt == nil || !repeated.ArchivedAt.Equal(*archived.ArchivedAt) {
 		t.Fatalf("repeat archive changed timestamp: first=%+v repeat=%+v", archived, repeated)
-	}
-	if err := catalog.RequireActive(ctx, created.ID); !errors.Is(err, workspace.ErrArchived) {
-		t.Fatalf("require archived workspace error = %v, want workspace.ErrArchived", err)
-	}
-	if err := catalog.RequireActive(ctx, "missing"); !errors.Is(err, workspace.ErrNotFound) {
-		t.Fatalf("require missing workspace error = %v, want workspace.ErrNotFound", err)
 	}
 }
 

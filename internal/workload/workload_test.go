@@ -8,10 +8,18 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
+type workspaceTestLog struct {
+	eventlog.EventLog
+}
+
+func (l workspaceTestLog) AppendNew(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}
+
 func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 	ctx := context.Background()
 	log := openWorkloadTestLog(t)
-	svc := New(log, activeTestWorkspace)
+	svc := New(log)
 
 	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
 		t.Fatalf("create workload: %v", err)
@@ -46,7 +54,7 @@ func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 // invalid revisions (e.g. an empty image) must still be rejected.
 func TestServiceAcceptsMutableTagsRejectsInvalidRevisions(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openWorkloadTestLog(t), activeTestWorkspace)
+	svc := New(openWorkloadTestLog(t))
 	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
 		t.Fatalf("create workload: %v", err)
 	}
@@ -64,7 +72,7 @@ func TestServiceAcceptsMutableTagsRejectsInvalidRevisions(t *testing.T) {
 	}
 }
 
-func openWorkloadTestLog(t *testing.T) *eventlog.SQLiteEventLog {
+func openWorkloadTestLog(t *testing.T) eventlog.WorkspaceEventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -75,7 +83,7 @@ func openWorkloadTestLog(t *testing.T) *eventlog.SQLiteEventLog {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return log
+	return workspaceTestLog{EventLog: log}
 }
 
 func validRevision() domain.WorkloadRevision {

@@ -1,16 +1,11 @@
 package workspace
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
-
-type ActiveCatalog interface {
-	RequireActive(context.Context, string) error
-}
 
 const MigrationPrincipal = "system:migration"
 

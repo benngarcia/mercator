@@ -34,6 +34,15 @@ func requestPrincipal(ctx context.Context) (string, bool) {
 	return actor.Subject, ok && actor.Subject != ""
 }
 
+func requirePrincipal(ctx context.Context) (string, *ErrorResponse) {
+	subject, ok := requestPrincipal(ctx)
+	if !ok {
+		response := apiError("UNAUTHORIZED", "An authenticated principal is required.")
+		return "", &response
+	}
+	return subject, nil
+}
+
 // maxRequestBodyBytes bounds request bodies server-wide. The largest legitimate
 // payloads are well under 1 MiB.
 const maxRequestBodyBytes = 1 << 20
