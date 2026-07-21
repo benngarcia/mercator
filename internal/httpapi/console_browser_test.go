@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -52,7 +53,8 @@ func TestConsoleRunsNavigation(t *testing.T) {
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	seedConsoleBrowserRun(t, server.URL)
+	workspaceID := createConsoleBrowserWorkspace(t, server.URL)
+	seedConsoleBrowserRun(t, server.URL, workspaceID)
 
 	cmd := exec.Command("bun", "run", "test:browser:runs-navigation")
 	cmd.Dir = appDir
@@ -60,6 +62,7 @@ func TestConsoleRunsNavigation(t *testing.T) {
 		"MERCATOR_BROWSER_BASE_URL="+server.URL,
 		"MERCATOR_BROWSER_FIXTURE="+fixture,
 		"MERCATOR_BROWSER_OUTPUT="+output,
+		"MERCATOR_BROWSER_WORKSPACE_ID="+workspaceID,
 	)
 	result, err := cmd.CombinedOutput()
 	if err != nil {
@@ -68,13 +71,41 @@ func TestConsoleRunsNavigation(t *testing.T) {
 	t.Logf("browser acceptance: %s", result)
 }
 
-func seedConsoleBrowserRun(t *testing.T, serverURL string) {
+func createConsoleBrowserWorkspace(t *testing.T, serverURL string) string {
+	t.Helper()
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		serverURL+"/v1/workspaces",
+		bytes.NewBufferString(`{"display_name":"Runs navigation"}`),
+	)
+	if err != nil {
+		t.Fatalf("build workspace request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer runs-navigation-token")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("create workspace: got %s, want 201 Created", response.Status)
+	}
+	var body WorkspaceResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode workspace: %v", err)
+	}
+	return body.Workspace.ID
+}
+
+func seedConsoleBrowserRun(t *testing.T, serverURL, workspaceID string) {
 	t.Helper()
 
 	request, err := http.NewRequestWithContext(
 		context.Background(),
 		http.MethodPost,
-		serverURL+"/v1/runs?workspace_id=ws_runs_navigation",
+		serverURL+"/v1/runs?workspace_id="+workspaceID,
 		bytes.NewBufferString(`{"image":"busybox:latest"}`),
 	)
 	if err != nil {
