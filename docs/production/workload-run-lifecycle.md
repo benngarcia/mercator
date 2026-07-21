@@ -65,7 +65,7 @@ go run ./cmd/mercator run create \
 
 `POST /v1/runs` returns the same envelope as the read endpoints and a `202`
 status: `{"run_id": "...", "run": {id, workspace_id, workload_revision_id,
-phase, outcome, exit_code, cleanup, disposition, closed}, "metadata": {...},
+phase, outcome, exit_code, cleanup, cleanup_error, disposition, closed}, "metadata": {...},
 "links": {...}, "duplicate": <bool>}`. The convenience top-level `run_id` is
 returned on every run response (create, get, wait, refresh, cancel) and always
 equals `.run.id`; `metadata` is reserved for future per-response metadata. Read
@@ -164,9 +164,11 @@ indefinitely.
 Polling is optional. The serving broker runs a background reconcile sweep every
 minute (alongside the orphan-reclaiming janitor) that advances every open run:
 observing container exits, recording terminal outcomes, confirming cleanup, and
-closing the run. An exited run therefore reaches `closed` even if no client
-ever calls `run wait` or `run refresh` again — client polling only changes how
-quickly you observe the terminal state, not whether the run converges.
+closing the run. A signed terminal workload report is acknowledged after its
+fact is durable; this sweep performs cleanup after the report response no longer
+depends on the reporting container. An exited run therefore reaches `closed`
+even if no client calls `run wait` or `run refresh` again. Client polling only
+changes how quickly the run converges.
 
 ## Refresh And Cancel
 
@@ -175,9 +177,10 @@ go run ./cmd/mercator run refresh --workspace-id ws_eval --run-id run_eval_1 | j
 go run ./cmd/mercator run cancel --workspace-id ws_eval --run-id run_eval_1 | jq .
 ```
 
-Refresh resumes event-log-authoritative advancement. Cancel records cancellation
-through the adapter-backed lifecycle and still requires cleanup confirmation
-before the run is closed.
+Refresh resumes event-log-authoritative advancement. Cancel records a terminal
+fact, then the same lifecycle owner used for successful and failed exits invokes
+the recorded `Release` or `Terminate` disposition. Cleanup confirmation remains
+required before the run closes.
 
 ## Cleanup Disposition: Terminate vs Release
 
@@ -209,9 +212,8 @@ offer that produced it has since changed or disappeared. The adapter exposes two
 distinct cleanup verbs, `Release` and `Terminate`, and the orchestrator (and the
 orphan-reclaiming janitor) call the one matching the recorded disposition.
 
-**Backward compatibility.** A run whose event log predates this field (no
-recorded disposition) defaults to `release` — the safe option that never
-destroys a host.
+An absent or unknown recorded disposition is invalid run history. Cleanup fails
+before a provider call instead of guessing which resource Mercator owns.
 
 **Adapter semantics.** The fake adapter (an internal test mechanism) implements
 both verbs idempotently and tracks which path ran: its standing offer drives
@@ -230,10 +232,17 @@ shape:
 2. placement decided;
 3. launch intent recorded;
 4. launch accepted or duplicate launch observed;
-5. terminal observation;
-6. cleanup requested;
-7. cleanup confirmed;
-8. run closed.
+5. first terminal fact, from an observation, signed report, or cancellation;
+6. outcome recorded;
+7. cleanup requested;
+8. cleanup confirmed;
+9. run closed.
+
+When provider cleanup fails, the run remains open with its outcome visible,
+`cleanup: "blocked"`, and a structured `cleanup_error`. The public event stream
+records `compute.run.cleanup_failed.v1` with a stable redacted error. Refresh or
+the next background sweep retries the same idempotent provider operation; a
+later confirmation clears the projected error and closes the run.
 
 Public CloudEvents `data` payloads are snake_case. For example, the terminal
 `compute.run.external_state_observed.v1` event carries

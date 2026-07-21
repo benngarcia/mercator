@@ -210,14 +210,6 @@ func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapt
 	return ad.Observe(ctx, req)
 }
 
-func (b *Broker) Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
-	if err != nil {
-		return adapter.CancelReceipt{}, err
-	}
-	return ad.Cancel(ctx, req)
-}
-
 func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
 	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {

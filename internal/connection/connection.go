@@ -37,13 +37,13 @@ type CredentialRef struct {
 }
 
 type CredentialRepository interface {
-	eventlog.EventLog
+	eventlog.WorkspaceEventLog
 	CreateCredential(context.Context, eventlog.AppendRequest, CredentialWrite) (eventlog.AppendResult, error)
 	DeleteCredential(context.Context, eventlog.AppendRequest, CredentialRef) (eventlog.AppendResult, error)
 }
 
 type Service struct {
-	log         eventlog.EventLog
+	log         eventlog.WorkspaceEventLog
 	credentials CredentialRepository
 	now         func() time.Time
 }
@@ -92,7 +92,7 @@ type DeleteRequest struct {
 	Actor json.RawMessage
 }
 
-func New(log eventlog.EventLog) *Service {
+func New(log eventlog.WorkspaceEventLog) *Service {
 	return &Service{log: log, now: time.Now}
 }
 
@@ -155,7 +155,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 
 func (s *Service) appendCreate(ctx context.Context, request eventlog.AppendRequest, credentialWrite CredentialWrite) error {
 	if len(credentialWrite.Secret) == 0 {
-		_, err := s.log.Append(ctx, request)
+		_, err := s.log.AppendIfWorkspaceActive(ctx, request)
 		return err
 	}
 	_, err := s.credentials.CreateCredential(ctx, request, credentialWrite)

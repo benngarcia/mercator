@@ -34,6 +34,7 @@ import type {
   RunResponse,
   SinkResult,
   SinkStatus,
+  Workspace,
 } from "./types";
 import { getWorkspace } from "../session";
 import { useSession } from "@/hooks/useSession";
@@ -99,6 +100,67 @@ export function useAuthSession(): UseQueryResult<AuthSessionState, ApiError> {
     queryFn: ({ signal }) => endpoints.getAuthSession(signal),
     staleTime: Infinity,
     retry: false,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces
+// ---------------------------------------------------------------------------
+
+export function useWorkspaces(
+  includeArchived = false,
+): UseQueryResult<Workspace[], ApiError> {
+  return useQuery<Workspace[], ApiError>({
+    queryKey: queryKeys.workspaces(includeArchived),
+    queryFn: async ({ signal }) => {
+      const response = await endpoints.listWorkspaces(includeArchived, signal);
+      return response.workspaces;
+    },
+    retry: defaultRetry,
+  });
+}
+
+export function useCreateWorkspace(): UseMutationResult<
+  Workspace,
+  ApiError,
+  string
+> {
+  const queryClient = useQueryClient();
+  return useMutation<Workspace, ApiError, string>({
+    mutationFn: async (displayName) => {
+      const response = await endpoints.createWorkspace({ display_name: displayName });
+      return response.workspace;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces(false),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces(true),
+      });
+    },
+  });
+}
+
+export function useArchiveWorkspace(): UseMutationResult<
+  Workspace,
+  ApiError,
+  string
+> {
+  const queryClient = useQueryClient();
+  return useMutation<Workspace, ApiError, string>({
+    mutationFn: async (workspaceID) => {
+      const response = await endpoints.archiveWorkspace(workspaceID);
+      return response.workspace;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces(false),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces(true),
+      });
+    },
   });
 }
 

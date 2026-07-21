@@ -57,9 +57,15 @@ export interface ApiFetchOptions {
   // injected automatically from the session unless explicitly provided here.
   searchParams?: Record<string, string | number | boolean | undefined | null>;
   signal?: AbortSignal;
-  // workspaceId overrides the session default workspace for this request.
-  workspaceId?: string;
+  // workspaceScope states whether this request uses the selected workspace,
+  // no workspace, or one explicit workspace.
+  workspaceScope?: WorkspaceScope;
 }
+
+export type WorkspaceScope =
+  | "session"
+  | "none"
+  | { workspaceId: string };
 
 const MUTATING_METHODS: ReadonlySet<string> = new Set([
   "POST",
@@ -83,7 +89,7 @@ function newIdempotencyKey(): string {
 function buildUrl(
   path: string,
   searchParams: ApiFetchOptions["searchParams"],
-  workspaceId: string | undefined,
+  workspaceScope: WorkspaceScope,
 ): string {
   // Resolve against the current origin so callers pass bare paths like
   // "/v1/runs". apiFetch is always same-origin.
@@ -96,7 +102,7 @@ function buildUrl(
     searchParams && Object.prototype.hasOwnProperty.call(searchParams, "workspace_id")
       ? searchParams["workspace_id"]
       : undefined;
-  const resolvedWorkspace = workspaceId ?? getWorkspace() ?? undefined;
+  const resolvedWorkspace = resolveWorkspace(workspaceScope);
   if (
     (callerWorkspace === undefined || callerWorkspace === null) &&
     resolvedWorkspace
@@ -114,6 +120,16 @@ function buildUrl(
   }
 
   return url.pathname + url.search;
+}
+
+function resolveWorkspace(scope: WorkspaceScope): string | undefined {
+  if (scope === "none") {
+    return undefined;
+  }
+  if (scope === "session") {
+    return getWorkspace() ?? undefined;
+  }
+  return scope.workspaceId;
 }
 
 async function parseError(response: Response): Promise<ApiError> {
@@ -165,7 +181,7 @@ export async function apiFetch<T>(
     headers.set("Idempotency-Key", opts.idempotencyKey ?? newIdempotencyKey());
   }
 
-  const url = buildUrl(path, opts.searchParams, opts.workspaceId);
+  const url = buildUrl(path, opts.searchParams, opts.workspaceScope ?? "session");
 
   const response = await fetch(url, {
     method,

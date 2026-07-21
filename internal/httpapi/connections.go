@@ -33,6 +33,9 @@ func (s *Server) CreateConnection(ctx context.Context, request CreateConnectionR
 		Actor:        requestActor(ctx),
 	})
 	if err != nil {
+		if response, ok := workspaceAPIError(err); ok {
+			return CreateConnection400JSONResponse(response), nil
+		}
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
 			return CreateConnection409JSONResponse(apiError("IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")), nil
 		}

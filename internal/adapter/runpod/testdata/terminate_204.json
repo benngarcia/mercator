@@ -1,0 +1,16 @@
+{
+  "list_status": 200,
+  "list_body": [
+    {
+      "id": "pod_1",
+      "name": "mercator-lk1",
+      "desiredStatus": "RUNNING",
+      "env": {
+        "MERCATOR_OWNERSHIP_TOKEN": "own1"
+      }
+    }
+  ],
+  "delete_status": 204,
+  "delete_body": "",
+  "want_error": false
+}

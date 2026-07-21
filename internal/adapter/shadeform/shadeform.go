@@ -337,14 +337,6 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	}, nil
 }
 
-func (a *Adapter) Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error) {
-	// Best-effort: deleting a not-yet-active instance is the same delete path.
-	if _, err := a.deleteOwned(ctx, req.LaunchKey, ""); err != nil {
-		return adapter.CancelReceipt{}, err
-	}
-	return adapter.CancelReceipt{Cancelled: true}, nil
-}
-
 // Release behaves exactly like Terminate: the adapter is provisionable-only, so
 // "our slot" and "the host we own" are the same instance, and /instances/{id}/delete
 // is the only teardown Shadeform offers. (/restart is never used — whether it

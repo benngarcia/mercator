@@ -77,7 +77,6 @@ func Run(ctx context.Context, spec TrialSpec, options ...Option) (report TrialRe
 		return report, err
 	}
 	report.TrialID = trialID
-	report.WorkspaceID = "ws_" + strings.TrimPrefix(trialID, "trial_")
 	report.ConnectionID = "conn_" + spec.AdapterType + "_" + strings.TrimPrefix(trialID, "trial_")
 
 	root, err := os.MkdirTemp(settings.tempRoot, "mercator-conformance-")
@@ -136,15 +135,20 @@ func Run(ctx context.Context, spec TrialSpec, options ...Option) (report TrialRe
 	}()
 
 	client := trialClient{baseURL: "http://" + listener.Addr().String(), token: operatorToken, client: http.DefaultClient}
+	if err := client.ready(trialCtx); err != nil {
+		return report, err
+	}
+	workspaceID, err := client.createWorkspace(trialCtx, trialID)
+	if err != nil {
+		return report, err
+	}
+	report.WorkspaceID = workspaceID
 	execution := scenarioExecution{}
 	defer func() {
 		finalizeCtx, finalizeCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer finalizeCancel()
 		finalizeTrial(finalizeCtx, client, runtime, &report, execution)
 	}()
-	if err := client.ready(trialCtx); err != nil {
-		return report, err
-	}
 	if err := client.createAndAuthorizeConnection(trialCtx, report.WorkspaceID, report.ConnectionID, spec); err != nil {
 		return report, err
 	}
@@ -186,6 +190,15 @@ func (client trialClient) ready(ctx context.Context) error {
 		case <-deadline.C:
 		}
 	}
+}
+
+func (client trialClient) createWorkspace(ctx context.Context, trialID string) (string, error) {
+	request := httpapi.CreateWorkspaceRequest{DisplayName: "Conformance " + trialID}
+	var response httpapi.WorkspaceResponse
+	if err := client.do(ctx, http.MethodPost, "/v1/workspaces", "", request, &response); err != nil {
+		return "", fmt.Errorf("create trial workspace: %w", err)
+	}
+	return response.Workspace.ID, nil
 }
 
 func (client trialClient) createAndAuthorizeConnection(ctx context.Context, workspaceID, connectionID string, spec TrialSpec) error {

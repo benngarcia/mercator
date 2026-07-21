@@ -134,7 +134,7 @@ func TestTrialTimeoutCancelsRunAndRetainsBlockedEvidence(t *testing.T) {
 }
 
 func TestTrialCleanupRetriesTransientProviderFailuresUntilInventoryIsEmpty(t *testing.T) {
-	provider := &transientCancelProvider{
+	provider := &transientReleaseProvider{
 		Provider: fake.New(
 			fake.WithOffers([]domain.OfferSnapshot{conformanceOffer()}),
 			fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
@@ -164,31 +164,31 @@ func TestTrialCleanupRetriesTransientProviderFailuresUntilInventoryIsEmpty(t *te
 	if report.Verdict != VerdictBlocked || report.Failure == nil || report.Failure.Code != "SCENARIO_BLOCKED" {
 		t.Fatalf("report = %+v, want the scenario failure retained after successful cleanup", report)
 	}
-	if provider.cancelAttempts() < 4 {
-		t.Fatalf("cancel attempts = %d, want cleanup retries after transient failures", provider.cancelAttempts())
+	if provider.releaseAttempts() < 4 {
+		t.Fatalf("release attempts = %d, want cleanup retries after transient failures", provider.releaseAttempts())
 	}
 }
 
-type transientCancelProvider struct {
+type transientReleaseProvider struct {
 	adapter.Provider
 	mu                sync.Mutex
 	failuresRemaining int
 	attempts          int
 }
 
-func (provider *transientCancelProvider) Cancel(ctx context.Context, request adapter.CancelRequest) (adapter.CancelReceipt, error) {
+func (provider *transientReleaseProvider) Release(ctx context.Context, request adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
 	provider.mu.Lock()
 	provider.attempts++
 	if provider.failuresRemaining > 0 {
 		provider.failuresRemaining--
 		provider.mu.Unlock()
-		return adapter.CancelReceipt{}, adapter.ErrRetryableFailure
+		return adapter.ReleaseReceipt{}, adapter.ErrRetryableFailure
 	}
 	provider.mu.Unlock()
-	return provider.Provider.Cancel(ctx, request)
+	return provider.Provider.Release(ctx, request)
 }
 
-func (provider *transientCancelProvider) cancelAttempts() int {
+func (provider *transientReleaseProvider) releaseAttempts() int {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	return provider.attempts

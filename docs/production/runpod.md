@@ -81,8 +81,14 @@ NVIDIA accelerator (feasible) and is selected.
 - RunPod offers are **provisionable** ⇒ disposition **terminate** ⇒ cleanup
   issues `DELETE /pods/{id}`.
 - On the workload's **exit report**, Mercator records the authoritative outcome
-  and terminates the pod promptly. If a pod shows `EXITED` with no report, the
-  run is marked **failed** (indeterminate) and the pod is terminated.
+  as a durable fact and returns 202. The background reconciler terminates the
+  pod within its one-minute sweep bound, after the response no longer depends
+  on the reporting pod. If a pod shows `EXITED` with no report, the run is
+  marked **failed** and the pod is terminated.
+- A failed RunPod DELETE leaves the run open with `cleanup: "blocked"`, a
+  redacted `cleanup_error`, and a queryable `compute.run.cleanup_failed.v1`
+  event. Refresh or the next sweep repeats the idempotent DELETE; 404 confirms
+  the pod is already absent.
 
 ### Cost attribution
 

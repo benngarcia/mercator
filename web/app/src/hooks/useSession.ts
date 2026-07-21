@@ -5,7 +5,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 import {
-  getRecentWorkspaces,
   getToken,
   getWorkspace,
   setToken as persistToken,
@@ -17,7 +16,6 @@ import {
 export interface UseSession {
   token: string | null;
   workspace: string | null;
-  recentWorkspaces: string[];
   hasToken: boolean;
   setToken: (token: string | null) => void;
   setWorkspace: (workspaceID: string | null) => void;
@@ -43,7 +41,6 @@ export function useSession(): UseSession {
   return {
     token,
     workspace: getWorkspace(),
-    recentWorkspaces: getRecentWorkspaces(),
     hasToken: Boolean(token),
     setToken,
     setWorkspace,

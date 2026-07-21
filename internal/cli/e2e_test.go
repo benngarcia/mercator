@@ -17,7 +17,9 @@ func TestE2EFakeAdapterHTTPAndCLI(t *testing.T) {
 	if os.Getenv("MERCATOR_E2E_FAKE") != "1" {
 		t.Skip("set MERCATOR_E2E_FAKE=1 to run fake-adapter E2E")
 	}
-	handler, closeFn, err := httpapi.HandlerForSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared", []domain.OfferSnapshot{cliOffer()})
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	seedCLIWorkspace(t, dsn)
+	handler, closeFn, err := httpapi.HandlerForSQLite(context.Background(), dsn, []domain.OfferSnapshot{cliOffer()})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

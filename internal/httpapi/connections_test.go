@@ -23,6 +23,7 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 func testKey32() []byte { return []byte("0123456789abcdef0123456789abcdef") }
@@ -51,10 +52,10 @@ func newHTTPTestServerWithConns(t *testing.T, extraOpts ...Option) http.Handler 
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad)
+	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
 	staticResolver := ociresolver.NewStaticResolver(nil)
-	svc := connection.New(log)
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Connections: svc, Resolver: staticResolver}, extraOpts...)
+	svc := connection.New(workspaceTestLog{EventLog: log})
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Connections: svc, Resolver: staticResolver}, extraOpts...)
 }
 
 // TestConnectionsListReflectsRegistry asserts that GET /v1/connections returns
@@ -289,7 +290,7 @@ func TestCreateConnectionStoresSecretOutOfBand(t *testing.T) {
 type atomicCredentialServer struct {
 	handler  http.Handler
 	db       *sql.DB
-	log      *eventlog.SQLiteEventLog
+	log      eventlog.WorkspaceEventLog
 	service  *connection.Service
 	store    *credential.SQLiteStore
 	resolver *credential.Resolver
@@ -305,6 +306,14 @@ func newAtomicCredentialServer(t *testing.T, masterKey []byte, options ...Option
 	storage, err := sqlitestore.New(t.Context(), db)
 	if err != nil {
 		t.Fatalf("open storage: %v", err)
+	}
+	if _, err := storage.Workspaces().Create(t.Context(), workspace.Create{
+		ID:          "ws_1",
+		DisplayName: "Test workspace",
+		CreatedAt:   time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		CreatedBy:   "test:httpapi",
+	}); err != nil {
+		t.Fatalf("create workspace: %v", err)
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 	log := storage.EventLog()

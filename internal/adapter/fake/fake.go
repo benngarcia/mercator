@@ -220,29 +220,6 @@ func (a *Adapter) Observe(_ context.Context, req adapter.ObserveRequest) (adapte
 	return observation, nil
 }
 
-func (a *Adapter) Cancel(_ context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if err := requireOperation(req.OperationKey, req.RequestHash); err != nil {
-		return adapter.CancelReceipt{}, err
-	}
-	if existing, ok := a.ops[req.OperationKey]; ok {
-		if existing.hash != req.RequestHash {
-			return adapter.CancelReceipt{}, adapter.ErrIdempotencyConflict
-		}
-		receipt := existing.receipt.(adapter.CancelReceipt)
-		receipt.Duplicate = true
-		return receipt, nil
-	}
-	if object, ok := a.objects[req.LaunchKey]; ok {
-		object.Phase = adapter.ExternalPhaseCancelled
-		a.objects[req.LaunchKey] = object
-	}
-	receipt := adapter.CancelReceipt{Cancelled: true}
-	a.ops[req.OperationKey] = operationRecord{hash: req.RequestHash, receipt: receipt}
-	return receipt, nil
-}
-
 func (a *Adapter) Release(_ context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

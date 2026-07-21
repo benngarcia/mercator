@@ -71,7 +71,6 @@ func runServer(ctx context.Context, env map[string]string) int {
 		stdlog.Printf("configure server: %v", err)
 		return 1
 	}
-
 	warnIfNonLoopback(addr)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {

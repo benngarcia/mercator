@@ -8,6 +8,14 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
+type workspaceTestLog struct {
+	eventlog.EventLog
+}
+
+func (l workspaceTestLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}
+
 func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 	ctx := context.Background()
 	log := openWorkloadTestLog(t)
@@ -64,7 +72,7 @@ func TestServiceAcceptsMutableTagsRejectsInvalidRevisions(t *testing.T) {
 	}
 }
 
-func openWorkloadTestLog(t *testing.T) *eventlog.SQLiteEventLog {
+func openWorkloadTestLog(t *testing.T) eventlog.WorkspaceEventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -75,7 +83,7 @@ func openWorkloadTestLog(t *testing.T) *eventlog.SQLiteEventLog {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return log
+	return workspaceTestLog{EventLog: log}
 }
 
 func validRevision() domain.WorkloadRevision {

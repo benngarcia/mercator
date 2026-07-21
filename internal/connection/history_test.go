@@ -38,7 +38,7 @@ func TestServiceListsMoreThanOnePageOfConnections(t *testing.T) {
 
 func TestServiceListsConnectionsWithoutReadingEveryStream(t *testing.T) {
 	ctx := context.Background()
-	log := &streamReadCountingLog{EventLog: openConnectionTestLog(t)}
+	log := &streamReadCountingLog{WorkspaceEventLog: openConnectionTestLog(t)}
 	svc := New(log)
 	for _, connectionID := range []string{"conn_1", "conn_2"} {
 		if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: connectionID, AdapterType: "docker"}); err != nil {
@@ -102,11 +102,11 @@ func TestServiceReadsAndUpdatesConnectionPastOneStreamPage(t *testing.T) {
 }
 
 type streamReadCountingLog struct {
-	eventlog.EventLog
+	eventlog.WorkspaceEventLog
 	streamReads int
 }
 
 func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
 	l.streamReads++
-	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
+	return l.WorkspaceEventLog.ReadStream(ctx, stream, afterVersion, limit)
 }
