@@ -9,6 +9,9 @@ export const queryKeys = {
 
   authSession: () => ["mercator", "authSession"] as const,
 
+  workspaces: (includeArchived: boolean) =>
+    ["mercator", "workspaces", { includeArchived }] as const,
+
   runs: (workspaceID: string) =>
     ["mercator", "runs", { workspaceID }] as const,
   run: (workspaceID: string, runID: string) =>
@@ -23,17 +26,6 @@ export const queryKeys = {
   adapters: () => ["mercator", "adapters"] as const,
   connections: (workspaceID: string) =>
     ["mercator", "connections", { workspaceID }] as const,
-
-  workloadRevisions: (workspaceID: string, workloadID: string) =>
-    ["mercator", "workload", { workspaceID, workloadID }, "revisions"] as const,
-  revision: (workspaceID: string, workloadID: string, revisionID: string) =>
-    [
-      "mercator",
-      "workload",
-      { workspaceID, workloadID },
-      "revision",
-      revisionID,
-    ] as const,
 
   sinkStatus: (sinkID: string) => ["mercator", "sink", sinkID] as const,
 } as const;

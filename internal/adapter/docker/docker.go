@@ -142,10 +142,6 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	return adapter.ExternalObservation{ExternalID: container.ID, LaunchKey: req.LaunchKey, Phase: phase, ExitCode: exitCode, ObservedAt: a.now().UTC()}, nil
 }
 
-func (a *Adapter) Cancel(context.Context, adapter.CancelRequest) (adapter.CancelReceipt, error) {
-	return adapter.CancelReceipt{Cancelled: true}, nil
-}
-
 func (a *Adapter) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
 	container, err := a.client.InspectContainer(ctx, req.LaunchKey)
 	if err != nil {

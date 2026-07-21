@@ -66,7 +66,6 @@ type Provider interface {
 	ListOffers(ctx context.Context, req OfferRequest) ([]domain.OfferSnapshot, error)
 	Launch(ctx context.Context, req LaunchRequest) (LaunchReceipt, error)
 	Observe(ctx context.Context, req ObserveRequest) (ExternalObservation, error)
-	Cancel(ctx context.Context, req CancelRequest) (CancelReceipt, error)
 	// Release removes only our job/container from a pool we DON'T own (standing
 	// capacity). It never touches the host. Used for disposition=release.
 	Release(ctx context.Context, req ReleaseRequest) (ReleaseReceipt, error)
@@ -145,19 +144,6 @@ type ExternalObservation struct {
 	ObservedAt time.Time     `json:"observed_at"`
 	ExitCode   *int          `json:"exit_code,omitempty"`
 	NativeJSON string        `json:"native_json,omitempty"`
-}
-
-type CancelRequest struct {
-	WorkspaceID  string
-	ConnectionID string
-	OperationKey string
-	RequestHash  string
-	LaunchKey    string
-}
-
-type CancelReceipt struct {
-	Cancelled bool
-	Duplicate bool
 }
 
 type ReleaseRequest struct {

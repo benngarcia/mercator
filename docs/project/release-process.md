@@ -41,8 +41,7 @@ scripts/check-open-source-launch.sh
 go test ./...
 go build ./...
 scripts/build-release-archives.sh v0.0.0-local /tmp/mercator-release-dist
-
-cd web/app && bun install && bun run typecheck && bun run build
+cd web/app && bun install --frozen-lockfile && bun run typecheck
 ```
 
 Run the root README Docker quickstart against a real daemon. It detects the
@@ -64,8 +63,9 @@ gh workflow run release.yml --ref master -f version=v0.2.0
 ```
 
 The workflow validates the version (`vMAJOR.MINOR.PATCH`, optional prerelease
-suffix), refuses an existing tag, runs the tests, and creates the tag at the
-branch head as part of publishing the release.
+suffix), refuses an existing tag, runs the tests, rebuilds the embedded console
+through the archive builder, and creates the tag at the branch head as part of
+publishing the release.
 
 **Tag push.** Push an annotated tag; the workflow releases exactly that
 commit:

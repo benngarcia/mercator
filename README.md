@@ -135,7 +135,7 @@ curl -fsS -X POST "$MERCATOR_API_URL/v1/connections" \
   -H 'Idempotency-Key: quickstart-docker' \
   -d '{"workspace_id":"ws_1","connection_id":"conn_docker_loopback","adapter_type":"docker"}'
 curl -fsS -X POST \
-  "$MERCATOR_API_URL/v1/connections/conn_docker_loopback:authorize?workspace_id=$MERCATOR_WORKSPACE_ID" \
+  "$MERCATOR_API_URL/v1/connections/conn_docker_loopback/authorize?workspace_id=$MERCATOR_WORKSPACE_ID" \
   -H "Authorization: Bearer $MERCATOR_API_TOKEN"
 
 docker pull -q busybox:latest >/dev/null

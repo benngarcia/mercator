@@ -209,15 +209,6 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	}, nil
 }
 
-func (a *Adapter) Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error) {
-	// Best-effort: destroying a not-yet-started instance is the same
-	// resolve+destroy path.
-	if _, err := a.deleteOwned(ctx, req.LaunchKey, ""); err != nil {
-		return adapter.CancelReceipt{}, err
-	}
-	return adapter.CancelReceipt{Cancelled: true}, nil
-}
-
 func (a *Adapter) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
 	deleted, err := a.deleteOwned(ctx, req.LaunchKey, req.OwnershipToken)
 	if err != nil {

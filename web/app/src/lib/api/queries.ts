@@ -23,14 +23,10 @@ import type {
   AuthSessionState,
   ConnectionRecord,
   CreateConnectionRequest,
-  CreateRevisionRequest,
   CreateRunRequest,
-  CreateWorkloadRequest,
-  CreateWorkloadResponse,
   CloudEvent,
   OfferSnapshot,
   PlacementDecision,
-  PlacementPreviewRequest,
   ReplaySinkRequest,
   ResolveImageRequest,
   ResolvedImage,
@@ -38,7 +34,7 @@ import type {
   RunResponse,
   SinkResult,
   SinkStatus,
-  WorkloadRevision,
+  Workspace,
 } from "./types";
 import { getWorkspace } from "../session";
 import { useSession } from "@/hooks/useSession";
@@ -104,6 +100,67 @@ export function useAuthSession(): UseQueryResult<AuthSessionState, ApiError> {
     queryFn: ({ signal }) => endpoints.getAuthSession(signal),
     staleTime: Infinity,
     retry: false,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces
+// ---------------------------------------------------------------------------
+
+export function useWorkspaces(
+  includeArchived = false,
+): UseQueryResult<Workspace[], ApiError> {
+  return useQuery<Workspace[], ApiError>({
+    queryKey: queryKeys.workspaces(includeArchived),
+    queryFn: async ({ signal }) => {
+      const response = await endpoints.listWorkspaces(includeArchived, signal);
+      return response.workspaces;
+    },
+    retry: defaultRetry,
+  });
+}
+
+export function useCreateWorkspace(): UseMutationResult<
+  Workspace,
+  ApiError,
+  string
+> {
+  const queryClient = useQueryClient();
+  return useMutation<Workspace, ApiError, string>({
+    mutationFn: async (displayName) => {
+      const response = await endpoints.createWorkspace({ display_name: displayName });
+      return response.workspace;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces(false),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces(true),
+      });
+    },
+  });
+}
+
+export function useArchiveWorkspace(): UseMutationResult<
+  Workspace,
+  ApiError,
+  string
+> {
+  const queryClient = useQueryClient();
+  return useMutation<Workspace, ApiError, string>({
+    mutationFn: async (workspaceID) => {
+      const response = await endpoints.archiveWorkspace(workspaceID);
+      return response.workspace;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces(false),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workspaces(true),
+      });
+    },
   });
 }
 
@@ -253,55 +310,6 @@ export function useAdapters(): UseQueryResult<AdapterManifest[], ApiError> {
 }
 
 // ---------------------------------------------------------------------------
-// Workloads & revisions (501 -> ApiError.serviceDisabled)
-// ---------------------------------------------------------------------------
-
-export function useWorkloadRevisions(
-  workloadID: string | undefined,
-  workspaceOverride?: string,
-): UseQueryResult<WorkloadRevision[], ApiError> {
-  const workspaceID = useWorkspaceId(workspaceOverride);
-  return useQuery<WorkloadRevision[], ApiError>({
-    queryKey: queryKeys.workloadRevisions(workspaceID ?? "", workloadID ?? ""),
-    queryFn: async ({ signal }) => {
-      const res = await endpoints.listWorkloadRevisions(workloadID as string, {
-        workspaceId: workspaceID ?? undefined,
-        signal,
-      });
-      return res.revisions;
-    },
-    enabled: Boolean(workspaceID) && Boolean(workloadID),
-    retry: defaultRetry,
-  });
-}
-
-export function useRevision(
-  workloadID: string | undefined,
-  revisionID: string | undefined,
-  workspaceOverride?: string,
-): UseQueryResult<WorkloadRevision, ApiError> {
-  const workspaceID = useWorkspaceId(workspaceOverride);
-  return useQuery<WorkloadRevision, ApiError>({
-    queryKey: queryKeys.revision(
-      workspaceID ?? "",
-      workloadID ?? "",
-      revisionID ?? "",
-    ),
-    queryFn: async ({ signal }) => {
-      const res = await endpoints.getWorkloadRevision(
-        workloadID as string,
-        revisionID as string,
-        { workspaceId: workspaceID ?? undefined, signal },
-      );
-      return res.revision;
-    },
-    enabled:
-      Boolean(workspaceID) && Boolean(workloadID) && Boolean(revisionID),
-    retry: defaultRetry,
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Sinks (501 -> ApiError.serviceDisabled)
 // ---------------------------------------------------------------------------
 
@@ -366,66 +374,6 @@ export function useRefreshRun(
       const ws = workspaceID ?? getWorkspace() ?? "";
       queryClient.setQueryData(queryKeys.run(ws, res.run_id), res.run);
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs(ws) });
-    },
-  });
-}
-
-export function useCreateWorkload(
-  workspaceOverride?: string,
-): UseMutationResult<CreateWorkloadResponse, ApiError, CreateWorkloadRequest> {
-  const queryClient = useQueryClient();
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<CreateWorkloadResponse, ApiError, CreateWorkloadRequest>({
-    mutationFn: (body) =>
-      endpoints.createWorkload(body, { workspaceId: workspaceID }),
-    onSuccess: (res) => {
-      const ws = workspaceID ?? getWorkspace() ?? "";
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.workloadRevisions(ws, res.workload_id),
-      });
-    },
-  });
-}
-
-export interface CreateRevisionVariables {
-  workloadID: string;
-  body: CreateRevisionRequest;
-}
-
-export function useCreateRevision(
-  workspaceOverride?: string,
-): UseMutationResult<WorkloadRevision, ApiError, CreateRevisionVariables> {
-  const queryClient = useQueryClient();
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<WorkloadRevision, ApiError, CreateRevisionVariables>({
-    mutationFn: async ({ workloadID, body }) => {
-      const res = await endpoints.createRevision(workloadID, body, {
-        workspaceId: workspaceID,
-      });
-      return res.revision;
-    },
-    onSuccess: (_revision, { workloadID }) => {
-      const ws = workspaceID ?? getWorkspace() ?? "";
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.workloadRevisions(ws, workloadID),
-      });
-    },
-  });
-}
-
-export function usePreviewPlacement(
-  workspaceOverride?: string,
-): UseMutationResult<PlacementDecision, ApiError, PlacementPreviewRequest> {
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<PlacementDecision, ApiError, PlacementPreviewRequest>({
-    mutationFn: async (body) => {
-      const res = await endpoints.previewPlacement(body, {
-        workspaceId: workspaceID,
-      });
-      return res.decision;
     },
   });
 }

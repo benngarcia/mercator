@@ -13,7 +13,7 @@ export interface WorkloadSpecEditorProps {
   /** Fires on every keystroke with the new raw text. */
   onChange: (value: string) => void;
   /**
-   * Server-side error from a failed Create Run / Preview mutation. Its
+   * Server-side error from a failed Create run mutation. Its
    * `details[]` Violations are surfaced inline beneath the editor.
    */
   error?: ApiError | null;
@@ -56,8 +56,8 @@ function parseLocal(text: string): LocalParse {
 }
 
 /**
- * WorkloadSpecEditor is the JSON authoring surface shared by Create Run
- * ("spec" mode) and Preview. It is a controlled monospace textarea with live
+ * WorkloadSpecEditor is the JSON authoring surface used by Create run's spec
+ * mode. It is a controlled monospace textarea with live
  * client-side JSON validation and inline display of server Violations from a
  * failed submission. It does not own a submit action — the parent owns the
  * button and reads `value`.

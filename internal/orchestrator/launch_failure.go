@@ -56,16 +56,16 @@ func launchFailureFrom(err error, launchKey string) launchFailureData {
 	return failure
 }
 
-func (failure launchFailureData) publicData() adapterErrorData {
+func (failure launchFailureData) publicData() domain.ProviderError {
 	code, message := failure.Code, failure.Message
 	if failure.ProviderKind != "" {
 		code, message = publicProviderFailure(failure.ProviderKind)
 	}
-	return adapterErrorData{
+	return domain.ProviderError{
 		Code:       code,
 		Message:    message,
 		Retryable:  failure.Retryable,
-		SideEffect: failure.SideEffect,
+		SideEffect: string(failure.SideEffect),
 		LaunchKey:  failure.LaunchKey,
 	}
 }

@@ -163,7 +163,6 @@ func TestCancelRunClosesLocallyAfterSideEffectFreeLaunchFailure(t *testing.T) {
 	})
 	provider.listOffersErrAfter = 1
 	provider.listOffersErr = errors.New("catalog unavailable")
-	provider.cancelErr = errors.New("provider unavailable")
 	orch := newReplacementOrchestrator(t, provider)
 	createReplacementRun(t, orch, 2)
 
@@ -178,8 +177,8 @@ func TestCancelRunClosesLocallyAfterSideEffectFreeLaunchFailure(t *testing.T) {
 	if !record.Closed || record.Outcome != domain.RunOutcomeCancelled || record.Cleanup != domain.CleanupNotRequired {
 		t.Fatalf("cancelled replacement = %+v", record)
 	}
-	if provider.cancelCalls != 0 {
-		t.Fatalf("provider cancel calls = %d, want 0 for known-absent object", provider.cancelCalls)
+	if provider.TerminateCount() != 0 {
+		t.Fatalf("provider terminate calls = %d, want 0 for known-absent object", provider.TerminateCount())
 	}
 }
 
@@ -278,8 +277,6 @@ type replacementProvider struct {
 	listOffersCalls    int
 	listOffersErrAfter int
 	listOffersErr      error
-	cancelCalls        int
-	cancelErr          error
 }
 
 func newReplacementProvider(offers []domain.OfferSnapshot, failures map[string]error) *replacementProvider {
@@ -307,14 +304,6 @@ func (p *replacementProvider) Launch(ctx context.Context, req adapter.LaunchRequ
 		return adapter.LaunchReceipt{}, err
 	}
 	return p.Adapter.Launch(ctx, req)
-}
-
-func (p *replacementProvider) Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error) {
-	p.cancelCalls++
-	if p.cancelErr != nil {
-		return adapter.CancelReceipt{}, p.cancelErr
-	}
-	return p.Adapter.Cancel(ctx, req)
 }
 
 type indeterminateCreateProvider struct {

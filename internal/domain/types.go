@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -361,6 +362,44 @@ const (
 	CleanupBlocked     CleanupState = "blocked"
 )
 
+type ProviderError struct {
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	Retryable  bool   `json:"retryable"`
+	SideEffect string `json:"side_effect,omitempty"`
+	LaunchKey  string `json:"launch_key"`
+}
+
+func (providerError ProviderError) Validate() error {
+	switch {
+	case providerError.Code == "":
+		return fmt.Errorf("code is required")
+	case providerError.Message == "":
+		return fmt.Errorf("message is required")
+	case providerError.LaunchKey == "":
+		return fmt.Errorf("launch_key is required")
+	case providerError.SideEffect != "" && providerError.SideEffect != "none" && providerError.SideEffect != "indeterminate":
+		return fmt.Errorf("unknown side effect certainty %q", providerError.SideEffect)
+	default:
+		return nil
+	}
+}
+
+type CleanupError struct {
+	ProviderError
+	Disposition Disposition `json:"disposition"`
+}
+
+func (cleanupError CleanupError) Validate() error {
+	if err := cleanupError.ProviderError.Validate(); err != nil {
+		return err
+	}
+	if !cleanupError.Disposition.Valid() {
+		return fmt.Errorf("unknown disposition %q", cleanupError.Disposition)
+	}
+	return nil
+}
+
 // Disposition is the cost-safety discriminator that records, at launch time,
 // what cleanup must do for a run. It is recorded explicitly on the launch
 // intent and the cleanup path dispatches on the RECORDED value; it is never
@@ -383,17 +422,17 @@ func (disposition Disposition) Valid() bool {
 	return disposition == DispositionRelease || disposition == DispositionTerminate
 }
 
-// DispositionForOfferKind maps the natural source of disposition — the selected
-// offer's Kind — to the cleanup disposition. A provisionable offer means we
-// provisioned (and own) the host, so cleanup must terminate it; a standing
-// offer means we borrowed a slot in a pool we don't own, so cleanup only
-// releases our job. Any unknown/empty kind defaults to release, the safe option
-// that NEVER destroys a host.
-func DispositionForOfferKind(kind OfferKind) Disposition {
-	if kind == OfferKindProvisionable {
-		return DispositionTerminate
+// DispositionForOfferKind maps the selected offer's ownership model to its
+// required cleanup action.
+func DispositionForOfferKind(kind OfferKind) (Disposition, error) {
+	switch kind {
+	case OfferKindProvisionable:
+		return DispositionTerminate, nil
+	case OfferKindStanding:
+		return DispositionRelease, nil
+	default:
+		return "", fmt.Errorf("domain: cleanup disposition for unknown offer kind %q", kind)
 	}
-	return DispositionRelease
 }
 
 type RunRecord struct {
@@ -407,8 +446,9 @@ type RunRecord struct {
 	// Disposition surfaces the RECORDED cleanup disposition (terminate vs
 	// release) so operators can see whether this run will destroy a host it owns
 	// or merely release a borrowed slot. Empty until a launch intent is recorded.
-	Disposition Disposition `json:"disposition,omitempty"`
-	Closed      bool        `json:"closed"`
+	Disposition  Disposition   `json:"disposition,omitempty"`
+	CleanupError *CleanupError `json:"cleanup_error,omitempty"`
+	Closed       bool          `json:"closed"`
 	// CreatedBy and CancelledBy are the audited principals of the create and
 	// cancel commands: a signed-in operator's email, or "bearer" for
 	// machine-token calls. Empty on runs recorded before auditing existed or

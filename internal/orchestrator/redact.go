@@ -7,6 +7,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -106,6 +107,37 @@ func envKind(value *string) string {
 	return "empty"
 }
 
+// publicAdapterError maps an adapter failure to a stable public error payload;
+// the raw error text never reaches the public stream.
+func publicAdapterError(err error, launchKey string) domain.ProviderError {
+	var providerFailure *adapter.ProviderFailure
+	if errors.As(err, &providerFailure) {
+		code, message := publicProviderFailure(providerFailure.Kind)
+		return domain.ProviderError{Code: code, Message: message, Retryable: providerFailure.Retryable, SideEffect: string(providerFailure.SideEffect), LaunchKey: launchKey}
+	}
+	code := "ADAPTER_ERROR"
+	message := "Adapter operation failed."
+	retryable := true
+	sideEffect := ""
+	switch {
+	case errors.Is(err, adapter.ErrIdempotencyConflict):
+		code = "ADAPTER_IDEMPOTENCY_CONFLICT"
+		retryable = false
+	case errors.Is(err, adapter.ErrLaunchTimeout):
+		code = "ADAPTER_LAUNCH_TIMEOUT"
+		sideEffect = string(adapter.SideEffectIndeterminate)
+	case errors.Is(err, adapter.ErrLaunchIndeterminate):
+		code = "ADAPTER_LAUNCH_INDETERMINATE"
+		sideEffect = string(adapter.SideEffectIndeterminate)
+	case errors.Is(err, adapter.ErrRetryableFailure):
+		code = "ADAPTER_RETRYABLE_FAILURE"
+	case errors.Is(err, adapter.ErrRegistryAuthentication):
+		code = "ADAPTER_REGISTRY_AUTHENTICATION_FAILED"
+		message = "Registry authentication failed."
+		retryable = false
+	}
+	return domain.ProviderError{Code: code, Message: message, Retryable: retryable, SideEffect: sideEffect, LaunchKey: launchKey}
+}
 func publicProviderFailure(kind adapter.ProviderFailureKind) (string, string) {
 	switch kind {
 	case adapter.ProviderFailureCapacityUnavailable:
@@ -120,5 +152,13 @@ func publicProviderFailure(kind adapter.ProviderFailureKind) (string, string) {
 		return "PROVIDER_TRANSPORT_FAILURE", "Provider transport failed."
 	default:
 		return "PROVIDER_INTERNAL_ERROR", "Provider operation failed."
+	}
+}
+
+func publicCleanupError(err error, launchKey string, disposition domain.Disposition) domain.CleanupError {
+	adapterError := publicAdapterError(err, launchKey)
+	return domain.CleanupError{
+		ProviderError: adapterError,
+		Disposition:   disposition,
 	}
 }

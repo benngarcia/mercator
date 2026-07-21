@@ -9,6 +9,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
@@ -32,7 +33,7 @@ func TestJanitorSeesCleanupRequestedBeyondOneStreamPage(t *testing.T) {
 	}
 
 	log := openJanitorTestLog(t)
-	events := make([]eventlog.NewEvent, 1001)
+	events := make([]eventlog.NewEvent, 1002)
 	for i := 0; i < 1000; i++ {
 		events[i] = eventlog.NewEvent{
 			ID:            fmt.Sprintf("evt_run_history_%04d", i+1),
@@ -42,7 +43,19 @@ func TestJanitorSeesCleanupRequestedBeyondOneStreamPage(t *testing.T) {
 			Data:          json.RawMessage(`{}`),
 		}
 	}
+	intent, err := json.Marshal(adapter.LaunchRequest{Disposition: domain.DispositionRelease})
+	if err != nil {
+		t.Fatalf("marshal launch intent: %v", err)
+	}
 	events[1000] = eventlog.NewEvent{
+		ID:            "evt_run_history_launch_intent",
+		Type:          "compute.run.launch_intent_recorded.v1",
+		SchemaVersion: 1,
+		OccurredAt:    time.Now().UTC(),
+		Data:          json.RawMessage(`{}`),
+		PrivateData:   intent,
+	}
+	events[1001] = eventlog.NewEvent{
 		ID:            "evt_run_history_cleanup_requested",
 		Type:          "compute.run.cleanup_requested.v1",
 		SchemaVersion: 1,

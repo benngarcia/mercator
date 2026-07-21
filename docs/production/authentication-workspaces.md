@@ -88,9 +88,13 @@ credential, and expiry bounds the remaining lifetime of a copied token.
 
 - Run, workload, secret, connection, and offer requests require an explicit
   `workspace_id` in the query or request body where the route expects one.
-- A workspace id is an event-log partition carried by domain records. It is not
-  process configuration and Mercator does not maintain a separate workspace
-  catalog.
+- Workspaces are saved SQLite records with stable IDs and display names. Create
+  and select one through the authenticated API or console before creating
+  workspace-owned records. Unknown workspace IDs fail with
+  `WORKSPACE_NOT_FOUND`.
+- Archiving removes a workspace from the default chooser and rejects new runs,
+  connections, workloads, and workload revisions. Existing lifecycle commands
+  remain available so operators can converge and clean up archived workspaces.
 - Every authenticated principal administers the Mercator instance. Workspaces
   isolate stored runs, connections, offers, and events from accidental
   cross-partition queries; they are not per-user authorization boundaries.

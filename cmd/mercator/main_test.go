@@ -10,10 +10,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 func TestBuildServerDepsValidatesSecretKey(t *testing.T) {
@@ -218,6 +220,7 @@ func TestBrokerServesConnectionsCreatedThroughTheRegistry(t *testing.T) {
 	}()
 
 	ctx := context.Background()
+	createTestWorkspace(t, deps, "staging")
 	if _, err := deps.conns.Create(ctx, connection.CreateRequest{
 		WorkspaceID:  "staging",
 		ConnectionID: "conn_docker_loopback",
@@ -256,6 +259,7 @@ func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 		}
 	}()
 	ctx := context.Background()
+	createTestWorkspace(t, deps, "ws_1")
 	if _, err := deps.conns.Create(ctx, connection.CreateRequest{
 		WorkspaceID:  "ws_1",
 		ConnectionID: "conn_docker_loopback",
@@ -310,6 +314,18 @@ func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 	}
 	if byConn["conn_docker_loopback"].Platform.Architecture != "arm64" || byConn["conn_docker_remote"].Platform.Architecture != "amd64" {
 		t.Fatalf("connection architectures = loopback:%s remote:%s, want arm64 and amd64", byConn["conn_docker_loopback"].Platform.Architecture, byConn["conn_docker_remote"].Platform.Architecture)
+	}
+}
+
+func createTestWorkspace(t *testing.T, deps serverDeps, id string) {
+	t.Helper()
+	if _, err := deps.workspaces.Create(t.Context(), workspace.Create{
+		ID:          id,
+		DisplayName: id,
+		CreatedAt:   time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		CreatedBy:   "test:mercator",
+	}); err != nil {
+		t.Fatalf("create workspace %s: %v", id, err)
 	}
 }
 

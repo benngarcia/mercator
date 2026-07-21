@@ -70,11 +70,10 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 		if !releasable {
 			continue
 		}
-		// Reclaim via the RECORDED disposition: a run that provisioned a host we
-		// own (terminate) must have that host destroyed, while a borrowed standing
-		// slot (release) only loses our job. An orphan with no recorded intent
-		// defaults to release, the safe option that never destroys a host.
-		if disposition == domain.DispositionTerminate {
+		// Reclaim a recorded run through its recorded ownership action. Objects
+		// without run history are unattributed orphans and release only their slot.
+		switch disposition {
+		case domain.DispositionTerminate:
 			req := adapter.TerminateRequest{
 				WorkspaceID:       object.WorkspaceID,
 				ConnectionID:      object.ConnectionID,
@@ -91,7 +90,7 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 			if _, err := j.adapter.Terminate(ctx, req); err != nil {
 				return result, err
 			}
-		} else {
+		case domain.DispositionRelease:
 			req := adapter.ReleaseRequest{
 				WorkspaceID:       object.WorkspaceID,
 				ConnectionID:      object.ConnectionID,
@@ -108,15 +107,17 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 			if _, err := j.adapter.Release(ctx, req); err != nil {
 				return result, err
 			}
+		default:
+			return result, fmt.Errorf("janitor: cleanup requires a valid recorded disposition, got %q", disposition)
 		}
 		result.Released++
 	}
 	return result, nil
 }
 
-// releasable reports whether an owned object should be reclaimed and, if so, the
-// RECORDED cleanup disposition to reclaim it with (defaulting to release when no
-// launch intent was recorded — an orphan or a pre-change event log).
+// releasable reports whether an owned object should be reclaimed and returns
+// the run's recorded cleanup disposition. An object with no run history is an
+// unattributed orphan, so the janitor may only release its slot.
 func (j *Janitor) releasable(ctx context.Context, object adapter.OwnedExternalObject) (bool, domain.Disposition, error) {
 	if object.RunID == "" {
 		return true, domain.DispositionRelease, nil
@@ -128,7 +129,7 @@ func (j *Janitor) releasable(ctx context.Context, object adapter.OwnedExternalOb
 	if len(history.Events) == 0 {
 		return true, domain.DispositionRelease, nil
 	}
-	disposition := domain.DispositionRelease
+	var disposition domain.Disposition
 	reclaim := false
 	for _, event := range history.Events {
 		switch event.Type {
@@ -140,12 +141,16 @@ func (j *Janitor) releasable(ctx context.Context, object adapter.OwnedExternalOb
 			var intent struct {
 				Disposition domain.Disposition `json:"disposition"`
 			}
-			if err := json.Unmarshal(payload, &intent); err == nil && intent.Disposition != "" {
-				disposition = intent.Disposition
+			if err := json.Unmarshal(payload, &intent); err != nil {
+				return false, "", fmt.Errorf("janitor: decode recorded launch intent: %w", err)
 			}
+			disposition = intent.Disposition
 		case "compute.run.cleanup_requested.v1", "compute.run.cleanup_confirmed.v1":
 			reclaim = true
 		}
+	}
+	if reclaim && !disposition.Valid() {
+		return false, "", fmt.Errorf("janitor: cleanup requires a valid recorded disposition, got %q", disposition)
 	}
 	return reclaim, disposition, nil
 }

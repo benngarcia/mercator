@@ -21,7 +21,9 @@ import (
 )
 
 var (
-	ErrRunNotFound = errors.New("orchestrator: run not found")
+	ErrRunNotFound            = errors.New("orchestrator: run not found")
+	ErrInvalidReport          = errors.New("orchestrator: invalid run report")
+	ErrTerminalReportConflict = errors.New("orchestrator: terminal report conflict")
 	// ErrRunRequestPersistence marks failure to durably record the acceptance
 	// event, before Mercator owns the Run lifecycle.
 	ErrRunRequestPersistence = errors.New("orchestrator: persist run request")
@@ -43,6 +45,7 @@ const (
 	EventExternalStateObserved   = "compute.run.external_state_observed.v1"
 	EventRunOutcomeRecorded      = "compute.run.outcome_recorded.v1"
 	EventCleanupRequested        = "compute.run.cleanup_requested.v1"
+	EventCleanupFailed           = "compute.run.cleanup_failed.v1"
 	EventCleanupConfirmed        = "compute.run.cleanup_confirmed.v1"
 	EventRunClosed               = "compute.run.closed.v1"
 	EventRunReported             = "compute.run.reported.v1"
@@ -50,7 +53,7 @@ const (
 )
 
 type Orchestrator struct {
-	log                eventlog.EventLog
+	log                eventlog.WorkspaceEventLog
 	scheduler          scheduler.Scheduler
 	adapter            Adapter
 	now                func() time.Time
@@ -63,7 +66,6 @@ type Adapter interface {
 	ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error)
 	Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error)
 	Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error)
-	Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error)
 	Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error)
 	Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error)
 	ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error)
@@ -83,7 +85,7 @@ func WithReporting(publicURL string, signer *reporting.Signer) Option {
 	}
 }
 
-func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
+func New(log eventlog.WorkspaceEventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
 	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
 	for _, opt := range opts {
 		opt(o)
@@ -176,7 +178,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	result, err := o.log.Append(ctx, eventlog.AppendRequest{
+	result, err := o.log.AppendIfWorkspaceActive(ctx, eventlog.AppendRequest{
 		Stream:                runStream(req.WorkspaceID, req.RunID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            req.CommandKey,
@@ -218,12 +220,11 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 }
 
 // AdvanceRun drives a run toward closure by repeatedly reducing its event
-// stream and performing the single next transition: cleanup, cancel,
-// placement, launch, reported-exit finalization, or observation. Every entry
-// point (create, cancel, report, poll) appends its fact events and funnels
-// through this loop, so there is exactly one place a run moves forward. Each
-// iteration re-reads the stream, so state is always derived from the log
-// rather than threaded through in memory.
+// stream and performing the single next transition: terminal convergence,
+// cleanup, placement, launch, or observation. Commands append facts; create,
+// cancel, refresh, wait, and the background sweep drive those facts through
+// this loop. Each iteration re-reads the stream, so state is always derived
+// from the log rather than threaded through in memory.
 func (o *Orchestrator) AdvanceRun(ctx context.Context, workspaceID, runID string) error {
 	unlock := o.runLocks.Lock(workspaceID + "/" + runID)
 	defer unlock()
@@ -289,26 +290,14 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 		return false, nil
 	case state.cleanupRequested && !state.cleanupConfirmed:
 		return true, o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
-	case state.cancelRequested:
-		return o.stepCancel(ctx, workspaceID, runID, version, state)
+	case state.firstTerminal != nil && !state.outcomeRecorded:
+		return true, o.recordTerminalTransition(ctx, workspaceID, runID, version, state)
 	case state.launchIntent == nil:
 		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
 	case state.replacementEligible():
 		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
 	case !state.launchAccepted && state.launchFailure == nil:
 		return o.stepLaunch(ctx, workspaceID, runID, version, state)
-	case state.exitCode != nil && !state.outcomeRecorded:
-		// A reported exit code is authoritative: record the outcome (0 →
-		// succeeded, else failed) and request cleanup without waiting for the
-		// observation backstop to see the container exit.
-		outcome := domain.RunOutcomeSucceeded
-		if *state.exitCode != 0 {
-			outcome = domain.RunOutcomeFailed
-		}
-		return true, o.appendEvents(ctx, workspaceID, runID, version, "advance:report-finalize", []eventlog.NewEvent{
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: outcome}, o.now()),
-			mustEvent(runID, "cleanup_requested", EventCleanupRequested, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, o.now()),
-		})
 	default:
 		observation, err := o.observeLaunch(ctx, workspaceID, state)
 		if err != nil {
@@ -348,37 +337,19 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	})
 }
 
-// stepCancel completes a requested cancel: close immediately when nothing was
-// launched, otherwise cancel at the adapter, then record the terminal
-// cancelled observation (the cleanup step closes the run on the next
-// iteration).
-func (o *Orchestrator) stepCancel(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+// recordTerminalTransition converts the first terminal fact in stream order
+// into the run's single outcome and cleanup intent.
+func (o *Orchestrator) recordTerminalTransition(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
 	if !state.externalObjectPossible() {
-		// No launch happened, or the launch failed with proof that it created no
-		// object. Close terminally without calling the provider or scheduling cleanup.
-		return true, o.appendEvents(ctx, workspaceID, runID, version, "cancel:close_before_launch", []eventlog.NewEvent{
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeCancelled}, o.now()),
+		return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal-before-launch", []eventlog.NewEvent{
+			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: state.firstTerminal.Outcome}, o.now()),
 			mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 		})
 	}
-	if !state.cancelAccepted {
-		cancelReq := adapter.CancelRequest{WorkspaceID: workspaceID, ConnectionID: state.launchIntent.SelectedOfferConnectionID, OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
-		hash, err := domain.CanonicalHash(cancelReq)
-		if err != nil {
-			return false, err
-		}
-		cancelReq.RequestHash = hash
-		if _, err := o.adapter.Cancel(ctx, cancelReq); err != nil {
-			return false, err
-		}
-		return true, o.appendEvents(ctx, workspaceID, runID, version, "cancel:accepted", []eventlog.NewEvent{
-			mustEvent(runID, "cancel_accepted", EventCancelAccepted, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, o.now()),
-		})
-	}
-	if !state.outcomeRecorded {
-		return o.recordObservation(ctx, workspaceID, runID, version, state, adapter.ExternalObservation{LaunchKey: state.launchIntent.LaunchKey, Phase: adapter.ExternalPhaseCancelled, ObservedAt: o.now().UTC()})
-	}
-	return false, nil
+	return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal", []eventlog.NewEvent{
+		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: state.firstTerminal.Outcome}, o.now()),
+		mustEvent(runID, "cleanup_requested", EventCleanupRequested, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, o.now()),
+	})
 }
 
 func (o *Orchestrator) GetRunEvents(ctx context.Context, workspaceID, runID string) ([]eventlog.StoredEvent, error) {
@@ -554,10 +525,9 @@ func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string
 	return o.GetRun(ctx, workspaceID, runID)
 }
 
-// CancelRun records the cancel request as a fact (attributed to the acting
-// principal), then advances the run: the advance loop cancels at the adapter,
-// records the cancelled outcome, and cleans up. Cancelling an already-closed
-// run returns the record unchanged.
+// CancelRun records the cancel request as a fact attributed to the acting
+// principal, then advances it through the same terminal cleanup transition as
+// workload exit and provider exit. Cancelling a closed run returns it unchanged.
 func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string, actor json.RawMessage) (domain.RunRecord, error) {
 	events, err := o.GetRunEvents(ctx, workspaceID, runID)
 	if err != nil {
@@ -590,10 +560,17 @@ func (o *Orchestrator) CancelRun(ctx context.Context, workspaceID, runID string,
 	return o.GetRun(ctx, workspaceID, runID)
 }
 
-// RecordReport appends a compute.run.reported.v1 event to the run's stream.
-// It uses optimistic concurrency and retries once on a concurrency conflict.
-func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, reportType string, data json.RawMessage, exitCode *int) error {
-	payload := runReportedData{Type: reportType, Data: data, ExitCode: exitCode}
+// RecordReport appends a compute.run.reported.v1 fact and returns before
+// cleanup. Terminal reports use one semantic command per run, so an exact
+// replay is idempotent and conflicting terminal data fails explicitly.
+func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID string, report RunReport) error {
+	if report == nil {
+		return fmt.Errorf("%w: report is required", ErrInvalidReport)
+	}
+	payload := report.payload()
+	unlock := o.runLocks.Lock(workspaceID + "/" + runID)
+	defer unlock()
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("orchestrator: marshal report data: %w", err)
@@ -609,6 +586,16 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 		}
 		version := streamVersion(events)
 		suffix := fmt.Sprintf("reported_%d", version+1)
+		commandKey := runID + ":report:" + suffix
+		requestHash := ""
+		if payload.terminal() {
+			suffix = "reported_terminal"
+			commandKey = runID + ":report:terminal"
+			requestHash, err = domain.CanonicalHash(payload)
+			if err != nil {
+				return err
+			}
+		}
 		evt := eventlog.NewEvent{
 			ID:            eventID(workspaceID, runID, suffix),
 			Type:          EventRunReported,
@@ -617,27 +604,26 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 			Visibility:    eventlog.VisibilityPublic,
 			Data:          encoded,
 		}
-		requestHash, err := domain.CanonicalHash([]eventlog.NewEvent{evt})
-		if err != nil {
-			return err
+		if requestHash == "" {
+			requestHash, err = domain.CanonicalHash([]eventlog.NewEvent{evt})
+			if err != nil {
+				return err
+			}
 		}
 		_, appendErr := o.log.Append(ctx, eventlog.AppendRequest{
 			Stream:                runStream(workspaceID, runID),
 			ExpectedStreamVersion: version,
-			CommandKey:            runID + ":report:" + suffix,
+			CommandKey:            commandKey,
 			RequestHash:           requestHash,
 			CorrelationID:         runID,
 			CausationID:           "report",
 			Events:                []eventlog.NewEvent{evt},
 		})
 		if appendErr == nil {
-			if exitCode != nil {
-				// Drive the authoritative outcome + prompt cleanup from the
-				// reported exit code. Best-effort: any error here is non-fatal —
-				// the next poll's AdvanceRun still finalizes.
-				_ = o.AdvanceRun(ctx, workspaceID, runID)
-			}
 			return nil
+		}
+		if payload.terminal() && errors.Is(appendErr, eventlog.ErrIdempotencyConflict) {
+			return fmt.Errorf("%w: %v", ErrTerminalReportConflict, appendErr)
 		}
 		if errors.Is(appendErr, eventlog.ErrConcurrencyConflict) && attempt == 0 {
 			// Retry once on optimistic-concurrency conflict.
@@ -668,6 +654,10 @@ func newAttempt(workspaceID, runID string, attemptNumber int) attemptData {
 
 func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot, reportPublicURL, reportToken string) (adapter.LaunchRequest, error) {
 	container := requested.Workload.Spec.Containers[0]
+	disposition, err := domain.DispositionForOfferKind(selectedOffer.Kind)
+	if err != nil {
+		return adapter.LaunchRequest{}, err
+	}
 	env := launchEnvironment(container.Env)
 	if reportPublicURL != "" && reportToken != "" {
 		env = append(env,
@@ -702,7 +692,7 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		// Derive the cleanup disposition from the selected offer's Kind and RECORD
 		// it on the launch intent now. This recorded value — not the offer kind
 		// looked up later — is the source of truth for cleanup.
-		Disposition: domain.DispositionForOfferKind(selectedOffer.Kind),
+		Disposition: disposition,
 	}
 	hash, err := domain.CanonicalHash(launchReq)
 	if err != nil {
@@ -712,24 +702,16 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 	return launchReq, nil
 }
 
-// recordObservation appends the observation and, on a terminal phase, the
-// outcome and cleanup request (the cleanup step then closes the run on the
-// next advance iteration). It reports whether the run progressed. A
-// non-terminal observation that repeats the last recorded phase carries no new
-// information; appending it anyway would grow the stream on every poll
-// (waitRun refreshes every 100ms) without bound.
+// recordObservation appends the provider fact. A terminal fact makes the next
+// advance iteration record the outcome and cleanup intent. A repeated
+// non-terminal phase carries no new information, so it is not appended on
+// every poll.
 func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID string, version uint64, state runState, observation adapter.ExternalObservation) (bool, error) {
 	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase {
 		return false, nil
 	}
 	toAppend := []eventlog.NewEvent{
 		mustEvent(runID, fmt.Sprintf("external_state_observed_%d", version+1), EventExternalStateObserved, observation, o.now()),
-	}
-	if isTerminal(observation.Phase) && !state.outcomeRecorded {
-		toAppend = append(toAppend,
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: outcomeForPhase(observation.Phase)}, o.now()),
-			mustEvent(runID, "cleanup_requested", EventCleanupRequested, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, o.now()),
-		)
 	}
 	if err := o.appendEvents(ctx, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), toAppend); err != nil {
 		return false, err
@@ -779,37 +761,57 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 	// Dispatch on the RECORDED disposition from the launch intent. We never
 	// consult live offers or re-derive the disposition here: that is what makes
 	// cleanup crash-safe and orphan-free even if offers changed or disappeared.
-	// A missing recorded disposition (e.g. a pre-change event log) defaults to
-	// release, the safe option that never destroys a host.
 	disposition := launchReq.Disposition
-	if disposition == "" {
-		disposition = domain.DispositionRelease
+	if !disposition.Valid() {
+		return fmt.Errorf("orchestrator: cleanup requires a valid recorded disposition, got %q", disposition)
 	}
-	if disposition == domain.DispositionTerminate {
-		terminateReq := adapter.TerminateRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
-		hash, err := domain.CanonicalHash(terminateReq)
-		if err != nil {
-			return err
-		}
-		terminateReq.RequestHash = hash
-		if _, err := o.adapter.Terminate(ctx, terminateReq); err != nil {
-			return err
-		}
-	} else {
-		releaseReq := adapter.ReleaseRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
-		hash, err := domain.CanonicalHash(releaseReq)
-		if err != nil {
-			return err
-		}
-		releaseReq.RequestHash = hash
-		if _, err := o.adapter.Release(ctx, releaseReq); err != nil {
-			return err
-		}
+	if err := o.cleanup(ctx, workspaceID, launchReq); err != nil {
+		return o.recordCleanupFailure(ctx, workspaceID, runID, version, launchReq.LaunchKey, disposition, err)
 	}
 	return o.appendEvents(ctx, workspaceID, runID, version, "advance:cleanup", []eventlog.NewEvent{
 		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, cleanupConfirmedData{LaunchKey: launchReq.LaunchKey, Disposition: disposition}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 	})
+}
+
+func (o *Orchestrator) cleanup(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
+	switch launchReq.Disposition {
+	case domain.DispositionTerminate:
+		return o.terminate(ctx, workspaceID, launchReq)
+	case domain.DispositionRelease:
+		return o.release(ctx, workspaceID, launchReq)
+	default:
+		return fmt.Errorf("orchestrator: unknown cleanup disposition %q", launchReq.Disposition)
+	}
+}
+
+func (o *Orchestrator) terminate(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
+	request := adapter.TerminateRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+	hash, err := domain.CanonicalHash(request)
+	if err != nil {
+		return err
+	}
+	request.RequestHash = hash
+	_, err = o.adapter.Terminate(ctx, request)
+	return err
+}
+
+func (o *Orchestrator) release(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
+	request := adapter.ReleaseRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+	hash, err := domain.CanonicalHash(request)
+	if err != nil {
+		return err
+	}
+	request.RequestHash = hash
+	_, err = o.adapter.Release(ctx, request)
+	return err
+}
+
+func (o *Orchestrator) recordCleanupFailure(ctx context.Context, workspaceID, runID string, version uint64, launchKey string, disposition domain.Disposition, cleanupErr error) error {
+	appendErr := o.appendEvents(ctx, workspaceID, runID, version, fmt.Sprintf("advance:cleanup-failed:%d", version), []eventlog.NewEvent{
+		mustEvent(runID, fmt.Sprintf("cleanup_failed_%d", version+1), EventCleanupFailed, publicCleanupError(cleanupErr, launchKey, disposition), o.now()),
+	})
+	return errors.Join(cleanupErr, appendErr)
 }
 
 func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {

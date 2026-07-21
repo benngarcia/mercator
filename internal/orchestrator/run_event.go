@@ -19,16 +19,21 @@ type runState struct {
 	attemptCount             int
 	excludedOfferSnapshotIDs []string
 	cancelRequested          bool
-	cancelAccepted           bool
+	firstTerminal            *terminalFact
 	outcomeRecorded          bool
 	outcome                  domain.RunOutcome
 	cleanupRequested         bool
+	cleanupFailure           *domain.CleanupError
 	cleanupConfirmed         bool
 	closed                   bool
 	exitCode                 *int
 	lastObservedPhase        adapter.ExternalPhase
 	createdBy                string
 	cancelledBy              string
+}
+
+type terminalFact struct {
+	Outcome domain.RunOutcome
 }
 
 func (state runState) externalObjectPossible() bool {
@@ -132,6 +137,9 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		state.cancelRequested = true
 		state.cancelledBy = actorSubject(stored.Actor)
+		if state.firstTerminal == nil {
+			state.firstTerminal = &terminalFact{Outcome: domain.RunOutcomeCancelled}
+		}
 
 	case EventCancelAccepted:
 		var data launchReferenceData
@@ -141,7 +149,6 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if data.LaunchKey == "" {
 			return invalidRunEvent(stored, "launch_key is required")
 		}
-		state.cancelAccepted = true
 
 	case EventExternalStateObserved:
 		var data adapter.ExternalObservation
@@ -155,9 +162,12 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		// Only an exited container's code is authoritative. Docker observes exit
 		// code zero on running containers, while workload-reported codes are
 		// trusted independently by EventRunReported.
-		if data.ExitCode != nil && data.Phase.Exited() {
+		if data.ExitCode != nil && data.Phase.Exited() && state.firstTerminal == nil {
 			code := *data.ExitCode
 			state.exitCode = &code
+		}
+		if isTerminal(data.Phase) && state.firstTerminal == nil {
+			state.firstTerminal = &terminalFact{Outcome: outcomeForPhase(data.Phase)}
 		}
 
 	case EventRunReported:
@@ -165,12 +175,17 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if err := decodePublicRunPayload(stored, &data); err != nil {
 			return err
 		}
-		if data.Type == "" {
-			return invalidRunEvent(stored, "report type is required")
+		if err := data.validate(); err != nil {
+			return invalidRunEvent(stored, err.Error())
 		}
-		if data.ExitCode != nil {
+		if data.terminal() && state.firstTerminal == nil {
 			code := *data.ExitCode
 			state.exitCode = &code
+			outcome := domain.RunOutcomeSucceeded
+			if code != 0 {
+				outcome = domain.RunOutcomeFailed
+			}
+			state.firstTerminal = &terminalFact{Outcome: outcome}
 		}
 
 	case EventRunOutcomeRecorded:
@@ -193,6 +208,16 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, "launch_key is required")
 		}
 		state.cleanupRequested = true
+
+	case EventCleanupFailed:
+		var data domain.CleanupError
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if err := data.Validate(); err != nil {
+			return invalidRunEvent(stored, err.Error())
+		}
+		state.cleanupFailure = &data
 
 	case EventCleanupConfirmed:
 		var data cleanupConfirmedData
@@ -331,6 +356,11 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 		record.Phase = "cleaning_up"
 		record.Cleanup = domain.CleanupPending
 	}
+	if state.cleanupFailure != nil && !state.cleanupConfirmed {
+		record.Cleanup = domain.CleanupBlocked
+		failure := *state.cleanupFailure
+		record.CleanupError = &failure
+	}
 	if state.cleanupConfirmed {
 		record.Cleanup = domain.CleanupConfirmed
 	}
@@ -338,12 +368,12 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 		code := *state.exitCode
 		record.ExitCode = &code
 	}
+	if state.outcomeRecorded {
+		record.Outcome = state.outcome
+	}
 	if state.closed {
 		record.Phase = "closed"
 		record.Closed = true
-		if state.outcomeRecorded {
-			record.Outcome = state.outcome
-		}
 	}
 	return record
 }

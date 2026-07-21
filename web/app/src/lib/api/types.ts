@@ -73,6 +73,10 @@ export type CredentialRef = ContractSchemas["Credential"];
 export type CredentialSource = CredentialRef["source"];
 export type ConnectionRecord = ContractSchemas["ConnectionRecord"];
 export type ResolvedImage = ContractSchemas["ResolvedImage"];
+export type Workspace = ContractSchemas["Workspace"];
+export type CreateWorkspaceRequest = ContractSchemas["CreateWorkspaceRequest"];
+export type WorkspaceResponse = ContractSchemas["WorkspaceResponse"];
+export type WorkspaceListResponse = ContractSchemas["WorkspaceListResponse"];
 
 // /auth/session belongs to the browser login surface rather than the public
 // versioned HTTP contract.

@@ -18,6 +18,14 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
+type workspaceTestLog struct {
+	eventlog.EventLog
+}
+
+func (l workspaceTestLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}
+
 func TestCreateRunIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
@@ -51,7 +59,7 @@ func TestCreateRunIsIdempotent(t *testing.T) {
 
 func TestListRunsDoesNotReadEveryStream(t *testing.T) {
 	ctx := context.Background()
-	log := &streamReadCountingLog{EventLog: openOrchestratorLog(t)}
+	log := &streamReadCountingLog{WorkspaceEventLog: openOrchestratorLog(t)}
 	orch := New(log, scheduler.New(), fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
@@ -290,7 +298,7 @@ func TestAdvanceRunDoesNotInjectReportingEnvWhenNotConfigured(t *testing.T) {
 
 func TestCancelRunAfterLaunchRecordsCancelledOutcomeAndCleansUp(t *testing.T) {
 	ctx := context.Background()
-	offer := orchOffer("offer_cancel", time.Now().UTC())
+	offer := orchProvisionableOffer("offer_cancel", time.Now().UTC())
 	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
 	orch := newTestOrchestrator(t, ad)
 	rev := orchRevision()
@@ -319,10 +327,16 @@ func TestCancelRunAfterLaunchRecordsCancelledOutcomeAndCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}
-	for _, eventType := range []string{EventCancelRequested, EventCancelAccepted, EventRunOutcomeRecorded, EventCleanupRequested, EventCleanupConfirmed, EventRunClosed} {
+	for _, eventType := range []string{EventCancelRequested, EventRunOutcomeRecorded, EventCleanupRequested, EventCleanupConfirmed, EventRunClosed} {
 		if !hasEvent(events, eventType) {
 			t.Fatalf("expected %s in %s", eventType, eventTypes(events))
 		}
+	}
+	if hasEvent(events, EventCancelAccepted) {
+		t.Fatalf("cancellation must use the terminal cleanup path without cancel_accepted: %s", eventTypes(events))
+	}
+	if ad.TerminateCount() != 1 || ad.ReleaseCount() != 0 {
+		t.Fatalf("cleanup counts: terminate=%d release=%d, want one termination", ad.TerminateCount(), ad.ReleaseCount())
 	}
 	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
 	if err != nil {
@@ -407,9 +421,6 @@ func TestCancelRunResumesAfterCancelAcceptedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reduce run: %v", err)
 	}
-	if _, err := ad.Cancel(ctx, adapter.CancelRequest{OperationKey: "cancel_" + state.launchIntent.AttemptID, RequestHash: mustHash(t, adapter.CancelRequest{OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}), LaunchKey: state.launchIntent.LaunchKey}); err != nil {
-		t.Fatalf("seed adapter cancel: %v", err)
-	}
 	if err := orch.appendEvents(ctx, "ws_1", runID, uint64(len(events)), "cancel:accepted", []eventlog.NewEvent{
 		mustEvent(runID, "cancel_requested", EventCancelRequested, cancelRequestedData{LaunchKey: state.launchIntent.LaunchKey}, time.Now()),
 		mustEvent(runID, "cancel_accepted", EventCancelAccepted, launchReferenceData{LaunchKey: state.launchIntent.LaunchKey}, time.Now()),
@@ -423,32 +434,6 @@ func TestCancelRunResumesAfterCancelAcceptedEvents(t *testing.T) {
 	}
 	if !record.Closed || record.Outcome != domain.RunOutcomeCancelled || record.Cleanup != domain.CleanupConfirmed {
 		t.Fatalf("unexpected resumed cancel record: %+v", record)
-	}
-}
-
-func TestCancelRunRecordsIntentBeforeAdapterFailure(t *testing.T) {
-	ctx := context.Background()
-	ad := &cancelFailsAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("offer_cancel_fail", time.Now().UTC())}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))}
-	orch := newTestOrchestrator(t, ad)
-	runID := "run_cancel_fail"
-	if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
-		t.Fatalf("create run: %v", err)
-	}
-	if err := orch.AdvanceRun(ctx, "ws_1", runID); err != nil {
-		t.Fatalf("advance run: %v", err)
-	}
-	if _, err := orch.CancelRun(ctx, "ws_1", runID, nil); !errors.Is(err, adapter.ErrRetryableFailure) {
-		t.Fatalf("expected retryable cancel failure, got %v", err)
-	}
-	events, err := orch.GetRunEvents(ctx, "ws_1", runID)
-	if err != nil {
-		t.Fatalf("get events: %v", err)
-	}
-	if !hasEvent(events, EventCancelRequested) {
-		t.Fatalf("cancel intent should be durable before adapter failure: %s", eventTypes(events))
-	}
-	if hasEvent(events, EventCancelAccepted) {
-		t.Fatalf("cancel accepted should not be recorded after adapter failure: %s", eventTypes(events))
 	}
 }
 
@@ -720,14 +705,6 @@ func (r *releaseFailsOnceAdapter) Release(ctx context.Context, req adapter.Relea
 	return r.Adapter.Release(ctx, req)
 }
 
-type cancelFailsAdapter struct {
-	*fake.Adapter
-}
-
-func (c *cancelFailsAdapter) Cancel(context.Context, adapter.CancelRequest) (adapter.CancelReceipt, error) {
-	return adapter.CancelReceipt{}, adapter.ErrRetryableFailure
-}
-
 type indeterminateLaunchAdapter struct {
 	*fake.Adapter
 	launchCalls    int
@@ -818,16 +795,16 @@ func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {
 }
 
 type streamReadCountingLog struct {
-	eventlog.EventLog
+	eventlog.WorkspaceEventLog
 	streamReads int
 }
 
 func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
 	l.streamReads++
-	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
+	return l.WorkspaceEventLog.ReadStream(ctx, stream, afterVersion, limit)
 }
 
-func openOrchestratorLog(t *testing.T) *eventlog.SQLiteEventLog {
+func openOrchestratorLog(t *testing.T) eventlog.WorkspaceEventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -838,7 +815,7 @@ func openOrchestratorLog(t *testing.T) *eventlog.SQLiteEventLog {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return log
+	return workspaceTestLog{EventLog: log}
 }
 
 func createRun(t *testing.T, ctx context.Context, orch *Orchestrator) {
@@ -1033,7 +1010,7 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 	orch := New(log, scheduler.New(), ad)
 	createRun(t, ctx, orch)
 
-	fillerData, err := json.Marshal(adapterErrorData{
+	fillerData, err := json.Marshal(domain.ProviderError{
 		Code:      "TEST_PAGINATION_FILLER",
 		Message:   "Pagination filler.",
 		Retryable: false,
