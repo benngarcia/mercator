@@ -1,0 +1,54 @@
+{
+  "summary": "The run defers for a busy rental due free in 6 minutes, but the rental is still observed busy at the deadline. Re-evaluation past the deadline stops waiting and falls through to provisioning fresh.",
+  "status": "target",
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "state": "busy",
+        "busy": {"remaining_max_runtime": "6m", "frees_after": "30m"},
+        "cached_images": ["trainer:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m"}
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "iteration",
+      "request": {
+        "image": "trainer:v1",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "defer",
+        "defer": {"reason": "BUSY_RENTAL_WORTH_WAITING", "deadline": "+6m"}
+      }
+    },
+    {"advance": "7m"},
+    {
+      "reevaluate": "iteration",
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-4090",
+        "disposition": "terminate"
+      }
+    }
+  ]
+}

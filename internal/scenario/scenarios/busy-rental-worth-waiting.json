@@ -1,0 +1,44 @@
+{
+  "summary": "The warm rental is busy but frees in 6 minutes, and fresh capacity pays 5 minutes of boot plus a full pull: waiting wins, so the run defers with a deadline derived from the running work's remaining max runtime.",
+  "status": "target",
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "state": "busy",
+        "busy": {"remaining_max_runtime": "6m"},
+        "cached_images": ["trainer:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m"}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer:v1",
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "defer",
+    "defer": {"reason": "BUSY_RENTAL_WORTH_WAITING", "deadline": "+6m"},
+    "candidates": {
+      "rental-warm": {"queue_seconds": 360, "pull_seconds": 0},
+      "fresh-4090": {"provision_seconds": {"at_least": 300}}
+    }
+  }
+}

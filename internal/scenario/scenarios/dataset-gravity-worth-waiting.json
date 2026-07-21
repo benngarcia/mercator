@@ -1,0 +1,51 @@
+{
+  "summary": "The rental holding the declared 40GB dataset is busy for 8 more minutes while a rental with a perfect image cache sits idle. Waiting for the dataset still wins: the run defers for the dataset rental instead of taking the idle one.",
+  "status": "target",
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-dataset",
+        "state": "busy",
+        "busy": {"remaining_max_runtime": "8m"},
+        "cached_layers": ["cuda-base"],
+        "named_caches": {"dataset-imagenet-2a41": "40GB"},
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-imagecache",
+        "state": "idle",
+        "cached_images": ["trainer:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer:v1",
+    "expected_runtime": "20m",
+    "max_runtime": "1h",
+    "cache_mounts": [
+      {"name": "dataset", "key": "dataset-imagenet-2a41", "size": "40GB"}
+    ]
+  },
+  "expect": {
+    "outcome": "defer",
+    "defer": {"reason": "BUSY_RENTAL_WORTH_WAITING", "deadline": "+8m"},
+    "candidates": {
+      "rental-dataset": {
+        "queue_seconds": 480,
+        "caches": {"dataset-imagenet-2a41": "hit"}
+      },
+      "rental-imagecache": {
+        "caches": {"dataset-imagenet-2a41": "miss"}
+      }
+    }
+  }
+}

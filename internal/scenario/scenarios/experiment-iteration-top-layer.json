@@ -1,0 +1,51 @@
+{
+  "summary": "An engineer's next iteration changes only the 40MB top layer of an 18GB image. The rental warm from the previous iteration holds every base layer, so a near-free one-layer pull beats provisioning and pulling the world.",
+  "status": "green",
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      },
+      "trainer:v2": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v2", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "state": "idle",
+        "cached_images": ["trainer:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "4m", "p90": "8m"}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer:v2",
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-warm",
+    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+    "disposition": "release",
+    "candidates": {
+      "rental-warm": {"feasible": true, "pull_seconds": {"at_most": 2}},
+      "fresh-4090": {"feasible": true, "pull_seconds": {"at_least": 200}}
+    }
+  }
+}

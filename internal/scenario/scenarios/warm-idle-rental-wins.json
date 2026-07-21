@@ -1,0 +1,50 @@
+{
+  "summary": "A warm idle rental holding the full image beats provisioning fresh capacity, because the fresh offer pays boot time plus an 18GB pull.",
+  "status": "green",
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "state": "idle",
+        "idle_lease_expires_in": "30m",
+        "cached_images": ["trainer:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "4m", "p90": "8m"}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer:v1",
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-warm",
+    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+    "disposition": "release",
+    "candidates": {
+      "rental-warm": {"feasible": true, "pull_seconds": 0},
+      "fresh-4090": {
+        "feasible": true,
+        "provision_seconds": {"at_least": 240},
+        "pull_seconds": {"at_least": 200}
+      }
+    }
+  }
+}
