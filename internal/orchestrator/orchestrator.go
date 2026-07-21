@@ -85,6 +85,15 @@ func WithReporting(publicURL string, signer *reporting.Signer) Option {
 	}
 }
 
+// WithClock replaces the wall clock used to stamp event occurrence times and
+// placement evaluation times. Scenario harnesses inject a scripted clock so
+// decisions and deadlines are deterministic; production uses time.Now.
+func WithClock(now func() time.Time) Option {
+	return func(o *Orchestrator) {
+		o.now = now
+	}
+}
+
 func New(log eventlog.WorkspaceEventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
 	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
 	for _, opt := range opts {
