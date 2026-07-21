@@ -2699,15 +2699,6 @@ func (response CreateRun500JSONResponse) VisitCreateRunResponse(w http.ResponseW
 	return json.NewEncoder(w).Encode(response)
 }
 
-type CreateRun502JSONResponse ErrorResponse
-
-func (response CreateRun502JSONResponse) VisitCreateRunResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(502)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
 type GetRunRequestObject struct {
 	RunId  string `json:"run_id"`
 	Params GetRunParams

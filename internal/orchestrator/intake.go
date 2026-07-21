@@ -3,18 +3,12 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 
 	"github.com/benngarcia/mercator/internal/domain"
 )
-
-// ErrAdvanceFailed is returned by Intake when the run was recorded but the
-// first AdvanceRun drive failed. Callers should treat the run as accepted and
-// inspect public run events for the stable failure code.
-var ErrAdvanceFailed = errors.New("orchestrator: advance run failed")
 
 // IntakeRequest is the deep create-run interface: HTTP/CLI-shaped input that
 // owns shorthand synthesis, env overrides, run-id minting, append, and the
@@ -39,9 +33,10 @@ type IntakeResult struct {
 	Duplicate bool
 }
 
-// Intake accepts a create-run request, records it, advances once through
-// placement/launch, and returns the resulting run record. Callers do not need
-// to know hash-before-resolve, generated-id idempotency, or advance-after-create.
+// Intake accepts a create-run request and returns the current record once the
+// run_requested event is durable. Eager advancement is best-effort after that
+// acceptance point: provider failures are represented by the Run's recorded
+// state and do not replace the accepted result with an error.
 func (o *Orchestrator) Intake(ctx context.Context, req IntakeRequest) (IntakeResult, error) {
 	if req.WorkspaceID == "" {
 		return IntakeResult{}, fmt.Errorf("orchestrator: workspace_id is required")
@@ -84,12 +79,10 @@ func (o *Orchestrator) Intake(ctx context.Context, req IntakeRequest) (IntakeRes
 	if err != nil {
 		return IntakeResult{}, err
 	}
-	if err := o.AdvanceRun(ctx, req.WorkspaceID, result.RunID); err != nil {
-		return IntakeResult{}, fmt.Errorf("%w: %v", ErrAdvanceFailed, err)
-	}
+	_ = o.AdvanceRun(ctx, req.WorkspaceID, result.RunID)
 	record, err := o.GetRun(ctx, req.WorkspaceID, result.RunID)
 	if err != nil {
-		return IntakeResult{}, err
+		return IntakeResult{}, fmt.Errorf("%w: %w", ErrAcceptedRunUnavailable, err)
 	}
 	return IntakeResult{Run: record, Duplicate: result.Duplicate}, nil
 }
