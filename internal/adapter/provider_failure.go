@@ -41,6 +41,48 @@ type ProviderFailure struct {
 	ResponseTruncated bool
 }
 
+// ProviderFailureDiagnostic is the private, correlated record for one final
+// failed provider operation. Reporters must select fields from this value and
+// must never serialize the originating provider request.
+type ProviderFailureDiagnostic struct {
+	WorkspaceID     string
+	RunID           string
+	AttemptID       string
+	ConnectionID    string
+	AdapterType     string
+	Operation       string
+	OfferSnapshotID string
+	OfferNativeRef  string
+	Failure         ProviderFailure
+}
+
+// ProviderOperationContext carries the stable Run and provider correlation
+// shared by cancellation and cleanup requests.
+type ProviderOperationContext struct {
+	WorkspaceID     string
+	RunID           string
+	AttemptID       string
+	ConnectionID    string
+	AdapterType     string
+	OfferSnapshotID string
+	OfferNativeRef  string
+}
+
+// FailureDiagnostic names the operation that failed without copying request
+// payload or ownership material into the diagnostic.
+func (c ProviderOperationContext) FailureDiagnostic(operation string) ProviderFailureDiagnostic {
+	return ProviderFailureDiagnostic{
+		WorkspaceID:     c.WorkspaceID,
+		RunID:           c.RunID,
+		AttemptID:       c.AttemptID,
+		ConnectionID:    c.ConnectionID,
+		AdapterType:     c.AdapterType,
+		Operation:       operation,
+		OfferSnapshotID: c.OfferSnapshotID,
+		OfferNativeRef:  c.OfferNativeRef,
+	}
+}
+
 func (f *ProviderFailure) Error() string {
 	if f == nil {
 		return "provider operation failed"

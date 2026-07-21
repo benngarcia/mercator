@@ -147,6 +147,16 @@ does not publish the provider response body, API key, authorization headers,
 registry credentials, workload environment values, or launch request payload
 through run events or sinks.
 
+When the optional Sentry integration is enabled, the same final diagnostic also
+creates a provider-failure event. Search by `run_id` and `workspace_id` to find
+one occurrence. Equivalent failures share a fingerprint based on adapter,
+operation, failure kind, Shadeform code, and HTTP status, while the Run,
+attempt, connection, and Offer identities remain per-occurrence context.
+Shadeform response bodies and request material stay in the private process log
+and are never copied to Sentry. See
+[observability-audit.md](observability-audit.md#optional-sentry-provider-failure-reporting)
+for configuration and safe verification.
+
 ## Live verification checklist
 
 With a funded account and `SHADEFORM_API_KEY` exported:

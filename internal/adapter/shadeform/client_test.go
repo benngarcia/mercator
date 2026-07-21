@@ -67,6 +67,39 @@ func TestIdempotentCallsGiveUpAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestReadFailuresRetainProviderClassification(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		wantKind  adapter.ProviderFailureKind
+		wantRetry bool
+	}{
+		{name: "authentication", status: http.StatusUnauthorized, body: `{"code":"UNAUTHORIZED"}`, wantKind: adapter.ProviderFailureAuthentication},
+		{name: "invalid payload", status: http.StatusOK, body: `{"instances":`, wantKind: adapter.ProviderFailureInternal},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			c := newTestClient(func(*http.Request) (*http.Response, error) {
+				return jsonResponse(test.status, test.body), nil
+			})
+
+			_, err := c.listInstances(t.Context())
+
+			var failure *adapter.ProviderFailure
+			if !errors.As(err, &failure) {
+				t.Fatalf("read error = %v, want ProviderFailure", err)
+			}
+			if failure.Kind != test.wantKind || failure.Status != test.status || failure.Retryable != test.wantRetry {
+				t.Fatalf("read failure = %+v", failure)
+			}
+			if failure.SideEffect != adapter.SideEffectNone {
+				t.Fatalf("read side effect = %q, want none", failure.SideEffect)
+			}
+		})
+	}
+}
+
 func TestCreateRetriesOnlyOn429(t *testing.T) {
 	statuses := []int{429, 429, 200}
 	calls := 0
@@ -179,6 +212,33 @@ func TestDeleteTreats404AsGone(t *testing.T) {
 	})
 	if err := c.deleteInstance(context.Background(), "inst_1"); err != nil {
 		t.Fatalf("404 delete must be idempotent success, got %v", err)
+	}
+}
+
+func TestDeleteExhaustionReturnsSanitizedProviderFailure(t *testing.T) {
+	calls := 0
+	c := newTestClient(func(*http.Request) (*http.Response, error) {
+		calls++
+		return jsonResponse(http.StatusServiceUnavailable, `{"code":"UPSTREAM_UNAVAILABLE","authorization":"secret-key"}`), nil
+	})
+
+	err := c.deleteInstance(t.Context(), "inst_1")
+
+	var failure *adapter.ProviderFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("delete error = %v, want ProviderFailure", err)
+	}
+	if calls != 4 || failure.RetryCount != 3 {
+		t.Fatalf("delete attempts/retries = %d/%d, want 4/3", calls, failure.RetryCount)
+	}
+	if failure.Kind != adapter.ProviderFailureInternal || !failure.Retryable || failure.SideEffect != adapter.SideEffectIndeterminate {
+		t.Fatalf("delete failure = %+v", failure)
+	}
+	if failure.Status != http.StatusServiceUnavailable || failure.ProviderCode != "UPSTREAM_UNAVAILABLE" {
+		t.Fatalf("delete status/code = %d/%q", failure.Status, failure.ProviderCode)
+	}
+	if strings.Contains(failure.ResponseBody, "secret-key") {
+		t.Fatalf("delete response was not sanitized: %s", failure.ResponseBody)
 	}
 }
 

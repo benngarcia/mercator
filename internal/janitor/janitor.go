@@ -76,12 +76,11 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 		// defaults to release, the safe option that never destroys a host.
 		if disposition == domain.DispositionTerminate {
 			req := adapter.TerminateRequest{
-				WorkspaceID:       object.WorkspaceID,
-				ConnectionID:      object.ConnectionID,
-				OperationKey:      "janitor:terminate:" + object.LaunchKey,
-				LaunchKey:         object.LaunchKey,
-				OwnershipToken:    object.OwnershipToken,
-				LaunchRequestHash: object.RequestHash,
+				ProviderOperationContext: cleanupContext(object),
+				OperationKey:             "janitor:terminate:" + object.LaunchKey,
+				LaunchKey:                object.LaunchKey,
+				OwnershipToken:           object.OwnershipToken,
+				LaunchRequestHash:        object.RequestHash,
 			}
 			hash, err := domain.CanonicalHash(req)
 			if err != nil {
@@ -93,12 +92,11 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 			}
 		} else {
 			req := adapter.ReleaseRequest{
-				WorkspaceID:       object.WorkspaceID,
-				ConnectionID:      object.ConnectionID,
-				OperationKey:      "janitor:release:" + object.LaunchKey,
-				LaunchKey:         object.LaunchKey,
-				OwnershipToken:    object.OwnershipToken,
-				LaunchRequestHash: object.RequestHash,
+				ProviderOperationContext: cleanupContext(object),
+				OperationKey:             "janitor:release:" + object.LaunchKey,
+				LaunchKey:                object.LaunchKey,
+				OwnershipToken:           object.OwnershipToken,
+				LaunchRequestHash:        object.RequestHash,
 			}
 			hash, err := domain.CanonicalHash(req)
 			if err != nil {
@@ -112,6 +110,16 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 		result.Released++
 	}
 	return result, nil
+}
+
+func cleanupContext(object adapter.OwnedExternalObject) adapter.ProviderOperationContext {
+	return adapter.ProviderOperationContext{
+		WorkspaceID:  object.WorkspaceID,
+		RunID:        object.RunID,
+		AttemptID:    object.AttemptID,
+		ConnectionID: object.ConnectionID,
+		AdapterType:  object.AdapterType,
+	}
 }
 
 // releasable reports whether an owned object should be reclaimed and, if so, the

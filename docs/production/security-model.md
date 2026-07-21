@@ -21,6 +21,8 @@ evaluation. It is not a GA security assurance statement.
 - Runtime adapters are trusted in-process code.
 - Docker runs on the local host and should be treated as part of the trusted
   evaluation environment.
+- When an operator sets `SENTRY_DSN`, Sentry becomes an outbound trust boundary
+  for allow-listed provider-failure metadata. It remains disabled by default.
 
 ## Environment Non-Observability
 
@@ -37,6 +39,9 @@ Implemented protections:
   material. It is written only to an operation-owned mode-0600 Docker config,
   removed from the Docker subprocess environment, never passed in Docker argv
   or workload env, and removed after the container create command.
+- Optional Sentry events are constructed from correlated identifiers and
+  provider classifications. Provider response/request bodies, authorization
+  headers, credentials, and workload env values are never attached.
 
 Operator checks:
 

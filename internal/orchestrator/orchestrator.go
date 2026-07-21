@@ -379,7 +379,19 @@ func (o *Orchestrator) stepCancel(ctx context.Context, workspaceID, runID string
 		})
 	}
 	if !state.cancelAccepted {
-		cancelReq := adapter.CancelRequest{WorkspaceID: workspaceID, ConnectionID: state.launchIntent.SelectedOfferConnectionID, OperationKey: "cancel_" + state.launchIntent.AttemptID, LaunchKey: state.launchIntent.LaunchKey}
+		cancelReq := adapter.CancelRequest{
+			ProviderOperationContext: adapter.ProviderOperationContext{
+				WorkspaceID:     workspaceID,
+				RunID:           runID,
+				AttemptID:       state.launchIntent.AttemptID,
+				ConnectionID:    state.launchIntent.SelectedOfferConnectionID,
+				AdapterType:     state.launchIntent.SelectedOfferAdapterType,
+				OfferSnapshotID: state.launchIntent.SelectedOfferSnapshotID,
+				OfferNativeRef:  state.launchIntent.SelectedOfferNativeRef,
+			},
+			OperationKey: "cancel_" + state.launchIntent.AttemptID,
+			LaunchKey:    state.launchIntent.LaunchKey,
+		}
 		hash, err := domain.CanonicalHash(cancelReq)
 		if err != nil {
 			return false, err
@@ -796,7 +808,13 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 		disposition = domain.DispositionRelease
 	}
 	if disposition == domain.DispositionTerminate {
-		terminateReq := adapter.TerminateRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "terminate_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+		terminateReq := adapter.TerminateRequest{
+			ProviderOperationContext: providerOperationContext(workspaceID, runID, launchReq),
+			OperationKey:             "terminate_" + launchReq.AttemptID,
+			LaunchKey:                launchReq.LaunchKey,
+			OwnershipToken:           launchReq.OwnershipToken,
+			LaunchRequestHash:        launchReq.RequestHash,
+		}
 		hash, err := domain.CanonicalHash(terminateReq)
 		if err != nil {
 			return err
@@ -806,7 +824,13 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 			return err
 		}
 	} else {
-		releaseReq := adapter.ReleaseRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+		releaseReq := adapter.ReleaseRequest{
+			ProviderOperationContext: providerOperationContext(workspaceID, runID, launchReq),
+			OperationKey:             "release_" + launchReq.AttemptID,
+			LaunchKey:                launchReq.LaunchKey,
+			OwnershipToken:           launchReq.OwnershipToken,
+			LaunchRequestHash:        launchReq.RequestHash,
+		}
 		hash, err := domain.CanonicalHash(releaseReq)
 		if err != nil {
 			return err
@@ -820,6 +844,18 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, cleanupConfirmedData{LaunchKey: launchReq.LaunchKey, Disposition: disposition}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 	})
+}
+
+func providerOperationContext(workspaceID, runID string, launchReq *adapter.LaunchRequest) adapter.ProviderOperationContext {
+	return adapter.ProviderOperationContext{
+		WorkspaceID:     workspaceID,
+		RunID:           runID,
+		AttemptID:       launchReq.AttemptID,
+		ConnectionID:    launchReq.SelectedOfferConnectionID,
+		AdapterType:     launchReq.SelectedOfferAdapterType,
+		OfferSnapshotID: launchReq.SelectedOfferSnapshotID,
+		OfferNativeRef:  launchReq.SelectedOfferNativeRef,
+	}
 }
 
 func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {

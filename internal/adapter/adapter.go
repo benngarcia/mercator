@@ -148,8 +148,7 @@ type ExternalObservation struct {
 }
 
 type CancelRequest struct {
-	WorkspaceID  string
-	ConnectionID string
+	ProviderOperationContext
 	OperationKey string
 	RequestHash  string
 	LaunchKey    string
@@ -161,8 +160,7 @@ type CancelReceipt struct {
 }
 
 type ReleaseRequest struct {
-	WorkspaceID       string
-	ConnectionID      string
+	ProviderOperationContext
 	OperationKey      string
 	RequestHash       string
 	LaunchKey         string
@@ -180,8 +178,7 @@ type ReleaseReceipt struct {
 // ownership material (OwnershipToken/LaunchRequestHash) as ReleaseRequest so
 // the no-orphan reconciliation path is identical.
 type TerminateRequest struct {
-	WorkspaceID       string
-	ConnectionID      string
+	ProviderOperationContext
 	OperationKey      string
 	RequestHash       string
 	LaunchKey         string
@@ -206,6 +203,7 @@ type OwnedExternalObject struct {
 	// aggregation so callers (e.g. the janitor) can route Release/Terminate
 	// back through the right connection.
 	ConnectionID   string
+	AdapterType    string
 	RunID          string
 	AttemptID      string
 	OwnershipToken string

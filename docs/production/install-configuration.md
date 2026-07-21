@@ -58,6 +58,13 @@ server path.
 | `MERCATOR_OIDC_ALLOWED_DOMAIN` | none | Comma-separated email domains admitted at login (and/or `MERCATOR_OIDC_ALLOWED_EMAILS`). |
 | `MERCATOR_OIDC_ALLOWED_EMAILS` | none | Comma-separated email addresses admitted at login. |
 | `MERCATOR_SESSION_KEY` | none | Session-cookie signing key (32+ bytes, hex or base64). Required with OIDC. |
+| `SENTRY_DSN` | none | Enables provider-failure delivery to the Sentry project named by this DSN. Copy it from **Sentry project settings → Client Keys (DSN)**. When absent, Sentry reporting is disabled. |
+| `SENTRY_ENVIRONMENT` | none | Required with `SENTRY_DSN`. Use the deployment environment operators filter on, such as `staging` or `production`. |
+| `SENTRY_RELEASE` | none | Required with `SENTRY_DSN`. Use an immutable Mercator build identity, such as `mercator@v0.5.0` or `mercator@<git-sha>`. |
+
+`SENTRY_DSN` is the enabling switch. Setting it without either companion value
+stops startup and names the missing variable. `SENTRY_ENVIRONMENT` and
+`SENTRY_RELEASE` alone do not enable network delivery.
 
 ## Health And Discovery
 

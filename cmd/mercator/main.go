@@ -32,6 +32,7 @@ import (
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
+	"github.com/benngarcia/mercator/internal/sentryreporter"
 	"github.com/benngarcia/mercator/internal/sinks"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/webauth"
@@ -54,6 +55,19 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 			Stderr:      stderr,
 		})
 	}
+	failureReporter, err := sentryreporter.New(env)
+	if err != nil {
+		stdlog.Printf("configure Sentry: %v", err)
+		return 1
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if !failureReporter.Flush(flushCtx) {
+			stdlog.Printf("flush Sentry events: deadline exceeded")
+		}
+		failureReporter.Close()
+	}()
 	addr := envValue(env, "MERCATOR_ADDR", "127.0.0.1:8080")
 	apiToken, generatedToken, err := apiTokenFromEnv(env)
 	if err != nil {
@@ -75,7 +89,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	// HandlerForSQLite's internal construction but over the SHARED event log,
 	// connection.Service, and Broker (the Broker is the adapter), plus the
 	// secret store, credential resolver, and verifier.
-	deps, err := buildServerDeps(env)
+	deps, err := buildServerDeps(env, broker.WithFailureReporter(failureReporter))
 	if err != nil {
 		stdlog.Printf("configure server: %v", err)
 		return 1
@@ -251,7 +265,7 @@ type serverDeps struct {
 // connection.Service over one event log, the SQLite secret store, and the
 // credential resolver. Connections are event-sourced domain records created
 // and authorized through the API; process startup never invents one.
-func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
+func buildServerDeps(values map[string]string, brokerOptions ...broker.Option) (deps serverDeps, err error) {
 	ctx := context.Background()
 	dsn := envValue(values, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db")
 
@@ -326,7 +340,7 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 		return vastadapter.New(secret, config)
 	})
 
-	br := broker.NewBroker(svc, factory, resolver)
+	br := broker.NewBroker(svc, factory, resolver, brokerOptions...)
 
 	return serverDeps{
 		broker:    br,

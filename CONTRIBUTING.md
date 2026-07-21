@@ -8,7 +8,7 @@ isolation, credentials, cleanup, or public event data.
 
 Required tools:
 
-- Go 1.25+
+- Go 1.25.12+
 - Bun 1.3+ for the embedded console
 - Ruby 3.3+ for the launch audit
 - Docker only when working on live Docker adapter behavior
