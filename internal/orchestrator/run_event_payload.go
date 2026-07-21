@@ -25,10 +25,11 @@ type attemptData struct {
 }
 
 type adapterErrorData struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
-	LaunchKey string `json:"launch_key"`
+	Code       string                      `json:"code"`
+	Message    string                      `json:"message"`
+	Retryable  bool                        `json:"retryable"`
+	SideEffect adapter.SideEffectCertainty `json:"side_effect,omitempty"`
+	LaunchKey  string                      `json:"launch_key"`
 }
 
 type cancelRequestedData struct {
@@ -50,7 +51,8 @@ type cleanupConfirmedData struct {
 }
 
 type runClosedData struct {
-	Closed bool `json:"closed"`
+	Closed bool   `json:"closed"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type runReportedData struct {
@@ -154,6 +156,8 @@ func invalidAdapterError(data adapterErrorData) string {
 		return "message is required"
 	case data.LaunchKey == "":
 		return "launch_key is required"
+	case data.SideEffect != "" && data.SideEffect != adapter.SideEffectNone && data.SideEffect != adapter.SideEffectIndeterminate:
+		return fmt.Sprintf("unknown side effect certainty %q", data.SideEffect)
 	default:
 		return ""
 	}

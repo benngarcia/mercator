@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/eventlog"
@@ -46,6 +47,12 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.attempt = &data
+		state.attemptCount++
+		state.launchIntent = nil
+		state.launchAccepted = false
+		state.launchIndeterminate = false
+		state.launchFailed = false
+		state.replacementEligible = false
 
 	case EventLaunchIntentRecorded:
 		var data adapter.LaunchRequest
@@ -77,6 +84,12 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		if stored.Type == EventLaunchIndeterminate {
 			state.launchIndeterminate = true
+			break
+		}
+		state.launchFailed = true
+		state.replacementEligible = isReplacementEligible(data)
+		if state.replacementEligible && state.launchIntent != nil && !slices.Contains(state.excludedOfferSnapshotIDs, state.launchIntent.SelectedOfferSnapshotID) {
+			state.excludedOfferSnapshotIDs = append(state.excludedOfferSnapshotIDs, state.launchIntent.SelectedOfferSnapshotID)
 		}
 
 	case EventCancelRequested:

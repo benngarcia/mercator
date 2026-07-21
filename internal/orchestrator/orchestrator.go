@@ -31,21 +31,22 @@ var (
 )
 
 const (
-	EventRunRequested          = "compute.run.requested.v1"
-	EventPlacementDecided      = "compute.run.placement_decided.v1"
-	EventAttemptCreated        = "compute.run.attempt_created.v1"
-	EventLaunchIntentRecorded  = "compute.run.launch_intent_recorded.v1"
-	EventLaunchAccepted        = "compute.run.launch_accepted.v1"
-	EventLaunchIndeterminate   = "compute.run.launch_indeterminate.v1"
-	EventLaunchFailed          = "compute.run.launch_failed.v1"
-	EventCancelRequested       = "compute.run.cancel_requested.v1"
-	EventCancelAccepted        = "compute.run.cancel_accepted.v1"
-	EventExternalStateObserved = "compute.run.external_state_observed.v1"
-	EventRunOutcomeRecorded    = "compute.run.outcome_recorded.v1"
-	EventCleanupRequested      = "compute.run.cleanup_requested.v1"
-	EventCleanupConfirmed      = "compute.run.cleanup_confirmed.v1"
-	EventRunClosed             = "compute.run.closed.v1"
-	EventRunReported           = "compute.run.reported.v1"
+	EventRunRequested            = "compute.run.requested.v1"
+	EventPlacementDecided        = "compute.run.placement_decided.v1"
+	EventAttemptCreated          = "compute.run.attempt_created.v1"
+	EventLaunchIntentRecorded    = "compute.run.launch_intent_recorded.v1"
+	EventLaunchAccepted          = "compute.run.launch_accepted.v1"
+	EventLaunchIndeterminate     = "compute.run.launch_indeterminate.v1"
+	EventLaunchFailed            = "compute.run.launch_failed.v1"
+	EventCancelRequested         = "compute.run.cancel_requested.v1"
+	EventCancelAccepted          = "compute.run.cancel_accepted.v1"
+	EventExternalStateObserved   = "compute.run.external_state_observed.v1"
+	EventRunOutcomeRecorded      = "compute.run.outcome_recorded.v1"
+	EventCleanupRequested        = "compute.run.cleanup_requested.v1"
+	EventCleanupConfirmed        = "compute.run.cleanup_confirmed.v1"
+	EventRunClosed               = "compute.run.closed.v1"
+	EventRunReported             = "compute.run.reported.v1"
+	runCloseReasonRetryExhausted = "RETRY_EXHAUSTED"
 )
 
 type Orchestrator struct {
@@ -292,6 +293,8 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 		return o.stepCancel(ctx, workspaceID, runID, version, state)
 	case state.launchIntent == nil:
 		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
+	case state.launchFailed && state.replacementEligible:
+		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
 	case !state.launchAccepted && !state.launchIndeterminate:
 		return o.stepLaunch(ctx, workspaceID, runID, version, state)
 	case state.exitCode != nil && !state.outcomeRecorded:
@@ -318,8 +321,12 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 // stepPlace decides placement and records the decision, attempt, and launch
 // intent in one append, so the intent is durable before any adapter call.
 func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
-	decision, attempt, selectedOffer, err := o.decide(ctx, workspaceID, *state.requested, runID)
+	attemptNumber := state.attemptCount + 1
+	decision, attempt, selectedOffer, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, state.excludedOfferSnapshotIDs)
 	if err != nil {
+		if state.replacementEligible && errors.Is(err, ErrNoFeasibleOffers) {
+			return o.closeRetryExhausted(ctx, workspaceID, runID, version)
+		}
 		return err
 	}
 	reportPublicURL, reportToken := "", ""
@@ -331,38 +338,87 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	if err != nil {
 		return err
 	}
-	return o.appendEvents(ctx, workspaceID, runID, version, "advance:placement", []eventlog.NewEvent{
-		mustEvent(runID, "placement_decided", EventPlacementDecided, placementData{Decision: decision}, o.now()),
-		mustEvent(runID, "attempt_created", EventAttemptCreated, attempt, o.now()),
-		mustPrivateEvent(runID, "launch_intent_recorded", EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
+	return o.appendEvents(ctx, workspaceID, runID, version, "advance:placement:"+attempt.AttemptID, []eventlog.NewEvent{
+		mustEvent(runID, "placement_decided_"+attempt.AttemptID, EventPlacementDecided, placementData{Decision: decision}, o.now()),
+		mustEvent(runID, "attempt_created_"+attempt.AttemptID, EventAttemptCreated, attempt, o.now()),
+		mustPrivateEvent(runID, "launch_intent_recorded_"+attempt.AttemptID, EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
 	})
 }
 
 func (o *Orchestrator) stepLaunch(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
 	receipt, err := o.adapter.Launch(ctx, *state.launchIntent)
 	if err != nil {
-		if errors.Is(err, adapter.ErrLaunchIndeterminate) || errors.Is(err, adapter.ErrLaunchTimeout) {
-			_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_indeterminate", []eventlog.NewEvent{
-				mustEvent(runID, "launch_indeterminate", EventLaunchIndeterminate, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
-			})
-			return false, err
-		}
-		// A definitive launch rejection closes the run terminally: nothing
-		// external was created (so no cleanup is needed), and retrying the
-		// same launch on every poll can never succeed — it left runs wedged
-		// in "launching" forever.
-		if appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed", []eventlog.NewEvent{
-			mustEvent(runID, "launch_failed", EventLaunchFailed, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
-			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, o.now()),
-			mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
-		}); appendErr != nil {
-			return false, appendErr
-		}
+		return o.recordLaunchFailure(ctx, workspaceID, runID, version, state, err)
+	}
+	return true, o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
+		mustEvent(runID, "launch_accepted_"+state.launchIntent.AttemptID, EventLaunchAccepted, receipt, o.now()),
+	})
+}
+
+func (o *Orchestrator) recordLaunchFailure(ctx context.Context, workspaceID, runID string, version uint64, state runState, launchErr error) (bool, error) {
+	if errors.Is(launchErr, adapter.ErrLaunchIndeterminate) || errors.Is(launchErr, adapter.ErrLaunchTimeout) {
+		return false, o.recordIndeterminateLaunch(ctx, workspaceID, runID, version, state, launchErr)
+	}
+	failure := publicAdapterError(launchErr, state.launchIntent.LaunchKey)
+	if isReplacementEligible(failure) {
+		return o.recordReplaceableLaunchFailure(ctx, workspaceID, runID, version, state, failure)
+	}
+	return false, o.recordTerminalLaunchFailure(ctx, workspaceID, runID, version, state, failure, launchErr)
+}
+
+func (o *Orchestrator) recordIndeterminateLaunch(ctx context.Context, workspaceID, runID string, version uint64, state runState, launchErr error) error {
+	appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_indeterminate:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
+		mustEvent(runID, "launch_indeterminate_"+state.launchIntent.AttemptID, EventLaunchIndeterminate, publicAdapterError(launchErr, state.launchIntent.LaunchKey), o.now()),
+	})
+	if appendErr != nil {
+		return appendErr
+	}
+	return launchErr
+}
+
+func (o *Orchestrator) recordReplaceableLaunchFailure(ctx context.Context, workspaceID, runID string, version uint64, state runState, failure adapterErrorData) (bool, error) {
+	exhausted := state.attemptCount >= state.requested.Workload.Spec.Execution.MaxPreStartAttempts
+	toAppend := []eventlog.NewEvent{
+		mustEvent(runID, "launch_failed_"+state.launchIntent.AttemptID, EventLaunchFailed, failure, o.now()),
+	}
+	if exhausted {
+		toAppend = append(toAppend, retryExhaustedEvents(runID, o.now())...)
+	}
+	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed:"+state.launchIntent.AttemptID, toAppend); err != nil {
 		return false, err
 	}
-	return true, o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted", []eventlog.NewEvent{
-		mustEvent(runID, "launch_accepted", EventLaunchAccepted, receipt, o.now()),
-	})
+	return !exhausted, nil
+}
+
+// A definitive launch rejection closes the run terminally. The provider did
+// not create an object, so cleanup is not required and a later poll must never
+// repeat the rejected launch.
+func (o *Orchestrator) recordTerminalLaunchFailure(ctx context.Context, workspaceID, runID string, version uint64, state runState, failure adapterErrorData, launchErr error) error {
+	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
+		mustEvent(runID, "launch_failed_"+state.launchIntent.AttemptID, EventLaunchFailed, failure, o.now()),
+		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, o.now()),
+		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
+	}); err != nil {
+		return err
+	}
+	return launchErr
+}
+
+func (o *Orchestrator) closeRetryExhausted(ctx context.Context, workspaceID, runID string, version uint64) error {
+	return o.appendEvents(ctx, workspaceID, runID, version, "advance:retry_exhausted", retryExhaustedEvents(runID, o.now()))
+}
+
+func retryExhaustedEvents(runID string, now time.Time) []eventlog.NewEvent {
+	return []eventlog.NewEvent{
+		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, now),
+		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true, Reason: runCloseReasonRetryExhausted}, now),
+	}
+}
+
+func isReplacementEligible(failure adapterErrorData) bool {
+	return failure.Code == "PROVIDER_CAPACITY_UNAVAILABLE" &&
+		failure.Retryable &&
+		failure.SideEffect == adapter.SideEffectNone
 }
 
 // stepCancel completes a requested cancel: close immediately when nothing was
@@ -545,6 +601,8 @@ func (o *Orchestrator) GetPlacementDecision(ctx context.Context, workspaceID, ru
 	if err != nil {
 		return domain.PlacementDecision{}, err
 	}
+	var latest domain.PlacementDecision
+	found := false
 	for _, event := range events {
 		if event.Type != EventPlacementDecided {
 			continue
@@ -553,7 +611,11 @@ func (o *Orchestrator) GetPlacementDecision(ctx context.Context, workspaceID, ru
 		if err := json.Unmarshal(event.Data, &data); err != nil {
 			return domain.PlacementDecision{}, err
 		}
-		return data.Decision, nil
+		latest = data.Decision
+		found = true
+	}
+	if found {
+		return latest, nil
 	}
 	return domain.PlacementDecision{}, fmt.Errorf("orchestrator: placement decision not found")
 }
@@ -666,8 +728,9 @@ func (o *Orchestrator) RecordReport(ctx context.Context, workspaceID, runID, rep
 // it as ours, CleanupLocator addresses its cleanup. The derivations are part
 // of the adapter wire contract (container labels, pod env), so they are
 // recorded on the launch intent and never re-derived after launch.
-func newAttempt(workspaceID, runID string) attemptData {
-	id := "att_" + externalIDPart(workspaceID) + "_" + externalIDPart(strings.TrimPrefix(runID, "run_")) + "_" + shortExternalHash(workspaceID, runID)
+func newAttempt(workspaceID, runID string, attemptNumber int) attemptData {
+	ordinal := fmt.Sprintf("%d", attemptNumber)
+	id := "att_" + externalIDPart(workspaceID) + "_" + externalIDPart(strings.TrimPrefix(runID, "run_")) + "_" + ordinal + "_" + shortExternalHash(workspaceID, runID, ordinal)
 	return attemptData{
 		AttemptID:      id,
 		LaunchKey:      "launch_" + id,
@@ -850,22 +913,26 @@ func (o *Orchestrator) appendEventsAs(ctx context.Context, actor json.RawMessage
 }
 
 type runState struct {
-	requested           *runRequestedData
-	attempt             *attemptData
-	launchIntent        *adapter.LaunchRequest
-	launchAccepted      bool
-	launchIndeterminate bool
-	cancelRequested     bool
-	cancelAccepted      bool
-	outcomeRecorded     bool
-	outcome             domain.RunOutcome
-	cleanupRequested    bool
-	cleanupConfirmed    bool
-	closed              bool
-	exitCode            *int
-	lastObservedPhase   adapter.ExternalPhase
-	createdBy           string
-	cancelledBy         string
+	requested                *runRequestedData
+	attempt                  *attemptData
+	launchIntent             *adapter.LaunchRequest
+	launchAccepted           bool
+	launchIndeterminate      bool
+	launchFailed             bool
+	replacementEligible      bool
+	attemptCount             int
+	excludedOfferSnapshotIDs []string
+	cancelRequested          bool
+	cancelAccepted           bool
+	outcomeRecorded          bool
+	outcome                  domain.RunOutcome
+	cleanupRequested         bool
+	cleanupConfirmed         bool
+	closed                   bool
+	exitCode                 *int
+	lastObservedPhase        adapter.ExternalPhase
+	createdBy                string
+	cancelledBy              string
 }
 
 // actorSubject extracts the audited subject from an event envelope's actor
