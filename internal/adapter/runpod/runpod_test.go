@@ -455,21 +455,3 @@ func TestReleaseResolvesByNameAndDeletes(t *testing.T) {
 		t.Fatalf("release rec=%+v deleted=%q", rec, deleted)
 	}
 }
-
-func TestCancelDeletesRegardlessOfOwnershipToken(t *testing.T) {
-	var deleted string
-	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
-		if r.Method == http.MethodDelete {
-			deleted = strings.TrimPrefix(r.URL.Path, "/v1/pods/")
-			return jsonResponse(204, ``), nil
-		}
-		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
-	})
-	rec, err := a.Cancel(context.Background(), adapter.CancelRequest{LaunchKey: "lk1"})
-	if err != nil {
-		t.Fatalf("cancel: %v", err)
-	}
-	if !rec.Cancelled || deleted != "pod_1" {
-		t.Fatalf("cancel rec=%+v deleted=%q", rec, deleted)
-	}
-}

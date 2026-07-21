@@ -152,3 +152,14 @@ func publicProviderFailure(kind adapter.ProviderFailureKind) (string, string) {
 		return "PROVIDER_INTERNAL_ERROR", "Provider operation failed."
 	}
 }
+
+func publicCleanupError(err error, launchKey string, disposition domain.Disposition) domain.CleanupError {
+	adapterError := publicAdapterError(err, launchKey)
+	return domain.CleanupError{
+		Code:        adapterError.Code,
+		Message:     adapterError.Message,
+		Retryable:   adapterError.Retryable,
+		LaunchKey:   adapterError.LaunchKey,
+		Disposition: disposition,
+	}
+}

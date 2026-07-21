@@ -45,6 +45,24 @@ func (e CapabilityProfileOfferKinds) Valid() bool {
 	}
 }
 
+// Defines values for CleanupErrorDisposition.
+const (
+	Release   CleanupErrorDisposition = "release"
+	Terminate CleanupErrorDisposition = "terminate"
+)
+
+// Valid indicates whether the value is a known member of the CleanupErrorDisposition enum.
+func (e CleanupErrorDisposition) Valid() bool {
+	switch e {
+	case Release:
+		return true
+	case Terminate:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NetworkCapabilitiesInbound.
 const (
 	NetworkCapabilitiesInboundNone       NetworkCapabilitiesInbound = "none"
@@ -232,6 +250,18 @@ type CapacityEvidence struct {
 	Available  bool    `json:"available"`
 	Confidence float64 `json:"confidence"`
 }
+
+// CleanupError defines model for CleanupError.
+type CleanupError struct {
+	Code        string                  `json:"code"`
+	Disposition CleanupErrorDisposition `json:"disposition"`
+	LaunchKey   string                  `json:"launch_key"`
+	Message     string                  `json:"message"`
+	Retryable   bool                    `json:"retryable"`
+}
+
+// CleanupErrorDisposition defines model for CleanupError.Disposition.
+type CleanupErrorDisposition string
 
 // CloudEvent defines model for CloudEvent.
 type CloudEvent = eventlog.CloudEvent
@@ -3013,6 +3043,15 @@ type ReportRun404JSONResponse ErrorResponse
 func (response ReportRun404JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReportRun409JSONResponse ErrorResponse
+
+func (response ReportRun409JSONResponse) VisitReportRunResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 
 	return json.NewEncoder(w).Encode(response)
 }

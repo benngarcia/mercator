@@ -217,8 +217,11 @@ func (s *Server) ReportRun(ctx context.Context, request ReportRunRequestObject) 
 	}
 	body := request.Body
 	if err := s.orch.RecordReport(ctx, workspaceID, request.RunId, body.Type, body.Data, body.ExitCode); err != nil {
-		if errors.Is(err, orchestrator.ErrRunNotFound) {
+		switch {
+		case errors.Is(err, orchestrator.ErrRunNotFound):
 			return ReportRun404JSONResponse(apiError("RUN_NOT_FOUND", "Run not found.")), nil
+		case errors.Is(err, orchestrator.ErrTerminalReportConflict):
+			return ReportRun409JSONResponse(apiError("TERMINAL_REPORT_CONFLICT", "A different terminal report is already recorded for this run.")), nil
 		}
 		return ReportRun502JSONResponse(internalAPIError(http.StatusBadGateway, "REPORT_FAILED", err)), nil
 	}

@@ -22,9 +22,11 @@ func TestGetRunRejectsInvalidPersistedEvents(t *testing.T) {
 		{name: "malformed external observation", eventType: EventExternalStateObserved, schemaVersion: 1, data: json.RawMessage(`{`)},
 		{name: "malformed run report", eventType: EventRunReported, schemaVersion: 1, data: json.RawMessage(`{`)},
 		{name: "malformed outcome", eventType: EventRunOutcomeRecorded, schemaVersion: 1, data: json.RawMessage(`{`)},
+		{name: "malformed cleanup failure", eventType: EventCleanupFailed, schemaVersion: 1, data: json.RawMessage(`{`)},
 		{name: "unsupported outcome schema", eventType: EventRunOutcomeRecorded, schemaVersion: 2, data: json.RawMessage(`{"outcome":"succeeded"}`)},
 		{name: "unknown external phase", eventType: EventExternalStateObserved, schemaVersion: 1, data: json.RawMessage(`{"launch_key":"launch_1","phase":"future","observed_at":"2026-07-18T12:00:00Z"}`)},
 		{name: "unknown outcome", eventType: EventRunOutcomeRecorded, schemaVersion: 1, data: json.RawMessage(`{"outcome":"future"}`)},
+		{name: "unknown cleanup disposition", eventType: EventCleanupFailed, schemaVersion: 1, data: json.RawMessage(`{"code":"ADAPTER_ERROR","message":"Adapter operation failed.","retryable":true,"launch_key":"launch_1","disposition":"future"}`)},
 	}
 
 	for _, test := range tests {
@@ -185,6 +187,7 @@ func knownRunEventTypes() []string {
 		EventExternalStateObserved,
 		EventRunOutcomeRecorded,
 		EventCleanupRequested,
+		EventCleanupFailed,
 		EventCleanupConfirmed,
 		EventRunClosed,
 		EventRunReported,

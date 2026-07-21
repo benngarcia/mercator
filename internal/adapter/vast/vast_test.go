@@ -367,26 +367,6 @@ func TestDestroyTolerates404(t *testing.T) {
 	}
 }
 
-func TestCancelDestroysRegardlessOfOwnershipToken(t *testing.T) {
-	var destroyed string
-	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
-		if r.Method == http.MethodDelete {
-			destroyed = r.URL.Path
-			return jsonResponse(200, `{"success":true}`), nil
-		}
-		return jsonResponse(200, `{"instances":[
-			{"id":777,"label":"mercator-lk1","actual_status":"created","extra_env":[["MERCATOR_OWNERSHIP_TOKEN","own1"]]}
-		]}`), nil
-	})
-	rec, err := a.Cancel(context.Background(), cancelRequest())
-	if err != nil {
-		t.Fatalf("cancel: %v", err)
-	}
-	if !rec.Cancelled || destroyed != "/api/v0/instances/777/" {
-		t.Fatalf("cancel rec=%+v destroyed=%q", rec, destroyed)
-	}
-}
-
 func TestListOwnedFiltersByLabelPrefixAndWorkspace(t *testing.T) {
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"instances":[

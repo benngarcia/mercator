@@ -412,6 +412,14 @@ export interface components {
             };
             workload?: components["schemas"]["WorkloadRevision"];
         };
+        CleanupError: {
+            code: string;
+            message: string;
+            retryable: boolean;
+            launch_key: string;
+            /** @enum {string} */
+            disposition: "release" | "terminate";
+        };
         Run: {
             id: string;
             workspace_id: string;
@@ -424,6 +432,7 @@ export interface components {
             cleanup: "not_required" | "pending" | "confirmed" | "blocked";
             /** @enum {string} */
             disposition?: "release" | "terminate";
+            cleanup_error?: components["schemas"]["CleanupError"];
             closed: boolean;
             created_by?: string;
             cancelled_by?: string;
@@ -1962,6 +1971,15 @@ export interface operations {
             };
             /** @description Run not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Terminal report conflicts with the report already recorded for this run */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

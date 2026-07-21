@@ -123,18 +123,11 @@ func TestCleanupDispatchesOnRecordedDispositionNotLiveOffers(t *testing.T) {
 	}
 }
 
-// Backward compatibility: a pre-change launch intent that recorded NO
-// disposition must still clean up safely by defaulting to release (the
-// never-destroys-a-host option). releaseAndClose reads the recorded value off
-// the launch intent; an empty value must route to Release, never Terminate.
-func TestMissingRecordedDispositionDefaultsToRelease(t *testing.T) {
+func TestMissingRecordedDispositionFailsBeforeProviderCleanup(t *testing.T) {
 	ctx := context.Background()
 	ad := fake.New()
 	orch := newTestOrchestrator(t, ad)
 
-	// A launch intent as a pre-change event log would have recorded it: no
-	// Disposition field set, but ownership material present so the fake's
-	// release ownership checks pass.
 	intent := &adapter.LaunchRequest{
 		AttemptID:      "att_legacy",
 		LaunchKey:      "launch_att_legacy",
@@ -143,15 +136,11 @@ func TestMissingRecordedDispositionDefaultsToRelease(t *testing.T) {
 		WorkspaceID:    "ws_1",
 	}
 
-	if err := orch.releaseAndClose(ctx, "ws_1", "run_legacy", 0, intent); err != nil {
-		t.Fatalf("releaseAndClose with missing disposition: %v", err)
+	if err := orch.releaseAndClose(ctx, "ws_1", "run_missing_disposition", 0, intent); err == nil {
+		t.Fatal("releaseAndClose accepted a missing recorded disposition")
 	}
-
-	if ad.ReleaseCount() != 1 {
-		t.Fatalf("missing disposition must default to release, release count=%d", ad.ReleaseCount())
-	}
-	if ad.TerminateCount() != 0 {
-		t.Fatalf("missing disposition must NOT terminate a host, terminate count=%d", ad.TerminateCount())
+	if ad.ReleaseCount() != 0 || ad.TerminateCount() != 0 {
+		t.Fatalf("missing disposition reached provider cleanup: release=%d terminate=%d", ad.ReleaseCount(), ad.TerminateCount())
 	}
 }
 

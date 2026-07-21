@@ -120,7 +120,7 @@ func invalidLaunchRequest(data adapter.LaunchRequest) string {
 		return "selected_offer_snapshot_id is required"
 	case data.SelectedOfferConnectionID == "":
 		return "selected_offer_connection_id is required"
-	case data.Disposition != "" && !data.Disposition.Valid():
+	case !data.Disposition.Valid():
 		return fmt.Sprintf("unknown disposition %q", data.Disposition)
 	default:
 		return ""
@@ -154,6 +154,21 @@ func invalidAdapterError(data adapterErrorData) string {
 		return "message is required"
 	case data.LaunchKey == "":
 		return "launch_key is required"
+	default:
+		return ""
+	}
+}
+
+func invalidCleanupError(data domain.CleanupError) string {
+	switch {
+	case data.Code == "":
+		return "code is required"
+	case data.Message == "":
+		return "message is required"
+	case data.LaunchKey == "":
+		return "launch_key is required"
+	case !data.Disposition.Valid():
+		return fmt.Sprintf("unknown disposition %q", data.Disposition)
 	default:
 		return ""
 	}

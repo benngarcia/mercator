@@ -60,18 +60,33 @@ not inject the full `/report` path. Workloads build the full endpoint by appendi
 
 **`POST /v1/runs/{run_id}/report?workspace_id=<ws>`**
 
-- **Auth**: `Authorization: Bearer <MERCATOR_RUN_TOKEN>` — the run-scoped
+- **Auth**: `Authorization: Bearer <MERCATOR_RUN_TOKEN>`, the run-scoped
   token, NOT the operator token. The operator token is explicitly rejected.
-- **Body**: arbitrary JSON object (`{"type": "...", "data": {...}}`).
-- **Success**: `202 Accepted`, body `{"recorded": true}`.
+- **Body**: progress uses `{"type":"progress","data":{...}}`; terminal
+  workload exit uses `{"type":"exit","exit_code":0}` with the real process
+  exit code at the top level.
+- **Success**: `202 Accepted`, body `{"recorded": true}`. This confirms the fact
+  is durable. Cleanup runs after the response through normal reconciliation.
 - **Errors**:
-  - `400 WORKSPACE_REQUIRED` — `workspace_id` query param missing.
-  - `401 INVALID_RUN_TOKEN` — token wrong, missing, or for a different run.
-  - `501 REPORTING_DISABLED` — `MERCATOR_SECRET_KEY` or `MERCATOR_PUBLIC_URL`
+  - `400 WORKSPACE_REQUIRED`: `workspace_id` query param missing.
+  - `401 INVALID_RUN_TOKEN`: token wrong, missing, or for a different run.
+  - `409 TERMINAL_REPORT_CONFLICT`: a different terminal report is already
+    recorded for the run.
+  - `501 REPORTING_DISABLED`: `MERCATOR_SECRET_KEY` or `MERCATOR_PUBLIC_URL`
     not set on the server.
 
 The event is recorded in the run's event stream as `compute.run.reported.v1`
-and is visible via `GET /v1/runs/{run_id}/events` (operator token).
+and is visible via `GET /v1/runs/{run_id}/events` (operator token). Exact
+terminal-report replay returns 202 without recording a second event. The first
+terminal fact in stream order determines the outcome when report, cancellation,
+or provider observation arrives concurrently.
+
+The background sweep advances open runs every minute. It records the terminal
+outcome, requests the launch intent's cleanup disposition, and closes only after
+cleanup confirmation. A provider error leaves the run open with
+`cleanup: "blocked"`, exposes `cleanup_error` on the run, and records the public
+`compute.run.cleanup_failed.v1` event. The next sweep or an explicit refresh
+retries the same idempotent cleanup operation.
 
 ---
 

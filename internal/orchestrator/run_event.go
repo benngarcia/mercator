@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
@@ -89,6 +90,9 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		state.cancelRequested = true
 		state.cancelledBy = actorSubject(stored.Actor)
+		if state.firstTerminal == nil {
+			state.firstTerminal = &terminalFact{Outcome: domain.RunOutcomeCancelled}
+		}
 
 	case EventCancelAccepted:
 		var data launchReferenceData
@@ -98,7 +102,6 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if data.LaunchKey == "" {
 			return invalidRunEvent(stored, "launch_key is required")
 		}
-		state.cancelAccepted = true
 
 	case EventExternalStateObserved:
 		var data adapter.ExternalObservation
@@ -112,9 +115,12 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		// Only an exited container's code is authoritative. Docker observes exit
 		// code zero on running containers, while workload-reported codes are
 		// trusted independently by EventRunReported.
-		if data.ExitCode != nil && data.Phase.Exited() {
+		if data.ExitCode != nil && data.Phase.Exited() && state.firstTerminal == nil {
 			code := *data.ExitCode
 			state.exitCode = &code
+		}
+		if isTerminal(data.Phase) && state.firstTerminal == nil {
+			state.firstTerminal = &terminalFact{Outcome: outcomeForPhase(data.Phase)}
 		}
 
 	case EventRunReported:
@@ -125,9 +131,14 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if data.Type == "" {
 			return invalidRunEvent(stored, "report type is required")
 		}
-		if data.ExitCode != nil {
+		if data.ExitCode != nil && state.firstTerminal == nil {
 			code := *data.ExitCode
 			state.exitCode = &code
+			outcome := domain.RunOutcomeSucceeded
+			if code != 0 {
+				outcome = domain.RunOutcomeFailed
+			}
+			state.firstTerminal = &terminalFact{Outcome: outcome}
 		}
 
 	case EventRunOutcomeRecorded:
@@ -150,6 +161,16 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, "launch_key is required")
 		}
 		state.cleanupRequested = true
+
+	case EventCleanupFailed:
+		var data domain.CleanupError
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidCleanupError(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.cleanupFailure = &data
 
 	case EventCleanupConfirmed:
 		var data cleanupConfirmedData

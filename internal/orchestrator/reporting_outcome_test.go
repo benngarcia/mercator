@@ -2,6 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +38,9 @@ func TestExitReportZeroRecordsSucceededAndTerminates(t *testing.T) {
 	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(0)); err != nil {
 		t.Fatalf("record report: %v", err)
 	}
+	if _, err := orch.AdvanceOpenRuns(ctx, "ws_1"); err != nil {
+		t.Fatalf("reconcile report: %v", err)
+	}
 
 	record, err := orch.GetRun(ctx, "ws_1", "run_1")
 	if err != nil {
@@ -57,6 +63,9 @@ func TestExitReportNonzeroRecordsFailed(t *testing.T) {
 
 	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(2)); err != nil {
 		t.Fatalf("record report: %v", err)
+	}
+	if _, err := orch.AdvanceOpenRuns(ctx, "ws_1"); err != nil {
+		t.Fatalf("reconcile report: %v", err)
 	}
 	record, err := orch.GetRun(ctx, "ws_1", "run_1")
 	if err != nil {
@@ -89,6 +98,92 @@ func TestProgressReportDoesNotFinalize(t *testing.T) {
 	}
 }
 
+func TestFirstTerminalFactDeterminesOutcome(t *testing.T) {
+	ctx := context.Background()
+	orch, ad := runningProvisionableRun(t, ctx)
+
+	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(0)); err != nil {
+		t.Fatalf("record report: %v", err)
+	}
+	record, err := orch.CancelRun(ctx, "ws_1", "run_1", nil)
+	if err != nil {
+		t.Fatalf("cancel after terminal report: %v", err)
+	}
+
+	if !record.Closed || record.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("run = %+v, want first terminal report to preserve successful outcome", record)
+	}
+	if ad.TerminateCount() != 1 {
+		t.Fatalf("terminate count = %d, want 1", ad.TerminateCount())
+	}
+}
+
+func TestCleanupFailureIsDurableBlockedEvidenceAndRefreshRetries(t *testing.T) {
+	ctx := context.Background()
+	base := fake.New(
+		fake.WithOffers([]domain.OfferSnapshot{orchProvisionableOffer("off_cleanup_failure", time.Now().UTC())}),
+		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
+	)
+	ad := &terminateFailsOnceAdapter{Adapter: base}
+	orch := newTestOrchestrator(t, ad)
+	createRun(t, ctx, orch)
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
+		t.Fatalf("advance to running: %v", err)
+	}
+	if err := orch.RecordReport(ctx, "ws_1", "run_1", "exit", nil, intPtr(0)); err != nil {
+		t.Fatalf("record report: %v", err)
+	}
+
+	if _, err := orch.AdvanceOpenRuns(ctx, "ws_1"); !errors.Is(err, adapter.ErrRetryableFailure) {
+		t.Fatalf("reconcile error = %v, want retryable cleanup failure", err)
+	}
+	blocked, err := orch.GetRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get blocked run: %v", err)
+	}
+	if blocked.Closed || blocked.Outcome != domain.RunOutcomeSucceeded || blocked.Cleanup != domain.CleanupBlocked {
+		t.Fatalf("blocked run = %+v, want open succeeded run with blocked cleanup", blocked)
+	}
+	encoded, err := json.Marshal(blocked)
+	if err != nil {
+		t.Fatalf("marshal blocked run: %v", err)
+	}
+	for _, expected := range []string{`"cleanup_error"`, `"ADAPTER_RETRYABLE_FAILURE"`, `"terminate"`} {
+		if !strings.Contains(string(encoded), expected) {
+			t.Fatalf("blocked run JSON %s does not contain %s", encoded, expected)
+		}
+	}
+
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get cleanup events: %v", err)
+	}
+	failures := 0
+	for _, event := range events {
+		if event.Type != "compute.run.cleanup_failed.v1" {
+			continue
+		}
+		failures++
+		if strings.Contains(string(event.Data), "provider secret") || !strings.Contains(string(event.Data), "ADAPTER_RETRYABLE_FAILURE") {
+			t.Fatalf("cleanup failure is not stable and redacted: %s", event.Data)
+		}
+	}
+	if failures != 1 {
+		t.Fatalf("cleanup failure event count = %d, want 1", failures)
+	}
+
+	closed, err := orch.RefreshRun(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("refresh blocked cleanup: %v", err)
+	}
+	if !closed.Closed || closed.Cleanup != domain.CleanupConfirmed || closed.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("refreshed run = %+v, want closed succeeded run", closed)
+	}
+	if ad.terminateCalls != 2 || base.TerminateCount() != 1 {
+		t.Fatalf("terminate calls: wrapper=%d provider=%d, want one failed attempt and one successful delete", ad.terminateCalls, base.TerminateCount())
+	}
+}
+
 func TestExitReportAfterRunClosedIsNoop(t *testing.T) {
 	ctx := context.Background()
 	// Drive a run to terminal via the normal succeeded path first.
@@ -117,4 +212,17 @@ func TestExitReportAfterRunClosedIsNoop(t *testing.T) {
 	if record.Outcome != domain.RunOutcomeSucceeded {
 		t.Fatalf("late report must not change already-recorded outcome: got %q, want %q", record.Outcome, domain.RunOutcomeSucceeded)
 	}
+}
+
+type terminateFailsOnceAdapter struct {
+	*fake.Adapter
+	terminateCalls int
+}
+
+func (a *terminateFailsOnceAdapter) Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	a.terminateCalls++
+	if a.terminateCalls == 1 {
+		return adapter.TerminateReceipt{}, errors.Join(adapter.ErrRetryableFailure, errors.New("provider secret"))
+	}
+	return a.Adapter.Terminate(ctx, req)
 }
