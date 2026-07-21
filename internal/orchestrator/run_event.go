@@ -36,6 +36,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if reason := invalidPlacement(data); reason != "" {
 			return invalidRunEvent(stored, reason)
 		}
+		state.placement = &data.Decision
 
 	case EventAttemptCreated:
 		var data attemptData
@@ -46,6 +47,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.attempt = &data
+		state.preStart.beginAttempt()
 
 	case EventLaunchIntentRecorded:
 		var data adapter.LaunchRequest
@@ -54,6 +56,9 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		if reason := invalidLaunchRequest(data); reason != "" {
 			return invalidRunEvent(stored, reason)
+		}
+		if state.placement != nil && state.requested != nil {
+			data.DiagnosticContext.AlternativesExhausted = finalPreStartAttempt(*state.placement, state.preStart.attempts, state.requested.Workload.Spec.Execution.MaxPreStartAttempts)
 		}
 		state.launchIntent = &data
 
@@ -65,7 +70,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if reason := invalidLaunchReceipt(data); reason != "" {
 			return invalidRunEvent(stored, reason)
 		}
-		state.launchAccepted = true
+		state.preStart.accept()
 
 	case EventLaunchIndeterminate, EventLaunchFailed:
 		var data adapterErrorData
@@ -76,7 +81,25 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		if stored.Type == EventLaunchIndeterminate {
-			state.launchIndeterminate = true
+			state.preStart.markIndeterminate()
+		} else {
+			var diagnostic *adapter.ProviderFailureDiagnostic
+			if len(stored.PrivateData) > 0 {
+				var private adapter.ProviderFailureDiagnostic
+				if err := json.Unmarshal(stored.PrivateData, &private); err != nil {
+					return invalidRunEvent(stored, "private provider failure diagnostic is invalid")
+				}
+				if state.launchIntent == nil {
+					return invalidRunEvent(stored, "private provider failure has no launch intent")
+				}
+				if reason := invalidProviderFailureDiagnostic(private, *state.launchIntent); reason != "" {
+					return invalidRunEvent(stored, reason)
+				}
+				diagnostic = &private
+			}
+			if state.launchIntent != nil {
+				state.preStart.reject(state.launchIntent.SelectedOfferSnapshotID, diagnostic)
+			}
 		}
 
 	case EventCancelRequested:

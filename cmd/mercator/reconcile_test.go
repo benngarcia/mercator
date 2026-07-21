@@ -99,6 +99,7 @@ func reconcileTestRevision() domain.WorkloadRevision {
 func reconcileTestOffer(now time.Time) domain.OfferSnapshot {
 	return domain.OfferSnapshot{
 		ID:           "off_1",
+		NativeRef:    "native/off_1",
 		ConnectionID: "conn_1",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,

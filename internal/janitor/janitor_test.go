@@ -3,6 +3,7 @@ package janitor
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -167,18 +168,98 @@ func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
 	}
 }
 
+func TestJanitorCarriesRecordedOfferIdentityIntoCleanup(t *testing.T) {
+	t.Parallel()
+	cleanup := &captureCleanupAdapter{object: adapter.OwnedExternalObject{
+		ExternalID:     "ext_1",
+		WorkspaceID:    "ws_1",
+		ConnectionID:   "conn_1",
+		AdapterType:    "shadeform",
+		RunID:          "run_term",
+		AttemptID:      "att_run_term",
+		OwnershipToken: "own_term",
+		LaunchKey:      "launch_run_term",
+		RequestHash:    "sha256:launch",
+	}}
+	log := openJanitorTestLog(t)
+	appendLaunchIntent(t, log, "ws_1", "run_term", domain.DispositionTerminate)
+
+	result, err := New(cleanup, WithEventLog(log)).Sweep(t.Context(), "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.Released != 1 || cleanup.terminateRequest == nil {
+		t.Fatalf("cleanup result/request = %+v/%+v, want one termination", result, cleanup.terminateRequest)
+	}
+	context := cleanup.terminateRequest.DiagnosticContext
+	if context.OfferSnapshotID != "off_run_term" || context.OfferNativeRef != "cloud/region/run_term" {
+		t.Fatalf("cleanup diagnostic context = %+v, want recorded Offer identity", context)
+	}
+}
+
+func TestJanitorRejectsMalformedRecordedLaunchIntent(t *testing.T) {
+	t.Parallel()
+	cleanup := &captureCleanupAdapter{object: adapter.OwnedExternalObject{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_1",
+		RunID:        "run_malformed",
+		LaunchKey:    "launch_malformed",
+	}}
+	log := openJanitorTestLog(t)
+	payload, err := os.ReadFile("testdata/malformed_launch_intent.json")
+	if err != nil {
+		t.Fatalf("read malformed launch intent: %v", err)
+	}
+	appendLaunchIntentEvents(t, log, "ws_1", "run_malformed", payload)
+
+	_, err = New(cleanup, WithEventLog(log)).Sweep(t.Context(), "ws_1")
+
+	if err == nil {
+		t.Fatal("sweep error = nil, want malformed launch intent rejected")
+	}
+}
+
+type captureCleanupAdapter struct {
+	object           adapter.OwnedExternalObject
+	terminateRequest *adapter.TerminateRequest
+}
+
+func (a *captureCleanupAdapter) ListOwned(context.Context, adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+	return []adapter.OwnedExternalObject{a.object}, nil
+}
+
+func (a *captureCleanupAdapter) Release(context.Context, adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
+	return adapter.ReleaseReceipt{}, nil
+}
+
+func (a *captureCleanupAdapter) Terminate(_ context.Context, request adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	a.terminateRequest = &request
+	return adapter.TerminateReceipt{Terminated: true}, nil
+}
+
 func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
 	t.Helper()
 	intent := adapter.LaunchRequest{
-		AttemptID:   "att_" + runID,
-		LaunchKey:   "launch_" + runID,
-		Disposition: disposition,
+		WorkspaceID:               workspaceID,
+		RunID:                     runID,
+		AttemptID:                 "att_" + runID,
+		LaunchKey:                 "launch_" + runID,
+		SelectedOfferConnectionID: "conn_1",
+		SelectedOfferSnapshotID:   "off_" + runID,
+		SelectedOfferNativeRef:    "cloud/region/" + runID,
+		SelectedOfferAdapterType:  "shadeform",
+		Disposition:               disposition,
 	}
 	private, err := json.Marshal(intent)
 	if err != nil {
 		t.Fatalf("marshal intent: %v", err)
 	}
-	_, err = log.Append(context.Background(), eventlog.AppendRequest{
+	appendLaunchIntentEvents(t, log, workspaceID, runID, private)
+}
+
+func appendLaunchIntentEvents(t *testing.T, log eventlog.EventLog, workspaceID, runID string, private []byte) {
+	t.Helper()
+	_, err := log.Append(context.Background(), eventlog.AppendRequest{
 		Stream:                eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:intent:" + runID,

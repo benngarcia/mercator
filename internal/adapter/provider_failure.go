@@ -1,6 +1,13 @@
 package adapter
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
+
+type ProviderFailureSink interface {
+	CaptureProviderFailure(context.Context, ProviderFailureDiagnostic)
+}
 
 // ProviderFailureKind is Mercator's provider-neutral classification for a
 // failed adapter operation. Provider-native codes remain separate so public
@@ -16,6 +23,20 @@ const (
 	ProviderFailureInternal            ProviderFailureKind = "provider_internal"
 )
 
+func (k ProviderFailureKind) Valid() bool {
+	switch k {
+	case ProviderFailureCapacityUnavailable,
+		ProviderFailureInvalidRequest,
+		ProviderFailureAuthentication,
+		ProviderFailureRateLimited,
+		ProviderFailureTransport,
+		ProviderFailureInternal:
+		return true
+	default:
+		return false
+	}
+}
+
 // SideEffectCertainty records what Mercator knows about the failed operation's
 // external effect. Retryability is deliberately independent: a capacity
 // rejection is retryable with no object, while a failed Create can be
@@ -26,6 +47,10 @@ const (
 	SideEffectNone          SideEffectCertainty = "none"
 	SideEffectIndeterminate SideEffectCertainty = "indeterminate"
 )
+
+func (c SideEffectCertainty) Valid() bool {
+	return c == SideEffectNone || c == SideEffectIndeterminate
+}
 
 // ProviderFailure carries private provider diagnostics through the adapter
 // boundary. ResponseBody is sanitized and bounded by the adapter before this
@@ -41,46 +66,49 @@ type ProviderFailure struct {
 	ResponseTruncated bool
 }
 
-// ProviderFailureDiagnostic is the private, correlated record for one final
+// ProviderFailureDiagnostic is the private, correlated record for one
 // failed provider operation. Reporters must select fields from this value and
 // must never serialize the originating provider request.
 type ProviderFailureDiagnostic struct {
-	WorkspaceID     string
-	RunID           string
-	AttemptID       string
-	ConnectionID    string
-	AdapterType     string
-	Operation       string
-	OfferSnapshotID string
-	OfferNativeRef  string
-	Failure         ProviderFailure
+	WorkspaceID           string
+	RunID                 string
+	AttemptID             string
+	ConnectionID          string
+	AdapterType           string
+	Operation             string
+	OfferSnapshotID       string
+	OfferNativeRef        string
+	AlternativesExhausted bool
+	Failure               ProviderFailure
 }
 
-// ProviderOperationContext carries the stable Run and provider correlation
-// shared by cancellation and cleanup requests.
+// ProviderOperationContext carries diagnostic-only Run and Offer correlation
+// beside an operation request without duplicating its routing identity.
 type ProviderOperationContext struct {
-	WorkspaceID     string
-	RunID           string
-	AttemptID       string
-	ConnectionID    string
-	AdapterType     string
-	OfferSnapshotID string
-	OfferNativeRef  string
+	RunID                 string
+	AttemptID             string
+	OfferSnapshotID       string
+	OfferNativeRef        string
+	AlternativesExhausted bool
 }
 
 // FailureDiagnostic names the operation that failed without copying request
 // payload or ownership material into the diagnostic.
 func (c ProviderOperationContext) FailureDiagnostic(operation string) ProviderFailureDiagnostic {
 	return ProviderFailureDiagnostic{
-		WorkspaceID:     c.WorkspaceID,
-		RunID:           c.RunID,
-		AttemptID:       c.AttemptID,
-		ConnectionID:    c.ConnectionID,
-		AdapterType:     c.AdapterType,
-		Operation:       operation,
-		OfferSnapshotID: c.OfferSnapshotID,
-		OfferNativeRef:  c.OfferNativeRef,
+		RunID:                 c.RunID,
+		AttemptID:             c.AttemptID,
+		Operation:             operation,
+		OfferSnapshotID:       c.OfferSnapshotID,
+		OfferNativeRef:        c.OfferNativeRef,
+		AlternativesExhausted: c.AlternativesExhausted,
 	}
+}
+
+// Actionable reports whether the failure should page operators. A capacity
+// rejection remains expected marketplace churn while another Offer is viable.
+func (d ProviderFailureDiagnostic) Actionable() bool {
+	return d.Failure.Kind != ProviderFailureCapacityUnavailable || d.AlternativesExhausted
 }
 
 func (f *ProviderFailure) Error() string {

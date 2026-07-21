@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -198,8 +199,15 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	if !reflect.DeepEqual(ad.offerRequest.Resources, rev.Spec.Resources) {
 		t.Fatalf("offer request resources = %+v, want %+v", ad.offerRequest.Resources, rev.Spec.Resources)
 	}
+	if ad.offerRequest.WorkspaceID != "ws_1" || ad.offerRequest.DiagnosticContext.RunID != "run_contract" {
+		t.Fatalf("offer request routing/context = %+v, want workspace and Run correlation", ad.offerRequest)
+	}
 	if req.SelectedOfferSnapshotID != "off_1" || req.SelectedOfferNativeRef != "native-offer-1" {
 		t.Fatalf("launch request missing selected offer context: %+v", req)
+	}
+	observeContext := ad.observeRequest.DiagnosticContext
+	if observeContext.RunID != "run_contract" || observeContext.AttemptID != req.AttemptID || observeContext.OfferSnapshotID != "off_1" || observeContext.OfferNativeRef != "native-offer-1" {
+		t.Fatalf("observe request diagnostic context = %+v, want complete Run and Offer correlation", observeContext)
 	}
 	if req.CleanupLocator == "" || req.OwnershipToken == "" || req.LaunchKey == "" || req.RequestHash == "" {
 		t.Fatalf("launch request missing side-effect identity fields: %+v", req)
@@ -495,6 +503,34 @@ func TestAdvanceRunRecoversRecordedLaunchIntentWhenOffersChange(t *testing.T) {
 	}
 }
 
+func TestAdvanceRunClosesAndReportsWhenCapacityAlternativeDisappears(t *testing.T) {
+	ctx := context.Background()
+	ad := &vanishingAlternativeAdapter{offers: []domain.OfferSnapshot{
+		orchOffer("off_cheap", time.Now().UTC()),
+		orchOffer("off_next", time.Now().UTC()),
+	}}
+	reporter := &providerFailureRecorder{}
+	log := openOrchestratorLog(t)
+	orch := New(log, scheduler.New(), ad, WithFailureReporter(reporter))
+	createRun(t, ctx, orch)
+
+	err := orch.AdvanceRun(ctx, "ws_1", "run_1")
+
+	if !errors.Is(err, ErrNoFeasibleOffers) {
+		t.Fatalf("advance error = %v, want exhausted alternatives", err)
+	}
+	if len(reporter.diagnostics) != 2 || reporter.diagnostics[0].Actionable() || !reporter.diagnostics[1].Actionable() {
+		t.Fatalf("provider diagnostics = %+v, want warning followed by actionable exhaustion", reporter.diagnostics)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	if countEvents(events, EventRunClosed) != 1 {
+		t.Fatalf("capacity exhaustion did not close run: %s", eventTypes(events))
+	}
+}
+
 func TestAdvanceRunRetriesCleanupWithoutRelaunch(t *testing.T) {
 	ctx := context.Background()
 	ad := &releaseFailsOnceAdapter{
@@ -692,6 +728,38 @@ type mutableOfferAdapter struct {
 	launchCalls int
 }
 
+type vanishingAlternativeAdapter struct {
+	Adapter
+	offers    []domain.OfferSnapshot
+	listCalls int
+}
+
+func (a *vanishingAlternativeAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	a.listCalls++
+	if a.listCalls > 1 {
+		return nil, nil
+	}
+	return slices.Clone(a.offers), nil
+}
+
+func (a *vanishingAlternativeAdapter) Launch(context.Context, adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	return adapter.LaunchReceipt{}, &adapter.ProviderFailure{
+		Kind:         adapter.ProviderFailureCapacityUnavailable,
+		Status:       409,
+		ProviderCode: "OUT_OF_STOCK",
+		Retryable:    true,
+		SideEffect:   adapter.SideEffectNone,
+	}
+}
+
+type providerFailureRecorder struct {
+	diagnostics []adapter.ProviderFailureDiagnostic
+}
+
+func (r *providerFailureRecorder) CaptureProviderFailure(_ context.Context, diagnostic adapter.ProviderFailureDiagnostic) {
+	r.diagnostics = append(r.diagnostics, diagnostic)
+}
+
 func (m *mutableOfferAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	return append([]domain.OfferSnapshot(nil), m.offers...), nil
 }
@@ -798,8 +866,9 @@ func (o *ownedIndeterminateLaunchAdapter) ListOwned(context.Context, adapter.Own
 
 type captureLaunchAdapter struct {
 	*fake.Adapter
-	offerRequest  adapter.OfferRequest
-	launchRequest adapter.LaunchRequest
+	offerRequest   adapter.OfferRequest
+	launchRequest  adapter.LaunchRequest
+	observeRequest adapter.ObserveRequest
 }
 
 func (c *captureLaunchAdapter) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
@@ -810,6 +879,11 @@ func (c *captureLaunchAdapter) ListOffers(ctx context.Context, req adapter.Offer
 func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	c.launchRequest = req
 	return c.Adapter.Launch(ctx, req)
+}
+
+func (c *captureLaunchAdapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	c.observeRequest = req
+	return c.Adapter.Observe(ctx, req)
 }
 
 func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {
@@ -906,6 +980,7 @@ func orchProvisionableOffer(id string, now time.Time) domain.OfferSnapshot {
 func orchOffer(id string, now time.Time) domain.OfferSnapshot {
 	return domain.OfferSnapshot{
 		ID:           id,
+		NativeRef:    "native/" + id,
 		ConnectionID: "conn_1",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,

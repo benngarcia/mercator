@@ -190,7 +190,7 @@ func TestProviderFailureGroupingAndSeverity(t *testing.T) {
 	differentCode.Failure.ProviderCode = "QUOTA_EXCEEDED"
 	reporter.CaptureProviderFailure(t.Context(), differentCode)
 	exhausted := base
-	exhausted.Failure.RetryCount = 3
+	exhausted.AlternativesExhausted = true
 	reporter.CaptureProviderFailure(t.Context(), exhausted)
 	authentication := base
 	authentication.Failure.Kind = adapter.ProviderFailureAuthentication

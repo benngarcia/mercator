@@ -74,7 +74,7 @@ func (r *Reporter) CaptureProviderFailure(_ context.Context, diagnostic adapter.
 	failure := diagnostic.Failure
 	event := sentry.NewEvent()
 	event.Message = "provider operation failed"
-	event.Level = level(failure)
+	event.Level = level(diagnostic)
 	event.Fingerprint = []string{
 		"provider_failure",
 		diagnostic.AdapterType,
@@ -93,27 +93,28 @@ func (r *Reporter) CaptureProviderFailure(_ context.Context, diagnostic adapter.
 		"side_effect":   string(failure.SideEffect),
 	}
 	event.Contexts["provider_failure"] = sentry.Context{
-		"adapter_type":       diagnostic.AdapterType,
-		"attempt_id":         diagnostic.AttemptID,
-		"connection_id":      diagnostic.ConnectionID,
-		"failure_kind":       string(failure.Kind),
-		"http_status":        failure.Status,
-		"offer_native_ref":   diagnostic.OfferNativeRef,
-		"offer_snapshot_id":  diagnostic.OfferSnapshotID,
-		"operation":          diagnostic.Operation,
-		"provider_code":      failure.ProviderCode,
-		"response_truncated": failure.ResponseTruncated,
-		"retry_count":        failure.RetryCount,
-		"retryable":          failure.Retryable,
-		"run_id":             diagnostic.RunID,
-		"side_effect":        string(failure.SideEffect),
-		"workspace_id":       diagnostic.WorkspaceID,
+		"alternatives_exhausted": diagnostic.AlternativesExhausted,
+		"adapter_type":           diagnostic.AdapterType,
+		"attempt_id":             diagnostic.AttemptID,
+		"connection_id":          diagnostic.ConnectionID,
+		"failure_kind":           string(failure.Kind),
+		"http_status":            failure.Status,
+		"offer_native_ref":       diagnostic.OfferNativeRef,
+		"offer_snapshot_id":      diagnostic.OfferSnapshotID,
+		"operation":              diagnostic.Operation,
+		"provider_code":          failure.ProviderCode,
+		"response_truncated":     failure.ResponseTruncated,
+		"retry_count":            failure.RetryCount,
+		"retryable":              failure.Retryable,
+		"run_id":                 diagnostic.RunID,
+		"side_effect":            string(failure.SideEffect),
+		"workspace_id":           diagnostic.WorkspaceID,
 	}
 	r.client.CaptureEvent(event, nil, nil)
 }
 
-func level(failure adapter.ProviderFailure) sentry.Level {
-	if failure.Kind == adapter.ProviderFailureCapacityUnavailable && failure.RetryCount == 0 {
+func level(diagnostic adapter.ProviderFailureDiagnostic) sentry.Level {
+	if !diagnostic.Actionable() {
 		return sentry.LevelWarning
 	}
 	return sentry.LevelError

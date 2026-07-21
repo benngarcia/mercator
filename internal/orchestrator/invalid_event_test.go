@@ -3,11 +3,14 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
@@ -111,6 +114,12 @@ func TestGetRunRejectsMissingRequiredDataForEveryKnownEvent(t *testing.T) {
 }
 
 func TestGetRunRejectsInvalidPrivatePayloads(t *testing.T) {
+	emptyWorkspace := validLaunchIntentFixture()
+	emptyWorkspace.WorkspaceID = ""
+	emptyAdapter := validLaunchIntentFixture()
+	emptyAdapter.SelectedOfferAdapterType = ""
+	emptyNativeOffer := validLaunchIntentFixture()
+	emptyNativeOffer.SelectedOfferNativeRef = ""
 	tests := []struct {
 		name        string
 		eventType   string
@@ -120,12 +129,80 @@ func TestGetRunRejectsInvalidPrivatePayloads(t *testing.T) {
 		{name: "missing run requested data", eventType: EventRunRequested, privateData: json.RawMessage(`{}`)},
 		{name: "wrong launch intent shape", eventType: EventLaunchIntentRecorded, privateData: json.RawMessage(`[]`)},
 		{name: "missing launch intent data", eventType: EventLaunchIntentRecorded, privateData: json.RawMessage(`{}`)},
+		{name: "launch intent missing workspace", eventType: EventLaunchIntentRecorded, privateData: mustJSON(t, emptyWorkspace)},
+		{name: "launch intent missing adapter", eventType: EventLaunchIntentRecorded, privateData: mustJSON(t, emptyAdapter)},
+		{name: "launch intent missing native Offer", eventType: EventLaunchIntentRecorded, privateData: mustJSON(t, emptyNativeOffer)},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			assertGetRunRejectsStoredEventPayloads(t, test.eventType, json.RawMessage(`{}`), test.privateData)
 		})
+	}
+}
+
+func TestGetRunRejectsEmptyPrivateProviderFailureDiagnostic(t *testing.T) {
+	ctx := context.Background()
+	log := openOrchestratorLog(t)
+	orch := New(log, scheduler.New(), fake.New())
+	createRun(t, ctx, orch)
+	privateData, err := os.ReadFile("testdata/empty_provider_failure_diagnostic.json")
+	if err != nil {
+		t.Fatalf("read private provider failure fixture: %v", err)
+	}
+	attempt := attemptData{AttemptID: "att_1", LaunchKey: "launch_att_1", OwnershipToken: "own_att_1", CleanupLocator: "cleanup_att_1"}
+	decision := domain.PlacementDecision{
+		ID:                      "dec_1",
+		RunID:                   "run_1",
+		EvaluatedAt:             time.Now().UTC(),
+		ModelVersion:            "latency-v1",
+		SelectedOfferSnapshotID: "off_1",
+	}
+	intent := validLaunchIntentFixture()
+	_, err = log.Append(ctx, eventlog.AppendRequest{
+		Stream:                runStream("ws_1", "run_1"),
+		ExpectedStreamVersion: 1,
+		CommandKey:            "inject-empty-provider-failure",
+		RequestHash:           "empty-provider-failure-fixture",
+		Events: []eventlog.NewEvent{
+			mustEvent("run_1", "placement", EventPlacementDecided, placementData{Decision: decision}, time.Now()),
+			mustEvent("run_1", "attempt", EventAttemptCreated, attempt, time.Now()),
+			mustPrivateEvent("run_1", "intent", EventLaunchIntentRecorded, intent, intent, time.Now()),
+			{
+				ID:            "evt_run_1_empty_provider_failure",
+				Type:          EventLaunchFailed,
+				SchemaVersion: 1,
+				OccurredAt:    time.Now().UTC(),
+				Data:          mustJSON(t, adapterErrorData{Code: "PROVIDER_CAPACITY_UNAVAILABLE", Message: "provider capacity unavailable", Retryable: true, LaunchKey: attempt.LaunchKey}),
+				PrivateData:   privateData,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("append empty provider failure fixture: %v", err)
+	}
+
+	_, err = orch.GetRun(ctx, "ws_1", "run_1")
+	if err == nil || !strings.Contains(err.Error(), "provider failure kind") {
+		t.Fatalf("GetRun() error = %v, want invalid private provider failure", err)
+	}
+}
+
+func validLaunchIntentFixture() adapter.LaunchRequest {
+	return adapter.LaunchRequest{
+		OperationKey:              "launch_att_1",
+		RequestHash:               "sha256:launch",
+		WorkspaceID:               "ws_1",
+		RunID:                     "run_1",
+		AttemptID:                 "att_1",
+		OwnershipToken:            "own_att_1",
+		LaunchKey:                 "launch_att_1",
+		CleanupLocator:            "cleanup_att_1",
+		Image:                     "ghcr.io/acme/test@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		SelectedOfferSnapshotID:   "off_1",
+		SelectedOfferConnectionID: "conn_1",
+		SelectedOfferAdapterType:  "fake",
+		SelectedOfferNativeRef:    "native/off_1",
 	}
 }
 

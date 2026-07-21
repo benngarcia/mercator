@@ -78,8 +78,9 @@ type Provider interface {
 }
 
 type OfferRequest struct {
-	WorkspaceID string
-	Resources   domain.ResourceRequirements
+	WorkspaceID       string
+	DiagnosticContext ProviderOperationContext `json:"-"`
+	Resources         domain.ResourceRequirements
 }
 
 type LaunchRequest struct {
@@ -103,16 +104,40 @@ type LaunchRequest struct {
 	// MaxRuntimeSeconds is the run's execution bound from the workload's
 	// ExecutionPolicy. Adapters that support provider-side reclamation (e.g.
 	// Shadeform auto_delete) derive their TTL backstop from it.
-	MaxRuntimeSeconds         int64  `json:"max_runtime_seconds,omitempty"`
-	SelectedOfferSnapshotID   string `json:"selected_offer_snapshot_id"`
-	SelectedOfferConnectionID string `json:"selected_offer_connection_id"`
-	SelectedOfferAdapterType  string `json:"selected_offer_adapter_type"`
-	SelectedOfferNativeRef    string `json:"selected_offer_native_ref"`
+	MaxRuntimeSeconds         int64                    `json:"max_runtime_seconds,omitempty"`
+	DiagnosticContext         ProviderOperationContext `json:"-"`
+	SelectedOfferSnapshotID   string                   `json:"selected_offer_snapshot_id"`
+	SelectedOfferConnectionID string                   `json:"selected_offer_connection_id"`
+	SelectedOfferAdapterType  string                   `json:"selected_offer_adapter_type"`
+	SelectedOfferNativeRef    string                   `json:"selected_offer_native_ref"`
 	// Disposition is the RECORDED cleanup intent, derived from the selected
 	// offer's Kind at launch time (provisionable->terminate, standing->release)
 	// and persisted on the launch_intent_recorded event. Cleanup dispatches on
 	// this recorded value; it is never re-inferred from live offers.
 	Disposition domain.Disposition `json:"disposition,omitempty"`
+}
+
+// ProviderOperationContext returns the diagnostic-only correlation recorded
+// with this launch intent. Routing identity remains on the operation request.
+func (r LaunchRequest) ProviderOperationContext() ProviderOperationContext {
+	return ProviderOperationContext{
+		RunID:                 r.RunID,
+		AttemptID:             r.AttemptID,
+		OfferSnapshotID:       r.SelectedOfferSnapshotID,
+		OfferNativeRef:        r.SelectedOfferNativeRef,
+		AlternativesExhausted: r.DiagnosticContext.AlternativesExhausted,
+	}
+}
+
+// FailureDiagnostic correlates a typed launch failure without serializing the
+// launch request or allowing diagnostic metadata to alter operation identity.
+func (r LaunchRequest) FailureDiagnostic(operation string, failure ProviderFailure) ProviderFailureDiagnostic {
+	diagnostic := r.ProviderOperationContext().FailureDiagnostic(operation)
+	diagnostic.WorkspaceID = r.WorkspaceID
+	diagnostic.ConnectionID = r.SelectedOfferConnectionID
+	diagnostic.AdapterType = r.SelectedOfferAdapterType
+	diagnostic.Failure = failure
+	return diagnostic
 }
 
 type EnvironmentBinding struct {
@@ -131,11 +156,12 @@ type LaunchReceipt struct {
 }
 
 type ObserveRequest struct {
-	WorkspaceID    string
-	ConnectionID   string
-	LaunchKey      string
-	OwnershipToken string
-	RequestHash    string
+	WorkspaceID       string
+	ConnectionID      string
+	DiagnosticContext ProviderOperationContext `json:"-"`
+	LaunchKey         string
+	OwnershipToken    string
+	RequestHash       string
 }
 
 type ExternalObservation struct {
@@ -148,10 +174,12 @@ type ExternalObservation struct {
 }
 
 type CancelRequest struct {
-	ProviderOperationContext
-	OperationKey string
-	RequestHash  string
-	LaunchKey    string
+	WorkspaceID       string
+	ConnectionID      string
+	DiagnosticContext ProviderOperationContext `json:"-"`
+	OperationKey      string
+	RequestHash       string
+	LaunchKey         string
 }
 
 type CancelReceipt struct {
@@ -160,7 +188,9 @@ type CancelReceipt struct {
 }
 
 type ReleaseRequest struct {
-	ProviderOperationContext
+	WorkspaceID       string
+	ConnectionID      string
+	DiagnosticContext ProviderOperationContext `json:"-"`
 	OperationKey      string
 	RequestHash       string
 	LaunchKey         string
@@ -178,7 +208,9 @@ type ReleaseReceipt struct {
 // ownership material (OwnershipToken/LaunchRequestHash) as ReleaseRequest so
 // the no-orphan reconciliation path is identical.
 type TerminateRequest struct {
-	ProviderOperationContext
+	WorkspaceID       string
+	ConnectionID      string
+	DiagnosticContext ProviderOperationContext `json:"-"`
 	OperationKey      string
 	RequestHash       string
 	LaunchKey         string
@@ -192,7 +224,8 @@ type TerminateReceipt struct {
 }
 
 type OwnershipQuery struct {
-	WorkspaceID string
+	WorkspaceID       string
+	DiagnosticContext ProviderOperationContext `json:"-"`
 }
 
 type OwnedExternalObject struct {
