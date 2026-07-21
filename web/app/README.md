@@ -12,9 +12,9 @@ web/app/            this dir — frontend source
   index.html        entry: #root + <script src="src/main.tsx">
   src/index.css     Tailwind v4 + the canonical shadcn theme tokens (light/dark, teal accent)
   src/lib/utils.ts  cn() helper
-  build.ts          Bun.build → ../static (hashed, split, minified, no sourcemaps — they would be embedded in the Go binary)
+  build.ts          Bun.build → ../static (hashed, split, minified, no sourcemaps)
   dev.ts            Bun HTML dev server (HMR) + /v1,/health proxy to :8080
-web/static/         BUILD OUTPUT (git-tracked, embedded via //go:embed all:static)
+web/static/         GENERATED BUILD OUTPUT (git-ignored, embedded via //go:embed all:static)
 ```
 
 The import alias `@/*` maps to `web/app/src/*` (see `tsconfig.json`).
@@ -47,8 +47,9 @@ and workspace are injected centrally by `@/lib/api/client` — never call
 
 ## Build & embed (the order matters)
 
-`go build` embeds whatever is in `web/static` at compile time, so the UI build
-must run **first**:
+`go build` embeds whatever is in `web/static` at compile time, so shipping paths
+must build the UI **first**. `mise run build`, the Dockerfile, and the release
+archive builder all enforce that order:
 
 ```sh
 mise run ui                    # = (cd web/app && bun install && bun run build) → web/static
@@ -68,6 +69,8 @@ content-hashed `assets/*.js` / `assets/*.css`. The Go server serves:
 A `.gitkeep` placeholder keeps `web/static` non-empty so `//go:embed all:static`
 always has a file to embed even on a fresh checkout that has not run the build
 (in that state the server returns a `UI_NOT_AVAILABLE` hint until `mise run ui`).
+Generated `index.html` and `assets/` remain ignored; release artifacts never
+depend on a committed bundle.
 
 > Makefile equivalent (if a Makefile is added): `ui: ; cd web/app && bun install && bun run build`.
 
@@ -76,6 +79,18 @@ always has a file to embed even on a fresh checkout that has not run the build
 ```sh
 cd web/app && bun run typecheck   # tsc --noEmit, strict
 ```
+
+## Runs
+
+`/runs` owns run intake as well as run history. Its **Create run** action adds
+`action=create` to the current URL and opens an accessible sheet without
+leaving the Runs context. Successful creation replaces that transient history
+entry with `/runs/{run_id}`; cancelling returns to the exact originating URL
+and restores focus to the button that opened the sheet.
+
+The sheet accepts either the image shorthand or a complete immutable workload
+revision. The former Workloads, Preview, and `/runs/new` authoring pages are
+retired. Their public API endpoints remain available for automation.
 
 ## Connections page
 

@@ -24,16 +24,5 @@ export const queryKeys = {
   connections: (workspaceID: string) =>
     ["mercator", "connections", { workspaceID }] as const,
 
-  workloadRevisions: (workspaceID: string, workloadID: string) =>
-    ["mercator", "workload", { workspaceID, workloadID }, "revisions"] as const,
-  revision: (workspaceID: string, workloadID: string, revisionID: string) =>
-    [
-      "mercator",
-      "workload",
-      { workspaceID, workloadID },
-      "revision",
-      revisionID,
-    ] as const,
-
   sinkStatus: (sinkID: string) => ["mercator", "sink", sinkID] as const,
 } as const;

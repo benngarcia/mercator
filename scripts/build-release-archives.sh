@@ -37,10 +37,17 @@ case "${VERSION}" in
 esac
 
 need go
+need bun
 need tar
 
 cd "${ROOT}"
 mkdir -p "${DIST_DIR}"
+
+(
+  cd web/app
+  bun install --frozen-lockfile
+  bun run build
+)
 
 archives=()
 for target in ${TARGETS}; do

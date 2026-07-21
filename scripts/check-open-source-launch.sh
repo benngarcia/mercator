@@ -238,6 +238,7 @@ check_internal_artifacts_absent
 
 if [[ "${FULL}" == "1" ]]; then
   need_command go
+  need_command bun
   need_command tar
   need_checksum_command
   run_full_checks

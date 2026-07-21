@@ -4,7 +4,7 @@
 // "no decision yet" empty state on 404). Polling cadence is driven by the run's
 // terminal state inside the hooks.
 
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, notFound } from "@tanstack/react-router";
 import { Compass } from "lucide-react";
 
 import { rootRoute } from "./root";
@@ -161,5 +161,8 @@ function RunDetailPage() {
 export const runsDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/runs/$runId",
+  beforeLoad: ({ params }) => {
+    if (params.runId === "new") throw notFound();
+  },
   component: RunDetailPage,
 });
