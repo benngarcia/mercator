@@ -155,6 +155,7 @@ Mercator is an OCI run broker with an HTTP API, JSON CLI, and embedded console.
 
 Commands:
   serve                 Start the Mercator HTTP server and console
+  verify --spec FILE    Launch a bounded provider Conformance Trial
   login                 Sign in through the server's OIDC login and store a CLI token
   logout                Clear the stored login credential
   context <command>     Manage named server contexts (list, use, set, delete)

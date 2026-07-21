@@ -1,13 +1,45 @@
 # CLI Reference
 
-The `mercator` binary has two modes:
+The `mercator` binary has three modes:
 
 - `mercator serve` starts the HTTP API and embedded console.
+- `mercator verify --spec FILE` starts an isolated broker and launches a real,
+  bounded provider conformance Run.
 - Every other command (`run`, `sink`, `login`, `context`, ...) targets an
   existing Mercator API and prints JSON responses.
 
 Run `mercator --help` or `mercator help run create` for the in-binary reference.
 Help does not require a running server or `MERCATOR_API_URL`.
+
+## Provider Verification
+
+`mercator verify --spec trial.json` validates provider credentials, pricing,
+launch, signed workload reporting, terminal cleanup, and empty owned-resource
+inventory. It does launch an instance. The command refuses to launch when the
+offer's hourly rate multiplied by the trial timeout exceeds
+`max_expected_cost_usd`.
+
+The trial's optional `mode` is `probe` by default. `launch-cancel` proves that
+Mercator can cancel an accepted instance and drive cleanup to completion.
+
+The trial names a credential environment variable. Mercator reads that one
+value in-process when it constructs the provider adapter. It does not accept
+the API key in the JSON document, command arguments, or evidence output.
+
+```sh
+export RUNPOD_API_KEY='rpa_...'
+export MERCATOR_CONFORMANCE_LISTEN_ADDR='0.0.0.0:8082'
+export MERCATOR_CONFORMANCE_PUBLIC_URL='https://reports.example.com'
+
+mercator verify --spec trial.json | jq .
+```
+
+Local Docker verification needs no credential or public URL. Cloud and remote
+Docker verification require a fixed `MERCATOR_CONFORMANCE_LISTEN_ADDR` and an
+origin-only `MERCATOR_CONFORMANCE_PUBLIC_URL` routed to that listener. Invalid
+topology fails before Mercator contacts the provider. See
+[provider-conformance.md](../production/provider-conformance.md) for the full
+trial schema and a local Docker proof.
 
 ## Environment And Contexts
 
@@ -175,9 +207,9 @@ mistakes from API/runtime failures:
 
 | Exit | Meaning | Examples |
 | --- | --- | --- |
-| `0` | Command completed successfully. | Help output, successful `run`/`sink` responses. |
-| `1` | The command reached the request/response layer, but the request failed or the API returned an error response. | Network/transport failure, non-2xx API response, response-read failure, or non-JSON API response. |
-| `2` | Local argument or configuration validation failed before an API request was sent. | Missing `MERCATOR_API_URL`, missing workspace, missing `--run-id`, unknown command, invalid flags, or invalid `--workload-json`. |
+| `0` | Command completed successfully. | Help output, successful `run`/`sink` response, or passed provider trial. |
+| `1` | Runtime work failed. | Network/API failure, blocked trial, failed probe, or unconfirmed cleanup. |
+| `2` | Local argument or configuration validation failed. | Missing base URL, invalid flags, invalid workload JSON, or invalid trial document. |
 
 ## Error Responses
 

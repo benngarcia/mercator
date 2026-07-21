@@ -62,6 +62,15 @@ jobs:
   image:
     name: Image
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - suffix: ""
+            dockerfile: ./Dockerfile
+            platforms: linux/amd64
+          - suffix: -conformance-probe
+            dockerfile: ./conformance/Dockerfile
+            platforms: linux/amd64,linux/arm64
     permissions:
       contents: read
       packages: write
@@ -81,7 +90,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
@@ -89,6 +98,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

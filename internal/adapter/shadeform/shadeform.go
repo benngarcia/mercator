@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -442,21 +443,28 @@ func ownershipTags(req adapter.LaunchRequest) []string {
 // MERCATOR_* ownership/identity keys; these intentionally match the
 // orchestrator-injected reporting vars of the same name (identical values).
 func launchEnvs(req adapter.LaunchRequest) []envVar {
-	envs := make([]envVar, 0, len(req.Environment)+7)
+	values := make(map[string]string, len(req.Environment)+7)
 	for _, b := range req.Environment {
 		if b.Value != nil {
-			envs = append(envs, envVar{Name: b.Name, Value: *b.Value})
+			values[b.Name] = *b.Value
 		}
 	}
-	envs = append(envs,
-		envVar{Name: "MERCATOR_WORKSPACE_ID", Value: req.WorkspaceID},
-		envVar{Name: "MERCATOR_RUN_ID", Value: req.RunID},
-		envVar{Name: "MERCATOR_ATTEMPT_ID", Value: req.AttemptID},
-		envVar{Name: "MERCATOR_LAUNCH_KEY", Value: req.LaunchKey},
-		envVar{Name: "MERCATOR_OWNERSHIP_TOKEN", Value: req.OwnershipToken},
-		envVar{Name: "MERCATOR_REQUEST_HASH", Value: req.RequestHash},
-		envVar{Name: "MERCATOR_CLEANUP_LOCATOR", Value: req.CleanupLocator},
-	)
+	values["MERCATOR_WORKSPACE_ID"] = req.WorkspaceID
+	values["MERCATOR_RUN_ID"] = req.RunID
+	values["MERCATOR_ATTEMPT_ID"] = req.AttemptID
+	values["MERCATOR_LAUNCH_KEY"] = req.LaunchKey
+	values["MERCATOR_OWNERSHIP_TOKEN"] = req.OwnershipToken
+	values["MERCATOR_REQUEST_HASH"] = req.RequestHash
+	values["MERCATOR_CLEANUP_LOCATOR"] = req.CleanupLocator
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	envs := make([]envVar, 0, len(names))
+	for _, name := range names {
+		envs = append(envs, envVar{Name: name, Value: values[name]})
+	}
 	return envs
 }
 

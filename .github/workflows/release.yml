@@ -87,6 +87,15 @@ jobs:
     name: Publish image
     needs: version
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - suffix: ""
+            dockerfile: ./Dockerfile
+            platforms: linux/amd64
+          - suffix: -conformance-probe
+            dockerfile: ./conformance/Dockerfile
+            platforms: linux/amd64,linux/arm64
     permissions:
       contents: read
       packages: write
@@ -103,7 +112,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
           # `value:` pins the semver source to the resolved version so the same
           # tags come out whether the run started from a tag push or a manual
           # dispatch on a branch.
@@ -115,6 +124,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

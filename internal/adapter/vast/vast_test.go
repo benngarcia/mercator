@@ -49,7 +49,7 @@ func TestListOffersQueriesSecureTierAndMapsOffers(t *testing.T) {
 	if len(offers) != 1 || offers[0].NativeRef != "9001" {
 		t.Fatalf("only the verified offer must survive, got %+v", offers)
 	}
-	for _, want := range []string{`"verification":{"eq":"verified"}`, `"datacenter":{"eq":true}`, `"external":{"eq":false}`, `"rentable":{"eq":true}`, `"type":"ondemand"`, `"num_gpus":{"eq":1}`} {
+	for _, want := range []string{`"verified":{"eq":true}`, `"datacenter":{"eq":true}`, `"external":{"eq":false}`, `"rentable":{"eq":true}`, `"type":"ondemand"`, `"num_gpus":{"eq":1}`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("secure-tier search body missing %s: %s", want, body)
 		}
@@ -57,7 +57,7 @@ func TestListOffersQueriesSecureTierAndMapsOffers(t *testing.T) {
 }
 
 func TestLaunchCreatesInstanceWithLabelEnvAndArgs(t *testing.T) {
-	var createPath, createBody string
+	var createPath, createBody, secureLookupBody string
 	listCalls := 0
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
 		switch {
@@ -71,6 +71,8 @@ func TestLaunchCreatesInstanceWithLabelEnvAndArgs(t *testing.T) {
 				 "extra_env":[["MERCATOR_OWNERSHIP_TOKEN","own1"]]}
 			]}`), nil
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v0/bundles/":
+			raw, _ := io.ReadAll(r.Body)
+			secureLookupBody = string(raw)
 			return jsonResponse(200, `{"offers":[{"id":9001,"num_gpus":1,"dph_total":0.31,"verification":"verified"}]}`), nil
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/v0/asks/"):
 			createPath = r.URL.Path
@@ -94,6 +96,14 @@ func TestLaunchCreatesInstanceWithLabelEnvAndArgs(t *testing.T) {
 	}
 	if createPath != "/api/v0/asks/9001/" {
 		t.Errorf("create path = %q", createPath)
+	}
+	for _, want := range []string{`"verified":{"eq":true}`, `"datacenter":{"eq":true}`, `"rentable":{"eq":true}`, `"rented":{"eq":false}`, `"num_gpus":{"eq":1}`, `"disk_space":{"gte":20}`} {
+		if !strings.Contains(secureLookupBody, want) {
+			t.Errorf("launch secure-tier lookup missing %s: %s", want, secureLookupBody)
+		}
+	}
+	if strings.Contains(secureLookupBody, `"id"`) {
+		t.Errorf("launch secure-tier lookup uses unsupported id filter: %s", secureLookupBody)
 	}
 	for _, want := range []string{`"label":"mercator-lk1"`, `"runtype":"args"`, `"args":["sh","-c","echo hi"]`, `"image":"busybox"`, `"cancel_unavail":true`, `"target_state":"running"`, `"MERCATOR_OWNERSHIP_TOKEN":"own1"`, `"MERCATOR_REQUEST_HASH":"rh1"`, `"FOO":"v"`} {
 		if !strings.Contains(createBody, want) {

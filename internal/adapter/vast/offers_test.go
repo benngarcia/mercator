@@ -11,8 +11,12 @@ func pricePtr(v float64) *float64 { return &v }
 
 func TestSecureOfferQueryHardCodesTheSecureTier(t *testing.T) {
 	q := secureOfferQuery([]string{"RTX 4090"}, 2, 75, 20)
-	if got := q["verification"].(map[string]any)["eq"]; got != "verified" {
-		t.Errorf("verification filter = %v", got)
+	verified, ok := q["verified"].(map[string]any)
+	if !ok {
+		t.Fatalf("verified filter = %v", q["verified"])
+	}
+	if got := verified["eq"]; got != true {
+		t.Errorf("verified filter = %v", got)
 	}
 	if got := q["datacenter"].(map[string]any)["eq"]; got != true {
 		t.Errorf("datacenter filter = %v", got)
@@ -31,19 +35,6 @@ func TestSecureOfferQueryHardCodesTheSecureTier(t *testing.T) {
 	}
 	if got := q["gpu_name"].(map[string]any)["in"].([]string); len(got) != 1 || got[0] != "RTX 4090" {
 		t.Errorf("gpu_name = %v", got)
-	}
-}
-
-func TestSecureAskQueryPinsIdAndTier(t *testing.T) {
-	q := secureAskQuery(42)
-	if got := q["id"].(map[string]any)["eq"]; got != int64(42) {
-		t.Errorf("id filter = %v", got)
-	}
-	if got := q["verification"].(map[string]any)["eq"]; got != "verified" {
-		t.Errorf("verification filter = %v", got)
-	}
-	if got := q["datacenter"].(map[string]any)["eq"]; got != true {
-		t.Errorf("datacenter filter = %v", got)
 	}
 }
 
