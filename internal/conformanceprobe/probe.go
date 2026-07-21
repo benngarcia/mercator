@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 )
 
 const UserAgent = "mercator-conformance-probe/1"
@@ -32,8 +33,8 @@ type readyData struct {
 }
 
 func Run(ctx context.Context, args []string, env map[string]string, _ io.Writer, stderr io.Writer) int {
-	if len(args) != 1 || args[0] != "success" {
-		_, _ = fmt.Fprintln(stderr, "usage: mercator-conformance-probe success")
+	if len(args) != 1 || (args[0] != "success" && args[0] != "wait-for-cancel") {
+		_, _ = fmt.Fprintln(stderr, "usage: mercator-conformance-probe success | wait-for-cancel")
 		return 2
 	}
 	config, err := configurationFromEnvironment(env)
@@ -42,9 +43,16 @@ func Run(ctx context.Context, args []string, env map[string]string, _ io.Writer,
 		return 2
 	}
 	reporter := newReporter(config)
-	if err := reporter.post(ctx, report{Type: "ready", Data: &readyData{Scenario: "success"}}); err != nil {
+	if err := reporter.post(ctx, report{Type: "ready", Data: &readyData{Scenario: args[0]}}); err != nil {
+		if args[0] == "wait-for-cancel" && ctx.Err() != nil {
+			return 0
+		}
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if args[0] == "wait-for-cancel" {
+		<-ctx.Done()
+		return 0
 	}
 	exitCode := 0
 	if err := reporter.post(ctx, report{Type: "exit", ExitCode: &exitCode}); err != nil {
@@ -96,20 +104,35 @@ func (r reporter) post(ctx context.Context, payload report) error {
 	if err != nil {
 		return fmt.Errorf("encode report: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create report request: %w", err)
+	var lastErr error
+	const maxAttempts = 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("create report request: %w", err)
+		}
+		request.Header.Set("Authorization", "Bearer "+r.token)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("User-Agent", UserAgent)
+		response, err := r.client.Do(request)
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusAccepted {
+				return nil
+			}
+			err = fmt.Errorf("unexpected HTTP status %d", response.StatusCode)
+		}
+		lastErr = err
+		if attempt == maxAttempts-1 {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
-	request.Header.Set("Authorization", "Bearer "+r.token)
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("User-Agent", UserAgent)
-	response, err := r.client.Do(request)
-	if err != nil {
-		return fmt.Errorf("send report: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("send report: unexpected HTTP status %d", response.StatusCode)
-	}
-	return nil
+	return fmt.Errorf("send report after %d attempts: %w", maxAttempts, lastErr)
 }

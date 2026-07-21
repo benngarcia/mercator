@@ -23,7 +23,7 @@ func TestVerifyCommandReadsATrialFileAndWritesEvidence(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("runCommand() = %d, stderr = %s", exitCode, stderr.String())
 	}
-	if received.AdapterType != "docker" || received.Timeout != 12*time.Minute || received.MaxExpectedCostUSD != 0.5 {
+	if received.AdapterType != "docker" || received.Mode != ModeProbe || received.Timeout != 12*time.Minute || received.MaxExpectedCostUSD != 0.5 {
 		t.Fatalf("trial = %+v", received)
 	}
 	var evidence Evidence
@@ -32,6 +32,19 @@ func TestVerifyCommandReadsATrialFileAndWritesEvidence(t *testing.T) {
 	}
 	if evidence.Verdict != VerdictPassed {
 		t.Fatalf("evidence = %+v", evidence)
+	}
+}
+
+func TestVerifyCommandReadsLaunchCancelModeFromTheTrial(t *testing.T) {
+	var received Trial
+	exitCode := runCommand(context.Background(), []string{"--spec", "testdata/docker_cancel_trial.json"}, map[string]string{}, &bytes.Buffer{}, &bytes.Buffer{},
+		func(_ context.Context, trial Trial) (Evidence, error) {
+			received = trial
+			return Evidence{Mode: trial.Mode, Verdict: VerdictPassed}, nil
+		})
+
+	if exitCode != 0 || received.Mode != ModeLaunchCancel {
+		t.Fatalf("runCommand() = %d, trial = %+v", exitCode, received)
 	}
 }
 
@@ -89,13 +102,13 @@ func TestVerifyCommandRedactsOnlyTheSelectedCredential(t *testing.T) {
 
 	exitCode := runCommand(context.Background(), []string{"--spec", "testdata/runpod_trial.json"}, environment, &stdout, &bytes.Buffer{},
 		func(context.Context, Trial) (Evidence, error) {
-			return Evidence{}, errors.New("provider secret-provider-token failed under /Users/operator")
+			return Evidence{CleanupFailure: &TrialFailure{Code: "CLEANUP_FAILED", Message: "cleanup secret-provider-token"}}, errors.New("provider secret-provider-token failed under /Users/operator")
 		})
 
 	if exitCode != 1 {
 		t.Fatalf("runCommand() = %d", exitCode)
 	}
-	if strings.Contains(stdout.String(), "secret-provider-token") || !strings.Contains(stdout.String(), "/Users/operator") {
+	if strings.Contains(stdout.String(), "secret-provider-token") || !strings.Contains(stdout.String(), "/Users/operator") || !strings.Contains(stdout.String(), "cleanup [REDACTED]") {
 		t.Fatalf("stdout = %s", stdout.String())
 	}
 }

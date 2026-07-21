@@ -8,8 +8,8 @@ connection. A passing verdict means all of these conditions held:
 1. the provider authorized the supplied credential;
 2. a known-USD offer fit the declared maximum cost;
 3. the provider launched the digest-pinned probe image;
-4. the probe submitted signed ready and zero-exit reports;
-5. the Run closed with succeeded outcome and confirmed cleanup; and
+4. the selected scenario reached its expected terminal outcome;
+5. the Run closed with confirmed cleanup; and
 6. the provider listed zero objects owned by the trial workspace.
 
 The command returns JSON evidence on stdout. `passed` exits 0. `failed` or
@@ -25,6 +25,7 @@ The command returns JSON evidence on stdout. `passed` exits 0. `failed` or
     "gpu_types": "NVIDIA RTX A4000"
   },
   "image": "ghcr.io/benngarcia/mercator-conformance-probe@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "mode": "probe",
   "max_expected_cost_usd": 0.50,
   "timeout": "12m"
 }
@@ -34,7 +35,9 @@ The command returns JSON evidence on stdout. `passed` exits 0. `failed` or
 providers require `credential_env`; Docker rejects it. `image` must be an OCI
 digest reference. Resolve the published probe tag to its current digest before
 creating the trial. `config` accepts the same keys documented by the selected
-provider manifest.
+provider manifest. `mode` defaults to `probe`, which requires a signed zero
+exit. Set it to `launch-cancel` to prove that an accepted instance can be
+cancelled and cleaned up through the same Run lifecycle.
 
 The cost gate is deliberately conservative and simple:
 
@@ -53,8 +56,10 @@ value. The verifier resolves only that named variable when it constructs the
 provider adapter. Credential material is absent from arguments, evidence, and
 persisted events.
 
-Cloud instances must reach the verifier to report completion. Bind a listener
-that accepts the routed traffic and set its externally reachable base URL:
+Cloud and remote-Docker instances must reach the verifier to report completion.
+They require a fixed listener port and an externally reachable origin. The
+verifier rejects missing, dynamic-port, or path-bearing callback topology
+before it contacts the provider:
 
 ```sh
 export RUNPOD_API_KEY='rpa_...'
@@ -94,4 +99,19 @@ MERCATOR_CONFORMANCE_LISTEN_ADDR='0.0.0.0:8082' \
 A passing result includes `run.outcome: "succeeded"`, `run.exit_code: 0`,
 `run.cleanup: "confirmed"`, `run.closed: true`, and `inventory.owned: 0`.
 The verifier attempts cancellation on every non-terminal failure and checks
-provider inventory before returning.
+provider inventory before returning. Cleanup uses an independent deadline and
+retries Run cancellation, reconciliation, orphan reclamation, evidence capture,
+and inventory inspection until the Run is closed and inventory is empty. A
+cleanup failure is reported separately so the primary scenario failure remains
+available.
+
+To exercise cancellation instead of natural exit, add this field to the same
+trial document:
+
+```json
+{"mode":"launch-cancel"}
+```
+
+A passing cancellation trial has `run.outcome: "cancelled"`, confirmed cleanup,
+and zero owned inventory. Evidence for either mode includes the placement
+decision, public events, and scenario timing.

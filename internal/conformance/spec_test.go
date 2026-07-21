@@ -15,6 +15,7 @@ func TestTrialRequiresEveryBillingAndCleanupBound(t *testing.T) {
 		Image:              probeImage(),
 		MaxExpectedCostUSD: 0.50,
 		Timeout:            12 * time.Minute,
+		Mode:               conformance.ModeProbe,
 	}
 	tests := []struct {
 		name    string
@@ -25,6 +26,7 @@ func TestTrialRequiresEveryBillingAndCleanupBound(t *testing.T) {
 		{name: "budget", change: func(trial *conformance.Trial) { trial.MaxExpectedCostUSD = 0 }, wantErr: "must be positive"},
 		{name: "timeout", change: func(trial *conformance.Trial) { trial.Timeout = 0 }, wantErr: "must be positive"},
 		{name: "credential", change: func(trial *conformance.Trial) { trial.CredentialEnv = "" }, wantErr: "requires credential_env"},
+		{name: "mode", change: func(trial *conformance.Trial) { trial.Mode = "future" }, wantErr: "unsupported mode"},
 	}
 
 	for _, test := range tests {
@@ -41,7 +43,7 @@ func TestTrialRequiresEveryBillingAndCleanupBound(t *testing.T) {
 
 func TestTrialAcceptsEveryProductionProvider(t *testing.T) {
 	trials := []conformance.Trial{
-		{AdapterType: "docker", Image: probeImage(), MaxExpectedCostUSD: 0.50, Timeout: time.Minute},
+		{AdapterType: "docker", Mode: conformance.ModeProbe, Image: probeImage(), MaxExpectedCostUSD: 0.50, Timeout: time.Minute},
 		{AdapterType: "runpod", CredentialEnv: "RUNPOD_API_KEY", Image: probeImage(), MaxExpectedCostUSD: 0.50, Timeout: time.Minute},
 		{AdapterType: "shadeform", CredentialEnv: "SHADEFORM_API_KEY", Image: probeImage(), MaxExpectedCostUSD: 0.50, Timeout: time.Minute},
 		{AdapterType: "vast", CredentialEnv: "VAST_API_KEY", Image: probeImage(), MaxExpectedCostUSD: 0.50, Timeout: time.Minute},

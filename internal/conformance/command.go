@@ -47,6 +47,9 @@ func runCommand(ctx context.Context, args []string, environment map[string]strin
 	if evidence.Failure != nil {
 		evidence.Failure.Message = sanitize(evidence.Failure.Message, credential)
 	}
+	if evidence.CleanupFailure != nil {
+		evidence.CleanupFailure.Message = sanitize(evidence.CleanupFailure.Message, credential)
+	}
 	if err := json.NewEncoder(stdout).Encode(evidence); err != nil {
 		writeCommandError(stderr, "WRITE_EVIDENCE_FAILED", err.Error())
 		return 2
@@ -60,7 +63,8 @@ func runCommand(ctx context.Context, args []string, environment map[string]strin
 const verifyHelp = `Usage: mercator verify --spec FILE
 
 Launch a real, bounded provider Conformance Trial. The JSON result proves
-provider authorization, placement, signed probe exit, and terminal cleanup.
+provider authorization, placement, probe exit or launch cancellation, and
+terminal cleanup.
 
 Cloud trials read the credential named by credential_env and require
 MERCATOR_CONFORMANCE_PUBLIC_URL for probe reports.
@@ -71,6 +75,7 @@ type trialDocument struct {
 	CredentialEnv      string            `json:"credential_env,omitempty"`
 	Config             map[string]string `json:"config,omitempty"`
 	Image              string            `json:"image"`
+	Mode               Mode              `json:"mode,omitempty"`
 	MaxExpectedCostUSD float64           `json:"max_expected_cost_usd"`
 	Timeout            string            `json:"timeout"`
 }
@@ -106,14 +111,15 @@ func readTrial(args []string) (Trial, error) {
 	if err != nil {
 		return Trial{}, fmt.Errorf("decode trial timeout: %w", err)
 	}
-	return Trial{
+	return normalizeTrial(Trial{
 		AdapterType:        document.AdapterType,
 		CredentialEnv:      document.CredentialEnv,
 		Config:             document.Config,
 		Image:              document.Image,
+		Mode:               document.Mode,
 		MaxExpectedCostUSD: document.MaxExpectedCostUSD,
 		Timeout:            timeout,
-	}, nil
+	}), nil
 }
 
 func writeCommandError(stderr io.Writer, code, message string) {

@@ -28,13 +28,15 @@ The decision that selects an Offer for a Run (or preview) under the scheduler mo
 _Avoid_: Scheduling result (as a noun for the decision)
 
 **Conformance Trial**:
-An isolated verification that launches one probe Run through a Connection,
-observes its signed successful exit, and proves provider cleanup.
+An isolated verification that launches one probe Run through a Connection and
+proves either signed successful exit or explicit launch cancellation, followed
+by terminal provider cleanup.
 _Avoid_: Credential check, provider test, smoke test
 
 **Evidence Bundle**:
 The sanitized record of a Conformance Trial's Connection, selected Offer, Run,
-terminal outcome, cost bound, timing, and final provider inventory.
+Placement, public events, terminal outcome, cost bound, timing, primary
+failure, cleanup failure, and final provider inventory.
 _Avoid_: Logs, debug output
 
 **Verdict**:

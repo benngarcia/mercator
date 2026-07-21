@@ -4,6 +4,8 @@ package conformance
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -16,6 +18,13 @@ import (
 
 var environmentName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
+type Mode string
+
+const (
+	ModeProbe        Mode = "probe"
+	ModeLaunchCancel Mode = "launch-cancel"
+)
+
 // Trial is one real, billable provider verification. CredentialEnv names the
 // environment variable to resolve at execution time; credential material is
 // absent so it cannot enter arguments, evidence, or persisted events.
@@ -24,6 +33,7 @@ type Trial struct {
 	CredentialEnv      string
 	Config             map[string]string
 	Image              string
+	Mode               Mode
 	MaxExpectedCostUSD float64
 	Timeout            time.Duration
 }
@@ -33,6 +43,7 @@ type EnvLookup func(string) (string, bool)
 // ValidateTrial rejects unsafe input before opening SQLite, contacting a
 // provider, or creating billable infrastructure.
 func ValidateTrial(trial Trial, lookup EnvLookup) error {
+	trial = normalizeTrial(trial)
 	if !digestReference(trial.Image) {
 		return fmt.Errorf("conformance: image must be a digest-pinned OCI reference")
 	}
@@ -41,6 +52,9 @@ func ValidateTrial(trial Trial, lookup EnvLookup) error {
 	}
 	if trial.Timeout <= 0 {
 		return fmt.Errorf("conformance: timeout must be positive")
+	}
+	if trial.Mode != ModeProbe && trial.Mode != ModeLaunchCancel {
+		return fmt.Errorf("conformance: unsupported mode %q", trial.Mode)
 	}
 	manifest, ok := providers.Manifest(trial.AdapterType)
 	if !ok {
@@ -56,6 +70,44 @@ func ValidateTrial(trial Trial, lookup EnvLookup) error {
 		strings.TrimSpace(trial.Config["host"]) != "" &&
 		strings.TrimSpace(trial.Config["context"]) != "" {
 		return fmt.Errorf("conformance: docker config cannot set both host and context")
+	}
+	return nil
+}
+
+func normalizeTrial(trial Trial) Trial {
+	if trial.Mode == "" {
+		trial.Mode = ModeProbe
+	}
+	return trial
+}
+
+func validateTopology(trial Trial, config RunnerConfig) error {
+	localDocker := trial.AdapterType == "docker" && strings.TrimSpace(trial.Config["host"]) == "" && strings.TrimSpace(trial.Config["context"]) == ""
+	listenAddress := strings.TrimSpace(config.ListenAddress)
+	publicURL := strings.TrimSpace(config.PublicURL)
+	if listenAddress != "" {
+		_, port, err := net.SplitHostPort(listenAddress)
+		if err != nil {
+			return fmt.Errorf("conformance: MERCATOR_CONFORMANCE_LISTEN_ADDR must be host:port: %w", err)
+		}
+		if !localDocker && port == "0" {
+			return fmt.Errorf("conformance: MERCATOR_CONFORMANCE_LISTEN_ADDR must use a fixed port for %s", trial.AdapterType)
+		}
+	} else if !localDocker {
+		return fmt.Errorf("conformance: MERCATOR_CONFORMANCE_LISTEN_ADDR is required for %s", trial.AdapterType)
+	}
+	if publicURL == "" {
+		if localDocker {
+			return nil
+		}
+		return fmt.Errorf("conformance: MERCATOR_CONFORMANCE_PUBLIC_URL is required for %s", trial.AdapterType)
+	}
+	parsed, err := url.Parse(publicURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("conformance: MERCATOR_CONFORMANCE_PUBLIC_URL must be an absolute HTTP or HTTPS origin")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return fmt.Errorf("conformance: MERCATOR_CONFORMANCE_PUBLIC_URL must be an origin without a path, query, or fragment")
 	}
 	return nil
 }

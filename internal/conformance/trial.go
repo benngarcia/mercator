@@ -44,9 +44,6 @@ func NewRunner(config RunnerConfig) *Runner {
 }
 
 func newRunner(config RunnerConfig, options ...runnerOption) *Runner {
-	if config.ListenAddress == "" {
-		config.ListenAddress = "127.0.0.1:0"
-	}
 	config.Environment = cloneEnvironment(config.Environment)
 	runner := &Runner{config: config}
 	for _, option := range options {
@@ -58,8 +55,9 @@ func newRunner(config RunnerConfig, options ...runnerOption) *Runner {
 // Verify launches one probe Run through Mercator's authenticated HTTP
 // lifecycle and returns only after provider inventory proves cleanup.
 func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidence, err error) {
+	trial = normalizeTrial(trial)
 	started := time.Now().UTC()
-	evidence = Evidence{AdapterType: trial.AdapterType, StartedAt: started}
+	evidence = Evidence{AdapterType: trial.AdapterType, Mode: trial.Mode, StartedAt: started}
 	defer func() {
 		evidence.Duration = time.Since(started)
 		evidence.DurationSecs = evidence.Duration.Seconds()
@@ -67,8 +65,8 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 	if err := ValidateTrial(trial, runner.lookupEnv); err != nil {
 		return evidence, err
 	}
-	if trial.AdapterType != "docker" && runner.config.PublicURL == "" && runner.providerFactory == nil {
-		return evidence, errors.New("conformance: MERCATOR_CONFORMANCE_PUBLIC_URL is required for cloud probe reports")
+	if err := validateTopology(trial, runner.config); err != nil {
+		return evidence, err
 	}
 
 	trialCtx, cancel := context.WithTimeout(ctx, trial.Timeout)
@@ -85,7 +83,7 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 		return evidence, fmt.Errorf("create private trial directory: %w", err)
 	}
 	defer os.RemoveAll(root)
-	listener, err := net.Listen("tcp", runner.config.ListenAddress)
+	listener, err := net.Listen("tcp", runner.listenAddress())
 	if err != nil {
 		return evidence, fmt.Errorf("bind trial listener: %w", err)
 	}
@@ -152,6 +150,7 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 	}
 	evidence.Offer = offerEvidence(offer, trial.Timeout)
 
+	runStarted := time.Now().UTC()
 	runID, err := randomID("run_conformance")
 	if err != nil {
 		return evidence, err
@@ -161,57 +160,90 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 	if err != nil {
 		evidence.Verdict = VerdictFailed
 		evidence.Failure = &TrialFailure{Code: "RUN_CREATE_FAILED", Message: err.Error()}
-		return runner.finish(runtime, client, evidence, trial.Timeout)
+		return runner.finish(runtime, client, evidence, runStarted, trial.Timeout)
 	}
 	evidence.Run.ID = run.Run.ID
+	if trial.Mode == ModeLaunchCancel {
+		if cancelErr := client.cancelRun(trialCtx, identity.workspaceID, run.Run.ID); cancelErr != nil {
+			evidence.Verdict = VerdictFailed
+			evidence.Failure = &TrialFailure{Code: "RUN_CANCEL_FAILED", Message: cancelErr.Error()}
+			return runner.finish(runtime, client, evidence, runStarted, trial.Timeout)
+		}
+	}
 	run, waitErr := client.waitClosed(trialCtx, identity.workspaceID, run.Run.ID)
 	if waitErr == nil {
-		evidence.Run = runEvidence(run.Run)
-		evidence.Run.EventTypes, waitErr = client.eventTypes(trialCtx, identity.workspaceID, run.Run.ID)
+		evidence.Run, waitErr = client.captureRunEvidence(trialCtx, identity.workspaceID, run, runStarted)
 	}
 	if waitErr != nil {
 		evidence.Verdict = VerdictFailed
 		evidence.Failure = &TrialFailure{Code: "RUN_DID_NOT_COMPLETE", Message: waitErr.Error()}
-		return runner.finish(runtime, client, evidence, trial.Timeout)
+		return runner.finish(runtime, client, evidence, runStarted, trial.Timeout)
 	}
-	if failure := successfulRunFailure(evidence.Run); failure != nil {
+	if failure := successfulRunFailure(trial.Mode, evidence.Run); failure != nil {
 		evidence.Verdict = VerdictFailed
 		evidence.Failure = failure
-		return runner.finish(runtime, client, evidence, trial.Timeout)
+		return runner.finish(runtime, client, evidence, runStarted, trial.Timeout)
 	}
 	evidence.Verdict = VerdictPassed
-	return runner.finish(runtime, client, evidence, trial.Timeout)
+	return runner.finish(runtime, client, evidence, runStarted, trial.Timeout)
 }
 
-func (runner *Runner) finish(runtime *daemon.Runtime, client trialClient, evidence Evidence, timeout time.Duration) (Evidence, error) {
+func (runner *Runner) finish(runtime *daemon.Runtime, client trialClient, evidence Evidence, runStarted time.Time, timeout time.Duration) (Evidence, error) {
 	cleanupTimeout := timeout
 	if cleanupTimeout < 30*time.Second {
 		cleanupTimeout = 30 * time.Second
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	if evidence.Run.ID != "" && !evidence.Run.Closed {
-		_ = client.cancelRun(cleanupCtx, evidence.WorkspaceID, evidence.Run.ID)
-		if run, err := client.waitClosed(cleanupCtx, evidence.WorkspaceID, evidence.Run.ID); err == nil {
-			evidence.Run = runEvidence(run.Run)
-			evidence.Run.EventTypes, _ = client.eventTypes(cleanupCtx, evidence.WorkspaceID, evidence.Run.ID)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		cleanupComplete, attemptErr := reconcileCleanup(cleanupCtx, runtime, client, &evidence, runStarted)
+		lastErr = attemptErr
+		if cleanupComplete {
+			return evidence, nil
+		}
+		select {
+		case <-cleanupCtx.Done():
+			if evidence.Inventory.Owned != 0 {
+				lastErr = errors.Join(lastErr, fmt.Errorf("provider still lists %d owned objects", evidence.Inventory.Owned))
+			}
+			evidence.Verdict = VerdictFailed
+			evidence.CleanupFailure = &TrialFailure{Code: "CLEANUP_FAILED", Message: errors.Join(lastErr, cleanupCtx.Err()).Error()}
+			return evidence, nil
+		case <-ticker.C:
 		}
 	}
-	owned, inventoryErr := runtime.ListOwned(cleanupCtx, evidence.WorkspaceID)
-	evidence.Inventory.Owned = len(owned)
-	if inventoryErr != nil {
-		evidence.Verdict = VerdictFailed
-		evidence.Failure = &TrialFailure{Code: "INVENTORY_UNAVAILABLE", Message: inventoryErr.Error()}
-		return evidence, nil
-	}
-	if len(owned) != 0 {
-		evidence.Verdict = VerdictFailed
-		evidence.Failure = &TrialFailure{Code: "OWNED_RESOURCES_REMAIN", Message: fmt.Sprintf("provider still lists %d owned objects", len(owned))}
-	}
-	return evidence, nil
 }
 
-func successfulRunFailure(run RunEvidence) *TrialFailure {
+func reconcileCleanup(ctx context.Context, runtime *daemon.Runtime, client trialClient, evidence *Evidence, runStarted time.Time) (bool, error) {
+	var cancelErr error
+	if evidence.Run.ID != "" && !evidence.Run.Closed {
+		cancelErr = client.cancelRun(ctx, evidence.WorkspaceID, evidence.Run.ID)
+	}
+	reconciled, reconcileErr := runtime.ReconcileWorkspace(ctx, evidence.WorkspaceID)
+	evidence.Inventory.Owned = len(reconciled.Owned)
+	var evidenceErr error
+	if evidence.Run.ID != "" {
+		if run, getErr := client.getRun(ctx, evidence.WorkspaceID, evidence.Run.ID); getErr == nil {
+			evidence.Run, evidenceErr = client.captureRunEvidence(ctx, evidence.WorkspaceID, run, runStarted)
+		} else {
+			evidenceErr = getErr
+		}
+	}
+	attemptErr := errors.Join(cancelErr, reconcileErr, evidenceErr)
+	runClosed := evidence.Run.ID == "" || evidence.Run.Closed
+	return attemptErr == nil && runClosed && len(reconciled.Owned) == 0, attemptErr
+}
+
+func successfulRunFailure(mode Mode, run RunEvidence) *TrialFailure {
+	if mode == ModeLaunchCancel {
+		if run.Outcome != string(domain.RunOutcomeCancelled) || run.Cleanup != string(domain.CleanupConfirmed) || !run.Closed {
+			return &TrialFailure{Code: "CANCEL_SCENARIO_FAILED", Message: "launch-cancel Run did not close cancelled with confirmed cleanup"}
+		}
+		return nil
+	}
 	if !containsEvent(run.EventTypes, orchestrator.EventRunReported) {
 		return &TrialFailure{Code: "PROBE_REPORT_MISSING", Message: "probe Run closed without a signed workload report"}
 	}
@@ -244,12 +276,19 @@ func (runner *Runner) publicURL(address net.Addr, adapterType string) string {
 	if runner.providerFactory != nil {
 		return "http://" + address.String()
 	}
-	if runner.config.PublicURL != "" {
-		return strings.TrimRight(runner.config.PublicURL, "/")
+	if publicURL := strings.TrimSpace(runner.config.PublicURL); publicURL != "" {
+		return strings.TrimRight(publicURL, "/")
 	}
 	_, port, err := net.SplitHostPort(address.String())
 	if err != nil || adapterType != "docker" {
 		return ""
 	}
 	return "http://host.docker.internal:" + port
+}
+
+func (runner *Runner) listenAddress() string {
+	if address := strings.TrimSpace(runner.config.ListenAddress); address != "" {
+		return address
+	}
+	return "127.0.0.1:0"
 }

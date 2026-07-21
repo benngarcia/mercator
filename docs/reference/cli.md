@@ -19,6 +19,9 @@ inventory. It does launch an instance. The command refuses to launch when the
 offer's hourly rate multiplied by the trial timeout exceeds
 `max_expected_cost_usd`.
 
+The trial's optional `mode` is `probe` by default. `launch-cancel` proves that
+Mercator can cancel an accepted instance and drive cleanup to completion.
+
 The trial names a credential environment variable. Mercator reads that one
 value in-process when it constructs the provider adapter. It does not accept
 the API key in the JSON document, command arguments, or evidence output.
@@ -31,9 +34,10 @@ export MERCATOR_CONFORMANCE_PUBLIC_URL='https://reports.example.com'
 mercator verify --spec trial.json | jq .
 ```
 
-Docker verification needs no credential or public URL. Cloud verification
-requires `MERCATOR_CONFORMANCE_PUBLIC_URL` to route to the listen address so
-the launched probe can submit its signed ready and exit reports. See
+Local Docker verification needs no credential or public URL. Cloud and remote
+Docker verification require a fixed `MERCATOR_CONFORMANCE_LISTEN_ADDR` and an
+origin-only `MERCATOR_CONFORMANCE_PUBLIC_URL` routed to that listener. Invalid
+topology fails before Mercator contacts the provider. See
 [provider-conformance.md](../production/provider-conformance.md) for the full
 trial schema and a local Docker proof.
 

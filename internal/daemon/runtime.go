@@ -51,6 +51,8 @@ type Runtime struct {
 	server  *http.Server
 	broker  *broker.Broker
 	storage *sqlitestore.Storage
+	orch    *orchestrator.Orchestrator
+	janitor *janitor.Janitor
 
 	stopReconcile context.CancelFunc
 	reconcileDone chan struct{}
@@ -136,6 +138,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	}, serverOptions...)
 
 	reconcileCtx, stopReconcile := context.WithCancel(ctx)
+	workspaceJanitor := janitor.New(providerBroker, janitor.WithEventLog(logStore))
 	runtime := &Runtime{
 		server: &http.Server{
 			Handler:           handler,
@@ -146,10 +149,12 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		},
 		broker:        providerBroker,
 		storage:       storage,
+		orch:          orch,
+		janitor:       workspaceJanitor,
 		stopReconcile: stopReconcile,
 		reconcileDone: make(chan struct{}),
 	}
-	go runtime.reconcile(reconcileCtx, orch, janitor.New(providerBroker, janitor.WithEventLog(logStore)))
+	go runtime.reconcile(reconcileCtx)
 	return runtime, nil
 }
 
@@ -180,7 +185,22 @@ func (r *Runtime) ListOwned(ctx context.Context, workspaceID string) ([]adapter.
 	return r.broker.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: workspaceID})
 }
 
-func (r *Runtime) reconcile(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor) {
+type ReconcileResult struct {
+	Advanced  orchestrator.AdvanceOpenRunsResult
+	Reclaimed int
+	Owned     []adapter.OwnedExternalObject
+}
+
+// ReconcileWorkspace drives run cleanup and orphan reclamation once, then
+// returns the provider inventory observed after both paths run.
+func (r *Runtime) ReconcileWorkspace(ctx context.Context, workspaceID string) (ReconcileResult, error) {
+	advanced, advanceErr := r.orch.AdvanceOpenRuns(ctx, workspaceID)
+	swept, sweepErr := r.janitor.Sweep(ctx, workspaceID)
+	owned, inventoryErr := r.ListOwned(ctx, workspaceID)
+	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Released, Owned: owned}, errors.Join(advanceErr, sweepErr, inventoryErr)
+}
+
+func (r *Runtime) reconcile(ctx context.Context) {
 	defer close(r.reconcileDone)
 	const interval = time.Minute
 	ticker := time.NewTicker(interval)
@@ -190,7 +210,7 @@ func (r *Runtime) reconcile(ctx context.Context, orch *orchestrator.Orchestrator
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			reconcileWorkspaces(ctx, orch, jan)
+			reconcileWorkspaces(ctx, r.orch, r.janitor)
 		}
 	}
 }

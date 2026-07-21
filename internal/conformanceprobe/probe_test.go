@@ -10,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestSuccessReportsReadyThenZeroExit(t *testing.T) {
@@ -39,6 +40,55 @@ func TestSuccessReportsReadyThenZeroExit(t *testing.T) {
 		if request.UserAgent != UserAgent {
 			t.Errorf("user agent = %q, want %q", request.UserAgent, UserAgent)
 		}
+	}
+}
+
+func TestWaitForCancelReportsReadyThenBlocks(t *testing.T) {
+	ready := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = recordRequest(t, r)
+		w.WriteHeader(http.StatusAccepted)
+		ready <- struct{}{}
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- Run(ctx, []string{"wait-for-cancel"}, reportEnvironment(server.URL), io.Discard, io.Discard)
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("probe did not report ready")
+	}
+	select {
+	case code := <-done:
+		t.Fatalf("probe returned before cancellation with %d", code)
+	default:
+	}
+	cancel()
+	if code := <-done; code != 0 {
+		t.Fatalf("exit code after cancellation = %d, want zero", code)
+	}
+}
+
+func TestProbeRetriesTransientReportFailures(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts < 3 {
+			http.Error(w, "retry", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(server.Close)
+
+	exitCode := Run(context.Background(), []string{"success"}, reportEnvironment(server.URL), io.Discard, io.Discard)
+
+	if exitCode != 0 || attempts != 4 {
+		t.Fatalf("exit code = %d, attempts = %d, want success after ready retries plus exit", exitCode, attempts)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -110,10 +111,14 @@ func successWorkload(workspaceID string, trial Trial, platform domain.Platform) 
 		resources.Accelerators = []domain.AcceleratorRequirement{{Vendor: "nvidia", Count: 1}}
 	}
 	budget := trial.MaxExpectedCostUSD
+	arguments := []string{"success"}
+	if trial.Mode == ModeLaunchCancel {
+		arguments = []string{"wait-for-cancel"}
+	}
 	return domain.WorkloadRevision{
 		ID: "wrev_conformance_probe", WorkspaceID: workspaceID, WorkloadID: "wrk_conformance_probe", Digest: "sha256:conformance-probe",
 		Spec: domain.WorkloadSpec{
-			Containers: []domain.ContainerSpec{{Name: "main", Image: trial.Image, Platform: platform, Args: []string{"success"}}},
+			Containers: []domain.ContainerSpec{{Name: "main", Image: trial.Image, Platform: platform, Args: arguments}},
 			Resources:  resources,
 			Placement:  domain.PlacementPolicy{Objective: domain.ObjectiveCheapest, ExpectedRuntimeSeconds: trial.Timeout.Seconds(), MaxExpectedCostUSD: &budget},
 			Execution:  domain.ExecutionPolicy{MaxRuntimeSeconds: int64(trial.Timeout.Seconds()), MaxPreStartAttempts: 1},
@@ -136,20 +141,44 @@ func (client trialClient) waitClosed(ctx context.Context, workspaceID, runID str
 
 func (client trialClient) cancelRun(ctx context.Context, workspaceID, runID string) error {
 	path := "/v1/runs/" + url.PathEscape(runID) + "/cancel?workspace_id=" + url.QueryEscape(workspaceID)
-	return client.do(ctx, http.MethodPost, path, "", nil, &httpapi.RunResponse{})
+	err := client.do(ctx, http.MethodPost, path, "", nil, &httpapi.RunResponse{})
+	var responseErr *httpResponseError
+	if errors.As(err, &responseErr) && responseErr.status == http.StatusNotFound {
+		return nil
+	}
+	return err
 }
 
-func (client trialClient) eventTypes(ctx context.Context, workspaceID, runID string) ([]string, error) {
+func (client trialClient) getRun(ctx context.Context, workspaceID, runID string) (httpapi.RunResponse, error) {
+	var response httpapi.RunResponse
+	path := "/v1/runs/" + url.PathEscape(runID) + "?workspace_id=" + url.QueryEscape(workspaceID)
+	err := client.do(ctx, http.MethodGet, path, "", nil, &response)
+	return response, err
+}
+
+func (client trialClient) captureRunEvidence(ctx context.Context, workspaceID string, run httpapi.RunResponse, started time.Time) (RunEvidence, error) {
+	evidence := runEvidence(run.Run)
+	evidence.StartedAt = started
+	evidence.DurationSecs = time.Since(started).Seconds()
+	var responseErr error
 	var response httpapi.EventListResponse
-	path := "/v1/runs/" + url.PathEscape(runID) + "/events?workspace_id=" + url.QueryEscape(workspaceID)
+	path := "/v1/runs/" + url.PathEscape(run.Run.ID) + "/events?workspace_id=" + url.QueryEscape(workspaceID)
 	if err := client.do(ctx, http.MethodGet, path, "", nil, &response); err != nil {
-		return nil, err
+		responseErr = errors.Join(responseErr, fmt.Errorf("read probe events: %w", err))
+	} else {
+		evidence.Events = response.Events
+		for _, event := range response.Events {
+			evidence.EventTypes = append(evidence.EventTypes, event.Type)
+		}
 	}
-	types := make([]string, 0, len(response.Events))
-	for _, event := range response.Events {
-		types = append(types, event.Type)
+	var decision httpapi.PlacementDecisionResponse
+	path = "/v1/runs/" + url.PathEscape(run.Run.ID) + "/decision?workspace_id=" + url.QueryEscape(workspaceID)
+	if err := client.do(ctx, http.MethodGet, path, "", nil, &decision); err != nil {
+		responseErr = errors.Join(responseErr, fmt.Errorf("read probe placement: %w", err))
+	} else {
+		evidence.Placement = decision.Decision
 	}
-	return types, nil
+	return evidence, responseErr
 }
 
 func runEvidence(run domain.RunRecord) RunEvidence {
@@ -181,7 +210,7 @@ func (client trialClient) do(ctx context.Context, method, path, idempotencyKey s
 	defer result.Body.Close()
 	if result.StatusCode < 200 || result.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(result.Body, 4096))
-		return fmt.Errorf("%s %s returned %d: %s", method, path, result.StatusCode, strings.TrimSpace(string(raw)))
+		return &httpResponseError{method: method, path: path, status: result.StatusCode, body: strings.TrimSpace(string(raw))}
 	}
 	if response == nil {
 		return nil
@@ -190,4 +219,15 @@ func (client trialClient) do(ctx context.Context, method, path, idempotencyKey s
 		return fmt.Errorf("decode %s %s: %w", method, path, err)
 	}
 	return nil
+}
+
+type httpResponseError struct {
+	method string
+	path   string
+	status int
+	body   string
+}
+
+func (err *httpResponseError) Error() string {
+	return fmt.Sprintf("%s %s returned %d: %s", err.method, err.path, err.status, err.body)
 }
