@@ -8,6 +8,7 @@ import (
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 type credentialSealer interface {
@@ -16,8 +17,9 @@ type credentialSealer interface {
 
 type Storage struct {
 	db          *sql.DB
-	log         *eventlog.SQLiteEventLog
+	log         *WorkspaceEventLog
 	credentials *credential.SQLiteStore
+	workspaces  *workspace.SQLiteCatalog
 }
 
 func Open(ctx context.Context, dsn string) (*Storage, error) {
@@ -30,16 +32,22 @@ func Open(ctx context.Context, dsn string) (*Storage, error) {
 
 // New takes ownership of db.
 func New(ctx context.Context, db *sql.DB) (*Storage, error) {
-	log, err := eventlog.NewSQLite(ctx, db)
+	sqliteLog, err := eventlog.NewSQLite(ctx, db)
 	if err != nil {
 		return nil, err
 	}
+	log := &WorkspaceEventLog{SQLiteEventLog: sqliteLog}
+	if err := migrateWorkspaces(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
+	workspaces := workspace.NewSQLiteCatalog(db)
 	credentials, err := credential.NewSQLiteStore(ctx, db)
 	if err != nil {
 		_ = log.Close()
 		return nil, err
 	}
-	storage := &Storage{db: db, log: log, credentials: credentials}
+	storage := &Storage{db: db, log: log, credentials: credentials, workspaces: workspaces}
 	if err := storage.purgeDeletedConnectionCredentials(ctx); err != nil {
 		_ = log.Close()
 		return nil, err
@@ -47,7 +55,7 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 	return storage, nil
 }
 
-func (s *Storage) EventLog() *eventlog.SQLiteEventLog {
+func (s *Storage) EventLog() *WorkspaceEventLog {
 	return s.log
 }
 
@@ -55,11 +63,15 @@ func (s *Storage) CredentialStore() *credential.SQLiteStore {
 	return s.credentials
 }
 
+func (s *Storage) Workspaces() *workspace.SQLiteCatalog {
+	return s.workspaces
+}
+
 func (s *Storage) Connections(sealer credentialSealer) (*ConnectionRepository, error) {
 	if sealer == nil {
 		return nil, fmt.Errorf("sqlite storage: connection credential sealer is required")
 	}
-	return &ConnectionRepository{SQLiteEventLog: s.log, sealer: sealer, credentials: s.credentials}, nil
+	return &ConnectionRepository{WorkspaceEventLog: s.log, sealer: sealer, credentials: s.credentials}, nil
 }
 
 func (s *Storage) Close() error {
@@ -88,13 +100,13 @@ func (s *Storage) purgeDeletedConnectionCredentials(ctx context.Context) error {
 }
 
 type ConnectionRepository struct {
-	*eventlog.SQLiteEventLog
+	*WorkspaceEventLog
 	sealer      credentialSealer
 	credentials *credential.SQLiteStore
 }
 
 func (r *ConnectionRepository) CreateCredential(ctx context.Context, request eventlog.AppendRequest, write connection.CredentialWrite) (eventlog.AppendResult, error) {
-	return r.AppendAtomic(ctx, request, func(ctx context.Context, tx *sql.Tx) error {
+	return r.appendIfWorkspaceActiveAtomic(ctx, request, func(ctx context.Context, tx *sql.Tx) error {
 		sealed, ok := r.sealer.Seal(write.Secret)
 		if !ok {
 			return fmt.Errorf("%w: configure MERCATOR_SECRET_KEY", connection.ErrSecretStoreDisabled)
@@ -104,6 +116,38 @@ func (r *ConnectionRepository) CreateCredential(ctx context.Context, request eve
 		}
 		return nil
 	})
+}
+
+type WorkspaceEventLog struct {
+	*eventlog.SQLiteEventLog
+}
+
+func (l *WorkspaceEventLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.appendIfWorkspaceActiveAtomic(ctx, request, func(context.Context, *sql.Tx) error { return nil })
+}
+
+func (l *WorkspaceEventLog) appendIfWorkspaceActiveAtomic(ctx context.Context, request eventlog.AppendRequest, mutation func(context.Context, *sql.Tx) error) (eventlog.AppendResult, error) {
+	return l.AppendAtomic(ctx, request, func(ctx context.Context, tx *sql.Tx) error {
+		if err := requireActiveWorkspace(ctx, tx, request.Stream.WorkspaceID); err != nil {
+			return err
+		}
+		return mutation(ctx, tx)
+	})
+}
+
+func requireActiveWorkspace(ctx context.Context, tx *sql.Tx, workspaceID string) error {
+	var archivedAt sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT archived_at FROM workspaces WHERE workspace_id = ?`, workspaceID).Scan(&archivedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("%w: %s", workspace.ErrNotFound, workspaceID)
+		}
+		return fmt.Errorf("load workspace %s: %w", workspaceID, err)
+	}
+	if archivedAt.Valid {
+		return fmt.Errorf("%w: %s", workspace.ErrArchived, workspaceID)
+	}
+	return nil
 }
 
 func (r *ConnectionRepository) DeleteCredential(ctx context.Context, request eventlog.AppendRequest, ref connection.CredentialRef) (eventlog.AppendResult, error) {

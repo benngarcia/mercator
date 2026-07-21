@@ -5,8 +5,6 @@
 
 const TOKEN_KEY = "mercator.token";
 const WORKSPACE_KEY = "mercator.workspace";
-const RECENT_WORKSPACES_KEY = "mercator.recentWorkspaces";
-const MAX_RECENTS = 8;
 
 type Listener = () => void;
 
@@ -63,72 +61,18 @@ export function setToken(token: string | null): void {
   write(TOKEN_KEY, token);
 }
 
-// getWorkspace returns the operator's current workspace: the explicitly chosen
-// one, else the most recently added (the latest committed workspace), else null.
-// There is no hardcoded default — the console only knows workspaces the operator
-// has used, and there is no API to enumerate them.
+// getWorkspace returns the operator's explicitly chosen workspace. The saved
+// workspace catalog lives on the server and is never reconstructed locally.
 export function getWorkspace(): string | null {
   const stored = read(WORKSPACE_KEY);
   if (stored && stored.trim() !== "") {
     return stored;
   }
-  return getRecentWorkspaces()[0] ?? null;
-}
-
-// workspaceOptions builds the list the switcher offers: the active workspace
-// first (so it is always selectable, even when it came from a URL and was never
-// committed to recents), then recents — deduped, with empty entries dropped.
-export function workspaceOptions(
-  current: string | null | undefined,
-  recents: string[],
-): string[] {
-  const seen = new Set<string>();
-  const options: string[] = [];
-  for (const candidate of [current ?? "", ...recents]) {
-    const id = candidate.trim();
-    if (id === "" || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    options.push(id);
-  }
-  return options;
+  return null;
 }
 
 export function setWorkspace(workspaceID: string | null): void {
-  if (workspaceID) {
-    pushRecentWorkspace(workspaceID);
-  }
   write(WORKSPACE_KEY, workspaceID);
-}
-
-export function getRecentWorkspaces(): string[] {
-  const raw = read(RECENT_WORKSPACES_KEY);
-  if (!raw) {
-    return [];
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed.filter((entry): entry is string => typeof entry === "string");
-    }
-  } catch {
-    // fall through to empty.
-  }
-  return [];
-}
-
-function pushRecentWorkspace(workspaceID: string): void {
-  const existing = getRecentWorkspaces().filter((entry) => entry !== workspaceID);
-  const next = [workspaceID, ...existing].slice(0, MAX_RECENTS);
-  if (!hasStorage()) {
-    return;
-  }
-  try {
-    localStorage.setItem(RECENT_WORKSPACES_KEY, JSON.stringify(next));
-  } catch {
-    // ignore.
-  }
 }
 
 // subscribe registers a listener invoked on any session mutation. It also
@@ -140,8 +84,7 @@ export function subscribe(listener: Listener): () => void {
     if (
       event.key === null ||
       event.key === TOKEN_KEY ||
-      event.key === WORKSPACE_KEY ||
-      event.key === RECENT_WORKSPACES_KEY
+      event.key === WORKSPACE_KEY
     ) {
       listener();
     }

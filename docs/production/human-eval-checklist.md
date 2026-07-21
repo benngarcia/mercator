@@ -13,6 +13,10 @@ environment.
 
 ## Auth And Workspace Partitioning
 
+- [ ] Creating a workspace records the authenticated principal and exposes it
+  in the console chooser.
+- [ ] Archived workspaces appear only after choosing `Show archived`.
+- [ ] Unknown and archived workspaces reject new workspace-owned records.
 - [ ] Valid bearer token can access an explicit workspace.
 - [ ] Invalid bearer token returns `UNAUTHORIZED`.
 - [ ] Missing workspace returns `WORKSPACE_ID_REQUIRED`.

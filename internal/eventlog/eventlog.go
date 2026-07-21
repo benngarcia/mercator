@@ -146,3 +146,10 @@ type EventLog interface {
 	Subscribe(ctx context.Context, req SubscriptionRequest) (<-chan Delivery, error)
 	Ack(ctx context.Context, subscriptionID string, position GlobalPosition) error
 }
+
+// WorkspaceEventLog applies the active-workspace policy to new facts while
+// allowing exact command replays to resolve before the policy check.
+type WorkspaceEventLog interface {
+	EventLog
+	AppendIfWorkspaceActive(ctx context.Context, req AppendRequest) (AppendResult, error)
+}

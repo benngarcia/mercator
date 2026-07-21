@@ -212,9 +212,9 @@ func TestCreateRunReturnsInternalErrorWhenInitialPersistenceFails(t *testing.T) 
 	}
 	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", time.Now().UTC())}))
 	handler := New(Deps{
-		Orchestrator: orchestrator.New(log, scheduler.New(), provider),
+		Orchestrator: orchestrator.New(workspaceTestLog{EventLog: log}, scheduler.New(), provider),
 		Offers:       singleProviderOffers{provider: provider},
-		Workloads:    workload.New(log),
+		Workloads:    workload.New(workspaceTestLog{EventLog: log}),
 	})
 	if err := log.Close(); err != nil {
 		t.Fatalf("close event log: %v", err)
@@ -615,8 +615,8 @@ func TestCreateRunEnvOverridesStoredWorkloadRevision(t *testing.T) {
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)}
 	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad)
-	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: ociresolver.NewStaticResolver(nil)})
+	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
+	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: ociresolver.NewStaticResolver(nil)})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_env", Name: "env"})))
 	req.Header.Set("Idempotency-Key", "idem_workload_env")
@@ -709,7 +709,7 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
 	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad)
+	orch := orchestrator.New(workspaceTestLog{EventLog: log}, sched, ad)
 	resolver := ociresolver.NewStaticResolver(map[string]ociresolver.ResolvedImage{
 		"ghcr.io/acme/trainer:latest|linux/amd64": {
 			Image:    "ghcr.io/acme/trainer@sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -717,7 +717,7 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 			Platform: "linux/amd64",
 		},
 	})
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver}, options...)
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver}, options...)
 }
 
 func newHTTPTestServerForAdapter(t *testing.T, provider adapter.Provider) http.Handler {
@@ -732,9 +732,9 @@ func newHTTPTestServerForAdapter(t *testing.T, provider adapter.Provider) http.H
 		}
 	})
 	return New(Deps{
-		Orchestrator: orchestrator.New(log, scheduler.New(), provider),
+		Orchestrator: orchestrator.New(workspaceTestLog{EventLog: log}, scheduler.New(), provider),
 		Offers:       singleProviderOffers{provider: provider},
-		Workloads:    workload.New(log),
+		Workloads:    workload.New(workspaceTestLog{EventLog: log}),
 	})
 }
 

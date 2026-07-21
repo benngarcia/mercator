@@ -19,6 +19,7 @@ import (
 	eventlog "github.com/benngarcia/mercator/internal/eventlog"
 	ociresolver "github.com/benngarcia/mercator/internal/ociresolver"
 	sinks "github.com/benngarcia/mercator/internal/sinks"
+	workspace "github.com/benngarcia/mercator/internal/workspace"
 	"github.com/oapi-codegen/runtime"
 	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
 )
@@ -357,6 +358,11 @@ type CreateWorkloadRequest struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
+// CreateWorkspaceRequest defines model for CreateWorkspaceRequest.
+type CreateWorkspaceRequest struct {
+	DisplayName string `json:"display_name"`
+}
+
 // Credential defines model for Credential.
 type Credential = credential.Credential
 
@@ -668,6 +674,19 @@ type WorkloadSpec struct {
 	Resources  ResourceRequirements   `json:"resources"`
 }
 
+// Workspace defines model for Workspace.
+type Workspace = workspace.Workspace
+
+// WorkspaceListResponse defines model for WorkspaceListResponse.
+type WorkspaceListResponse struct {
+	Workspaces []Workspace `json:"workspaces"`
+}
+
+// WorkspaceResponse defines model for WorkspaceResponse.
+type WorkspaceResponse struct {
+	Workspace Workspace `json:"workspace"`
+}
+
 // ListConnectionsParams defines parameters for ListConnections.
 type ListConnectionsParams struct {
 	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
@@ -769,6 +788,11 @@ type GetWorkloadRevisionParams struct {
 	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
+// ListWorkspacesParams defines parameters for ListWorkspaces.
+type ListWorkspacesParams struct {
+	IncludeArchived bool `form:"include_archived,omitempty" json:"include_archived,omitempty"`
+}
+
 // CreateConnectionJSONRequestBody defines body for CreateConnection for application/json ContentType.
 type CreateConnectionJSONRequestBody = CreateConnectionRequest
 
@@ -792,6 +816,9 @@ type CreateWorkloadJSONRequestBody = CreateWorkloadRequest
 
 // CreateWorkloadRevisionJSONRequestBody defines body for CreateWorkloadRevision for application/json ContentType.
 type CreateWorkloadRevisionJSONRequestBody = CreateRevisionRequest
+
+// CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
+type CreateWorkspaceJSONRequestBody = CreateWorkspaceRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -876,6 +903,15 @@ type ServerInterface interface {
 
 	// (GET /v1/workloads/{workload_id}/revisions/{revision_id})
 	GetWorkloadRevision(w http.ResponseWriter, r *http.Request, workloadId string, revisionId string, params GetWorkloadRevisionParams)
+
+	// (GET /v1/workspaces)
+	ListWorkspaces(w http.ResponseWriter, r *http.Request, params ListWorkspacesParams)
+
+	// (POST /v1/workspaces)
+	CreateWorkspace(w http.ResponseWriter, r *http.Request)
+
+	// (POST /v1/workspaces/{workspace_id}/archive)
+	ArchiveWorkspace(w http.ResponseWriter, r *http.Request, workspaceId string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1920,6 +1956,90 @@ func (siw *ServerInterfaceWrapper) GetWorkloadRevision(w http.ResponseWriter, r 
 	handler.ServeHTTP(w, r)
 }
 
+// ListWorkspaces operation middleware
+func (siw *ServerInterfaceWrapper) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListWorkspacesParams
+
+	// ------------- Optional query parameter "include_archived" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "include_archived", r.URL.Query(), &params.IncludeArchived, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "include_archived", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListWorkspaces(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateWorkspace operation middleware
+func (siw *ServerInterfaceWrapper) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateWorkspace(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ArchiveWorkspace operation middleware
+func (siw *ServerInterfaceWrapper) ArchiveWorkspace(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspace_id" -------------
+	var workspaceId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace_id", r.PathValue("workspace_id"), &workspaceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ArchiveWorkspace(w, r, workspaceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -2067,6 +2187,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("GET "+options.BaseURL+"/v1/workloads/{workload_id}/revisions", wrapper.ListWorkloadRevisions)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/workloads/{workload_id}/revisions", wrapper.CreateWorkloadRevision)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/workloads/{workload_id}/revisions/{revision_id}", wrapper.GetWorkloadRevision)
+	m.HandleFunc("GET "+options.BaseURL+"/v1/workspaces", wrapper.ListWorkspaces)
+	m.HandleFunc("POST "+options.BaseURL+"/v1/workspaces", wrapper.CreateWorkspace)
+	m.HandleFunc("POST "+options.BaseURL+"/v1/workspaces/{workspace_id}/archive", wrapper.ArchiveWorkspace)
 
 	return m
 }
@@ -3564,6 +3687,147 @@ func (response GetWorkloadRevision501JSONResponse) VisitGetWorkloadRevisionRespo
 	return json.NewEncoder(w).Encode(response)
 }
 
+type ListWorkspacesRequestObject struct {
+	Params ListWorkspacesParams
+}
+
+type ListWorkspacesResponseObject interface {
+	VisitListWorkspacesResponse(w http.ResponseWriter) error
+}
+
+type ListWorkspaces200JSONResponse WorkspaceListResponse
+
+func (response ListWorkspaces200JSONResponse) VisitListWorkspacesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkspaces401JSONResponse ErrorResponse
+
+func (response ListWorkspaces401JSONResponse) VisitListWorkspacesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ListWorkspaces500JSONResponse ErrorResponse
+
+func (response ListWorkspaces500JSONResponse) VisitListWorkspacesResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkspaceRequestObject struct {
+	Body *CreateWorkspaceJSONRequestBody
+}
+
+type CreateWorkspaceResponseObject interface {
+	VisitCreateWorkspaceResponse(w http.ResponseWriter) error
+}
+
+type CreateWorkspace201JSONResponse WorkspaceResponse
+
+func (response CreateWorkspace201JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkspace400JSONResponse ErrorResponse
+
+func (response CreateWorkspace400JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkspace401JSONResponse ErrorResponse
+
+func (response CreateWorkspace401JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkspace409JSONResponse ErrorResponse
+
+func (response CreateWorkspace409JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateWorkspace500JSONResponse ErrorResponse
+
+func (response CreateWorkspace500JSONResponse) VisitCreateWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ArchiveWorkspaceRequestObject struct {
+	WorkspaceId string `json:"workspace_id"`
+}
+
+type ArchiveWorkspaceResponseObject interface {
+	VisitArchiveWorkspaceResponse(w http.ResponseWriter) error
+}
+
+type ArchiveWorkspace200JSONResponse WorkspaceResponse
+
+func (response ArchiveWorkspace200JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ArchiveWorkspace400JSONResponse ErrorResponse
+
+func (response ArchiveWorkspace400JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ArchiveWorkspace401JSONResponse ErrorResponse
+
+func (response ArchiveWorkspace401JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ArchiveWorkspace404JSONResponse ErrorResponse
+
+func (response ArchiveWorkspace404JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ArchiveWorkspace500JSONResponse ErrorResponse
+
+func (response ArchiveWorkspace500JSONResponse) VisitArchiveWorkspaceResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
@@ -3647,6 +3911,15 @@ type StrictServerInterface interface {
 
 	// (GET /v1/workloads/{workload_id}/revisions/{revision_id})
 	GetWorkloadRevision(ctx context.Context, request GetWorkloadRevisionRequestObject) (GetWorkloadRevisionResponseObject, error)
+
+	// (GET /v1/workspaces)
+	ListWorkspaces(ctx context.Context, request ListWorkspacesRequestObject) (ListWorkspacesResponseObject, error)
+
+	// (POST /v1/workspaces)
+	CreateWorkspace(ctx context.Context, request CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error)
+
+	// (POST /v1/workspaces/{workspace_id}/archive)
+	ArchiveWorkspace(ctx context.Context, request ArchiveWorkspaceRequestObject) (ArchiveWorkspaceResponseObject, error)
 }
 
 type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
@@ -4432,6 +4705,89 @@ func (sh *strictHandler) GetWorkloadRevision(w http.ResponseWriter, r *http.Requ
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetWorkloadRevisionResponseObject); ok {
 		if err := validResponse.VisitGetWorkloadRevisionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListWorkspaces operation middleware
+func (sh *strictHandler) ListWorkspaces(w http.ResponseWriter, r *http.Request, params ListWorkspacesParams) {
+	var request ListWorkspacesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListWorkspaces(ctx, request.(ListWorkspacesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListWorkspaces")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListWorkspacesResponseObject); ok {
+		if err := validResponse.VisitListWorkspacesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateWorkspace operation middleware
+func (sh *strictHandler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
+	var request CreateWorkspaceRequestObject
+
+	var body CreateWorkspaceJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateWorkspace(ctx, request.(CreateWorkspaceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateWorkspace")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateWorkspaceResponseObject); ok {
+		if err := validResponse.VisitCreateWorkspaceResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ArchiveWorkspace operation middleware
+func (sh *strictHandler) ArchiveWorkspace(w http.ResponseWriter, r *http.Request, workspaceId string) {
+	var request ArchiveWorkspaceRequestObject
+
+	request.WorkspaceId = workspaceId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ArchiveWorkspace(ctx, request.(ArchiveWorkspaceRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ArchiveWorkspace")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ArchiveWorkspaceResponseObject); ok {
+		if err := validResponse.VisitArchiveWorkspaceResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

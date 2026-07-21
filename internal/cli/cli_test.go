@@ -11,6 +11,8 @@ import (
 
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/httpapi"
+	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 func TestRunCommandsEmitParseableJSON(t *testing.T) {
@@ -267,7 +269,9 @@ func TestRunAcceptsGlobalAPIURLFlag(t *testing.T) {
 
 func newCLITestServer(t *testing.T) http.Handler {
 	t.Helper()
-	handler, closeFn, err := httpapi.HandlerForSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared", []domain.OfferSnapshot{cliOffer()})
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	seedCLIWorkspace(t, dsn)
+	handler, closeFn, err := httpapi.HandlerForSQLite(context.Background(), dsn, []domain.OfferSnapshot{cliOffer()})
 	if err != nil {
 		t.Fatalf("build http handler: %v", err)
 	}
@@ -277,6 +281,23 @@ func newCLITestServer(t *testing.T) http.Handler {
 		}
 	})
 	return handler
+}
+
+func seedCLIWorkspace(t *testing.T, dsn string) {
+	t.Helper()
+	storage, err := sqlitestore.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("open workspace storage: %v", err)
+	}
+	if _, err := storage.Workspaces().Create(t.Context(), workspace.Create{
+		ID:          "ws_1",
+		DisplayName: "CLI test",
+		CreatedAt:   time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		CreatedBy:   "test:cli",
+	}); err != nil {
+		t.Fatalf("create CLI workspace: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
 }
 
 func cliRevision() domain.WorkloadRevision {

@@ -52,9 +52,6 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	if generatedToken {
 		stdlog.Printf("generated MERCATOR_API_TOKEN for this server process: %s", apiToken)
 	}
-	// Human login: fail-closed OIDC config. Absent config means no login
-	// surface (token-only, exactly as before); partial config refuses to boot;
-	// full config must reach the issuer at startup.
 	webauthCfg, err := webauth.FromEnv(env)
 	if err != nil {
 		stdlog.Printf("configure OIDC login: %v", err)
@@ -108,9 +105,6 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	return exitCode
 }
 
-// warnIfNonLoopback logs a loud warning when the server binds beyond loopback:
-// Mercator serves plaintext HTTP, so on any other interface the bearer token
-// and run data cross the network unencrypted unless a TLS proxy sits in front.
 func warnIfNonLoopback(addr string) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {

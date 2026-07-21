@@ -19,7 +19,7 @@ func newTrialIdentity(adapterType string) (trialIdentity, error) {
 		return trialIdentity{}, err
 	}
 	suffix := strings.TrimPrefix(id, "trial_")
-	return trialIdentity{trialID: id, workspaceID: "ws_" + suffix, connectionID: "conn_" + adapterType + "_" + suffix}, nil
+	return trialIdentity{trialID: id, connectionID: "conn_" + adapterType + "_" + suffix}, nil
 }
 
 func trialSecrets() (string, []byte, error) {

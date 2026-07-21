@@ -132,6 +132,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Sinks:        sinks.NewManager(logStore, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  connectionService,
 		Resolver:     ociresolver.NewStaticResolver(nil),
+		Workspaces:   storage.Workspaces(),
 	}, serverOptions...)
 
 	reconcileCtx, stopReconcile := context.WithCancel(ctx)

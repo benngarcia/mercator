@@ -23,6 +23,15 @@ type trialClient struct {
 	client  *http.Client
 }
 
+func (client trialClient) createWorkspace(ctx context.Context, displayName string) (string, error) {
+	request := httpapi.CreateWorkspaceRequest{DisplayName: displayName}
+	var response httpapi.WorkspaceResponse
+	if err := client.do(ctx, http.MethodPost, "/v1/workspaces", "", request, &response); err != nil {
+		return "", fmt.Errorf("create trial workspace: %w", err)
+	}
+	return response.Workspace.ID, nil
+}
+
 func (client trialClient) ready(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()

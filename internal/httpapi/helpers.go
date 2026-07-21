@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log"
 	"net/http"
@@ -13,12 +14,13 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/domain"
-	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
+	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
+	"github.com/benngarcia/mercator/internal/workspace"
 	"github.com/benngarcia/mercator/web"
 )
 
@@ -135,13 +137,26 @@ func errorMessage(err error) string {
 	return err.Error()
 }
 
+func workspaceAPIError(err error) (ErrorResponse, bool) {
+	switch {
+	case errors.Is(err, workspace.ErrNotFound):
+		return apiError("WORKSPACE_NOT_FOUND", "Workspace not found."), true
+	case errors.Is(err, workspace.ErrArchived):
+		return apiError("WORKSPACE_ARCHIVED", "Workspace is archived."), true
+	default:
+		return ErrorResponse{}, false
+	}
+}
+
 // HandlerForSQLite builds a fully-wired handler over a SQLite event log with
 // the fake adapter serving the given offers. Used for evaluation and tests.
 func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnapshot, options ...Option) (http.Handler, func() error, error) {
-	log, err := eventlog.OpenSQLite(ctx, dsn)
+	storage, err := sqlitestore.Open(ctx, dsn)
 	if err != nil {
 		return nil, nil, err
 	}
+	log := storage.EventLog()
+	workspaces := storage.Workspaces()
 	ad := fake.New(fake.WithOffers(offer), fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded))
 	sched := scheduler.New()
 	// Synthetic-digest resolution lets the minimal create path
@@ -155,8 +170,9 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
 		Connections:  connection.New(log),
 		Resolver:     ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests()),
+		Workspaces:   workspaces,
 	}, options...)
-	return handler, log.Close, nil
+	return handler, storage.Close, nil
 }
 
 var _ fs.FS = web.Static()

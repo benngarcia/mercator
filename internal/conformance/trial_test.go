@@ -66,14 +66,18 @@ func TestRunnerRejectsAnOfferWhoseTimeoutCostExceedsTheBudget(t *testing.T) {
 	}
 }
 
-func TestRunnerCancelsAndConfirmsCleanupAfterTheTrialTimesOut(t *testing.T) {
-	provider := fake.New(
-		fake.WithOffers([]domain.OfferSnapshot{trialOffer(0.0001)}),
-		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
-	)
+func TestRunnerCancelsAndConfirmsCleanupWhenTheTrialEndsAfterLaunch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := &cancellingProvider{
+		Provider: fake.New(
+			fake.WithOffers([]domain.OfferSnapshot{trialOffer(0.0001)}),
+			fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
+		),
+		cancel: cancel,
+	}
 	runner := testRunner(t, provider)
 
-	evidence, err := runner.Verify(context.Background(), dockerTrial(50*time.Millisecond, 0.50))
+	evidence, err := runner.Verify(ctx, dockerTrial(10*time.Second, 0.50))
 
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
@@ -137,6 +141,17 @@ func trialOffer(rate float64) domain.OfferSnapshot {
 type reportingProvider struct {
 	adapter.Provider
 	launches atomic.Int64
+}
+
+type cancellingProvider struct {
+	adapter.Provider
+	cancel context.CancelFunc
+}
+
+func (provider *cancellingProvider) Launch(ctx context.Context, request adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	receipt, err := provider.Provider.Launch(ctx, request)
+	provider.cancel()
+	return receipt, err
 }
 
 func (provider *reportingProvider) Launch(ctx context.Context, request adapter.LaunchRequest) (adapter.LaunchReceipt, error) {

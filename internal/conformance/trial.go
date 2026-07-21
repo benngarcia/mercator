@@ -78,7 +78,6 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 		return evidence, err
 	}
 	evidence.TrialID = identity.trialID
-	evidence.WorkspaceID = identity.workspaceID
 	evidence.ConnectionID = identity.connectionID
 
 	root, err := os.MkdirTemp(runner.tempRoot, "mercator-conformance-")
@@ -134,6 +133,11 @@ func (runner *Runner) Verify(ctx context.Context, trial Trial) (evidence Evidenc
 	if err := client.ready(trialCtx); err != nil {
 		return evidence, err
 	}
+	identity.workspaceID, err = client.createWorkspace(trialCtx, "Conformance "+identity.trialID)
+	if err != nil {
+		return evidence, err
+	}
+	evidence.WorkspaceID = identity.workspaceID
 	if err := client.createAndAuthorizeConnection(trialCtx, identity, trial); err != nil {
 		return evidence, err
 	}

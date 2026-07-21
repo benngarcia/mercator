@@ -17,7 +17,7 @@ const (
 )
 
 type Service struct {
-	log eventlog.EventLog
+	log eventlog.WorkspaceEventLog
 	now func() time.Time
 }
 
@@ -42,7 +42,7 @@ type revisionCreatedData struct {
 	Revision domain.WorkloadRevision `json:"revision"`
 }
 
-func New(log eventlog.EventLog) *Service {
+func New(log eventlog.WorkspaceEventLog) *Service {
 	return &Service{log: log, now: time.Now}
 }
 
@@ -58,7 +58,7 @@ func (s *Service) CreateWorkload(ctx context.Context, req CreateWorkloadRequest)
 	if err != nil {
 		return err
 	}
-	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+	_, err = s.log.AppendIfWorkspaceActive(ctx, eventlog.AppendRequest{
 		Stream:                workloadStream(req.WorkspaceID, req.WorkloadID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            "workload:create:" + req.WorkloadID,
@@ -94,15 +94,16 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	if len(history.Events) == 0 {
 		return domain.WorkloadRevision{}, fmt.Errorf("workload: workload not found")
 	}
+	commandKey := "workload:revision:create:" + revision.ID
 	for _, event := range history.Events {
 		if event.Type != EventWorkloadRevisionCreated {
 			continue
 		}
-		var data revisionCreatedData
-		if err := json.Unmarshal(event.Data, &data); err != nil {
+		var existing revisionCreatedData
+		if err := json.Unmarshal(event.Data, &existing); err != nil {
 			return domain.WorkloadRevision{}, err
 		}
-		if data.Revision.ID == revision.ID {
+		if existing.Revision.ID == revision.ID && event.CommandKey != commandKey {
 			return domain.WorkloadRevision{}, fmt.Errorf("workload: revision already exists")
 		}
 	}
@@ -114,13 +115,13 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	if err != nil {
 		return domain.WorkloadRevision{}, err
 	}
-	_, err = s.log.Append(ctx, eventlog.AppendRequest{
+	_, err = s.log.AppendIfWorkspaceActive(ctx, eventlog.AppendRequest{
 		Stream:                workloadStream(req.WorkspaceID, req.WorkloadID),
 		ExpectedStreamVersion: history.LastVersion,
-		CommandKey:            "workload:revision:create:" + revision.ID,
+		CommandKey:            commandKey,
 		RequestHash:           hash,
 		CorrelationID:         req.WorkloadID,
-		CausationID:           "workload:revision:create:" + revision.ID,
+		CausationID:           commandKey,
 		Events: []eventlog.NewEvent{{
 			ID:            "evt_workload_" + req.WorkloadID + "_revision_" + revision.ID + "_created",
 			Type:          EventWorkloadRevisionCreated,

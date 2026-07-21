@@ -52,7 +52,7 @@ const (
 )
 
 type Orchestrator struct {
-	log                eventlog.EventLog
+	log                eventlog.WorkspaceEventLog
 	scheduler          scheduler.Scheduler
 	adapter            Adapter
 	now                func() time.Time
@@ -84,7 +84,7 @@ func WithReporting(publicURL string, signer *reporting.Signer) Option {
 	}
 }
 
-func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
+func New(log eventlog.WorkspaceEventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
 	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
 	for _, opt := range opts {
 		opt(o)
@@ -177,7 +177,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	result, err := o.log.Append(ctx, eventlog.AppendRequest{
+	result, err := o.log.AppendIfWorkspaceActive(ctx, eventlog.AppendRequest{
 		Stream:                runStream(req.WorkspaceID, req.RunID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            req.CommandKey,

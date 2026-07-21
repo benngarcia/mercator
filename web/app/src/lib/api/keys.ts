@@ -9,6 +9,9 @@ export const queryKeys = {
 
   authSession: () => ["mercator", "authSession"] as const,
 
+  workspaces: (includeArchived: boolean) =>
+    ["mercator", "workspaces", { includeArchived }] as const,
+
   runs: (workspaceID: string) =>
     ["mercator", "runs", { workspaceID }] as const,
   run: (workspaceID: string, runID: string) =>
