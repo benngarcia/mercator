@@ -14,6 +14,9 @@ _Avoid_: Spec (alone), definition
 
 **Offer**:
 A snapshot of placeable capacity from a Connection at a point in time.
+Its Broker-assigned snapshot ID combines the Connection with the adapter-local
+capacity identity, so two Connections can expose the same provider catalog item
+without becoming the same Offer.
 _Avoid_: Quote, instance type (alone)
 
 **Connection**:
