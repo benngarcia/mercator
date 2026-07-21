@@ -209,12 +209,19 @@ func TestDispositionForOfferKind(t *testing.T) {
 	}{
 		{OfferKindProvisionable, DispositionTerminate},
 		{OfferKindStanding, DispositionRelease},
-		{OfferKind(""), DispositionRelease},
-		{OfferKind("unknown"), DispositionRelease},
 	}
 	for _, tc := range cases {
-		if got := DispositionForOfferKind(tc.kind); got != tc.want {
+		got, err := DispositionForOfferKind(tc.kind)
+		if err != nil {
+			t.Fatalf("DispositionForOfferKind(%q): %v", tc.kind, err)
+		}
+		if got != tc.want {
 			t.Fatalf("DispositionForOfferKind(%q) = %q, want %q", tc.kind, got, tc.want)
+		}
+	}
+	for _, kind := range []OfferKind{"", "unknown"} {
+		if _, err := DispositionForOfferKind(kind); err == nil {
+			t.Fatalf("DispositionForOfferKind(%q) accepted an unknown offer kind", kind)
 		}
 	}
 }

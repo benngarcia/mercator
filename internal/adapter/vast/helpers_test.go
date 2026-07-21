@@ -60,10 +60,6 @@ func terminateRequest() adapter.TerminateRequest {
 	return adapter.TerminateRequest{LaunchKey: "lk1", OwnershipToken: "own1", LaunchRequestHash: "rh1"}
 }
 
-func cancelRequest() adapter.CancelRequest {
-	return adapter.CancelRequest{LaunchKey: "lk1"}
-}
-
 func ownershipQuery(workspaceID string) adapter.OwnershipQuery {
 	return adapter.OwnershipQuery{WorkspaceID: workspaceID}
 }

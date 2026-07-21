@@ -109,11 +109,11 @@ func envKind(value *string) string {
 
 // publicAdapterError maps an adapter failure to a stable public error payload;
 // the raw error text never reaches the public stream.
-func publicAdapterError(err error, launchKey string) adapterErrorData {
+func publicAdapterError(err error, launchKey string) domain.ProviderError {
 	var providerFailure *adapter.ProviderFailure
 	if errors.As(err, &providerFailure) {
 		code, message := publicProviderFailure(providerFailure.Kind)
-		return adapterErrorData{Code: code, Message: message, Retryable: providerFailure.Retryable, LaunchKey: launchKey}
+		return domain.ProviderError{Code: code, Message: message, Retryable: providerFailure.Retryable, LaunchKey: launchKey}
 	}
 	code := "ADAPTER_ERROR"
 	message := "Adapter operation failed."
@@ -133,7 +133,7 @@ func publicAdapterError(err error, launchKey string) adapterErrorData {
 		message = "Registry authentication failed."
 		retryable = false
 	}
-	return adapterErrorData{Code: code, Message: message, Retryable: retryable, LaunchKey: launchKey}
+	return domain.ProviderError{Code: code, Message: message, Retryable: retryable, LaunchKey: launchKey}
 }
 
 func publicProviderFailure(kind adapter.ProviderFailureKind) (string, string) {
@@ -150,5 +150,13 @@ func publicProviderFailure(kind adapter.ProviderFailureKind) (string, string) {
 		return "PROVIDER_TRANSPORT_FAILURE", "Provider transport failed."
 	default:
 		return "PROVIDER_INTERNAL_ERROR", "Provider operation failed."
+	}
+}
+
+func publicCleanupError(err error, launchKey string, disposition domain.Disposition) domain.CleanupError {
+	adapterError := publicAdapterError(err, launchKey)
+	return domain.CleanupError{
+		ProviderError: adapterError,
+		Disposition:   disposition,
 	}
 }
