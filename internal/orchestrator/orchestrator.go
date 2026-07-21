@@ -56,7 +56,7 @@ type Orchestrator struct {
 	now                func() time.Time
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
-	failureReporter    ProviderFailureReporter
+	failureReporter    adapter.ProviderFailureSink
 	runLocks           keyedMutex
 }
 
@@ -68,10 +68,6 @@ type Adapter interface {
 	Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error)
 	Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error)
 	ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error)
-}
-
-type ProviderFailureReporter interface {
-	CaptureProviderFailure(context.Context, adapter.ProviderFailureDiagnostic)
 }
 
 // Option configures an Orchestrator.
@@ -88,7 +84,7 @@ func WithReporting(publicURL string, signer *reporting.Signer) Option {
 	}
 }
 
-func WithFailureReporter(reporter ProviderFailureReporter) Option {
+func WithFailureReporter(reporter adapter.ProviderFailureSink) Option {
 	return func(o *Orchestrator) {
 		o.failureReporter = reporter
 	}

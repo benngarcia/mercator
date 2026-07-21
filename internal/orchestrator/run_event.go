@@ -89,6 +89,12 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 				if err := json.Unmarshal(stored.PrivateData, &private); err != nil {
 					return invalidRunEvent(stored, "private provider failure diagnostic is invalid")
 				}
+				if state.launchIntent == nil {
+					return invalidRunEvent(stored, "private provider failure has no launch intent")
+				}
+				if reason := invalidProviderFailureDiagnostic(private, *state.launchIntent); reason != "" {
+					return invalidRunEvent(stored, reason)
+				}
 				diagnostic = &private
 			}
 			if state.launchIntent != nil {

@@ -83,7 +83,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := orchestrator.New(log, scheduler.New(), broker, orchestrator.WithFailureReporter(reporter))
+	orch := orchestrator.New(log, scheduler.New(), broker, orchestrator.WithFailureReporter(broker))
 	value := workloadSecret
 	workload := providerFailureWorkload(&value)
 
@@ -237,7 +237,7 @@ func TestShadeformProviderCodeCannotExposeConnectionCredential(t *testing.T) {
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := orchestrator.New(log, scheduler.New(), br, orchestrator.WithFailureReporter(reporter))
+	orch := orchestrator.New(log, scheduler.New(), br, orchestrator.WithFailureReporter(br))
 	workloadSecret := "workload-secret"
 	workload := providerFailureWorkload(&workloadSecret)
 
@@ -298,7 +298,7 @@ func TestCapacityFailuresWarnThenBecomeActionableWhenOffersAreExhausted(t *testi
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := orchestrator.New(log, scheduler.New(), br, orchestrator.WithFailureReporter(reporter))
+	orch := orchestrator.New(log, scheduler.New(), br, orchestrator.WithFailureReporter(br))
 	workloadSecret := "workload-secret"
 	workload := providerFailureWorkload(&workloadSecret)
 	workload.Spec.Execution.MaxPreStartAttempts = 2

@@ -159,6 +159,35 @@ func invalidAdapterError(data adapterErrorData) string {
 	}
 }
 
+func invalidProviderFailureDiagnostic(data adapter.ProviderFailureDiagnostic, launch adapter.LaunchRequest) string {
+	switch {
+	case !data.Failure.Kind.Valid():
+		return "private provider failure kind is invalid"
+	case !data.Failure.SideEffect.Valid():
+		return "private provider failure side-effect certainty is invalid"
+	case data.Operation != "launch":
+		return "private provider failure operation must be launch"
+	case data.WorkspaceID != launch.WorkspaceID:
+		return "private provider failure workspace does not match launch intent"
+	case data.RunID != launch.RunID:
+		return "private provider failure Run does not match launch intent"
+	case data.AttemptID != launch.AttemptID:
+		return "private provider failure attempt does not match launch intent"
+	case data.ConnectionID != launch.SelectedOfferConnectionID:
+		return "private provider failure connection does not match launch intent"
+	case data.AdapterType != launch.SelectedOfferAdapterType:
+		return "private provider failure adapter does not match launch intent"
+	case data.OfferSnapshotID == "" || data.OfferSnapshotID != launch.SelectedOfferSnapshotID:
+		return "private provider failure Offer does not match launch intent"
+	case data.OfferNativeRef != launch.SelectedOfferNativeRef:
+		return "private provider failure native Offer does not match launch intent"
+	case data.AlternativesExhausted != launch.DiagnosticContext.AlternativesExhausted:
+		return "private provider failure exhaustion does not match launch intent"
+	default:
+		return ""
+	}
+}
+
 func invalidExternalObservation(data adapter.ExternalObservation) string {
 	switch {
 	case data.LaunchKey == "":

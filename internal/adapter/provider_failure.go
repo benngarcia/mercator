@@ -1,6 +1,13 @@
 package adapter
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
+
+type ProviderFailureSink interface {
+	CaptureProviderFailure(context.Context, ProviderFailureDiagnostic)
+}
 
 // ProviderFailureKind is Mercator's provider-neutral classification for a
 // failed adapter operation. Provider-native codes remain separate so public
@@ -16,6 +23,20 @@ const (
 	ProviderFailureInternal            ProviderFailureKind = "provider_internal"
 )
 
+func (k ProviderFailureKind) Valid() bool {
+	switch k {
+	case ProviderFailureCapacityUnavailable,
+		ProviderFailureInvalidRequest,
+		ProviderFailureAuthentication,
+		ProviderFailureRateLimited,
+		ProviderFailureTransport,
+		ProviderFailureInternal:
+		return true
+	default:
+		return false
+	}
+}
+
 // SideEffectCertainty records what Mercator knows about the failed operation's
 // external effect. Retryability is deliberately independent: a capacity
 // rejection is retryable with no object, while a failed Create can be
@@ -26,6 +47,10 @@ const (
 	SideEffectNone          SideEffectCertainty = "none"
 	SideEffectIndeterminate SideEffectCertainty = "indeterminate"
 )
+
+func (c SideEffectCertainty) Valid() bool {
+	return c == SideEffectNone || c == SideEffectIndeterminate
+}
 
 // ProviderFailure carries private provider diagnostics through the adapter
 // boundary. ResponseBody is sanitized and bounded by the adapter before this

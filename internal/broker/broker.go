@@ -25,18 +25,12 @@ type Resolver interface {
 	Resolve(ctx context.Context, workspaceID string, c credential.Credential) (string, error)
 }
 
-// ProviderFailureReporter receives the same typed private diagnostic that the
-// Broker writes to its process log.
-type ProviderFailureReporter interface {
-	CaptureProviderFailure(context.Context, adapter.ProviderFailureDiagnostic)
-}
-
 type Broker struct {
 	conns    Connections
 	factory  *Factory
 	resolver Resolver
 	logger   *slog.Logger
-	reporter ProviderFailureReporter
+	reporter adapter.ProviderFailureSink
 }
 
 type Option func(*Broker)
@@ -49,7 +43,7 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-func WithFailureReporter(reporter ProviderFailureReporter) Option {
+func WithFailureReporter(reporter adapter.ProviderFailureSink) Option {
 	return func(b *Broker) {
 		b.reporter = reporter
 	}
@@ -166,26 +160,25 @@ func offerSnapshotID(connectionID, adapterOfferID string) (string, error) {
 func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.SelectedOfferConnectionID)
 	if err != nil {
-		b.logLaunchFailure(ctx, req, err)
 		return adapter.LaunchReceipt{}, err
 	}
-	receipt, err := ad.Launch(ctx, req)
-	if err != nil {
-		b.logLaunchFailure(ctx, req, err)
-	}
-	return receipt, err
-}
-
-func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest, err error) {
-	diagnostic := failureDiagnostic(req.ProviderOperationContext(), req.WorkspaceID, req.SelectedOfferConnectionID, req.SelectedOfferAdapterType, "launch")
-	diagnostic, _ = classifyProviderFailure(diagnostic, err)
-	b.logProviderFailure(ctx, diagnostic)
+	return ad.Launch(ctx, req)
 }
 
 func (b *Broker) reportProviderFailure(ctx context.Context, diagnostic adapter.ProviderFailureDiagnostic, err error) {
 	diagnostic, typedFailure := classifyProviderFailure(diagnostic, err)
+	if typedFailure {
+		b.CaptureProviderFailure(ctx, diagnostic)
+		return
+	}
 	b.logProviderFailure(ctx, diagnostic)
-	if typedFailure && b.reporter != nil {
+}
+
+// CaptureProviderFailure is the single private failure sink: every diagnostic
+// gets one structured process-log record and optional Sentry delivery.
+func (b *Broker) CaptureProviderFailure(ctx context.Context, diagnostic adapter.ProviderFailureDiagnostic) {
+	b.logProviderFailure(ctx, diagnostic)
+	if b.reporter != nil {
 		b.reporter.CaptureProviderFailure(ctx, diagnostic)
 	}
 }
