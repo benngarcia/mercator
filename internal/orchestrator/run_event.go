@@ -36,6 +36,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if reason := invalidPlacement(data); reason != "" {
 			return invalidRunEvent(stored, reason)
 		}
+		state.placement = &data.Decision
 
 	case EventAttemptCreated:
 		var data attemptData
@@ -46,10 +47,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.attempt = &data
-		state.attemptCount++
-		state.launchAccepted = false
-		state.launchIndeterminate = false
-		state.launchFailed = false
+		state.preStart.beginAttempt()
 
 	case EventLaunchIntentRecorded:
 		var data adapter.LaunchRequest
@@ -58,6 +56,9 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		if reason := invalidLaunchRequest(data); reason != "" {
 			return invalidRunEvent(stored, reason)
+		}
+		if state.placement != nil && state.requested != nil {
+			data.DiagnosticContext.AlternativesExhausted = finalPreStartAttempt(*state.placement, state.preStart.attempts, state.requested.Workload.Spec.Execution.MaxPreStartAttempts)
 		}
 		state.launchIntent = &data
 
@@ -69,7 +70,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if reason := invalidLaunchReceipt(data); reason != "" {
 			return invalidRunEvent(stored, reason)
 		}
-		state.launchAccepted = true
+		state.preStart.accept()
 
 	case EventLaunchIndeterminate, EventLaunchFailed:
 		var data adapterErrorData
@@ -80,14 +81,18 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		if stored.Type == EventLaunchIndeterminate {
-			state.launchIndeterminate = true
+			state.preStart.markIndeterminate()
 		} else {
-			state.launchFailed = true
-			if state.launchIntent != nil {
-				if state.failedOfferSnapshotIDs == nil {
-					state.failedOfferSnapshotIDs = make(map[string]struct{})
+			var diagnostic *adapter.ProviderFailureDiagnostic
+			if len(stored.PrivateData) > 0 {
+				var private adapter.ProviderFailureDiagnostic
+				if err := json.Unmarshal(stored.PrivateData, &private); err != nil {
+					return invalidRunEvent(stored, "private provider failure diagnostic is invalid")
 				}
-				state.failedOfferSnapshotIDs[state.launchIntent.SelectedOfferSnapshotID] = struct{}{}
+				diagnostic = &private
+			}
+			if state.launchIntent != nil {
+				state.preStart.reject(state.launchIntent.SelectedOfferSnapshotID, diagnostic)
 			}
 		}
 

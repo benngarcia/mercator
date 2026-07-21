@@ -44,3 +44,31 @@ func TestDiagnosticCorrelationDoesNotChangeCleanupOperationIdentity(t *testing.T
 		t.Fatalf("diagnostic correlation changed operation identity: %q != %q", firstHash, secondHash)
 	}
 }
+
+func TestDiagnosticActionabilityDoesNotChangeLaunchOperationIdentity(t *testing.T) {
+	request := adapter.LaunchRequest{
+		OperationKey:              "launch_att_1",
+		WorkspaceID:               "ws_1",
+		RunID:                     "run_1",
+		AttemptID:                 "att_1",
+		SelectedOfferConnectionID: "conn_1",
+		SelectedOfferSnapshotID:   "off_1",
+	}
+	warning := request
+	warning.DiagnosticContext.AlternativesExhausted = false
+	actionable := request
+	actionable.DiagnosticContext.AlternativesExhausted = true
+
+	warningHash, err := domain.CanonicalHash(warning)
+	if err != nil {
+		t.Fatalf("hash warning launch request: %v", err)
+	}
+	actionableHash, err := domain.CanonicalHash(actionable)
+	if err != nil {
+		t.Fatalf("hash actionable launch request: %v", err)
+	}
+
+	if warningHash != actionableHash {
+		t.Fatalf("diagnostic actionability changed launch identity: %q != %q", warningHash, actionableHash)
+	}
+}

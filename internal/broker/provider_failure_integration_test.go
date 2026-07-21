@@ -83,7 +83,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := orchestrator.New(log, scheduler.New(), broker)
+	orch := orchestrator.New(log, scheduler.New(), broker, orchestrator.WithFailureReporter(reporter))
 	value := workloadSecret
 	workload := providerFailureWorkload(&value)
 
@@ -237,7 +237,7 @@ func TestShadeformProviderCodeCannotExposeConnectionCredential(t *testing.T) {
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := orchestrator.New(log, scheduler.New(), br)
+	orch := orchestrator.New(log, scheduler.New(), br, orchestrator.WithFailureReporter(reporter))
 	workloadSecret := "workload-secret"
 	workload := providerFailureWorkload(&workloadSecret)
 
@@ -298,7 +298,7 @@ func TestCapacityFailuresWarnThenBecomeActionableWhenOffersAreExhausted(t *testi
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := orchestrator.New(log, scheduler.New(), br)
+	orch := orchestrator.New(log, scheduler.New(), br, orchestrator.WithFailureReporter(reporter))
 	workloadSecret := "workload-secret"
 	workload := providerFailureWorkload(&workloadSecret)
 	workload.Spec.Execution.MaxPreStartAttempts = 2
@@ -332,6 +332,13 @@ func TestCapacityFailuresWarnThenBecomeActionableWhenOffersAreExhausted(t *testi
 	}
 	if first["offer_snapshot_id"] == second["offer_snapshot_id"] {
 		t.Fatalf("capacity attempts reused Offer %v", first["offer_snapshot_id"])
+	}
+	decision, err := orch.GetPlacementDecision(t.Context(), "ws_1", "run_capacity_exhausted")
+	if err != nil {
+		t.Fatalf("get placement decision: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != second["offer_snapshot_id"] {
+		t.Fatalf("latest placement Offer = %q, want %v", decision.SelectedOfferSnapshotID, second["offer_snapshot_id"])
 	}
 
 	events, err := orch.GetRunEvents(t.Context(), "ws_1", "run_capacity_exhausted")

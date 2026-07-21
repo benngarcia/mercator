@@ -13,6 +13,7 @@ import (
 // ErrOfferQuery is returned when placement cannot load a complete offer set
 // (provider failure, or a fail-closed partial aggregation).
 var ErrOfferQuery = errors.New("orchestrator: offer query failed")
+var ErrNoFeasibleOffers = errors.New("orchestrator: no feasible offers")
 
 // PreviewPlacement evaluates placement for a workload without recording a run.
 // It uses the same offer query and scheduler path as live placement (decide).
@@ -58,7 +59,7 @@ func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested
 		return placementPlan{}, err
 	}
 	if decision.SelectedOfferSnapshotID == "" {
-		return placementPlan{}, fmt.Errorf("orchestrator: no feasible offers")
+		return placementPlan{}, ErrNoFeasibleOffers
 	}
 	selectedOffer, ok := selectedOfferByID(offers, decision.SelectedOfferSnapshotID)
 	if !ok {

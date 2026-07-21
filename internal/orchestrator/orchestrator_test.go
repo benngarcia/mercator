@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -502,6 +503,34 @@ func TestAdvanceRunRecoversRecordedLaunchIntentWhenOffersChange(t *testing.T) {
 	}
 }
 
+func TestAdvanceRunClosesAndReportsWhenCapacityAlternativeDisappears(t *testing.T) {
+	ctx := context.Background()
+	ad := &vanishingAlternativeAdapter{offers: []domain.OfferSnapshot{
+		orchOffer("off_cheap", time.Now().UTC()),
+		orchOffer("off_next", time.Now().UTC()),
+	}}
+	reporter := &providerFailureRecorder{}
+	log := openOrchestratorLog(t)
+	orch := New(log, scheduler.New(), ad, WithFailureReporter(reporter))
+	createRun(t, ctx, orch)
+
+	err := orch.AdvanceRun(ctx, "ws_1", "run_1")
+
+	if !errors.Is(err, ErrNoFeasibleOffers) {
+		t.Fatalf("advance error = %v, want exhausted alternatives", err)
+	}
+	if len(reporter.diagnostics) != 2 || reporter.diagnostics[0].Actionable() || !reporter.diagnostics[1].Actionable() {
+		t.Fatalf("provider diagnostics = %+v, want warning followed by actionable exhaustion", reporter.diagnostics)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", "run_1")
+	if err != nil {
+		t.Fatalf("get events: %v", err)
+	}
+	if countEvents(events, EventRunClosed) != 1 {
+		t.Fatalf("capacity exhaustion did not close run: %s", eventTypes(events))
+	}
+}
+
 func TestAdvanceRunRetriesCleanupWithoutRelaunch(t *testing.T) {
 	ctx := context.Background()
 	ad := &releaseFailsOnceAdapter{
@@ -697,6 +726,38 @@ type mutableOfferAdapter struct {
 	*fake.Adapter
 	offers      []domain.OfferSnapshot
 	launchCalls int
+}
+
+type vanishingAlternativeAdapter struct {
+	Adapter
+	offers    []domain.OfferSnapshot
+	listCalls int
+}
+
+func (a *vanishingAlternativeAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	a.listCalls++
+	if a.listCalls > 1 {
+		return nil, nil
+	}
+	return slices.Clone(a.offers), nil
+}
+
+func (a *vanishingAlternativeAdapter) Launch(context.Context, adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	return adapter.LaunchReceipt{}, &adapter.ProviderFailure{
+		Kind:         adapter.ProviderFailureCapacityUnavailable,
+		Status:       409,
+		ProviderCode: "OUT_OF_STOCK",
+		Retryable:    true,
+		SideEffect:   adapter.SideEffectNone,
+	}
+}
+
+type providerFailureRecorder struct {
+	diagnostics []adapter.ProviderFailureDiagnostic
+}
+
+func (r *providerFailureRecorder) CaptureProviderFailure(_ context.Context, diagnostic adapter.ProviderFailureDiagnostic) {
+	r.diagnostics = append(r.diagnostics, diagnostic)
 }
 
 func (m *mutableOfferAdapter) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {

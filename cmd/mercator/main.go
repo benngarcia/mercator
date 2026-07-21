@@ -100,7 +100,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		}
 	}()
 	sched := scheduler.New()
-	orchOpts := []orchestrator.Option{}
+	orchOpts := []orchestrator.Option{orchestrator.WithFailureReporter(failureReporter)}
 	if deps.signer != nil && deps.signer.Enabled() && deps.publicURL != "" {
 		orchOpts = append(orchOpts, orchestrator.WithReporting(deps.publicURL, deps.signer))
 	}

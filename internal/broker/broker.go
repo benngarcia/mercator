@@ -178,11 +178,19 @@ func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter
 
 func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest, err error) {
 	diagnostic := failureDiagnostic(req.ProviderOperationContext(), req.WorkspaceID, req.SelectedOfferConnectionID, req.SelectedOfferAdapterType, "launch")
-	diagnostic.AlternativesExhausted = req.FinalPreStartAttempt
-	b.reportProviderFailure(ctx, diagnostic, err)
+	diagnostic, _ = classifyProviderFailure(diagnostic, err)
+	b.logProviderFailure(ctx, diagnostic)
 }
 
 func (b *Broker) reportProviderFailure(ctx context.Context, diagnostic adapter.ProviderFailureDiagnostic, err error) {
+	diagnostic, typedFailure := classifyProviderFailure(diagnostic, err)
+	b.logProviderFailure(ctx, diagnostic)
+	if typedFailure && b.reporter != nil {
+		b.reporter.CaptureProviderFailure(ctx, diagnostic)
+	}
+}
+
+func classifyProviderFailure(diagnostic adapter.ProviderFailureDiagnostic, err error) (adapter.ProviderFailureDiagnostic, bool) {
 	diagnostic.Failure = adapter.ProviderFailure{
 		Kind:       adapter.ProviderFailureKind("unclassified"),
 		SideEffect: adapter.SideEffectNone,
@@ -192,7 +200,15 @@ func (b *Broker) reportProviderFailure(ctx context.Context, diagnostic adapter.P
 	if typedFailure {
 		diagnostic.Failure = *failure
 	}
-	b.logger.ErrorContext(ctx, "provider operation failed",
+	return diagnostic, typedFailure
+}
+
+func (b *Broker) logProviderFailure(ctx context.Context, diagnostic adapter.ProviderFailureDiagnostic) {
+	logLevel := slog.LevelError
+	if !diagnostic.Actionable() {
+		logLevel = slog.LevelWarn
+	}
+	b.logger.Log(ctx, logLevel, "provider operation failed",
 		"workspace_id", diagnostic.WorkspaceID,
 		"run_id", diagnostic.RunID,
 		"attempt_id", diagnostic.AttemptID,
@@ -211,9 +227,6 @@ func (b *Broker) reportProviderFailure(ctx context.Context, diagnostic adapter.P
 		"response_truncated", diagnostic.Failure.ResponseTruncated,
 		"alternatives_exhausted", diagnostic.AlternativesExhausted,
 	)
-	if typedFailure && b.reporter != nil {
-		b.reporter.CaptureProviderFailure(ctx, diagnostic)
-	}
 }
 
 func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {

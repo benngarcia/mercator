@@ -56,6 +56,7 @@ type Orchestrator struct {
 	now                func() time.Time
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
+	failureReporter    ProviderFailureReporter
 	runLocks           keyedMutex
 }
 
@@ -69,6 +70,10 @@ type Adapter interface {
 	ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error)
 }
 
+type ProviderFailureReporter interface {
+	CaptureProviderFailure(context.Context, adapter.ProviderFailureDiagnostic)
+}
+
 // Option configures an Orchestrator.
 type Option func(*Orchestrator)
 
@@ -80,6 +85,12 @@ func WithReporting(publicURL string, signer *reporting.Signer) Option {
 	return func(o *Orchestrator) {
 		o.reportingPublicURL = publicURL
 		o.reportingSigner = signer
+	}
+}
+
+func WithFailureReporter(reporter ProviderFailureReporter) Option {
+	return func(o *Orchestrator) {
+		o.failureReporter = reporter
 	}
 }
 
@@ -291,9 +302,9 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 		return true, o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
 	case state.cancelRequested:
 		return o.stepCancel(ctx, workspaceID, runID, version, state)
-	case state.launchIntent == nil || state.launchFailed:
+	case state.preStart.needsPlacement(state.launchIntent):
 		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
-	case !state.launchAccepted && !state.launchIndeterminate:
+	case state.preStart.needsLaunch():
 		return o.stepLaunch(ctx, workspaceID, runID, version, state)
 	case state.exitCode != nil && !state.outcomeRecorded:
 		// A reported exit code is authoritative: record the outcome (0 →
@@ -319,9 +330,23 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 // stepPlace decides placement and records the decision, attempt, and launch
 // intent in one append, so the intent is durable before any adapter call.
 func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
-	attemptNumber := state.attemptCount + 1
-	plan, err := o.decide(ctx, workspaceID, *state.requested, runID, state.failedOfferSnapshotIDs, attemptNumber)
+	attemptNumber := state.preStart.nextAttemptNumber()
+	plan, err := o.decide(ctx, workspaceID, *state.requested, runID, state.preStart.failedOffers, attemptNumber)
 	if err != nil {
+		if errors.Is(err, ErrNoFeasibleOffers) && state.preStart.lastFailure != nil {
+			diagnostic := *state.preStart.lastFailure
+			diagnostic.AlternativesExhausted = true
+			if o.failureReporter != nil {
+				o.failureReporter.CaptureProviderFailure(ctx, diagnostic)
+			}
+			if appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:capacity_exhausted", []eventlog.NewEvent{
+				mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, o.now()),
+				mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
+			}); appendErr != nil {
+				return appendErr
+			}
+			return ErrNoFeasibleOffers
+		}
 		return err
 	}
 	reportPublicURL, reportToken := "", ""
@@ -343,6 +368,10 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 func (o *Orchestrator) stepLaunch(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
 	receipt, err := o.adapter.Launch(ctx, *state.launchIntent)
 	if err != nil {
+		diagnostic, typedFailure := launchFailureDiagnostic(*state.launchIntent, err)
+		if typedFailure && o.failureReporter != nil {
+			o.failureReporter.CaptureProviderFailure(ctx, diagnostic)
+		}
 		if errors.Is(err, adapter.ErrLaunchIndeterminate) || errors.Is(err, adapter.ErrLaunchTimeout) {
 			_ = o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_indeterminate", []eventlog.NewEvent{
 				mustEvent(runID, "launch_indeterminate", EventLaunchIndeterminate, publicAdapterError(err, state.launchIntent.LaunchKey), o.now()),
@@ -350,8 +379,11 @@ func (o *Orchestrator) stepLaunch(ctx context.Context, workspaceID, runID string
 			return false, err
 		}
 		failureEvent := mustEvent(runID, "launch_failed_"+state.launchIntent.AttemptID, EventLaunchFailed, publicAdapterError(err, state.launchIntent.LaunchKey), o.now())
+		if typedFailure {
+			failureEvent = mustPrivateEvent(runID, "launch_failed_"+state.launchIntent.AttemptID, EventLaunchFailed, publicAdapterError(err, state.launchIntent.LaunchKey), diagnostic, o.now())
+		}
 		var failure *adapter.ProviderFailure
-		if errors.As(err, &failure) && failure.Kind == adapter.ProviderFailureCapacityUnavailable && !state.launchIntent.FinalPreStartAttempt {
+		if errors.As(err, &failure) && failure.Kind == adapter.ProviderFailureCapacityUnavailable && !state.launchIntent.DiagnosticContext.AlternativesExhausted {
 			if appendErr := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed:"+state.launchIntent.AttemptID, []eventlog.NewEvent{failureEvent}); appendErr != nil {
 				return false, appendErr
 			}
@@ -371,6 +403,14 @@ func (o *Orchestrator) stepLaunch(ctx context.Context, workspaceID, runID string
 	return true, o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_accepted", []eventlog.NewEvent{
 		mustEvent(runID, "launch_accepted", EventLaunchAccepted, receipt, o.now()),
 	})
+}
+
+func launchFailureDiagnostic(request adapter.LaunchRequest, err error) (adapter.ProviderFailureDiagnostic, bool) {
+	var failure *adapter.ProviderFailure
+	if !errors.As(err, &failure) {
+		return adapter.ProviderFailureDiagnostic{}, false
+	}
+	return request.FailureDiagnostic("launch", *failure), true
 }
 
 // stepCancel completes a requested cancel: close immediately when nothing was
@@ -559,6 +599,7 @@ func (o *Orchestrator) GetPlacementDecision(ctx context.Context, workspaceID, ru
 	if err != nil {
 		return domain.PlacementDecision{}, err
 	}
+	var latest domain.PlacementDecision
 	for _, event := range events {
 		if event.Type != EventPlacementDecided {
 			continue
@@ -567,9 +608,12 @@ func (o *Orchestrator) GetPlacementDecision(ctx context.Context, workspaceID, ru
 		if err := json.Unmarshal(event.Data, &data); err != nil {
 			return domain.PlacementDecision{}, err
 		}
-		return data.Decision, nil
+		latest = data.Decision
 	}
-	return domain.PlacementDecision{}, fmt.Errorf("orchestrator: placement decision not found")
+	if latest.ID == "" {
+		return domain.PlacementDecision{}, fmt.Errorf("orchestrator: placement decision not found")
+	}
+	return latest, nil
 }
 
 func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {
@@ -702,24 +746,26 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		)
 	}
 	launchReq := adapter.LaunchRequest{
-		OperationKey:              attempt.LaunchKey,
-		WorkspaceID:               workspaceID,
-		RunID:                     runID,
-		AttemptID:                 attempt.AttemptID,
-		WorkloadID:                requested.Workload.WorkloadID,
-		WorkloadRevisionID:        requested.Workload.ID,
-		OwnershipToken:            attempt.OwnershipToken,
-		LaunchKey:                 attempt.LaunchKey,
-		CleanupLocator:            attempt.CleanupLocator,
-		Image:                     container.Image,
-		Platform:                  container.Platform,
-		Entrypoint:                container.Entrypoint,
-		Args:                      slices.Clone(container.Args),
-		Environment:               env,
-		Ports:                     slices.Clone(container.Ports),
-		Resources:                 requested.Workload.Spec.Resources,
-		MaxRuntimeSeconds:         requested.Workload.Spec.Execution.MaxRuntimeSeconds,
-		FinalPreStartAttempt:      finalPreStartAttempt,
+		OperationKey:       attempt.LaunchKey,
+		WorkspaceID:        workspaceID,
+		RunID:              runID,
+		AttemptID:          attempt.AttemptID,
+		WorkloadID:         requested.Workload.WorkloadID,
+		WorkloadRevisionID: requested.Workload.ID,
+		OwnershipToken:     attempt.OwnershipToken,
+		LaunchKey:          attempt.LaunchKey,
+		CleanupLocator:     attempt.CleanupLocator,
+		Image:              container.Image,
+		Platform:           container.Platform,
+		Entrypoint:         container.Entrypoint,
+		Args:               slices.Clone(container.Args),
+		Environment:        env,
+		Ports:              slices.Clone(container.Ports),
+		Resources:          requested.Workload.Spec.Resources,
+		MaxRuntimeSeconds:  requested.Workload.Spec.Execution.MaxRuntimeSeconds,
+		DiagnosticContext: adapter.ProviderOperationContext{
+			AlternativesExhausted: finalPreStartAttempt,
+		},
 		SelectedOfferSnapshotID:   selectedOffer.ID,
 		SelectedOfferConnectionID: selectedOffer.ConnectionID,
 		SelectedOfferAdapterType:  selectedOffer.AdapterType,
@@ -774,7 +820,7 @@ func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, st
 	if err != nil {
 		return adapter.ExternalObservation{}, err
 	}
-	if observation.Phase != adapter.ExternalPhaseReleased || !state.launchIndeterminate {
+	if observation.Phase != adapter.ExternalPhaseReleased || !state.preStart.indeterminate() {
 		return observation, nil
 	}
 	owned, err := o.adapter.ListOwned(ctx, adapter.OwnershipQuery{
@@ -884,26 +930,72 @@ func (o *Orchestrator) appendEventsAs(ctx context.Context, actor json.RawMessage
 	return err
 }
 
+type preStartPhase uint8
+
+const (
+	preStartUnplaced preStartPhase = iota
+	preStartLaunching
+	preStartAccepted
+	preStartIndeterminate
+	preStartRejected
+)
+
+type preStartState struct {
+	phase        preStartPhase
+	attempts     int
+	failedOffers map[string]struct{}
+	lastFailure  *adapter.ProviderFailureDiagnostic
+}
+
+func (s *preStartState) beginAttempt() {
+	s.attempts++
+	s.phase = preStartLaunching
+}
+
+func (s *preStartState) accept() { s.phase = preStartAccepted }
+
+func (s *preStartState) markIndeterminate() { s.phase = preStartIndeterminate }
+
+func (s *preStartState) reject(offerID string, failure *adapter.ProviderFailureDiagnostic) {
+	s.phase = preStartRejected
+	s.lastFailure = failure
+	if s.failedOffers == nil {
+		s.failedOffers = make(map[string]struct{})
+	}
+	s.failedOffers[offerID] = struct{}{}
+}
+
+func (s preStartState) needsPlacement(intent *adapter.LaunchRequest) bool {
+	return intent == nil || s.phase == preStartRejected
+}
+
+func (s preStartState) needsLaunch() bool { return s.phase == preStartLaunching }
+
+func (s preStartState) nextAttemptNumber() int { return s.attempts + 1 }
+
+func (s preStartState) indeterminate() bool { return s.phase == preStartIndeterminate }
+
+func (s preStartState) running() bool {
+	return s.phase == preStartAccepted || s.phase == preStartIndeterminate
+}
+
 type runState struct {
-	requested              *runRequestedData
-	attempt                *attemptData
-	launchIntent           *adapter.LaunchRequest
-	launchAccepted         bool
-	launchIndeterminate    bool
-	launchFailed           bool
-	attemptCount           int
-	failedOfferSnapshotIDs map[string]struct{}
-	cancelRequested        bool
-	cancelAccepted         bool
-	outcomeRecorded        bool
-	outcome                domain.RunOutcome
-	cleanupRequested       bool
-	cleanupConfirmed       bool
-	closed                 bool
-	exitCode               *int
-	lastObservedPhase      adapter.ExternalPhase
-	createdBy              string
-	cancelledBy            string
+	requested         *runRequestedData
+	attempt           *attemptData
+	launchIntent      *adapter.LaunchRequest
+	placement         *domain.PlacementDecision
+	preStart          preStartState
+	cancelRequested   bool
+	cancelAccepted    bool
+	outcomeRecorded   bool
+	outcome           domain.RunOutcome
+	cleanupRequested  bool
+	cleanupConfirmed  bool
+	closed            bool
+	exitCode          *int
+	lastObservedPhase adapter.ExternalPhase
+	createdBy         string
+	cancelledBy       string
 }
 
 // actorSubject extracts the audited subject from an event envelope's actor
@@ -967,7 +1059,7 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 			record.Disposition = domain.DispositionRelease
 		}
 	}
-	if state.launchAccepted || state.launchIndeterminate {
+	if state.preStart.running() {
 		record.Phase = "running"
 		record.Cleanup = domain.CleanupPending
 	}

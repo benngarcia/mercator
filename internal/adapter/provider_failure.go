@@ -41,7 +41,7 @@ type ProviderFailure struct {
 	ResponseTruncated bool
 }
 
-// ProviderFailureDiagnostic is the private, correlated record for one final
+// ProviderFailureDiagnostic is the private, correlated record for one
 // failed provider operation. Reporters must select fields from this value and
 // must never serialize the originating provider request.
 type ProviderFailureDiagnostic struct {
@@ -60,22 +60,30 @@ type ProviderFailureDiagnostic struct {
 // ProviderOperationContext carries diagnostic-only Run and Offer correlation
 // beside an operation request without duplicating its routing identity.
 type ProviderOperationContext struct {
-	RunID           string
-	AttemptID       string
-	OfferSnapshotID string
-	OfferNativeRef  string
+	RunID                 string
+	AttemptID             string
+	OfferSnapshotID       string
+	OfferNativeRef        string
+	AlternativesExhausted bool
 }
 
 // FailureDiagnostic names the operation that failed without copying request
 // payload or ownership material into the diagnostic.
 func (c ProviderOperationContext) FailureDiagnostic(operation string) ProviderFailureDiagnostic {
 	return ProviderFailureDiagnostic{
-		RunID:           c.RunID,
-		AttemptID:       c.AttemptID,
-		Operation:       operation,
-		OfferSnapshotID: c.OfferSnapshotID,
-		OfferNativeRef:  c.OfferNativeRef,
+		RunID:                 c.RunID,
+		AttemptID:             c.AttemptID,
+		Operation:             operation,
+		OfferSnapshotID:       c.OfferSnapshotID,
+		OfferNativeRef:        c.OfferNativeRef,
+		AlternativesExhausted: c.AlternativesExhausted,
 	}
+}
+
+// Actionable reports whether the failure should page operators. A capacity
+// rejection remains expected marketplace churn while another Offer is viable.
+func (d ProviderFailureDiagnostic) Actionable() bool {
+	return d.Failure.Kind != ProviderFailureCapacityUnavailable || d.AlternativesExhausted
 }
 
 func (f *ProviderFailure) Error() string {

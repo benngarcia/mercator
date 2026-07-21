@@ -114,7 +114,7 @@ func (r *Reporter) CaptureProviderFailure(_ context.Context, diagnostic adapter.
 }
 
 func level(diagnostic adapter.ProviderFailureDiagnostic) sentry.Level {
-	if diagnostic.Failure.Kind == adapter.ProviderFailureCapacityUnavailable && !diagnostic.AlternativesExhausted {
+	if !diagnostic.Actionable() {
 		return sentry.LevelWarning
 	}
 	return sentry.LevelError
