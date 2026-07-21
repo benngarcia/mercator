@@ -114,6 +114,12 @@ func TestGetRunRejectsMissingRequiredDataForEveryKnownEvent(t *testing.T) {
 }
 
 func TestGetRunRejectsInvalidPrivatePayloads(t *testing.T) {
+	emptyWorkspace := validLaunchIntentFixture()
+	emptyWorkspace.WorkspaceID = ""
+	emptyAdapter := validLaunchIntentFixture()
+	emptyAdapter.SelectedOfferAdapterType = ""
+	emptyNativeOffer := validLaunchIntentFixture()
+	emptyNativeOffer.SelectedOfferNativeRef = ""
 	tests := []struct {
 		name        string
 		eventType   string
@@ -123,6 +129,9 @@ func TestGetRunRejectsInvalidPrivatePayloads(t *testing.T) {
 		{name: "missing run requested data", eventType: EventRunRequested, privateData: json.RawMessage(`{}`)},
 		{name: "wrong launch intent shape", eventType: EventLaunchIntentRecorded, privateData: json.RawMessage(`[]`)},
 		{name: "missing launch intent data", eventType: EventLaunchIntentRecorded, privateData: json.RawMessage(`{}`)},
+		{name: "launch intent missing workspace", eventType: EventLaunchIntentRecorded, privateData: mustJSON(t, emptyWorkspace)},
+		{name: "launch intent missing adapter", eventType: EventLaunchIntentRecorded, privateData: mustJSON(t, emptyAdapter)},
+		{name: "launch intent missing native Offer", eventType: EventLaunchIntentRecorded, privateData: mustJSON(t, emptyNativeOffer)},
 	}
 
 	for _, test := range tests {
@@ -149,21 +158,7 @@ func TestGetRunRejectsEmptyPrivateProviderFailureDiagnostic(t *testing.T) {
 		ModelVersion:            "latency-v1",
 		SelectedOfferSnapshotID: "off_1",
 	}
-	intent := adapter.LaunchRequest{
-		OperationKey:              attempt.LaunchKey,
-		RequestHash:               "sha256:launch",
-		WorkspaceID:               "ws_1",
-		RunID:                     "run_1",
-		AttemptID:                 attempt.AttemptID,
-		OwnershipToken:            attempt.OwnershipToken,
-		LaunchKey:                 attempt.LaunchKey,
-		CleanupLocator:            attempt.CleanupLocator,
-		Image:                     "ghcr.io/acme/test@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-		SelectedOfferSnapshotID:   "off_1",
-		SelectedOfferConnectionID: "conn_1",
-		SelectedOfferAdapterType:  "fake",
-		SelectedOfferNativeRef:    "native/off_1",
-	}
+	intent := validLaunchIntentFixture()
 	_, err = log.Append(ctx, eventlog.AppendRequest{
 		Stream:                runStream("ws_1", "run_1"),
 		ExpectedStreamVersion: 1,
@@ -190,6 +185,24 @@ func TestGetRunRejectsEmptyPrivateProviderFailureDiagnostic(t *testing.T) {
 	_, err = orch.GetRun(ctx, "ws_1", "run_1")
 	if err == nil || !strings.Contains(err.Error(), "provider failure kind") {
 		t.Fatalf("GetRun() error = %v, want invalid private provider failure", err)
+	}
+}
+
+func validLaunchIntentFixture() adapter.LaunchRequest {
+	return adapter.LaunchRequest{
+		OperationKey:              "launch_att_1",
+		RequestHash:               "sha256:launch",
+		WorkspaceID:               "ws_1",
+		RunID:                     "run_1",
+		AttemptID:                 "att_1",
+		OwnershipToken:            "own_att_1",
+		LaunchKey:                 "launch_att_1",
+		CleanupLocator:            "cleanup_att_1",
+		Image:                     "ghcr.io/acme/test@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		SelectedOfferSnapshotID:   "off_1",
+		SelectedOfferConnectionID: "conn_1",
+		SelectedOfferAdapterType:  "fake",
+		SelectedOfferNativeRef:    "native/off_1",
 	}
 }
 

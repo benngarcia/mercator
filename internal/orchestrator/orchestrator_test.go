@@ -980,6 +980,7 @@ func orchProvisionableOffer(id string, now time.Time) domain.OfferSnapshot {
 func orchOffer(id string, now time.Time) domain.OfferSnapshot {
 	return domain.OfferSnapshot{
 		ID:           id,
+		NativeRef:    "native/" + id,
 		ConnectionID: "conn_1",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,

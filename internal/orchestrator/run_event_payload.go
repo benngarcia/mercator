@@ -104,6 +104,8 @@ func invalidLaunchRequest(data adapter.LaunchRequest) string {
 		return "operation_key is required"
 	case data.RequestHash == "":
 		return "request_hash is required"
+	case data.WorkspaceID == "":
+		return "workspace_id is required"
 	case data.RunID == "":
 		return "run_id is required"
 	case data.AttemptID == "":
@@ -120,6 +122,10 @@ func invalidLaunchRequest(data adapter.LaunchRequest) string {
 		return "selected_offer_snapshot_id is required"
 	case data.SelectedOfferConnectionID == "":
 		return "selected_offer_connection_id is required"
+	case data.SelectedOfferAdapterType == "":
+		return "selected_offer_adapter_type is required"
+	case data.SelectedOfferNativeRef == "":
+		return "selected_offer_native_ref is required"
 	case data.Disposition != "" && !data.Disposition.Valid():
 		return fmt.Sprintf("unknown disposition %q", data.Disposition)
 	default:
