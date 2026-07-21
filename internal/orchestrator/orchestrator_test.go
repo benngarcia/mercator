@@ -198,8 +198,8 @@ func TestAdvanceRunPassesCompleteWorkloadAndPlacementToAdapter(t *testing.T) {
 	if !reflect.DeepEqual(ad.offerRequest.Resources, rev.Spec.Resources) {
 		t.Fatalf("offer request resources = %+v, want %+v", ad.offerRequest.Resources, rev.Spec.Resources)
 	}
-	if ad.offerRequest.DiagnosticContext.WorkspaceID != "ws_1" || ad.offerRequest.DiagnosticContext.RunID != "run_contract" {
-		t.Fatalf("offer request diagnostic context = %+v, want workspace and Run correlation", ad.offerRequest.DiagnosticContext)
+	if ad.offerRequest.WorkspaceID != "ws_1" || ad.offerRequest.DiagnosticContext.RunID != "run_contract" {
+		t.Fatalf("offer request routing/context = %+v, want workspace and Run correlation", ad.offerRequest)
 	}
 	if req.SelectedOfferSnapshotID != "off_1" || req.SelectedOfferNativeRef != "native-offer-1" {
 		t.Fatalf("launch request missing selected offer context: %+v", req)

@@ -46,6 +46,10 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.attempt = &data
+		state.attemptCount++
+		state.launchAccepted = false
+		state.launchIndeterminate = false
+		state.launchFailed = false
 
 	case EventLaunchIntentRecorded:
 		var data adapter.LaunchRequest
@@ -77,6 +81,14 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		if stored.Type == EventLaunchIndeterminate {
 			state.launchIndeterminate = true
+		} else {
+			state.launchFailed = true
+			if state.launchIntent != nil {
+				if state.failedOfferSnapshotIDs == nil {
+					state.failedOfferSnapshotIDs = make(map[string]struct{})
+				}
+				state.failedOfferSnapshotIDs[state.launchIntent.SelectedOfferSnapshotID] = struct{}{}
+			}
 		}
 
 	case EventCancelRequested:

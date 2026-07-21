@@ -124,11 +124,8 @@ type cleanupPlan struct {
 
 func cleanupContext(object adapter.OwnedExternalObject) adapter.ProviderOperationContext {
 	return adapter.ProviderOperationContext{
-		WorkspaceID:  object.WorkspaceID,
-		RunID:        object.RunID,
-		AttemptID:    object.AttemptID,
-		ConnectionID: object.ConnectionID,
-		AdapterType:  object.AdapterType,
+		RunID:     object.RunID,
+		AttemptID: object.AttemptID,
 	}
 }
 
@@ -160,12 +157,13 @@ func (j *Janitor) planCleanup(ctx context.Context, object adapter.OwnedExternalO
 				payload = event.Data
 			}
 			var intent adapter.LaunchRequest
-			if err := json.Unmarshal(payload, &intent); err == nil {
-				if intent.Disposition != "" {
-					plan.Disposition = intent.Disposition
-				}
-				plan.DiagnosticContext = intent.ProviderOperationContext()
+			if err := json.Unmarshal(payload, &intent); err != nil {
+				return cleanupPlan{}, fmt.Errorf("janitor: decode launch intent for run %s event %s: %w", object.RunID, event.ID, err)
 			}
+			if intent.Disposition != "" {
+				plan.Disposition = intent.Disposition
+			}
+			plan.DiagnosticContext = intent.ProviderOperationContext()
 		case "compute.run.cleanup_requested.v1", "compute.run.cleanup_confirmed.v1":
 			plan.Reclaim = true
 		}

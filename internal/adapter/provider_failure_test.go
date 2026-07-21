@@ -20,7 +20,6 @@ func TestDiagnosticCorrelationDoesNotChangeCleanupOperationIdentity(t *testing.T
 	first.DiagnosticContext = adapter.ProviderOperationContext{
 		RunID:           "run_1",
 		AttemptID:       "att_1",
-		AdapterType:     "shadeform",
 		OfferSnapshotID: "off_1",
 		OfferNativeRef:  "cloud/region/type-a",
 	}
@@ -28,7 +27,6 @@ func TestDiagnosticCorrelationDoesNotChangeCleanupOperationIdentity(t *testing.T
 	second.DiagnosticContext = adapter.ProviderOperationContext{
 		RunID:           "run_2",
 		AttemptID:       "att_2",
-		AdapterType:     "shadeform",
 		OfferSnapshotID: "off_2",
 		OfferNativeRef:  "cloud/region/type-b",
 	}

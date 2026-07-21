@@ -3,6 +3,7 @@ package janitor
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -196,6 +197,28 @@ func TestJanitorCarriesRecordedOfferIdentityIntoCleanup(t *testing.T) {
 	}
 }
 
+func TestJanitorRejectsMalformedRecordedLaunchIntent(t *testing.T) {
+	t.Parallel()
+	cleanup := &captureCleanupAdapter{object: adapter.OwnedExternalObject{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_1",
+		RunID:        "run_malformed",
+		LaunchKey:    "launch_malformed",
+	}}
+	log := openJanitorTestLog(t)
+	payload, err := os.ReadFile("testdata/malformed_launch_intent.json")
+	if err != nil {
+		t.Fatalf("read malformed launch intent: %v", err)
+	}
+	appendLaunchIntentEvents(t, log, "ws_1", "run_malformed", payload)
+
+	_, err = New(cleanup, WithEventLog(log)).Sweep(t.Context(), "ws_1")
+
+	if err == nil {
+		t.Fatal("sweep error = nil, want malformed launch intent rejected")
+	}
+}
+
 type captureCleanupAdapter struct {
 	object           adapter.OwnedExternalObject
 	terminateRequest *adapter.TerminateRequest
@@ -231,7 +254,12 @@ func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID 
 	if err != nil {
 		t.Fatalf("marshal intent: %v", err)
 	}
-	_, err = log.Append(context.Background(), eventlog.AppendRequest{
+	appendLaunchIntentEvents(t, log, workspaceID, runID, private)
+}
+
+func appendLaunchIntentEvents(t *testing.T, log eventlog.EventLog, workspaceID, runID string, private []byte) {
+	t.Helper()
+	_, err := log.Append(context.Background(), eventlog.AppendRequest{
 		Stream:                eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:intent:" + runID,

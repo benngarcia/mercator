@@ -404,10 +404,8 @@ func TestBrokerReportsTerminateFailureWithRunCorrelation(t *testing.T) {
 		WorkspaceID:  "ws_1",
 		ConnectionID: "conn_shadeform",
 		DiagnosticContext: adapter.ProviderOperationContext{
-			WorkspaceID:     "ws_1",
 			RunID:           "run_1",
 			AttemptID:       "att_1",
-			ConnectionID:    "conn_shadeform",
 			OfferSnapshotID: "off_1",
 			OfferNativeRef:  "lambdalabs/us-west/rtx6000ada",
 		},

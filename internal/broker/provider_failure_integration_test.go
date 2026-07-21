@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/shadeform"
@@ -35,7 +35,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/instances":
-			_, _ = io.WriteString(w, `{"instances":[]}`)
+			_, _ = w.Write(readFixture(t, "testdata/shadeform_empty_instances.json"))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/instances/types":
 			_, _ = w.Write(readFixture(t, "testdata/shadeform_a6000_catalog.json"))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/instances/create":
@@ -126,7 +126,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		"provider_code":      "OUT_OF_STOCK",
 		"retryable":          true,
 		"side_effect":        "none",
-		"retry_count":        float64(3),
+		"retry_count":        float64(0),
 		"response_truncated": false,
 	} {
 		if got := diagnostic[key]; got != want {
@@ -195,7 +195,7 @@ func TestShadeformProviderCodeCannotExposeConnectionCredential(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/instances":
-			_, _ = io.WriteString(w, `{"instances":[]}`)
+			_, _ = w.Write(readFixture(t, "testdata/shadeform_empty_instances.json"))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/instances/types":
 			_, _ = w.Write(readFixture(t, "testdata/shadeform_a6000_catalog.json"))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/instances/create":
@@ -266,6 +266,140 @@ func TestShadeformProviderCodeCannotExposeConnectionCredential(t *testing.T) {
 	if strings.Contains(string(recordedJSON), apiKey) {
 		t.Fatalf("Sentry event exposed connection credential: %s", recordedJSON)
 	}
+}
+
+func TestCapacityFailuresWarnThenBecomeActionableWhenOffersAreExhausted(t *testing.T) {
+	transport := &sentry.MockTransport{}
+	reporter, err := sentryreporter.New(map[string]string{
+		"SENTRY_DSN":         "https://public@example.com/1",
+		"SENTRY_ENVIRONMENT": "test",
+		"SENTRY_RELEASE":     "mercator@test",
+	}, sentryreporter.WithTransport(transport))
+	if err != nil {
+		t.Fatalf("configure Sentry reporter: %v", err)
+	}
+	t.Cleanup(reporter.Close)
+
+	providers := map[string]adapter.Provider{
+		"cheap": capacityFailureProvider{offer: capacityOffer("cheap", 0.0001)},
+		"next":  capacityFailureProvider{offer: capacityOffer("next", 0.0002)},
+	}
+	factory := NewFactory()
+	factory.Register(adapter.Manifest{Type: "capacity-test"}, func(config map[string]string, _ string) (adapter.Provider, error) {
+		return providers[config["id"]], nil
+	})
+	connections := fakeConns{recs: []connection.Record{
+		{ID: "conn_cheap", WorkspaceID: "ws_1", AdapterType: "capacity-test", Authorized: true, Config: map[string]string{"id": "cheap"}},
+		{ID: "conn_next", WorkspaceID: "ws_1", AdapterType: "capacity-test", Authorized: true, Config: map[string]string{"id": "next"}},
+	}}
+	br := NewBroker(connections, factory, nil, WithFailureReporter(reporter))
+	log, err := eventlog.OpenSQLite(t.Context(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	orch := orchestrator.New(log, scheduler.New(), br)
+	workloadSecret := "workload-secret"
+	workload := providerFailureWorkload(&workloadSecret)
+	workload.Spec.Execution.MaxPreStartAttempts = 2
+
+	_, err = orch.CreateRun(t.Context(), orchestrator.CreateRunRequest{
+		WorkspaceID: "ws_1",
+		RunID:       "run_capacity_exhausted",
+		CommandKey:  "create_run_capacity_exhausted",
+		Workload:    workload,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	err = orch.AdvanceRun(t.Context(), "ws_1", "run_capacity_exhausted")
+	var failure *adapter.ProviderFailure
+	if !errors.As(err, &failure) || failure.Kind != adapter.ProviderFailureCapacityUnavailable {
+		t.Fatalf("advance error = %v, want exhausted capacity failure", err)
+	}
+
+	recorded := transport.Events()
+	if len(recorded) != 2 {
+		t.Fatalf("Sentry events = %d, want one warning and one exhaustion error", len(recorded))
+	}
+	if recorded[0].Level != sentry.LevelWarning || recorded[1].Level != sentry.LevelError {
+		t.Fatalf("Sentry levels = %q/%q, want warning/error", recorded[0].Level, recorded[1].Level)
+	}
+	first := recorded[0].Contexts["provider_failure"]
+	second := recorded[1].Contexts["provider_failure"]
+	if first["alternatives_exhausted"] != false || second["alternatives_exhausted"] != true {
+		t.Fatalf("Sentry exhaustion states = %#v/%#v, want false/true", first["alternatives_exhausted"], second["alternatives_exhausted"])
+	}
+	if first["offer_snapshot_id"] == second["offer_snapshot_id"] {
+		t.Fatalf("capacity attempts reused Offer %v", first["offer_snapshot_id"])
+	}
+
+	events, err := orch.GetRunEvents(t.Context(), "ws_1", "run_capacity_exhausted")
+	if err != nil {
+		t.Fatalf("get run events: %v", err)
+	}
+	if countStoredEvents(events, orchestrator.EventAttemptCreated) != 2 || countStoredEvents(events, orchestrator.EventLaunchFailed) != 2 {
+		t.Fatalf("attempt/launch failure counts = %d/%d, want 2/2", countStoredEvents(events, orchestrator.EventAttemptCreated), countStoredEvents(events, orchestrator.EventLaunchFailed))
+	}
+}
+
+type capacityFailureProvider struct {
+	adapter.Provider
+	offer domain.OfferSnapshot
+}
+
+func (p capacityFailureProvider) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	return []domain.OfferSnapshot{p.offer}, nil
+}
+
+func (capacityFailureProvider) Launch(context.Context, adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	return adapter.LaunchReceipt{}, &adapter.ProviderFailure{
+		Kind:         adapter.ProviderFailureCapacityUnavailable,
+		Status:       http.StatusConflict,
+		ProviderCode: "OUT_OF_STOCK",
+		Retryable:    true,
+		SideEffect:   adapter.SideEffectNone,
+	}
+}
+
+func capacityOffer(id string, rate float64) domain.OfferSnapshot {
+	now := time.Now().UTC()
+	return domain.OfferSnapshot{
+		ID:         id,
+		NativeRef:  "capacity/" + id,
+		Kind:       domain.OfferKindProvisionable,
+		ObservedAt: now,
+		ExpiresAt:  now.Add(time.Minute),
+		Platform:   domain.Platform{OS: "linux", Architecture: "amd64"},
+		Resources: domain.ResourceInventory{
+			CPUMillis:          2000,
+			MemoryBytes:        2 << 30,
+			EphemeralDiskBytes: 2 << 30,
+		},
+		Capabilities: domain.CapabilityProfile{
+			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, SupportsEntrypointOverride: true, MaxEnvironmentBytes: 32768},
+			Network:   domain.NetworkCapabilities{Inbound: domain.InboundNetworkNone, Protocols: []string{"tcp"}},
+			Pricing:   domain.PricingCapabilities{Known: true},
+			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "deterministic_name", ListOwned: true},
+		},
+		Pricing:  domain.PriceModel{Currency: "USD", RatePerSecondUSD: rate, Known: true},
+		Queue:    &domain.QueueSnapshot{},
+		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+		ImageCache: domain.ImageCacheEvidence{
+			ManifestCached: true,
+			Known:          true,
+		},
+	}
+}
+
+func countStoredEvents(events []eventlog.StoredEvent, eventType string) int {
+	count := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			count++
+		}
+	}
+	return count
 }
 
 func readFixture(t *testing.T, path string) []byte {

@@ -177,7 +177,9 @@ func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter
 }
 
 func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest, err error) {
-	b.reportProviderFailure(ctx, req.ProviderOperationContext().FailureDiagnostic("launch"), err)
+	diagnostic := failureDiagnostic(req.ProviderOperationContext(), req.WorkspaceID, req.SelectedOfferConnectionID, req.SelectedOfferAdapterType, "launch")
+	diagnostic.AlternativesExhausted = req.FinalPreStartAttempt
+	b.reportProviderFailure(ctx, diagnostic, err)
 }
 
 func (b *Broker) reportProviderFailure(ctx context.Context, diagnostic adapter.ProviderFailureDiagnostic, err error) {
@@ -207,6 +209,7 @@ func (b *Broker) reportProviderFailure(ctx context.Context, diagnostic adapter.P
 		"side_effect", diagnostic.Failure.SideEffect,
 		"retry_count", diagnostic.Failure.RetryCount,
 		"response_truncated", diagnostic.Failure.ResponseTruncated,
+		"alternatives_exhausted", diagnostic.AlternativesExhausted,
 	)
 	if typedFailure && b.reporter != nil {
 		b.reporter.CaptureProviderFailure(ctx, diagnostic)
@@ -216,7 +219,7 @@ func (b *Broker) reportProviderFailure(ctx context.Context, diagnostic adapter.P
 func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
 	connection, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
-		b.reportProviderFailure(ctx, failureDiagnostic(req.DiagnosticContext, req.WorkspaceID, req.ConnectionID, valueOr(connection.AdapterType, req.DiagnosticContext.AdapterType), "observe"), err)
+		b.reportProviderFailure(ctx, failureDiagnostic(req.DiagnosticContext, req.WorkspaceID, req.ConnectionID, connection.AdapterType, "observe"), err)
 		return adapter.ExternalObservation{}, err
 	}
 	observation, err := ad.Observe(ctx, req)
@@ -229,7 +232,7 @@ func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapt
 func (b *Broker) Cancel(ctx context.Context, req adapter.CancelRequest) (adapter.CancelReceipt, error) {
 	connection, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
-		b.reportProviderFailure(ctx, failureDiagnostic(req.DiagnosticContext, req.WorkspaceID, req.ConnectionID, valueOr(connection.AdapterType, req.DiagnosticContext.AdapterType), "cancel"), err)
+		b.reportProviderFailure(ctx, failureDiagnostic(req.DiagnosticContext, req.WorkspaceID, req.ConnectionID, connection.AdapterType, "cancel"), err)
 		return adapter.CancelReceipt{}, err
 	}
 	receipt, err := ad.Cancel(ctx, req)
@@ -242,7 +245,7 @@ func (b *Broker) Cancel(ctx context.Context, req adapter.CancelRequest) (adapter
 func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
 	connection, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
-		b.reportProviderFailure(ctx, failureDiagnostic(req.DiagnosticContext, req.WorkspaceID, req.ConnectionID, valueOr(connection.AdapterType, req.DiagnosticContext.AdapterType), "release"), err)
+		b.reportProviderFailure(ctx, failureDiagnostic(req.DiagnosticContext, req.WorkspaceID, req.ConnectionID, connection.AdapterType, "release"), err)
 		return adapter.ReleaseReceipt{}, err
 	}
 	receipt, err := ad.Release(ctx, req)
@@ -255,7 +258,7 @@ func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapt
 func (b *Broker) Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
 	connection, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
-		b.reportProviderFailure(ctx, failureDiagnostic(req.DiagnosticContext, req.WorkspaceID, req.ConnectionID, valueOr(connection.AdapterType, req.DiagnosticContext.AdapterType), "terminate"), err)
+		b.reportProviderFailure(ctx, failureDiagnostic(req.DiagnosticContext, req.WorkspaceID, req.ConnectionID, connection.AdapterType, "terminate"), err)
 		return adapter.TerminateReceipt{}, err
 	}
 	receipt, err := ad.Terminate(ctx, req)
@@ -266,17 +269,11 @@ func (b *Broker) Terminate(ctx context.Context, req adapter.TerminateRequest) (a
 }
 
 func failureDiagnostic(correlation adapter.ProviderOperationContext, workspaceID, connectionID, adapterType, operation string) adapter.ProviderFailureDiagnostic {
-	correlation.WorkspaceID = workspaceID
-	correlation.ConnectionID = connectionID
-	correlation.AdapterType = adapterType
-	return correlation.FailureDiagnostic(operation)
-}
-
-func valueOr(value, fallback string) string {
-	if value != "" {
-		return value
-	}
-	return fallback
+	diagnostic := correlation.FailureDiagnostic(operation)
+	diagnostic.WorkspaceID = workspaceID
+	diagnostic.ConnectionID = connectionID
+	diagnostic.AdapterType = adapterType
+	return diagnostic
 }
 
 func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {

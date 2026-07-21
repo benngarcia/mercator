@@ -29,7 +29,7 @@ func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID 
 	if violations := domain.ValidateWorkloadRevision(workload); len(violations) > 0 {
 		return domain.PlacementDecision{}, &ValidationError{Violations: violations}
 	}
-	decision, _, err := o.evaluatePlacement(ctx, runID, workload)
+	decision, _, err := o.evaluatePlacement(ctx, runID, workload, nil)
 	return decision, err
 }
 
@@ -45,35 +45,47 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Violations[0].Code, e.Violations[0].Message)
 }
 
-func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string) (domain.PlacementDecision, attemptData, domain.OfferSnapshot, error) {
-	decision, offers, err := o.evaluatePlacement(ctx, runID, requested.Workload)
+type placementPlan struct {
+	Decision             domain.PlacementDecision
+	Attempt              attemptData
+	SelectedOffer        domain.OfferSnapshot
+	FinalPreStartAttempt bool
+}
+
+func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string, excludedOffers map[string]struct{}, attemptNumber int) (placementPlan, error) {
+	decision, offers, err := o.evaluatePlacement(ctx, runID, requested.Workload, excludedOffers)
 	if err != nil {
-		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, err
+		return placementPlan{}, err
 	}
 	if decision.SelectedOfferSnapshotID == "" {
-		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: no feasible offers")
+		return placementPlan{}, fmt.Errorf("orchestrator: no feasible offers")
 	}
 	selectedOffer, ok := selectedOfferByID(offers, decision.SelectedOfferSnapshotID)
 	if !ok {
-		return domain.PlacementDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: selected offer %s not found", decision.SelectedOfferSnapshotID)
+		return placementPlan{}, fmt.Errorf("orchestrator: selected offer %s not found", decision.SelectedOfferSnapshotID)
 	}
-	return decision, newAttempt(workspaceID, runID), selectedOffer, nil
+	return placementPlan{
+		Decision:             decision,
+		Attempt:              newAttempt(workspaceID, runID, attemptNumber),
+		SelectedOffer:        selectedOffer,
+		FinalPreStartAttempt: finalPreStartAttempt(decision, attemptNumber, requested.Workload.Spec.Execution.MaxPreStartAttempts),
+	}, nil
 }
 
 // evaluatePlacement is the shared placement path for preview and live decide:
 // fail-closed offer list, then scheduler.Evaluate.
-func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, workload domain.WorkloadRevision) (domain.PlacementDecision, []domain.OfferSnapshot, error) {
+func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, workload domain.WorkloadRevision, excludedOffers map[string]struct{}) (domain.PlacementDecision, []domain.OfferSnapshot, error) {
 	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
 		WorkspaceID: workload.WorkspaceID,
 		DiagnosticContext: adapter.ProviderOperationContext{
-			WorkspaceID: workload.WorkspaceID,
-			RunID:       runID,
+			RunID: runID,
 		},
 		Resources: workload.Spec.Resources,
 	})
 	if err != nil {
 		return domain.PlacementDecision{}, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)
 	}
+	offers = remainingOffers(offers, excludedOffers)
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
 		RunID:        runID,
 		Workload:     workload,
@@ -85,4 +97,30 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 		return domain.PlacementDecision{}, nil, err
 	}
 	return decision, offers, nil
+}
+
+func remainingOffers(offers []domain.OfferSnapshot, excluded map[string]struct{}) []domain.OfferSnapshot {
+	if len(excluded) == 0 {
+		return offers
+	}
+	remaining := make([]domain.OfferSnapshot, 0, len(offers))
+	for _, offer := range offers {
+		if _, rejected := excluded[offer.ID]; !rejected {
+			remaining = append(remaining, offer)
+		}
+	}
+	return remaining
+}
+
+func finalPreStartAttempt(decision domain.PlacementDecision, attemptNumber, maximumAttempts int) bool {
+	if attemptNumber >= maximumAttempts {
+		return true
+	}
+	feasibleOffers := 0
+	for _, candidate := range decision.Candidates {
+		if candidate.Feasible {
+			feasibleOffers++
+		}
+	}
+	return feasibleOffers <= 1
 }

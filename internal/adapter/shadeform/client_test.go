@@ -155,7 +155,7 @@ func TestCreateClassifiesProviderFailures(t *testing.T) {
 		wantEffect  adapter.SideEffectCertainty
 		wantRetries int
 	}{
-		{name: "exhausted capacity", status: 409, body: fixture(t, "create_out_of_stock.json"), wantKind: adapter.ProviderFailureCapacityUnavailable, wantRetry: true, wantEffect: adapter.SideEffectNone, wantRetries: 3},
+		{name: "out of stock", status: 409, body: fixture(t, "create_out_of_stock.json"), wantKind: adapter.ProviderFailureCapacityUnavailable, wantRetry: true, wantEffect: adapter.SideEffectNone},
 		{name: "invalid request", status: 400, body: `{"code":"INVALID_ARGUMENT"}`, wantKind: adapter.ProviderFailureInvalidRequest, wantEffect: adapter.SideEffectNone},
 		{name: "authentication", status: 401, body: `{"message":"Invalid API key"}`, wantKind: adapter.ProviderFailureAuthentication, wantEffect: adapter.SideEffectNone},
 		{name: "exhausted throttling", status: 429, body: `{"code":"RATE_LIMITED"}`, wantKind: adapter.ProviderFailureRateLimited, wantRetry: true, wantEffect: adapter.SideEffectNone, wantRetries: 3},

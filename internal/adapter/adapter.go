@@ -105,6 +105,7 @@ type LaunchRequest struct {
 	// ExecutionPolicy. Adapters that support provider-side reclamation (e.g.
 	// Shadeform auto_delete) derive their TTL backstop from it.
 	MaxRuntimeSeconds         int64  `json:"max_runtime_seconds,omitempty"`
+	FinalPreStartAttempt      bool   `json:"final_pre_start_attempt"`
 	SelectedOfferSnapshotID   string `json:"selected_offer_snapshot_id"`
 	SelectedOfferConnectionID string `json:"selected_offer_connection_id"`
 	SelectedOfferAdapterType  string `json:"selected_offer_adapter_type"`
@@ -116,15 +117,12 @@ type LaunchRequest struct {
 	Disposition domain.Disposition `json:"disposition,omitempty"`
 }
 
-// ProviderOperationContext returns the diagnostic correlation recorded with
-// this launch intent. The context is excluded from operation request hashes.
+// ProviderOperationContext returns the diagnostic-only correlation recorded
+// with this launch intent. Routing identity remains on the operation request.
 func (r LaunchRequest) ProviderOperationContext() ProviderOperationContext {
 	return ProviderOperationContext{
-		WorkspaceID:     r.WorkspaceID,
 		RunID:           r.RunID,
 		AttemptID:       r.AttemptID,
-		ConnectionID:    r.SelectedOfferConnectionID,
-		AdapterType:     r.SelectedOfferAdapterType,
 		OfferSnapshotID: r.SelectedOfferSnapshotID,
 		OfferNativeRef:  r.SelectedOfferNativeRef,
 	}
