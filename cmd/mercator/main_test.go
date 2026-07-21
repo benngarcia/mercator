@@ -305,8 +305,8 @@ func TestBrokerRoutesEachDockerConnectionToItsOwnEndpoint(t *testing.T) {
 	if byConn["conn_docker_loopback"].ID == byConn["conn_docker_remote"].ID {
 		t.Fatalf("both connections advertise the same offer id %q: adapter is shared", byConn["conn_docker_loopback"].ID)
 	}
-	if byConn["conn_docker_remote"].ID != "offer_docker_gpu-2" {
-		t.Fatalf("remote offer id = %q, want offer_docker_gpu-2 derived from its own endpoint", byConn["conn_docker_remote"].ID)
+	if byConn["conn_docker_remote"].NativeRef != "gpu-2" {
+		t.Fatalf("remote offer native ref = %q, want gpu-2 derived from its own endpoint", byConn["conn_docker_remote"].NativeRef)
 	}
 	if byConn["conn_docker_loopback"].Platform.Architecture != "arm64" || byConn["conn_docker_remote"].Platform.Architecture != "amd64" {
 		t.Fatalf("connection architectures = loopback:%s remote:%s, want arm64 and amd64", byConn["conn_docker_loopback"].Platform.Architecture, byConn["conn_docker_remote"].Platform.Architecture)
