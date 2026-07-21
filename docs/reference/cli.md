@@ -144,6 +144,17 @@ go run ./cmd/mercator sink status --sink-id audit \
   | jq '{sink_id, cursor}'
 ```
 
+`run decision` returns the latest recorded placement decision. After stale
+capacity triggers replacement, this is the replacement decision rather than
+the initial selection. If no eligible Offer remains, the decision has no
+`selected_offer_snapshot_id`, carries `NO_FEASIBLE_OFFERS`, and preserves the
+candidate rejection that explains the terminal `RETRY_EXHAUSTED` Run event.
+
+`run events` exposes provider-neutral launch failure fields. Replacement is
+limited to `PROVIDER_CAPACITY_UNAVAILABLE` with `retryable=true` and
+`side_effect=none`; indeterminate outcomes keep their original launch key for
+reconciliation.
+
 Use `--workspace-id ID` on any run command to override
 `MERCATOR_WORKSPACE_ID`.
 

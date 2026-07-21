@@ -1,0 +1,23 @@
+{
+  "same_native_ref": [
+    {"id":"off_stale","connection_id":"conn_stale","native_ref":"hyperstack/canada-1/A6000","rate":0.0001},
+    {"id":"off_alternate","connection_id":"conn_alternate","native_ref":"hyperstack/canada-1/A6000","rate":0.0002}
+  ],
+  "bounded_exhaustion": [
+    {"id":"off_first","connection_id":"conn_1","native_ref":"cloud/region/A6000","rate":0.0001},
+    {"id":"off_second","connection_id":"conn_2","native_ref":"cloud/region/L40S","rate":0.0002}
+  ],
+  "alternate_capacity": [
+    {"id":"off_stale","connection_id":"conn_1","native_ref":"cloud/region/A6000","rate":0.0001},
+    {"id":"off_alternate","connection_id":"conn_2","native_ref":"cloud/region/L40S","rate":0.0002}
+  ],
+  "single_stale": [
+    {"id":"off_stale","connection_id":"conn_1","native_ref":"cloud/region/A6000","rate":0.0001}
+  ],
+  "single_terminal": [
+    {"id":"off_only","connection_id":"conn_1","native_ref":"cloud/region/A6000","rate":0.0001}
+  ],
+  "single_indeterminate": [
+    {"id":"off_indeterminate","connection_id":"conn_1","native_ref":"cloud/region/A6000","rate":0.0001}
+  ]
+}

@@ -17,13 +17,14 @@ type Scheduler interface {
 }
 
 type SchedulingInput struct {
-	RunID            string
-	Workload         domain.WorkloadRevision
-	Offers           []domain.OfferSnapshot
-	ModelVersion     string
-	EvaluatedAt      time.Time
-	Weights          ScoreWeights
-	LatencyEstimates map[string]domain.Estimate
+	RunID                    string
+	Workload                 domain.WorkloadRevision
+	Offers                   []domain.OfferSnapshot
+	ExcludedOfferSnapshotIDs []string
+	ModelVersion             string
+	EvaluatedAt              time.Time
+	Weights                  ScoreWeights
+	LatencyEstimates         map[string]domain.Estimate
 }
 
 type ScoreWeights struct {
@@ -128,6 +129,15 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	var violations []domain.Violation
 	workload := input.Workload
 	container := workload.Spec.Containers[0]
+	if slices.Contains(input.ExcludedOfferSnapshotIDs, offer.ID) {
+		violations = append(violations, domain.Violation{
+			Code:     "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE",
+			Path:     "offer_snapshot_id",
+			Required: "offer not rejected by an earlier attempt",
+			Offered:  offer.ID,
+			Message:  "Offer was rejected as unavailable by an earlier launch attempt.",
+		})
+	}
 	if !offer.ExpiresAt.IsZero() && !offer.ExpiresAt.After(input.EvaluatedAt) {
 		violations = append(violations, domain.Violation{Code: "OFFER_EXPIRED", Path: "expires_at", Required: "future", Offered: offer.ExpiresAt, Message: "Offer is expired and cannot be selected."})
 	}
@@ -279,13 +289,17 @@ func acceleratorRequirementsSatisfied(requirements []domain.AcceleratorRequireme
 		}
 		matched := 0
 		for _, inventory := range offer.Resources.Accelerators {
-			// Vendor is normalized on both sides so provider casing/aliases
-			// ("NVIDIA" vs "Nvidia") align; the model is matched on the
-			// provider-agnostic canonical id, not the raw provider string.
+			// Both sides are normalized through gpunorm so provider spellings
+			// and requirement spellings align: the inventory carries a
+			// canonical id, and each ModelAnyOf entry is canonicalized before
+			// comparison so a requirement written as "RTX 5090" or
+			// "nvidia-rtx5090" names the same card as "nvidia-rtx-5090".
 			if req.Vendor != "" && gpunorm.NormalizeVendor(inventory.Vendor) != gpunorm.NormalizeVendor(req.Vendor) {
 				continue
 			}
-			if len(req.ModelAnyOf) > 0 && !slices.Contains(req.ModelAnyOf, inventory.CanonicalModel) {
+			if len(req.ModelAnyOf) > 0 && !slices.ContainsFunc(req.ModelAnyOf, func(model string) bool {
+				return gpunorm.Canonical(inventory.Vendor, model) == inventory.CanonicalModel
+			}) {
 				continue
 			}
 			if req.MemoryMinBytes > 0 && inventory.MemoryBytes < req.MemoryMinBytes {

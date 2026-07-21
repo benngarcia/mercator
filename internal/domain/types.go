@@ -184,7 +184,7 @@ type ResourceInventory struct {
 type AcceleratorInventory struct {
 	Vendor string `json:"vendor"`
 	Model  string `json:"model"`
-	// CanonicalModel is the provider-agnostic GPU id (e.g. "nvidia-rtx-a2000")
+	// CanonicalModel is the provider-agnostic GPU id (e.g. "nvidia-a6000")
 	// the scheduler matches AcceleratorRequirement.ModelAnyOf against. Adapters
 	// derive it from their native model string via internal/gpunorm; Model keeps
 	// the provider's raw display name for provenance.
@@ -363,10 +363,11 @@ const (
 )
 
 type ProviderError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
-	LaunchKey string `json:"launch_key"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	Retryable  bool   `json:"retryable"`
+	SideEffect string `json:"side_effect,omitempty"`
+	LaunchKey  string `json:"launch_key"`
 }
 
 func (providerError ProviderError) Validate() error {
@@ -377,6 +378,8 @@ func (providerError ProviderError) Validate() error {
 		return fmt.Errorf("message is required")
 	case providerError.LaunchKey == "":
 		return fmt.Errorf("launch_key is required")
+	case providerError.SideEffect != "" && providerError.SideEffect != "none" && providerError.SideEffect != "indeterminate":
+		return fmt.Errorf("unknown side effect certainty %q", providerError.SideEffect)
 	default:
 		return nil
 	}
