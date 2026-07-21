@@ -146,13 +146,13 @@ func TestSchedulerMatchesAcceleratorByCanonicalModelAndNormalizedVendor(t *testi
 	// canonical model — not the raw Model string.
 	gpu := schedulerOffer("off_gpu", now, 0.00001, 1)
 	gpu.Resources.Accelerators = []domain.AcceleratorInventory{{
-		Vendor: "NVIDIA", Model: "RTX A2000", CanonicalModel: "nvidia-rtx-a2000", Count: 1, MemoryBytes: 6 << 30,
+		Vendor: "NVIDIA", Model: "RTX A2000", CanonicalModel: "nvidia-a2000", Count: 1, MemoryBytes: 6 << 30,
 	}}
 	gpu.Capabilities.Resources.GPUVendors = []string{"nvidia"}
 
 	rev := schedulerRevision()
 	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{
-		Vendor: "nvidia", ModelAnyOf: []string{"nvidia-rtx-a2000"}, Count: 1,
+		Vendor: "nvidia", ModelAnyOf: []string{"nvidia-a2000"}, Count: 1,
 	}}
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID: "run_1", Workload: rev, Offers: []domain.OfferSnapshot{gpu}, ModelVersion: "latency-v1", EvaluatedAt: now,

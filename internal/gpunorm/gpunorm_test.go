@@ -8,16 +8,21 @@ func TestCanonicalConsolidatesProviderSpellings(t *testing.T) {
 		model  string
 		want   string
 	}{
-		// Different provider spellings of the same GPU collapse to one id.
-		{"NVIDIA", "RTX A2000", "nvidia-rtx-a2000"},
-		{"NVIDIA", "NVIDIA RTX A2000", "nvidia-rtx-a2000"},
-		{"nvidia", "A2000", "nvidia-rtx-a2000"},
-		{"NVIDIA", "RTX A4000", "nvidia-rtx-a4000"},
+		// Different provider spellings of the same GPU collapse to one id —
+		// the Shadeform catalog identifier (bare, no RTX marketing prefix).
+		{"NVIDIA", "RTX A2000", "nvidia-a2000"},
+		{"NVIDIA", "NVIDIA RTX A2000", "nvidia-a2000"},
+		{"nvidia", "A2000", "nvidia-a2000"},
+		{"NVIDIA", "RTX A4000", "nvidia-a4000"},
+		{"NVIDIA", "RTX A6000", "nvidia-a6000"},
+		{"NVIDIA", "A6000", "nvidia-a6000"},
 		// Memory variants of the same model share one id (memory is matched
 		// separately via MemoryMinBytes).
 		{"NVIDIA", "A100", "nvidia-a100"},
 		{"NVIDIA", "A100 80GB PCIe", "nvidia-a100"},
 		{"NVIDIA", "A100-SXM", "nvidia-a100"},
+		{"NVIDIA", "A100_80G", "nvidia-a100"},
+		{"NVIDIA", "V100 32GB", "nvidia-v100"},
 		{"NVIDIA", "H100", "nvidia-h100"},
 		{"NVIDIA", "H100 NVL", "nvidia-h100"},
 		// nvidia-smi marketing names (docker GPU probe) collapse onto the same
@@ -40,6 +45,12 @@ func TestCanonicalConsolidatesProviderSpellings(t *testing.T) {
 		{"NVIDIA", "RTX PRO 6000 Blackwell", "nvidia-rtx-pro-6000"},
 		{"NVIDIA", "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "nvidia-rtx-pro-6000"},
 		{"NVIDIA", "RTX PRO 6000 Blackwell Server Edition", "nvidia-rtx-pro-6000"},
+		{"NVIDIA", "RTX 4000 Ada", "nvidia-rtx-4000-ada"},
+		// The pre-Ada Quadro RTX 6000 stays distinct from the RTX 6000 Ada.
+		{"NVIDIA", "Quadro RTX 6000", "nvidia-rtx-6000"},
+		{"NVIDIA", "RTX 6000", "nvidia-rtx-6000"},
+		{"NVIDIA", "B200", "nvidia-b200"},
+		{"NVIDIA", "GH200", "nvidia-gh200"},
 	}
 	for _, c := range cases {
 		if got := Canonical(c.vendor, c.model); got != c.want {
