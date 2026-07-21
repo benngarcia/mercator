@@ -117,6 +117,36 @@ on it.
   inside the container as automatic. Verify with `nvidia-smi` on first use of a
   new instance type (see below).
 
+## Correlating provider launch failures
+
+The public run event identifies the failure without exposing Shadeform's
+response. Read the run's events and find
+`compute.run.launch_failed.v1` or `compute.run.launch_indeterminate.v1`:
+
+```sh
+curl -fsS "$MERCATOR/v1/runs/$RUN_ID/events?workspace_id=$WORKSPACE_ID" \
+  -H "Authorization: Bearer $MERCATOR_API_TOKEN" \
+  | jq '.events[] | select(.type == "compute.run.launch_failed.v1" or .type == "compute.run.launch_indeterminate.v1") | {correlationid, data}'
+```
+
+The event's `data.code` and `data.retryable` are stable, provider-neutral
+fields. Use its `correlationid` (the run ID) with the workspace ID to find the
+single `provider operation failed` process-log record. That private structured
+record includes the attempt, connection, adapter, selected offer, HTTP status,
+Shadeform code, retry count, side-effect certainty, and sanitized bounded
+response body. For the default text log, the correlation looks like:
+
+```sh
+grep 'provider operation failed' /path/to/mercator.log \
+  | grep "workspace_id=$WORKSPACE_ID" \
+  | grep "run_id=$RUN_ID"
+```
+
+Keep that process log on the operator side of the trust boundary. Mercator
+does not publish the provider response body, API key, authorization headers,
+registry credentials, workload environment values, or launch request payload
+through run events or sinks.
+
 ## Live verification checklist
 
 With a funded account and `SHADEFORM_API_KEY` exported:

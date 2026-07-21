@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "OUT_OF_STOCK",
+    "message": "The selected region has no remaining capacity",
+    "request": {
+      "authorization": "Bearer shadeform-api-secret",
+      "registry_credentials": {"password": "registry-secret"},
+      "envs": [{"name": "TOKEN", "value": "workload-secret"}]
+    }
+  }
+}

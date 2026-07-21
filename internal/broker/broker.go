@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -28,10 +29,25 @@ type Broker struct {
 	conns    Connections
 	factory  *Factory
 	resolver Resolver
+	logger   *slog.Logger
 }
 
-func NewBroker(conns Connections, factory *Factory, resolver Resolver) *Broker {
-	return &Broker{conns: conns, factory: factory, resolver: resolver}
+type Option func(*Broker)
+
+func WithLogger(logger *slog.Logger) Option {
+	return func(b *Broker) {
+		if logger != nil {
+			b.logger = logger
+		}
+	}
+}
+
+func NewBroker(conns Connections, factory *Factory, resolver Resolver, opts ...Option) *Broker {
+	b := &Broker{conns: conns, factory: factory, resolver: resolver, logger: slog.Default()}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // Manifests exposes the registered adapters' onboarding manifests for the
@@ -136,9 +152,54 @@ func offerSnapshotID(connectionID, adapterOfferID string) (string, error) {
 func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.SelectedOfferConnectionID)
 	if err != nil {
+		b.logLaunchFailure(ctx, req, err)
 		return adapter.LaunchReceipt{}, err
 	}
-	return ad.Launch(ctx, req)
+	receipt, err := ad.Launch(ctx, req)
+	if err != nil {
+		b.logLaunchFailure(ctx, req, err)
+	}
+	return receipt, err
+}
+
+func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest, err error) {
+	kind := "unclassified"
+	status := 0
+	providerCode := ""
+	responseBody := ""
+	retryable := false
+	sideEffect := adapter.SideEffectNone
+	retryCount := 0
+	truncated := false
+	var failure *adapter.ProviderFailure
+	if errors.As(err, &failure) {
+		kind = string(failure.Kind)
+		status = failure.Status
+		providerCode = failure.ProviderCode
+		responseBody = failure.ResponseBody
+		retryable = failure.Retryable
+		sideEffect = failure.SideEffect
+		retryCount = failure.RetryCount
+		truncated = failure.ResponseTruncated
+	}
+	b.logger.ErrorContext(ctx, "provider operation failed",
+		"workspace_id", req.WorkspaceID,
+		"run_id", req.RunID,
+		"attempt_id", req.AttemptID,
+		"connection_id", req.SelectedOfferConnectionID,
+		"adapter_type", req.SelectedOfferAdapterType,
+		"operation", "launch",
+		"offer_snapshot_id", req.SelectedOfferSnapshotID,
+		"offer_native_ref", req.SelectedOfferNativeRef,
+		"failure_kind", kind,
+		"http_status", status,
+		"provider_code", providerCode,
+		"response_body", responseBody,
+		"retryable", retryable,
+		"side_effect", sideEffect,
+		"retry_count", retryCount,
+		"response_truncated", truncated,
+	)
 }
 
 func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
