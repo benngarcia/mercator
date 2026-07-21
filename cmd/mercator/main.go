@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/cli"
+	"github.com/benngarcia/mercator/internal/conformance"
 	"github.com/benngarcia/mercator/internal/daemon"
 	"github.com/benngarcia/mercator/internal/keymaterial"
 	"github.com/benngarcia/mercator/internal/webauth"
@@ -25,6 +26,12 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, env map[string]string, stdout, stderr io.Writer) int {
+	if len(args) > 2 && args[1] == "help" && args[2] == "verify" {
+		return conformance.RunCommand(ctx, []string{"--help"}, env, stdout, stderr)
+	}
+	if len(args) > 1 && args[1] == "verify" {
+		return conformance.RunCommand(ctx, args[2:], env, stdout, stderr)
+	}
 	if len(args) > 1 && args[1] != "serve" {
 		return cli.Run(ctx, cli.Config{
 			BaseURL:     envValue(env, "MERCATOR_API_URL", ""),

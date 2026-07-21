@@ -1,0 +1,7 @@
+{
+  "adapter_type": "docker",
+  "image": "ghcr.io/benngarcia/mercator-conformance-probe@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "max_expected_cost_usd": 0.5,
+  "timeout": "12m",
+  "mode": "probe"
+}

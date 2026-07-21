@@ -10,6 +10,29 @@ import (
 	"testing"
 )
 
+func TestRunDelegatesVerifyToTheConformanceRunner(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	exitCode := run(context.Background(), []string{"mercator", "verify"}, map[string]string{}, &stdout, &stderr)
+
+	if exitCode != 2 {
+		t.Fatalf("run() = %d, want 2", exitCode)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("--spec")) {
+		t.Fatalf("stderr = %q, want verify spec diagnostic", stderr.String())
+	}
+}
+
+func TestRunPrintsVerifyHelpWithoutAnAPIBaseURL(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	exitCode := run(context.Background(), []string{"mercator", "help", "verify"}, map[string]string{}, &stdout, &stderr)
+
+	if exitCode != 0 || !bytes.Contains(stdout.Bytes(), []byte("mercator verify --spec FILE")) {
+		t.Fatalf("run() = %d, stdout = %s, stderr = %s", exitCode, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunDelegatesJSONCLICommands(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/runs" || request.URL.Query().Get("workspace_id") != "ws_1" {

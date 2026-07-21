@@ -16,8 +16,9 @@ rebuilt from the event log.
 1. Install and configure the process: [install-configuration.md](install-configuration.md).
 2. Lock down API access: [authentication-workspaces.md](authentication-workspaces.md).
 3. Exercise the local Docker adapter: [docker-adapter-operation.md](docker-adapter-operation.md).
-4. Evaluate workload semantics: [workload-run-lifecycle.md](workload-run-lifecycle.md).
-5. Check the production-hardening gaps before relying on it:
+4. Launch a bounded provider trial: [provider-conformance.md](provider-conformance.md).
+5. Evaluate workload semantics: [workload-run-lifecycle.md](workload-run-lifecycle.md).
+6. Check the production-hardening gaps before relying on it:
    [known-limitations.md](known-limitations.md).
 
 ## Operator Runbooks
@@ -28,6 +29,8 @@ rebuilt from the event log.
   operator identities and explicit workspace partitions.
 - [docker-adapter-operation.md](docker-adapter-operation.md): Docker host adapter
   setup, labels, lifecycle, and cleanup checks.
+- [provider-conformance.md](provider-conformance.md): real provider launch,
+  budget gate, signed probe evidence, and cleanup verification.
 - [../reference/openapi.md](../reference/openapi.md): OpenAPI discovery,
   route families, auth boundary, and first HTTP integration path.
 - [workload-run-lifecycle.md](workload-run-lifecycle.md): workload JSON, run
