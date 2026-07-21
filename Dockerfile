@@ -13,7 +13,7 @@
 # Mounting the Docker socket grants this container root-equivalent control of
 # the host Docker daemon. That is fine for local evaluation on a machine you
 # own; do not do it on an untrusted host.
-FROM golang:1.25 AS build
+FROM golang:1.25.12 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

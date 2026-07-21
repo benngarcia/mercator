@@ -21,6 +21,8 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scheduler"
+	"github.com/benngarcia/mercator/internal/sentryreporter"
+	"github.com/getsentry/sentry-go"
 )
 
 func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
@@ -47,6 +49,16 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 
 	var privateLog bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&privateLog, nil))
+	transport := &sentry.MockTransport{}
+	reporter, err := sentryreporter.New(map[string]string{
+		"SENTRY_DSN":         "https://public@example.com/1",
+		"SENTRY_ENVIRONMENT": "test",
+		"SENTRY_RELEASE":     "mercator@test",
+	}, sentryreporter.WithTransport(transport))
+	if err != nil {
+		t.Fatalf("configure Sentry reporter: %v", err)
+	}
+	t.Cleanup(reporter.Close)
 	factory := NewFactory()
 	factory.Register(shadeform.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
 		return shadeform.New(secret, config)
@@ -65,7 +77,7 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	}}}
 	broker := NewBroker(connections, factory, resolverFunc(func(context.Context, string, credential.Credential) (string, error) {
 		return apiKey, nil
-	}), WithLogger(logger))
+	}), WithLogger(logger), WithFailureReporter(reporter))
 	log, err := eventlog.OpenSQLite(t.Context(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
 		t.Fatalf("open event log: %v", err)
@@ -130,6 +142,22 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	for _, secret := range []string{apiKey, registrySecret, workloadSecret, "Bearer " + apiKey} {
 		if strings.Contains(privateText, secret) {
 			t.Fatalf("private diagnostic leaked %q: %s", secret, privateText)
+		}
+	}
+	recorded := transport.Events()
+	if len(recorded) != 1 {
+		t.Fatalf("Sentry events = %d, want exactly one", len(recorded))
+	}
+	if got := recorded[0].Contexts["provider_failure"]["run_id"]; got != "run_out_of_stock" {
+		t.Errorf("Sentry run_id = %#v, want run_out_of_stock", got)
+	}
+	if got := recorded[0].Contexts["provider_failure"]["provider_code"]; got != "OUT_OF_STOCK" {
+		t.Errorf("Sentry provider_code = %#v, want OUT_OF_STOCK", got)
+	}
+	recordedJSON, _ := json.Marshal(recorded[0])
+	for _, secret := range []string{apiKey, registrySecret, workloadSecret, "response_body", "authorization"} {
+		if strings.Contains(string(recordedJSON), secret) {
+			t.Fatalf("Sentry event leaked %q: %s", secret, recordedJSON)
 		}
 	}
 

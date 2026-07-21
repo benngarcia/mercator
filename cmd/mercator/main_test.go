@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	stdlog "log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,27 @@ import (
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/domain"
 )
+
+func TestRunRejectsPartialSentryConfiguration(t *testing.T) {
+	var processLog bytes.Buffer
+	previousOutput := stdlog.Writer()
+	stdlog.SetOutput(&processLog)
+	t.Cleanup(func() { stdlog.SetOutput(previousOutput) })
+
+	code := run(t.Context(), []string{"mercator", "serve"}, map[string]string{
+		"MERCATOR_ADDR":       "invalid-address",
+		"MERCATOR_API_TOKEN":  "operator-token",
+		"MERCATOR_SQLITE_DSN": "file:" + t.Name() + "?mode=memory&cache=shared",
+		"SENTRY_DSN":          "https://public@example.com/1",
+		"SENTRY_RELEASE":      "mercator@test",
+	}, &bytes.Buffer{}, &bytes.Buffer{})
+	if code != 1 {
+		t.Fatalf("run() = %d, want 1", code)
+	}
+	if got := processLog.String(); !strings.Contains(got, "configure Sentry: SENTRY_ENVIRONMENT is required when SENTRY_DSN is set") {
+		t.Fatalf("process log = %q, want clear partial Sentry diagnostic", got)
+	}
+}
 
 func TestBuildServerDepsValidatesSecretKey(t *testing.T) {
 	validBase64 := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))

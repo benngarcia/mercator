@@ -200,23 +200,17 @@ func (c *client) wait(ctx context.Context, attempt int) error {
 	}
 }
 
-// httpError omits response bodies because read/list/delete failures can flow to
-// general process logs without the launch failure sanitizer.
-func httpError(method, path string, result httpResult) error {
-	return fmt.Errorf("shadeform: %s %s -> %d", method, path, result.status)
-}
-
 // getJSON performs an idempotent request and decodes the 2xx body into out.
 func (c *client) getJSON(ctx context.Context, method, path string, out any) error {
 	result, err := c.doRetry(ctx, method, path, nil, true)
 	if err != nil {
-		return err
+		return c.readFailure(result)
 	}
 	if result.status < 200 || result.status >= 300 {
-		return httpError(method, path, result)
+		return c.readFailure(result)
 	}
 	if err := json.Unmarshal(result.body, out); err != nil {
-		return fmt.Errorf("shadeform: decode %s: %w", path, err)
+		return c.invalidReadResponse(result)
 	}
 	return nil
 }
@@ -269,10 +263,10 @@ func (c *client) deleteInstance(ctx context.Context, id string) error {
 	path := "/instances/" + id + "/delete"
 	result, err := c.doRetry(ctx, http.MethodPost, path, nil, true)
 	if err != nil {
-		return err
+		return c.operationFailure(result, []string{c.apiKey})
 	}
 	if result.status == http.StatusNotFound || (result.status >= 200 && result.status < 300) {
 		return nil
 	}
-	return httpError(http.MethodPost, path, result)
+	return c.operationFailure(result, []string{c.apiKey})
 }

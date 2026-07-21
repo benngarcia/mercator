@@ -81,6 +81,8 @@ Dependency update pull requests should go through the same CI and review path
 as human-authored changes. Before `v0.1.0`, maintainers should keep automated
 update volume conservative, review release-risk changes manually, and prefer
 small dependency PRs that can be reverted or skipped without blocking launch.
+New runtime dependencies and material version changes must also satisfy
+[the dependency supply-chain policy](docs/dependency-supply-chain-policy.md).
 
 ## Releases
 

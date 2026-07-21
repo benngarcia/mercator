@@ -13,7 +13,11 @@ import (
 const maxProviderResponseBodyBytes = 4 * 1024
 
 func (c *client) createFailure(request createRequest, result httpResult) *adapter.ProviderFailure {
-	body, truncated := c.sanitizedResponseBody(request, result)
+	return c.operationFailure(result, requestSecrets(c.apiKey, request))
+}
+
+func (c *client) operationFailure(result httpResult, secrets []string) *adapter.ProviderFailure {
+	body, truncated := sanitizedResponseBody(result, secrets)
 	failure := &adapter.ProviderFailure{
 		Kind:              adapter.ProviderFailureInternal,
 		Status:            result.status,
@@ -47,8 +51,21 @@ func (c *client) createFailure(request createRequest, result httpResult) *adapte
 	return failure
 }
 
+func (c *client) readFailure(result httpResult) *adapter.ProviderFailure {
+	failure := c.operationFailure(result, []string{c.apiKey})
+	failure.SideEffect = adapter.SideEffectNone
+	return failure
+}
+
+func (c *client) invalidReadResponse(result httpResult) *adapter.ProviderFailure {
+	failure := c.readFailure(result)
+	failure.Kind = adapter.ProviderFailureInternal
+	failure.Retryable = false
+	return failure
+}
+
 func (c *client) invalidCreateResponse(request createRequest, result httpResult) *adapter.ProviderFailure {
-	body, truncated := c.sanitizedResponseBody(request, result)
+	body, truncated := sanitizedResponseBody(result, requestSecrets(c.apiKey, request))
 	return &adapter.ProviderFailure{
 		Kind:              adapter.ProviderFailureInternal,
 		Status:            result.status,
@@ -61,8 +78,7 @@ func (c *client) invalidCreateResponse(request createRequest, result httpResult)
 	}
 }
 
-func (c *client) sanitizedResponseBody(request createRequest, result httpResult) (string, bool) {
-	secrets := requestSecrets(c.apiKey, request)
+func sanitizedResponseBody(result httpResult, secrets []string) (string, bool) {
 	var value any
 	var sanitized string
 	if json.Unmarshal(result.body, &value) == nil {

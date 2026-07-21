@@ -312,6 +312,67 @@ func TestBrokerLaunchUnknownConnectionErrors(t *testing.T) {
 	}
 }
 
+func TestBrokerReportsTerminateFailureWithRunCorrelation(t *testing.T) {
+	failure := &adapter.ProviderFailure{
+		Kind:         adapter.ProviderFailureAuthentication,
+		Status:       401,
+		ProviderCode: "UNAUTHORIZED",
+		SideEffect:   adapter.SideEffectNone,
+	}
+	factory := NewFactory()
+	factory.Register(adapter.Manifest{Type: "shadeform"}, func(map[string]string, string) (adapter.Provider, error) {
+		return terminateFailureAdapter{failure: failure}, nil
+	})
+	recorder := &failureDiagnosticRecorder{}
+	b := NewBroker(fakeConns{recs: []connection.Record{{
+		ID:          "conn_shadeform",
+		AdapterType: "shadeform",
+	}}}, factory, nilResolver{}, WithFailureReporter(recorder))
+
+	_, err := b.Terminate(t.Context(), adapter.TerminateRequest{
+		ProviderOperationContext: adapter.ProviderOperationContext{
+			WorkspaceID:     "ws_1",
+			RunID:           "run_1",
+			AttemptID:       "att_1",
+			ConnectionID:    "conn_shadeform",
+			OfferSnapshotID: "off_1",
+			OfferNativeRef:  "lambdalabs/us-west/rtx6000ada",
+		},
+		OperationKey: "terminate_att_1",
+		LaunchKey:    "launch_att_1",
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("terminate error = %v, want provider failure", err)
+	}
+	if len(recorder.diagnostics) != 1 {
+		t.Fatalf("reported diagnostics = %d, want 1", len(recorder.diagnostics))
+	}
+	got := recorder.diagnostics[0]
+	if got.Operation != "terminate" || got.RunID != "run_1" || got.AttemptID != "att_1" || got.AdapterType != "shadeform" {
+		t.Fatalf("terminate diagnostic = %+v", got)
+	}
+	if got.OfferSnapshotID != "off_1" || got.OfferNativeRef != "lambdalabs/us-west/rtx6000ada" {
+		t.Fatalf("terminate offer correlation = %+v", got)
+	}
+}
+
+type terminateFailureAdapter struct {
+	adapter.Provider
+	failure error
+}
+
+func (a terminateFailureAdapter) Terminate(context.Context, adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	return adapter.TerminateReceipt{}, a.failure
+}
+
+type failureDiagnosticRecorder struct {
+	diagnostics []adapter.ProviderFailureDiagnostic
+}
+
+func (r *failureDiagnosticRecorder) CaptureProviderFailure(_ context.Context, diagnostic adapter.ProviderFailureDiagnostic) {
+	r.diagnostics = append(r.diagnostics, diagnostic)
+}
+
 // ownedAdapter is a stub adapter whose ListOwned returns one object tagged with its id.
 type ownedAdapter struct {
 	adapter.Provider
