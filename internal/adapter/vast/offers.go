@@ -25,14 +25,14 @@ const secureVerification = "verified"
 // (datacenter=false or unverified machines) is never queried.
 func secureOfferQuery(gpuNames []string, gpuCount, diskGB, limit int) map[string]any {
 	q := map[string]any{
-		"verification": map[string]any{"eq": secureVerification},
-		"datacenter":   map[string]any{"eq": true},
-		"external":     map[string]any{"eq": false},
-		"rentable":     map[string]any{"eq": true},
-		"rented":       map[string]any{"eq": false},
-		"num_gpus":     map[string]any{"eq": gpuCount},
-		"disk_space":   map[string]any{"gte": float64(diskGB)},
-		"type":         "ondemand",
+		"verified":   map[string]any{"eq": true},
+		"datacenter": map[string]any{"eq": true},
+		"external":   map[string]any{"eq": false},
+		"rentable":   map[string]any{"eq": true},
+		"rented":     map[string]any{"eq": false},
+		"num_gpus":   map[string]any{"eq": gpuCount},
+		"disk_space": map[string]any{"gte": float64(diskGB)},
+		"type":       "ondemand",
 		// allocated_storage sizes the disk the offer is priced for, so
 		// dph_total already includes the disk we will request at launch.
 		"allocated_storage": float64(diskGB),
@@ -43,20 +43,6 @@ func secureOfferQuery(gpuNames []string, gpuCount, diskGB, limit int) map[string
 		q["gpu_name"] = map[string]any{"in": gpuNames}
 	}
 	return q
-}
-
-// secureAskQuery re-resolves one ask id under the same secure-tier filters.
-// Used by Launch to validate a selected offer before renting it: a stale or
-// forged native ref pointing at community capacity simply does not resolve.
-func secureAskQuery(askID int64) map[string]any {
-	return map[string]any{
-		"id":           map[string]any{"eq": askID},
-		"verification": map[string]any{"eq": secureVerification},
-		"datacenter":   map[string]any{"eq": true},
-		"external":     map[string]any{"eq": false},
-		"type":         "ondemand",
-		"limit":        1,
-	}
 }
 
 func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.OfferSnapshot {

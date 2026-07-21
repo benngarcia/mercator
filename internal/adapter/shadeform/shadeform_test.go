@@ -117,6 +117,38 @@ func TestLaunchCreatesInstanceWithDockerConfigTagsAndAutoDelete(t *testing.T) {
 	}
 }
 
+func TestLaunchEmitsEachEnvironmentNameOnce(t *testing.T) {
+	fake := newFakeShadeform()
+	fake.types = []instanceType{vmType()}
+	a := newTestAdapter(t, fake, nil)
+	request := launchRequest()
+	staleRunID := "stale_run"
+	staleWorkspaceID := "stale_workspace"
+	request.Environment = append(request.Environment,
+		adapter.EnvironmentBinding{Name: "MERCATOR_RUN_ID", Value: &staleRunID},
+		adapter.EnvironmentBinding{Name: "MERCATOR_WORKSPACE_ID", Value: &staleWorkspaceID},
+	)
+
+	_, err := a.Launch(context.Background(), request)
+
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	envs := fake.creates[0].LaunchConfiguration.DockerConfiguration.Envs
+	counts := map[string]int{}
+	values := map[string]string{}
+	for _, env := range envs {
+		counts[env.Name]++
+		values[env.Name] = env.Value
+	}
+	if counts["MERCATOR_RUN_ID"] != 1 || values["MERCATOR_RUN_ID"] != request.RunID {
+		t.Fatalf("run identity environment = %v, values = %v", counts, values)
+	}
+	if counts["MERCATOR_WORKSPACE_ID"] != 1 || values["MERCATOR_WORKSPACE_ID"] != request.WorkspaceID {
+		t.Fatalf("workspace identity environment = %v, values = %v", counts, values)
+	}
+}
+
 func TestLaunchDerivesAutoDeleteFromRunTimeout(t *testing.T) {
 	fake := newFakeShadeform()
 	fake.types = []instanceType{vmType()}

@@ -94,7 +94,7 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 	} else if found {
 		return a.receipt(req, existing, true), nil
 	}
-	askID, err := a.secureAskID(ctx, req.SelectedOfferNativeRef)
+	askID, err := a.secureAskID(ctx, req)
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
 	}
@@ -176,12 +176,14 @@ func (a *Adapter) receipt(req adapter.LaunchRequest, i instance, duplicate bool)
 // offer filtering) means a stale offer or misconfigured caller cannot leak a
 // workload onto community/peer hardware: a non-secure ask id simply does not
 // resolve, and the launch is refused before any money moves.
-func (a *Adapter) secureAskID(ctx context.Context, nativeRef string) (int64, error) {
-	askID, err := strconv.ParseInt(strings.TrimSpace(nativeRef), 10, 64)
+func (a *Adapter) secureAskID(ctx context.Context, req adapter.LaunchRequest) (int64, error) {
+	askID, err := strconv.ParseInt(strings.TrimSpace(req.SelectedOfferNativeRef), 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("vast: selected offer native ref %q is not an ask id", nativeRef)
+		return 0, fmt.Errorf("vast: selected offer native ref %q is not an ask id", req.SelectedOfferNativeRef)
 	}
-	offers, err := a.api.searchOffers(ctx, secureAskQuery(askID))
+	gpuCount := requestedGPUCount(req.Resources)
+	diskGB := requestedDiskGB(req.Resources, a.diskGB)
+	offers, err := a.api.searchOffers(ctx, secureOfferQuery(a.gpuNames, gpuCount, diskGB, a.offerLimit))
 	if err != nil {
 		return 0, err
 	}
