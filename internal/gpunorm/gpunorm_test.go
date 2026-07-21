@@ -27,6 +27,19 @@ func TestCanonicalConsolidatesProviderSpellings(t *testing.T) {
 		{"NVIDIA", "NVIDIA GeForce RTX 4090", "nvidia-rtx-4090"},
 		{"NVIDIA", "NVIDIA H100 80GB HBM3", "nvidia-h100"},
 		{"NVIDIA", "NVIDIA A100-SXM4-80GB", "nvidia-a100"},
+		// Separator-free provider spellings collapse onto the dashed id.
+		{"NVIDIA", "RTX5090", "nvidia-rtx-5090"},
+		{"NVIDIA", "RTX4090", "nvidia-rtx-4090"},
+		// Workstation 6000-class cards: Ada and Blackwell generations keep
+		// distinct ids, while SKU-edition suffixes collapse within each.
+		{"NVIDIA", "RTX 6000 Ada", "nvidia-rtx-6000-ada"},
+		{"NVIDIA", "RTX6000Ada", "nvidia-rtx-6000-ada"},
+		{"NVIDIA", "RTX 6000 Ada Generation", "nvidia-rtx-6000-ada"},
+		{"NVIDIA", "RTX PRO 6000", "nvidia-rtx-pro-6000"},
+		{"NVIDIA", "RTXPRO6000", "nvidia-rtx-pro-6000"},
+		{"NVIDIA", "RTX PRO 6000 Blackwell", "nvidia-rtx-pro-6000"},
+		{"NVIDIA", "NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "nvidia-rtx-pro-6000"},
+		{"NVIDIA", "RTX PRO 6000 Blackwell Server Edition", "nvidia-rtx-pro-6000"},
 	}
 	for _, c := range cases {
 		if got := Canonical(c.vendor, c.model); got != c.want {
@@ -37,11 +50,11 @@ func TestCanonicalConsolidatesProviderSpellings(t *testing.T) {
 
 func TestCanonicalUnknownGPUFallsBackToDeterministicSlug(t *testing.T) {
 	// An unseeded GPU still resolves to a stable, matchable id, never an error.
-	got := Canonical("NVIDIA", "RTX 6000 Ada Generation")
-	if got != "nvidia-rtx-6000-ada-generation" {
+	got := Canonical("NVIDIA", "RTX 9000 Rubin")
+	if got != "nvidia-rtx-9000-rubin" {
 		t.Fatalf("unknown GPU canonical = %q", got)
 	}
-	if Canonical("NVIDIA", "RTX 6000 Ada Generation") != got {
+	if Canonical("NVIDIA", "RTX 9000 Rubin") != got {
 		t.Fatal("Canonical must be deterministic")
 	}
 }

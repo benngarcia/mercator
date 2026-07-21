@@ -180,6 +180,50 @@ func TestSchedulerMatchesAcceleratorByCanonicalModelAndNormalizedVendor(t *testi
 	}
 }
 
+func TestSchedulerNormalizesRequirementModelSpellings(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+
+	gpu := schedulerOffer("off_gpu", now, 0.00001, 1)
+	gpu.Resources.Accelerators = []domain.AcceleratorInventory{{
+		Vendor: "NVIDIA", Model: "NVIDIA GeForce RTX 5090", CanonicalModel: "nvidia-rtx-5090", Count: 1, MemoryBytes: 32 << 30,
+	}}
+	gpu.Capabilities.Resources.GPUVendors = []string{"nvidia"}
+
+	// A requirement spelled any way gpunorm can resolve — marketing name,
+	// separator-free id, or canonical id — must match the same inventory.
+	for _, spelling := range []string{"nvidia-rtx-5090", "nvidia-rtx5090", "RTX 5090"} {
+		rev := schedulerRevision()
+		rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{
+			Vendor: "nvidia", ModelAnyOf: []string{spelling}, Count: 1,
+		}}
+		decision, err := New().Evaluate(context.Background(), SchedulingInput{
+			RunID: "run_1", Workload: rev, Offers: []domain.OfferSnapshot{gpu}, ModelVersion: "latency-v1", EvaluatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("evaluate(%q): %v", spelling, err)
+		}
+		if decision.SelectedOfferSnapshotID != "off_gpu" {
+			t.Fatalf("requirement spelling %q must match canonical inventory, got %q", spelling, decision.SelectedOfferSnapshotID)
+		}
+	}
+
+	// Normalization must not loosen matching: a nearby but different model
+	// still rejects.
+	rev := schedulerRevision()
+	rev.Spec.Resources.Accelerators = []domain.AcceleratorRequirement{{
+		Vendor: "nvidia", ModelAnyOf: []string{"RTX 5080"}, Count: 1,
+	}}
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID: "run_2", Workload: rev, Offers: []domain.OfferSnapshot{gpu}, ModelVersion: "latency-v1", EvaluatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != "" {
+		t.Fatalf("a different model spelling must not match, got %q", decision.SelectedOfferSnapshotID)
+	}
+}
+
 func TestSchedulerAllowsUnknownNetworkWhenPolicyAllowsIt(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	rev := schedulerRevision()

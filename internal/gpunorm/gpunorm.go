@@ -63,10 +63,25 @@ var modelAliases = map[string]string{
 	"t4":   "t4",
 	"v100": "v100", "v100-sxm2": "v100",
 	"a10": "a10", "a10g": "a10g",
-	"4090": "rtx-4090", "rtx-4090": "rtx-4090",
-	"3090": "rtx-3090", "rtx-3090": "rtx-3090",
-	"5090": "rtx-5090", "rtx-5090": "rtx-5090",
-	"5080": "rtx-5080", "rtx-5080": "rtx-5080",
+	"4090": "rtx-4090", "rtx-4090": "rtx-4090", "rtx4090": "rtx-4090",
+	"3090": "rtx-3090", "rtx-3090": "rtx-3090", "rtx3090": "rtx-3090",
+	"5090": "rtx-5090", "rtx-5090": "rtx-5090", "rtx5090": "rtx-5090",
+	"5080": "rtx-5080", "rtx-5080": "rtx-5080", "rtx5080": "rtx-5080",
+	// Workstation 6000-class cards (Ada and Blackwell generations). Providers
+	// spell these with and without separators and with SKU-edition suffixes;
+	// every spelling of one marketing model lands on one id.
+	"rtx-6000-ada": "rtx-6000-ada", "6000-ada": "rtx-6000-ada",
+	"rtx6000ada": "rtx-6000-ada", "rtx-6000ada": "rtx-6000-ada",
+	"rtx-6000-ada-generation": "rtx-6000-ada",
+	"rtx-pro-6000":            "rtx-pro-6000",
+	"pro-6000":                "rtx-pro-6000",
+	"rtxpro6000":              "rtx-pro-6000",
+	"pro6000":                 "rtx-pro-6000",
+	"rtx-pro-6000-blackwell":  "rtx-pro-6000",
+	"rtx-pro-6000-blackwell-workstation-edition":       "rtx-pro-6000",
+	"rtx-pro-6000-blackwell-server-edition":            "rtx-pro-6000",
+	"rtx-pro-6000-blackwell-max-q-workstation-edition": "rtx-pro-6000",
+	"rtx-pro-6000-max-q":                               "rtx-pro-6000",
 }
 
 // canonicalModelPart resolves the canonical model token for (vendor, model).
