@@ -28,6 +28,11 @@ also require an explicit `workspace_id` query parameter or request field.
 | Connections and offers | `GET /v1/adapters`, `GET /v1/connections`, `POST /v1/connections`, `POST /v1/connections/{id}/authorize`, `DELETE /v1/connections/{id}`, `GET /v1/offers` | Discover registered adapters' onboarding manifests (display metadata, config fields, setup steps), create/verify/delete provider connections, and inspect the offers visible to the placement engine for a workspace. |
 | Sinks | `GET /v1/sinks/{sink_id}`, `POST /v1/sinks/{sink_id}/deliver`, `POST /v1/sinks/{sink_id}/replay` | Read sink cursor state, deliver pending events, and replay events after a global position. |
 
+`GET /v1/offers` returns Broker-assigned snapshot IDs derived from the
+Connection and the adapter-local capacity identity. The IDs are stable and
+unique within a workspace, including when two Connections expose the same
+provider catalog item.
+
 ## First Integrator Path
 
 For the smallest HTTP integration, start with the Docker adapter and use the

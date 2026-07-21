@@ -120,6 +120,11 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		for i := range result.items {
 			result.items[i].ConnectionID = result.connection.ID
 			result.items[i].AdapterType = result.connection.AdapterType
+			id, err := offerSnapshotID(result.connection.ID, result.items[i].ID)
+			if err != nil {
+				return OfferAggregation{}, err
+			}
+			result.items[i].ID = id
 		}
 		aggregation.Offers = append(aggregation.Offers, result.items...)
 	}
@@ -131,6 +136,17 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 	})
 	sortConnectionErrors(aggregation.Failures)
 	return aggregation, nil
+}
+
+func offerSnapshotID(connectionID, adapterOfferID string) (string, error) {
+	hash, err := domain.CanonicalHash(struct {
+		ConnectionID   string
+		AdapterOfferID string
+	}{connectionID, adapterOfferID})
+	if err != nil {
+		return "", fmt.Errorf("broker: derive offer snapshot id: %w", err)
+	}
+	return "off_" + hash[len("sha256:"):], nil
 }
 
 func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {

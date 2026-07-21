@@ -53,8 +53,8 @@ func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) 
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
 			return CreateRun409JSONResponse(apiError("IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")), nil
 		}
-		if errors.Is(err, orchestrator.ErrAdvanceFailed) {
-			return CreateRun502JSONResponse(apiError("ADVANCE_RUN_FAILED", "Run advancement failed; inspect public run events for the stable failure code.")), nil
+		if errors.Is(err, orchestrator.ErrRunRequestPersistence) || errors.Is(err, orchestrator.ErrAcceptedRunUnavailable) {
+			return CreateRun500JSONResponse(internalAPIError(http.StatusInternalServerError, "CREATE_RUN_FAILED", err)), nil
 		}
 		return CreateRun400JSONResponse(apiError(errorCode(err, "CREATE_RUN_FAILED"), errorMessage(err))), nil
 	}
