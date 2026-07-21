@@ -9,8 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/connection"
@@ -87,17 +85,6 @@ func (s *Server) requiredWorkspace(ctx context.Context, queryWorkspaceID string)
 	return s.resolveWorkspace(ctx, "", queryWorkspaceID)
 }
 
-// newRunID mints a server-generated run identifier from a uuidv7 (time-ordered,
-// collision-resistant). Used when a caller omits run_id on create.
-func newRunID() string {
-	id, err := uuid.NewV7()
-	if err != nil {
-		// NewV7 only errors if the system RNG fails; fall back to a v4.
-		id = uuid.New()
-	}
-	return "run_" + id.String()
-}
-
 // resolveImageFn adapts the server's OCI resolver into the orchestrator's
 // ResolveImage hook. It returns nil when no resolver is configured, in which
 // case images are stored/launched as submitted (backward-compatible).
@@ -163,7 +150,6 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	// exercisable without a pre-pinned image.
 	handler := New(Deps{
 		Orchestrator: orchestrator.New(log, sched, ad),
-		Scheduler:    sched,
 		Offers:       singleProviderOffers{provider: ad},
 		Workloads:    workload.New(log),
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),

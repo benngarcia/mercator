@@ -11,7 +11,6 @@ import (
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
-	"github.com/benngarcia/mercator/internal/scheduler"
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
 	"github.com/benngarcia/mercator/internal/workload"
 )
@@ -40,11 +39,11 @@ func (s singleProviderOffers) AggregateOffers(ctx context.Context, request adapt
 	return broker.OfferAggregation{Offers: offers, Failures: broker.ConnectionErrors{}}, err
 }
 
-// Deps are the services the server routes to. Orchestrator, Scheduler, and
-// Offers are required; a nil optional service disables its endpoints.
+// Deps are the services the server routes to. Orchestrator and Offers are
+// required; a nil optional service disables its endpoints. Placement preview
+// and create-run intake both go through Orchestrator.
 type Deps struct {
 	Orchestrator *orchestrator.Orchestrator
-	Scheduler    scheduler.Scheduler
 	Offers       OfferAggregator
 	Workloads    *workload.Service
 	Sinks        *sinkspkg.Manager
@@ -55,7 +54,6 @@ type Deps struct {
 type Server struct {
 	mux          *http.ServeMux
 	orch         *orchestrator.Orchestrator
-	scheduler    scheduler.Scheduler
 	offers       OfferAggregator
 	workloads    *workload.Service
 	sinks        *sinkspkg.Manager
@@ -125,7 +123,6 @@ func New(deps Deps, options ...Option) http.Handler {
 	s := &Server{
 		mux:       http.NewServeMux(),
 		orch:      deps.Orchestrator,
-		scheduler: deps.Scheduler,
 		offers:    deps.Offers,
 		workloads: deps.Workloads,
 		sinks:     deps.Sinks,

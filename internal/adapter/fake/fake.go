@@ -35,6 +35,8 @@ type Adapter struct {
 	terminateCount int
 	// verifyErr is the error returned by Verify. Defaults to nil (success).
 	verifyErr error
+	// listOffersErr, when set, is returned by ListOffers instead of offers.
+	listOffersErr error
 }
 
 type operationRecord struct {
@@ -84,6 +86,14 @@ func WithVerifyError(err error) Option {
 	}
 }
 
+// WithListOffersError configures ListOffers to fail. Use to exercise fail-closed
+// placement preview and decide paths.
+func WithListOffersError(err error) Option {
+	return func(a *Adapter) {
+		a.listOffersErr = err
+	}
+}
+
 func New(options ...Option) *Adapter {
 	a := &Adapter{
 		now:           time.Now,
@@ -101,6 +111,9 @@ func New(options ...Option) *Adapter {
 func (a *Adapter) ListOffers(_ context.Context, _ adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.listOffersErr != nil {
+		return nil, a.listOffersErr
+	}
 	return append([]domain.OfferSnapshot(nil), a.offers...), nil
 }
 

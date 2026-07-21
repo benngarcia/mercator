@@ -183,13 +183,15 @@ curl -fsS "$MERCATOR_API_URL/v1/runs/$RUN_ID/decision?workspace_id=$MERCATOR_WOR
 ```
 
 ```json
-{ "selected": "offer_docker_loopback", "candidate_count": 1 }
+{ "selected": "off_6db3971c410b35f41709569981b515d60e215fe741a45b807130b480a66edafe", "candidate_count": 1 }
 ```
 
 On a single Docker host there is one offer, so it wins uncontested — but the
 selected offer, every rejected candidate, and the reason codes are recorded for
 each run, and that record fills in as more offers appear (a second host, a
-RunPod GPU). Open the console at
+RunPod GPU). The broker derives each snapshot ID from both the Connection and
+the adapter-local capacity identity, so equivalent catalog items exposed by two
+Connections remain distinct placement candidates. Open the console at
 [`http://127.0.0.1:8080/?workspace_id=ws_1`](http://127.0.0.1:8080/?workspace_id=ws_1)
 and paste `dev-token` when prompted.
 

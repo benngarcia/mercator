@@ -2,12 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
-	"time"
 
-	"github.com/benngarcia/mercator/internal/adapter"
-	"github.com/benngarcia/mercator/internal/domain"
-	"github.com/benngarcia/mercator/internal/scheduler"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
 func (s *Server) PreviewPlacement(ctx context.Context, request PreviewPlacementRequestObject) (PreviewPlacementResponseObject, error) {
@@ -23,28 +21,16 @@ func (s *Server) PreviewPlacement(ctx context.Context, request PreviewPlacementR
 		}
 		return PreviewPlacement400JSONResponse(workspaceErr.Response), nil
 	}
-	if violations := domain.ValidateWorkloadRevision(body.Workload); len(violations) > 0 {
-		return PreviewPlacement400JSONResponse(apiErrorWithDetails(violations[0].Code, violations[0].Message, violations)), nil
-	}
-	aggregation, err := s.offers.AggregateOffers(ctx, adapter.OfferRequest{
-		WorkspaceID: workspaceID,
-		Resources:   body.Workload.Spec.Resources,
-	})
+	decision, err := s.orch.PreviewPlacement(ctx, workspaceID, body.RunId, body.Workload)
 	if err != nil {
-		return PreviewPlacement502JSONResponse(internalAPIError(http.StatusBadGateway, "OFFER_QUERY_FAILED", err)), nil
-	}
-	if err := aggregation.Failures.OrNil(); err != nil {
-		return PreviewPlacement502JSONResponse(internalAPIError(http.StatusBadGateway, "OFFER_QUERY_FAILED", err)), nil
-	}
-	decision, err := s.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
-		RunID:        body.RunId,
-		Workload:     body.Workload,
-		Offers:       aggregation.Offers,
-		ModelVersion: "latency-v1",
-		EvaluatedAt:  time.Now().UTC(),
-	})
-	if err != nil {
-		return PreviewPlacement400JSONResponse(apiError("PLACEMENT_FAILED", err.Error())), nil
+		if errors.Is(err, orchestrator.ErrOfferQuery) {
+			return PreviewPlacement502JSONResponse(internalAPIError(http.StatusBadGateway, "OFFER_QUERY_FAILED", err)), nil
+		}
+		var verr *orchestrator.ValidationError
+		if errors.As(err, &verr) && len(verr.Violations) > 0 {
+			return PreviewPlacement400JSONResponse(apiErrorWithDetails(verr.Violations[0].Code, verr.Violations[0].Message, verr.Violations)), nil
+		}
+		return PreviewPlacement400JSONResponse(apiError(errorCode(err, "PLACEMENT_FAILED"), errorMessage(err))), nil
 	}
 	return PreviewPlacement200JSONResponse{Decision: decision}, nil
 }

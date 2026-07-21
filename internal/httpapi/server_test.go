@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -92,6 +93,141 @@ func TestCreateRunDrivesFakeAdapterFastPath(t *testing.T) {
 	}
 	if !hasEventType(listed.Events, orchestrator.EventLaunchIntentRecorded) || !hasEventType(listed.Events, orchestrator.EventRunClosed) {
 		t.Fatalf("create run should drive fake fast path through closure, got %+v", listed.Events)
+	}
+}
+
+func TestCreateRunReturnsAcceptedTerminalRunAfterLaunchFailure(t *testing.T) {
+	provider := newLaunchErrorAdapter(errors.New("provider rejected launch"))
+	handler := newHTTPTestServerForAdapter(t, provider)
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_launch_failed", Workload: httpRevision()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_launch_failed")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		getReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_launch_failed?workspace_id=ws_1", nil)
+		getRec := httptest.NewRecorder()
+		handler.ServeHTTP(getRec, getReq)
+		t.Fatalf("expected 202, got %d body=%s; follow-up GET got %d body=%s", rec.Code, rec.Body.String(), getRec.Code, getRec.Body.String())
+	}
+	var accepted RunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if accepted.RunId != "run_launch_failed" || accepted.Run.ID != accepted.RunId {
+		t.Fatalf("unexpected accepted run: %+v", accepted)
+	}
+	if !accepted.Run.Closed || accepted.Run.Outcome != domain.RunOutcomeFailed {
+		t.Fatalf("expected terminal failed run, got %+v", accepted.Run)
+	}
+
+	replayReq := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	replayReq.Header.Set("Idempotency-Key", "idem_launch_failed")
+	replayRec := httptest.NewRecorder()
+	handler.ServeHTTP(replayRec, replayReq)
+	if replayRec.Code != http.StatusAccepted {
+		t.Fatalf("replay expected 202, got %d body=%s", replayRec.Code, replayRec.Body.String())
+	}
+	var replayed RunResponse
+	if err := json.Unmarshal(replayRec.Body.Bytes(), &replayed); err != nil {
+		t.Fatalf("decode replay: %v", err)
+	}
+	if !replayed.Duplicate || replayed.RunId != accepted.RunId {
+		t.Fatalf("unexpected replay response: %+v", replayed)
+	}
+	if provider.launchCalls != 1 {
+		t.Fatalf("idempotent replay repeated provider launch: calls=%d", provider.launchCalls)
+	}
+}
+
+func TestCreateRunReturnsAcceptedOpenRunAfterIndeterminateLaunch(t *testing.T) {
+	provider := newLaunchErrorAdapter(adapter.ErrLaunchIndeterminate)
+	handler := newHTTPTestServerForAdapter(t, provider)
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_launch_indeterminate", Workload: httpRevision()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_launch_indeterminate")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var accepted RunResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if accepted.RunId != "run_launch_indeterminate" || accepted.Run.ID != accepted.RunId {
+		t.Fatalf("unexpected accepted run: %+v", accepted)
+	}
+	if accepted.Run.Closed || accepted.Run.Phase != "running" {
+		t.Fatalf("expected open reconciling run, got %+v", accepted.Run)
+	}
+	eventsReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_launch_indeterminate/events?workspace_id=ws_1", nil)
+	eventsRec := httptest.NewRecorder()
+	handler.ServeHTTP(eventsRec, eventsReq)
+	if eventsRec.Code != http.StatusOK {
+		t.Fatalf("events expected 200, got %d body=%s", eventsRec.Code, eventsRec.Body.String())
+	}
+	var events EventListResponse
+	if err := json.Unmarshal(eventsRec.Body.Bytes(), &events); err != nil {
+		t.Fatalf("decode events: %v", err)
+	}
+	if !hasEventType(events.Events, orchestrator.EventLaunchIndeterminate) {
+		t.Fatalf("accepted run lost reconciliation marker: %+v", events.Events)
+	}
+}
+
+func TestCreateRunRejectsInvalidWorkloadBeforeAcceptance(t *testing.T) {
+	provider := newLaunchErrorAdapter(errors.New("provider must not be called"))
+	handler := newHTTPTestServerForAdapter(t, provider)
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_invalid", Workload: domain.WorkloadRevision{WorkspaceID: "ws_1"}})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_invalid")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/runs/run_invalid?workspace_id=ws_1", nil)
+	getRec := httptest.NewRecorder()
+	handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("invalid run was durably accepted: GET got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	if provider.launchCalls != 0 {
+		t.Fatalf("pre-acceptance validation reached provider launch: calls=%d", provider.launchCalls)
+	}
+}
+
+func TestCreateRunReturnsInternalErrorWhenInitialPersistenceFails(t *testing.T) {
+	ctx := context.Background()
+	log, err := eventlog.OpenSQLite(ctx, "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", time.Now().UTC())}))
+	handler := New(Deps{
+		Orchestrator: orchestrator.New(log, scheduler.New(), provider),
+		Offers:       singleProviderOffers{provider: provider},
+		Workloads:    workload.New(log),
+	})
+	if err := log.Close(); err != nil {
+		t.Fatalf("close event log: %v", err)
+	}
+	body := mustMarshal(t, CreateRunRequest{RunId: "run_persistence_failed", Workload: httpRevision()})
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_persistence_failed")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -480,7 +616,7 @@ func TestCreateRunEnvOverridesStoredWorkloadRevision(t *testing.T) {
 	)}
 	sched := scheduler.New()
 	orch := orchestrator.New(log, sched, ad)
-	handler := New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: ociresolver.NewStaticResolver(nil)})
+	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: ociresolver.NewStaticResolver(nil)})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_env", Name: "env"})))
 	req.Header.Set("Idempotency-Key", "idem_workload_env")
@@ -581,7 +717,25 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 			Platform: "linux/amd64",
 		},
 	})
-	return New(Deps{Orchestrator: orch, Scheduler: sched, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver}, options...)
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver}, options...)
+}
+
+func newHTTPTestServerForAdapter(t *testing.T, provider adapter.Provider) http.Handler {
+	t.Helper()
+	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := log.Close(); err != nil {
+			t.Fatalf("close event log: %v", err)
+		}
+	})
+	return New(Deps{
+		Orchestrator: orchestrator.New(log, scheduler.New(), provider),
+		Offers:       singleProviderOffers{provider: provider},
+		Workloads:    workload.New(log),
+	})
 }
 
 func httpRevision() domain.WorkloadRevision {
@@ -655,4 +809,22 @@ func hasEventType(events []eventlog.CloudEvent, eventType string) bool {
 		}
 	}
 	return false
+}
+
+type launchErrorAdapter struct {
+	*fake.Adapter
+	err         error
+	launchCalls int
+}
+
+func newLaunchErrorAdapter(err error) *launchErrorAdapter {
+	return &launchErrorAdapter{
+		Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{httpOffer("off_1", time.Now().UTC())})),
+		err:     err,
+	}
+}
+
+func (a *launchErrorAdapter) Launch(context.Context, adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	a.launchCalls++
+	return adapter.LaunchReceipt{}, a.err
 }

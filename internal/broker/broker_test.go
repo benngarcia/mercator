@@ -66,7 +66,7 @@ func TestBrokerAggregateOffersReturnsPartialResultsAndConnectionErrors(t *testin
 	if err != nil {
 		t.Fatalf("aggregate offers: %v", err)
 	}
-	if len(aggregation.Offers) != 1 || aggregation.Offers[0].ID != "offer_good" {
+	if len(aggregation.Offers) != 1 || aggregation.Offers[0].ConnectionID != "conn_good" {
 		t.Fatalf("offers = %#v, want the successful connection's offer", aggregation.Offers)
 	}
 	if len(aggregation.Failures) != 1 || aggregation.Failures[0].ConnectionID != "conn_bad" || !errors.Is(aggregation.Failures[0], providerErr) {
@@ -148,9 +148,50 @@ func TestBrokerListOffersSortsConcurrentResultsDeterministically(t *testing.T) {
 	for i, offer := range aggregation.Offers {
 		got[i] = offer.ConnectionID + "/" + offer.ID
 	}
-	want := []string{"conn_a/offer_m", "conn_b/offer_a", "conn_b/offer_z"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("offers = %v, want %v", got, want)
+	again, err := broker.AggregateOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list offers again: %v", err)
+	}
+	againIDs := make([]string, len(again.Offers))
+	for i, offer := range again.Offers {
+		againIDs[i] = offer.ConnectionID + "/" + offer.ID
+	}
+	if !slices.Equal(got, againIDs) {
+		t.Fatalf("concurrent offer order changed from %v to %v", got, againIDs)
+	}
+	wantConnections := []string{"conn_a", "conn_b", "conn_b"}
+	for i, offer := range aggregation.Offers {
+		if offer.ConnectionID != wantConnections[i] {
+			t.Fatalf("offers are not sorted by connection: %v", got)
+		}
+	}
+}
+
+func TestBrokerListOffersScopesOfferIdentityToConnection(t *testing.T) {
+	sharedOffer := func(context.Context) ([]domain.OfferSnapshot, error) {
+		return []domain.OfferSnapshot{{ID: "off_shared"}}, nil
+	}
+	broker := fanoutBroker(t, map[string]adapter.Provider{
+		"a": fanoutAdapter{listOffers: sharedOffer},
+		"b": fanoutAdapter{listOffers: sharedOffer},
+	})
+
+	first, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	second, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list offers again: %v", err)
+	}
+
+	if first[0].ID == first[1].ID {
+		t.Fatalf("twin connections returned colliding offer snapshot id %q", first[0].ID)
+	}
+	for i := range first {
+		if first[i].ID != second[i].ID {
+			t.Fatalf("offer snapshot id for %s changed from %q to %q", first[i].ConnectionID, first[i].ID, second[i].ID)
+		}
 	}
 }
 

@@ -10,8 +10,11 @@ import (
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
@@ -50,14 +53,15 @@ func TestListOffersExposesPartialResultsAndConnectionFailures(t *testing.T) {
 	}
 }
 
-func TestPreviewPlacementRejectsPartialOfferSet(t *testing.T) {
-	failure := broker.ConnectionError{ConnectionID: "conn_bad", AdapterType: "runpod", Err: errors.New("provider unavailable")}
-	handler := New(Deps{
-		Scheduler: scheduler.New(),
-		Offers: stubOfferAggregator{aggregation: broker.OfferAggregation{
-			Failures: broker.ConnectionErrors{failure},
-		}},
-	})
+func TestPreviewPlacementRejectsOfferQueryFailure(t *testing.T) {
+	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	ad := fake.New(fake.WithListOffersError(errors.New("provider unavailable")))
+	orch := orchestrator.New(log, scheduler.New(), ad)
+	handler := New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}})
 	body := mustMarshal(t, PlacementPreviewRequest{RunId: "run_1", WorkspaceId: "ws_1", Workload: httpRevision()})
 	req := httptest.NewRequest(http.MethodPost, "/v1/placements:preview", bytes.NewReader(body))
 	rec := httptest.NewRecorder()

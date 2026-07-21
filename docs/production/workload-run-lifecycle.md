@@ -72,6 +72,14 @@ equals `.run.id`; `metadata` is reserved for future per-response metadata. Read
 the run id from `.run_id` or `.run.id`. `duplicate` is `true` (and otherwise
 omitted) when the create was a safe idempotent replay.
 
+The durable `compute.run.requested.v1` event is the acceptance point. Once that
+event is recorded, create returns `202` with the canonical Run identifier and
+latest Run record even when eager advancement encounters a provider failure. A
+definitive launch failure is returned as a closed failed Run; an indeterminate
+launch is returned as an open Run that reconciliation will continue. Validation,
+authorization, idempotency, image resolution, and initial persistence failures
+occur before acceptance and retain their explicit error responses.
+
 You can omit `--workspace-id` on every `run` subcommand by exporting
 `MERCATOR_WORKSPACE_ID`:
 
