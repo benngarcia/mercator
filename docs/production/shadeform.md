@@ -129,12 +129,13 @@ curl -fsS "$MERCATOR/v1/runs/$RUN_ID/events?workspace_id=$WORKSPACE_ID" \
   | jq '.events[] | select(.type == "compute.run.launch_failed.v1" or .type == "compute.run.launch_indeterminate.v1") | {correlationid, data}'
 ```
 
-The event's `data.code` and `data.retryable` are stable, provider-neutral
-fields. Use its `correlationid` (the run ID) with the workspace ID to find the
-single `provider operation failed` process-log record. That private structured
-record includes the attempt, connection, adapter, selected offer, HTTP status,
-Shadeform code, retry count, side-effect certainty, and sanitized bounded
-response body. For the default text log, the correlation looks like:
+The event's `data.code`, `data.retryable`, and `data.side_effect` are stable,
+provider-neutral fields. Use its `correlationid` (the run ID) with the workspace
+ID to find the matching `provider operation failed` process-log record for each
+attempt. Each private structured record includes the attempt, connection,
+adapter, selected offer, HTTP status, Shadeform code, retry count, side-effect
+certainty, and sanitized bounded response body. For the default text log, the
+correlation looks like:
 
 ```sh
 grep 'provider operation failed' /path/to/mercator.log \
@@ -147,18 +148,56 @@ does not publish the provider response body, API key, authorization headers,
 registry credentials, workload environment values, or launch request payload
 through run events or sinks.
 
+## Stale Offer replacement
+
+Shadeform inventory is provisionable and can disappear after catalog listing.
+Mercator replaces a rejected placement only when Shadeform returns a response
+classified as `capacity_unavailable` and the adapter records
+`side_effect=none`. The completed attempt's exact Broker-assigned Offer
+snapshot ID is excluded from every later decision for that Run. Inventory with
+the same cloud, region, or instance type through another Connection remains a
+different Offer and stays eligible.
+
+The workload's `max_pre_start_attempts` is the complete pre-start bound,
+including the initial attempt. When the bound or eligible Offer set is
+exhausted, the public `compute.run.closed.v1` event carries
+`reason=RETRY_EXHAUSTED`. Read the full sequence through supported Mercator
+surfaces:
+
+```sh
+go run ./cmd/mercator run events \
+  --workspace-id "$WORKSPACE_ID" --run-id "$RUN_ID" \
+  | jq '.events[] | select(.type == "compute.run.placement_decided.v1" or .type == "compute.run.attempt_created.v1" or .type == "compute.run.launch_intent_recorded.v1" or .type == "compute.run.launch_failed.v1" or .type == "compute.run.launch_indeterminate.v1" or .type == "compute.run.launch_accepted.v1" or .type == "compute.run.cleanup_confirmed.v1" or .type == "compute.run.closed.v1") | {type, data}'
+
+go run ./cmd/mercator run decision \
+  --workspace-id "$WORKSPACE_ID" --run-id "$RUN_ID" \
+  | jq '.decision | {selected_offer_snapshot_id, candidates}'
+```
+
+Timeout, transport, and 5xx Create outcomes are indeterminate. Mercator keeps
+reconciling the original launch key through Observe and ListOwned and does not
+record another placement or attempt. This preserves Shadeform's client-side
+idempotency contract even when Create's response is lost.
+
 ## Live verification checklist
 
 With a funded account and `SHADEFORM_API_KEY` exported:
 
-1. Launch a tiny CUDA workload (e.g. `nvidia/cuda:12.2.0-base-ubuntu22.04`
-   running `nvidia-smi`) on the cheapest available type; confirm the GPU is
-   visible inside the container, since passthrough is undocumented.
-2. Confirm the instance carries the `mercator:*` tags and that the run's exit
-   report finalizes the outcome while the instance stays `active`.
-3. Confirm cleanup: on run completion the instance moves to `deleting`, and
-   `mercator` (janitor) reports no owned instances afterwards.
-4. Confirm the backstop: create an instance, kill the broker, and check
-   Shadeform deletes it at the `auto_delete` date threshold.
+1. Authorize the Connection and list Offers through Mercator. Record the exact
+   Offer snapshot IDs and native refs returned before launch.
+2. Launch a tiny CUDA workload (e.g. `nvidia/cuda:12.2.0-base-ubuntu22.04`
+   running `nvidia-smi`) through `mercator run create` with an explicit
+   `max_pre_start_attempts` bound.
+3. Record `run events`, `run decision`, and the sanitized correlated Mercator
+   process logs. If Shadeform rejects stale capacity, verify that the next
+   decision excludes that exact snapshot and that each attempt has a distinct
+   launch key.
+4. Confirm the workload's exit report finalizes the outcome. Confirm provider
+   cleanup through `run get` (`cleanup=confirmed`) and the matching public
+   `compute.run.cleanup_confirmed.v1` event, which records the `terminate`
+   disposition after Shadeform accepts deletion.
+5. Exercise the `auto_delete` backstop separately only when the evaluation
+   explicitly includes killing the broker and waiting through the configured
+   threshold.
 
 Rotate the API key after testing — keys are admin-scoped.

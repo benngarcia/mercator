@@ -80,6 +80,22 @@ launch is returned as an open Run that reconciliation will continue. Validation,
 authorization, idempotency, image resolution, and initial persistence failures
 occur before acceptance and retain their explicit error responses.
 
+Provisionable capacity can become stale between placement and Create. When a
+provider returns the typed `capacity_unavailable` outcome and proves that
+Create produced no external object, Mercator completes that attempt and places
+the Run again. The new decision excludes the exact rejected Offer snapshot ID,
+records a new attempt and launch intent, and stays within the workload's
+`max_pre_start_attempts` bound. The initial attempt counts toward that bound.
+Exhaustion closes the Run as failed with `RETRY_EXHAUSTED` on the public
+`compute.run.closed.v1` event.
+
+Other failures do not enter replacement placement. Invalid requests,
+authentication failures, ownership conflicts, rate-limit exhaustion, and
+unclassified failures close terminally. A timeout, transport failure, or 5xx
+Create whose side effect is indeterminate stays attached to its original
+launch key while Mercator reconciles Observe and ListOwned. It never creates a
+replacement attempt while an external object may exist.
+
 You can omit `--workspace-id` on every `run` subcommand by exporting
 `MERCATOR_WORKSPACE_ID`:
 
@@ -234,6 +250,23 @@ shape:
 6. cleanup requested;
 7. cleanup confirmed;
 8. run closed.
+
+A successful stale-Offer replacement adds a complete pre-start attempt before
+the successful sequence:
+
+1. placement decided for the stale Offer;
+2. attempt created and launch intent recorded;
+3. launch failed with `code=PROVIDER_CAPACITY_UNAVAILABLE` and
+   `side_effect=none`;
+4. a fresh placement decision records the rejected snapshot as
+   `PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE` and selects another Offer;
+5. a new attempt and launch intent are recorded before the next provider call;
+6. launch accepted, followed by the normal observation, cleanup, and close
+   sequence.
+
+Every attempt has a distinct attempt ID, launch key, ownership token, and
+cleanup locator. `run decision` returns the latest placement. `run events`
+retains every placement, attempt, intent, and outcome for audit.
 
 Public CloudEvents `data` payloads are snake_case. For example, the terminal
 `compute.run.external_state_observed.v1` event carries
