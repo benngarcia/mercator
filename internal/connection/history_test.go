@@ -12,7 +12,7 @@ import (
 
 func TestServiceListsMoreThanOnePageOfConnections(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openConnectionTestLog(t))
+	svc := New(openConnectionTestLog(t), activeTestWorkspace)
 	for i := 1; i <= 1001; i++ {
 		_, err := svc.Create(ctx, CreateRequest{
 			WorkspaceID:  "ws_1",
@@ -39,7 +39,7 @@ func TestServiceListsMoreThanOnePageOfConnections(t *testing.T) {
 func TestServiceListsConnectionsWithoutReadingEveryStream(t *testing.T) {
 	ctx := context.Background()
 	log := &streamReadCountingLog{EventLog: openConnectionTestLog(t)}
-	svc := New(log)
+	svc := New(log, activeTestWorkspace)
 	for _, connectionID := range []string{"conn_1", "conn_2"} {
 		if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: connectionID, AdapterType: "docker"}); err != nil {
 			t.Fatalf("create %s: %v", connectionID, err)
@@ -68,7 +68,7 @@ func TestServiceListsConnectionsWithoutReadingEveryStream(t *testing.T) {
 func TestServiceReadsAndUpdatesConnectionPastOneStreamPage(t *testing.T) {
 	ctx := context.Background()
 	log := openConnectionTestLog(t)
-	svc := New(log)
+	svc := New(log, activeTestWorkspace)
 	if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: "conn_history", AdapterType: "docker"}); err != nil {
 		t.Fatalf("create connection: %v", err)
 	}

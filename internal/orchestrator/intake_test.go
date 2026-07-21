@@ -187,7 +187,7 @@ func TestPreviewPlacementSharesOfferQueryPathWithDecide(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	ad := fake.New(fake.WithListOffersError(errors.New("provider unavailable")))
-	orch := New(log, scheduler.New(), ad)
+	orch := New(log, scheduler.New(), ad, activeTestWorkspace)
 
 	_, err = orch.PreviewPlacement(context.Background(), "ws_1", "run_preview", orchRevision())
 	if !errors.Is(err, ErrOfferQuery) {
@@ -229,7 +229,7 @@ func newIntakeOrchWithAdapter(t *testing.T, provider Adapter) *Orchestrator {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return New(log, scheduler.New(), provider)
+	return New(log, scheduler.New(), provider, activeTestWorkspace)
 }
 
 type intakeLaunchErrorAdapter struct {

@@ -8,6 +8,7 @@ import (
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 type credentialSealer interface {
@@ -18,6 +19,7 @@ type Storage struct {
 	db          *sql.DB
 	log         *eventlog.SQLiteEventLog
 	credentials *credential.SQLiteStore
+	workspaces  *workspace.SQLiteCatalog
 }
 
 func Open(ctx context.Context, dsn string) (*Storage, error) {
@@ -34,12 +36,17 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 	if err != nil {
 		return nil, err
 	}
+	workspaces, err := workspace.NewSQLiteCatalog(ctx, db)
+	if err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	credentials, err := credential.NewSQLiteStore(ctx, db)
 	if err != nil {
 		_ = log.Close()
 		return nil, err
 	}
-	storage := &Storage{db: db, log: log, credentials: credentials}
+	storage := &Storage{db: db, log: log, credentials: credentials, workspaces: workspaces}
 	if err := storage.purgeDeletedConnectionCredentials(ctx); err != nil {
 		_ = log.Close()
 		return nil, err
@@ -53,6 +60,10 @@ func (s *Storage) EventLog() *eventlog.SQLiteEventLog {
 
 func (s *Storage) CredentialStore() *credential.SQLiteStore {
 	return s.credentials
+}
+
+func (s *Storage) Workspaces() *workspace.SQLiteCatalog {
+	return s.workspaces
 }
 
 func (s *Storage) Connections(sealer credentialSealer) (*ConnectionRepository, error) {

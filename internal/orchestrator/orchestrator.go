@@ -18,6 +18,7 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 var (
@@ -55,6 +56,7 @@ type Orchestrator struct {
 	now                func() time.Time
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
+	workspaces         workspace.ActiveCatalog
 	runLocks           keyedMutex
 }
 
@@ -82,8 +84,11 @@ func WithReporting(publicURL string, signer *reporting.Signer) Option {
 	}
 }
 
-func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
-	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
+func New(log eventlog.EventLog, scheduler scheduler.Scheduler, adapter Adapter, workspaces workspace.ActiveCatalog, opts ...Option) *Orchestrator {
+	if workspaces == nil {
+		panic("orchestrator: workspace catalog is required")
+	}
+	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, workspaces: workspaces, now: time.Now}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -117,6 +122,9 @@ type CreateRunResult struct {
 func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
 	if req.WorkspaceID == "" || req.RunID == "" {
 		return CreateRunResult{}, fmt.Errorf("orchestrator: workspace_id and run_id are required")
+	}
+	if err := o.workspaces.RequireActive(ctx, req.WorkspaceID); err != nil {
+		return CreateRunResult{}, err
 	}
 	if req.CommandKey == "" {
 		req.CommandKey = req.IdempotencyKey

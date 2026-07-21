@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/workspace"
+
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
@@ -184,6 +186,9 @@ func (l *SQLiteEventLog) append(ctx context.Context, req AppendRequest, mutation
 			[]byte(event.Data), event.PrivateData,
 		)
 		if err != nil {
+			if workspace.IsNotFoundConstraint(err) {
+				return AppendResult{}, workspace.ErrNotFound
+			}
 			if isConstraintViolation(err) {
 				return AppendResult{}, ErrIdempotencyConflict
 			}

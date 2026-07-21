@@ -9,6 +9,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 const (
@@ -17,8 +18,9 @@ const (
 )
 
 type Service struct {
-	log eventlog.EventLog
-	now func() time.Time
+	log        eventlog.EventLog
+	workspaces workspace.ActiveCatalog
+	now        func() time.Time
 }
 
 type CreateWorkloadRequest struct {
@@ -42,13 +44,19 @@ type revisionCreatedData struct {
 	Revision domain.WorkloadRevision `json:"revision"`
 }
 
-func New(log eventlog.EventLog) *Service {
-	return &Service{log: log, now: time.Now}
+func New(log eventlog.EventLog, workspaces workspace.ActiveCatalog) *Service {
+	if workspaces == nil {
+		panic("workload: workspace catalog is required")
+	}
+	return &Service{log: log, workspaces: workspaces, now: time.Now}
 }
 
 func (s *Service) CreateWorkload(ctx context.Context, req CreateWorkloadRequest) error {
 	if req.WorkspaceID == "" || req.WorkloadID == "" {
 		return fmt.Errorf("workload: workspace_id and workload_id are required")
+	}
+	if err := s.workspaces.RequireActive(ctx, req.WorkspaceID); err != nil {
+		return err
 	}
 	data, err := json.Marshal(workloadCreatedData{WorkloadID: req.WorkloadID, Name: req.Name})
 	if err != nil {
@@ -80,6 +88,9 @@ func (s *Service) CreateWorkload(ctx context.Context, req CreateWorkloadRequest)
 func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest) (domain.WorkloadRevision, error) {
 	if req.WorkspaceID == "" || req.WorkloadID == "" || req.Revision.ID == "" {
 		return domain.WorkloadRevision{}, fmt.Errorf("workload: workspace_id, workload_id, and revision id are required")
+	}
+	if err := s.workspaces.RequireActive(ctx, req.WorkspaceID); err != nil {
+		return domain.WorkloadRevision{}, err
 	}
 	revision := req.Revision
 	revision.WorkspaceID = req.WorkspaceID

@@ -1,13 +1,13 @@
-// WorkspaceSwitcher edits the active workspace id. It is a controlled component
-// — { value; onChange } — so the parent (Topbar) owns binding to the route
-// search param / session. Recents are read directly from session.ts (the
-// canonical store updated whenever a workspace is committed) and offered in a
-// filterable list for quick switching; any free-form id can be committed with
-// Enter or the "Use" affordance, since workspaces are operator-supplied and
-// need not pre-exist in recents.
-
 import { useMemo, useRef, useState } from "react";
-import { Check, ChevronsUpDown, Layers, Search } from "lucide-react";
+import {
+  Archive,
+  Check,
+  ChevronsUpDown,
+  Layers,
+  Loader2,
+  Plus,
+  Search,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,8 +16,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useCreateWorkspace, useWorkspaces } from "@/lib/api/queries";
 import { cn } from "@/lib/utils";
-import { getRecentWorkspaces, workspaceOptions } from "@/lib/session";
 
 export interface WorkspaceSwitcherProps {
   value: string | null;
@@ -26,43 +26,48 @@ export interface WorkspaceSwitcherProps {
 
 export function WorkspaceSwitcher({ value, onChange }: WorkspaceSwitcherProps) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [recents, setRecents] = useState<string[]>([]);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const workspaces = useWorkspaces(showArchived);
+  const createWorkspace = useCreateWorkspace();
 
   const changeOpen = (nextOpen: boolean) => {
     setOpen(nextOpen);
     if (!nextOpen) return;
-    setRecents(getRecentWorkspaces());
-    setDraft("");
-    requestAnimationFrame(() => inputRef.current?.focus());
+    setQuery("");
+    setCreating(false);
+    setDisplayName("");
+    createWorkspace.reset();
+    requestAnimationFrame(() => searchRef.current?.focus());
   };
 
   const select = (workspaceID: string) => {
-    const next = workspaceID.trim();
-    if (next === "") return;
-    onChange(next);
+    onChange(workspaceID);
     setOpen(false);
   };
 
-  const trimmedDraft = draft.trim();
-  const query = trimmedDraft.toLowerCase();
-  // Always include the active workspace and the default, not just recents, so
-  // the current selection is visible/selectable even when it was set via URL or
-  // never explicitly committed.
-  const options = useMemo(
-    () => workspaceOptions(value, recents),
-    [value, recents],
-  );
+  const create = () => {
+    const name = displayName.trim();
+    if (name === "") return;
+    createWorkspace.mutate(name, {
+      onSuccess: (workspace) => select(workspace.id),
+    });
+  };
+
+  const normalizedQuery = query.trim().toLowerCase();
   const filtered = useMemo(
     () =>
-      query === ""
-        ? options
-        : options.filter((ws) => ws.toLowerCase().includes(query)),
-    [options, query],
+      (workspaces.data ?? []).filter((workspace) =>
+        normalizedQuery === "" ||
+        workspace.display_name.toLowerCase().includes(normalizedQuery) ||
+        workspace.id.toLowerCase().includes(normalizedQuery),
+      ),
+    [normalizedQuery, workspaces.data],
   );
-  const draftIsNew =
-    trimmedDraft !== "" && !options.some((ws) => ws === trimmedDraft);
+  const selected = workspaces.data?.find((workspace) => workspace.id === value);
 
   return (
     <Popover open={open} onOpenChange={changeOpen}>
@@ -73,96 +78,116 @@ export function WorkspaceSwitcher({ value, onChange }: WorkspaceSwitcherProps) {
           role="combobox"
           aria-expanded={open}
           aria-label="Switch workspace"
-          className="min-w-44 justify-between gap-2 rounded-full"
+          className="min-w-52 justify-between gap-2 rounded-full"
         >
           <span className="flex min-w-0 items-center gap-2">
             <Layers className="text-muted-foreground" />
-            <span
-              className={cn(
-                "truncate font-mono text-xs",
-                !value && "text-muted-foreground",
-              )}
-            >
-              {value || "Set workspace…"}
+            <span className={cn("truncate text-xs", !value && "text-muted-foreground")}>
+              {selected?.display_name ?? value ?? "Select workspace"}
             </span>
           </span>
           <ChevronsUpDown className="text-muted-foreground" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-0">
-        <div className="flex items-center border-b px-3">
-          <Search className="mr-2 size-4 shrink-0 text-muted-foreground" />
-          <Input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                // Commit the typed id, or the sole filtered match if no draft.
-                select(trimmedDraft !== "" ? trimmedDraft : (filtered[0] ?? ""));
-              }
+      <PopoverContent align="start" className="w-80 p-0">
+        {creating ? (
+          <form
+            className="space-y-3 p-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              create();
             }}
-            placeholder="Workspace id…"
-            autoComplete="off"
-            spellCheck={false}
-            aria-label="Workspace id"
-            className="h-10 border-0 bg-transparent px-0 font-mono text-xs shadow-none focus-visible:ring-0"
-          />
-        </div>
-        <div
-          role="listbox"
-          className="max-h-72 overflow-y-auto p-1"
-        >
-          {draftIsNew ? (
-            <button
-              type="button"
-              role="option"
-              aria-selected={false}
-              onClick={() => select(trimmedDraft)}
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground"
-            >
-              <Layers className="size-4 shrink-0 text-muted-foreground" />
-              <span className="text-muted-foreground">Use</span>
-              <span className="truncate font-mono text-xs">{trimmedDraft}</span>
-            </button>
-          ) : null}
-
-          {filtered.length > 0 ? (
-            <>
-              {draftIsNew ? <div className="my-1 h-px bg-border" /> : null}
-              <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
-                Workspaces
-              </div>
-              {filtered.map((ws) => (
-                <button
-                  key={ws}
-                  type="button"
-                  role="option"
-                  aria-selected={ws === value}
-                  onClick={() => select(ws)}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground"
-                >
-                  <Check
-                    className={cn(
-                      "size-4 shrink-0 text-primary",
-                      ws === value ? "opacity-100" : "opacity-0",
-                    )}
-                  />
-                  <span className="truncate font-mono text-xs">{ws}</span>
-                </button>
-              ))}
-            </>
-          ) : null}
-
-          {filtered.length === 0 && !draftIsNew ? (
-            <div className="px-2 py-6 text-center text-sm text-muted-foreground">
-              {trimmedDraft === ""
-                ? "Type a workspace id."
-                : "Press Enter to use this id."}
+          >
+            <div>
+              <div className="text-sm font-medium">Create workspace</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Mercator assigns a stable ID and records your authenticated identity.
+              </p>
             </div>
-          ) : null}
-        </div>
+            <Input
+              autoFocus
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              placeholder="Workspace name"
+              aria-label="Workspace name"
+              disabled={createWorkspace.isPending}
+            />
+            {createWorkspace.error ? (
+              <p role="alert" className="text-xs text-destructive">
+                {createWorkspace.error.message}
+              </p>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setCreating(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={displayName.trim() === "" || createWorkspace.isPending}>
+                {createWorkspace.isPending ? <Loader2 className="animate-spin" /> : <Plus />}
+                Create
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <div className="flex items-center border-b px-3">
+              <Search className="mr-2 size-4 shrink-0 text-muted-foreground" />
+              <Input
+                ref={searchRef}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search workspaces"
+                autoComplete="off"
+                aria-label="Search workspaces"
+                className="h-10 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
+              />
+            </div>
+            <div role="listbox" className="max-h-72 overflow-y-auto p-1">
+              {workspaces.isLoading ? (
+                <div className="flex items-center justify-center gap-2 px-2 py-8 text-sm text-muted-foreground">
+                  <Loader2 className="animate-spin" /> Loading workspaces
+                </div>
+              ) : workspaces.isError ? (
+                <div className="px-3 py-6 text-center text-sm text-destructive" role="alert">
+                  {workspaces.error.message}
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                  {normalizedQuery === "" ? "No saved workspaces." : "No matching workspaces."}
+                </div>
+              ) : (
+                filtered.map((workspace) => (
+                  <button
+                    key={workspace.id}
+                    type="button"
+                    role="option"
+                    aria-selected={workspace.id === value}
+                    onClick={() => select(workspace.id)}
+                    className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left outline-none hover:bg-accent hover:text-accent-foreground"
+                  >
+                    <Check className={cn("size-4 shrink-0 text-primary", workspace.id === value ? "opacity-100" : "opacity-0")} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">{workspace.display_name}</span>
+                      <span className="block truncate font-mono text-[11px] text-muted-foreground">{workspace.id}</span>
+                    </span>
+                    {workspace.archived_at ? (
+                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <Archive className="size-3" /> Archived
+                      </span>
+                    ) : null}
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="flex items-center justify-between border-t p-1.5">
+              <Button variant="ghost" size="sm" onClick={() => setShowArchived((shown) => !shown)}>
+                <Archive /> {showArchived ? "Hide archived" : "Show archived"}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setCreating(true)}>
+                <Plus /> New workspace
+              </Button>
+            </div>
+          </>
+        )}
       </PopoverContent>
     </Popover>
   );

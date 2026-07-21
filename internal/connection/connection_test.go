@@ -14,7 +14,7 @@ import (
 
 func TestServiceCreatesGetsListsAndUpdatesConnectionAuthorization(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openConnectionTestLog(t))
+	svc := New(openConnectionTestLog(t), activeTestWorkspace)
 	created, err := svc.Create(ctx, CreateRequest{
 		WorkspaceID:         "ws_1",
 		ConnectionID:        "conn_1",
@@ -48,7 +48,7 @@ func TestServiceCreatesGetsListsAndUpdatesConnectionAuthorization(t *testing.T) 
 }
 
 func TestCreateRoundTripsConfigAndCredential(t *testing.T) {
-	svc := New(openConnectionTestLog(t))
+	svc := New(openConnectionTestLog(t), activeTestWorkspace)
 	_, err := svc.Create(context.Background(), CreateRequest{
 		WorkspaceID:  "ws_1",
 		ConnectionID: "conn_rp",
@@ -80,7 +80,7 @@ func TestCreateReplaysConnectionsAcrossCredentialPresentationChange(t *testing.T
 			ctx := context.Background()
 			log := arrangeConnectionCreateFixture(t, fixture)
 
-			_, err := New(log).Create(ctx, CreateRequest{
+			_, err := New(log, activeTestWorkspace).Create(ctx, CreateRequest{
 				WorkspaceID:  "staging",
 				ConnectionID: "conn_docker_loopback",
 				AdapterType:  "docker",
@@ -104,7 +104,7 @@ func TestCreateReplaysConnectionsAcrossCredentialPresentationChange(t *testing.T
 func TestCreateRejectsDifferentLegacyConnectionConfig(t *testing.T) {
 	log := arrangeConnectionCreateFixture(t, "v0_3_docker_connection_created.json")
 
-	_, err := New(log).Create(context.Background(), CreateRequest{
+	_, err := New(log, activeTestWorkspace).Create(context.Background(), CreateRequest{
 		WorkspaceID:  "staging",
 		ConnectionID: "conn_docker_loopback",
 		AdapterType:  "docker",
@@ -147,7 +147,7 @@ func arrangeConnectionCreateFixture(t *testing.T, fixture string) *eventlog.SQLi
 
 func TestSameConnectionIDCanExistInMultipleWorkspaces(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openConnectionTestLog(t))
+	svc := New(openConnectionTestLog(t), activeTestWorkspace)
 
 	for _, workspaceID := range []string{"ws_1", "bucket-worktree"} {
 		if _, err := svc.Create(ctx, CreateRequest{
@@ -196,7 +196,7 @@ func openConnectionTestLog(t *testing.T) *eventlog.SQLiteEventLog {
 // idempotency hashes of actorless (bootstrap) commands.
 func TestConnectionSurfacesActingPrincipals(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openConnectionTestLog(t))
+	svc := New(openConnectionTestLog(t), activeTestWorkspace)
 
 	if _, err := svc.Create(ctx, CreateRequest{
 		WorkspaceID:  "ws_1",
@@ -232,7 +232,7 @@ func TestConnectionSurfacesActingPrincipals(t *testing.T) {
 // is not part of WHAT was commanded.
 func TestAuthorizationIdempotencyIgnoresActor(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openConnectionTestLog(t))
+	svc := New(openConnectionTestLog(t), activeTestWorkspace)
 
 	if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: "conn_boot", AdapterType: "docker"}); err != nil {
 		t.Fatalf("create connection: %v", err)
@@ -255,7 +255,7 @@ func TestAuthorizationIdempotencyIgnoresActor(t *testing.T) {
 // boot-style Create replay (same command key and hash) must NOT resurrect it.
 func TestDeleteHidesConnectionAndSurvivesBootReplay(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openConnectionTestLog(t))
+	svc := New(openConnectionTestLog(t), activeTestWorkspace)
 
 	if _, err := svc.Create(ctx, CreateRequest{WorkspaceID: "ws_1", ConnectionID: "conn_del", AdapterType: "docker"}); err != nil {
 		t.Fatalf("create connection: %v", err)
@@ -298,7 +298,7 @@ func TestDeleteHidesConnectionAndSurvivesBootReplay(t *testing.T) {
 
 // Deleting a connection that never existed is an error, not a silent no-op.
 func TestDeleteUnknownConnectionFails(t *testing.T) {
-	svc := New(openConnectionTestLog(t))
+	svc := New(openConnectionTestLog(t), activeTestWorkspace)
 	if err := svc.Delete(context.Background(), DeleteRequest{WorkspaceID: "ws_1", ConnectionID: "conn_ghost"}); err != ErrNotFound {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}

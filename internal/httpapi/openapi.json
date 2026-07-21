@@ -818,6 +818,153 @@
         }
       }
     },
+    "/v1/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "parameters": [
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "boolean", "default": false }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved workspace list",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceListResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Workspace catalog failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkspace",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateWorkspaceRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Workspace created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "Workspace ID conflict",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Workspace catalog failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{workspace_id}/archive": {
+      "post": {
+        "operationId": "archiveWorkspace",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace archived",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Workspace not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Workspace catalog failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/connections": {
       "get": {
         "operationId": "listConnections",
@@ -3780,6 +3927,49 @@
         "x-go-type-import": {
           "path": "github.com/benngarcia/mercator/internal/credential",
           "name": "credential"
+        }
+      },
+      "CreateWorkspaceRequest": {
+        "type": "object",
+        "required": ["display_name"],
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "Workspace": {
+        "type": "object",
+        "required": ["id", "display_name", "created_at", "created_by"],
+        "properties": {
+          "id": { "type": "string" },
+          "display_name": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "created_by": { "type": "string" },
+          "archived_at": { "type": "string", "format": "date-time" }
+        },
+        "x-go-type": "workspace.Workspace",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/workspace",
+          "name": "workspace"
+        }
+      },
+      "WorkspaceResponse": {
+        "type": "object",
+        "required": ["workspace"],
+        "properties": {
+          "workspace": { "$ref": "#/components/schemas/Workspace" }
+        }
+      },
+      "WorkspaceListResponse": {
+        "type": "object",
+        "required": ["workspaces"],
+        "properties": {
+          "workspaces": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Workspace" }
+          }
         }
       },
       "ConnectionRecord": {

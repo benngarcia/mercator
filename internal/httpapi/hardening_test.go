@@ -251,9 +251,9 @@ func newHTTPTestServerWithOpenObservations(t *testing.T, openObserves int) http.
 		fake.WithOpenObservations(openObserves),
 	)
 	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, ad)
+	orch := orchestrator.New(log, sched, ad, activeTestWorkspaces)
 	resolver := ociresolver.NewStaticResolver(nil)
-	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log), Resolver: resolver})
+	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(log, activeTestWorkspaces), Resolver: resolver})
 }
 
 func TestOversizedRequestBodyIsRejected(t *testing.T) {

@@ -18,15 +18,20 @@ type principal struct {
 // recorded on human-command facts: {"subject": <email or "bearer">}. Nil when
 // auth is disabled entirely (no principal to record).
 func requestActor(ctx context.Context) json.RawMessage {
-	actor, ok := ctx.Value(principalContextKey{}).(principal)
-	if !ok || actor.Subject == "" {
+	subject, ok := requestPrincipal(ctx)
+	if !ok {
 		return nil
 	}
-	encoded, err := json.Marshal(map[string]string{"subject": actor.Subject})
+	encoded, err := json.Marshal(map[string]string{"subject": subject})
 	if err != nil {
 		return nil
 	}
 	return encoded
+}
+
+func requestPrincipal(ctx context.Context) (string, bool) {
+	actor, ok := ctx.Value(principalContextKey{}).(principal)
+	return actor.Subject, ok && actor.Subject != ""
 }
 
 // maxRequestBodyBytes bounds request bodies server-wide. The largest legitimate

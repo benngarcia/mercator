@@ -11,7 +11,7 @@ import (
 func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 	ctx := context.Background()
 	log := openWorkloadTestLog(t)
-	svc := New(log)
+	svc := New(log, activeTestWorkspace)
 
 	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
 		t.Fatalf("create workload: %v", err)
@@ -46,7 +46,7 @@ func TestServiceCreatesImmutableWorkloadRevisionsFromEvents(t *testing.T) {
 // invalid revisions (e.g. an empty image) must still be rejected.
 func TestServiceAcceptsMutableTagsRejectsInvalidRevisions(t *testing.T) {
 	ctx := context.Background()
-	svc := New(openWorkloadTestLog(t))
+	svc := New(openWorkloadTestLog(t), activeTestWorkspace)
 	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
 		t.Fatalf("create workload: %v", err)
 	}

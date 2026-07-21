@@ -36,6 +36,7 @@ import (
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 func main() {
@@ -90,7 +91,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	if deps.signer != nil && deps.signer.Enabled() && deps.publicURL != "" {
 		orchOpts = append(orchOpts, orchestrator.WithReporting(deps.publicURL, deps.signer))
 	}
-	orch := orchestrator.New(deps.log, sched, deps.broker, orchOpts...)
+	orch := orchestrator.New(deps.log, sched, deps.broker, deps.workspaces, orchOpts...)
 	// No synthetic digests in the served path: a mutable tag must be rejected
 	// at create time (registry tag resolution is not implemented), never
 	// silently rewritten to a fabricated digest the daemon can't pull.
@@ -115,10 +116,11 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
 		Offers:       deps.broker,
-		Workloads:    workload.New(deps.log),
+		Workloads:    workload.New(deps.log, deps.workspaces),
 		Sinks:        sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  deps.conns,
 		Resolver:     imageResolver,
+		Workspaces:   deps.workspaces,
 	}, serverOpts...)
 	// Background reconciliation: each tick advances every open run's lifecycle
 	// (observe container exits, record terminal outcomes, request and confirm
@@ -235,9 +237,10 @@ func warnIfNonLoopback(addr string) {
 // connections listed by the server stay consistent. Connection events and
 // sealed credentials share the event log's SQLite transaction boundary.
 type serverDeps struct {
-	broker *broker.Broker
-	conns  *connection.Service
-	log    eventlog.EventLog
+	broker     *broker.Broker
+	conns      *connection.Service
+	log        eventlog.EventLog
+	workspaces *workspace.SQLiteCatalog
 	// signer is non-nil when MERCATOR_SECRET_KEY is set. It signs per-run
 	// reporting tokens using a domain-separated subkey derived from the master key.
 	signer *reporting.Signer
@@ -298,7 +301,7 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	if err != nil {
 		return serverDeps{}, fmt.Errorf("init connection storage: %w", err)
 	}
-	svc := connection.NewWithCredentials(connections)
+	svc := connection.NewWithCredentials(connections, storage.Workspaces())
 
 	// Build the report-token signer from a domain-separated subkey. The signer
 	// is always constructed (so its Enabled() reflects key presence); the
@@ -329,12 +332,13 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	br := broker.NewBroker(svc, factory, resolver)
 
 	return serverDeps{
-		broker:    br,
-		conns:     svc,
-		log:       log,
-		signer:    signer,
-		publicURL: publicURL,
-		close:     storage.Close,
+		broker:     br,
+		conns:      svc,
+		log:        log,
+		workspaces: storage.Workspaces(),
+		signer:     signer,
+		publicURL:  publicURL,
+		close:      storage.Close,
 	}, nil
 }
 

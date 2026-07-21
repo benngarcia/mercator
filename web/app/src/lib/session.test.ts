@@ -2,9 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 
 import {
   getWorkspace,
-  getRecentWorkspaces,
   setWorkspace,
-  workspaceOptions,
 } from "./session";
 
 // Minimal in-memory localStorage so the browser-targeted session module is
@@ -46,35 +44,8 @@ describe("getWorkspace", () => {
     expect(getWorkspace()).toBe("ws_42");
   });
 
-  test("defaults to the most recently added workspace", () => {
-    setWorkspace("ws_one");
-    setWorkspace("ws_two"); // most recent
-    // Clear the explicit current selection; the default should be the latest recent.
-    (globalThis as unknown as { localStorage: Storage }).localStorage.removeItem(
-      "mercator.workspace",
-    );
-    expect(getWorkspace()).toBe("ws_two");
-  });
-});
-
-describe("setWorkspace", () => {
-  test("records the committed workspace in recents, most-recent first", () => {
-    setWorkspace("ws_a");
-    setWorkspace("ws_b");
-    expect(getRecentWorkspaces()).toEqual(["ws_b", "ws_a"]);
-  });
-});
-
-describe("workspaceOptions", () => {
-  test("lists the active workspace first, then recents, deduped", () => {
-    expect(workspaceOptions("ws_x", ["ws_a", "ws_x"])).toEqual(["ws_x", "ws_a"]);
-  });
-
-  test("omits an empty active workspace", () => {
-    expect(workspaceOptions("", ["ws_a"])).toEqual(["ws_a"]);
-  });
-
-  test("does not invent a default when nothing exists", () => {
-    expect(workspaceOptions(null, [])).toEqual([]);
+  test("does not reconstruct a default from legacy recents", () => {
+    localStorage.setItem("mercator.recentWorkspaces", JSON.stringify(["ws_old"]));
+    expect(getWorkspace()).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ import (
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 const (
@@ -45,6 +46,7 @@ type CredentialRepository interface {
 type Service struct {
 	log         eventlog.EventLog
 	credentials CredentialRepository
+	workspaces  workspace.ActiveCatalog
 	now         func() time.Time
 }
 
@@ -92,17 +94,26 @@ type DeleteRequest struct {
 	Actor json.RawMessage
 }
 
-func New(log eventlog.EventLog) *Service {
-	return &Service{log: log, now: time.Now}
+func New(log eventlog.EventLog, workspaces workspace.ActiveCatalog) *Service {
+	if workspaces == nil {
+		panic("connection: workspace catalog is required")
+	}
+	return &Service{log: log, workspaces: workspaces, now: time.Now}
 }
 
-func NewWithCredentials(repository CredentialRepository) *Service {
-	return &Service{log: repository, credentials: repository, now: time.Now}
+func NewWithCredentials(repository CredentialRepository, workspaces workspace.ActiveCatalog) *Service {
+	if workspaces == nil {
+		panic("connection: workspace catalog is required")
+	}
+	return &Service{log: repository, credentials: repository, workspaces: workspaces, now: time.Now}
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error) {
 	if req.WorkspaceID == "" || req.ConnectionID == "" || req.AdapterType == "" {
 		return Record{}, fmt.Errorf("connection: workspace_id, connection_id, and adapter_type are required")
+	}
+	if err := s.workspaces.RequireActive(ctx, req.WorkspaceID); err != nil {
+		return Record{}, err
 	}
 	record := Record{
 		ID:                  req.ConnectionID,

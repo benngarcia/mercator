@@ -29,6 +29,9 @@ import type {
   SinkStatus,
   WorkloadRevisionListResponse,
   WorkloadRevisionResponse,
+  CreateWorkspaceRequest,
+  WorkspaceListResponse,
+  WorkspaceResponse,
 } from "./types";
 
 interface WorkspaceArg {
@@ -59,6 +62,38 @@ export function getAuthSession(
   signal?: AbortSignal,
 ): Promise<AuthSessionState> {
   return apiFetch<AuthSessionState>("/auth/session", { signal });
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces
+// ---------------------------------------------------------------------------
+
+export function listWorkspaces(
+  includeArchived: boolean,
+  signal?: AbortSignal,
+): Promise<WorkspaceListResponse> {
+  return apiFetch<WorkspaceListResponse>("/v1/workspaces", {
+    workspaceId: "",
+    searchParams: { include_archived: includeArchived },
+    signal,
+  });
+}
+
+export function createWorkspace(
+  body: CreateWorkspaceRequest,
+): Promise<WorkspaceResponse> {
+  return apiFetch<WorkspaceResponse>("/v1/workspaces", {
+    method: "POST",
+    body,
+    workspaceId: "",
+  });
+}
+
+export function archiveWorkspace(workspaceID: string): Promise<WorkspaceResponse> {
+  return apiFetch<WorkspaceResponse>(
+    `/v1/workspaces/${encodeURIComponent(workspaceID)}/archive`,
+    { method: "POST", workspaceId: "" },
+  );
 }
 
 // ---------------------------------------------------------------------------

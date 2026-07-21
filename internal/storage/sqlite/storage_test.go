@@ -5,10 +5,12 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 func TestOpenPurgesCredentialsForDeletedConnections(t *testing.T) {
@@ -19,12 +21,20 @@ func TestOpenPurgesCredentialsForDeletedConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open storage: %v", err)
 	}
+	if _, err := storage.Workspaces().Create(ctx, workspace.Create{
+		ID:          "ws_1",
+		DisplayName: "Test workspace",
+		CreatedAt:   time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		CreatedBy:   "test:storage",
+	}); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
 	resolver := credential.NewResolver(nil, storage.CredentialStore(), masterKey)
 	connections, err := storage.Connections(resolver)
 	if err != nil {
 		t.Fatalf("open connection storage: %v", err)
 	}
-	service := connection.NewWithCredentials(connections)
+	service := connection.NewWithCredentials(connections, storage.Workspaces())
 	if _, err := service.Create(ctx, connection.CreateRequest{
 		WorkspaceID:  "ws_1",
 		ConnectionID: "conn_deleted",
@@ -34,8 +44,11 @@ func TestOpenPurgesCredentialsForDeletedConnections(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create connection: %v", err)
 	}
+	if _, err := storage.Workspaces().Archive(ctx, "ws_1", time.Date(2026, 7, 20, 13, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("archive workspace: %v", err)
+	}
 	if err := service.Delete(ctx, connection.DeleteRequest{WorkspaceID: "ws_1", ConnectionID: "conn_deleted"}); err != nil {
-		t.Fatalf("delete connection: %v", err)
+		t.Fatalf("delete connection in archived workspace: %v", err)
 	}
 	orphaned, err := credential.Seal(credential.DeriveSealKey(masterKey), []byte("orphaned-secret"))
 	if err != nil {

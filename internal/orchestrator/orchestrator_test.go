@@ -55,7 +55,7 @@ func TestListRunsDoesNotReadEveryStream(t *testing.T) {
 	orch := New(log, scheduler.New(), fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
-	))
+	), activeTestWorkspace)
 	for _, runID := range []string{"run_1", "run_2"} {
 		if _, err := orch.CreateRun(ctx, CreateRunRequest{WorkspaceID: "ws_1", RunID: runID, IdempotencyKey: "idem_" + runID, Workload: orchRevision()}); err != nil {
 			t.Fatalf("create %s: %v", runID, err)
@@ -136,7 +136,7 @@ func TestAdvanceRunPersistsLaunchIntentBeforeCallingAdapter(t *testing.T) {
 	ctx := context.Background()
 	log := openOrchestratorLog(t)
 	spy := &spyAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})), log: log}
-	orch := New(log, scheduler.New(), spy)
+	orch := New(log, scheduler.New(), spy, activeTestWorkspace)
 	createRun(t, ctx, orch)
 
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_1"); err != nil {
@@ -219,7 +219,7 @@ func TestAdvanceRunInjectsReportingEnvWhenConfigured(t *testing.T) {
 	offer := orchOffer("off_reporting", time.Now().UTC())
 	ad := &captureLaunchAdapter{Adapter: fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}))}
 	log := openOrchestratorLog(t)
-	orch := New(log, scheduler.New(), ad, WithReporting(publicURL, signer))
+	orch := New(log, scheduler.New(), ad, activeTestWorkspace, WithReporting(publicURL, signer))
 
 	if _, err := orch.CreateRun(ctx, CreateRunRequest{
 		WorkspaceID:    "ws_1",
@@ -814,7 +814,7 @@ func (c *captureLaunchAdapter) Launch(ctx context.Context, req adapter.LaunchReq
 
 func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {
 	t.Helper()
-	return New(openOrchestratorLog(t), scheduler.New(), ad)
+	return New(openOrchestratorLog(t), scheduler.New(), ad, activeTestWorkspace)
 }
 
 type streamReadCountingLog struct {
@@ -1030,7 +1030,7 @@ func TestAdvanceRunSurvivesStreamsLongerThanOneReadPage(t *testing.T) {
 		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 	)
-	orch := New(log, scheduler.New(), ad)
+	orch := New(log, scheduler.New(), ad, activeTestWorkspace)
 	createRun(t, ctx, orch)
 
 	fillerData, err := json.Marshal(adapterErrorData{

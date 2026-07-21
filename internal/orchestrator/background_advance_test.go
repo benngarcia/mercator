@@ -121,7 +121,7 @@ func TestListRunWorkspacesDiscoversPersistedPartitions(t *testing.T) {
 		t.Fatalf("open event log: %v", err)
 	}
 	t.Cleanup(func() { _ = log.Close() })
-	orch := New(log, scheduler.New(), fake.New())
+	orch := New(log, scheduler.New(), fake.New(), activeTestWorkspace)
 
 	seedWedgedRun(t, log, "staging-experiments", "run_exp")
 	seedWedgedRun(t, log, "staging", "run_released")
