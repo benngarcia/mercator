@@ -17,13 +17,14 @@ type Scheduler interface {
 }
 
 type SchedulingInput struct {
-	RunID            string
-	Workload         domain.WorkloadRevision
-	Offers           []domain.OfferSnapshot
-	ModelVersion     string
-	EvaluatedAt      time.Time
-	Weights          ScoreWeights
-	LatencyEstimates map[string]domain.Estimate
+	RunID                    string
+	Workload                 domain.WorkloadRevision
+	Offers                   []domain.OfferSnapshot
+	ExcludedOfferSnapshotIDs []string
+	ModelVersion             string
+	EvaluatedAt              time.Time
+	Weights                  ScoreWeights
+	LatencyEstimates         map[string]domain.Estimate
 }
 
 type ScoreWeights struct {
@@ -128,6 +129,15 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	var violations []domain.Violation
 	workload := input.Workload
 	container := workload.Spec.Containers[0]
+	if slices.Contains(input.ExcludedOfferSnapshotIDs, offer.ID) {
+		violations = append(violations, domain.Violation{
+			Code:     "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE",
+			Path:     "offer_snapshot_id",
+			Required: "offer not rejected by an earlier attempt",
+			Offered:  offer.ID,
+			Message:  "Offer was rejected as unavailable by an earlier launch attempt.",
+		})
+	}
 	if !offer.ExpiresAt.IsZero() && !offer.ExpiresAt.After(input.EvaluatedAt) {
 		violations = append(violations, domain.Violation{Code: "OFFER_EXPIRED", Path: "expires_at", Required: "future", Offered: offer.ExpiresAt, Message: "Offer is expired and cannot be selected."})
 	}

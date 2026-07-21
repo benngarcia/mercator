@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -43,7 +44,8 @@ type cleanupConfirmedData struct {
 }
 
 type runClosedData struct {
-	Closed bool `json:"closed"`
+	Closed bool   `json:"closed"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type runReportedData struct {
@@ -119,7 +121,7 @@ func invalidPlacement(data placementData) string {
 		return "decision.evaluated_at is required"
 	case data.Decision.ModelVersion == "":
 		return "decision.model_version is required"
-	case data.Decision.SelectedOfferSnapshotID == "":
+	case data.Decision.SelectedOfferSnapshotID == "" && !slices.Contains(data.Decision.SelectionReasonCodes, "NO_FEASIBLE_OFFERS"):
 		return "decision.selected_offer_snapshot_id is required"
 	default:
 		return ""
@@ -189,6 +191,15 @@ func invalidLaunchReceipt(data adapter.LaunchReceipt) string {
 	}
 }
 
+func invalidLaunchFailure(data launchFailureData) string {
+	if err := data.publicData().Validate(); err != nil {
+		return err.Error()
+	}
+	if !validProviderFailureKind(data.ProviderKind) {
+		return fmt.Sprintf("unknown provider failure kind %q", data.ProviderKind)
+	}
+	return ""
+}
 func invalidExternalObservation(data adapter.ExternalObservation) string {
 	switch {
 	case data.LaunchKey == "":

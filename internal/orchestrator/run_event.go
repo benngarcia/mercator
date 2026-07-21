@@ -3,11 +3,53 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
+
+type runState struct {
+	requested                *runRequestedData
+	attempt                  *attemptData
+	launchIntent             *adapter.LaunchRequest
+	launchAccepted           bool
+	launchFailure            *launchFailureData
+	attemptCount             int
+	excludedOfferSnapshotIDs []string
+	cancelRequested          bool
+	firstTerminal            *terminalFact
+	outcomeRecorded          bool
+	outcome                  domain.RunOutcome
+	cleanupRequested         bool
+	cleanupFailure           *domain.CleanupError
+	cleanupConfirmed         bool
+	closed                   bool
+	exitCode                 *int
+	lastObservedPhase        adapter.ExternalPhase
+	createdBy                string
+	cancelledBy              string
+}
+
+type terminalFact struct {
+	Outcome domain.RunOutcome
+}
+
+func (state runState) externalObjectPossible() bool {
+	if state.launchIntent == nil {
+		return false
+	}
+	return state.launchFailure == nil || state.launchFailure.SideEffect != adapter.SideEffectNone
+}
+
+func (state runState) replacementEligible() bool {
+	return state.launchFailure != nil && state.launchFailure.replacementEligible()
+}
+
+func (state runState) launchIndeterminate() bool {
+	return state.launchFailure != nil && state.launchFailure.indeterminate()
+}
 
 func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 	if stored.SchemaVersion != 1 {
@@ -47,6 +89,10 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.attempt = &data
+		state.attemptCount++
+		state.launchIntent = nil
+		state.launchAccepted = false
+		state.launchFailure = nil
 
 	case EventLaunchIntentRecorded:
 		var data adapter.LaunchRequest
@@ -69,15 +115,16 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		state.launchAccepted = true
 
 	case EventLaunchIndeterminate, EventLaunchFailed:
-		var data domain.ProviderError
-		if err := decodePublicRunPayload(stored, &data); err != nil {
+		var data launchFailureData
+		if err := decodeRunPayload(stored, &data); err != nil {
 			return err
 		}
-		if err := data.Validate(); err != nil {
-			return invalidRunEvent(stored, err.Error())
+		if reason := invalidLaunchFailure(data); reason != "" {
+			return invalidRunEvent(stored, reason)
 		}
-		if stored.Type == EventLaunchIndeterminate {
-			state.launchIndeterminate = true
+		state.launchFailure = &data
+		if data.replacementEligible() && state.launchIntent != nil && !slices.Contains(state.excludedOfferSnapshotIDs, state.launchIntent.SelectedOfferSnapshotID) {
+			state.excludedOfferSnapshotIDs = append(state.excludedOfferSnapshotIDs, state.launchIntent.SelectedOfferSnapshotID)
 		}
 
 	case EventCancelRequested:
@@ -238,4 +285,95 @@ func requireRunEventObject(stored eventlog.StoredEvent, payload json.RawMessage,
 		return invalidRunEvent(stored, name+" payload must be a JSON object")
 	}
 	return nil
+}
+
+// actorSubject extracts the audited subject from an event envelope's actor
+// ({"subject": ...}). Empty when the event was recorded without a principal.
+func actorSubject(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var actor struct {
+		Subject string `json:"subject"`
+	}
+	if err := json.Unmarshal(raw, &actor); err != nil {
+		return ""
+	}
+	return actor.Subject
+}
+
+func reduceRun(events []eventlog.StoredEvent) (runState, error) {
+	var state runState
+	for _, stored := range events {
+		if err := applyStoredEvent(&state, stored); err != nil {
+			return runState{}, err
+		}
+	}
+	if err := state.validate(); err != nil {
+		return runState{}, err
+	}
+	return state, nil
+}
+
+func (state runState) validate() error {
+	if state.requested == nil {
+		return fmt.Errorf("orchestrator: run requested event not found")
+	}
+	if state.launchIntent == nil && state.attempt != nil {
+		return fmt.Errorf("orchestrator: attempt exists without launch intent")
+	}
+	if state.closed && !state.outcomeRecorded {
+		return fmt.Errorf("orchestrator: run closed without a recorded outcome")
+	}
+	return nil
+}
+
+func runRecordFromState(workspaceID, runID string, state runState) domain.RunRecord {
+	record := domain.RunRecord{
+		ID:                 runID,
+		WorkspaceID:        workspaceID,
+		WorkloadRevisionID: state.requested.Workload.ID,
+		Phase:              "requested",
+		Cleanup:            domain.CleanupNotRequired,
+		CreatedBy:          state.createdBy,
+		CancelledBy:        state.cancelledBy,
+	}
+	if state.launchIntent != nil {
+		record.Phase = "launching"
+		// Surface the RECORDED disposition (defaulting a missing one to release)
+		// so operators can see whether this run will terminate an owned host or
+		// merely release a borrowed slot.
+		record.Disposition = state.launchIntent.Disposition
+		if record.Disposition == "" {
+			record.Disposition = domain.DispositionRelease
+		}
+	}
+	if state.launchAccepted || state.launchIndeterminate() {
+		record.Phase = "running"
+		record.Cleanup = domain.CleanupPending
+	}
+	if state.cleanupRequested {
+		record.Phase = "cleaning_up"
+		record.Cleanup = domain.CleanupPending
+	}
+	if state.cleanupFailure != nil && !state.cleanupConfirmed {
+		record.Cleanup = domain.CleanupBlocked
+		failure := *state.cleanupFailure
+		record.CleanupError = &failure
+	}
+	if state.cleanupConfirmed {
+		record.Cleanup = domain.CleanupConfirmed
+	}
+	if state.exitCode != nil {
+		code := *state.exitCode
+		record.ExitCode = &code
+	}
+	if state.outcomeRecorded {
+		record.Outcome = state.outcome
+	}
+	if state.closed {
+		record.Phase = "closed"
+		record.Closed = true
+	}
+	return record
 }

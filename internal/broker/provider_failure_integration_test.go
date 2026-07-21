@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -84,16 +83,8 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create run: %v", err)
 	}
-	err = orch.AdvanceRun(t.Context(), "ws_1", "run_out_of_stock")
-	var failure *adapter.ProviderFailure
-	if !errors.As(err, &failure) {
-		t.Fatalf("advance error = %v, want typed provider failure", err)
-	}
-	if failure.Kind != adapter.ProviderFailureCapacityUnavailable || failure.Status != http.StatusConflict || failure.ProviderCode != "OUT_OF_STOCK" {
-		t.Fatalf("failure classification = %+v", failure)
-	}
-	if !failure.Retryable || failure.SideEffect != adapter.SideEffectNone {
-		t.Fatalf("out-of-stock retryability and side effect = %+v", failure)
+	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_out_of_stock"); err != nil {
+		t.Fatalf("capacity rejection should be handled by replacement policy: %v", err)
 	}
 
 	lines := bytes.Split(bytes.TrimSpace(privateLog.Bytes()), []byte("\n"))
@@ -138,17 +129,36 @@ func TestShadeformOutOfStockFailureIsPrivateAndPublicSafe(t *testing.T) {
 		t.Fatalf("get run events: %v", err)
 	}
 	var publicFailure map[string]any
+	var publicClosed map[string]any
 	publicEvents := make([]eventlog.CloudEvent, 0, len(events))
 	for _, event := range events {
 		publicEvents = append(publicEvents, event.CloudEvent())
-		if event.Type == orchestrator.EventLaunchFailed {
+		switch event.Type {
+		case orchestrator.EventLaunchFailed:
 			if err := json.Unmarshal(event.CloudEvent().Data, &publicFailure); err != nil {
 				t.Fatalf("decode public failure: %v", err)
 			}
+		case orchestrator.EventRunClosed:
+			if err := json.Unmarshal(event.CloudEvent().Data, &publicClosed); err != nil {
+				t.Fatalf("decode public close: %v", err)
+			}
 		}
 	}
-	if publicFailure["code"] != "PROVIDER_CAPACITY_UNAVAILABLE" || publicFailure["retryable"] != true {
+	if publicFailure["code"] != "PROVIDER_CAPACITY_UNAVAILABLE" || publicFailure["retryable"] != true || publicFailure["side_effect"] != "none" {
 		t.Fatalf("public failure = %#v", publicFailure)
+	}
+	if _, exposed := publicFailure["provider_kind"]; exposed {
+		t.Fatalf("public failure exposed canonical private classification: %#v", publicFailure)
+	}
+	record, err := orch.GetRun(t.Context(), "ws_1", "run_out_of_stock")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if !record.Closed || record.Outcome != domain.RunOutcomeFailed || record.Cleanup != domain.CleanupNotRequired {
+		t.Fatalf("single stale Offer should exhaust without cleanup: %+v", record)
+	}
+	if publicClosed["reason"] != "RETRY_EXHAUSTED" {
+		t.Fatalf("public close = %#v", publicClosed)
 	}
 	publicJSON, _ := json.Marshal(publicEvents)
 	for _, private := range []string{"OUT_OF_STOCK", "response_body", apiKey, registrySecret, workloadSecret} {
