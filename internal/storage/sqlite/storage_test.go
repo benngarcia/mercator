@@ -3,7 +3,9 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -143,7 +145,7 @@ func TestWorkloadRevisionReplaySurvivesWorkspaceArchive(t *testing.T) {
 	request := workload.CreateRevisionRequest{
 		WorkspaceID: "ws_revision_replay",
 		WorkloadID:  "wrk_replayed",
-		Revision:    replayRevision(),
+		Revision:    replayRevision(t),
 	}
 	if _, err := service.CreateRevision(ctx, request); err != nil {
 		t.Fatalf("create revision: %v", err)
@@ -162,26 +164,17 @@ func TestWorkloadRevisionReplaySurvivesWorkspaceArchive(t *testing.T) {
 	}
 }
 
-func replayRevision() domain.WorkloadRevision {
-	return domain.WorkloadRevision{
-		ID:     "wrev_replayed",
-		Digest: "sha256:revision",
-		Spec: domain.WorkloadSpec{
-			Containers: []domain.ContainerSpec{{
-				Name:     "main",
-				Image:    "ghcr.io/acme/trainer@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-				Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
-			}},
-			Resources: domain.ResourceRequirements{
-				CPU:           domain.CPURequirement{MinMillis: 1000},
-				Memory:        domain.MemoryRequirement{MinBytes: 1 << 30},
-				EphemeralDisk: domain.DiskRequirement{MinBytes: 1 << 30},
-			},
-			Network:   domain.NetworkRequirements{Inbound: domain.InboundNetworkNone},
-			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, ExpectedRuntimeSeconds: 60},
-			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 120, MaxPreStartAttempts: 3},
-		},
+func replayRevision(t *testing.T) domain.WorkloadRevision {
+	t.Helper()
+	contents, err := os.ReadFile("testdata/replay_revision.json")
+	if err != nil {
+		t.Fatalf("read replay revision fixture: %v", err)
 	}
+	var revision domain.WorkloadRevision
+	if err := json.Unmarshal(contents, &revision); err != nil {
+		t.Fatalf("decode replay revision fixture: %v", err)
+	}
+	return revision
 }
 
 func TestWorkspaceArchiveWaitsForInFlightConnectionCreate(t *testing.T) {

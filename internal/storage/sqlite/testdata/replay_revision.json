@@ -1,0 +1,32 @@
+{
+  "id": "wrev_replayed",
+  "workspace_id": "",
+  "workload_id": "",
+  "digest": "sha256:revision",
+  "spec": {
+    "containers": [
+      {
+        "name": "main",
+        "image": "ghcr.io/acme/trainer@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "platform": {
+          "os": "linux",
+          "architecture": "amd64"
+        }
+      }
+    ],
+    "resources": {
+      "cpu": { "min_millis": 1000 },
+      "memory": { "min_bytes": 1073741824 },
+      "ephemeral_disk": { "min_bytes": 1073741824 }
+    },
+    "network": { "inbound": "none" },
+    "placement": {
+      "objective": "balanced",
+      "expected_runtime_seconds": 60
+    },
+    "execution": {
+      "max_runtime_seconds": 120,
+      "max_pre_start_attempts": 3
+    }
+  }
+}
