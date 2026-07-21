@@ -22,7 +22,7 @@ type workspaceTestLog struct {
 	eventlog.EventLog
 }
 
-func (l workspaceTestLog) AppendNew(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+func (l workspaceTestLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
 	return l.Append(ctx, request)
 }
 

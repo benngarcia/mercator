@@ -29,12 +29,12 @@ func (s *Server) ListWorkspaces(ctx context.Context, request ListWorkspacesReque
 }
 
 func (s *Server) CreateWorkspace(ctx context.Context, request CreateWorkspaceRequestObject) (CreateWorkspaceResponseObject, error) {
-	if s.workspaces == nil {
-		return CreateWorkspace500JSONResponse(internalAPIError(http.StatusInternalServerError, "WORKSPACE_CATALOG_DISABLED", errors.New("workspace catalog is not configured"))), nil
-	}
 	createdBy, authError := requirePrincipal(ctx)
 	if authError != nil {
 		return CreateWorkspace401JSONResponse(*authError), nil
+	}
+	if s.workspaces == nil {
+		return CreateWorkspace500JSONResponse(internalAPIError(http.StatusInternalServerError, "WORKSPACE_CATALOG_DISABLED", errors.New("workspace catalog is not configured"))), nil
 	}
 	id, err := newWorkspaceID()
 	if err != nil {

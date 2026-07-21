@@ -175,7 +175,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	result, err := o.log.AppendNew(ctx, eventlog.AppendRequest{
+	result, err := o.log.AppendIfWorkspaceActive(ctx, eventlog.AppendRequest{
 		Stream:                runStream(req.WorkspaceID, req.RunID),
 		ExpectedStreamVersion: 0,
 		CommandKey:            req.CommandKey,

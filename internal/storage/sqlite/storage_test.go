@@ -11,8 +11,10 @@ import (
 
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
+	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
 	_ "modernc.org/sqlite"
 )
@@ -112,6 +114,73 @@ func TestConnectionCreateReplaySurvivesWorkspaceArchive(t *testing.T) {
 	}
 	if replayed.ID != request.ConnectionID {
 		t.Fatalf("replayed connection id = %q, want %q", replayed.ID, request.ConnectionID)
+	}
+}
+
+func TestWorkloadRevisionReplaySurvivesWorkspaceArchive(t *testing.T) {
+	ctx := context.Background()
+	storage, err := sqlitestore.Open(ctx, "file:"+filepath.Join(t.TempDir(), "mercator.db"))
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	if _, err := storage.Workspaces().Create(ctx, workspace.Create{
+		ID:          "ws_revision_replay",
+		DisplayName: "Revision replay workspace",
+		CreatedAt:   time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC),
+		CreatedBy:   "test:storage",
+	}); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	service := workload.New(storage.EventLog())
+	if err := service.CreateWorkload(ctx, workload.CreateWorkloadRequest{
+		WorkspaceID: "ws_revision_replay",
+		WorkloadID:  "wrk_replayed",
+		Name:        "Replayed workload",
+	}); err != nil {
+		t.Fatalf("create workload: %v", err)
+	}
+	request := workload.CreateRevisionRequest{
+		WorkspaceID: "ws_revision_replay",
+		WorkloadID:  "wrk_replayed",
+		Revision:    replayRevision(),
+	}
+	if _, err := service.CreateRevision(ctx, request); err != nil {
+		t.Fatalf("create revision: %v", err)
+	}
+	if _, err := storage.Workspaces().Archive(ctx, "ws_revision_replay", time.Date(2026, 7, 20, 13, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("archive workspace: %v", err)
+	}
+
+	replayed, err := service.CreateRevision(ctx, request)
+
+	if err != nil {
+		t.Fatalf("replay revision create: %v", err)
+	}
+	if replayed.ID != request.Revision.ID {
+		t.Fatalf("replayed revision id = %q, want %q", replayed.ID, request.Revision.ID)
+	}
+}
+
+func replayRevision() domain.WorkloadRevision {
+	return domain.WorkloadRevision{
+		ID:     "wrev_replayed",
+		Digest: "sha256:revision",
+		Spec: domain.WorkloadSpec{
+			Containers: []domain.ContainerSpec{{
+				Name:     "main",
+				Image:    "ghcr.io/acme/trainer@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+				Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
+			}},
+			Resources: domain.ResourceRequirements{
+				CPU:           domain.CPURequirement{MinMillis: 1000},
+				Memory:        domain.MemoryRequirement{MinBytes: 1 << 30},
+				EphemeralDisk: domain.DiskRequirement{MinBytes: 1 << 30},
+			},
+			Network:   domain.NetworkRequirements{Inbound: domain.InboundNetworkNone},
+			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, ExpectedRuntimeSeconds: 60},
+			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 120, MaxPreStartAttempts: 3},
+		},
 	}
 }
 

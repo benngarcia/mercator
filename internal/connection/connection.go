@@ -155,7 +155,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Record, error)
 
 func (s *Service) appendCreate(ctx context.Context, request eventlog.AppendRequest, credentialWrite CredentialWrite) error {
 	if len(credentialWrite.Secret) == 0 {
-		_, err := s.log.AppendNew(ctx, request)
+		_, err := s.log.AppendIfWorkspaceActive(ctx, request)
 		return err
 	}
 	_, err := s.credentials.CreateCredential(ctx, request, credentialWrite)

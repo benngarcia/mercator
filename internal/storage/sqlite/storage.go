@@ -106,7 +106,7 @@ type ConnectionRepository struct {
 }
 
 func (r *ConnectionRepository) CreateCredential(ctx context.Context, request eventlog.AppendRequest, write connection.CredentialWrite) (eventlog.AppendResult, error) {
-	return r.appendNewAtomic(ctx, request, func(ctx context.Context, tx *sql.Tx) error {
+	return r.appendIfWorkspaceActiveAtomic(ctx, request, func(ctx context.Context, tx *sql.Tx) error {
 		sealed, ok := r.sealer.Seal(write.Secret)
 		if !ok {
 			return fmt.Errorf("%w: configure MERCATOR_SECRET_KEY", connection.ErrSecretStoreDisabled)
@@ -122,11 +122,11 @@ type WorkspaceEventLog struct {
 	*eventlog.SQLiteEventLog
 }
 
-func (l *WorkspaceEventLog) AppendNew(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
-	return l.appendNewAtomic(ctx, request, func(context.Context, *sql.Tx) error { return nil })
+func (l *WorkspaceEventLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.appendIfWorkspaceActiveAtomic(ctx, request, func(context.Context, *sql.Tx) error { return nil })
 }
 
-func (l *WorkspaceEventLog) appendNewAtomic(ctx context.Context, request eventlog.AppendRequest, mutation func(context.Context, *sql.Tx) error) (eventlog.AppendResult, error) {
+func (l *WorkspaceEventLog) appendIfWorkspaceActiveAtomic(ctx context.Context, request eventlog.AppendRequest, mutation func(context.Context, *sql.Tx) error) (eventlog.AppendResult, error) {
 	return l.AppendAtomic(ctx, request, func(ctx context.Context, tx *sql.Tx) error {
 		if err := requireActiveWorkspace(ctx, tx, request.Stream.WorkspaceID); err != nil {
 			return err

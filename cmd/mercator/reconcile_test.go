@@ -18,7 +18,7 @@ type activeTestWorkspaceLog struct {
 	eventlog.EventLog
 }
 
-func (l activeTestWorkspaceLog) AppendNew(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+func (l activeTestWorkspaceLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
 	return l.Append(ctx, request)
 }
 

@@ -147,9 +147,9 @@ type EventLog interface {
 	Ack(ctx context.Context, subscriptionID string, position GlobalPosition) error
 }
 
-// WorkspaceEventLog appends new workspace-owned facts only while their
-// workspace is active. Exact command replays resolve before that check.
+// WorkspaceEventLog applies the active-workspace policy to new facts while
+// allowing exact command replays to resolve before the policy check.
 type WorkspaceEventLog interface {
 	EventLog
-	AppendNew(ctx context.Context, req AppendRequest) (AppendResult, error)
+	AppendIfWorkspaceActive(ctx context.Context, req AppendRequest) (AppendResult, error)
 }
