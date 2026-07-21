@@ -80,8 +80,9 @@ genuinely fine — Mercator adds idempotent retries, a recorded placement decisi
 across multiple offers, and a queryable run history on top of that).
 
 Mercator is built by a solo maintainer, in the open, with nothing to sell — no
-company, no upsell, no telemetry. For the right person that is a feature; set
-your support expectations accordingly (see [SUPPORT.md](SUPPORT.md)).
+company, no upsell, and no telemetry unless an operator explicitly enables the
+optional Sentry provider-failure integration. For the right person that is a
+feature; set your support expectations accordingly (see [SUPPORT.md](SUPPORT.md)).
 
 ## Try It In 5 Minutes
 
@@ -197,7 +198,7 @@ and paste `dev-token` when prompted.
 
 ### From source (contributors)
 
-With Go 1.25+, skip the image and use the binary directly — compile once, then
+With Go 1.25.12+, skip the image and use the binary directly — compile once, then
 reuse it:
 
 ```sh
@@ -221,7 +222,7 @@ need to prove the provisionable GPU-provider flow.
 
 | Path | Use It To Prove | Requires | Start Here |
 | --- | --- | --- | --- |
-| Docker adapter | Broker lifecycle, placement, public events, cleanup, CLI, HTTP interface, and console with real local container launch, observation, and labels on one host. | Go 1.25+, a running Docker daemon, a digest-pinned Linux image, `jq`, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
+| Docker adapter | Broker lifecycle, placement, public events, cleanup, CLI, HTTP interface, and console with real local container launch, observation, and labels on one host. | Go 1.25.12+, a running Docker daemon, a digest-pinned Linux image, `jq`, and local host capacity. | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
 | RunPod adapter | Provisionable GPU-provider flow and terminate cleanup. | RunPod API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [RunPod runbook](docs/production/runpod.md) |
 | Shadeform adapter | The same provisionable flow across ~21 aggregated GPU clouds (Lambda, Nebius, Crusoe, …) through one API key and invoice. | Shadeform API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [Shadeform runbook](docs/production/shadeform.md) |
 | Vast.ai adapter | Marketplace-offer placement on secure-tier (certified datacenter) hosts with terminate cleanup. | Vast.ai API key, a GPU workload, a real registry-pullable image digest, and workload exit-code reporting. | [Vast.ai runbook](docs/production/vast.md) |
