@@ -12,6 +12,14 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
+type workspaceTestLog struct {
+	eventlog.EventLog
+}
+
+func (l workspaceTestLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}
+
 func TestServiceCreatesGetsListsAndUpdatesConnectionAuthorization(t *testing.T) {
 	ctx := context.Background()
 	svc := New(openConnectionTestLog(t))
@@ -116,7 +124,7 @@ func TestCreateRejectsDifferentLegacyConnectionConfig(t *testing.T) {
 	}
 }
 
-func arrangeConnectionCreateFixture(t *testing.T, fixture string) *eventlog.SQLiteEventLog {
+func arrangeConnectionCreateFixture(t *testing.T, fixture string) eventlog.WorkspaceEventLog {
 	t.Helper()
 	createdEvent, err := os.ReadFile("testdata/" + fixture)
 	if err != nil {
@@ -177,7 +185,7 @@ func TestSameConnectionIDCanExistInMultipleWorkspaces(t *testing.T) {
 	}
 }
 
-func openConnectionTestLog(t *testing.T) *eventlog.SQLiteEventLog {
+func openConnectionTestLog(t *testing.T) eventlog.WorkspaceEventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -188,7 +196,7 @@ func openConnectionTestLog(t *testing.T) *eventlog.SQLiteEventLog {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return log
+	return workspaceTestLog{EventLog: log}
 }
 
 // Connection create/authorize commands record the acting principal on the

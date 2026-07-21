@@ -18,6 +18,14 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
+type workspaceTestLog struct {
+	eventlog.EventLog
+}
+
+func (l workspaceTestLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {
+	return l.Append(ctx, request)
+}
+
 func TestCreateRunIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
@@ -51,7 +59,7 @@ func TestCreateRunIsIdempotent(t *testing.T) {
 
 func TestListRunsDoesNotReadEveryStream(t *testing.T) {
 	ctx := context.Background()
-	log := &streamReadCountingLog{EventLog: openOrchestratorLog(t)}
+	log := &streamReadCountingLog{WorkspaceEventLog: openOrchestratorLog(t)}
 	orch := New(log, scheduler.New(), fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
@@ -787,16 +795,16 @@ func newTestOrchestrator(t *testing.T, ad Adapter) *Orchestrator {
 }
 
 type streamReadCountingLog struct {
-	eventlog.EventLog
+	eventlog.WorkspaceEventLog
 	streamReads int
 }
 
 func (l *streamReadCountingLog) ReadStream(ctx context.Context, stream eventlog.StreamKey, afterVersion uint64, limit int) ([]eventlog.StoredEvent, error) {
 	l.streamReads++
-	return l.EventLog.ReadStream(ctx, stream, afterVersion, limit)
+	return l.WorkspaceEventLog.ReadStream(ctx, stream, afterVersion, limit)
 }
 
-func openOrchestratorLog(t *testing.T) *eventlog.SQLiteEventLog {
+func openOrchestratorLog(t *testing.T) eventlog.WorkspaceEventLog {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
@@ -807,7 +815,7 @@ func openOrchestratorLog(t *testing.T) *eventlog.SQLiteEventLog {
 			t.Fatalf("close event log: %v", err)
 		}
 	})
-	return log
+	return workspaceTestLog{EventLog: log}
 }
 
 func createRun(t *testing.T, ctx context.Context, orch *Orchestrator) {

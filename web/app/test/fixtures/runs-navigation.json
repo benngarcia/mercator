@@ -1,5 +1,4 @@
 {
-  "workspace_id": "ws_runs_navigation",
   "token": "runs-navigation-token",
   "image": {
     "reference": "busybox:latest",

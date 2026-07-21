@@ -36,6 +36,7 @@ import (
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 func main() {
@@ -119,6 +120,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		Sinks:        sinks.NewManager(deps.log, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  deps.conns,
 		Resolver:     imageResolver,
+		Workspaces:   deps.workspaces,
 	}, serverOpts...)
 	// Background reconciliation: each tick advances every open run's lifecycle
 	// (observe container exits, record terminal outcomes, request and confirm
@@ -235,9 +237,10 @@ func warnIfNonLoopback(addr string) {
 // connections listed by the server stay consistent. Connection events and
 // sealed credentials share the event log's SQLite transaction boundary.
 type serverDeps struct {
-	broker *broker.Broker
-	conns  *connection.Service
-	log    eventlog.EventLog
+	broker     *broker.Broker
+	conns      *connection.Service
+	log        eventlog.WorkspaceEventLog
+	workspaces *workspace.SQLiteCatalog
 	// signer is non-nil when MERCATOR_SECRET_KEY is set. It signs per-run
 	// reporting tokens using a domain-separated subkey derived from the master key.
 	signer *reporting.Signer
@@ -329,12 +332,13 @@ func buildServerDeps(values map[string]string) (deps serverDeps, err error) {
 	br := broker.NewBroker(svc, factory, resolver)
 
 	return serverDeps{
-		broker:    br,
-		conns:     svc,
-		log:       log,
-		signer:    signer,
-		publicURL: publicURL,
-		close:     storage.Close,
+		broker:     br,
+		conns:      svc,
+		log:        log,
+		workspaces: storage.Workspaces(),
+		signer:     signer,
+		publicURL:  publicURL,
+		close:      storage.Close,
 	}, nil
 }
 

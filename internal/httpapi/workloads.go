@@ -16,6 +16,9 @@ func (s *Server) CreateWorkload(ctx context.Context, request CreateWorkloadReque
 		return CreateWorkload400JSONResponse(apiError("WORKSPACE_ID_REQUIRED", "workspace_id is required.")), nil
 	}
 	if err := s.workloads.CreateWorkload(ctx, workload.CreateWorkloadRequest{WorkspaceID: body.WorkspaceId, WorkloadID: body.WorkloadId, Name: body.Name}); err != nil {
+		if response, ok := workspaceAPIError(err); ok {
+			return CreateWorkload400JSONResponse(response), nil
+		}
 		return CreateWorkload400JSONResponse(apiError(errorCode(err, "CREATE_WORKLOAD_FAILED"), errorMessage(err))), nil
 	}
 	return CreateWorkload202JSONResponse{WorkloadId: body.WorkloadId}, nil
@@ -34,6 +37,9 @@ func (s *Server) CreateWorkloadRevision(ctx context.Context, request CreateWorkl
 	}
 	revision, err := s.workloads.CreateRevision(ctx, workload.CreateRevisionRequest{WorkspaceID: workspaceID, WorkloadID: request.WorkloadId, Revision: request.Body.Revision})
 	if err != nil {
+		if response, ok := workspaceAPIError(err); ok {
+			return CreateWorkloadRevision400JSONResponse(response), nil
+		}
 		return CreateWorkloadRevision400JSONResponse(apiError(errorCode(err, "CREATE_REVISION_FAILED"), errorMessage(err))), nil
 	}
 	return CreateWorkloadRevision202JSONResponse{Revision: revision}, nil

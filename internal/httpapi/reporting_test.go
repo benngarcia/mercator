@@ -102,14 +102,15 @@ func newReportingTestHarness(t *testing.T, signerKey []byte, extra ...Option) re
 func newReportingTestHarnessWithProvider(t *testing.T, signerKey []byte, log eventlog.EventLog, provider adapter.Provider, ad *fake.Adapter, extra ...Option) reportingTestHarness {
 	t.Helper()
 	sched := scheduler.New()
-	orch := orchestrator.New(log, sched, provider)
+	workspaceLog := workspaceTestLog{EventLog: log}
+	orch := orchestrator.New(workspaceLog, sched, provider)
 	signer := reporting.NewSigner(signerKey)
 	opts := append([]Option{
 		WithReportSigner(signer),
 		WithBearerAuth("op-token"),
 	}, extra...)
 	return reportingTestHarness{
-		handler: New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: provider}, Workloads: workload.New(log)}, opts...),
+		handler: New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: provider}, Workloads: workload.New(workspaceLog)}, opts...),
 		orch:    orch,
 		adapter: ad,
 	}

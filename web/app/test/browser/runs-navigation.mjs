@@ -14,6 +14,7 @@ const baseURL = requiredEnv("MERCATOR_BROWSER_BASE_URL").replace(/\/$/, "");
 const fixturePath = path.resolve(requiredEnv("MERCATOR_BROWSER_FIXTURE"));
 const outputDirectory = path.resolve(requiredEnv("MERCATOR_BROWSER_OUTPUT"));
 const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8"));
+const workspaceID = requiredEnv("MERCATOR_BROWSER_WORKSPACE_ID");
 await fs.mkdir(outputDirectory, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
@@ -37,14 +38,14 @@ async function prepareContext(viewport) {
         JSON.stringify([workspace]),
       );
     },
-    [fixture.token, fixture.workspace_id],
+    [fixture.token, workspaceID],
   );
   return context;
 }
 
 function runsURL(pathname = "/runs") {
   const url = new URL(pathname, baseURL);
-  url.searchParams.set("workspace_id", fixture.workspace_id);
+  url.searchParams.set("workspace_id", workspaceID);
   return url.toString();
 }
 
@@ -168,7 +169,7 @@ async function minimalImageRunCreated(page) {
   assert.ok(request.headers()["idempotency-key"]);
   assert.equal(
     new URL(request.url()).searchParams.get("workspace_id"),
-    fixture.workspace_id,
+    workspaceID,
   );
   assert.deepEqual(request.postDataJSON(), {
     image: fixture.image.reference,
@@ -185,7 +186,7 @@ async function minimalImageRunCreated(page) {
   );
   assert.equal(
     new URL(page.url()).searchParams.get("workspace_id"),
-    fixture.workspace_id,
+    workspaceID,
   );
   await page.goBack();
   await page.waitForURL(originatingURL);

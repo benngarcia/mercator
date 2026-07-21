@@ -50,6 +50,9 @@ func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) 
 		ResolveImage:   s.resolveImageFn(),
 	})
 	if err != nil {
+		if response, ok := workspaceAPIError(err); ok {
+			return CreateRun400JSONResponse(response), nil
+		}
 		if errors.Is(err, eventlog.ErrIdempotencyConflict) {
 			return CreateRun409JSONResponse(apiError("IDEMPOTENCY_CONFLICT", "Idempotency key was reused with a different request hash.")), nil
 		}
