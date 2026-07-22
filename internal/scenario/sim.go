@@ -100,7 +100,7 @@ func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, c
 	}
 	if running := schedule.Running; running != nil {
 		daemon.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
-		daemon.FreesAt = daemon.BusyUntil
+		daemon.ExpectedBusyUntil = start.Add(running.expectedRemaining().Duration())
 		if running.CompletesAfter != nil {
 			daemon.FreesAt = start.Add(running.CompletesAfter.Duration())
 		}

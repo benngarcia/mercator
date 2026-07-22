@@ -55,12 +55,17 @@ type Daemon struct {
 	// materialized on the daemon's local disk. No offer field carries this
 	// today; the world holds it so cache-evidence milestones can surface it.
 	HeldCaches map[string]int64
-	// BusyUntil is when the running work's maximum runtime elapses; zero
-	// means idle. The remaining time is advertised as queue evidence.
+	// BusyUntil is when the running work's enforced maximum runtime elapses;
+	// zero means idle. It is the hard ceiling behind latest-start guarantees.
 	BusyUntil time.Time
+	// ExpectedBusyUntil is when the running work is expected (p50) to finish,
+	// defaulting to BusyUntil. The expected remaining time is what queue-delay
+	// scoring weighs.
+	ExpectedBusyUntil time.Time
 	// FreesAt is when the daemon is actually observed free again. It defaults
-	// to BusyUntil; a later value models enforcement or observation lag, which
-	// lets a scenario hold a Rental busy past a ScheduledPlacement deadline.
+	// to ExpectedBusyUntil; another value models a run finishing early, or
+	// overrunning its estimate up to the enforced bound, which lets a scenario
+	// hold a Rental busy past a ScheduledPlacement's latest start.
 	FreesAt time.Time
 	// LeaseExpiresAt is when the daemon's idle lease ends; zero means no
 	// lease bound. An expired daemon stops being offered, standing in for
@@ -71,13 +76,20 @@ type Daemon struct {
 func (d *Daemon) busyAt(now time.Time) bool {
 	frees := d.FreesAt
 	if frees.IsZero() {
-		frees = d.BusyUntil
+		frees = d.expectedBusyUntil()
 	}
 	return now.Before(frees)
 }
 
-func (d *Daemon) remainingMaxRuntimeAt(now time.Time) time.Duration {
-	if remaining := d.BusyUntil.Sub(now); remaining > 0 {
+func (d *Daemon) expectedBusyUntil() time.Time {
+	if !d.ExpectedBusyUntil.IsZero() {
+		return d.ExpectedBusyUntil
+	}
+	return d.BusyUntil
+}
+
+func (d *Daemon) expectedRemainingAt(now time.Time) time.Duration {
+	if remaining := d.expectedBusyUntil().Sub(now); remaining > 0 {
 		return remaining
 	}
 	return 0
@@ -215,9 +227,10 @@ func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domai
 		// Today's offer vocabulary marks a busy Rental unavailable. The target
 		// Broker-owned RentalSchedule will keep it feasible and create a
 		// ScheduledPlacement instead. It remains visible now so the decision
-		// records the RunningPlacement's remaining maximum runtime.
+		// records the RunningPlacement's expected (p50) remaining runtime as
+		// queue-delay evidence; the enforced max bound backs latest-start math.
 		offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
-		offer.Queue = &domain.QueueSnapshot{QueuedWorkSeconds: daemon.remainingMaxRuntimeAt(now).Seconds(), ActiveSlots: 1}
+		offer.Queue = &domain.QueueSnapshot{QueuedWorkSeconds: daemon.expectedRemainingAt(now).Seconds(), ActiveSlots: 1}
 	} else {
 		offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: 1}
 		offer.Queue = &domain.QueueSnapshot{}

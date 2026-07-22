@@ -1,0 +1,79 @@
+{
+  "summary": "The warm Rental would win on score, but its RentalSchedule already holds the maximum of four ScheduledPlacements. The cap, not the score, forces the fifth Run onto fresh capacity, and the rejection records that the schedule is full.",
+  "status": "target",
+  "missing_capabilities": ["rental_schedule"],
+  "world": {
+    "images": {
+      "worker:v1": {
+        "layers": [
+          {"name": "worker-base", "size": "4GB"},
+          {"name": "worker-code-v1", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["worker:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 5,
+        "running": {
+          "placement": "placement-active",
+          "run": "run-active",
+          "remaining_max_runtime": "2m"
+        },
+        "scheduled": [
+          {"placement": "placement-q1", "run": "run-q1", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"placement": "placement-q2", "run": "run-q2", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"placement": "placement-q3", "run": "run-q3", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"placement": "placement-q4", "run": "run-q4", "max_runtime": "2m", "expected_runtime": "1m"}
+        ]
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-slow",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "30m", "p90": "45m"}
+      }
+    ]
+  },
+  "request": {
+    "image": "worker:v1",
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "fresh-slow",
+    "disposition": "terminate",
+    "candidates": {
+      "rental-warm": {
+        "feasible": false,
+        "rejected": [{"code": "SCHEDULE_FULL", "path": "rental_schedule.scheduled"}],
+        "rental_schedule": {
+          "version": 5,
+          "running": {
+            "placement": "placement-active",
+            "run": "run-active",
+            "remaining_max_runtime": "2m"
+          },
+          "preceding": [
+            {"placement": "placement-q1", "run": "run-q1", "max_runtime": "2m", "expected_runtime": "1m"},
+            {"placement": "placement-q2", "run": "run-q2", "max_runtime": "2m", "expected_runtime": "1m"},
+            {"placement": "placement-q3", "run": "run-q3", "max_runtime": "2m", "expected_runtime": "1m"},
+            {"placement": "placement-q4", "run": "run-q4", "max_runtime": "2m", "expected_runtime": "1m"}
+          ],
+          "projected_start_in": "6m"
+        }
+      },
+      "fresh-slow": {"feasible": true, "provision_seconds": 1800}
+    }
+  }
+}

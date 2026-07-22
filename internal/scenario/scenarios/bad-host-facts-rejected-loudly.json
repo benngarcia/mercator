@@ -1,6 +1,7 @@
 {
   "summary": "The cheapest marketplace offer has no working NVIDIA driver and another is silent about SSH access. Both must be rejected loudly at placement instead of failing mysteriously at launch; the well-attested host wins despite its price.",
   "status": "target",
+  "missing_capabilities": ["host_facts"],
   "world": {
     "images": {
       "trainer:v1": {

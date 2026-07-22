@@ -31,6 +31,7 @@ func TestLoadParsesHumanReadableUnits(t *testing.T) {
 	sc, err := loadFixtureText(t, `{
       "summary": "Units parse.",
       "status": "target",
+      "missing_capabilities": ["rental_schedule"],
       "world": {
         "images": {"app:v1": {"layers": [{"name": "base", "size": "1.5GB"}]}},
         "rentals": [{
@@ -116,6 +117,7 @@ func TestLoadRejectsIncoherentScheduledPlacement(t *testing.T) {
 	const coherent = `{
       "summary": "A scheduled placement follows the current tail.",
       "status": "target",
+      "missing_capabilities": ["rental_schedule"],
       "world": {
         "rentals": [{
           "id": "rental-a",
@@ -161,6 +163,119 @@ func TestLoadRejectsIncoherentScheduledPlacement(t *testing.T) {
 				t.Fatalf("incoherent %s must be rejected", name)
 			}
 		})
+	}
+}
+
+func TestLoadEnforcesCapabilityDeclarations(t *testing.T) {
+	if _, err := loadFixtureText(t, strings.Replace(minimalGreenScenario,
+		`"status": "green"`, `"status": "target"`, 1)); err == nil || !strings.Contains(err.Error(), "missing_capabilities") {
+		t.Fatalf("target scenarios must declare missing capabilities, got %v", err)
+	}
+	if _, err := loadFixtureText(t, strings.Replace(minimalGreenScenario,
+		`"status": "green"`, `"status": "green", "missing_capabilities": ["rental_schedule"]`, 1)); err == nil || !strings.Contains(err.Error(), "green scenarios") {
+		t.Fatalf("green scenarios must not declare missing capabilities, got %v", err)
+	}
+	if _, err := loadFixtureText(t, strings.Replace(minimalGreenScenario,
+		`"status": "green"`, `"status": "target", "missing_capabilities": ["telepathy"]`, 1)); err == nil || !strings.Contains(err.Error(), "unknown capability") {
+		t.Fatalf("unknown capabilities must be rejected, got %v", err)
+	}
+}
+
+func TestLoadEnforcesScheduleBounds(t *testing.T) {
+	const overfull = `{
+      "summary": "Five ScheduledPlacements exceed the schedule cap.",
+      "status": "target",
+      "missing_capabilities": ["rental_schedule"],
+      "world": {
+        "rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}],
+        "rental_schedules": [{
+          "rental": "rental-a",
+          "version": 1,
+          "running": {"placement": "p0", "run": "r0", "remaining_max_runtime": "5m"},
+          "scheduled": [
+            {"placement": "p1", "run": "r1", "max_runtime": "5m"},
+            {"placement": "p2", "run": "r2", "max_runtime": "5m"},
+            {"placement": "p3", "run": "r3", "max_runtime": "5m"},
+            {"placement": "p4", "run": "r4", "max_runtime": "5m"},
+            {"placement": "p5", "run": "r5", "max_runtime": "5m"}
+          ]
+        }]
+      },
+      "request": {"image": "app:v1"},
+      "expect": {"outcome": "fail"}
+    }`
+	if _, err := loadFixtureText(t, overfull); err == nil || !strings.Contains(err.Error(), "at most 4") {
+		t.Fatalf("a fifth ScheduledPlacement must be rejected, got %v", err)
+	}
+}
+
+func TestLoadRejectsExpectedRuntimeBeyondMaxBound(t *testing.T) {
+	const optimist = `{
+      "summary": "An expected runtime cannot exceed its enforced bound.",
+      "status": "target",
+      "missing_capabilities": ["rental_schedule"],
+      "world": {
+        "rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}],
+        "rental_schedules": [{
+          "rental": "rental-a",
+          "version": 1,
+          "running": {
+            "placement": "p0",
+            "run": "r0",
+            "remaining_max_runtime": "5m",
+            "remaining_expected_runtime": "6m"
+          }
+        }]
+      },
+      "request": {"image": "app:v1"},
+      "expect": {"outcome": "fail"}
+    }`
+	if _, err := loadFixtureText(t, optimist); err == nil || !strings.Contains(err.Error(), "within the max bound") {
+		t.Fatalf("an expected runtime beyond the max bound must be rejected, got %v", err)
+	}
+}
+
+func TestProjectedStartsWorkOffExpectedRuntimes(t *testing.T) {
+	const p50 = `{
+      "summary": "Projected starts derive from expected runtimes, not max bounds.",
+      "status": "target",
+      "missing_capabilities": ["rental_schedule"],
+      "world": {
+        "rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}],
+        "rental_schedules": [{
+          "rental": "rental-a",
+          "version": 1,
+          "running": {
+            "placement": "p0",
+            "run": "r0",
+            "remaining_max_runtime": "10m",
+            "remaining_expected_runtime": "3m"
+          },
+          "scheduled": [
+            {"placement": "p1", "run": "r1", "max_runtime": "10m", "expected_runtime": "2m"}
+          ]
+        }]
+      },
+      "request": {"image": "app:v1", "max_runtime": "1h"},
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-a",
+        "placement": {
+          "id": "p-new",
+          "rental": "rental-a",
+          "state": "scheduled",
+          "after": "p1",
+          "projected_start_in": "5m",
+          "schedule_version": 2
+        }
+      }
+    }`
+	if _, err := loadFixtureText(t, p50); err != nil {
+		t.Fatalf("p50-based projected start must validate: %v", err)
+	}
+	if _, err := loadFixtureText(t, strings.Replace(p50,
+		`"projected_start_in": "5m"`, `"projected_start_in": "20m"`, 1)); err == nil || !strings.Contains(err.Error(), "expected runtimes") {
+		t.Fatalf("a max-bound projected start must be rejected under p50 projection, got %v", err)
 	}
 }
 

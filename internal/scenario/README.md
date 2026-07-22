@@ -11,6 +11,8 @@ A scenario's `status` decides how the runner treats failures:
 - `green` asserts behavior Mercator has today. Any failure fails CI as a regression.
 - `target` encodes the future contract. Failures are reported as pending (the test skips, with the full diff of what happened instead). A target scenario that starts passing fails CI until someone promotes it to green, so the corpus always states exactly where the program stands.
 
+Every target scenario declares `missing_capabilities`: the named semantics its promotion waits on (`rental_schedule`, `schedule_advancement`, `cache_evidence`, `cache_mounts`, `host_facts`). Fixture parse or coherence errors are always hard failures; the capability declaration only explains why the executed expectations are still red, and it makes the fixtures for a given milestone greppable. Green scenarios declare none.
+
 ## Fixture shape
 
 A single-decision scenario:
@@ -68,9 +70,10 @@ Conventions:
 - layer names are content identity: two images listing the same layer name share that layer
 - rentals default to a generous GPU-box inventory (8 CPUs, 32GB memory, 200GB disk); state only the resources the scenario is about
 - `world.rental_schedules` belongs to the Broker and references Rentals by ID; Rental entries describe machines and contain no schedule or future-work state
-- an omitted RentalSchedule is empty; a nonempty RentalSchedule has a positive `version`, exactly one `running` Placement, and zero or more ordered `scheduled` Placements
+- an omitted RentalSchedule is empty; a nonempty RentalSchedule has a positive `version`, exactly one `running` Placement, and at most 4 ordered `scheduled` Placements; a Run arriving at a full schedule goes elsewhere, whatever the score says
 - every Placement carries stable `placement` and `run` IDs; a RunningPlacement states `remaining_max_runtime`, while every ScheduledPlacement states its full `max_runtime`
-- `expect.outcome` is `place` (a selected Rental or provisionable Offer) or `fail` (a recorded decision with no feasible candidates)
+- max runtimes are the enforced bounds; the optional `remaining_expected_runtime` and `expected_runtime` fields carry the p50, defaulting to the bound; projected starts and queue-delay scoring work off the p50 sums, while `latest_start` guarantees rest on the max bounds
+- `expect.outcome` is `place` (a selected Rental or provisionable Offer) or `fail` (a recorded decision with no feasible candidates); selecting a provisionable Offer mints a new Rental whose first RunningPlacement is the Run, so there is one ontology for running work
 - numeric candidate expectations are exact (`"pull_seconds": 0`) or bounded (`{"at_least": 240}`)
 
 ## Target contracts pinned here
@@ -78,9 +81,22 @@ Conventions:
 Target scenarios assert shapes that no domain type carries yet. The runner reads them from the decision's raw JSON, which pins the contract the milestones must implement:
 
 - assigning a Run to an existing Rental records `"placement": {"id", "rental_id", "state", "after_placement_id", "projected_start_at", "latest_start_at", "schedule_version"}` on the decision; `state` is `running` or `scheduled`
-- a busy Rental candidate records `"rental_schedule": {"version", "running", "preceding", "projected_start_seconds"}`; `running` identifies the RunningPlacement and its remaining maximum runtime, while `preceding` preserves every ScheduledPlacement ahead of the incoming Run in exact order
+- a busy Rental candidate records `"rental_schedule": {"version", "running", "preceding", "projected_start_seconds"}`; `running` and each `preceding` entry carry both the enforced max runtime and the expected (p50) runtime, `preceding` preserves every ScheduledPlacement ahead of the incoming Run in exact order, and `projected_start_seconds` is the p50 sum
+- a full schedule rejects the candidate with `SCHEDULE_FULL` at `rental_schedule.scheduled`
 - named-cache evidence is `"cache_evidence": [{"key", "hit"}]` on each candidate, recording hit or miss per declared cache key
 - host facts are rejected with the existing violation vocabulary: a fact present and false is `CAPABILITY_MISMATCH` at `facts.<name>`, a fact absent is `UNKNOWN_FACT` at `facts.<name>`
+
+## Schedule lifecycle contract
+
+The Broker owns every schedule transition and records each one on the Rental's stream, so "why did this Run wait" is answerable from the log alone:
+
+- `compute.rental.placement_scheduled.v1` when a decision appends a ScheduledPlacement
+- `compute.rental.placement_dispatched.v1` when a Placement becomes the RunningPlacement and launches through the Rental's Docker endpoint
+- `compute.rental.placement_moved.v1` when a recheck relocates a Placement
+- `compute.rental.placement_expired.v1` when a Placement passes its latest start and its Run re-enters placement
+- `compute.rental.placement_cancelled.v1` when a Run's cancellation removes its Placement
+
+The Broker rechecks schedules on a one-minute cadence. Only the tail Placement of a schedule is re-evaluated: it reruns the placement algorithm, and moves if a better candidate now exists. Interior Placements never move, so the order ahead of any waiting Run only ever shrinks. In scenarios, `reconcile` steps model those ticks; the `Session` seam gains a Rental-stream reader when these events exist.
 
 ## Backends
 

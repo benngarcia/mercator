@@ -1,6 +1,7 @@
 {
   "summary": "The run declares the 40GB dataset it trains on as a cache mount. The rental holding that dataset wins over a rental with a better image-layer cache, because avoiding a 40GB transfer dwarfs a 40MB layer pull.",
   "status": "target",
+  "missing_capabilities": ["cache_mounts", "cache_evidence"],
   "world": {
     "images": {
       "trainer:v1": {

@@ -50,15 +50,56 @@ const (
 	PlacementScheduled PlacementState = "scheduled"
 )
 
+// Capability names one unbuilt semantic a target scenario is red for. The
+// declaration keeps pending results attributable: a target fixture states
+// exactly which capability its promotion waits on, and green scenarios may
+// declare none.
+type Capability string
+
+const (
+	// CapabilityRentalSchedule is the Broker ingesting, versioning, and
+	// appending to ordered per-Rental schedules.
+	CapabilityRentalSchedule Capability = "rental_schedule"
+	// CapabilityScheduleAdvancement is the Broker advancing schedules over
+	// time: dispatching the next Placement, expiring one past its latest
+	// start, and re-placing its Run.
+	CapabilityScheduleAdvancement Capability = "schedule_advancement"
+	// CapabilityCacheEvidence is named-cache hit/miss evidence recorded and
+	// scored per candidate.
+	CapabilityCacheEvidence Capability = "cache_evidence"
+	// CapabilityCacheMounts is the container spec carrying content-keyed
+	// cache mount declarations.
+	CapabilityCacheMounts Capability = "cache_mounts"
+	// CapabilityHostFacts is providers advertising SSH and NVIDIA-driver
+	// facts on offers, rejected loudly when absent or false.
+	CapabilityHostFacts Capability = "host_facts"
+)
+
+var knownCapabilities = map[Capability]bool{
+	CapabilityRentalSchedule:      true,
+	CapabilityScheduleAdvancement: true,
+	CapabilityCacheEvidence:       true,
+	CapabilityCacheMounts:         true,
+	CapabilityHostFacts:           true,
+}
+
+// MaxScheduledPlacements bounds every RentalSchedule: at most this many
+// ScheduledPlacements may wait behind the RunningPlacement. A Run arriving at
+// a full schedule must go elsewhere, whatever the score says.
+const MaxScheduledPlacements = 4
+
 // defaultWorldStart is the scripted clock's origin when a fixture does not
 // state one. Every relative moment ("+6m") resolves against it.
 var defaultWorldStart = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 
 type Scenario struct {
-	Name    string    `json:"-"`
-	Summary string    `json:"summary"`
-	Status  Status    `json:"status"`
-	World   WorldSpec `json:"world"`
+	Name    string `json:"-"`
+	Summary string `json:"summary"`
+	Status  Status `json:"status"`
+	// MissingCapabilities names the unbuilt semantics a target scenario is red
+	// for. Required for target scenarios, forbidden for green ones.
+	MissingCapabilities []Capability `json:"missing_capabilities,omitempty"`
+	World               WorldSpec    `json:"world"`
 	// Request/Expect is the single-decision shorthand; Timeline is the scripted
 	// alternative for scenarios that advance the clock or submit several runs.
 	Request  *RequestSpec `json:"request,omitempty"`
@@ -125,21 +166,42 @@ type RentalScheduleSpec struct {
 type RunningPlacementSpec struct {
 	PlacementID string `json:"placement"`
 	RunID       string `json:"run"`
-	// RemainingMaxRuntime is the recorded upper bound used to project when the
-	// first ScheduledPlacement may start.
+	// RemainingMaxRuntime is the recorded, enforced upper bound: the basis for
+	// latest-start guarantees.
 	RemainingMaxRuntime Duration `json:"remaining_max_runtime"`
+	// RemainingExpectedRuntime is the p50 remaining runtime, the basis for
+	// projected starts and queue-delay scoring. Defaults to the max bound.
+	RemainingExpectedRuntime *Duration `json:"remaining_expected_runtime,omitempty"`
 	// CompletesAfter is when completion is actually observed, defaulting to
-	// RemainingMaxRuntime. A later value models enforcement or observation lag.
+	// the expected remaining runtime. Another value models a run finishing
+	// early or overrunning its estimate up to the enforced bound.
 	CompletesAfter *Duration `json:"completes_after,omitempty"`
+}
+
+func (p RunningPlacementSpec) expectedRemaining() Duration {
+	if p.RemainingExpectedRuntime != nil {
+		return *p.RemainingExpectedRuntime
+	}
+	return p.RemainingMaxRuntime
 }
 
 type ScheduledPlacementSpec struct {
 	PlacementID string   `json:"placement"`
 	RunID       string   `json:"run"`
 	MaxRuntime  Duration `json:"max_runtime"`
+	// ExpectedRuntime is the p50 runtime used for projected starts and
+	// queue-delay scoring. Defaults to the max bound.
+	ExpectedRuntime *Duration `json:"expected_runtime,omitempty"`
 	// LatestStart is the last acceptable start time for this Placement. When it
 	// expires, Mercator removes the Placement and re-evaluates its Run.
 	LatestStart *Moment `json:"latest_start,omitempty"`
+}
+
+func (p ScheduledPlacementSpec) expected() Duration {
+	if p.ExpectedRuntime != nil {
+		return *p.ExpectedRuntime
+	}
+	return p.MaxRuntime
 }
 
 type MarketplaceOfferSpec struct {
@@ -246,12 +308,30 @@ type RunningPlacementEvidence struct {
 	PlacementID         string   `json:"placement"`
 	RunID               string   `json:"run"`
 	RemainingMaxRuntime Duration `json:"remaining_max_runtime"`
+	// RemainingExpectedRuntime is the recorded p50; defaults to the max bound.
+	RemainingExpectedRuntime *Duration `json:"remaining_expected_runtime,omitempty"`
+}
+
+func (e RunningPlacementEvidence) expectedRemaining() Duration {
+	if e.RemainingExpectedRuntime != nil {
+		return *e.RemainingExpectedRuntime
+	}
+	return e.RemainingMaxRuntime
 }
 
 type ScheduledPlacementEvidence struct {
 	PlacementID string   `json:"placement"`
 	RunID       string   `json:"run"`
 	MaxRuntime  Duration `json:"max_runtime"`
+	// ExpectedRuntime is the recorded p50; defaults to the max bound.
+	ExpectedRuntime *Duration `json:"expected_runtime,omitempty"`
+}
+
+func (e ScheduledPlacementEvidence) expected() Duration {
+	if e.ExpectedRuntime != nil {
+		return *e.ExpectedRuntime
+	}
+	return e.MaxRuntime
 }
 
 type RejectionSpec struct {
@@ -445,6 +525,17 @@ func (sc Scenario) validate() error {
 	if sc.Status != StatusGreen && sc.Status != StatusTarget {
 		return fmt.Errorf("status must be %q or %q, got %q", StatusGreen, StatusTarget, sc.Status)
 	}
+	if sc.Status == StatusTarget && len(sc.MissingCapabilities) == 0 {
+		return fmt.Errorf("target scenarios declare the missing_capabilities their promotion waits on")
+	}
+	if sc.Status == StatusGreen && len(sc.MissingCapabilities) > 0 {
+		return fmt.Errorf("green scenarios declare no missing_capabilities")
+	}
+	for _, capability := range sc.MissingCapabilities {
+		if !knownCapabilities[capability] {
+			return fmt.Errorf("unknown capability %q", capability)
+		}
+	}
 	if err := sc.World.validate(); err != nil {
 		return err
 	}
@@ -540,16 +631,18 @@ func (sc Scenario) validateScheduleTimeline() error {
 		schedule.Version = placement.ScheduleVersion
 		if placement.State == PlacementRunning {
 			schedule.Running = &RunningPlacementSpec{
-				PlacementID:         placement.PlacementID,
-				RunID:               runID,
-				RemainingMaxRuntime: *request.MaxRuntime,
+				PlacementID:              placement.PlacementID,
+				RunID:                    runID,
+				RemainingMaxRuntime:      *request.MaxRuntime,
+				RemainingExpectedRuntime: request.ExpectedRuntime,
 			}
 		} else {
 			schedule.Scheduled = append(schedule.Scheduled, ScheduledPlacementSpec{
-				PlacementID: placement.PlacementID,
-				RunID:       runID,
-				MaxRuntime:  *request.MaxRuntime,
-				LatestStart: placement.LatestStart,
+				PlacementID:     placement.PlacementID,
+				RunID:           runID,
+				MaxRuntime:      *request.MaxRuntime,
+				ExpectedRuntime: request.ExpectedRuntime,
+				LatestStart:     placement.LatestStart,
 			})
 		}
 		placementIDs[placement.PlacementID] = true
@@ -591,12 +684,15 @@ func validatePlacementDecision(schedule RentalScheduleSpec, elapsed time.Duratio
 	if schedule.Running == nil {
 		return fmt.Errorf("ScheduledPlacement %q requires a RunningPlacement", placement.PlacementID)
 	}
+	if len(schedule.Scheduled) >= MaxScheduledPlacements {
+		return fmt.Errorf("ScheduledPlacement %q appends to a full RentalSchedule; at most %d Placements may wait", placement.PlacementID, MaxScheduledPlacements)
+	}
 	if want := schedule.tailPlacementID(); placement.AfterPlacement != want {
 		return fmt.Errorf("ScheduledPlacement %q follows %q, want current tail %q", placement.PlacementID, placement.AfterPlacement, want)
 	}
 	wait := schedule.projectedWait(elapsed)
 	if placement.ProjectedStart == nil || placement.ProjectedStart.Duration() != wait {
-		return fmt.Errorf("ScheduledPlacement %q projected_start_in is %v, want %v from preceding maximum runtimes", placement.PlacementID, durationValue(placement.ProjectedStart), wait)
+		return fmt.Errorf("ScheduledPlacement %q projected_start_in is %v, want %v from preceding expected runtimes", placement.PlacementID, durationValue(placement.ProjectedStart), wait)
 	}
 	return nil
 }
@@ -605,11 +701,11 @@ func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration
 	if expect.Version != schedule.Version {
 		return fmt.Errorf("schedule version is %d, want %d", expect.Version, schedule.Version)
 	}
-	remaining := schedule.runningRemaining(elapsed)
 	if schedule.Running == nil || expect.Running == nil ||
 		expect.Running.PlacementID != schedule.Running.PlacementID ||
 		expect.Running.RunID != schedule.Running.RunID ||
-		expect.Running.RemainingMaxRuntime.Duration() != remaining {
+		expect.Running.RemainingMaxRuntime.Duration() != schedule.runningMaxRemaining(elapsed) ||
+		expect.Running.expectedRemaining().Duration() != schedule.runningExpectedRemaining(elapsed) {
 		return fmt.Errorf("RunningPlacement evidence does not match the current schedule")
 	}
 	if len(expect.Preceding) != len(schedule.Scheduled) {
@@ -617,7 +713,9 @@ func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration
 	}
 	for i, placement := range schedule.Scheduled {
 		actual := expect.Preceding[i]
-		if actual.PlacementID != placement.PlacementID || actual.RunID != placement.RunID || actual.MaxRuntime.Duration() != placement.MaxRuntime.Duration() {
+		if actual.PlacementID != placement.PlacementID || actual.RunID != placement.RunID ||
+			actual.MaxRuntime.Duration() != placement.MaxRuntime.Duration() ||
+			actual.expected().Duration() != placement.expected().Duration() {
 			return fmt.Errorf("preceding[%d] does not match ScheduledPlacement %q", i, placement.PlacementID)
 		}
 	}
@@ -649,19 +747,30 @@ func (schedule RentalScheduleSpec) tailPlacementID() string {
 	return schedule.Running.PlacementID
 }
 
+// projectedWait is the p50 wait for the next arriving Placement: the running
+// Placement's expected remaining runtime plus every waiting Placement's
+// expected runtime. Max runtimes stay the enforced ceiling behind
+// latest-start guarantees; expectations drive projections and scoring.
 func (schedule RentalScheduleSpec) projectedWait(elapsed time.Duration) time.Duration {
-	wait := schedule.runningRemaining(elapsed)
+	wait := schedule.runningExpectedRemaining(elapsed)
 	for _, placement := range schedule.Scheduled {
-		wait += placement.MaxRuntime.Duration()
+		wait += placement.expected().Duration()
 	}
 	return wait
 }
 
-func (schedule RentalScheduleSpec) runningRemaining(elapsed time.Duration) time.Duration {
+func (schedule RentalScheduleSpec) runningMaxRemaining(elapsed time.Duration) time.Duration {
 	if schedule.Running == nil {
 		return 0
 	}
 	return max(0, schedule.Running.RemainingMaxRuntime.Duration()-elapsed)
+}
+
+func (schedule RentalScheduleSpec) runningExpectedRemaining(elapsed time.Duration) time.Duration {
+	if schedule.Running == nil {
+		return 0
+	}
+	return max(0, schedule.Running.expectedRemaining().Duration()-elapsed)
 }
 
 func durationValue(value *Duration) time.Duration {
@@ -833,8 +942,15 @@ func (schedule RentalScheduleSpec) validate(start time.Time) error {
 	if schedule.Running.RemainingMaxRuntime.Duration() <= 0 {
 		return fmt.Errorf("rental %q: RunningPlacement %q needs a positive remaining_max_runtime", rentalID, schedule.Running.PlacementID)
 	}
+	if expected := schedule.Running.RemainingExpectedRuntime; expected != nil &&
+		(expected.Duration() <= 0 || expected.Duration() > schedule.Running.RemainingMaxRuntime.Duration()) {
+		return fmt.Errorf("rental %q: RunningPlacement %q remaining_expected_runtime must be positive and within the max bound", rentalID, schedule.Running.PlacementID)
+	}
 	if completes := schedule.Running.CompletesAfter; completes != nil && completes.Duration() <= 0 {
 		return fmt.Errorf("rental %q: RunningPlacement %q needs a positive completes_after", rentalID, schedule.Running.PlacementID)
+	}
+	if len(schedule.Scheduled) > MaxScheduledPlacements {
+		return fmt.Errorf("rental %q: at most %d ScheduledPlacements may wait, got %d", rentalID, MaxScheduledPlacements, len(schedule.Scheduled))
 	}
 	for _, placement := range schedule.Scheduled {
 		if err := validatePlacementIdentity(rentalID, placement.PlacementID, placement.RunID, ids, runs); err != nil {
@@ -842,6 +958,10 @@ func (schedule RentalScheduleSpec) validate(start time.Time) error {
 		}
 		if placement.MaxRuntime.Duration() <= 0 {
 			return fmt.Errorf("rental %q: ScheduledPlacement %q needs a positive max_runtime", rentalID, placement.PlacementID)
+		}
+		if expected := placement.ExpectedRuntime; expected != nil &&
+			(expected.Duration() <= 0 || expected.Duration() > placement.MaxRuntime.Duration()) {
+			return fmt.Errorf("rental %q: ScheduledPlacement %q expected_runtime must be positive and within the max bound", rentalID, placement.PlacementID)
 		}
 		if placement.LatestStart != nil && !placement.LatestStart.Resolve(start).After(start) {
 			return fmt.Errorf("rental %q: ScheduledPlacement %q latest_start must be after the world start", rentalID, placement.PlacementID)

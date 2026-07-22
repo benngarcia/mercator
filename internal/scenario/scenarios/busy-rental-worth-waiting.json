@@ -1,6 +1,7 @@
 {
-  "summary": "The warm Rental is busy but frees in 6 minutes, and fresh capacity pays 5 minutes of boot plus a full pull. Mercator assigns the Run to the Rental as a ScheduledPlacement after its RunningPlacement.",
+  "summary": "The warm Rental's RunningPlacement is expected to finish in 4 minutes (bounded at 6), and fresh capacity pays 5 minutes of boot plus a full pull. Mercator assigns the Run to the Rental as a ScheduledPlacement projected from the expected runtime.",
   "status": "target",
+  "missing_capabilities": ["rental_schedule"],
   "world": {
     "images": {
       "trainer:v1": {
@@ -24,7 +25,8 @@
         "running": {
           "placement": "placement-active",
           "run": "run-active",
-          "remaining_max_runtime": "6m"
+          "remaining_max_runtime": "6m",
+          "remaining_expected_runtime": "4m"
         }
       }
     ],
@@ -50,21 +52,22 @@
       "rental": "rental-warm",
       "state": "scheduled",
       "after": "placement-active",
-      "projected_start_in": "6m",
+      "projected_start_in": "4m",
       "schedule_version": 2
     },
     "candidates": {
       "rental-warm": {
-        "queue_seconds": 360,
+        "queue_seconds": 240,
         "pull_seconds": 0,
         "rental_schedule": {
           "version": 1,
           "running": {
             "placement": "placement-active",
             "run": "run-active",
-            "remaining_max_runtime": "6m"
+            "remaining_max_runtime": "6m",
+            "remaining_expected_runtime": "4m"
           },
-          "projected_start_in": "6m"
+          "projected_start_in": "4m"
         }
       },
       "fresh-4090": {"provision_seconds": {"at_least": 300}}

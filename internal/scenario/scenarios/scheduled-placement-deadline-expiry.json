@@ -1,6 +1,7 @@
 {
   "summary": "Mercator schedules the Run on a Rental projected to free in 6 minutes. The RunningPlacement remains active past the latest acceptable start, so reconciliation removes the ScheduledPlacement and selects fresh capacity.",
   "status": "target",
+  "missing_capabilities": ["rental_schedule", "schedule_advancement"],
   "world": {
     "images": {
       "trainer:v1": {

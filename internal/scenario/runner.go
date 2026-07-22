@@ -299,14 +299,16 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 type scheduleEvidenceRecord struct {
 	Version uint64 `json:"version"`
 	Running *struct {
-		PlacementID                string  `json:"placement_id"`
-		RunID                      string  `json:"run_id"`
-		RemainingMaxRuntimeSeconds float64 `json:"remaining_max_runtime_seconds"`
+		PlacementID                     string  `json:"placement_id"`
+		RunID                           string  `json:"run_id"`
+		RemainingMaxRuntimeSeconds      float64 `json:"remaining_max_runtime_seconds"`
+		RemainingExpectedRuntimeSeconds float64 `json:"remaining_expected_runtime_seconds"`
 	} `json:"running,omitempty"`
 	Preceding []struct {
-		PlacementID       string  `json:"placement_id"`
-		RunID             string  `json:"run_id"`
-		MaxRuntimeSeconds float64 `json:"max_runtime_seconds"`
+		PlacementID            string  `json:"placement_id"`
+		RunID                  string  `json:"run_id"`
+		MaxRuntimeSeconds      float64 `json:"max_runtime_seconds"`
+		ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds"`
 	} `json:"preceding,omitempty"`
 	ProjectedStartSeconds float64 `json:"projected_start_seconds"`
 }
@@ -323,7 +325,9 @@ func assertScheduleEvidence(rec recordedDecision, name, id string, expect Schedu
 	if actual.Version != expect.Version {
 		fail("expected schedule version %d, got %d", expect.Version, actual.Version)
 	}
-	if actual.Running == nil || actual.Running.PlacementID != expect.Running.PlacementID || actual.Running.RunID != expect.Running.RunID || actual.Running.RemainingMaxRuntimeSeconds != expect.Running.RemainingMaxRuntime.Duration().Seconds() {
+	if actual.Running == nil || actual.Running.PlacementID != expect.Running.PlacementID || actual.Running.RunID != expect.Running.RunID ||
+		actual.Running.RemainingMaxRuntimeSeconds != expect.Running.RemainingMaxRuntime.Duration().Seconds() ||
+		actual.Running.RemainingExpectedRuntimeSeconds != expect.Running.expectedRemaining().Duration().Seconds() {
 		fail("running Placement evidence does not match %+v", *expect.Running)
 	}
 	if len(actual.Preceding) != len(expect.Preceding) {
@@ -331,7 +335,9 @@ func assertScheduleEvidence(rec recordedDecision, name, id string, expect Schedu
 	} else {
 		for i, want := range expect.Preceding {
 			got := actual.Preceding[i]
-			if got.PlacementID != want.PlacementID || got.RunID != want.RunID || got.MaxRuntimeSeconds != want.MaxRuntime.Duration().Seconds() {
+			if got.PlacementID != want.PlacementID || got.RunID != want.RunID ||
+				got.MaxRuntimeSeconds != want.MaxRuntime.Duration().Seconds() ||
+				got.ExpectedRuntimeSeconds != want.expected().Duration().Seconds() {
 				fail("preceding[%d] does not match %+v", i, want)
 			}
 		}

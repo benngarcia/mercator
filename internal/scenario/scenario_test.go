@@ -32,12 +32,20 @@ func TestPlacementScenarios(t *testing.T) {
 			case sc.Status == StatusGreen && len(result.Failures) > 0:
 				t.Errorf("green scenario regressed:\n  %s", strings.Join(result.Failures, "\n  "))
 			case sc.Status == StatusTarget && len(result.Failures) == 0:
-				t.Errorf("target scenario now passes; promote its status to green")
+				t.Errorf("target scenario now passes; promote its status to green and drop its missing_capabilities")
 			case sc.Status == StatusTarget:
-				t.Skipf("PENDING (target contract not built yet):\n  %s", strings.Join(result.Failures, "\n  "))
+				t.Skipf("PENDING (missing %s):\n  %s", describeCapabilities(sc.MissingCapabilities), strings.Join(result.Failures, "\n  "))
 			}
 		})
 	}
+}
+
+func describeCapabilities(capabilities []Capability) string {
+	names := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		names = append(names, string(capability))
+	}
+	return strings.Join(names, ", ")
 }
 
 // TestCorpusCoversBothStatuses keeps the corpus honest about its own shape:

@@ -1,6 +1,7 @@
 {
-  "summary": "Two Runs arrive while a warm Rental is busy. Mercator schedules the first behind the RunningPlacement. The second decision includes that ScheduledPlacement's maximum runtime, making fresh capacity faster.",
+  "summary": "Two Runs arrive while a warm Rental is busy. Mercator schedules the first behind the RunningPlacement. The second decision includes that ScheduledPlacement's expected runtime, making fresh capacity faster.",
   "status": "target",
+  "missing_capabilities": ["rental_schedule"],
   "world": {
     "images": {
       "trainer:v1": {
@@ -71,7 +72,7 @@
         "disposition": "terminate",
         "candidates": {
           "rental-warm": {
-            "queue_seconds": 3900,
+            "queue_seconds": 1500,
             "rental_schedule": {
               "version": 2,
               "running": {
@@ -83,10 +84,11 @@
                 {
                   "placement": "placement-first-waiter",
                   "run": "run-first-waiter",
-                  "max_runtime": "1h"
+                  "max_runtime": "1h",
+                  "expected_runtime": "20m"
                 }
               ],
-              "projected_start_in": "1h5m"
+              "projected_start_in": "25m"
             }
           }
         }

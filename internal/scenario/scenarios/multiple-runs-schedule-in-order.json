@@ -1,6 +1,7 @@
 {
   "summary": "A warm Rental has one short RunningPlacement and fresh capacity is slow. Two arriving Runs both receive durable ScheduledPlacements in submission order because the full ordered wait remains faster than provisioning.",
   "status": "target",
+  "missing_capabilities": ["rental_schedule"],
   "world": {
     "images": {
       "worker:v1": {
@@ -73,12 +74,12 @@
           "rental": "rental-warm",
           "state": "scheduled",
           "after": "placement-first",
-          "projected_start_in": "3m",
+          "projected_start_in": "2m",
           "schedule_version": 3
         },
         "candidates": {
           "rental-warm": {
-            "queue_seconds": 180,
+            "queue_seconds": 120,
             "rental_schedule": {
               "version": 2,
               "running": {
@@ -90,10 +91,11 @@
                 {
                   "placement": "placement-first",
                   "run": "run-first",
-                  "max_runtime": "2m"
+                  "max_runtime": "2m",
+                  "expected_runtime": "1m"
                 }
               ],
-              "projected_start_in": "3m"
+              "projected_start_in": "2m"
             }
           }
         }

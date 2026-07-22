@@ -1,6 +1,7 @@
 {
   "summary": "The Rental holding the declared 40GB dataset has a RunningPlacement with 8 minutes remaining while a Rental with a perfect image cache sits idle. Dataset gravity wins, so Mercator creates an ordered ScheduledPlacement on the dataset Rental.",
   "status": "target",
+  "missing_capabilities": ["rental_schedule", "cache_mounts", "cache_evidence"],
   "world": {
     "images": {
       "trainer:v1": {
