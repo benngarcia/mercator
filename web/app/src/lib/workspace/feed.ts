@@ -225,37 +225,44 @@ function activeScenario() {
     : { name, playbackDelay: play === "1" || play === '"1"' ? 800 : 0 };
 }
 
-function fixtureSignals(workspaceId: string, playbackDelay: number) {
-  return Stream.unwrap(
-    Effect.tryPromise({
-      try: () =>
-        import("./scenario").then(({ fullScheduleScenarioMessages }) =>
-          fullScheduleScenarioMessages(workspaceId),
-        ),
-      catch: (cause) =>
-        decodeFailure("The Workspace fixture could not load.", cause),
-    }).pipe(
-      Effect.map((messages) =>
-        Stream.fromIterable(messages).pipe(
-          Stream.mapAccumEffect(
-            () => false,
-            (live, message) =>
-              Effect.gen(function* () {
-                if (live && playbackDelay > 0) {
-                  yield* Effect.sleep(Duration.millis(playbackDelay));
-                }
-                return [
-                  live || message.type === "ready",
-                  [{ type: "message", message } satisfies WorkspaceSignal],
-                ] as const;
-              }),
+const fixtureSignals =
+  process.env.NODE_ENV === "production"
+    ? null
+    : (workspaceId: string, playbackDelay: number) =>
+        Stream.unwrap(
+          Effect.tryPromise({
+            try: () =>
+              import("./scenario").then(({ fullScheduleScenarioMessages }) =>
+                fullScheduleScenarioMessages(workspaceId),
+              ),
+            catch: (cause) =>
+              decodeFailure("The Workspace fixture could not load.", cause),
+          }).pipe(
+            Effect.map((messages) =>
+              Stream.fromIterable(messages).pipe(
+                Stream.mapAccumEffect(
+                  () => false,
+                  (live, message) =>
+                    Effect.gen(function* () {
+                      if (live && playbackDelay > 0) {
+                        yield* Effect.sleep(Duration.millis(playbackDelay));
+                      }
+                      return [
+                        live || message.type === "ready",
+                        [
+                          {
+                            type: "message",
+                            message,
+                          } satisfies WorkspaceSignal,
+                        ],
+                      ] as const;
+                    }),
+                ),
+                Stream.prepend<WorkspaceSignal>([{ type: "connecting" }]),
+              ),
+            ),
           ),
-          Stream.prepend<WorkspaceSignal>([{ type: "connecting" }]),
-        ),
-      ),
-    ),
-  );
-}
+        );
 
 export const layer = Layer.effect(
   WorkspaceEvents,
@@ -267,7 +274,10 @@ export const layer = Layer.effect(
       Stream.unwrap(
         Effect.gen(function* () {
           const scenario = activeScenario();
-          if (scenario?.name === "full-schedule-forces-fresh-capacity") {
+          if (
+            fixtureSignals !== null &&
+            scenario?.name === "full-schedule-forces-fresh-capacity"
+          ) {
             return fixtureSignals(workspaceId, scenario.playbackDelay);
           }
           const state = yield* session.current;
