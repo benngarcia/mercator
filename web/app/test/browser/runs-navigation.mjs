@@ -18,6 +18,39 @@ const workspaceID = requiredEnv("MERCATOR_BROWSER_WORKSPACE_ID");
 await fs.mkdir(outputDirectory, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
+const browserFailures = [];
+
+function expectedMissingDecision(response) {
+  const url = new URL(response.url());
+  return (
+    response.status() === 404 &&
+    response.request().method() === "GET" &&
+    /^\/v1\/runs\/[^/]+\/decision$/.test(url.pathname)
+  );
+}
+
+function recordBrowserFailures(page) {
+  page.on("console", (message) => {
+    if (
+      message.type() === "error" &&
+      !message.text().startsWith("Failed to load resource:")
+    ) {
+      browserFailures.push(message.text());
+      console.error(`browser console: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => {
+    browserFailures.push(error.message);
+    console.error(`browser page error: ${error.message}`);
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 400 && !expectedMissingDecision(response)) {
+      const failure = `${response.request().method()} ${response.url()}: ${response.status()}`;
+      browserFailures.push(failure);
+      console.error(`browser HTTP failure: ${failure}`);
+    }
+  });
+}
 
 function contextOptions(viewport) {
   return {
@@ -285,17 +318,7 @@ async function authoringRoutesRetired(page) {
 
 const desktop = await prepareContext({ width: 1280, height: 800 });
 const page = await desktop.newPage();
-const consoleErrors = [];
-page.on("console", (message) => {
-  if (message.type() === "error") {
-    consoleErrors.push(message.text());
-    console.error(`browser console: ${message.text()}`);
-  }
-});
-page.on("pageerror", (error) => {
-  consoleErrors.push(error.message);
-  console.error(`browser page error: ${error.message}`);
-});
+recordBrowserFailures(page);
 try {
   await localSessionSurvivesReload(page);
   await runsScopeCancelledCreate(page);
@@ -320,16 +343,7 @@ try {
 const mobile = await prepareContext({ width: 390, height: 844 });
 try {
   const mobilePage = await mobile.newPage();
-  mobilePage.on("console", (message) => {
-    if (message.type() === "error") {
-      consoleErrors.push(message.text());
-      console.error(`mobile browser console: ${message.text()}`);
-    }
-  });
-  mobilePage.on("pageerror", (error) => {
-    consoleErrors.push(error.message);
-    console.error(`mobile browser page error: ${error.message}`);
-  });
+  recordBrowserFailures(mobilePage);
   await mobilePage.goto(runsURL(), { waitUntil: "domcontentloaded" });
   await waitForRuns(mobilePage);
   await mobilePage
@@ -344,7 +358,7 @@ try {
   await mobilePage.screenshot({
     path: path.join(outputDirectory, "create-run-spec-mobile.png"),
   });
-  assert.deepEqual(consoleErrors, []);
+  assert.deepEqual(browserFailures, []);
 } finally {
   await mobile.close();
   await browser.close();
