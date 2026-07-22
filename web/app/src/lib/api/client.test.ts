@@ -1,55 +1,63 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, effect, expect } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
-import { setWorkspace } from "../session";
-import { apiFetch } from "./client";
+import { layer as sessionLayer } from "../session";
+import * as endpoints from "./endpoints";
+import { layer as apiLayer } from "./client";
 
-let requestedURL = "";
 const originalFetch = globalThis.fetch;
-
-beforeEach(() => {
-  (globalThis as unknown as { localStorage: Storage }).localStorage =
-    new MemoryStorage() as unknown as Storage;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    requestedURL = String(input);
-    return new Response("{}", { status: 200 });
-  }) as typeof fetch;
-  requestedURL = "";
-});
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-test("workspace scope none omits the selected workspace", async () => {
-  setWorkspace("ws_selected");
+const testApiLayer = apiLayer.pipe(Layer.provide(sessionLayer));
 
-  await apiFetch("/v1/workspaces", { workspaceScope: "none" });
+effect("uses the explicit Workspace from the OpenAPI query", () =>
+  Effect.gen(function* () {
+    const requests: Request[] = [];
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push(
+          input instanceof Request ? input : new Request(input, init),
+        );
+        return Response.json({ runs: [] });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
 
-  expect(requestedURL).toBe("/v1/workspaces");
-});
+    yield* endpoints.listRuns({ workspaceId: "ws_explicit" });
 
-test("explicit workspace scope overrides the selected workspace", async () => {
-  setWorkspace("ws_selected");
+    const request = requests[0];
+    if (request === undefined) {
+      throw new Error("Expected the API to issue a request");
+    }
+    expect(new URL(request.url).searchParams.get("workspace_id")).toBe(
+      "ws_explicit",
+    );
+  }).pipe(Effect.provide(testApiLayer)),
+);
 
-  await apiFetch("/v1/runs", {
-    workspaceScope: { workspaceId: "ws_explicit" },
-  });
+effect("omits Workspace scope from the Workspace catalog", () =>
+  Effect.gen(function* () {
+    const requests: Request[] = [];
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push(
+          input instanceof Request ? input : new Request(input, init),
+        );
+        return Response.json({ workspaces: [] });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
 
-  expect(requestedURL).toBe("/v1/runs?workspace_id=ws_explicit");
-});
+    yield* endpoints.listWorkspaces(false);
 
-class MemoryStorage {
-  private values = new Map<string, string>();
-
-  getItem(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-
-  setItem(key: string, value: string): void {
-    this.values.set(key, value);
-  }
-
-  removeItem(key: string): void {
-    this.values.delete(key);
-  }
-}
+    const request = requests[0];
+    if (request === undefined) {
+      throw new Error("Expected the API to issue a request");
+    }
+    expect(new URL(request.url).searchParams.has("workspace_id")).toBe(false);
+  }).pipe(Effect.provide(testApiLayer)),
+);

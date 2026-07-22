@@ -4,6 +4,18 @@ import type {
   OfferSnapshot,
   WorkloadRevision,
 } from "@/lib/api/types";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+
+import {
+  BookingDecidedData,
+  LaunchIntentData,
+  ObservedRunData,
+  OutcomeData,
+  RentalBookingData,
+  RentalRemovalData,
+  RequestedData,
+} from "./contracts";
 
 export type WorkspaceRunPhase =
   | "requested"
@@ -157,10 +169,7 @@ function replaceOffers(
   });
 }
 
-function applyDomainEvent(
-  workspace: Workspace,
-  event: CloudEvent,
-): Workspace {
+function applyDomainEvent(workspace: Workspace, event: CloudEvent): Workspace {
   if (event.workspaceid !== workspace.id) return workspace;
   const next = applyRunEvent(workspace, event);
   return {
@@ -203,12 +212,9 @@ function applyRunEvent(workspace: Workspace, event: CloudEvent): Workspace {
 }
 
 function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
-  const data = objectData(event);
-  const runID = requiredString(data, "run_id", event.type);
-  const workload = data.workload_revision as WorkloadRevision | undefined;
-  if (!workload?.spec?.execution) {
-    throw new Error(`${event.type} requires workload_revision`);
-  }
+  const data = decodeEventData(RequestedData, event);
+  const runID = data.run_id;
+  const workload: WorkloadRevision = data.workload_revision;
   const expected = workload.spec.placement.expected_runtime_seconds;
   const max = workload.spec.execution.max_runtime_seconds;
   if (expected !== undefined && expected > max) {
@@ -226,9 +232,8 @@ function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
 }
 
 function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
-  const data = objectData(event);
-  const decision = data.decision as BookingDecision | undefined;
-  if (!decision) throw new Error(`${event.type} requires decision`);
+  const data = decodeEventData(BookingDecidedData, event);
+  const decision: BookingDecision = data.decision;
   const runID = decision.run_id ?? event.correlationid;
   if (!runID) throw new Error(`${event.type} requires decision.run_id`);
   const run = requiredRun(workspace, runID, event.type);
@@ -294,12 +299,12 @@ function insertBooking(
   const provisioned = offer?.kind === "provisionable";
   const rental: Rental = {
     id: booking.rentalID,
-    source: provisioned ? "provisioned" : existing?.source ?? "unknown",
+    source: provisioned ? "provisioned" : (existing?.source ?? "unknown"),
     phase: provisioned
       ? "provisioning"
       : booking.state === "running"
         ? "active"
-        : existing?.phase ?? "idle",
+        : (existing?.phase ?? "idle"),
     offer: offer ?? existing?.offer,
     runningBookingID:
       booking.state === "running" ? booking.id : existing?.runningBookingID,
@@ -341,13 +346,16 @@ function orderedQueuedBookings(
   return ordered;
 }
 
-function recordLaunchIntent(workspace: Workspace, event: CloudEvent): Workspace {
+function recordLaunchIntent(
+  workspace: Workspace,
+  event: CloudEvent,
+): Workspace {
   const runID = runIDForEvent(event);
   const run = requiredRun(workspace, runID, event.type);
   if (!run.bookingID) return workspace;
   const booking = workspace.bookings[run.bookingID];
   if (!booking) return workspace;
-  const data = objectData(event);
+  const data = decodeEventData(LaunchIntentData, event);
   const rental = workspace.rentals[booking.rentalID];
   if (!rental) return workspace;
   const provisioned = data.disposition === "terminate";
@@ -368,8 +376,8 @@ function recordLaunchIntent(workspace: Workspace, event: CloudEvent): Workspace 
 }
 
 function observeRun(workspace: Workspace, event: CloudEvent): Workspace {
-  const data = objectData(event);
-  const phase = typeof data.phase === "string" ? data.phase : "";
+  const data = decodeEventData(ObservedRunData, event);
+  const phase = data.phase;
   if (phase !== "running") return workspace;
   const runID = runIDForEvent(event);
   const run = requiredRun(workspace, runID, event.type);
@@ -393,14 +401,14 @@ function observeRun(workspace: Workspace, event: CloudEvent): Workspace {
 function recordOutcome(workspace: Workspace, event: CloudEvent): Workspace {
   const runID = runIDForEvent(event);
   const run = requiredRun(workspace, runID, event.type);
-  const data = objectData(event);
+  const data = decodeEventData(OutcomeData, event);
   return changed(workspace, {
     runs: {
       ...workspace.runs,
       [runID]: {
         ...run,
         phase: "cleaning",
-        outcome: typeof data.outcome === "string" ? data.outcome : undefined,
+        outcome: data.outcome,
       },
     },
   });
@@ -439,18 +447,22 @@ function applyRentalBookingEvent(
   workspace: Workspace,
   event: CloudEvent,
 ): Workspace {
-  const data = objectData(event);
-  const source = (data.booking ?? data) as Record<string, unknown>;
-  const runID = requiredString(data, "run_id", event.type);
+  const data = decodeEventData(RentalBookingData, event);
+  const source = data.booking ?? data;
+  const runID = data.run_id;
   const booking: WorkspaceBooking = {
-    id: requiredString(source, "id", event.type),
-    rentalID: requiredString(source, "rental_id", event.type),
+    id: requiredValue(source.id, "id", event.type),
+    rentalID: requiredValue(source.rental_id, "rental_id", event.type),
     runID,
     state: event.type.endsWith("booking_dispatched.v1") ? "running" : "queued",
     afterBookingID: optionalString(source.after_booking_id),
     projectedStartAt: optionalString(source.projected_start_at),
     latestStartAt: optionalString(source.latest_start_at),
-    scheduleVersion: requiredNumber(source, "schedule_version", event.type),
+    scheduleVersion: requiredNumberValue(
+      source.schedule_version,
+      "schedule_version",
+      event.type,
+    ),
   };
   const bookings = { ...workspace.bookings, [booking.id]: booking };
   return changed(workspace, {
@@ -463,7 +475,7 @@ function removeRentalBooking(
   workspace: Workspace,
   event: CloudEvent,
 ): Workspace {
-  const data = objectData(event);
+  const data = decodeEventData(RentalRemovalData, event);
   const bookingID =
     optionalString(data.booking_id) ?? optionalString(data.id) ?? "";
   return bookingID ? detachBooking(workspace, bookingID) : workspace;
@@ -500,10 +512,7 @@ function detachBooking(
   });
 }
 
-function changed(
-  workspace: Workspace,
-  values: Partial<Workspace>,
-): Workspace {
+function changed(workspace: Workspace, values: Partial<Workspace>): Workspace {
   return {
     ...workspace,
     ...values,
@@ -511,11 +520,17 @@ function changed(
   };
 }
 
-function objectData(event: CloudEvent): Record<string, unknown> {
-  if (!event.data || typeof event.data !== "object" || Array.isArray(event.data)) {
-    throw new Error(`${event.type} requires an object data payload`);
+function decodeEventData<Type>(
+  schema: Schema.ConstraintDecoder<Type>,
+  event: CloudEvent,
+): Type {
+  const decoded = Schema.decodeUnknownResult(schema)(event.data);
+  if (Result.isFailure(decoded)) {
+    throw new Error(
+      `${event.type} has invalid data: ${decoded.failure.message}`,
+    );
   }
-  return event.data as Record<string, unknown>;
+  return decoded.success;
 }
 
 function requiredRun(
@@ -537,25 +552,23 @@ function runIDForEvent(event: CloudEvent): string {
   return runID;
 }
 
-function requiredString(
-  data: Record<string, unknown>,
+function requiredValue(
+  value: string | undefined,
   field: string,
   eventType: string,
 ): string {
-  const value = data[field];
-  if (typeof value !== "string" || value === "") {
+  if (value === undefined || value === "") {
     throw new Error(`${eventType} requires ${field}`);
   }
   return value;
 }
 
-function requiredNumber(
-  data: Record<string, unknown>,
+function requiredNumberValue(
+  value: number | undefined,
   field: string,
   eventType: string,
 ): number {
-  const value = data[field];
-  if (typeof value !== "number") {
+  if (value === undefined) {
     throw new Error(`${eventType} requires ${field}`);
   }
   return value;

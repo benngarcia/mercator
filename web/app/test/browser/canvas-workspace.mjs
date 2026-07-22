@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 
 import { chromium } from "playwright";
 
-const baseURL = (process.env.MERCATOR_BROWSER_BASE_URL ?? "http://127.0.0.1:3000").replace(
-  /\/$/,
-  "",
-);
+const baseURL = (
+  process.env.MERCATOR_BROWSER_BASE_URL ?? "http://127.0.0.1:3000"
+).replace(/\/$/, "");
 const workspaceID = "ws_scenario";
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
@@ -34,10 +33,7 @@ try {
   page.on("pageerror", (error) => consoleProblems.push(error.message));
   const url = new URL("/canvas", baseURL);
   url.searchParams.set("workspace_id", workspaceID);
-  url.searchParams.set(
-    "scenario",
-    "full-schedule-forces-fresh-capacity",
-  );
+  url.searchParams.set("scenario", "full-schedule-forces-fresh-capacity");
   url.searchParams.set("play", "1");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
 
@@ -63,7 +59,15 @@ try {
   await movingRun.waitFor();
   const incomingPosition = await movingRun.boundingBox();
   assert.ok(incomingPosition, "incoming Run needs a rendered card");
-  await page.waitForTimeout(1_100);
+  await page.waitForFunction(
+    ({ x, y }) => {
+      const card = document.querySelector('a[aria-label^="run-fifth:"]');
+      if (!(card instanceof HTMLElement)) return false;
+      const position = card.getBoundingClientRect();
+      return position.y > y + 80 && position.x > x + 300;
+    },
+    { x: incomingPosition.x, y: incomingPosition.y },
+  );
   const rentalPosition = await movingRun.boundingBox();
   assert.ok(rentalPosition, "booked Run needs a rendered card");
   assert.ok(

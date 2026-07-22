@@ -1,108 +1,136 @@
-// Session storage: the bearer token and the default workspace id live in
-// localStorage. The token is NEVER placed in the URL; workspace_id may be a
-// route search param, but its default is read from here. A tiny subscribe
-// helper lets React components stay in sync via useSyncExternalStore.
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
 const TOKEN_KEY = "mercator.token";
 const WORKSPACE_KEY = "mercator.workspace";
 
-type Listener = () => void;
-
-const listeners = new Set<Listener>();
-
-function emit(): void {
-  for (const listener of listeners) {
-    listener();
-  }
+export interface SessionState {
+  readonly token: string | null;
+  readonly workspace: string | null;
 }
 
-// hasStorage guards against SSR / non-browser contexts and privacy modes that
-// throw on localStorage access.
-function hasStorage(): boolean {
-  try {
-    return typeof localStorage !== "undefined";
-  } catch {
-    return false;
-  }
+export interface SessionService {
+  readonly current: Effect.Effect<SessionState>;
+  readonly changes: Stream.Stream<SessionState>;
+  readonly setToken: (token: string | null) => Effect.Effect<void>;
+  readonly setWorkspace: (workspace: string | null) => Effect.Effect<void>;
 }
 
-function read(key: string): string | null {
-  if (!hasStorage()) {
-    return null;
-  }
+export class Session extends Context.Service<Session, SessionService>()(
+  "@mercator/Session",
+) {}
+
+function browserStorage(): Storage | null {
   try {
-    return localStorage.getItem(key);
+    return globalThis.localStorage;
   } catch {
     return null;
   }
 }
 
-function write(key: string, value: string | null): void {
-  if (!hasStorage()) {
+function readStoredValue(key: string): string | null {
+  try {
+    return browserStorage()?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function readBrowserSession(): SessionState {
+  const workspace = readStoredValue(WORKSPACE_KEY)?.trim() || null;
+  return {
+    token: readStoredValue(TOKEN_KEY),
+    workspace,
+  };
+}
+
+function persist(key: string, value: string | null): void {
+  const storage = browserStorage();
+  if (storage === null) {
     return;
   }
   try {
     if (value === null || value === "") {
-      localStorage.removeItem(key);
+      storage.removeItem(key);
     } else {
-      localStorage.setItem(key, value);
+      storage.setItem(key, value);
     }
   } catch {
-    // best-effort: ignore quota / privacy errors.
+    // Browsers may deny persistent storage in private or embedded contexts.
+    // The live SubscriptionRef still owns the session for this tab.
   }
-  emit();
 }
 
-export function getToken(): string | null {
-  return read(TOKEN_KEY);
+function isSessionStorageEvent(event: StorageEvent): boolean {
+  return (
+    event.key === null || event.key === TOKEN_KEY || event.key === WORKSPACE_KEY
+  );
 }
 
-export function setToken(token: string | null): void {
-  write(TOKEN_KEY, token);
-}
+export const layer = Layer.effect(
+  Session,
+  Effect.gen(function* () {
+    const state = yield* SubscriptionRef.make(readBrowserSession());
 
-// getWorkspace returns the operator's explicitly chosen workspace. The saved
-// workspace catalog lives on the server and is never reconstructed locally.
-export function getWorkspace(): string | null {
-  const stored = read(WORKSPACE_KEY);
-  if (stored && stored.trim() !== "") {
-    return stored;
-  }
-  return null;
-}
-
-export function setWorkspace(workspaceID: string | null): void {
-  write(WORKSPACE_KEY, workspaceID);
-}
-
-// subscribe registers a listener invoked on any session mutation. It also
-// listens for cross-tab `storage` events so multiple tabs stay coherent.
-// Returns an unsubscribe function (useSyncExternalStore contract).
-export function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  const onStorage = (event: StorageEvent) => {
-    if (
-      event.key === null ||
-      event.key === TOKEN_KEY ||
-      event.key === WORKSPACE_KEY
-    ) {
-      listener();
-    }
-  };
-  if (typeof window !== "undefined") {
-    window.addEventListener("storage", onStorage);
-  }
-  return () => {
-    listeners.delete(listener);
     if (typeof window !== "undefined") {
-      window.removeEventListener("storage", onStorage);
+      const onStorage = (event: StorageEvent) => {
+        if (isSessionStorageEvent(event)) {
+          Effect.runSync(SubscriptionRef.set(state, readBrowserSession()));
+        }
+      };
+      window.addEventListener("storage", onStorage);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => window.removeEventListener("storage", onStorage)),
+      );
     }
-  };
-}
 
-// snapshot returns a stable string used by useSyncExternalStore to detect
-// changes. It intentionally excludes the recents list since the token/workspace
-// pair is what drives request behavior.
-export function snapshot(): string {
-  return `${getWorkspace() ?? ""}::${getToken() ? "1" : "0"}`;
-}
+    const update = Effect.fn("Session.update")(function* (next: SessionState) {
+      yield* SubscriptionRef.set(state, next);
+    });
+
+    const setToken = Effect.fn("Session.setToken")(function* (
+      token: string | null,
+    ) {
+      persist(TOKEN_KEY, token);
+      const current = yield* SubscriptionRef.get(state);
+      yield* update({ ...current, token });
+    });
+
+    const setWorkspace = Effect.fn("Session.setWorkspace")(function* (
+      workspace: string | null,
+    ) {
+      persist(WORKSPACE_KEY, workspace);
+      const current = yield* SubscriptionRef.get(state);
+      yield* update({ ...current, workspace: workspace?.trim() || null });
+    });
+
+    return Session.of({
+      current: SubscriptionRef.get(state),
+      changes: SubscriptionRef.changes(state),
+      setToken,
+      setWorkspace,
+    });
+  }),
+);
+
+export const testLayer = (initial: SessionState) =>
+  Layer.effect(
+    Session,
+    Effect.gen(function* () {
+      const state = yield* SubscriptionRef.make(initial);
+      return Session.of({
+        current: SubscriptionRef.get(state),
+        changes: SubscriptionRef.changes(state),
+        setToken: (token) =>
+          SubscriptionRef.update(state, (current) => ({ ...current, token })),
+        setWorkspace: (workspace) =>
+          SubscriptionRef.update(state, (current) => ({
+            ...current,
+            workspace,
+          })),
+      });
+    }),
+  );

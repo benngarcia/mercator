@@ -14,9 +14,8 @@ interface CanvasSearch {
 
 function validateSearch(search: Record<string, unknown>): CanvasSearch {
   return {
-    scenario:
-      typeof search.scenario === "string" ? search.scenario : undefined,
-    play: search.play === "1" ? "1" : undefined,
+    scenario: typeof search.scenario === "string" ? search.scenario : undefined,
+    play: search.play === "1" || search.play === 1 ? "1" : undefined,
   };
 }
 

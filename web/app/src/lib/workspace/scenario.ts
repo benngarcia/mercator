@@ -26,12 +26,7 @@ export function fullScheduleScenarioMessages(
 ): WorkspaceMessage[] {
   const messages: WorkspaceMessage[] = [];
   let position = 0;
-  const append = (
-    runID: string,
-    type: string,
-    data: unknown,
-    time = now,
-  ) => {
+  const append = (runID: string, type: string, data: unknown, time = now) => {
     position += 1;
     messages.push({
       type: "domain_event",
@@ -39,7 +34,8 @@ export function fullScheduleScenarioMessages(
     });
   };
   const schedule = scenario.world.rental_schedules[0];
-  if (!schedule) throw new Error("full schedule scenario requires a RentalSchedule");
+  if (!schedule)
+    throw new Error("full schedule scenario requires a RentalSchedule");
   const running = schedule.running;
   const runningMax = parseDuration(running.remaining_max_runtime);
   append(
@@ -75,7 +71,9 @@ export function fullScheduleScenarioMessages(
   let projectedStart = runningMax;
   let predecessor = running.booking;
   for (const queued of schedule.queued as ScenarioBooking[]) {
-    const expected = parseDuration(queued.expected_runtime ?? queued.max_runtime);
+    const expected = parseDuration(
+      queued.expected_runtime ?? queued.max_runtime,
+    );
     const max = parseDuration(queued.max_runtime);
     append(queued.run, "compute.run.requested.v1", {
       run_id: queued.run,
@@ -235,8 +233,12 @@ function decision(
       id: bookingID,
       rental_id: rentalID,
       state,
-      after_booking_id: afterBookingID,
-      projected_start_at: projectedStartAt,
+      ...(afterBookingID === undefined
+        ? {}
+        : { after_booking_id: afterBookingID }),
+      ...(projectedStartAt === undefined
+        ? {}
+        : { projected_start_at: projectedStartAt }),
       schedule_version: scheduleVersion,
     },
     selection_reason_codes: ["FEASIBLE", "LOWEST_SCORE"],
@@ -263,7 +265,8 @@ function standingOffer(now: Date): OfferSnapshot {
 
 function marketplaceOffer(now: Date): OfferSnapshot {
   const source = scenario.world.marketplace[0];
-  if (!source) throw new Error("full schedule scenario requires a marketplace Offer");
+  if (!source)
+    throw new Error("full schedule scenario requires a marketplace Offer");
   return offer(now, {
     id: source.id,
     kind: "provisionable",
@@ -297,7 +300,7 @@ function offer(
 ): OfferSnapshot {
   return {
     id: values.id,
-    rental_id: values.rental_id,
+    ...(values.rental_id === undefined ? {} : { rental_id: values.rental_id }),
     connection_id: values.connection_id,
     adapter_type: values.adapter_type,
     kind: values.kind,
@@ -338,7 +341,9 @@ function offer(
       granularity_seconds: 1,
       known: true,
     },
-    provisioning: values.provisioning,
+    ...(values.provisioning === undefined
+      ? {}
+      : { provisioning: values.provisioning }),
     image_cache: {
       manifest_cached: values.cached,
       missing_bytes: values.cached ? 0 : 4 * GIB,

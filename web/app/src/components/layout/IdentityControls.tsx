@@ -6,6 +6,7 @@
 //     the pre-OIDC console behavior.
 
 import { LogIn, LogOut } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,13 +14,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { signInUrl, signOut } from "@/lib/auth";
-import { useAuthSession } from "@/lib/api/queries";
+import { signInUrl } from "@/lib/auth";
+import { useAuthSession, useLogout } from "@/lib/api/queries";
 
 import { TokenField } from "./TokenField";
 
 export function IdentityControls() {
   const auth = useAuthSession();
+  const logout = useLogout();
 
   // Until the mode is known, render nothing rather than flashing the token
   // field at a signed-in operator. Treat an unreachable /auth/session like
@@ -58,7 +60,13 @@ export function IdentityControls() {
             variant="ghost"
             size="icon"
             aria-label="Sign out"
-            onClick={() => void signOut()}
+            disabled={logout.isPending}
+            onClick={() =>
+              logout.mutate(undefined, {
+                onSuccess: () => window.location.assign("/"),
+                onError: (error) => toast.error(error.message),
+              })
+            }
           >
             <LogOut />
           </Button>

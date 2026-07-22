@@ -19,7 +19,6 @@ import {
 
 import { AppShell } from "@/components/layout";
 import { Button } from "@/components/ui/button";
-import { getWorkspace } from "@/lib/session";
 import { useSession } from "@/hooks/useSession";
 import { useMountEffect } from "@/hooks/useMountEffect";
 
@@ -39,7 +38,11 @@ function validateSearch(search: Record<string, unknown>): RootSearch {
   return {};
 }
 
-function UrlWorkspaceSync({ sessionWorkspace, setWorkspace, urlWorkspace }: {
+function UrlWorkspaceSync({
+  sessionWorkspace,
+  setWorkspace,
+  urlWorkspace,
+}: {
   sessionWorkspace: string | null;
   setWorkspace: (workspace: string) => void;
   urlWorkspace: string;
@@ -52,7 +55,11 @@ function UrlWorkspaceSync({ sessionWorkspace, setWorkspace, urlWorkspace }: {
   return null;
 }
 
-function SessionWorkspaceSync({ navigate, sessionWorkspace, urlWorkspace }: {
+function SessionWorkspaceSync({
+  navigate,
+  sessionWorkspace,
+  urlWorkspace,
+}: {
   navigate: ReturnType<typeof useNavigate>;
   sessionWorkspace: string;
   urlWorkspace: string | undefined;
@@ -73,7 +80,7 @@ function WorkspaceSync() {
   const navigate = useNavigate();
   const search = useSearch({ from: "__root__" });
   const { workspace, setWorkspace } = useSession();
-  const sessionWorkspace = workspace ?? getWorkspace();
+  const sessionWorkspace = workspace;
   const previousUrlWorkspace = useRef<string | undefined | null>(null);
   const urlChanged = previousUrlWorkspace.current !== search.workspace_id;
   previousUrlWorkspace.current = search.workspace_id;

@@ -1,7 +1,7 @@
 # Mercator Console (frontend)
 
-The operator console for Mercator. React 19 + TypeScript (strict), shadcn/ui
-(new-york), Tailwind CSS v4, TanStack Query + TanStack Router, sonner. Built by
+The operator console for Mercator. React 19 + TypeScript (strict), Effect v4,
+shadcn/ui (new-york), Tailwind CSS v4, TanStack Router, sonner. Built by
 **Bun**; the output is embedded in the Go binary and served same-origin — there
 is no second server in production.
 
@@ -12,7 +12,7 @@ web/app/            this dir — frontend source
   index.html        entry: #root + <script src="src/main.tsx">
   src/index.css     Tailwind v4 + the canonical shadcn theme tokens (light/dark, teal accent)
   src/lib/utils.ts  cn() helper
-  build.ts          Bun.build → ../static (hashed, split, minified, no sourcemaps)
+  build.ts          Bun.build → ../static (hashed, minified, no sourcemaps)
   dev.ts            Bun HTML dev server (HMR) + /v1,/health proxy to :8080
 web/static/         GENERATED BUILD OUTPUT (git-ignored, embedded via //go:embed all:static)
 ```
@@ -41,9 +41,9 @@ Auth has two modes, discovered at runtime from `GET /auth/session`:
   fallback; the bearer token lives in `localStorage`.
 
 The workspace id is a URL search param defaulting from `localStorage`. Token
-and workspace are injected centrally by `@/lib/api/client` — never call
-`fetch()` directly from a component (`@/lib/auth` owns the cookie-based
-`/auth` calls, which use no envelope, token, or workspace).
+and workspace are injected centrally by `@/lib/api/client`; components do not
+call `fetch()` directly. The Effect API service also owns cookie-based `/auth`
+calls, which use no envelope, token, or workspace.
 
 ## Build & embed (the order matters)
 

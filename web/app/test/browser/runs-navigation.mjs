@@ -270,10 +270,15 @@ const desktop = await prepareContext({ width: 1280, height: 800 });
 const page = await desktop.newPage();
 const consoleErrors = [];
 page.on("console", (message) => {
-  if (message.type() === "error") consoleErrors.push(message.text());
+  if (message.type() === "error") {
+    consoleErrors.push(message.text());
+    console.error(`browser console: ${message.text()}`);
+  }
 });
-page.on("pageerror", (error) => consoleErrors.push(error.message));
-
+page.on("pageerror", (error) => {
+  consoleErrors.push(error.message);
+  console.error(`browser page error: ${error.message}`);
+});
 try {
   await runsScopeCancelledCreate(page);
   await page
@@ -298,9 +303,15 @@ const mobile = await prepareContext({ width: 390, height: 844 });
 try {
   const mobilePage = await mobile.newPage();
   mobilePage.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() === "error") {
+      consoleErrors.push(message.text());
+      console.error(`mobile browser console: ${message.text()}`);
+    }
   });
-  mobilePage.on("pageerror", (error) => consoleErrors.push(error.message));
+  mobilePage.on("pageerror", (error) => {
+    consoleErrors.push(error.message);
+    console.error(`mobile browser page error: ${error.message}`);
+  });
   await mobilePage.goto(runsURL(), { waitUntil: "domcontentloaded" });
   await waitForRuns(mobilePage);
   await mobilePage

@@ -50,6 +50,8 @@ jobs:
         working-directory: web/app
       - run: bun run typecheck
         working-directory: web/app
+      - run: bun run test
+        working-directory: web/app
       - run: bun run build
         working-directory: web/app
       - run: git diff --exit-code

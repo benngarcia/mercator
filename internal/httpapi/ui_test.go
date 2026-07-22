@@ -28,7 +28,8 @@ func uiBuilt() bool {
 // (/assets/...). Relative references (./assets/...) resolve against the current
 // route, so a hard load of /runs/{id} would request /runs/assets/... , get the
 // SPA-fallback index.html back, and fail the module MIME check (blank page).
-// This is enforced by publicPath:"/" in web/app/build.ts.
+// This is enforced by publicPath:"/" and the single-entry build in
+// web/app/build.ts.
 func TestBuiltIndexReferencesAbsoluteAssets(t *testing.T) {
 	if !uiBuilt() {
 		t.Skip("UI not built; run the `ui` task (bun run build) to exercise this")
