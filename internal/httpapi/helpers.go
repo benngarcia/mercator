@@ -171,6 +171,7 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 		Connections:  connection.New(log),
 		Resolver:     ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests()),
 		Workspaces:   workspaces,
+		Events:       log,
 	}, options...)
 	return handler, storage.Close, nil
 }

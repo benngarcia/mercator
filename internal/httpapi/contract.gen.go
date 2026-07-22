@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -205,6 +206,9 @@ type AdapterListResponse struct {
 
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
 type AdapterManifest = adapter.Manifest
+
+// Booking defines model for Booking.
+type Booking = domain.Booking
 
 // BookingDecision defines model for BookingDecision.
 type BookingDecision = domain.BookingDecision
@@ -708,6 +712,12 @@ type AuthorizeConnectionParams struct {
 	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
+// StreamConsoleEventsParams defines parameters for StreamConsoleEvents.
+type StreamConsoleEventsParams struct {
+	WorkspaceId string `form:"workspace_id" json:"workspace_id"`
+	LastEventID string `json:"Last-Event-ID,omitempty"`
+}
+
 // ListOffersParams defines parameters for ListOffers.
 type ListOffersParams struct {
 	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
@@ -846,6 +856,9 @@ type ServerInterface interface {
 
 	// (POST /v1/connections/{connection_id}/authorize)
 	AuthorizeConnection(w http.ResponseWriter, r *http.Request, connectionId string, params AuthorizeConnectionParams)
+
+	// (GET /v1/console/events)
+	StreamConsoleEvents(w http.ResponseWriter, r *http.Request, params StreamConsoleEventsParams)
 
 	// (POST /v1/images:resolve)
 	ResolveImage(w http.ResponseWriter, r *http.Request)
@@ -1151,6 +1164,67 @@ func (siw *ServerInterfaceWrapper) AuthorizeConnection(w http.ResponseWriter, r 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AuthorizeConnection(w, r, connectionId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StreamConsoleEvents operation middleware
+func (siw *ServerInterfaceWrapper) StreamConsoleEvents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamConsoleEventsParams
+
+	// ------------- Required query parameter "workspace_id" -------------
+
+	if paramValue := r.URL.Query().Get("workspace_id"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "workspace_id"})
+		return
+	}
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Last-Event-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Last-Event-ID")]; found {
+		var LastEventID string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Last-Event-ID", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Last-Event-ID", valueList[0], &LastEventID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Last-Event-ID", Err: err})
+			return
+		}
+
+		params.LastEventID = LastEventID
+
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamConsoleEvents(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2168,6 +2242,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("POST "+options.BaseURL+"/v1/connections", wrapper.CreateConnection)
 	m.HandleFunc("DELETE "+options.BaseURL+"/v1/connections/{connection_id}", wrapper.DeleteConnection)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/connections/{connection_id}/authorize", wrapper.AuthorizeConnection)
+	m.HandleFunc("GET "+options.BaseURL+"/v1/console/events", wrapper.StreamConsoleEvents)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/images:resolve", wrapper.ResolveImage)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/offers", wrapper.ListOffers)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/placements:preview", wrapper.PreviewPlacement)
@@ -2545,6 +2620,78 @@ func (response AuthorizeConnection501JSONResponse) VisitAuthorizeConnectionRespo
 type AuthorizeConnection502JSONResponse ErrorResponse
 
 func (response AuthorizeConnection502JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEventsRequestObject struct {
+	Params StreamConsoleEventsParams
+}
+
+type StreamConsoleEventsResponseObject interface {
+	VisitStreamConsoleEventsResponse(w http.ResponseWriter) error
+}
+
+type StreamConsoleEvents200TexteventStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response StreamConsoleEvents200TexteventStreamResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type StreamConsoleEvents400JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents400JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEvents401JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents401JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEvents403JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents403JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEvents501JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents501JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEvents502JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents502JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(502)
 
@@ -3855,6 +4002,9 @@ type StrictServerInterface interface {
 	// (POST /v1/connections/{connection_id}/authorize)
 	AuthorizeConnection(ctx context.Context, request AuthorizeConnectionRequestObject) (AuthorizeConnectionResponseObject, error)
 
+	// (GET /v1/console/events)
+	StreamConsoleEvents(ctx context.Context, request StreamConsoleEventsRequestObject) (StreamConsoleEventsResponseObject, error)
+
 	// (POST /v1/images:resolve)
 	ResolveImage(ctx context.Context, request ResolveImageRequestObject) (ResolveImageResponseObject, error)
 
@@ -4153,6 +4303,32 @@ func (sh *strictHandler) AuthorizeConnection(w http.ResponseWriter, r *http.Requ
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(AuthorizeConnectionResponseObject); ok {
 		if err := validResponse.VisitAuthorizeConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamConsoleEvents operation middleware
+func (sh *strictHandler) StreamConsoleEvents(w http.ResponseWriter, r *http.Request, params StreamConsoleEventsParams) {
+	var request StreamConsoleEventsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamConsoleEvents(ctx, request.(StreamConsoleEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamConsoleEvents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StreamConsoleEventsResponseObject); ok {
+		if err := validResponse.VisitStreamConsoleEventsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

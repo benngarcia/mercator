@@ -125,6 +125,9 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 				return OfferAggregation{}, err
 			}
 			result.items[i].ID = id
+			if result.items[i].Kind == domain.OfferKindStanding {
+				result.items[i].RentalID = id
+			}
 		}
 		aggregation.Offers = append(aggregation.Offers, result.items...)
 	}

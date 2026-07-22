@@ -81,6 +81,92 @@
         }
       }
     },
+    "/v1/console/events": {
+      "get": {
+        "operationId": "streamConsoleEvents",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replay-complete public Workspace event feed followed by live events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Offer catalog unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Event feed is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/runs": {
       "get": {
         "operationId": "listRuns",
@@ -3683,6 +3769,9 @@
           "id": {
             "type": "string"
           },
+          "rental_id": {
+            "type": "string"
+          },
           "connection_id": {
             "type": "string"
           },
@@ -3832,6 +3921,51 @@
           }
         }
       },
+      "Booking": {
+        "type": "object",
+        "required": [
+          "id",
+          "rental_id",
+          "state",
+          "schedule_version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rental_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "queued"
+            ]
+          },
+          "after_booking_id": {
+            "type": "string"
+          },
+          "projected_start_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latest_start_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "schedule_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        },
+        "x-go-type": "domain.Booking",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
+        }
+      },
       "BookingDecision": {
         "type": "object",
         "required": [
@@ -3875,6 +4009,9 @@
           },
           "selected_offer_snapshot_id": {
             "type": "string"
+          },
+          "booking": {
+            "$ref": "#/components/schemas/Booking"
           },
           "selection_reason_codes": {
             "type": "array",

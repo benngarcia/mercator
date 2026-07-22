@@ -135,6 +135,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Connections:  connectionService,
 		Resolver:     ociresolver.NewStaticResolver(nil),
 		Workspaces:   storage.Workspaces(),
+		Events:       logStore,
 	}, serverOptions...)
 
 	reconcileCtx, stopReconcile := context.WithCancel(ctx)

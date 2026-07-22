@@ -124,6 +124,7 @@ type EventFilter struct {
 	WorkspaceID string
 	StreamTypes []string
 	EventTypes  []string
+	Visibility  Visibility
 }
 
 type SubscriptionRequest struct {

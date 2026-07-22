@@ -214,6 +214,7 @@ func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.Offe
 func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domain.OfferSnapshot {
 	offer := daemon.Offer
 	offer.Kind = domain.OfferKindStanding
+	offer.RentalID = offer.ID
 	offer.ObservedAt = now
 	offer.ExpiresAt = now.Add(5 * time.Minute)
 	missing := int64(0)
@@ -240,6 +241,7 @@ func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domai
 
 func (w *World) marketplaceOffer(offer domain.OfferSnapshot, now time.Time, layers []Layer) domain.OfferSnapshot {
 	offer.Kind = domain.OfferKindProvisionable
+	offer.RentalID = ""
 	offer.ObservedAt = now
 	offer.ExpiresAt = now.Add(5 * time.Minute)
 	missing := int64(0)

@@ -98,7 +98,49 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		return domain.BookingDecision{}, err
 	}
 	decision.ID = "dec_" + id[len("sha256:"):24]
+	if bestIndex >= 0 {
+		booking, err := runningBooking(decision.ID, offers[bestIndex])
+		if err != nil {
+			return domain.BookingDecision{}, err
+		}
+		decision.Booking = &booking
+	}
 	return decision, nil
+}
+
+func runningBooking(decisionID string, offer domain.OfferSnapshot) (domain.Booking, error) {
+	bookingHash, err := domain.CanonicalHash(struct {
+		DecisionID string
+		OfferID    string
+	}{decisionID, offer.ID})
+	if err != nil {
+		return domain.Booking{}, err
+	}
+	bookingID := "bkg_" + bookingHash[len("sha256:"):24]
+	rentalID := offer.RentalID
+	switch offer.Kind {
+	case domain.OfferKindStanding:
+		if rentalID == "" {
+			return domain.Booking{}, fmt.Errorf("scheduler: standing offer %q requires rental_id", offer.ID)
+		}
+	case domain.OfferKindProvisionable:
+		rentalHash, hashErr := domain.CanonicalHash(struct {
+			BookingID string
+			OfferID   string
+		}{bookingID, offer.ID})
+		if hashErr != nil {
+			return domain.Booking{}, hashErr
+		}
+		rentalID = "rnt_" + rentalHash[len("sha256:"):24]
+	default:
+		return domain.Booking{}, fmt.Errorf("scheduler: offer %q has unknown kind %q", offer.ID, offer.Kind)
+	}
+	return domain.Booking{
+		ID:              bookingID,
+		RentalID:        rentalID,
+		State:           domain.BookingStateRunning,
+		ScheduleVersion: 1,
+	}, nil
 }
 
 func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {

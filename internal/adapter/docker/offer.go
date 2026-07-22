@@ -181,6 +181,7 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 	}
 	return domain.OfferSnapshot{
 		ID:           id.OfferID,
+		RentalID:     id.OfferID,
 		ConnectionID: id.ConnectionID,
 		AdapterType:  "docker",
 		Kind:         domain.OfferKindStanding,
