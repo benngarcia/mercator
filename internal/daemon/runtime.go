@@ -106,11 +106,12 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if factory == nil {
 		factory = providers.Factory()
 	}
-	providerBroker := broker.NewBroker(connectionService, factory, resolver)
+	providerBroker := broker.NewBroker(connectionService, factory, resolver, broker.WithRentalSchedules(storage.RentalSchedules()))
 
 	signer := reporting.NewSigner(reporting.DeriveKey(cfg.MasterKey))
 	sched := scheduler.New()
 	orchestratorOptions := []orchestrator.Option{}
+	orchestratorOptions = append(orchestratorOptions, orchestrator.WithRentalSchedules(providerBroker))
 	if signer.Enabled() && cfg.PublicURL != "" {
 		orchestratorOptions = append(orchestratorOptions, orchestrator.WithReporting(cfg.PublicURL, signer))
 	}

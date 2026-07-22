@@ -928,8 +928,12 @@ func (o *Orchestrator) releaseAndCloseScheduled(ctx context.Context, workspaceID
 		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, cleanupConfirmedData{LaunchKey: launchReq.LaunchKey, Disposition: disposition}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
 	}
+	return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:cleanup", events)
+}
+
+func (o *Orchestrator) completeBookingAndAppend(ctx context.Context, workspaceID, runID string, version uint64, state runState, commandKey string, events []eventlog.NewEvent) error {
 	if state.bookingDecision == nil || state.bookingDecision.Booking == nil {
-		return fmt.Errorf("orchestrator: cleanup requires a recorded Booking")
+		return fmt.Errorf("orchestrator: transition requires a recorded Booking")
 	}
 	schedules, err := o.schedules.List(ctx, workspaceID)
 	if err != nil {
@@ -940,7 +944,7 @@ func (o *Orchestrator) releaseAndCloseScheduled(ctx context.Context, workspaceID
 	if err != nil {
 		return err
 	}
-	request, err := runAppendRequest(nil, workspaceID, runID, version, "advance:cleanup", events)
+	request, err := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
 	if err != nil {
 		return err
 	}

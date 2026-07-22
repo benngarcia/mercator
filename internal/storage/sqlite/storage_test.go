@@ -81,6 +81,51 @@ func TestOpenPurgesCredentialsForDeletedConnections(t *testing.T) {
 	}
 }
 
+func TestRentalScheduleCommitSurvivesStorageRestart(t *testing.T) {
+	ctx := context.Background()
+	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
+	storage, err := sqlitestore.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	if _, err := storage.Workspaces().Create(ctx, workspace.Create{
+		ID: "ws_schedule", DisplayName: "Schedule workspace", CreatedAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), CreatedBy: "test:storage",
+	}); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	schedule, booking, err := domain.NewRentalSchedule("rental-warm").Reserve(domain.BookingRequest{
+		BookingID: "booking-active", RunID: "run-active", ExpectedRuntimeSeconds: 60, MaxRuntimeSeconds: 90, ReservedAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("reserve Booking: %v", err)
+	}
+	request := eventlog.AppendRequest{
+		Stream:     eventlog.StreamKey{WorkspaceID: "ws_schedule", Type: "run", ID: "run-active"},
+		CommandKey: "run-active:place", RequestHash: "sha256:place", CorrelationID: "run-active", CausationID: "place",
+		Events: []eventlog.NewEvent{{ID: "evt_booking_active", Type: "compute.run.booking_decided.v1", SchemaVersion: 1, OccurredAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), Data: json.RawMessage(`{}`)}},
+	}
+	if _, err := storage.RentalSchedules().Commit(ctx, request, 0, schedule); err != nil {
+		t.Fatalf("commit Rental Schedule: %v", err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("close storage: %v", err)
+	}
+
+	reopened, err := sqlitestore.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("reopen storage: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	schedules, err := reopened.RentalSchedules().List(ctx, "ws_schedule")
+	if err != nil {
+		t.Fatalf("list Rental Schedules: %v", err)
+	}
+	stored := schedules["rental-warm"]
+	if stored.Version != 1 || len(stored.Bookings) != 1 || stored.Bookings[0].Booking.ID != booking.ID {
+		t.Fatalf("stored Rental Schedule = %+v", stored)
+	}
+}
+
 func TestConnectionCreateReplaySurvivesWorkspaceArchive(t *testing.T) {
 	ctx := context.Background()
 	storage, err := sqlitestore.Open(ctx, "file:"+filepath.Join(t.TempDir(), "mercator.db"))
