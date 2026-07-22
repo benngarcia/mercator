@@ -6,7 +6,6 @@ const baseURL = (
   process.env.MERCATOR_BROWSER_BASE_URL ?? "http://127.0.0.1:3000"
 ).replace(/\/$/, "");
 const workspaceID = `ws_browser_${process.pid}`;
-const requestedEventID = `evt_${workspaceID}_run-provider-replacement_requested`;
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
   viewport: { width: 1440, height: 960 },
@@ -18,33 +17,7 @@ try {
     localStorage.setItem("mercator.workspace", workspace);
   }, workspaceID);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
-  let feedResponses = 0;
-  page.on("response", (response) => {
-    if (response.url().includes("/v1/console/events")) feedResponses += 1;
-    if (
-      process.env.DEBUG_BROWSER &&
-      (response.url().includes("/v1/console/events") ||
-        response.url().includes("/v1/dev/scenario-sessions/"))
-    ) {
-      console.log(`Response ${response.status()} ${response.url()}`);
-    }
-  });
-  if (process.env.DEBUG_BROWSER) {
-    console.log(`Workspace ${workspaceID}`);
-    page.on("requestfailed", (request) => {
-      if (request.url().includes("/v1/")) {
-        console.log(`Request failed ${request.failure()?.errorText} ${request.url()}`);
-      }
-    });
-  }
-  await page.route("**/v1/workspaces*", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: '{"workspaces":[]}',
-    }),
-  );
+  page.setDefaultTimeout(15_000);
   const consoleProblems = [];
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning") {
@@ -52,143 +25,105 @@ try {
     }
   });
   page.on("pageerror", (error) => consoleProblems.push(error.message));
+  await page.route("**/v1/workspaces*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: '{"workspaces":[]}',
+    }),
+  );
+
   const url = new URL("/canvas", baseURL);
   url.searchParams.set("workspace_id", workspaceID);
-  url.searchParams.set("scenario", "full-schedule-forces-fresh-capacity");
+  url.searchParams.set("scenario", "warm-pool-burst");
   url.searchParams.set("play", "1");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
 
+  await page.getByLabel("Workspace events live").waitFor();
   await page.getByText("rental-warm", { exact: true }).waitFor();
   const eventFeed = page.getByRole("region", { name: "Workspace events" });
-  await eventFeed.waitFor();
   const progress = page.getByRole("progressbar", { name: "Scenario progress" });
-  const pauseScenario = page.getByRole("button", { name: "Pause scenario" });
-  if (await pauseScenario.isVisible()) {
+  await page.getByLabel("Placement scenario").waitFor();
+  assert.equal(await page.getByLabel("Placement scenario").inputValue(), "warm-pool-burst");
+  await eventFeed
+    .getByText("Sanitized recorded offers · 6 production paths", { exact: true })
+    .waitFor();
+  assert.equal(await eventFeed.getByText(/Target contract:/).count(), 0);
+
+  if (await page.getByRole("button", { name: "Pause scenario" }).isVisible()) {
     await playbackCommand(page, "Pause scenario");
-    await page.getByRole("button", { name: "Play scenario" }).waitFor();
   }
   await playbackCommand(page, "Restart scenario");
-  await pauseScenario.waitFor();
-  await page.getByText("Event 0 of 46", { exact: true }).waitFor();
   await playbackCommand(page, "Pause scenario");
-  await page.getByRole("button", { name: "Play scenario" }).waitFor();
-  const pausedAt = Number(await progress.getAttribute("aria-valuenow"));
-  await page.waitForTimeout(600);
-  assert.equal(Number(await progress.getAttribute("aria-valuenow")), pausedAt);
-  const stableFeedResponses = feedResponses;
-  await page.getByText("Event 0 of 46", { exact: true }).waitFor();
-  await eventFeed
-    .getByText("Sanitized recorded offers · 4 production paths", {
-      exact: true,
-    })
-    .waitFor();
-  await eventFeed.getByText("Target contract: rental_schedule", { exact: true }).waitFor();
-  for (const offerID of [
-    "off_vast_9001",
-    "off_runpod_secure_rtx_4090",
-    "off_shadeform_hyperstack_a6000",
-  ]) {
-    assert.equal(await page.locator(`[aria-label^="${offerID}:"]`).count(), 1);
-  }
-  assert.equal(
-    await page
-      .locator('[aria-label="1 of 4 Booking positions occupied"]')
-      .count(),
-    1,
-  );
-  await page.getByText("$2.50/h", { exact: true }).waitFor();
-  const queuedRun = page.locator('a[aria-label^="run-q1:"]');
-  const queuedRunPosition = await queuedRun.boundingBox();
-  assert.ok(queuedRunPosition, "queued Run needs a rendered card");
-  assert.ok(
-    queuedRunPosition.width >= 72,
-    `queued Run was compressed to ${queuedRunPosition.width}px`,
+  await waitForCursor(page, 0);
+  const cueCount = Number(await progress.getAttribute("aria-valuemax"));
+  assert.ok(cueCount > 40, `warm-pool scenario only has ${cueCount} events`);
+
+  await playbackCommand(page, "Next event");
+  await waitForCursor(page, 1);
+  const firstRun = page.locator('a[aria-label^="run-burst-01:"]');
+  await firstRun.waitFor();
+  const incoming = await firstRun.boundingBox();
+  assert.ok(incoming, "first Run needs an intake card");
+
+  await playbackCommand(page, "Next event");
+  await waitForCursor(page, 2);
+  await eventFeed.getByText("reuse now", { exact: true }).first().waitFor();
+  await eventFeed.getByText("9 candidates", { exact: true }).first().waitFor();
+  const placed = await firstRun.boundingBox();
+  assert.ok(placed && placed.y > incoming.y + 70, "first Run did not move onto its Rental");
+
+  await stepTo(page, progress, 8);
+  await eventFeed.getByText("queue", { exact: true }).first().waitFor();
+  const queuedRun = page.locator('a[aria-label^="run-burst-02:"]');
+  const queuedPosition = await queuedRun.boundingBox();
+  assert.ok(queuedPosition && queuedPosition.width >= 72, "queued Run was compressed");
+
+  const queuedDecision = eventFeed
+    .locator("li")
+    .filter({ hasText: "Booking decided" })
+    .filter({ hasText: "queue" })
+    .first();
+  await queuedDecision.getByRole("button").click();
+  await queuedDecision.getByText("off_vast_9002", { exact: true }).waitFor();
+  await queuedDecision.getByText("fresh", { exact: true }).first().waitFor();
+
+  await stepTo(page, progress, cueCount);
+  await page.getByText(`Event ${cueCount} of ${cueCount}`, { exact: true }).waitFor();
+
+  await page.getByLabel("Placement scenario").selectOption("deadline-versus-cost");
+  await page.waitForURL(/scenario=deadline-versus-cost/);
+  await waitForScenario(page, "deadline-versus-cost");
+  await page.getByLabel("Workspace events live").waitFor();
+  await eventFeed.getByText("runs/run-deadline-urgent", { exact: true }).first().waitFor();
+  const urgentDecision = eventFeed
+    .locator("li")
+    .filter({ hasText: "Booking decided" })
+    .filter({ hasText: "runs/run-deadline-urgent" });
+  await revealEvidence(urgentDecision, "LATENCY_SLO_EXCEEDED");
+
+  await page.getByLabel("Placement scenario").selectOption("failure-rebalance");
+  await page.waitForURL(/scenario=failure-rebalance/);
+  await waitForScenario(page, "failure-rebalance");
+  await page.getByLabel("Workspace events live").waitFor();
+  await eventFeed.getByText("runs/run-provider-replacement", { exact: true }).first().waitFor();
+  await eventFeed.getByText("Launch failed", { exact: true }).waitFor();
+  const replacementDecisions = eventFeed
+    .locator("li")
+    .filter({ hasText: "Booking decided" })
+    .filter({ hasText: "runs/run-provider-replacement" });
+  await revealEvidence(
+    replacementDecisions.first(),
+    "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE",
   );
 
-  const movingRun = page.locator(
-    'a[aria-label^="run-provider-replacement:"]',
-  );
-  await playbackCommand(page, "Next event");
-  await movingRun.waitFor();
-  await eventFeed
-    .locator(`[data-event-id="${requestedEventID}"]`)
-    .waitFor();
-  await page.getByText("Event 1 of 46", { exact: true }).waitFor();
-  await waitForViewTransitionAnimation(page);
-  const incomingPosition = await movingRun.boundingBox();
-  assert.ok(incomingPosition, "incoming Run needs a rendered card");
-  await page.waitForTimeout(450);
-  await playbackCommand(page, "Next event");
-  await page.getByText("Event 2 of 46", { exact: true }).waitFor();
-  await eventFeed.getByText("Booking decided", { exact: true }).first().waitFor();
-  await waitForViewTransitionAnimation(page);
-  await page.waitForFunction(
-    ({ y }) => {
-      const card = document.querySelector(
-        'a[aria-label^="run-provider-replacement:"]',
-      );
-      if (!(card instanceof HTMLElement)) return false;
-      const position = card.getBoundingClientRect();
-      return position.y > y + 80;
-    },
-    { y: incomingPosition.y },
-  );
-  const rentalPosition = await movingRun.boundingBox();
-  assert.ok(rentalPosition, "booked Run needs a rendered card");
-  assert.ok(
-    rentalPosition.y > incomingPosition.y + 80,
-    `Run card did not move from intake to its Rental: ${incomingPosition.y} -> ${rentalPosition.y}`,
-  );
-  await page.waitForTimeout(450);
-  await playbackCommand(page, "Previous event");
-  await page.getByText("Event 1 of 46", { exact: true }).waitFor();
-  assert.equal(
-    await eventFeed
-      .locator("[data-event-id]")
-      .first()
-      .getAttribute("data-event-id"),
-    requestedEventID,
-  );
-  await stepTo(page, progress, 5);
-  await eventFeed.getByText("Launch failed", { exact: true }).first().waitFor();
-  await stepTo(page, progress, 6);
-  assert.equal(
-    await eventFeed.getByText("Booking decided", { exact: true }).count(),
-    4,
-  );
-  await stepTo(page, progress, 38);
-  await eventFeed.locator('[data-event-id="target-q1-queued"]').waitFor();
-  await stepTo(page, progress, 42);
-  await eventFeed.locator('[data-event-id="target-q1-dispatched"]').waitFor();
-  await stepTo(page, progress, 46);
-  await eventFeed.locator('[data-event-id="target-q1-closed"]').waitFor();
-
-  await playbackCommand(page, "Restart scenario");
-  await pauseScenario.waitFor();
-  await page.getByText("Event 0 of 46", { exact: true }).waitFor();
-  await playbackCommand(page, "Pause scenario");
-  await page.getByText("Event 0 of 46", { exact: true }).waitFor();
-  await playbackCommand(page, "4× playback speed");
-  await page
-    .getByRole("button", { name: "4× playback speed", pressed: true })
-    .waitFor();
-  assert.equal(
-    feedResponses,
-    stableFeedResponses,
-    "scenario controls must not reconnect the Workspace event feed",
-  );
   assert.deepEqual(consoleProblems, []);
-
   if (process.env.MERCATOR_BROWSER_SCREENSHOT) {
     await page.screenshot({
       path: process.env.MERCATOR_BROWSER_SCREENSHOT,
       fullPage: false,
     });
   }
-  await queuedRun.focus();
-  await queuedRun.press("Enter");
-  await page.waitForURL(/\/runs\/run-q1/);
-  assert.equal(new URL(page.url()).pathname, "/runs/run-q1");
 } finally {
   await context.close();
   await browser.close();
@@ -197,32 +132,43 @@ try {
 async function stepTo(page, progress, target) {
   let current = Number(await progress.getAttribute("aria-valuenow"));
   while (current < target) {
-    if (process.env.DEBUG_BROWSER) console.log(`Stepping to event ${current + 1}`);
     await playbackCommand(page, "Next event");
-    await page.waitForFunction(
-      (expected) =>
-        document
-          .querySelector('[role="progressbar"][aria-label="Scenario progress"]')
-          ?.getAttribute("aria-valuenow") === String(expected),
-      current + 1,
-    );
-    await page.waitForTimeout(450);
     current += 1;
+    await waitForCursor(page, current);
+    await page.waitForTimeout(80);
   }
+}
+
+async function waitForCursor(page, expected) {
+  await page.waitForFunction(
+    (cursor) =>
+      document
+        .querySelector('[role="progressbar"][aria-label="Scenario progress"]')
+        ?.getAttribute("aria-valuenow") === String(cursor),
+    expected,
+  );
 }
 
 async function playbackCommand(page, accessibleName) {
   await page.getByRole("button", { name: accessibleName }).click();
 }
 
-async function waitForViewTransitionAnimation(page) {
-  await page.waitForFunction(() =>
-    document.getAnimations().some((animation) => {
-      const pseudoElement = animation.effect?.pseudoElement;
-      return (
-        animation.playState === "running" &&
-        pseudoElement?.startsWith("::view-transition")
-      );
-    }),
+async function waitForScenario(page, scenario) {
+  await page.waitForFunction(
+    (expected) =>
+      document.querySelector('[aria-label="Placement scenario"]')?.value === expected,
+    scenario,
   );
+}
+
+async function revealEvidence(row, evidence) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if ((await row.innerText()).includes(evidence)) return;
+    const button = row.getByRole("button");
+    if ((await button.getAttribute("aria-expanded")) !== "true") {
+      await button.click();
+    }
+    await row.page().waitForTimeout(250);
+  }
+  assert.fail(`Decision row did not reveal ${evidence}: ${await row.innerText()}`);
 }

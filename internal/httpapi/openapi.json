@@ -4000,6 +4000,7 @@
         "type": "object",
         "required": [
           "offer_snapshot_id",
+          "disposition",
           "feasible",
           "estimates"
         ],
@@ -4015,6 +4016,14 @@
           },
           "native_ref": {
             "type": "string"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "run_now_existing_rental",
+              "queue_existing_rental",
+              "provision_fresh_rental"
+            ]
           },
           "feasible": {
             "type": "boolean"
@@ -4038,12 +4047,16 @@
         "type": "object",
         "required": [
           "id",
+          "run_id",
           "rental_id",
           "state",
           "schedule_version"
         ],
         "properties": {
           "id": {
+            "type": "string"
+          },
+          "run_id": {
             "type": "string"
           },
           "rental_id": {

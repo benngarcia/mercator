@@ -205,6 +205,21 @@ const CandidateEstimateSet = Schema.Struct({
   start_seconds: Estimate,
   cost_usd: Estimate,
 });
+const CandidateDisposition = Schema.Literals([
+  "run_now_existing_rental",
+  "queue_existing_rental",
+  "provision_fresh_rental",
+]);
+export const Booking = Schema.Struct({
+  id: Schema.String,
+  run_id: Schema.String,
+  rental_id: Schema.String,
+  state: Schema.Literals(["running", "queued"]),
+  after_booking_id: Schema.optionalKey(Schema.String),
+  projected_start_at: Schema.optionalKey(Schema.String),
+  latest_start_at: Schema.optionalKey(Schema.String),
+  schedule_version: Schema.Number,
+});
 export const BookingDecision = Schema.Struct({
   id: Schema.String,
   run_id: Schema.optionalKey(Schema.String),
@@ -223,6 +238,7 @@ export const BookingDecision = Schema.Struct({
       connection_id: Schema.optionalKey(Schema.String),
       adapter_type: Schema.optionalKey(Schema.String),
       native_ref: Schema.optionalKey(Schema.String),
+      disposition: CandidateDisposition,
       feasible: Schema.Boolean,
       rejections: Schema.optionalKey(mutableArray(Violation)),
       estimates: CandidateEstimateSet,
@@ -230,17 +246,7 @@ export const BookingDecision = Schema.Struct({
     }),
   ),
   selected_offer_snapshot_id: Schema.optionalKey(Schema.String),
-  booking: Schema.optionalKey(
-    Schema.Struct({
-      id: Schema.String,
-      rental_id: Schema.String,
-      state: Schema.Literals(["running", "queued"]),
-      after_booking_id: Schema.optionalKey(Schema.String),
-      projected_start_at: Schema.optionalKey(Schema.String),
-      latest_start_at: Schema.optionalKey(Schema.String),
-      schedule_version: Schema.Number,
-    }),
-  ),
+  booking: Schema.optionalKey(Booking),
   selection_reason_codes: mutableArray(Schema.String),
 });
 
@@ -313,6 +319,7 @@ export const RequestedData = Schema.Struct({
   workload_revision: WorkloadRevision,
 });
 export const BookingDecidedData = Schema.Struct({ decision: BookingDecision });
+export const BookingDispatchedData = Schema.Struct({ booking: Booking });
 export const LaunchIntentData = Schema.Struct({ disposition: Schema.String });
 export const ObservedRunData = Schema.Struct({ phase: Schema.String });
 export const OutcomeData = Schema.Struct({

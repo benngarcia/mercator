@@ -25,6 +25,7 @@
           "selected_offer_snapshot_id": "offer-failed-provider",
           "booking": {
             "id": "booking-failed-provider",
+            "run_id": "run-1",
             "rental_id": "rental-failed-provider",
             "state": "running",
             "schedule_version": 1
@@ -60,6 +61,7 @@
           "selected_offer_snapshot_id": "offer-replacement-provider",
           "booking": {
             "id": "booking-replacement-provider",
+            "run_id": "run-1",
             "rental_id": "rental-replacement-provider",
             "state": "running",
             "schedule_version": 2

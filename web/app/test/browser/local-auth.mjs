@@ -29,7 +29,7 @@ try {
   // Arrange
   const url = new URL("/canvas", baseURL);
   url.searchParams.set("workspace_id", "ws_scenario");
-  url.searchParams.set("scenario", "full-schedule-forces-fresh-capacity");
+  url.searchParams.set("scenario", "warm-pool-burst");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
   await page.getByText("developer@localhost", { exact: true }).waitFor();
   await page.getByText("rental-warm", { exact: true }).waitFor();

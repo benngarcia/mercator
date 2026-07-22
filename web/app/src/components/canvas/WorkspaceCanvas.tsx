@@ -60,7 +60,7 @@ export function WorkspaceCanvas({
   const timelineWidth = horizonMinutes * pixelsPerMinute;
 
   return (
-    <div className="flex min-h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="border-b px-5 py-4">
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-base font-semibold tracking-tight">Workspace</h1>

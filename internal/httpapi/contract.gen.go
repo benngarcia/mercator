@@ -29,6 +29,27 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for CandidateDecisionDisposition.
+const (
+	ProvisionFreshRental CandidateDecisionDisposition = "provision_fresh_rental"
+	QueueExistingRental  CandidateDecisionDisposition = "queue_existing_rental"
+	RunNowExistingRental CandidateDecisionDisposition = "run_now_existing_rental"
+)
+
+// Valid indicates whether the value is a known member of the CandidateDecisionDisposition enum.
+func (e CandidateDecisionDisposition) Valid() bool {
+	switch e {
+	case ProvisionFreshRental:
+		return true
+	case QueueExistingRental:
+		return true
+	case RunNowExistingRental:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CapabilityProfileOfferKinds.
 const (
 	Provisionable CapabilityProfileOfferKinds = "provisionable"
@@ -294,15 +315,19 @@ type CPURequirement struct {
 
 // CandidateDecision defines model for CandidateDecision.
 type CandidateDecision struct {
-	AdapterType     string             `json:"adapter_type,omitempty"`
-	ConnectionId    string             `json:"connection_id,omitempty"`
-	Estimates       CandidateEstimates `json:"estimates"`
-	Feasible        bool               `json:"feasible"`
-	NativeRef       string             `json:"native_ref,omitempty"`
-	OfferSnapshotId string             `json:"offer_snapshot_id"`
-	Rejections      []Violation        `json:"rejections,omitempty"`
-	ScoreUsd        float64            `json:"score_usd,omitempty"`
+	AdapterType     string                       `json:"adapter_type,omitempty"`
+	ConnectionId    string                       `json:"connection_id,omitempty"`
+	Disposition     CandidateDecisionDisposition `json:"disposition"`
+	Estimates       CandidateEstimates           `json:"estimates"`
+	Feasible        bool                         `json:"feasible"`
+	NativeRef       string                       `json:"native_ref,omitempty"`
+	OfferSnapshotId string                       `json:"offer_snapshot_id"`
+	Rejections      []Violation                  `json:"rejections,omitempty"`
+	ScoreUsd        float64                      `json:"score_usd,omitempty"`
 }
+
+// CandidateDecisionDisposition defines model for CandidateDecision.Disposition.
+type CandidateDecisionDisposition string
 
 // CandidateEstimates defines model for CandidateEstimates.
 type CandidateEstimates struct {

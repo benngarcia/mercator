@@ -80,3 +80,33 @@ func TestDashboardPlaybackDropsAStalledSubscriber(t *testing.T) {
 		t.Fatal("stalled subscriber channel remained open")
 	}
 }
+
+func TestDashboardPlaybackReplacesWorkspaceSessionWhenScenarioChanges(t *testing.T) {
+	playback := NewDashboardPlayback()
+	first, err := playback.Open(t.Context(), "ws_scenario", DashboardScenarioWarmPoolBurst, false)
+	if err != nil {
+		t.Fatalf("open warm pool scenario: %v", err)
+	}
+	<-first
+
+	second, err := playback.Open(t.Context(), "ws_scenario", DashboardScenarioDeadlineCost, false)
+	if err != nil {
+		t.Fatalf("open deadline scenario: %v", err)
+	}
+	reset := <-second
+	if reset.Reset == nil || !resetContainsRun(reset.Reset, "run-deadline-urgent") {
+		t.Fatalf("replacement reset is not the deadline scenario: %+v", reset)
+	}
+	if _, open := <-first; open {
+		t.Fatal("previous scenario subscriber remained open")
+	}
+}
+
+func resetContainsRun(reset *DashboardReset, runID string) bool {
+	for _, message := range reset.Messages {
+		if message.Event != nil && message.Event.CorrelationID == runID {
+			return true
+		}
+	}
+	return false
+}

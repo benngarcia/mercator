@@ -45,7 +45,7 @@ type DashboardMessage struct {
 	Type                  string                  `json:"type"`
 	Event                 *eventlog.CloudEvent    `json:"event,omitempty"`
 	Catalog               *DashboardOfferCatalog  `json:"catalog,omitempty"`
-	ThroughGlobalPosition eventlog.GlobalPosition `json:"through_global_position,omitempty"`
+	ThroughGlobalPosition eventlog.GlobalPosition `json:"through_global_position"`
 }
 
 type DashboardStep struct {
@@ -73,6 +73,10 @@ func (t DashboardTranscript) OfferCatalog() *DashboardOfferCatalog {
 }
 
 func BuildDashboardTranscript(ctx context.Context, workspaceID string) (DashboardTranscript, error) {
+	return BuildDashboardScenarioTranscript(ctx, workspaceID, DashboardScenarioName)
+}
+
+func BuildDashboardScenarioTranscript(ctx context.Context, workspaceID, scenarioName string) (DashboardTranscript, error) {
 	if workspaceID == "" {
 		return DashboardTranscript{}, fmt.Errorf("dashboard scenario requires a Workspace")
 	}
@@ -80,22 +84,18 @@ func BuildDashboardTranscript(ctx context.Context, workspaceID string) (Dashboar
 	if err != nil {
 		return DashboardTranscript{}, err
 	}
-	realEvents, err := runDashboardSimulation(ctx, workspaceID, observedAt, offers)
+	offers, err = dashboardScenarioOffers(scenarioName, offers)
 	if err != nil {
 		return DashboardTranscript{}, err
 	}
-	baseline, position, err := dashboardBaseline(workspaceID, observedAt, offers)
+	realEvents, err := runDashboardSimulation(ctx, workspaceID, scenarioName, observedAt, offers)
 	if err != nil {
 		return DashboardTranscript{}, err
 	}
-	steps := make([]DashboardStep, 0, len(realEvents)+8)
+	baseline := dashboardBaseline(workspaceID, observedAt, offers)
+	steps := make([]DashboardStep, 0, len(realEvents))
 	for _, event := range realEvents {
-		position++
-		event.GlobalPosition = position
 		steps = append(steps, dashboardStep(event, ProvenanceOrchestrator, len(steps)))
-	}
-	for _, event := range dashboardQueueDrain(workspaceID, observedAt, position) {
-		steps = append(steps, dashboardStep(event, ProvenanceTargetContract, len(steps)))
 	}
 	return DashboardTranscript{
 		Baseline:       baseline,
@@ -103,10 +103,23 @@ func BuildDashboardTranscript(ctx context.Context, workspaceID string) (Dashboar
 		DurationMillis: (len(steps) + 1) * dashboardStepMillis,
 		Fidelity: DashboardFidelity{
 			OfferSource:        "sanitized_recordings",
-			ProvenCapabilities: []string{"placement", "launch_replacement", "run_lifecycle", "cleanup"},
-			TargetCapabilities: []string{"rental_schedule"},
+			ProvenCapabilities: []string{"placement", "rental_schedule", "queued_dispatch", "launch_replacement", "run_lifecycle", "cleanup"},
+			TargetCapabilities: []string{},
 		},
 	}, nil
+}
+
+func dashboardScenarioOffers(scenarioName string, offers []domain.OfferSnapshot) ([]domain.OfferSnapshot, error) {
+	if !validDashboardScenario(scenarioName) {
+		return nil, fmt.Errorf("%w %q", ErrUnknownDashboardScenario, scenarioName)
+	}
+	adjusted := append([]domain.OfferSnapshot(nil), offers...)
+	for index := range adjusted {
+		if adjusted[index].RentalID == "rental-warm" {
+			adjusted[index].Pricing.RatePerSecondUSD = 0.10 / 3600
+		}
+	}
+	return adjusted, nil
 }
 
 func dashboardStep(event eventlog.CloudEvent, provenance string, index int) DashboardStep {
@@ -270,7 +283,7 @@ func (p *dashboardProvider) Launch(ctx context.Context, request adapter.LaunchRe
 	return p.Adapter.Launch(ctx, request)
 }
 
-func runDashboardSimulation(ctx context.Context, workspaceID string, now time.Time, offers []domain.OfferSnapshot) ([]eventlog.CloudEvent, error) {
+func runDashboardSimulation(ctx context.Context, workspaceID, scenarioName string, now time.Time, offers []domain.OfferSnapshot) ([]eventlog.CloudEvent, error) {
 	log, err := eventlog.OpenSQLite(ctx, "file:dashboard-scenario-"+uuid.NewString()+"?mode=memory&cache=shared")
 	if err != nil {
 		return nil, fmt.Errorf("open dashboard scenario event log: %w", err)
@@ -294,31 +307,8 @@ func runDashboardSimulation(ctx context.Context, workspaceID string, now time.Ti
 		},
 	}
 	orch := orchestrator.New(alwaysActiveWorkspaceLog{log}, scheduler.New(), provider, orchestrator.WithClock(clock.Now))
-	for _, run := range []struct {
-		id    string
-		model string
-		mem   int64
-	}{
-		{id: "run-provider-replacement", model: "RTX 4090", mem: 16},
-		{id: "run-render-a6000", model: "RTX A6000", mem: 40},
-		{id: "run-training-h100", model: "H100", mem: 64},
-	} {
-		if _, err := orch.CreateRun(ctx, orchestrator.CreateRunRequest{
-			WorkspaceID:    workspaceID,
-			RunID:          run.id,
-			IdempotencyKey: "scenario:" + run.id,
-			Workload:       dashboardWorkload(workspaceID, run.id, run.model, run.mem),
-		}); err != nil {
-			return nil, fmt.Errorf("create dashboard Run %s: %w", run.id, err)
-		}
-		if err := orch.AdvanceRun(ctx, workspaceID, run.id); err != nil {
-			return nil, fmt.Errorf("start dashboard Run %s: %w", run.id, err)
-		}
-		clock.Advance(2 * time.Second)
-		if err := orch.AdvanceRun(ctx, workspaceID, run.id); err != nil {
-			return nil, fmt.Errorf("finish dashboard Run %s: %w", run.id, err)
-		}
-		clock.Advance(time.Second)
+	if err := executeDashboardScenario(ctx, workspaceID, scenarioName, orch, clock); err != nil {
+		return nil, err
 	}
 	stored, err := log.ReadAll(ctx, 0, 1000, eventlog.EventFilter{WorkspaceID: workspaceID, Visibility: eventlog.VisibilityPublic})
 	if err != nil {
@@ -329,6 +319,128 @@ func runDashboardSimulation(ctx context.Context, workspaceID string, now time.Ti
 		events = append(events, event.CloudEvent())
 	}
 	return events, nil
+}
+
+func executeDashboardScenario(ctx context.Context, workspaceID, scenarioName string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
+	switch scenarioName {
+	case DashboardScenarioWarmPoolBurst:
+		return executeWarmPoolBurst(ctx, workspaceID, orch, clock)
+	case DashboardScenarioDeadlineCost:
+		return executeDeadlineCost(ctx, workspaceID, orch, clock)
+	case DashboardScenarioFailureRebalance:
+		return executeFailureRebalance(ctx, workspaceID, orch, clock)
+	default:
+		return fmt.Errorf("%w %q", ErrUnknownDashboardScenario, scenarioName)
+	}
+}
+
+func executeWarmPoolBurst(ctx context.Context, workspaceID string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
+	runIDs := []string{"run-burst-01", "run-burst-02", "run-burst-03", "run-burst-04"}
+	for _, runID := range runIDs {
+		workload := dashboardWorkload(workspaceID, runID, "RTX A6000", 40)
+		workload.Spec.Placement.ExpectedRuntimeSeconds = 8 * 60
+		workload.Spec.Execution.MaxRuntimeSeconds = 12 * 60
+		if err := startDashboardRun(ctx, workspaceID, runID, workload, orch); err != nil {
+			return err
+		}
+		clock.Advance(time.Second)
+	}
+	for index, runID := range runIDs {
+		if err := finishDashboardRun(ctx, workspaceID, runID, orch); err != nil {
+			return err
+		}
+		clock.Advance(2 * time.Second)
+		if index+1 < len(runIDs) {
+			if err := advanceDashboardRun(ctx, workspaceID, runIDs[index+1], orch, "dispatch"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func executeDeadlineCost(ctx context.Context, workspaceID string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
+	long := dashboardWorkload(workspaceID, "run-batch-long", "RTX A6000", 40)
+	long.Spec.Placement.ExpectedRuntimeSeconds = 20 * 60
+	long.Spec.Execution.MaxRuntimeSeconds = 30 * 60
+	if err := startDashboardRun(ctx, workspaceID, "run-batch-long", long, orch); err != nil {
+		return err
+	}
+	clock.Advance(time.Second)
+	urgent := dashboardWorkload(workspaceID, "run-deadline-urgent", "RTX A6000", 40)
+	urgent.Spec.Placement.Objective = domain.ObjectiveBalanced
+	urgent.Spec.Placement.MaxP90StartSeconds = 60
+	urgent.Spec.Placement.ExpectedRuntimeSeconds = 4 * 60
+	urgent.Spec.Execution.MaxRuntimeSeconds = 6 * 60
+	if err := startDashboardRun(ctx, workspaceID, "run-deadline-urgent", urgent, orch); err != nil {
+		return err
+	}
+	clock.Advance(time.Second)
+	cheap := dashboardWorkload(workspaceID, "run-cost-flexible", "RTX A6000", 40)
+	cheap.Spec.Placement.ExpectedRuntimeSeconds = 6 * 60
+	cheap.Spec.Execution.MaxRuntimeSeconds = 10 * 60
+	if err := startDashboardRun(ctx, workspaceID, "run-cost-flexible", cheap, orch); err != nil {
+		return err
+	}
+	if err := finishDashboardRun(ctx, workspaceID, "run-deadline-urgent", orch); err != nil {
+		return err
+	}
+	if err := finishDashboardRun(ctx, workspaceID, "run-batch-long", orch); err != nil {
+		return err
+	}
+	if err := advanceDashboardRun(ctx, workspaceID, "run-cost-flexible", orch, "dispatch"); err != nil {
+		return err
+	}
+	return finishDashboardRun(ctx, workspaceID, "run-cost-flexible", orch)
+}
+
+func executeFailureRebalance(ctx context.Context, workspaceID string, orch *orchestrator.Orchestrator, clock *fake.Clock) error {
+	failed := dashboardWorkload(workspaceID, "run-provider-replacement", "RTX 4090", 16)
+	failed.Spec.Placement.ExpectedRuntimeSeconds = 10 * 60
+	failed.Spec.Execution.MaxRuntimeSeconds = 15 * 60
+	if err := startDashboardRun(ctx, workspaceID, "run-provider-replacement", failed, orch); err != nil {
+		return err
+	}
+	clock.Advance(time.Second)
+	for _, runID := range []string{"run-rebalance-warm", "run-rebalance-queued"} {
+		workload := dashboardWorkload(workspaceID, runID, "RTX A6000", 40)
+		workload.Spec.Placement.ExpectedRuntimeSeconds = 7 * 60
+		workload.Spec.Execution.MaxRuntimeSeconds = 10 * 60
+		if err := startDashboardRun(ctx, workspaceID, runID, workload, orch); err != nil {
+			return err
+		}
+		clock.Advance(time.Second)
+	}
+	if err := finishDashboardRun(ctx, workspaceID, "run-provider-replacement", orch); err != nil {
+		return err
+	}
+	if err := finishDashboardRun(ctx, workspaceID, "run-rebalance-warm", orch); err != nil {
+		return err
+	}
+	if err := advanceDashboardRun(ctx, workspaceID, "run-rebalance-queued", orch, "dispatch"); err != nil {
+		return err
+	}
+	return finishDashboardRun(ctx, workspaceID, "run-rebalance-queued", orch)
+}
+
+func startDashboardRun(ctx context.Context, workspaceID, runID string, workload domain.WorkloadRevision, orch *orchestrator.Orchestrator) error {
+	if _, err := orch.CreateRun(ctx, orchestrator.CreateRunRequest{
+		WorkspaceID: workspaceID, RunID: runID, IdempotencyKey: "scenario:" + runID, Workload: workload,
+	}); err != nil {
+		return fmt.Errorf("create dashboard Run %s: %w", runID, err)
+	}
+	return advanceDashboardRun(ctx, workspaceID, runID, orch, "start")
+}
+
+func finishDashboardRun(ctx context.Context, workspaceID, runID string, orch *orchestrator.Orchestrator) error {
+	return advanceDashboardRun(ctx, workspaceID, runID, orch, "finish")
+}
+
+func advanceDashboardRun(ctx context.Context, workspaceID, runID string, orch *orchestrator.Orchestrator, transition string) error {
+	if err := orch.AdvanceRun(ctx, workspaceID, runID); err != nil {
+		return fmt.Errorf("%s dashboard Run %s: %w", transition, runID, err)
+	}
+	return nil
 }
 
 func dashboardWorkload(workspaceID, runID, model string, gpuMemoryGiB int64) domain.WorkloadRevision {
@@ -360,18 +472,8 @@ func dashboardWorkload(workspaceID, runID, model string, gpuMemoryGiB int64) dom
 	}
 }
 
-func dashboardBaseline(workspaceID string, now time.Time, offers []domain.OfferSnapshot) ([]DashboardMessage, eventlog.GlobalPosition, error) {
-	activeWorkload := dashboardWorkload(workspaceID, "run-active", "RTX A6000", 40)
-	queuedWorkload := dashboardWorkload(workspaceID, "run-q1", "RTX A6000", 40)
-	activeDecision := dashboardBookingDecision("run-active", "booking-active", domain.BookingStateRunning, "", 5, now)
-	queuedDecision := dashboardBookingDecision("run-q1", "booking-q1", domain.BookingStateQueued, "booking-active", 6, now)
-	events := []eventlog.CloudEvent{
-		dashboardContractEvent(workspaceID, "baseline-active-requested", orchestrator.EventRunRequested, "runs/run-active", 1, now, map[string]any{"run_id": "run-active", "workload_revision": activeWorkload}),
-		dashboardContractEvent(workspaceID, "baseline-active-decided", orchestrator.EventBookingDecided, "runs/run-active", 2, now, map[string]any{"decision": activeDecision}),
-		dashboardContractEvent(workspaceID, "baseline-q1-requested", orchestrator.EventRunRequested, "runs/run-q1", 3, now, map[string]any{"run_id": "run-q1", "workload_revision": queuedWorkload}),
-		dashboardContractEvent(workspaceID, "baseline-q1-decided", orchestrator.EventBookingDecided, "runs/run-q1", 4, now, map[string]any{"decision": queuedDecision}),
-	}
-	baseline := []DashboardMessage{{
+func dashboardBaseline(workspaceID string, now time.Time, offers []domain.OfferSnapshot) []DashboardMessage {
+	return []DashboardMessage{{
 		Type: "offers_replaced",
 		Catalog: &DashboardOfferCatalog{
 			WorkspaceID: workspaceID,
@@ -380,88 +482,5 @@ func dashboardBaseline(workspaceID string, now time.Time, offers []domain.OfferS
 			Offers:      offers,
 			Failures:    []any{},
 		},
-	}}
-	for i := range events {
-		baseline = append(baseline, DashboardMessage{Type: "domain_event", Event: &events[i]})
-	}
-	baseline = append(baseline, DashboardMessage{Type: "ready", ThroughGlobalPosition: 4})
-	return baseline, 4, nil
-}
-
-func dashboardBookingDecision(runID, bookingID string, state domain.BookingState, after string, version uint64, now time.Time) domain.BookingDecision {
-	booking := &domain.Booking{
-		ID:              bookingID,
-		RentalID:        "rental-warm",
-		State:           state,
-		AfterBookingID:  after,
-		ScheduleVersion: version,
-	}
-	if state == domain.BookingStateQueued {
-		projected := now.Add(4 * time.Minute)
-		booking.ProjectedStartAt = &projected
-	}
-	return domain.BookingDecision{
-		ID:                     "dec-" + runID,
-		RunID:                  runID,
-		WorkloadRevisionDigest: "sha256:" + runID,
-		EvaluatedAt:            now,
-		ModelVersion:           "rental-schedule-target-v1",
-		Policy:                 domain.PlacementPolicy{Objective: domain.ObjectiveBalanced},
-		Candidates: []domain.CandidateDecision{{
-			OfferSnapshotID: "rental-warm",
-			ConnectionID:    "conn-docker-warm",
-			AdapterType:     "docker",
-			NativeRef:       "rental-warm",
-			Feasible:        true,
-		}},
-		SelectedOfferSnapshotID: "rental-warm",
-		Booking:                 booking,
-		SelectionReasonCodes:    []string{"FEASIBLE", "LOWEST_SCORE"},
-	}
-}
-
-func dashboardQueueDrain(workspaceID string, now time.Time, after eventlog.GlobalPosition) []eventlog.CloudEvent {
-	position := after
-	next := func(id, eventType, subject, runID string, data any) eventlog.CloudEvent {
-		position++
-		event := dashboardContractEvent(workspaceID, id, eventType, subject, position, now.Add(time.Duration(position)*time.Second), data)
-		event.CorrelationID = runID
-		return event
-	}
-	return []eventlog.CloudEvent{
-		next("target-q1-queued", "compute.rental.booking_queued.v1", "rentals/rental-warm", "run-q1", map[string]any{
-			"run_id":  "run-q1",
-			"booking": map[string]any{"id": "booking-q1", "rental_id": "rental-warm", "after_booking_id": "booking-active", "schedule_version": 6},
-		}),
-		next("target-active-outcome", orchestrator.EventRunOutcomeRecorded, "runs/run-active", "run-active", map[string]any{"outcome": "succeeded"}),
-		next("target-active-cleanup", orchestrator.EventCleanupRequested, "runs/run-active", "run-active", map[string]any{"launch_key": "launch-active"}),
-		next("target-active-closed", orchestrator.EventRunClosed, "runs/run-active", "run-active", map[string]any{"closed": true}),
-		next("target-q1-dispatched", "compute.rental.booking_dispatched.v1", "rentals/rental-warm", "run-q1", map[string]any{
-			"run_id":  "run-q1",
-			"booking": map[string]any{"id": "booking-q1", "rental_id": "rental-warm", "schedule_version": 7},
-		}),
-		next("target-q1-running", orchestrator.EventExternalStateObserved, "runs/run-q1", "run-q1", map[string]any{"phase": "running"}),
-		next("target-q1-outcome", orchestrator.EventRunOutcomeRecorded, "runs/run-q1", "run-q1", map[string]any{"outcome": "succeeded"}),
-		next("target-q1-cleanup", orchestrator.EventCleanupRequested, "runs/run-q1", "run-q1", map[string]any{"launch_key": "launch-q1"}),
-		next("target-q1-closed", orchestrator.EventRunClosed, "runs/run-q1", "run-q1", map[string]any{"closed": true}),
-	}
-}
-
-func dashboardContractEvent(workspaceID, id, eventType, subject string, position eventlog.GlobalPosition, occurredAt time.Time, data any) eventlog.CloudEvent {
-	encoded, err := json.Marshal(data)
-	if err != nil {
-		panic(err)
-	}
-	return eventlog.CloudEvent{
-		SpecVersion:    "1.0",
-		ID:             id,
-		Source:         "compute-control-plane/scenario-contracts/rental-schedule",
-		Type:           eventType,
-		Subject:        subject,
-		Time:           occurredAt.UTC().Format(time.RFC3339Nano),
-		WorkspaceID:    workspaceID,
-		StreamVersion:  uint64(position),
-		GlobalPosition: position,
-		Data:           encoded,
-	}
+	}, {Type: "ready", ThroughGlobalPosition: 0}}
 }

@@ -48,7 +48,7 @@ func TestConsoleEventStreamRunsTheGoDashboardScenario(t *testing.T) {
 	reset := readSSEFrame(t, reader)
 	if reset.Event != "reset" || !bytes.Contains(reset.Data, []byte(`"offer_source":"sanitized_recordings"`)) ||
 		!bytes.Contains(reset.Data, []byte(`"adapter_type":"runpod"`)) || !bytes.Contains(reset.Data, []byte(`"adapter_type":"shadeform"`)) ||
-		!bytes.Contains(reset.Data, []byte(`"adapter_type":"vast"`)) {
+		!bytes.Contains(reset.Data, []byte(`"adapter_type":"vast"`)) || !bytes.Contains(reset.Data, []byte(`"through_global_position":0`)) {
 		t.Fatalf("initial scenario reset = %s", reset.Data)
 	}
 

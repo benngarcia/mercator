@@ -15,21 +15,33 @@ var (
 )
 
 const (
-	DashboardScenarioName = "full-schedule-forces-fresh-capacity"
-	EmissionReset         = "reset"
-	EmissionMessage       = "message"
-	EmissionPlayback      = "playback"
-	CommandPlay           = "play"
-	CommandPause          = "pause"
-	CommandPrevious       = "previous"
-	CommandNext           = "next"
-	CommandRestart        = "restart"
-	CommandSetSpeed       = "set_speed"
-	PlaybackPlaying       = "playing"
-	PlaybackPaused        = "paused"
-	PlaybackFinished      = "finished"
-	dashboardTick         = 250 * time.Millisecond
+	DashboardScenarioWarmPoolBurst    = "warm-pool-burst"
+	DashboardScenarioDeadlineCost     = "deadline-versus-cost"
+	DashboardScenarioFailureRebalance = "failure-rebalance"
+	DashboardScenarioName             = DashboardScenarioWarmPoolBurst
+	EmissionReset                     = "reset"
+	EmissionMessage                   = "message"
+	EmissionPlayback                  = "playback"
+	CommandPlay                       = "play"
+	CommandPause                      = "pause"
+	CommandPrevious                   = "previous"
+	CommandNext                       = "next"
+	CommandRestart                    = "restart"
+	CommandSetSpeed                   = "set_speed"
+	PlaybackPlaying                   = "playing"
+	PlaybackPaused                    = "paused"
+	PlaybackFinished                  = "finished"
+	dashboardTick                     = 250 * time.Millisecond
 )
+
+func validDashboardScenario(name string) bool {
+	switch name {
+	case DashboardScenarioWarmPoolBurst, DashboardScenarioDeadlineCost, DashboardScenarioFailureRebalance:
+		return true
+	default:
+		return false
+	}
+}
 
 type DashboardPlaybackSnapshot struct {
 	Status         string `json:"status"`
@@ -77,11 +89,12 @@ type DashboardPlayback struct {
 }
 
 type dashboardPlaybackSession struct {
-	transcript  DashboardTranscript
-	state       DashboardPlaybackSnapshot
-	observed    []DashboardMessage
-	subscribers map[chan DashboardEmission]struct{}
-	stop        chan struct{}
+	scenarioName string
+	transcript   DashboardTranscript
+	state        DashboardPlaybackSnapshot
+	observed     []DashboardMessage
+	subscribers  map[chan DashboardEmission]struct{}
+	stop         chan struct{}
 }
 
 func NewDashboardPlayback() *DashboardPlayback {
@@ -89,18 +102,23 @@ func NewDashboardPlayback() *DashboardPlayback {
 }
 
 func (p *DashboardPlayback) Open(ctx context.Context, workspaceID, scenarioName string, autoplay bool) (<-chan DashboardEmission, error) {
-	if scenarioName != DashboardScenarioName {
+	if !validDashboardScenario(scenarioName) {
 		return nil, fmt.Errorf("%w %q", ErrUnknownDashboardScenario, scenarioName)
 	}
 	p.mu.Lock()
 	session := p.sessions[workspaceID]
+	if session != nil && session.scenarioName != scenarioName {
+		p.replaceSession(workspaceID, session)
+		session = nil
+	}
 	if session == nil {
-		transcript, err := BuildDashboardTranscript(ctx, workspaceID)
+		transcript, err := BuildDashboardScenarioTranscript(ctx, workspaceID, scenarioName)
 		if err != nil {
 			p.mu.Unlock()
 			return nil, err
 		}
 		session = newDashboardPlaybackSession(transcript, autoplay)
+		session.scenarioName = scenarioName
 		p.sessions[workspaceID] = session
 		go p.run(workspaceID, session)
 	}
@@ -114,6 +132,15 @@ func (p *DashboardPlayback) Open(ctx context.Context, workspaceID, scenarioName 
 		p.unsubscribe(workspaceID, session, subscriber)
 	}()
 	return subscriber, nil
+}
+
+func (p *DashboardPlayback) replaceSession(workspaceID string, session *dashboardPlaybackSession) {
+	delete(p.sessions, workspaceID)
+	close(session.stop)
+	for subscriber := range session.subscribers {
+		delete(session.subscribers, subscriber)
+		close(subscriber)
+	}
 }
 
 func newDashboardPlaybackSession(transcript DashboardTranscript, autoplay bool) *dashboardPlaybackSession {

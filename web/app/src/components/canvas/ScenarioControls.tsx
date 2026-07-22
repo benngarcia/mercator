@@ -9,6 +9,11 @@ import type {
 import type { WorkspacePlaybackControls } from "@/lib/workspace/react";
 
 const SPEEDS: readonly ScenarioPlaybackSpeed[] = [1, 2, 4];
+const SCENARIOS = [
+  { value: "warm-pool-burst", label: "Warm pool burst" },
+  { value: "deadline-versus-cost", label: "Deadline vs. cost" },
+  { value: "failure-rebalance", label: "Failure rebalance" },
+] as const;
 
 export function ScenarioControls({
   controls,
@@ -24,6 +29,22 @@ export function ScenarioControls({
       : (playback.cursor / playback.cueCount) * 100;
   return (
     <div className="flex min-w-0 items-center gap-3" aria-busy={controls.busy}>
+      <label className="sr-only" htmlFor="scenario-picker">
+        Placement scenario
+      </label>
+      <select
+        id="scenario-picker"
+        aria-label="Placement scenario"
+        value={currentScenario()}
+        onChange={(event) => selectScenario(event.target.value)}
+        className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {SCENARIOS.map((scenario) => (
+          <option key={scenario.value} value={scenario.value}>
+            {scenario.label}
+          </option>
+        ))}
+      </select>
       <div className="flex items-center gap-0.5">
         <Button
           type="button"
@@ -112,6 +133,21 @@ export function ScenarioControls({
       </div>
     </div>
   );
+}
+
+function currentScenario(): string {
+  if (typeof window === "undefined") return SCENARIOS[0].value;
+  const selected = new URLSearchParams(window.location.search).get("scenario");
+  return SCENARIOS.some((scenario) => scenario.value === selected)
+    ? (selected ?? SCENARIOS[0].value)
+    : SCENARIOS[0].value;
+}
+
+function selectScenario(scenario: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("scenario", scenario);
+  url.searchParams.delete("play");
+  window.location.assign(url);
 }
 
 function playbackTime(milliseconds: number): string {

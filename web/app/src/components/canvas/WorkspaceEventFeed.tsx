@@ -16,7 +16,7 @@ export function WorkspaceEventFeed({
     <aside
       role="region"
       aria-label="Workspace events"
-      className="flex min-h-0 w-[22rem] shrink-0 flex-col border-l bg-card/30"
+      className="flex min-h-0 w-[27rem] shrink-0 flex-col border-l bg-card/30"
     >
       <div className="flex h-14 shrink-0 items-center justify-between border-b px-4">
         <div className="flex items-center gap-2">

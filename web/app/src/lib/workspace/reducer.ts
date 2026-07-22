@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 
 import {
   BookingDecidedData,
+  BookingDispatchedData,
   LaunchIntentData,
   ObservedRunData,
   OutcomeData,
@@ -188,6 +189,8 @@ function applyRunEvent(workspace: Workspace, event: CloudEvent): Workspace {
       return requestRun(workspace, event);
     case "compute.run.booking_decided.v1":
       return decideBooking(workspace, event);
+    case "compute.run.booking_dispatched.v1":
+      return dispatchBooking(workspace, event);
     case "compute.run.launch_intent_recorded.v1":
       return recordLaunchIntent(workspace, event);
     case "compute.run.launch_accepted.v1":
@@ -209,6 +212,27 @@ function applyRunEvent(workspace: Workspace, event: CloudEvent): Workspace {
     default:
       return workspace;
   }
+}
+
+function dispatchBooking(workspace: Workspace, event: CloudEvent): Workspace {
+  const { booking: source } = decodeEventData(BookingDispatchedData, event);
+  const run = requiredRun(workspace, source.run_id, event.type);
+  const booking: WorkspaceBooking = {
+    id: source.id,
+    rentalID: source.rental_id,
+    runID: source.run_id,
+    state: "running",
+    scheduleVersion: source.schedule_version,
+  };
+  const bookings = { ...workspace.bookings, [booking.id]: booking };
+  return changed(workspace, {
+    bookings,
+    rentals: insertBooking(workspace.rentals, bookings, booking),
+    runs: {
+      ...workspace.runs,
+      [run.id]: { ...run, bookingID: booking.id },
+    },
+  });
 }
 
 function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
@@ -295,21 +319,7 @@ function detachSupersededBooking(
   nextBookingID: string,
 ): Workspace {
   if (!run.bookingID || run.bookingID === nextBookingID) return workspace;
-  const previous = workspace.bookings[run.bookingID];
-  const detached = detachBooking(workspace, run.bookingID);
-  if (!previous) return detached;
-  const rental = detached.rentals[previous.rentalID];
-  if (
-    !rental ||
-    rental.source !== "provisioned" ||
-    rental.runningBookingID ||
-    rental.queuedBookingIDs.length > 0
-  ) {
-    return detached;
-  }
-  const rentals = { ...detached.rentals };
-  delete rentals[rental.id];
-  return changed(detached, { rentals });
+  return detachBooking(workspace, run.bookingID);
 }
 
 function insertBooking(
@@ -517,15 +527,24 @@ function detachBooking(
   const rental = workspace.rentals[booking.rentalID];
   const rentals = { ...workspace.rentals };
   if (rental) {
-    rentals[rental.id] = {
+    const nextRental = {
       ...rental,
-      phase: "idle",
+      phase: "idle" as const,
       runningBookingID:
         rental.runningBookingID === bookingID
           ? undefined
           : rental.runningBookingID,
       queuedBookingIDs: orderedQueuedBookings(bookings, rental.id),
     };
+    if (
+      nextRental.source === "provisioned" &&
+      !nextRental.runningBookingID &&
+      nextRental.queuedBookingIDs.length === 0
+    ) {
+      delete rentals[rental.id];
+    } else {
+      rentals[rental.id] = nextRental;
+    }
   }
   return changed(workspace, {
     bookings,

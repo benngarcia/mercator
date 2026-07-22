@@ -921,6 +921,8 @@ export interface components {
             connection_id?: string;
             adapter_type?: string;
             native_ref?: string;
+            /** @enum {string} */
+            disposition: "run_now_existing_rental" | "queue_existing_rental" | "provision_fresh_rental";
             feasible: boolean;
             rejections?: components["schemas"]["Violation"][];
             estimates: components["schemas"]["CandidateEstimates"];
@@ -929,6 +931,7 @@ export interface components {
         };
         Booking: {
             id: string;
+            run_id: string;
             rental_id: string;
             /** @enum {string} */
             state: "running" | "queued";
