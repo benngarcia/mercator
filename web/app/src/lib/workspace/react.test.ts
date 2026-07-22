@@ -10,6 +10,8 @@ import {
 test("Workspace feed resets and orders the CloudEvents that drive the canvas", () => {
   const playback = {
     status: "playing" as const,
+    cursor: 0,
+    cueCount: 14,
     elapsedMillis: 0,
     durationMillis: 90_000,
     speed: 1 as const,

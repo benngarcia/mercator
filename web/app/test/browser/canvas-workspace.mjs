@@ -48,16 +48,7 @@ try {
   const pausedAt = Number(await progress.getAttribute("aria-valuenow"));
   await page.waitForTimeout(600);
   assert.equal(Number(await progress.getAttribute("aria-valuenow")), pausedAt);
-  await page.getByRole("button", { name: "Restart scenario" }).click();
-  await page.getByRole("button", { name: "Pause scenario" }).waitFor();
-  await page.getByRole("button", { name: "Pause scenario" }).click();
-  await page.getByRole("button", { name: "Play scenario" }).waitFor();
-  await page.getByRole("button", { name: "4× playback speed" }).click();
-  await page
-    .getByRole("button", { name: "4× playback speed", pressed: true })
-    .waitFor();
-  await page.getByRole("button", { name: "Play scenario" }).click();
-  await page.getByRole("button", { name: "Pause scenario" }).waitFor();
+  await page.getByText("Event 0 of 14", { exact: true }).waitFor();
   assert.equal(
     await page
       .getByText("The warm Rental would win on score", { exact: false })
@@ -74,17 +65,24 @@ try {
     1,
   );
   await page.getByText("$2.50/h", { exact: true }).waitFor();
+  const queuedRun = page.locator('a[aria-label^="run-q1:"]');
+  const queuedRunPosition = await queuedRun.boundingBox();
+  assert.ok(queuedRunPosition, "queued Run needs a rendered card");
+  assert.ok(
+    queuedRunPosition.width >= 72,
+    `queued Run was compressed to ${queuedRunPosition.width}px`,
+  );
 
   const movingRun = page.locator('a[aria-label^="run-fifth:"]');
+  await page.getByRole("button", { name: "Next event" }).click();
   await movingRun.waitFor();
   await eventFeed.locator('[data-event-id="scenario-11"]').waitFor();
-  await page.getByRole("button", { name: "Pause scenario" }).click();
-  await page.getByRole("button", { name: "Play scenario" }).waitFor();
+  await page.getByText("Event 1 of 14", { exact: true }).waitFor();
   const incomingPosition = await movingRun.boundingBox();
   assert.ok(incomingPosition, "incoming Run needs a rendered card");
-  await page.getByRole("button", { name: "Play scenario" }).click();
-  await page.getByRole("button", { name: "Pause scenario" }).waitFor();
+  await page.getByRole("button", { name: "Next event" }).click();
   await eventFeed.locator('[data-event-id="scenario-12"]').waitFor();
+  await page.getByText("Event 2 of 14", { exact: true }).waitFor();
   await page.waitForFunction(
     ({ x, y }) => {
       const card = document.querySelector('a[aria-label^="run-fifth:"]');
@@ -108,8 +106,25 @@ try {
     rentalPosition.x > incomingPosition.x + 300,
     `Run card did not move to its projected time: ${incomingPosition.x} -> ${rentalPosition.x}`,
   );
+  await page.getByRole("button", { name: "Previous event" }).click();
+  await page.getByText("Event 1 of 14", { exact: true }).waitFor();
+  await eventFeed.locator('[data-event-id="scenario-12"]').waitFor({
+    state: "detached",
+  });
+  assert.equal(
+    await eventFeed
+      .locator("[data-event-id]")
+      .first()
+      .getAttribute("data-event-id"),
+    "scenario-11",
+  );
+  await page.getByRole("button", { name: "Restart scenario" }).click();
   await page.getByRole("button", { name: "Pause scenario" }).click();
-  await page.getByRole("button", { name: "Play scenario" }).waitFor();
+  await page.getByText("Event 0 of 14", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "4× playback speed" }).click();
+  await page
+    .getByRole("button", { name: "4× playback speed", pressed: true })
+    .waitFor();
   assert.deepEqual(consoleProblems, []);
 
   if (process.env.MERCATOR_BROWSER_SCREENSHOT) {
@@ -118,10 +133,10 @@ try {
       fullPage: false,
     });
   }
-  await movingRun.focus();
-  await movingRun.press("Enter");
-  await page.waitForURL(/\/runs\/run-fifth/);
-  assert.equal(new URL(page.url()).pathname, "/runs/run-fifth");
+  await queuedRun.focus();
+  await queuedRun.press("Enter");
+  await page.waitForURL(/\/runs\/run-q1/);
+  assert.equal(new URL(page.url()).pathname, "/runs/run-q1");
 } finally {
   await context.close();
   await browser.close();

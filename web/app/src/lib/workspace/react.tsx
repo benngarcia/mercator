@@ -30,6 +30,8 @@ export type { WorkspaceFeedSnapshot } from "./snapshot";
 export interface WorkspacePlaybackControls {
   readonly play: () => void;
   readonly pause: () => void;
+  readonly previous: () => void;
+  readonly next: () => void;
   readonly restart: () => void;
   readonly setSpeed: (speed: ScenarioPlaybackSpeed) => void;
 }
@@ -196,6 +198,8 @@ export function useWorkspaceFeed(): WorkspaceFeed | null {
       : {
           play: () => sendPlaybackCommand({ type: "play" }),
           pause: () => sendPlaybackCommand({ type: "pause" }),
+          previous: () => sendPlaybackCommand({ type: "previous" }),
+          next: () => sendPlaybackCommand({ type: "next" }),
           restart: () => sendPlaybackCommand({ type: "restart" }),
           setSpeed: (speed: ScenarioPlaybackSpeed) =>
             sendPlaybackCommand({ type: "set_speed", speed }),

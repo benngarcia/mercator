@@ -15,6 +15,8 @@ export type ScenarioPlaybackStatus = "playing" | "paused" | "finished";
 
 export interface ScenarioPlaybackSnapshot {
   readonly status: ScenarioPlaybackStatus;
+  readonly cursor: number;
+  readonly cueCount: number;
   readonly elapsedMillis: number;
   readonly durationMillis: number;
   readonly speed: ScenarioPlaybackSpeed;
@@ -23,6 +25,8 @@ export interface ScenarioPlaybackSnapshot {
 export type ScenarioPlaybackCommand =
   | { readonly type: "play" }
   | { readonly type: "pause" }
+  | { readonly type: "previous" }
+  | { readonly type: "next" }
   | { readonly type: "restart" }
   | {
       readonly type: "set_speed";
@@ -49,7 +53,7 @@ export interface ScenarioPlaybackController {
 }
 
 interface PlaybackState extends ScenarioPlaybackSnapshot {
-  readonly nextCue: number;
+  readonly observedCues: readonly WorkspaceMessage[];
 }
 
 interface PlaybackTransition {
@@ -61,7 +65,8 @@ export const makeScenarioPlayback = Effect.fn("ScenarioPlayback.make")(
   function* (script: ScenarioScript, autoplay: boolean) {
     const output = yield* Queue.bounded<ScenarioPlaybackEmission>(1);
     yield* Effect.addFinalizer(() => Queue.shutdown(output));
-    const initial = initialTransition(script, autoplay);
+    const now = yield* Clock.currentTimeMillis;
+    const initial = initialTransition(script, autoplay, now);
     const state = yield* SynchronizedRef.make(initial.state);
     yield* Queue.offerAll(output, initial.emissions);
 
@@ -90,7 +95,8 @@ export const makeScenarioPlayback = Effect.fn("ScenarioPlayback.make")(
     const command = Effect.fn("ScenarioPlayback.command")(function* (
       value: ScenarioPlaybackCommand,
     ) {
-      yield* commit((current) => applyCommand(script, current, value));
+      const now = yield* Clock.currentTimeMillis;
+      yield* commit((current) => applyCommand(script, current, value, now));
     });
 
     return {
@@ -103,28 +109,33 @@ export const makeScenarioPlayback = Effect.fn("ScenarioPlayback.make")(
 function initialTransition(
   script: ScenarioScript,
   autoplay: boolean,
+  now: number,
 ): PlaybackTransition {
+  const observedCues = autoplay
+    ? []
+    : script.cues.map((cue) => observedNow(cue.message, now));
   const state: PlaybackState = autoplay
     ? {
         status: "playing",
+        cursor: 0,
+        cueCount: script.cues.length,
         elapsedMillis: 0,
         durationMillis: script.durationMillis,
         speed: 1,
-        nextCue: 0,
+        observedCues,
       }
     : {
         status: "finished",
+        cursor: script.cues.length,
+        cueCount: script.cues.length,
         elapsedMillis: script.durationMillis,
         durationMillis: script.durationMillis,
         speed: 1,
-        nextCue: script.cues.length,
+        observedCues,
       };
   const messages = autoplay
     ? script.initialMessages
-    : [
-        ...script.initialMessages,
-        ...script.cues.map((cue) => cue.message),
-      ];
+    : [...script.initialMessages, ...observedCues];
   return {
     state,
     emissions: [{ type: "reset", messages, playback: snapshot(state) }],
@@ -143,23 +154,27 @@ function tick(
     script.durationMillis,
     current.elapsedMillis + TICK_MILLIS * current.speed,
   );
-  let nextCue = current.nextCue;
+  let cursor = current.cursor;
+  const observedCues = [...current.observedCues];
   const emissions: ScenarioPlaybackEmission[] = [];
   while (
-    nextCue < script.cues.length &&
-    script.cues[nextCue]!.atMillis <= elapsedMillis
+    cursor < script.cues.length &&
+    script.cues[cursor]!.atMillis <= elapsedMillis
   ) {
+    const message = observedNow(script.cues[cursor]!.message, now);
     emissions.push({
       type: "message",
-      message: observedNow(script.cues[nextCue]!.message, now),
+      message,
     });
-    nextCue += 1;
+    observedCues.push(message);
+    cursor += 1;
   }
   const state: PlaybackState = {
     ...current,
     status: elapsedMillis === script.durationMillis ? "finished" : "playing",
+    cursor,
     elapsedMillis,
-    nextCue,
+    observedCues,
   };
   emissions.push({ type: "playback", playback: snapshot(state) });
   return { state, emissions };
@@ -177,6 +192,7 @@ function applyCommand(
   script: ScenarioScript,
   current: PlaybackState,
   command: ScenarioPlaybackCommand,
+  now: number,
 ): PlaybackTransition {
   switch (command.type) {
     case "restart":
@@ -188,6 +204,10 @@ function applyCommand(
       return updateStatus(current, "playing");
     case "pause":
       return updateStatus(current, "paused");
+    case "previous":
+      return stepPrevious(script, current);
+    case "next":
+      return stepNext(script, current, now);
     case "set_speed": {
       const state = { ...current, speed: command.speed };
       return {
@@ -204,10 +224,12 @@ function resetTransition(
 ): PlaybackTransition {
   const state: PlaybackState = {
     status: "playing",
+    cursor: 0,
+    cueCount: script.cues.length,
     elapsedMillis: 0,
     durationMillis: script.durationMillis,
     speed,
-    nextCue: 0,
+    observedCues: [],
   };
   return {
     state,
@@ -215,6 +237,63 @@ function resetTransition(
       {
         type: "reset",
         messages: script.initialMessages,
+        playback: snapshot(state),
+      },
+    ],
+  };
+}
+
+function stepPrevious(
+  script: ScenarioScript,
+  current: PlaybackState,
+): PlaybackTransition {
+  if (current.cursor === 0) return updateStatus(current, "paused");
+  const cursor = current.cursor - 1;
+  const observedCues = current.observedCues.slice(0, cursor);
+  const state: PlaybackState = {
+    ...current,
+    status: "paused",
+    cursor,
+    elapsedMillis: cursor === 0 ? 0 : script.cues[cursor - 1]!.atMillis,
+    observedCues,
+  };
+  return resetToCursor(script, state);
+}
+
+function stepNext(
+  script: ScenarioScript,
+  current: PlaybackState,
+  now: number,
+): PlaybackTransition {
+  if (current.cursor === script.cues.length) {
+    return { state: current, emissions: [] };
+  }
+  const cue = script.cues[current.cursor]!;
+  const observedCues = [
+    ...current.observedCues,
+    observedNow(cue.message, now),
+  ];
+  const cursor = current.cursor + 1;
+  const state: PlaybackState = {
+    ...current,
+    status: cursor === script.cues.length ? "finished" : "paused",
+    cursor,
+    elapsedMillis: cue.atMillis,
+    observedCues,
+  };
+  return resetToCursor(script, state);
+}
+
+function resetToCursor(
+  script: ScenarioScript,
+  state: PlaybackState,
+): PlaybackTransition {
+  return {
+    state,
+    emissions: [
+      {
+        type: "reset",
+        messages: [...script.initialMessages, ...state.observedCues],
         playback: snapshot(state),
       },
     ],
@@ -236,6 +315,8 @@ function updateStatus(
 function snapshot(state: PlaybackState): ScenarioPlaybackSnapshot {
   return {
     status: state.status,
+    cursor: state.cursor,
+    cueCount: state.cueCount,
     elapsedMillis: state.elapsedMillis,
     durationMillis: state.durationMillis,
     speed: state.speed,

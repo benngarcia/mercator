@@ -54,6 +54,70 @@ effect("scenario playback pauses, changes speed, and restarts", () =>
   }),
 );
 
+effect("scenario playback steps backward and forward one event at a time", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(1_000_000);
+    const controller = yield* makeScenarioPlayback(testScript, true);
+    const emissions = yield* Ref.make<readonly ScenarioPlaybackEmission[]>([]);
+    yield* controller.stream.pipe(
+      Stream.runForEach((emission) =>
+        Ref.update(emissions, (current) => [...current, emission]),
+      ),
+      Effect.forkChild,
+    );
+    yield* Effect.yieldNow;
+
+    yield* controller.command({ type: "next" });
+    yield* Effect.yieldNow;
+    expect((yield* Ref.get(emissions)).at(-1)).toMatchObject({
+      type: "reset",
+      messages: [
+        { type: "ready" },
+        { type: "domain_event", event: { id: "event-1" } },
+      ],
+      playback: {
+        status: "paused",
+        cursor: 1,
+        cueCount: 2,
+        elapsedMillis: 1_000,
+      },
+    });
+
+    yield* controller.command({ type: "next" });
+    yield* Effect.yieldNow;
+    expect((yield* Ref.get(emissions)).at(-1)).toMatchObject({
+      type: "reset",
+      messages: [
+        { type: "ready" },
+        { type: "domain_event", event: { id: "event-1" } },
+        { type: "ready" },
+      ],
+      playback: {
+        status: "finished",
+        cursor: 2,
+        cueCount: 2,
+        elapsedMillis: 2_000,
+      },
+    });
+
+    yield* controller.command({ type: "previous" });
+    yield* Effect.yieldNow;
+    expect((yield* Ref.get(emissions)).at(-1)).toMatchObject({
+      type: "reset",
+      messages: [
+        { type: "ready" },
+        { type: "domain_event", event: { id: "event-1" } },
+      ],
+      playback: {
+        status: "paused",
+        cursor: 1,
+        cueCount: 2,
+        elapsedMillis: 1_000,
+      },
+    });
+  }),
+);
+
 const testScript: ScenarioScript = {
   durationMillis: 2_000,
   initialMessages: [{ type: "ready", throughGlobalPosition: 0 }],

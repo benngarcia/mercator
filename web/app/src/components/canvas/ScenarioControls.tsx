@@ -1,4 +1,4 @@
-import { Pause, Play, RotateCcw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Pause, Play, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -19,12 +19,23 @@ export function ScenarioControls({
 }) {
   const playing = playback.status === "playing";
   const progress =
-    playback.durationMillis === 0
+    playback.cueCount === 0
       ? 0
-      : (playback.elapsedMillis / playback.durationMillis) * 100;
+      : (playback.cursor / playback.cueCount) * 100;
   return (
     <div className="flex min-w-0 items-center gap-3">
       <div className="flex items-center gap-0.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          aria-label="Previous event"
+          disabled={playback.cursor === 0}
+          onClick={controls.previous}
+        >
+          <ChevronLeft />
+        </Button>
         <Button
           type="button"
           variant="ghost"
@@ -34,6 +45,17 @@ export function ScenarioControls({
           onClick={playing ? controls.pause : controls.play}
         >
           {playing ? <Pause /> : <Play />}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          aria-label="Next event"
+          disabled={playback.cursor === playback.cueCount}
+          onClick={controls.next}
+        >
+          <ChevronRight />
         </Button>
         <Button
           type="button"
@@ -51,8 +73,8 @@ export function ScenarioControls({
           role="progressbar"
           aria-label="Scenario progress"
           aria-valuemin={0}
-          aria-valuemax={playback.durationMillis}
-          aria-valuenow={playback.elapsedMillis}
+          aria-valuemax={playback.cueCount}
+          aria-valuenow={playback.cursor}
           className="h-1 overflow-hidden rounded-full bg-surface-3"
         >
           <div
@@ -61,8 +83,10 @@ export function ScenarioControls({
           />
         </div>
         <div className="mt-1 flex justify-between font-mono text-[10px] tabular text-muted-foreground">
+          <span>
+            Event {playback.cursor} of {playback.cueCount}
+          </span>
           <span>{playbackTime(playback.elapsedMillis)}</span>
-          <span>{playbackTime(playback.durationMillis)}</span>
         </div>
       </div>
       <div className="flex rounded-md bg-muted p-0.5">
