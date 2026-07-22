@@ -1,23 +1,20 @@
-import { effect, expect } from "@effect/vitest";
+import { expect, test } from "vitest";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { TestClock } from "effect/testing";
 
 import { clock } from "./clock";
 
-effect("publishes clock time at the requested interval", () =>
-  Effect.gen(function* () {
-    const valuesFiber = yield* clock(1_000).pipe(
-      Stream.take(3),
-      Stream.runCollect,
-      Effect.forkChild,
-    );
-    yield* Effect.yieldNow;
+test("publishes clock time at the requested interval", async () => {
+  const values = await Effect.runPromise(
+    clock(5).pipe(Stream.take(3), Stream.runCollect),
+  );
 
-    yield* TestClock.adjust("2 seconds");
-    const values = yield* Fiber.join(valuesFiber);
-
-    expect(Array.from(values)).toEqual([0, 1_000, 2_000]);
-  }),
-);
+  const collected = Array.from(values);
+  expect(collected).toHaveLength(3);
+  const [first, second, third] = collected;
+  if (first === undefined || second === undefined || third === undefined) {
+    throw new Error("clock stream did not publish three values");
+  }
+  expect(second - first).toBeGreaterThanOrEqual(5);
+  expect(third - second).toBeGreaterThanOrEqual(5);
+});

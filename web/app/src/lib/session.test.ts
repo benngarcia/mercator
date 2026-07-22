@@ -22,9 +22,8 @@ effect("publishes Session changes", () =>
     const changesFiber = yield* session.changes.pipe(
       Stream.take(2),
       Stream.runCollect,
-      Effect.forkChild,
+      Effect.forkChild({ startImmediately: true }),
     );
-    yield* Effect.yieldNow;
 
     yield* session.setToken("secret");
     const changes = yield* Fiber.join(changesFiber);
