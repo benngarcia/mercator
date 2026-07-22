@@ -1,8 +1,8 @@
 // /runs/$runId — run detail. A RunPhaseTimeline header plus RunActions, then
-// three tabs: Overview (run facts via StatBlocks), Events (EventTimeline,
-// polled alongside the run), and Decision (DecisionPanel + CandidateTable, or a
-// "no decision yet" empty state on 404). Polling cadence is driven by the run's
-// terminal state inside the hooks.
+// three tabs: Overview (run facts via StatBlocks), Events (EventTimeline), and
+// Decision (DecisionPanel + CandidateTable, or a
+// "no decision yet" empty state on 404). The Workspace event feed appends
+// events and refreshes the run aggregate.
 
 import { createRoute, notFound } from "@tanstack/react-router";
 import { Compass } from "lucide-react";
@@ -31,7 +31,7 @@ import { useRun, useRunDecision, useRunEvents } from "@/lib/api/queries";
 function RunDetailPage() {
   const { runId } = runsDetailRoute.useParams();
   const run = useRun(runId);
-  const events = useRunEvents(runId, { run: run.data });
+  const events = useRunEvents(runId);
   const decision = useRunDecision(runId);
 
   if (run.isLoading) {

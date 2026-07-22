@@ -52,6 +52,7 @@ export type CandidateEstimates = ContractSchemas["CandidateEstimates"];
 export type CandidateDecision = ContractSchemas["CandidateDecision"];
 export type CollectionReport = ContractSchemas["CollectionReport"];
 export type BookingDecision = ContractSchemas["BookingDecision"];
+export type Booking = ContractSchemas["Booking"];
 
 export type RunRecord = ContractSchemas["Run"];
 export type Run = RunRecord;

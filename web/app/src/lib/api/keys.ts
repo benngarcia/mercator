@@ -5,8 +5,6 @@
 export const queryKeys = {
   all: ["mercator"] as const,
 
-  health: () => ["mercator", "health"] as const,
-
   authSession: () => ["mercator", "authSession"] as const,
 
   workspaces: (includeArchived: boolean) =>

@@ -3,7 +3,6 @@
 // endpoints accept an optional idempotencyKey (auto-generated otherwise).
 
 import { apiFetch, type WorkspaceScope } from "./client";
-import type { operations } from "./contract.gen";
 import type {
   AdapterListResponse,
   AuthSessionState,
@@ -41,21 +40,6 @@ interface WorkspaceArg {
 
 function requestWorkspaceScope(workspaceId: string | undefined): WorkspaceScope {
   return workspaceId === undefined ? "session" : { workspaceId };
-}
-
-// ---------------------------------------------------------------------------
-// Health
-// ---------------------------------------------------------------------------
-
-export type HealthStatus =
-  operations["healthLive"]["responses"][200]["content"]["application/json"];
-
-export function getHealthLive(signal?: AbortSignal): Promise<HealthStatus> {
-  return apiFetch<HealthStatus>("/health/live", { signal });
-}
-
-export function getHealthReady(signal?: AbortSignal): Promise<HealthStatus> {
-  return apiFetch<HealthStatus>("/health/ready", { signal });
 }
 
 // ---------------------------------------------------------------------------

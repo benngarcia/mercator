@@ -1,5 +1,5 @@
-// TanStack Query hooks for every endpoint in the design spec, with the
-// documented polling cadences. Conventions:
+// TanStack Query hooks for every endpoint in the design spec. Live resources
+// are refreshed by the console-wide Workspace event feed. Conventions:
 //   - workspace_id is sourced from the session unless explicitly passed; hooks
 //     stay disabled until a workspace is known.
 //   - query errors throw ApiError -> consumed by <ErrorState>.
@@ -38,7 +38,6 @@ import type {
 } from "./types";
 import { getWorkspace } from "../session";
 import { useSession } from "@/hooks/useSession";
-import { POLL, runRefetchInterval } from "@/hooks/usePollInterval";
 
 // useWorkspaceId resolves the active workspace: an explicit override wins,
 // otherwise the session default. Returns null when none is set, which callers
@@ -58,33 +57,6 @@ function defaultRetry(failureCount: number, error: unknown): boolean {
     }
   }
   return failureCount < 1;
-}
-
-// ---------------------------------------------------------------------------
-// Health
-// ---------------------------------------------------------------------------
-
-export interface HealthState {
-  live: boolean;
-  ready: boolean;
-}
-
-export function useHealth(): UseQueryResult<HealthState, ApiError> {
-  return useQuery<HealthState, ApiError>({
-    queryKey: queryKeys.health(),
-    queryFn: async ({ signal }) => {
-      const [live, ready] = await Promise.allSettled([
-        endpoints.getHealthLive(signal),
-        endpoints.getHealthReady(signal),
-      ]);
-      return {
-        live: live.status === "fulfilled",
-        ready: ready.status === "fulfilled",
-      };
-    },
-    refetchInterval: POLL.offers,
-    retry: false,
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +151,6 @@ export function useRuns(
       return res.runs;
     },
     enabled: Boolean(workspaceID),
-    refetchInterval: POLL.runs,
     retry: defaultRetry,
   });
 }
@@ -199,17 +170,15 @@ export function useRun(
       return res.run;
     },
     enabled: Boolean(workspaceID) && Boolean(runID),
-    // Poll every 2s while the run is open; stop once closed.
-    refetchInterval: (query) => runRefetchInterval(query.state.data, POLL.run),
     retry: defaultRetry,
   });
 }
 
 export function useRunEvents(
   runID: string | undefined,
-  options?: { run?: Run | null; workspaceId?: string },
+  workspaceOverride?: string,
 ): UseQueryResult<CloudEvent[], ApiError> {
-  const workspaceID = useWorkspaceId(options?.workspaceId);
+  const workspaceID = useWorkspaceId(workspaceOverride);
   return useQuery<CloudEvent[], ApiError>({
     queryKey: queryKeys.runEvents(workspaceID ?? "", runID ?? ""),
     queryFn: async ({ signal }) => {
@@ -220,8 +189,6 @@ export function useRunEvents(
       return res.events;
     },
     enabled: Boolean(workspaceID) && Boolean(runID),
-    // Poll alongside the run: stop once the (passed-in) run is closed.
-    refetchInterval: () => runRefetchInterval(options?.run, POLL.events),
     retry: defaultRetry,
   });
 }
@@ -270,7 +237,6 @@ export function useOffers(
       return res.offers;
     },
     enabled: Boolean(workspaceID),
-    refetchInterval: POLL.offers,
     retry: defaultRetry,
   });
 }
@@ -289,7 +255,6 @@ export function useConnections(
       return res.connections;
     },
     enabled: Boolean(workspaceID),
-    refetchInterval: POLL.connections,
     retry: defaultRetry,
   });
 }

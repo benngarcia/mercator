@@ -11,6 +11,8 @@
     "generate:api": "openapi-typescript ../../internal/httpapi/openapi.json -o src/lib/api/contract.gen.ts",
     "record:demo": "node scripts/record-demo.mjs",
     "test:browser:runs-navigation": "node test/browser/runs-navigation.mjs",
+    "test:browser:canvas": "node test/browser/canvas-workspace.mjs",
+    "record:canvas": "node scripts/record-canvas.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -113,8 +113,8 @@ function NotFoundPage() {
           This console destination does not exist.
         </p>
         <Button asChild size="sm">
-          <Link to="/runs" search={true}>
-            Return to Runs
+          <Link to="/canvas" search={true}>
+            Return to Workspace
           </Link>
         </Button>
       </div>

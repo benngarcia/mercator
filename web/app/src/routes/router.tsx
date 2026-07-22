@@ -12,9 +12,11 @@ import { runsDetailRoute } from "./runs.detail";
 import { offersRoute } from "./offers";
 import { connectionsRoute } from "./connections";
 import { sinksRoute } from "./sinks";
+import { canvasRoute } from "./canvas";
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  canvasRoute,
   runsRoute,
   runsDetailRoute,
   offersRoute,
