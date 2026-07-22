@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run dev.ts",
+    "prototype:canvas": "bun run dev.ts",
     "build": "bun run build.ts",
     "check:react-effects": "test/architecture/no-direct-react-effects",
     "test:browser:workspaces": "playwright test test/browser/workspace-switcher.spec.ts --output=../../../output/playwright-workspaces",
