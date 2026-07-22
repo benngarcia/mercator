@@ -102,7 +102,7 @@ func (c *offerCatalog) snapshot(ctx context.Context, workspaceID string) offerCa
 	if err != nil {
 		return offerCatalogSnapshot{WorkspaceID: workspaceID, Err: err}
 	}
-	offers := append([]domain.OfferSnapshot(nil), aggregation.Offers...)
+	offers := append([]domain.OfferSnapshot{}, aggregation.Offers...)
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
 	failures := connectionFailureResponses(aggregation.Failures)
 	revision, err := domain.CanonicalHash(struct {

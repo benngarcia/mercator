@@ -120,6 +120,21 @@ func TestOfferCatalogSharesOneObservationAcrossSubscribers(t *testing.T) {
 	}
 }
 
+func TestOfferCatalogEncodesEmptyOffersAsAnArray(t *testing.T) {
+	catalog := newOfferCatalog(emptyOfferAggregator{}, time.Hour)
+	snapshot := catalog.snapshot(t.Context(), "ws_1")
+	var wire bytes.Buffer
+
+	err := writeConsoleMessage(&wire, "offers_replaced", "", snapshot)
+
+	if err != nil {
+		t.Fatalf("encode empty Offer catalog: %v", err)
+	}
+	if !bytes.Contains(wire.Bytes(), []byte(`"offers":[]`)) {
+		t.Fatalf("empty Offer catalog = %s, want offers array", wire.String())
+	}
+}
+
 type sseFrame struct {
 	ID    string
 	Event string
@@ -175,6 +190,12 @@ type countingOfferAggregator struct {
 	mu    sync.Mutex
 	calls int
 	offer domain.OfferSnapshot
+}
+
+type emptyOfferAggregator struct{}
+
+func (emptyOfferAggregator) AggregateOffers(context.Context, adapter.OfferRequest) (broker.OfferAggregation, error) {
+	return broker.OfferAggregation{Offers: []domain.OfferSnapshot{}, Failures: broker.ConnectionErrors{}}, nil
 }
 
 func (a *countingOfferAggregator) AggregateOffers(context.Context, adapter.OfferRequest) (broker.OfferAggregation, error) {
