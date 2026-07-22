@@ -5,7 +5,10 @@ import type {
   WorkspaceFeedStatus,
   WorkspaceSignal,
 } from "./feed";
-import type { ScenarioPlaybackSnapshot } from "./playback";
+import type {
+  ScenarioFidelity,
+  ScenarioPlaybackSnapshot,
+} from "./playback";
 import {
   createWorkspace,
   reduceWorkspace,
@@ -19,6 +22,7 @@ export interface WorkspaceFeedSnapshot {
   readonly workspace: Workspace;
   readonly events: readonly CloudEvent[];
   readonly playback: ScenarioPlaybackSnapshot | null;
+  readonly fidelity: ScenarioFidelity | null;
   readonly status: WorkspaceFeedStatus;
   readonly error: WorkspaceFeedError | null;
 }
@@ -30,6 +34,7 @@ export function initialWorkspaceFeedSnapshot(
     workspace: createWorkspace(workspaceId),
     events: [],
     playback: null,
+    fidelity: null,
     status: "idle",
     error: null,
   };
@@ -45,7 +50,12 @@ export function reduceWorkspaceFeed(
     case "playback":
       return { ...current, playback: signal.playback };
     case "reset":
-      return resetSnapshot(current, signal.messages, signal.playback);
+      return resetSnapshot(
+        current,
+        signal.messages,
+        signal.playback,
+        signal.fidelity,
+      );
     case "message":
       return applyMessage(current, signal.message);
   }
@@ -55,11 +65,13 @@ function resetSnapshot(
   current: WorkspaceFeedSnapshot,
   messages: readonly WorkspaceMessage[],
   playback: ScenarioPlaybackSnapshot,
+  fidelity: ScenarioFidelity,
 ): WorkspaceFeedSnapshot {
   const initial = {
     ...initialWorkspaceFeedSnapshot(current.workspace.id),
     status: current.status,
     playback,
+    fidelity,
   };
   return messages.reduce(applyMessage, initial);
 }

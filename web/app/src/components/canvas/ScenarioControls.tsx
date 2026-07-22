@@ -23,7 +23,7 @@ export function ScenarioControls({
       ? 0
       : (playback.cursor / playback.cueCount) * 100;
   return (
-    <div className="flex min-w-0 items-center gap-3">
+    <div className="flex min-w-0 items-center gap-3" aria-busy={controls.busy}>
       <div className="flex items-center gap-0.5">
         <Button
           type="button"
@@ -31,8 +31,8 @@ export function ScenarioControls({
           size="icon"
           className="size-8"
           aria-label="Previous event"
-          disabled={playback.cursor === 0}
-          onClick={controls.previous}
+          disabled={controls.busy || playback.cursor === 0}
+          onClick={() => void controls.previous()}
         >
           <ChevronLeft />
         </Button>
@@ -42,7 +42,8 @@ export function ScenarioControls({
           size="icon"
           className="size-8"
           aria-label={playing ? "Pause scenario" : "Play scenario"}
-          onClick={playing ? controls.pause : controls.play}
+          disabled={controls.busy}
+          onClick={() => void (playing ? controls.pause() : controls.play())}
         >
           {playing ? <Pause /> : <Play />}
         </Button>
@@ -52,8 +53,8 @@ export function ScenarioControls({
           size="icon"
           className="size-8"
           aria-label="Next event"
-          disabled={playback.cursor === playback.cueCount}
-          onClick={controls.next}
+          disabled={controls.busy || playback.cursor === playback.cueCount}
+          onClick={() => void controls.next()}
         >
           <ChevronRight />
         </Button>
@@ -63,7 +64,8 @@ export function ScenarioControls({
           size="icon"
           className="size-8"
           aria-label="Restart scenario"
-          onClick={controls.restart}
+          disabled={controls.busy}
+          onClick={() => void controls.restart()}
         >
           <RotateCcw />
         </Button>
@@ -96,7 +98,8 @@ export function ScenarioControls({
             type="button"
             aria-label={`${speed}× playback speed`}
             aria-pressed={playback.speed === speed}
-            onClick={() => controls.setSpeed(speed)}
+            disabled={controls.busy}
+            onClick={() => void controls.setSpeed(speed)}
             className={cn(
               "h-6 min-w-7 rounded px-1.5 font-mono text-[10px] text-muted-foreground transition-colors",
               playback.speed === speed &&

@@ -16,7 +16,10 @@ import type {
   WorkspaceBooking,
   WorkspaceRun,
 } from "@/lib/workspace";
-import type { ScenarioPlaybackSnapshot } from "@/lib/workspace/playback";
+import type {
+  ScenarioFidelity,
+  ScenarioPlaybackSnapshot,
+} from "@/lib/workspace/playback";
 import type { WorkspacePlaybackControls } from "@/lib/workspace/react";
 
 import { ScenarioControls } from "./ScenarioControls";
@@ -31,11 +34,13 @@ const LANE_LABEL_WIDTH = 224;
 export function WorkspaceCanvas({
   controls,
   events,
+  fidelity,
   playback,
   workspace,
 }: {
   controls: WorkspacePlaybackControls | null;
   events: readonly CloudEvent[];
+  fidelity: ScenarioFidelity | null;
   playback: ScenarioPlaybackSnapshot | null;
   workspace: Workspace;
 }) {
@@ -123,7 +128,7 @@ export function WorkspaceCanvas({
             available={workspace.offersAvailable}
           />
         </div>
-        <WorkspaceEventFeed events={events} />
+        <WorkspaceEventFeed events={events} fidelity={fidelity} />
       </div>
     </div>
   );
@@ -540,6 +545,7 @@ function MarketplaceOffer({ offer }: { offer: OfferSnapshot }) {
     <Link
       to="/offers"
       search={true}
+      aria-label={`${offer.id}: ${offer.adapter_type} Offer`}
       className="group relative flex h-16 w-60 items-center gap-3 overflow-hidden rounded-lg border bg-background px-3 outline-none transition-[border-color,box-shadow] hover:border-primary/35 focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Box className="size-4 shrink-0 text-muted-foreground" />

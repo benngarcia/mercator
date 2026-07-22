@@ -13,12 +13,18 @@ import * as Sse from "effect/unstable/encoding/Sse";
 
 import { Session } from "@/lib/session";
 
-import { CloudEvent, OfferCatalogReplacement, Ready } from "./contracts";
 import {
-  makeScenarioPlayback,
-  type ScenarioPlaybackCommand,
-  type ScenarioPlaybackController,
+  CloudEvent,
+  DashboardMessage,
+  DashboardPlayback,
+  DashboardReset,
+  OfferCatalogReplacement,
+  Ready,
+} from "./contracts";
+import {
   type ScenarioPlaybackEmission,
+  type ScenarioFidelity,
+  type ScenarioPlaybackSnapshot,
 } from "./playback";
 import type { WorkspaceMessage } from "./reducer";
 
@@ -44,10 +50,6 @@ export interface WorkspaceEventsService {
   readonly stream: (
     workspaceId: string,
   ) => Stream.Stream<WorkspaceSignal, WorkspaceFeedError>;
-  readonly command: (
-    workspaceId: string,
-    command: ScenarioPlaybackCommand,
-  ) => Effect.Effect<void>;
 }
 
 export class WorkspaceEvents extends Context.Service<
@@ -65,6 +67,7 @@ function feedRequest(
   workspaceId: string,
   token: string | null,
   lastEventId: string,
+  scenario: ReturnType<typeof activeScenario>,
 ) {
   let request = HttpClientRequest.get("/v1/console/events").pipe(
     HttpClientRequest.accept("text/event-stream"),
@@ -78,6 +81,14 @@ function feedRequest(
       request,
       "Last-Event-ID",
       lastEventId,
+    );
+  }
+  if (scenario !== null) {
+    request = HttpClientRequest.setUrlParam(request, "scenario", scenario.name);
+    request = HttpClientRequest.setUrlParam(
+      request,
+      "play",
+      scenario.autoplay ? "1" : "0",
     );
   }
   return request;
@@ -100,32 +111,114 @@ function decodeJson<S extends Schema.Constraint>(schema: S, data: string) {
   );
 }
 
+function playbackSnapshot(
+  playback: Schema.Schema.Type<typeof DashboardPlayback>,
+): ScenarioPlaybackSnapshot {
+  return {
+    status: playback.status,
+    cursor: playback.cursor,
+    cueCount: playback.cue_count,
+    elapsedMillis: playback.elapsed_millis,
+    durationMillis: playback.duration_millis,
+    speed: playback.speed,
+  };
+}
+
+function scenarioFidelity(
+  fidelity: Schema.Schema.Type<typeof DashboardReset>["fidelity"],
+): ScenarioFidelity {
+  return {
+    offerSource: fidelity.offer_source,
+    provenCapabilities: fidelity.proven_capabilities,
+    targetCapabilities: fidelity.target_capabilities,
+  };
+}
+
+function workspaceMessage(
+  message: Schema.Schema.Type<typeof DashboardMessage>,
+): WorkspaceMessage {
+  switch (message.type) {
+    case "domain_event":
+      return { type: "domain_event", event: message.event };
+    case "offers_replaced":
+      return { type: "offers_replaced", catalog: message.catalog };
+    case "offers_unavailable":
+      return { type: "offers_unavailable" };
+    case "ready":
+      return {
+        type: "ready",
+        throughGlobalPosition: message.through_global_position,
+      };
+  }
+}
+
 function decodeFrame(
   frame: Sse.Event,
-): Effect.Effect<Option.Option<WorkspaceMessage>, WorkspaceFeedError> {
+): Effect.Effect<Option.Option<WorkspaceSignal>, WorkspaceFeedError> {
   switch (frame.event ?? "message") {
     case "domain_event":
       return decodeJson(CloudEvent, frame.data).pipe(
         Effect.map((event) =>
-          Option.some<WorkspaceMessage>({ type: "domain_event", event }),
+          Option.some<WorkspaceSignal>({
+            type: "message",
+            message: { type: "domain_event", event },
+          }),
         ),
       );
     case "offers_replaced":
       return decodeJson(OfferCatalogReplacement, frame.data).pipe(
         Effect.map((catalog) =>
-          Option.some<WorkspaceMessage>({ type: "offers_replaced", catalog }),
+          Option.some<WorkspaceSignal>({
+            type: "message",
+            message: { type: "offers_replaced", catalog },
+          }),
         ),
       );
     case "offers_unavailable":
       return Effect.succeed(
-        Option.some<WorkspaceMessage>({ type: "offers_unavailable" }),
+        Option.some<WorkspaceSignal>({
+          type: "message",
+          message: { type: "offers_unavailable" },
+        }),
       );
     case "ready":
       return decodeJson(Ready, frame.data).pipe(
         Effect.map((ready) =>
-          Option.some<WorkspaceMessage>({
-            type: "ready",
-            throughGlobalPosition: ready.through_global_position,
+          Option.some<WorkspaceSignal>({
+            type: "message",
+            message: {
+              type: "ready",
+              throughGlobalPosition: ready.through_global_position,
+            },
+          }),
+        ),
+      );
+    case "reset":
+      return decodeJson(DashboardReset, frame.data).pipe(
+        Effect.map((reset) =>
+          Option.some<WorkspaceSignal>({
+            type: "reset",
+            messages: reset.messages.map(workspaceMessage),
+            playback: playbackSnapshot(reset.playback),
+            fidelity: scenarioFidelity(reset.fidelity),
+          }),
+        ),
+      );
+    case "message":
+      return decodeJson(DashboardMessage, frame.data).pipe(
+        Effect.map((message) =>
+          Option.some<WorkspaceSignal>({
+            type: "message",
+            message: workspaceMessage(message),
+          }),
+        ),
+      );
+    case "playback":
+      return decodeJson(DashboardPlayback, frame.data).pipe(
+        Effect.map((playback) =>
+          Option.some<WorkspaceSignal>({
+            type: "playback",
+            playback: playbackSnapshot(playback),
           }),
         ),
       );
@@ -154,12 +247,13 @@ function liveConnection(
   workspaceId: string,
   token: string | null,
   lastEventId: Ref.Ref<string>,
+  scenario: ReturnType<typeof activeScenario>,
 ) {
   return Stream.unwrap(
     Effect.gen(function* () {
       const currentLastEventId = yield* Ref.get(lastEventId);
       const response = yield* HttpClient.execute(
-        feedRequest(workspaceId, token, currentLastEventId),
+        feedRequest(workspaceId, token, currentLastEventId, scenario),
       ).pipe(
         Effect.mapError(
           (cause) =>
@@ -210,9 +304,6 @@ function liveConnection(
             onSome: Stream.succeed,
           }),
         ),
-        Stream.map(
-          (message): WorkspaceSignal => ({ type: "message", message }),
-        ),
       );
       return Stream.succeed<WorkspaceSignal>({ type: "connecting" }).pipe(
         Stream.concat(messages),
@@ -239,80 +330,25 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const session = yield* Session;
     const client = yield* HttpClient.HttpClient;
-    const controllers = yield* Ref.make(
-      new Map<string, ReadonlySet<ScenarioPlaybackController>>(),
-    );
 
     const stream = (workspaceId: string) =>
       Stream.unwrap(
         Effect.gen(function* () {
           const scenario = activeScenario();
-          if (
-            process.env.NODE_ENV !== "production" &&
-            scenario?.name === "full-schedule-forces-fresh-capacity"
-          ) {
-            const script = yield* Effect.tryPromise({
-              try: () =>
-                import("./scenario").then(({ fullScheduleScenarioScript }) =>
-                  fullScheduleScenarioScript(workspaceId),
-                ),
-              catch: (cause) =>
-                decodeFailure("The Workspace fixture could not load.", cause),
-            });
-            const controller = yield* makeScenarioPlayback(
-              script,
-              scenario.autoplay,
-            );
-            yield* Ref.update(controllers, (current) => {
-              const next = new Map(current);
-              const active = new Set(next.get(workspaceId) ?? []);
-              active.add(controller);
-              next.set(workspaceId, active);
-              return next;
-            });
-            yield* Effect.addFinalizer(() =>
-              Ref.update(controllers, (current) => {
-                const next = new Map(current);
-                const active = new Set(next.get(workspaceId) ?? []);
-                active.delete(controller);
-                if (active.size === 0) {
-                  next.delete(workspaceId);
-                } else {
-                  next.set(workspaceId, active);
-                }
-                return next;
-              }),
-            );
-            return controller.stream.pipe(
-              Stream.prepend<WorkspaceSignal>([{ type: "connecting" }]),
-            );
-          }
           const state = yield* session.current;
           const lastEventId = yield* Ref.make("");
-          return liveConnection(workspaceId, state.token, lastEventId).pipe(
+          return liveConnection(
+            workspaceId,
+            state.token,
+            lastEventId,
+            scenario,
+          ).pipe(
             Stream.retry(reconnectSchedule),
             Stream.provideService(HttpClient.HttpClient, client),
           );
         }),
       );
 
-    const command = Effect.fn("WorkspaceEvents.command")(function* (
-      workspaceId: string,
-      value: ScenarioPlaybackCommand,
-    ) {
-      const active = (yield* Ref.get(controllers)).get(workspaceId);
-      if (active === undefined || active.size === 0) {
-        return yield* Effect.die(
-          new Error(`Workspace ${workspaceId} has no active scenario playback`),
-        );
-      }
-      yield* Effect.forEach(
-        active,
-        (controller) => controller.command(value),
-        { discard: true, concurrency: "unbounded" },
-      );
-    });
-
-    return WorkspaceEvents.of({ stream, command });
+    return WorkspaceEvents.of({ stream });
   }),
 );

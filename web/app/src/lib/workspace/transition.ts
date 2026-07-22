@@ -25,11 +25,23 @@ function supportsViewTransitions(): boolean {
   );
 }
 
-const awaitTransition = (transition: ViewTransition) =>
-  Effect.tryPromise({
-    try: () => transition.finished,
-    catch: () => undefined,
-  }).pipe(Effect.ignore);
+const awaitTransition = (transition: ViewTransition) => {
+  const settled = Promise.all([
+    transition.ready.catch(() => undefined),
+    transition.updateCallbackDone.catch(() => undefined),
+    transition.finished.catch(() => undefined),
+  ]);
+  return Effect.promise(() => settled).pipe(Effect.asVoid);
+};
+
+function startCanvasTransition(update: () => void): ViewTransition | null {
+  try {
+    return document.startViewTransition(() => flushSync(update));
+  } catch {
+    flushSync(update);
+    return null;
+  }
+}
 
 export const layer = Layer.effect(
   CanvasTransition,
@@ -46,10 +58,8 @@ export const layer = Layer.effect(
             yield* Effect.sync(update);
             return;
           }
-          const transition = document.startViewTransition(() =>
-            flushSync(update),
-          );
-          yield* awaitTransition(transition);
+          const transition = startCanvasTransition(update);
+          if (transition !== null) yield* awaitTransition(transition);
         }),
       ),
     );

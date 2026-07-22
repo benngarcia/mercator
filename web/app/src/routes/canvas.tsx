@@ -37,6 +37,7 @@ function CanvasPage() {
       workspace={feed.workspace}
       events={feed.events}
       playback={feed.playback}
+      fidelity={feed.fidelity}
       controls={feed.controls}
     />
   );

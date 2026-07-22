@@ -1,0 +1,72 @@
+[
+  {
+    "type": "domain_event",
+    "event": {
+      "specversion": "1.0",
+      "id": "evt_booking_failed_provider",
+      "source": "compute-control-plane/orchestrator",
+      "type": "compute.run.booking_decided.v1",
+      "subject": "runs/run-1",
+      "time": "2026-07-22T12:00:01Z",
+      "workspaceid": "ws_scenario",
+      "streamversion": 2,
+      "globalposition": 2,
+      "correlationid": "run-1",
+      "data": {
+        "decision": {
+          "id": "decision-failed-provider",
+          "run_id": "run-1",
+          "workload_revision_digest": "sha256:fixture",
+          "evaluated_at": "2026-07-22T12:00:01Z",
+          "model_version": "scheduler-v1",
+          "policy": { "objective": "cheapest" },
+          "collection_report": {},
+          "candidates": [],
+          "selected_offer_snapshot_id": "offer-failed-provider",
+          "booking": {
+            "id": "booking-failed-provider",
+            "rental_id": "rental-failed-provider",
+            "state": "running",
+            "schedule_version": 1
+          },
+          "selection_reason_codes": ["LOWEST_SCORE"]
+        }
+      }
+    }
+  },
+  {
+    "type": "domain_event",
+    "event": {
+      "specversion": "1.0",
+      "id": "evt_booking_replacement_provider",
+      "source": "compute-control-plane/orchestrator",
+      "type": "compute.run.booking_decided.v1",
+      "subject": "runs/run-1",
+      "time": "2026-07-22T12:00:02Z",
+      "workspaceid": "ws_scenario",
+      "streamversion": 3,
+      "globalposition": 3,
+      "correlationid": "run-1",
+      "data": {
+        "decision": {
+          "id": "decision-replacement-provider",
+          "run_id": "run-1",
+          "workload_revision_digest": "sha256:fixture",
+          "evaluated_at": "2026-07-22T12:00:02Z",
+          "model_version": "scheduler-v1",
+          "policy": { "objective": "cheapest" },
+          "collection_report": {},
+          "candidates": [],
+          "selected_offer_snapshot_id": "offer-replacement-provider",
+          "booking": {
+            "id": "booking-replacement-provider",
+            "rental_id": "rental-replacement-provider",
+            "state": "running",
+            "schedule_version": 2
+          },
+          "selection_reason_codes": ["REPLACED_FAILED_PROVIDER"]
+        }
+      }
+    }
+  }
+]

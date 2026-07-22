@@ -2,11 +2,14 @@ import { Radio } from "lucide-react";
 
 import { EventTimeline } from "@/components/runs/EventTimeline";
 import type { CloudEvent } from "@/lib/api/types";
+import type { ScenarioFidelity } from "@/lib/workspace/playback";
 
 export function WorkspaceEventFeed({
   events,
+  fidelity,
 }: {
   events: readonly CloudEvent[];
+  fidelity: ScenarioFidelity | null;
 }) {
   const latest = events[0];
   return (
@@ -24,6 +27,7 @@ export function WorkspaceEventFeed({
           {events.length} shown
         </span>
       </div>
+      {fidelity ? <ScenarioEvidence fidelity={fidelity} /> : null}
       <span className="sr-only" aria-live="polite">
         {latest ? `Latest event ${latest.type}` : "No Workspace events"}
       </span>
@@ -31,5 +35,23 @@ export function WorkspaceEventFeed({
         <EventTimeline events={events} dense highlightLatest />
       </div>
     </aside>
+  );
+}
+
+function ScenarioEvidence({ fidelity }: { fidelity: ScenarioFidelity }) {
+  const recordedOffers = fidelity.offerSource === "sanitized_recordings";
+  return (
+    <div className="shrink-0 border-b px-4 py-3 text-[11px] leading-4 text-muted-foreground">
+      <div className="font-medium text-foreground">Scenario evidence</div>
+      <div>
+        {recordedOffers ? "Sanitized recorded offers" : fidelity.offerSource}
+        {fidelity.provenCapabilities.length > 0
+          ? ` · ${fidelity.provenCapabilities.length} production paths`
+          : ""}
+      </div>
+      {fidelity.targetCapabilities.length > 0 ? (
+        <div>Target contract: {fidelity.targetCapabilities.join(", ")}</div>
+      ) : null}
+    </div>
   );
 }

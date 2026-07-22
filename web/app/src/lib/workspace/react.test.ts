@@ -16,6 +16,11 @@ test("Workspace feed resets and orders the CloudEvents that drive the canvas", (
     durationMillis: 90_000,
     speed: 1 as const,
   };
+  const fidelity = {
+    offerSource: "sanitized_recordings",
+    provenCapabilities: ["placement"],
+    targetCapabilities: ["rental_schedule"],
+  };
   const first = reduceWorkspaceFeed(initialWorkspaceFeedSnapshot("ws_1"), {
     type: "reset",
     messages: [
@@ -27,11 +32,13 @@ test("Workspace feed resets and orders the CloudEvents that drive the canvas", (
       },
     ],
     playback,
+    fidelity,
   });
 
   expect(first.workspace.throughGlobalPosition).toBe(2);
   expect(first.events.map((event) => event.id)).toEqual(["event-2", "event-1"]);
   expect(first.playback).toEqual(playback);
+  expect(first.fidelity).toEqual(fidelity);
 
   const duplicate = reduceWorkspaceFeed(first, {
     type: "message",
@@ -53,6 +60,7 @@ test("Workspace feed resets and orders the CloudEvents that drive the canvas", (
       },
     ],
     playback,
+    fidelity,
   });
 
   expect(restarted.events.map((event) => event.id)).toEqual(["event-3"]);

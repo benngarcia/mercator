@@ -269,6 +269,45 @@ export const OfferCatalogReplacement = Schema.Struct({
 
 export const Ready = Schema.Struct({ through_global_position: Schema.Number });
 
+const DashboardDomainEventMessage = Schema.Struct({
+  type: Schema.Literals(["domain_event"]),
+  event: CloudEvent,
+});
+const DashboardOfferMessage = Schema.Struct({
+  type: Schema.Literals(["offers_replaced"]),
+  catalog: OfferCatalogReplacement,
+});
+const DashboardOffersUnavailableMessage = Schema.Struct({
+  type: Schema.Literals(["offers_unavailable"]),
+});
+const DashboardReadyMessage = Schema.Struct({
+  type: Schema.Literals(["ready"]),
+  through_global_position: Schema.Number,
+});
+export const DashboardMessage = Schema.Union([
+  DashboardDomainEventMessage,
+  DashboardOfferMessage,
+  DashboardOffersUnavailableMessage,
+  DashboardReadyMessage,
+]);
+export const DashboardPlayback = Schema.Struct({
+  status: Schema.Literals(["playing", "paused", "finished"]),
+  cursor: Schema.Number,
+  cue_count: Schema.Number,
+  elapsed_millis: Schema.Number,
+  duration_millis: Schema.Number,
+  speed: Schema.Literals([1, 2, 4]),
+});
+export const DashboardReset = Schema.Struct({
+  messages: mutableArray(DashboardMessage),
+  playback: DashboardPlayback,
+  fidelity: Schema.Struct({
+    offer_source: Schema.String,
+    proven_capabilities: mutableArray(Schema.String),
+    target_capabilities: mutableArray(Schema.String),
+  }),
+});
+
 export const RequestedData = Schema.Struct({
   run_id: Schema.String,
   workload_revision: WorkloadRevision,

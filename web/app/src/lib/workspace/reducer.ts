@@ -256,12 +256,13 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
     latestStartAt: sourceBooking.latest_start_at,
     scheduleVersion: sourceBooking.schedule_version,
   };
-  const selectedOffer = workspace.offers.find(
+  const current = detachSupersededBooking(workspace, run, booking.id);
+  const selectedOffer = current.offers.find(
     (offer) => offer.id === decision.selected_offer_snapshot_id,
   );
   const rentals = insertBooking(
-    workspace.rentals,
-    { ...workspace.bookings, [booking.id]: booking },
+    current.rentals,
+    { ...current.bookings, [booking.id]: booking },
     booking,
     selectedOffer,
   );
@@ -272,10 +273,10 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
         ? "running"
         : "requested";
   return changed(workspace, {
-    bookings: { ...workspace.bookings, [booking.id]: booking },
+    bookings: { ...current.bookings, [booking.id]: booking },
     rentals,
     runs: {
-      ...workspace.runs,
+      ...current.runs,
       [runID]: {
         ...run,
         phase,
@@ -286,6 +287,29 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
       },
     },
   });
+}
+
+function detachSupersededBooking(
+  workspace: Workspace,
+  run: WorkspaceRun,
+  nextBookingID: string,
+): Workspace {
+  if (!run.bookingID || run.bookingID === nextBookingID) return workspace;
+  const previous = workspace.bookings[run.bookingID];
+  const detached = detachBooking(workspace, run.bookingID);
+  if (!previous) return detached;
+  const rental = detached.rentals[previous.rentalID];
+  if (
+    !rental ||
+    rental.source !== "provisioned" ||
+    rental.runningBookingID ||
+    rental.queuedBookingIDs.length > 0
+  ) {
+    return detached;
+  }
+  const rentals = { ...detached.rentals };
+  delete rentals[rental.id];
+  return changed(detached, { rentals });
 }
 
 function insertBooking(
