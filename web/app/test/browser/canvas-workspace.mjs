@@ -15,6 +15,14 @@ const context = await browser.newContext({
 try {
   await context.addInitScript((workspace) => {
     localStorage.setItem("mercator.workspace", workspace);
+    const startViewTransition = document.startViewTransition?.bind(document);
+    globalThis.__scenarioTransitionCount = 0;
+    if (startViewTransition) {
+      document.startViewTransition = (update) => {
+        globalThis.__scenarioTransitionCount += 1;
+        return startViewTransition(update);
+      };
+    }
   }, workspaceID);
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
@@ -74,15 +82,31 @@ try {
   );
 
   const movingRun = page.locator('a[aria-label^="run-fifth:"]');
+  const transitionsBeforeFirstStep = await page.evaluate(
+    () => globalThis.__scenarioTransitionCount,
+  );
   await page.getByRole("button", { name: "Next event" }).click();
   await movingRun.waitFor();
   await eventFeed.locator('[data-event-id="scenario-11"]').waitFor();
   await page.getByText("Event 1 of 14", { exact: true }).waitFor();
+  assert.ok(
+    (await page.evaluate(() => globalThis.__scenarioTransitionCount)) >
+      transitionsBeforeFirstStep,
+    "first event step did not start a View Transition",
+  );
   const incomingPosition = await movingRun.boundingBox();
   assert.ok(incomingPosition, "incoming Run needs a rendered card");
+  const transitionsBeforeSecondStep = await page.evaluate(
+    () => globalThis.__scenarioTransitionCount,
+  );
   await page.getByRole("button", { name: "Next event" }).click();
   await eventFeed.locator('[data-event-id="scenario-12"]').waitFor();
   await page.getByText("Event 2 of 14", { exact: true }).waitFor();
+  assert.ok(
+    (await page.evaluate(() => globalThis.__scenarioTransitionCount)) >
+      transitionsBeforeSecondStep,
+    "second event step did not start a View Transition",
+  );
   await page.waitForFunction(
     ({ x, y }) => {
       const card = document.querySelector('a[aria-label^="run-fifth:"]');

@@ -50,11 +50,11 @@ function shouldAnimate(
   current: WorkspaceFeedSnapshot,
   signal: WorkspaceSignal,
 ): boolean {
-  return (
-    signal.type === "message" &&
-    current.workspace.ready &&
-    signal.message.type !== "ready"
-  );
+  if (!current.workspace.ready) return false;
+  if (signal.type === "reset") {
+    return signal.playback.cursor !== current.playback?.cursor;
+  }
+  return signal.type === "message" && signal.message.type !== "ready";
 }
 
 function runIdForEvent(message: WorkspaceMessage): string | null {
