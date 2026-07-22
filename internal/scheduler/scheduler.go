@@ -20,6 +20,7 @@ type SchedulingInput struct {
 	RunID                    string
 	Workload                 domain.WorkloadRevision
 	Offers                   []domain.OfferSnapshot
+	Schedules                map[string]domain.RentalSchedule
 	ExcludedOfferSnapshotIDs []string
 	ModelVersion             string
 	EvaluatedAt              time.Time
@@ -80,6 +81,7 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 	if bestIndex >= 0 {
 		decision.SelectedOfferSnapshotID = decision.Candidates[bestIndex].OfferSnapshotID
 		decision.SelectionReasonCodes = []string{"FEASIBLE", "LOWEST_SCORE"}
+		decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, selectionReason(decision.Candidates[bestIndex].Disposition))
 		if input.Workload.Spec.Placement.MaxP90StartSeconds > 0 {
 			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, "WITHIN_START_SLO")
 		}
@@ -99,7 +101,7 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 	}
 	decision.ID = "dec_" + id[len("sha256:"):24]
 	if bestIndex >= 0 {
-		booking, err := runningBooking(decision.ID, offers[bestIndex])
+		booking, err := bookingForDecision(input, decision.ID, offers[bestIndex])
 		if err != nil {
 			return domain.BookingDecision{}, err
 		}
@@ -108,7 +110,7 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 	return decision, nil
 }
 
-func runningBooking(decisionID string, offer domain.OfferSnapshot) (domain.Booking, error) {
+func bookingForDecision(input SchedulingInput, decisionID string, offer domain.OfferSnapshot) (domain.Booking, error) {
 	bookingHash, err := domain.CanonicalHash(struct {
 		DecisionID string
 		OfferID    string
@@ -118,10 +120,15 @@ func runningBooking(decisionID string, offer domain.OfferSnapshot) (domain.Booki
 	}
 	bookingID := "bkg_" + bookingHash[len("sha256:"):24]
 	rentalID := offer.RentalID
+	schedule := domain.RentalSchedule{}
 	switch offer.Kind {
 	case domain.OfferKindStanding:
 		if rentalID == "" {
 			return domain.Booking{}, fmt.Errorf("scheduler: standing offer %q requires rental_id", offer.ID)
+		}
+		schedule = input.Schedules[rentalID]
+		if schedule.RentalID == "" {
+			schedule = domain.NewRentalSchedule(rentalID)
 		}
 	case domain.OfferKindProvisionable:
 		rentalHash, hashErr := domain.CanonicalHash(struct {
@@ -132,15 +139,31 @@ func runningBooking(decisionID string, offer domain.OfferSnapshot) (domain.Booki
 			return domain.Booking{}, hashErr
 		}
 		rentalID = "rnt_" + rentalHash[len("sha256:"):24]
+		schedule = domain.NewRentalSchedule(rentalID)
 	default:
 		return domain.Booking{}, fmt.Errorf("scheduler: offer %q has unknown kind %q", offer.ID, offer.Kind)
 	}
-	return domain.Booking{
-		ID:              bookingID,
-		RentalID:        rentalID,
-		State:           domain.BookingStateRunning,
-		ScheduleVersion: 1,
-	}, nil
+	expectedRuntime, maxRuntime := runtimeBounds(input.Workload)
+	_, booking, err := schedule.Reserve(domain.BookingRequest{
+		BookingID:              bookingID,
+		RunID:                  input.RunID,
+		ExpectedRuntimeSeconds: expectedRuntime,
+		MaxRuntimeSeconds:      maxRuntime,
+		ReservedAt:             input.EvaluatedAt,
+	})
+	return booking, err
+}
+
+func runtimeBounds(workload domain.WorkloadRevision) (float64, float64) {
+	maxRuntime := float64(workload.Spec.Execution.MaxRuntimeSeconds)
+	if maxRuntime <= 0 {
+		maxRuntime = float64(domain.DefaultMaxRuntimeSeconds)
+	}
+	expectedRuntime := workload.Spec.Placement.ExpectedRuntimeSeconds
+	if expectedRuntime <= 0 {
+		expectedRuntime = maxRuntime
+	}
+	return expectedRuntime, maxRuntime
 }
 
 func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
@@ -160,6 +183,7 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 		ConnectionID:    offer.ConnectionID,
 		AdapterType:     offer.AdapterType,
 		NativeRef:       offer.NativeRef,
+		Disposition:     candidateDisposition(input, offer),
 		Feasible:        len(rejections) == 0,
 		Rejections:      rejections,
 		Estimates:       estimates,
@@ -192,8 +216,11 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	if offer.Capabilities.Container.MaxContainers > 0 && offer.Capabilities.Container.MaxContainers < len(workload.Spec.Containers) {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.max_containers", Required: len(workload.Spec.Containers), Offered: offer.Capabilities.Container.MaxContainers, Message: "Offer cannot run the required number of containers."})
 	}
-	if !offer.Capacity.Available {
+	if !offer.Capacity.Available && !queueable(input, offer) {
 		violations = append(violations, domain.Violation{Code: "CAPACITY_UNAVAILABLE", Path: "capacity.available", Required: true, Offered: false, Message: "Offer capacity evidence says the capacity is not currently available."})
+	}
+	if schedule, ok := input.Schedules[offer.RentalID]; ok && len(schedule.Bookings) >= domain.RentalScheduleQueueCapacity+1 {
+		violations = append(violations, domain.Violation{Code: "QUEUE_CAPACITY_EXCEEDED", Path: "rental_schedule.bookings", Required: domain.RentalScheduleQueueCapacity + 1, Offered: len(schedule.Bookings), Message: "Rental Schedule has no open Booking position."})
 	}
 	if !offer.Capabilities.Container.SupportsDigestRefs {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})
@@ -243,7 +270,9 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 
 func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
 	queue := 0.0
-	if offer.Queue != nil {
+	if schedule, ok := input.Schedules[offer.RentalID]; ok {
+		queue = schedule.ExpectedWaitSeconds()
+	} else if offer.Queue != nil {
 		queue = offer.Queue.QueuedWorkSeconds
 	}
 	provision := 0.0
@@ -276,6 +305,34 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 		PullSeconds:      domain.Estimate{Expected: pull, P50: pull, P90: pull * 1.5, Source: "image_cache", ModelVersion: input.ModelVersion},
 		StartSeconds:     start,
 		CostUSD:          domain.Estimate{Expected: cost, Source: "price_model", ModelVersion: input.ModelVersion},
+	}
+}
+
+func queueable(input SchedulingInput, offer domain.OfferSnapshot) bool {
+	schedule, ok := input.Schedules[offer.RentalID]
+	return offer.Kind == domain.OfferKindStanding && ok && len(schedule.Bookings) > 0 && len(schedule.Bookings) < domain.RentalScheduleQueueCapacity+1
+}
+
+func candidateDisposition(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDisposition {
+	if offer.Kind == domain.OfferKindProvisionable {
+		return domain.CandidateDispositionProvision
+	}
+	if schedule, ok := input.Schedules[offer.RentalID]; ok && len(schedule.Bookings) > 0 {
+		return domain.CandidateDispositionQueue
+	}
+	return domain.CandidateDispositionRunNow
+}
+
+func selectionReason(disposition domain.CandidateDisposition) string {
+	switch disposition {
+	case domain.CandidateDispositionRunNow:
+		return "REUSE_EXISTING_RENTAL"
+	case domain.CandidateDispositionQueue:
+		return "QUEUE_EXISTING_RENTAL"
+	case domain.CandidateDispositionProvision:
+		return "PROVISION_FRESH_RENTAL"
+	default:
+		return "UNKNOWN_DISPOSITION"
 	}
 }
 
