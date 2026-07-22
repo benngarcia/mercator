@@ -1,5 +1,5 @@
 {
-  "summary": "The warm rental is busy but frees in 6 minutes, and fresh capacity pays 5 minutes of boot plus a full pull: waiting wins, so the run defers with a deadline derived from the running work's remaining max runtime.",
+  "summary": "The warm Rental is busy but frees in 6 minutes, and fresh capacity pays 5 minutes of boot plus a full pull. Mercator assigns the Run to the Rental as a ScheduledPlacement after its RunningPlacement.",
   "status": "target",
   "world": {
     "images": {
@@ -13,10 +13,19 @@
     "rentals": [
       {
         "id": "rental-warm",
-        "state": "busy",
-        "busy": {"remaining_max_runtime": "6m"},
         "cached_images": ["trainer:v1"],
         "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "placement": "placement-active",
+          "run": "run-active",
+          "remaining_max_runtime": "6m"
+        }
       }
     ],
     "marketplace": [
@@ -34,10 +43,30 @@
     "max_runtime": "1h"
   },
   "expect": {
-    "outcome": "defer",
-    "defer": {"reason": "BUSY_RENTAL_WORTH_WAITING", "deadline": "+6m"},
+    "outcome": "place",
+    "offer": "rental-warm",
+    "placement": {
+      "id": "placement-run",
+      "rental": "rental-warm",
+      "state": "scheduled",
+      "after": "placement-active",
+      "projected_start_in": "6m",
+      "schedule_version": 2
+    },
     "candidates": {
-      "rental-warm": {"queue_seconds": 360, "pull_seconds": 0},
+      "rental-warm": {
+        "queue_seconds": 360,
+        "pull_seconds": 0,
+        "rental_schedule": {
+          "version": 1,
+          "running": {
+            "placement": "placement-active",
+            "run": "run-active",
+            "remaining_max_runtime": "6m"
+          },
+          "projected_start_in": "6m"
+        }
+      },
       "fresh-4090": {"provision_seconds": {"at_least": 300}}
     }
   }

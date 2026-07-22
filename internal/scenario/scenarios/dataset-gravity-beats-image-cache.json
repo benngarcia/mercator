@@ -13,14 +13,12 @@
     "rentals": [
       {
         "id": "rental-dataset",
-        "state": "idle",
         "cached_layers": ["cuda-base"],
         "named_caches": {"dataset-imagenet-2a41": "40GB"},
         "rate_per_hour_usd": 2.5
       },
       {
         "id": "rental-imagecache",
-        "state": "idle",
         "cached_images": ["trainer:v1"],
         "rate_per_hour_usd": 2.5
       }

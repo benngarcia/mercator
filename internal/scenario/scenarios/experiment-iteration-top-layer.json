@@ -19,7 +19,6 @@
     "rentals": [
       {
         "id": "rental-warm",
-        "state": "idle",
         "cached_images": ["trainer:v1"],
         "rate_per_hour_usd": 2.5
       }

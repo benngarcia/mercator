@@ -1,5 +1,5 @@
 {
-  "summary": "The rental holding the declared 40GB dataset is busy for 8 more minutes while a rental with a perfect image cache sits idle. Waiting for the dataset still wins: the run defers for the dataset rental instead of taking the idle one.",
+  "summary": "The Rental holding the declared 40GB dataset has a RunningPlacement with 8 minutes remaining while a Rental with a perfect image cache sits idle. Dataset gravity wins, so Mercator creates an ordered ScheduledPlacement on the dataset Rental.",
   "status": "target",
   "world": {
     "images": {
@@ -13,17 +13,25 @@
     "rentals": [
       {
         "id": "rental-dataset",
-        "state": "busy",
-        "busy": {"remaining_max_runtime": "8m"},
         "cached_layers": ["cuda-base"],
         "named_caches": {"dataset-imagenet-2a41": "40GB"},
         "rate_per_hour_usd": 2.5
       },
       {
         "id": "rental-imagecache",
-        "state": "idle",
         "cached_images": ["trainer:v1"],
         "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-dataset",
+        "version": 1,
+        "running": {
+          "placement": "placement-producing-dataset",
+          "run": "run-producing-dataset",
+          "remaining_max_runtime": "8m"
+        }
       }
     ]
   },
@@ -36,11 +44,28 @@
     ]
   },
   "expect": {
-    "outcome": "defer",
-    "defer": {"reason": "BUSY_RENTAL_WORTH_WAITING", "deadline": "+8m"},
+    "outcome": "place",
+    "offer": "rental-dataset",
+    "placement": {
+      "id": "placement-run",
+      "rental": "rental-dataset",
+      "state": "scheduled",
+      "after": "placement-producing-dataset",
+      "projected_start_in": "8m",
+      "schedule_version": 2
+    },
     "candidates": {
       "rental-dataset": {
         "queue_seconds": 480,
+        "rental_schedule": {
+          "version": 1,
+          "running": {
+            "placement": "placement-producing-dataset",
+            "run": "run-producing-dataset",
+            "remaining_max_runtime": "8m"
+          },
+          "projected_start_in": "8m"
+        },
         "caches": {"dataset-imagenet-2a41": "hit"}
       },
       "rental-imagecache": {

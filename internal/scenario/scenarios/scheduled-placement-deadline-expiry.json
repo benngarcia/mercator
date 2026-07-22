@@ -1,5 +1,5 @@
 {
-  "summary": "The run defers for a busy rental due free in 6 minutes, but the rental is still observed busy at the deadline. Re-evaluation past the deadline stops waiting and falls through to provisioning fresh.",
+  "summary": "Mercator schedules the Run on a Rental projected to free in 6 minutes. The RunningPlacement remains active past the latest acceptable start, so reconciliation removes the ScheduledPlacement and selects fresh capacity.",
   "status": "target",
   "world": {
     "images": {
@@ -13,10 +13,20 @@
     "rentals": [
       {
         "id": "rental-warm",
-        "state": "busy",
-        "busy": {"remaining_max_runtime": "6m", "frees_after": "30m"},
         "cached_images": ["trainer:v1"],
         "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "placement": "placement-active",
+          "run": "run-active",
+          "remaining_max_runtime": "6m",
+          "completes_after": "30m"
+        }
       }
     ],
     "marketplace": [
@@ -37,13 +47,22 @@
         "max_runtime": "1h"
       },
       "expect": {
-        "outcome": "defer",
-        "defer": {"reason": "BUSY_RENTAL_WORTH_WAITING", "deadline": "+6m"}
+        "outcome": "place",
+        "offer": "rental-warm",
+        "placement": {
+          "id": "placement-iteration",
+          "rental": "rental-warm",
+          "state": "scheduled",
+          "after": "placement-active",
+          "projected_start_in": "6m",
+          "latest_start": "+6m",
+          "schedule_version": 2
+        }
       }
     },
     {"advance": "7m"},
     {
-      "reevaluate": "iteration",
+      "reconcile": "iteration",
       "expect": {
         "outcome": "place",
         "offer": "fresh-4090",

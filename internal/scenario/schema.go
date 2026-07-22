@@ -9,7 +9,7 @@
 //
 // Scenarios carry a status. Green scenarios assert current behavior and fail
 // CI on regression. Target scenarios encode the contract of unbuilt semantics
-// (deferral, cache evidence, host facts); the runner reports their failures as
+// (Rental schedules, cache evidence, host facts); the runner reports their failures as
 // pending-red, and a target scenario that starts passing must be promoted.
 package scenario
 
@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,6 +34,20 @@ const (
 	StatusGreen Status = "green"
 	// StatusTarget encodes the future contract; a failure is pending, not broken.
 	StatusTarget Status = "target"
+)
+
+type Outcome string
+
+const (
+	OutcomePlace Outcome = "place"
+	OutcomeFail  Outcome = "fail"
+)
+
+type PlacementState string
+
+const (
+	PlacementRunning   PlacementState = "running"
+	PlacementScheduled PlacementState = "scheduled"
 )
 
 // defaultWorldStart is the scripted clock's origin when a fixture does not
@@ -52,10 +67,11 @@ type Scenario struct {
 }
 
 type WorldSpec struct {
-	Clock       time.Time              `json:"clock,omitzero"`
-	Images      map[string]ImageSpec   `json:"images,omitempty"`
-	Rentals     []RentalSpec           `json:"rentals,omitempty"`
-	Marketplace []MarketplaceOfferSpec `json:"marketplace,omitempty"`
+	Clock           time.Time              `json:"clock,omitzero"`
+	Images          map[string]ImageSpec   `json:"images,omitempty"`
+	Rentals         []RentalSpec           `json:"rentals,omitempty"`
+	RentalSchedules []RentalScheduleSpec   `json:"rental_schedules,omitempty"`
+	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
 }
 
 // Start is the scripted clock's origin for this world.
@@ -77,13 +93,11 @@ type LayerSpec struct {
 	Size ByteSize `json:"size"`
 }
 
-// RentalSpec is a standing machine the broker owns: what it is running and
-// for how much longer, which image layers and named data caches it holds, and
-// how long its idle lease has left.
+// RentalSpec is reusable machine capacity the broker owns. Its schedule is
+// broker state; the machine itself receives only the running Placement through
+// its standard Docker endpoint.
 type RentalSpec struct {
-	ID    string    `json:"id"`
-	State string    `json:"state"` // "idle" | "busy"
-	Busy  *BusySpec `json:"busy,omitempty"`
+	ID string `json:"id"`
 	// IdleLeaseExpiresIn bounds how long the rental survives idle, measured
 	// from the world clock's start. Omitted means the lease outlives the
 	// scenario.
@@ -99,14 +113,33 @@ type RentalSpec struct {
 	Resources      *ResourcesSpec      `json:"resources,omitempty"`
 }
 
-type BusySpec struct {
-	// RemainingMaxRuntime is how much of the running run's maximum runtime is
-	// left: the recorded fact a deferral deadline derives from.
+// RentalScheduleSpec is Mercator's ordered sequence of nonterminal Placements
+// assigned to one Rental. At most one Placement runs; any number may wait.
+type RentalScheduleSpec struct {
+	RentalID  string                   `json:"rental"`
+	Version   uint64                   `json:"version,omitempty"`
+	Running   *RunningPlacementSpec    `json:"running,omitempty"`
+	Scheduled []ScheduledPlacementSpec `json:"scheduled,omitempty"`
+}
+
+type RunningPlacementSpec struct {
+	PlacementID string `json:"placement"`
+	RunID       string `json:"run"`
+	// RemainingMaxRuntime is the recorded upper bound used to project when the
+	// first ScheduledPlacement may start.
 	RemainingMaxRuntime Duration `json:"remaining_max_runtime"`
-	// FreesAfter is when the rental is actually observed free, defaulting to
-	// RemainingMaxRuntime. A later value models enforcement or observation
-	// lag, holding the rental busy past a deferral deadline.
-	FreesAfter *Duration `json:"frees_after,omitempty"`
+	// CompletesAfter is when completion is actually observed, defaulting to
+	// RemainingMaxRuntime. A later value models enforcement or observation lag.
+	CompletesAfter *Duration `json:"completes_after,omitempty"`
+}
+
+type ScheduledPlacementSpec struct {
+	PlacementID string   `json:"placement"`
+	RunID       string   `json:"run"`
+	MaxRuntime  Duration `json:"max_runtime"`
+	// LatestStart is the last acceptable start time for this Placement. When it
+	// expires, Mercator removes the Placement and re-evaluates its Run.
+	LatestStart *Moment `json:"latest_start,omitempty"`
 }
 
 type MarketplaceOfferSpec struct {
@@ -164,12 +197,12 @@ type CacheMountSpec struct {
 
 type ExpectSpec struct {
 	// Outcome is the decision the event log must record: "place" (a selected
-	// offer), "defer" (a reason and deadline, no selection), or "fail" (a
-	// recorded decision with no feasible offers).
-	Outcome string     `json:"outcome"`
-	Offer   string     `json:"offer,omitempty"`
-	Reasons []string   `json:"reasons,omitempty"`
-	Defer   *DeferSpec `json:"defer,omitempty"`
+	// offer) or "fail" (a recorded decision with no feasible offers). Selecting
+	// a busy Rental creates the Placement described by Placement.
+	Outcome   Outcome               `json:"outcome"`
+	Offer     string                `json:"offer,omitempty"`
+	Reasons   []string              `json:"reasons,omitempty"`
+	Placement *PlacementExpectation `json:"placement,omitempty"`
 	// Disposition asserts the recorded cleanup intent on the launch intent:
 	// "release" for standing rentals, "terminate" for provisioned hosts.
 	Disposition string `json:"disposition,omitempty"`
@@ -178,11 +211,14 @@ type ExpectSpec struct {
 	Candidates map[string]CandidateExpectation `json:"candidates,omitempty"`
 }
 
-type DeferSpec struct {
-	Reason string `json:"reason"`
-	// Deadline is when waiting must give up, written relative to the world
-	// clock's start ("+6m").
-	Deadline Moment `json:"deadline"`
+type PlacementExpectation struct {
+	PlacementID     string         `json:"id"`
+	RentalID        string         `json:"rental"`
+	State           PlacementState `json:"state"`
+	AfterPlacement  string         `json:"after,omitempty"`
+	ProjectedStart  *Duration      `json:"projected_start_in,omitempty"`
+	LatestStart     *Moment        `json:"latest_start,omitempty"`
+	ScheduleVersion uint64         `json:"schedule_version"`
 }
 
 type CandidateExpectation struct {
@@ -191,9 +227,31 @@ type CandidateExpectation struct {
 	QueueSeconds     *Bound          `json:"queue_seconds,omitempty"`
 	ProvisionSeconds *Bound          `json:"provision_seconds,omitempty"`
 	PullSeconds      *Bound          `json:"pull_seconds,omitempty"`
+	// Schedule asserts the ordered broker-owned schedule evidence weighed for
+	// this Rental candidate.
+	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`
 	// Caches asserts recorded named-cache evidence, key to "hit" or "miss".
 	// Target ontology: decisions record no cache evidence yet.
 	Caches map[string]string `json:"caches,omitempty"`
+}
+
+type ScheduleEvidenceExpectation struct {
+	Version        uint64                       `json:"version"`
+	Running        *RunningPlacementEvidence    `json:"running,omitempty"`
+	Preceding      []ScheduledPlacementEvidence `json:"preceding,omitempty"`
+	ProjectedStart Duration                     `json:"projected_start_in"`
+}
+
+type RunningPlacementEvidence struct {
+	PlacementID         string   `json:"placement"`
+	RunID               string   `json:"run"`
+	RemainingMaxRuntime Duration `json:"remaining_max_runtime"`
+}
+
+type ScheduledPlacementEvidence struct {
+	PlacementID string   `json:"placement"`
+	RunID       string   `json:"run"`
+	MaxRuntime  Duration `json:"max_runtime"`
 }
 
 type RejectionSpec struct {
@@ -201,15 +259,15 @@ type RejectionSpec struct {
 	Path string `json:"path"`
 }
 
-// StepSpec is one timeline entry: exactly one of Submit (a named run with its
-// request and expectation), Advance (move the scripted clock), or Reevaluate
-// (drive a named run's next advancement and assert the latest decision).
+// StepSpec is one timeline entry: exactly one of Submit (a named Run with its
+// request and expectation), Advance (move the scripted clock), or Reconcile
+// (drive Broker advancement for a named Run after relevant world state changed).
 type StepSpec struct {
-	Submit     string       `json:"submit,omitempty"`
-	Request    *RequestSpec `json:"request,omitempty"`
-	Advance    *Duration    `json:"advance,omitempty"`
-	Reevaluate string       `json:"reevaluate,omitempty"`
-	Expect     *ExpectSpec  `json:"expect,omitempty"`
+	Submit    string       `json:"submit,omitempty"`
+	Request   *RequestSpec `json:"request,omitempty"`
+	Advance   *Duration    `json:"advance,omitempty"`
+	Reconcile string       `json:"reconcile,omitempty"`
+	Expect    *ExpectSpec  `json:"expect,omitempty"`
 }
 
 // Duration is a JSON string in Go duration syntax ("6m", "1h30m").
@@ -418,7 +476,199 @@ func (sc Scenario) validate() error {
 			}
 		}
 	}
+	return sc.validateScheduleTimeline()
+}
+
+// validateScheduleTimeline proves that each fixture's expected schedule
+// versions, predecessors, and projected starts follow from the decisions
+// before it. A target scenario may be red in execution; its model must still
+// be internally coherent.
+func (sc Scenario) validateScheduleTimeline() error {
+	schedules := make(map[string]RentalScheduleSpec, len(sc.World.Rentals))
+	for _, rental := range sc.World.Rentals {
+		schedules[rental.ID] = RentalScheduleSpec{RentalID: rental.ID}
+	}
+	for _, schedule := range sc.World.RentalSchedules {
+		schedules[schedule.RentalID] = schedule
+	}
+	placementIDs, runIDs := scheduleIdentities(schedules)
+	requests := map[string]RequestSpec{}
+	var elapsed time.Duration
+	for i, step := range sc.Steps() {
+		if step.Advance != nil {
+			elapsed += step.Advance.Duration()
+			continue
+		}
+		if step.Reconcile != "" {
+			if expired, ok := expireScheduledPlacement(schedules, "run-"+step.Reconcile, sc.World.Start(), sc.World.Start().Add(elapsed)); ok {
+				delete(placementIDs, expired.PlacementID)
+				delete(runIDs, expired.RunID)
+			}
+		}
+		runName := step.Submit
+		request := step.Request
+		if step.Submit != "" {
+			requests[step.Submit] = *step.Request
+		} else if step.Reconcile != "" {
+			runName = step.Reconcile
+			original := requests[step.Reconcile]
+			request = &original
+		}
+		for rentalID, candidate := range step.Expect.Candidates {
+			if candidate.Schedule == nil {
+				continue
+			}
+			if err := validateScheduleEvidence(schedules[rentalID], elapsed, *candidate.Schedule); err != nil {
+				return fmt.Errorf("timeline[%d]: candidate %q: %w", i, rentalID, err)
+			}
+		}
+		if step.Expect.Placement == nil {
+			continue
+		}
+		placement := *step.Expect.Placement
+		runID := "run-" + runName
+		if placementIDs[placement.PlacementID] {
+			return fmt.Errorf("timeline[%d]: Placement %q already exists", i, placement.PlacementID)
+		}
+		if runIDs[runID] {
+			return fmt.Errorf("timeline[%d]: Run %q already has a nonterminal Placement", i, runID)
+		}
+		schedule := schedules[placement.RentalID]
+		if err := validatePlacementDecision(schedule, elapsed, request, placement); err != nil {
+			return fmt.Errorf("timeline[%d]: %w", i, err)
+		}
+		schedule.Version = placement.ScheduleVersion
+		if placement.State == PlacementRunning {
+			schedule.Running = &RunningPlacementSpec{
+				PlacementID:         placement.PlacementID,
+				RunID:               runID,
+				RemainingMaxRuntime: *request.MaxRuntime,
+			}
+		} else {
+			schedule.Scheduled = append(schedule.Scheduled, ScheduledPlacementSpec{
+				PlacementID: placement.PlacementID,
+				RunID:       runID,
+				MaxRuntime:  *request.MaxRuntime,
+				LatestStart: placement.LatestStart,
+			})
+		}
+		placementIDs[placement.PlacementID] = true
+		runIDs[runID] = true
+		schedules[placement.RentalID] = schedule
+	}
 	return nil
+}
+
+func scheduleIdentities(schedules map[string]RentalScheduleSpec) (map[string]bool, map[string]bool) {
+	placementIDs := map[string]bool{}
+	runIDs := map[string]bool{}
+	for _, schedule := range schedules {
+		if schedule.Running != nil {
+			placementIDs[schedule.Running.PlacementID] = true
+			runIDs[schedule.Running.RunID] = true
+		}
+		for _, placement := range schedule.Scheduled {
+			placementIDs[placement.PlacementID] = true
+			runIDs[placement.RunID] = true
+		}
+	}
+	return placementIDs, runIDs
+}
+
+func validatePlacementDecision(schedule RentalScheduleSpec, elapsed time.Duration, request *RequestSpec, placement PlacementExpectation) error {
+	if request == nil || request.MaxRuntime == nil {
+		return fmt.Errorf("Placement %q requires its submitted Run's max_runtime", placement.PlacementID)
+	}
+	if want := schedule.Version + 1; placement.ScheduleVersion != want {
+		return fmt.Errorf("Placement %q schedule_version is %d, want %d", placement.PlacementID, placement.ScheduleVersion, want)
+	}
+	if placement.State == PlacementRunning {
+		if schedule.Running != nil {
+			return fmt.Errorf("RunningPlacement %q requires an empty RentalSchedule", placement.PlacementID)
+		}
+		return nil
+	}
+	if schedule.Running == nil {
+		return fmt.Errorf("ScheduledPlacement %q requires a RunningPlacement", placement.PlacementID)
+	}
+	if want := schedule.tailPlacementID(); placement.AfterPlacement != want {
+		return fmt.Errorf("ScheduledPlacement %q follows %q, want current tail %q", placement.PlacementID, placement.AfterPlacement, want)
+	}
+	wait := schedule.projectedWait(elapsed)
+	if placement.ProjectedStart == nil || placement.ProjectedStart.Duration() != wait {
+		return fmt.Errorf("ScheduledPlacement %q projected_start_in is %v, want %v from preceding maximum runtimes", placement.PlacementID, durationValue(placement.ProjectedStart), wait)
+	}
+	return nil
+}
+
+func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration, expect ScheduleEvidenceExpectation) error {
+	if expect.Version != schedule.Version {
+		return fmt.Errorf("schedule version is %d, want %d", expect.Version, schedule.Version)
+	}
+	remaining := schedule.runningRemaining(elapsed)
+	if schedule.Running == nil || expect.Running == nil ||
+		expect.Running.PlacementID != schedule.Running.PlacementID ||
+		expect.Running.RunID != schedule.Running.RunID ||
+		expect.Running.RemainingMaxRuntime.Duration() != remaining {
+		return fmt.Errorf("RunningPlacement evidence does not match the current schedule")
+	}
+	if len(expect.Preceding) != len(schedule.Scheduled) {
+		return fmt.Errorf("preceding has %d Placements, want %d", len(expect.Preceding), len(schedule.Scheduled))
+	}
+	for i, placement := range schedule.Scheduled {
+		actual := expect.Preceding[i]
+		if actual.PlacementID != placement.PlacementID || actual.RunID != placement.RunID || actual.MaxRuntime.Duration() != placement.MaxRuntime.Duration() {
+			return fmt.Errorf("preceding[%d] does not match ScheduledPlacement %q", i, placement.PlacementID)
+		}
+	}
+	if want := schedule.projectedWait(elapsed); expect.ProjectedStart.Duration() != want {
+		return fmt.Errorf("projected_start_in is %v, want %v", expect.ProjectedStart.Duration(), want)
+	}
+	return nil
+}
+
+func expireScheduledPlacement(schedules map[string]RentalScheduleSpec, runID string, start, now time.Time) (ScheduledPlacementSpec, bool) {
+	for rentalID, schedule := range schedules {
+		for i, placement := range schedule.Scheduled {
+			if placement.RunID != runID || placement.LatestStart == nil || placement.LatestStart.Resolve(start).After(now) {
+				continue
+			}
+			schedule.Scheduled = slices.Delete(schedule.Scheduled, i, i+1)
+			schedule.Version++
+			schedules[rentalID] = schedule
+			return placement, true
+		}
+	}
+	return ScheduledPlacementSpec{}, false
+}
+
+func (schedule RentalScheduleSpec) tailPlacementID() string {
+	if len(schedule.Scheduled) > 0 {
+		return schedule.Scheduled[len(schedule.Scheduled)-1].PlacementID
+	}
+	return schedule.Running.PlacementID
+}
+
+func (schedule RentalScheduleSpec) projectedWait(elapsed time.Duration) time.Duration {
+	wait := schedule.runningRemaining(elapsed)
+	for _, placement := range schedule.Scheduled {
+		wait += placement.MaxRuntime.Duration()
+	}
+	return wait
+}
+
+func (schedule RentalScheduleSpec) runningRemaining(elapsed time.Duration) time.Duration {
+	if schedule.Running == nil {
+		return 0
+	}
+	return max(0, schedule.Running.RemainingMaxRuntime.Duration()-elapsed)
+}
+
+func durationValue(value *Duration) time.Duration {
+	if value == nil {
+		return 0
+	}
+	return value.Duration()
 }
 
 func (step StepSpec) validate(submitted map[string]bool) error {
@@ -429,11 +679,11 @@ func (step StepSpec) validate(submitted map[string]bool) error {
 	if step.Advance != nil {
 		actions++
 	}
-	if step.Reevaluate != "" {
+	if step.Reconcile != "" {
 		actions++
 	}
 	if actions != 1 {
-		return fmt.Errorf("each step is exactly one of submit, advance, or reevaluate")
+		return fmt.Errorf("each step is exactly one of submit, advance, or reconcile")
 	}
 	switch {
 	case step.Submit != "":
@@ -448,15 +698,15 @@ func (step StepSpec) validate(submitted map[string]bool) error {
 		if step.Request != nil || step.Expect != nil {
 			return fmt.Errorf("advance carries no request or expect")
 		}
-	case step.Reevaluate != "":
+	case step.Reconcile != "":
 		if step.Expect == nil {
-			return fmt.Errorf("reevaluate %q requires an expect", step.Reevaluate)
+			return fmt.Errorf("reconcile %q requires an expect", step.Reconcile)
 		}
 		if step.Request != nil {
-			return fmt.Errorf("reevaluate carries no request")
+			return fmt.Errorf("reconcile carries no request")
 		}
-		if !submitted[step.Reevaluate] {
-			return fmt.Errorf("reevaluate %q references a run never submitted", step.Reevaluate)
+		if !submitted[step.Reconcile] {
+			return fmt.Errorf("reconcile %q references a run never submitted", step.Reconcile)
 		}
 	}
 	return nil
@@ -483,18 +733,6 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("duplicate id %q", rental.ID)
 		}
 		ids[rental.ID] = true
-		switch rental.State {
-		case "idle":
-			if rental.Busy != nil {
-				return fmt.Errorf("rental %q: idle rentals carry no busy block", rental.ID)
-			}
-		case "busy":
-			if rental.Busy == nil {
-				return fmt.Errorf("rental %q: busy rentals state their remaining max runtime", rental.ID)
-			}
-		default:
-			return fmt.Errorf("rental %q: state must be \"idle\" or \"busy\", got %q", rental.ID, rental.State)
-		}
 		for _, ref := range rental.CachedImages {
 			if _, ok := w.Images[ref]; !ok {
 				return fmt.Errorf("rental %q caches undefined image %q", rental.ID, ref)
@@ -507,6 +745,27 @@ func (w WorldSpec) validate() error {
 		}
 		if rental.RatePerHourUSD <= 0 {
 			return fmt.Errorf("rental %q needs a positive rate_per_hour_usd", rental.ID)
+		}
+	}
+	scheduledRentals := map[string]bool{}
+	placementOwners := map[string]string{}
+	runOwners := map[string]string{}
+	for _, schedule := range w.RentalSchedules {
+		if !ids[schedule.RentalID] {
+			return fmt.Errorf("RentalSchedule references unknown Rental %q", schedule.RentalID)
+		}
+		if scheduledRentals[schedule.RentalID] {
+			return fmt.Errorf("Rental %q has more than one RentalSchedule", schedule.RentalID)
+		}
+		scheduledRentals[schedule.RentalID] = true
+		if err := schedule.validate(w.Start()); err != nil {
+			return err
+		}
+		if err := validateScheduleOwnership(schedule, placementOwners, runOwners); err != nil {
+			return err
+		}
+		if schedule.Running != nil && w.rental(schedule.RentalID).IdleLeaseExpiresIn != nil {
+			return fmt.Errorf("rental %q: only an empty RentalSchedule may carry an idle lease", schedule.RentalID)
 		}
 	}
 	for _, offer := range w.Marketplace {
@@ -524,6 +783,103 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("marketplace offer %q needs a provisioning estimate", offer.ID)
 		}
 	}
+	return nil
+}
+
+func validateScheduleOwnership(schedule RentalScheduleSpec, placementOwners, runOwners map[string]string) error {
+	check := func(placementID, runID string) error {
+		if owner := placementOwners[placementID]; owner != "" {
+			return fmt.Errorf("Placement %q belongs to both Rental %q and Rental %q", placementID, owner, schedule.RentalID)
+		}
+		if owner := runOwners[runID]; owner != "" {
+			return fmt.Errorf("Run %q has nonterminal Placements on both Rental %q and Rental %q", runID, owner, schedule.RentalID)
+		}
+		placementOwners[placementID] = schedule.RentalID
+		runOwners[runID] = schedule.RentalID
+		return nil
+	}
+	if schedule.Running != nil {
+		if err := check(schedule.Running.PlacementID, schedule.Running.RunID); err != nil {
+			return err
+		}
+	}
+	for _, placement := range schedule.Scheduled {
+		if err := check(placement.PlacementID, placement.RunID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (schedule RentalScheduleSpec) validate(start time.Time) error {
+	rentalID := schedule.RentalID
+	if schedule.Running == nil && len(schedule.Scheduled) > 0 {
+		return fmt.Errorf("rental %q: ScheduledPlacements require a RunningPlacement", rentalID)
+	}
+	if schedule.Running == nil {
+		if schedule.Version != 0 {
+			return fmt.Errorf("rental %q: an empty RentalSchedule omits its version", rentalID)
+		}
+		return nil
+	}
+	if schedule.Version == 0 {
+		return fmt.Errorf("rental %q: a nonempty RentalSchedule needs a positive version", rentalID)
+	}
+	ids := map[string]bool{}
+	runs := map[string]bool{}
+	if err := validatePlacementIdentity(rentalID, schedule.Running.PlacementID, schedule.Running.RunID, ids, runs); err != nil {
+		return err
+	}
+	if schedule.Running.RemainingMaxRuntime.Duration() <= 0 {
+		return fmt.Errorf("rental %q: RunningPlacement %q needs a positive remaining_max_runtime", rentalID, schedule.Running.PlacementID)
+	}
+	if completes := schedule.Running.CompletesAfter; completes != nil && completes.Duration() <= 0 {
+		return fmt.Errorf("rental %q: RunningPlacement %q needs a positive completes_after", rentalID, schedule.Running.PlacementID)
+	}
+	for _, placement := range schedule.Scheduled {
+		if err := validatePlacementIdentity(rentalID, placement.PlacementID, placement.RunID, ids, runs); err != nil {
+			return err
+		}
+		if placement.MaxRuntime.Duration() <= 0 {
+			return fmt.Errorf("rental %q: ScheduledPlacement %q needs a positive max_runtime", rentalID, placement.PlacementID)
+		}
+		if placement.LatestStart != nil && !placement.LatestStart.Resolve(start).After(start) {
+			return fmt.Errorf("rental %q: ScheduledPlacement %q latest_start must be after the world start", rentalID, placement.PlacementID)
+		}
+	}
+	return nil
+}
+
+func (w WorldSpec) rental(id string) RentalSpec {
+	for _, rental := range w.Rentals {
+		if rental.ID == id {
+			return rental
+		}
+	}
+	return RentalSpec{}
+}
+
+func (w WorldSpec) rentalSchedule(rentalID string) RentalScheduleSpec {
+	for _, schedule := range w.RentalSchedules {
+		if schedule.RentalID == rentalID {
+			return schedule
+		}
+	}
+	return RentalScheduleSpec{RentalID: rentalID}
+}
+
+func validatePlacementIdentity(rentalID, placementID, runID string, placementIDs, runIDs map[string]bool) error {
+	if placementID == "" || runID == "" {
+		return fmt.Errorf("rental %q: Placements need stable placement and run IDs", rentalID)
+	}
+	if placementIDs[placementID] {
+		return fmt.Errorf("rental %q: duplicate Placement %q", rentalID, placementID)
+	}
+	if runIDs[runID] {
+		return fmt.Errorf("rental %q: Run %q appears in more than one Placement", rentalID, runID)
+	}
+	placementIDs[placementID] = true
+	runIDs[runID] = true
 	return nil
 }
 
@@ -563,29 +919,42 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 func (w WorldSpec) validExpect(expect ExpectSpec) error {
 	ids := w.candidateIDs()
 	switch expect.Outcome {
-	case "place":
+	case OutcomePlace:
 		if expect.Offer == "" {
 			return fmt.Errorf("outcome \"place\" names the winning offer")
 		}
 		if !ids[expect.Offer] {
 			return fmt.Errorf("expected offer %q is not in the world", expect.Offer)
 		}
-		if expect.Defer != nil {
-			return fmt.Errorf("outcome \"place\" carries no defer block")
-		}
-	case "defer":
-		if expect.Defer == nil {
-			return fmt.Errorf("outcome \"defer\" states a reason and deadline")
-		}
-		if expect.Offer != "" {
-			return fmt.Errorf("outcome \"defer\" selects no offer")
-		}
-	case "fail":
-		if expect.Offer != "" || expect.Defer != nil {
-			return fmt.Errorf("outcome \"fail\" selects no offer and carries no defer block")
+	case OutcomeFail:
+		if expect.Offer != "" || expect.Placement != nil {
+			return fmt.Errorf("outcome \"fail\" selects no offer and creates no Placement")
 		}
 	default:
-		return fmt.Errorf("outcome must be \"place\", \"defer\", or \"fail\", got %q", expect.Outcome)
+		return fmt.Errorf("outcome must be \"place\" or \"fail\", got %q", expect.Outcome)
+	}
+	if placement := expect.Placement; placement != nil {
+		if placement.PlacementID == "" || placement.RentalID == "" || placement.ScheduleVersion == 0 {
+			return fmt.Errorf("expected Placement needs id, rental, and a positive schedule_version")
+		}
+		if !slices.ContainsFunc(w.Rentals, func(r RentalSpec) bool { return r.ID == placement.RentalID }) {
+			return fmt.Errorf("expected Placement Rental %q is not in the world", placement.RentalID)
+		}
+		if expect.Offer != placement.RentalID {
+			return fmt.Errorf("expected Placement Rental %q must be the winning offer", placement.RentalID)
+		}
+		switch placement.State {
+		case PlacementRunning:
+			if placement.AfterPlacement != "" || placement.ProjectedStart != nil {
+				return fmt.Errorf("a running Placement has no predecessor or projected_start_in")
+			}
+		case PlacementScheduled:
+			if placement.AfterPlacement == "" || placement.ProjectedStart == nil {
+				return fmt.Errorf("a ScheduledPlacement needs after and projected_start_in")
+			}
+		default:
+			return fmt.Errorf("Placement state must be \"running\" or \"scheduled\", got %q", placement.State)
+		}
 	}
 	if expect.Disposition != "" && expect.Disposition != "release" && expect.Disposition != "terminate" {
 		return fmt.Errorf("disposition must be \"release\" or \"terminate\", got %q", expect.Disposition)
@@ -597,6 +966,14 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 		for key, want := range candidate.Caches {
 			if want != "hit" && want != "miss" {
 				return fmt.Errorf("candidate %q cache %q expects \"hit\" or \"miss\", got %q", id, key, want)
+			}
+		}
+		if candidate.Schedule != nil {
+			if !slices.ContainsFunc(w.Rentals, func(r RentalSpec) bool { return r.ID == id }) {
+				return fmt.Errorf("candidate %q is not a Rental and cannot carry RentalSchedule evidence", id)
+			}
+			if candidate.Schedule.Version == 0 || candidate.Schedule.Running == nil {
+				return fmt.Errorf("candidate %q schedule evidence needs a version and RunningPlacement", id)
 			}
 		}
 	}

@@ -47,8 +47,12 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		world.DefineImage(ref, layers)
 	}
 	for _, rental := range spec.Rentals {
-		if err := world.AddDaemon(simDaemon(spec, rental, clock)); err != nil {
+		schedule := spec.rentalSchedule(rental.ID)
+		if err := world.AddDaemon(simDaemon(spec, rental, schedule, clock)); err != nil {
 			return nil, err
+		}
+		if len(schedule.Scheduled) > 0 {
+			session.note("rental %q starts with ScheduledPlacements, but the Broker has no RentalSchedule state yet", rental.ID)
 		}
 		if len(rental.NamedCaches) > 0 {
 			session.note("rental %q holds named caches, but no offer field can advertise them yet", rental.ID)
@@ -76,7 +80,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	return session, nil
 }
 
-func simDaemon(spec WorldSpec, rental RentalSpec, clock *fake.Clock) *fake.Daemon {
+func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Daemon {
 	start := clock.Now()
 	daemon := &fake.Daemon{
 		Offer:      simOffer(rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources),
@@ -94,11 +98,11 @@ func simDaemon(spec WorldSpec, rental RentalSpec, clock *fake.Clock) *fake.Daemo
 	for key, size := range rental.NamedCaches {
 		daemon.HeldCaches[key] = int64(size)
 	}
-	if rental.Busy != nil {
-		daemon.BusyUntil = start.Add(rental.Busy.RemainingMaxRuntime.Duration())
+	if running := schedule.Running; running != nil {
+		daemon.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
 		daemon.FreesAt = daemon.BusyUntil
-		if rental.Busy.FreesAfter != nil {
-			daemon.FreesAt = start.Add(rental.Busy.FreesAfter.Duration())
+		if running.CompletesAfter != nil {
+			daemon.FreesAt = start.Add(running.CompletesAfter.Duration())
 		}
 	}
 	if rental.IdleLeaseExpiresIn != nil {
@@ -197,7 +201,6 @@ type simSession struct {
 	images    map[string]string
 	hasImages bool
 	notes     []string
-	seq       int
 }
 
 func (s *simSession) note(format string, args ...any) {
@@ -211,8 +214,7 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	if len(req.CacheMounts) > 0 {
 		s.note("run %q declares cache mounts, but the container spec cannot carry them yet", name)
 	}
-	s.seq++
-	runID := fmt.Sprintf("run_%03d_%s", s.seq, name)
+	runID := "run-" + name
 	s.runs[name] = runID
 	s.images[name] = req.Image
 	_, err := s.orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{
@@ -227,7 +229,7 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
 }
 
-func (s *simSession) Reevaluate(name string) error {
+func (s *simSession) Reconcile(name string) error {
 	runID, ok := s.runs[name]
 	if !ok {
 		return fmt.Errorf("run %q was never submitted", name)

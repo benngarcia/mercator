@@ -13,10 +13,19 @@
     "rentals": [
       {
         "id": "rental-warm",
-        "state": "busy",
-        "busy": {"remaining_max_runtime": "45m"},
         "cached_images": ["trainer:v1"],
         "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "placement": "placement-active",
+          "run": "run-active",
+          "remaining_max_runtime": "45m"
+        }
       }
     ],
     "marketplace": [

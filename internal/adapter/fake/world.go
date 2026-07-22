@@ -12,7 +12,7 @@ import (
 
 // Clock is a scripted wall clock shared by a World, its daemons, and the
 // orchestrator under test. Time only moves when a scenario advances it, so
-// placement decisions, deferral deadlines, and lease expiries are exact.
+// placement decisions, scheduled-start deadlines, and lease expiries are exact.
 type Clock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -60,7 +60,7 @@ type Daemon struct {
 	BusyUntil time.Time
 	// FreesAt is when the daemon is actually observed free again. It defaults
 	// to BusyUntil; a later value models enforcement or observation lag, which
-	// is what lets a scenario hold a rental busy past a deferral deadline.
+	// lets a scenario hold a Rental busy past a ScheduledPlacement deadline.
 	FreesAt time.Time
 	// LeaseExpiresAt is when the daemon's idle lease ends; zero means no
 	// lease bound. An expired daemon stops being offered, standing in for
@@ -212,10 +212,10 @@ func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domai
 	}
 	offer.ImageCache = domain.ImageCacheEvidence{ManifestCached: missing == 0, MissingBytes: missing, Known: true}
 	if daemon.busyAt(now) {
-		// A busy rental is not placeable capacity (nothing ever stacks), but it
-		// stays visible as a candidate so the decision records why it lost. The
-		// remaining maximum runtime of its running work is the recorded fact a
-		// deferral deadline would rest on.
+		// Today's offer vocabulary marks a busy Rental unavailable. The target
+		// Broker-owned RentalSchedule will keep it feasible and create a
+		// ScheduledPlacement instead. It remains visible now so the decision
+		// records the RunningPlacement's remaining maximum runtime.
 		offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
 		offer.Queue = &domain.QueueSnapshot{QueuedWorkSeconds: daemon.remainingMaxRuntimeAt(now).Seconds(), ActiveSlots: 1}
 	} else {

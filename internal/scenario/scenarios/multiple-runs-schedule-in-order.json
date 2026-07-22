@@ -1,0 +1,103 @@
+{
+  "summary": "A warm Rental has one short RunningPlacement and fresh capacity is slow. Two arriving Runs both receive durable ScheduledPlacements in submission order because the full ordered wait remains faster than provisioning.",
+  "status": "target",
+  "world": {
+    "images": {
+      "worker:v1": {
+        "layers": [
+          {"name": "worker-base", "size": "4GB"},
+          {"name": "worker-code-v1", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["worker:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "placement": "placement-active",
+          "run": "run-active",
+          "remaining_max_runtime": "1m"
+        }
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-slow",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "30m", "p90": "45m"}
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "first",
+      "request": {
+        "image": "worker:v1",
+        "expected_runtime": "1m",
+        "max_runtime": "2m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "placement": {
+          "id": "placement-first",
+          "rental": "rental-warm",
+          "state": "scheduled",
+          "after": "placement-active",
+          "projected_start_in": "1m",
+          "schedule_version": 2
+        }
+      }
+    },
+    {
+      "submit": "second",
+      "request": {
+        "image": "worker:v1",
+        "expected_runtime": "1m",
+        "max_runtime": "2m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "placement": {
+          "id": "placement-second",
+          "rental": "rental-warm",
+          "state": "scheduled",
+          "after": "placement-first",
+          "projected_start_in": "3m",
+          "schedule_version": 3
+        },
+        "candidates": {
+          "rental-warm": {
+            "queue_seconds": 180,
+            "rental_schedule": {
+              "version": 2,
+              "running": {
+                "placement": "placement-active",
+                "run": "run-active",
+                "remaining_max_runtime": "1m"
+              },
+              "preceding": [
+                {
+                  "placement": "placement-first",
+                  "run": "run-first",
+                  "max_runtime": "2m"
+                }
+              ],
+              "projected_start_in": "3m"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

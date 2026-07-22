@@ -13,7 +13,6 @@
     "rentals": [
       {
         "id": "rental-warm",
-        "state": "idle",
         "idle_lease_expires_in": "30m",
         "cached_images": ["trainer:v1"],
         "rate_per_hour_usd": 2.5

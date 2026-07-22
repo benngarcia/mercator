@@ -23,9 +23,9 @@ type Backend interface {
 type Session interface {
 	// Submit creates the named run and drives it to its first decision.
 	Submit(name string, req RequestSpec) error
-	// Reevaluate drives the named run's next advancement (a deferred run
-	// re-entering placement, a placed run being observed).
-	Reevaluate(name string) error
+	// Reconcile drives Broker advancement for a named Run after relevant world
+	// state or time changed.
+	Reconcile(name string) error
 	// AdvanceClock moves the scripted clock forward.
 	AdvanceClock(d time.Duration)
 	// RunEvents returns the named run's recorded event stream.
@@ -62,19 +62,20 @@ func Run(backend Backend, sc Scenario) (Result, error) {
 			failures = append(failures, assertExpect(session, start, step.Submit, *step.Expect)...)
 		case step.Advance != nil:
 			session.AdvanceClock(step.Advance.Duration())
-		case step.Reevaluate != "":
-			if err := session.Reevaluate(step.Reevaluate); err != nil {
-				failures = append(failures, fmt.Sprintf("step %d: reevaluate %q: %v", i+1, step.Reevaluate, err))
+		case step.Reconcile != "":
+			if err := session.Reconcile(step.Reconcile); err != nil {
+				failures = append(failures, fmt.Sprintf("step %d: reconcile %q: %v", i+1, step.Reconcile, err))
 			}
-			failures = append(failures, assertExpect(session, start, step.Reevaluate, *step.Expect)...)
+			failures = append(failures, assertExpect(session, start, step.Reconcile, *step.Expect)...)
 		}
 	}
 	return Result{Failures: failures, Notes: session.Notes()}, nil
 }
 
 // recordedDecision is the latest placement decision in a run's stream, both
-// decoded and raw. The raw form is where target-contract fields (defer,
-// cache evidence) are asserted before the domain types carry them.
+// decoded and raw. The raw form is where target-contract fields (Placement,
+// RentalSchedule evidence, cache evidence) are asserted before the domain
+// types carry them.
 type recordedDecision struct {
 	decision domain.PlacementDecision
 	raw      map[string]json.RawMessage
@@ -119,43 +120,44 @@ func latestDisposition(events []eventlog.StoredEvent) (string, bool) {
 	return "", false
 }
 
-// deferRecord is the target contract for a recorded deferral, asserted
-// against the decision's raw JSON until the domain type exists: a decision
-// with no selected offer carrying {"defer": {"reason", "deadline"}}.
-type deferRecord struct {
-	Reason   string    `json:"reason"`
-	Deadline time.Time `json:"deadline"`
+// placementRecord is the target contract for the durable Placement created by
+// a decision that selects an existing Rental.
+type placementRecord struct {
+	PlacementID      string         `json:"id"`
+	RentalID         string         `json:"rental_id"`
+	State            PlacementState `json:"state"`
+	AfterPlacementID string         `json:"after_placement_id,omitempty"`
+	ProjectedStartAt *time.Time     `json:"projected_start_at,omitempty"`
+	LatestStartAt    *time.Time     `json:"latest_start_at,omitempty"`
+	ScheduleVersion  uint64         `json:"schedule_version"`
 }
 
-func (rec recordedDecision) deferral() (deferRecord, bool) {
-	raw, ok := rec.raw["defer"]
+func (rec recordedDecision) placement() (placementRecord, bool) {
+	raw, ok := rec.raw["placement"]
 	if !ok {
-		return deferRecord{}, false
+		return placementRecord{}, false
 	}
-	var d deferRecord
-	if err := json.Unmarshal(raw, &d); err != nil {
-		return deferRecord{}, false
+	var placement placementRecord
+	if err := json.Unmarshal(raw, &placement); err != nil {
+		return placementRecord{}, false
 	}
-	return d, true
+	return placement, true
 }
 
-func (rec recordedDecision) outcome() string {
+func (rec recordedDecision) outcome() Outcome {
 	if rec.decision.SelectedOfferSnapshotID != "" {
-		return "place"
+		return OutcomePlace
 	}
-	if _, ok := rec.deferral(); ok {
-		return "defer"
-	}
-	return "fail"
+	return OutcomeFail
 }
 
 func (rec recordedDecision) describe() string {
 	switch rec.outcome() {
-	case "place":
-		return fmt.Sprintf("placed on %q", rec.decision.SelectedOfferSnapshotID)
-	case "defer":
-		d, _ := rec.deferral()
-		return fmt.Sprintf("deferred (%s until %s)", d.Reason, d.Deadline.Format(time.RFC3339))
+	case OutcomePlace:
+		if placement, ok := rec.placement(); ok {
+			return fmt.Sprintf("placed on %q as %s Placement %q", rec.decision.SelectedOfferSnapshotID, placement.State, placement.PlacementID)
+		}
+		return fmt.Sprintf("selected offer %q without a recorded Placement", rec.decision.SelectedOfferSnapshotID)
 	default:
 		return fmt.Sprintf("no offer selected (reasons %v)", rec.decision.SelectionReasonCodes)
 	}
@@ -186,17 +188,8 @@ func assertExpect(session Session, start time.Time, name string, expect ExpectSp
 			fail("expected selection reason %q, got %v", reason, rec.decision.SelectionReasonCodes)
 		}
 	}
-	if expect.Defer != nil {
-		if d, ok := rec.deferral(); ok {
-			if d.Reason != expect.Defer.Reason {
-				fail("expected defer reason %q, got %q", expect.Defer.Reason, d.Reason)
-			}
-			if want := expect.Defer.Deadline.Resolve(start); !d.Deadline.Equal(want) {
-				fail("expected defer deadline %s, got %s", want.Format(time.RFC3339), d.Deadline.Format(time.RFC3339))
-			}
-		} else {
-			fail("expected a recorded deferral, but the decision %s", rec.describe())
-		}
+	if expect.Placement != nil {
+		failures = append(failures, assertPlacement(rec, start, name, *expect.Placement)...)
 	}
 	if expect.Disposition != "" {
 		disposition, ok := latestDisposition(events)
@@ -210,6 +203,52 @@ func assertExpect(session Session, start time.Time, name string, expect ExpectSp
 		failures = append(failures, assertCandidate(rec, name, id, expect.Candidates[id])...)
 	}
 	return failures
+}
+
+func assertPlacement(rec recordedDecision, start time.Time, name string, expect PlacementExpectation) []string {
+	placement, ok := rec.placement()
+	if !ok {
+		return []string{fmt.Sprintf("run %q: expected Placement %q, but the decision records none", name, expect.PlacementID)}
+	}
+	var failures []string
+	fail := func(format string, args ...any) {
+		failures = append(failures, fmt.Sprintf("run %q: Placement %q: ", name, expect.PlacementID)+fmt.Sprintf(format, args...))
+	}
+	if placement.PlacementID != expect.PlacementID {
+		fail("expected id %q, got %q", expect.PlacementID, placement.PlacementID)
+	}
+	if placement.RentalID != expect.RentalID {
+		fail("expected Rental %q, got %q", expect.RentalID, placement.RentalID)
+	}
+	if placement.State != expect.State {
+		fail("expected state %q, got %q", expect.State, placement.State)
+	}
+	if placement.AfterPlacementID != expect.AfterPlacement {
+		fail("expected predecessor %q, got %q", expect.AfterPlacement, placement.AfterPlacementID)
+	}
+	if placement.ScheduleVersion != expect.ScheduleVersion {
+		fail("expected schedule version %d, got %d", expect.ScheduleVersion, placement.ScheduleVersion)
+	}
+	if expect.ProjectedStart != nil {
+		want := start.Add(expect.ProjectedStart.Duration())
+		if placement.ProjectedStartAt == nil || !placement.ProjectedStartAt.Equal(want) {
+			fail("expected projected start %s, got %s", want.Format(time.RFC3339), describeTime(placement.ProjectedStartAt))
+		}
+	}
+	if expect.LatestStart != nil {
+		want := expect.LatestStart.Resolve(start)
+		if placement.LatestStartAt == nil || !placement.LatestStartAt.Equal(want) {
+			fail("expected latest start %s, got %s", want.Format(time.RFC3339), describeTime(placement.LatestStartAt))
+		}
+	}
+	return failures
+}
+
+func describeTime(value *time.Time) string {
+	if value == nil {
+		return "none"
+	}
+	return value.Format(time.RFC3339)
 }
 
 func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpectation) []string {
@@ -241,6 +280,9 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 	checkBound("queue_seconds", expect.QueueSeconds, candidate.Estimates.QueueSeconds.Expected)
 	checkBound("provision_seconds", expect.ProvisionSeconds, candidate.Estimates.ProvisionSeconds.Expected)
 	checkBound("pull_seconds", expect.PullSeconds, candidate.Estimates.PullSeconds.Expected)
+	if expect.Schedule != nil {
+		failures = append(failures, assertScheduleEvidence(rec, name, id, *expect.Schedule)...)
+	}
 	for _, key := range sortedKeys(expect.Caches) {
 		hit, ok := candidateCacheEvidence(rec, id, key)
 		if !ok {
@@ -252,6 +294,71 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 		}
 	}
 	return failures
+}
+
+type scheduleEvidenceRecord struct {
+	Version uint64 `json:"version"`
+	Running *struct {
+		PlacementID                string  `json:"placement_id"`
+		RunID                      string  `json:"run_id"`
+		RemainingMaxRuntimeSeconds float64 `json:"remaining_max_runtime_seconds"`
+	} `json:"running,omitempty"`
+	Preceding []struct {
+		PlacementID       string  `json:"placement_id"`
+		RunID             string  `json:"run_id"`
+		MaxRuntimeSeconds float64 `json:"max_runtime_seconds"`
+	} `json:"preceding,omitempty"`
+	ProjectedStartSeconds float64 `json:"projected_start_seconds"`
+}
+
+func assertScheduleEvidence(rec recordedDecision, name, id string, expect ScheduleEvidenceExpectation) []string {
+	actual, ok := candidateScheduleEvidence(rec, id)
+	if !ok {
+		return []string{fmt.Sprintf("run %q: candidate %q: records no RentalSchedule evidence", name, id)}
+	}
+	var failures []string
+	fail := func(format string, args ...any) {
+		failures = append(failures, fmt.Sprintf("run %q: candidate %q: ", name, id)+fmt.Sprintf(format, args...))
+	}
+	if actual.Version != expect.Version {
+		fail("expected schedule version %d, got %d", expect.Version, actual.Version)
+	}
+	if actual.Running == nil || actual.Running.PlacementID != expect.Running.PlacementID || actual.Running.RunID != expect.Running.RunID || actual.Running.RemainingMaxRuntimeSeconds != expect.Running.RemainingMaxRuntime.Duration().Seconds() {
+		fail("running Placement evidence does not match %+v", *expect.Running)
+	}
+	if len(actual.Preceding) != len(expect.Preceding) {
+		fail("expected %d preceding Placements, got %d", len(expect.Preceding), len(actual.Preceding))
+	} else {
+		for i, want := range expect.Preceding {
+			got := actual.Preceding[i]
+			if got.PlacementID != want.PlacementID || got.RunID != want.RunID || got.MaxRuntimeSeconds != want.MaxRuntime.Duration().Seconds() {
+				fail("preceding[%d] does not match %+v", i, want)
+			}
+		}
+	}
+	if actual.ProjectedStartSeconds != expect.ProjectedStart.Duration().Seconds() {
+		fail("expected projected_start_seconds %.0f, got %.0f", expect.ProjectedStart.Duration().Seconds(), actual.ProjectedStartSeconds)
+	}
+	return failures
+}
+
+func candidateScheduleEvidence(rec recordedDecision, id string) (scheduleEvidenceRecord, bool) {
+	var candidates []map[string]json.RawMessage
+	if err := json.Unmarshal(rec.raw["candidates"], &candidates); err != nil {
+		return scheduleEvidenceRecord{}, false
+	}
+	for _, candidate := range candidates {
+		var candidateID string
+		if err := json.Unmarshal(candidate["offer_snapshot_id"], &candidateID); err != nil || candidateID != id {
+			continue
+		}
+		var evidence scheduleEvidenceRecord
+		if err := json.Unmarshal(candidate["rental_schedule"], &evidence); err != nil {
+			return scheduleEvidenceRecord{}, false
+		}
+		return evidence, true
+	}
+	return scheduleEvidenceRecord{}, false
 }
 
 // candidateCacheEvidence reads the target contract for named-cache evidence

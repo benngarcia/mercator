@@ -1,0 +1,96 @@
+{
+  "summary": "Two Runs arrive while a warm Rental is busy. Mercator schedules the first behind the RunningPlacement. The second decision includes that ScheduledPlacement's maximum runtime, making fresh capacity faster.",
+  "status": "target",
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["trainer:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "placement": "placement-active",
+          "run": "run-active",
+          "remaining_max_runtime": "5m"
+        }
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m"}
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "first-waiter",
+      "request": {
+        "image": "trainer:v1",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "placement": {
+          "id": "placement-first-waiter",
+          "rental": "rental-warm",
+          "state": "scheduled",
+          "after": "placement-active",
+          "projected_start_in": "5m",
+          "schedule_version": 2
+        }
+      }
+    },
+    {
+      "submit": "second-waiter",
+      "request": {
+        "image": "trainer:v1",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-4090",
+        "disposition": "terminate",
+        "candidates": {
+          "rental-warm": {
+            "queue_seconds": 3900,
+            "rental_schedule": {
+              "version": 2,
+              "running": {
+                "placement": "placement-active",
+                "run": "run-active",
+                "remaining_max_runtime": "5m"
+              },
+              "preceding": [
+                {
+                  "placement": "placement-first-waiter",
+                  "run": "run-first-waiter",
+                  "max_runtime": "1h"
+                }
+              ],
+              "projected_start_in": "1h5m"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
