@@ -7,22 +7,37 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import type { CloudEvent, OfferSnapshot } from "@/lib/api/types";
 import { duration, usd } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { OfferSnapshot } from "@/lib/api/types";
 import type {
   Rental,
   Workspace,
   WorkspaceBooking,
   WorkspaceRun,
 } from "@/lib/workspace";
+import type { ScenarioPlaybackSnapshot } from "@/lib/workspace/playback";
+import type { WorkspacePlaybackControls } from "@/lib/workspace/react";
+
+import { ScenarioControls } from "./ScenarioControls";
+import { WorkspaceEventFeed } from "./WorkspaceEventFeed";
 
 const PIXELS_PER_MINUTE = 24;
 const MINIMUM_HORIZON_MINUTES = 60;
 const QUEUE_CAPACITY = 4;
 const LANE_LABEL_WIDTH = 224;
 
-export function WorkspaceCanvas({ workspace }: { workspace: Workspace }) {
+export function WorkspaceCanvas({
+  controls,
+  events,
+  playback,
+  workspace,
+}: {
+  controls: WorkspacePlaybackControls | null;
+  events: readonly CloudEvent[];
+  playback: ScenarioPlaybackSnapshot | null;
+  workspace: Workspace;
+}) {
   const now = Date.now();
   const rentals = Object.values(workspace.rentals).sort((a, b) => {
     const sourceOrder = sourceRank(a) - sourceRank(b);
@@ -40,54 +55,65 @@ export function WorkspaceCanvas({ workspace }: { workspace: Workspace }) {
   return (
     <div className="flex min-h-full flex-col">
       <div className="border-b px-5 py-4">
-        <div className="flex items-baseline justify-between gap-4">
+        <div className="flex items-center justify-between gap-4">
           <h1 className="text-base font-semibold tracking-tight">Workspace</h1>
-          <span className="font-mono text-xs text-muted-foreground">
-            {workspace.id}
-          </span>
+          <div className="flex items-center gap-5">
+            {playback && controls ? (
+              <ScenarioControls playback={playback} controls={controls} />
+            ) : null}
+            <span className="font-mono text-xs text-muted-foreground">
+              {workspace.id}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div
-          className="grid min-w-full"
-          style={{
-            gridTemplateColumns: `${LANE_LABEL_WIDTH}px minmax(${timelineWidth}px, 1fr)`,
-          }}
-        >
-          <div className="sticky left-0 z-30 border-b border-r bg-background" />
-          <TimeAxis horizonMinutes={horizonMinutes} />
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-auto">
+          <div
+            className="grid min-w-full"
+            style={{
+              gridTemplateColumns: `${LANE_LABEL_WIDTH}px minmax(${timelineWidth}px, 1fr)`,
+            }}
+          >
+            <div className="sticky left-0 z-30 border-b border-r bg-background" />
+            <TimeAxis horizonMinutes={horizonMinutes} />
 
-          <LaneLabel title="Incoming">
-            <span className="size-1.5 rounded-full bg-phase-requested" />
-          </LaneLabel>
-          <TimelineTrack horizonMinutes={horizonMinutes}>
-            <div className="flex h-full items-center gap-2 px-3">
-              {incoming.map((run) => (
-                <RunBlock
-                  key={run.id}
-                  run={run}
-                  left={0}
-                  maxSeconds={run.maxRuntimeSeconds}
-                  expectedSeconds={run.expectedRuntimeSeconds}
-                  compact
-                />
-              ))}
-            </div>
-          </TimelineTrack>
+            <LaneLabel title="Incoming">
+              <span className="size-1.5 rounded-full bg-phase-requested" />
+            </LaneLabel>
+            <TimelineTrack horizonMinutes={horizonMinutes}>
+              <div className="flex h-full items-center gap-2 px-3">
+                {incoming.map((run) => (
+                  <RunBlock
+                    key={run.id}
+                    run={run}
+                    left={0}
+                    maxSeconds={run.maxRuntimeSeconds}
+                    expectedSeconds={run.expectedRuntimeSeconds}
+                    compact
+                  />
+                ))}
+              </div>
+            </TimelineTrack>
 
-          {rentals.map((rental) => (
-            <RentalLane
-              key={rental.id}
-              rental={rental}
-              workspace={workspace}
-              horizonMinutes={horizonMinutes}
-              now={now}
-            />
-          ))}
+            {rentals.map((rental) => (
+              <RentalLane
+                key={rental.id}
+                rental={rental}
+                workspace={workspace}
+                horizonMinutes={horizonMinutes}
+                now={now}
+              />
+            ))}
+          </div>
+
+          <Marketplace
+            offers={marketplace}
+            available={workspace.offersAvailable}
+          />
         </div>
-
-        <Marketplace offers={marketplace} available={workspace.offersAvailable} />
+        <WorkspaceEventFeed events={events} />
       </div>
     </div>
   );

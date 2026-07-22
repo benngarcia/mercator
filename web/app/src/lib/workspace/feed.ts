@@ -1,6 +1,5 @@
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -15,6 +14,12 @@ import * as Sse from "effect/unstable/encoding/Sse";
 import { Session } from "@/lib/session";
 
 import { CloudEvent, OfferCatalogReplacement, Ready } from "./contracts";
+import {
+  makeScenarioPlayback,
+  type ScenarioPlaybackCommand,
+  type ScenarioPlaybackController,
+  type ScenarioPlaybackEmission,
+} from "./playback";
 import type { WorkspaceMessage } from "./reducer";
 
 export type WorkspaceFeedStatus =
@@ -33,12 +38,16 @@ export class WorkspaceFeedError extends Data.TaggedError("WorkspaceFeedError")<{
 
 export type WorkspaceSignal =
   | { readonly type: "connecting" }
-  | { readonly type: "message"; readonly message: WorkspaceMessage };
+  | ScenarioPlaybackEmission;
 
 export interface WorkspaceEventsService {
   readonly stream: (
     workspaceId: string,
   ) => Stream.Stream<WorkspaceSignal, WorkspaceFeedError>;
+  readonly command: (
+    workspaceId: string,
+    command: ScenarioPlaybackCommand,
+  ) => Effect.Effect<void>;
 }
 
 export class WorkspaceEvents extends Context.Service<
@@ -222,63 +231,61 @@ function activeScenario() {
   const play = search.get("play");
   return name === null
     ? null
-    : { name, playbackDelay: play === "1" || play === '"1"' ? 800 : 0 };
+    : { name, autoplay: play === "1" || play === '"1"' };
 }
-
-const fixtureSignals =
-  process.env.NODE_ENV === "production"
-    ? null
-    : (workspaceId: string, playbackDelay: number) =>
-        Stream.unwrap(
-          Effect.tryPromise({
-            try: () =>
-              import("./scenario").then(({ fullScheduleScenarioMessages }) =>
-                fullScheduleScenarioMessages(workspaceId),
-              ),
-            catch: (cause) =>
-              decodeFailure("The Workspace fixture could not load.", cause),
-          }).pipe(
-            Effect.map((messages) =>
-              Stream.fromIterable(messages).pipe(
-                Stream.mapAccumEffect(
-                  () => false,
-                  (live, message) =>
-                    Effect.gen(function* () {
-                      if (live && playbackDelay > 0) {
-                        yield* Effect.sleep(Duration.millis(playbackDelay));
-                      }
-                      return [
-                        live || message.type === "ready",
-                        [
-                          {
-                            type: "message",
-                            message,
-                          } satisfies WorkspaceSignal,
-                        ],
-                      ] as const;
-                    }),
-                ),
-                Stream.prepend<WorkspaceSignal>([{ type: "connecting" }]),
-              ),
-            ),
-          ),
-        );
 
 export const layer = Layer.effect(
   WorkspaceEvents,
   Effect.gen(function* () {
     const session = yield* Session;
     const client = yield* HttpClient.HttpClient;
+    const controllers = yield* Ref.make(
+      new Map<string, ReadonlySet<ScenarioPlaybackController>>(),
+    );
 
     const stream = (workspaceId: string) =>
       Stream.unwrap(
         Effect.gen(function* () {
           const scenario = activeScenario();
           if (
-            fixtureSignals !== null &&
+            process.env.NODE_ENV !== "production" &&
             scenario?.name === "full-schedule-forces-fresh-capacity"
           ) {
-            return fixtureSignals(workspaceId, scenario.playbackDelay);
+            const script = yield* Effect.tryPromise({
+              try: () =>
+                import("./scenario").then(({ fullScheduleScenarioScript }) =>
+                  fullScheduleScenarioScript(workspaceId),
+                ),
+              catch: (cause) =>
+                decodeFailure("The Workspace fixture could not load.", cause),
+            });
+            const controller = yield* makeScenarioPlayback(
+              script,
+              scenario.autoplay,
+            );
+            yield* Ref.update(controllers, (current) => {
+              const next = new Map(current);
+              const active = new Set(next.get(workspaceId) ?? []);
+              active.add(controller);
+              next.set(workspaceId, active);
+              return next;
+            });
+            yield* Effect.addFinalizer(() =>
+              Ref.update(controllers, (current) => {
+                const next = new Map(current);
+                const active = new Set(next.get(workspaceId) ?? []);
+                active.delete(controller);
+                if (active.size === 0) {
+                  next.delete(workspaceId);
+                } else {
+                  next.set(workspaceId, active);
+                }
+                return next;
+              }),
+            );
+            return controller.stream.pipe(
+              Stream.prepend<WorkspaceSignal>([{ type: "connecting" }]),
+            );
           }
           const state = yield* session.current;
           const lastEventId = yield* Ref.make("");
@@ -289,6 +296,23 @@ export const layer = Layer.effect(
         }),
       );
 
-    return WorkspaceEvents.of({ stream });
+    const command = Effect.fn("WorkspaceEvents.command")(function* (
+      workspaceId: string,
+      value: ScenarioPlaybackCommand,
+    ) {
+      const active = (yield* Ref.get(controllers)).get(workspaceId);
+      if (active === undefined || active.size === 0) {
+        return yield* Effect.die(
+          new Error(`Workspace ${workspaceId} has no active scenario playback`),
+        );
+      }
+      yield* Effect.forEach(
+        active,
+        (controller) => controller.command(value),
+        { discard: true, concurrency: "unbounded" },
+      );
+    });
+
+    return WorkspaceEvents.of({ stream, command });
   }),
 );

@@ -7,9 +7,11 @@ import { humanizeEventType } from "@/lib/format";
 import { JsonViewer, RelativeTime, EmptyState, CopyButton } from "@/components/common";
 
 export interface EventTimelineProps {
-  events: CloudEvent[];
+  events: readonly CloudEvent[];
   className?: string;
   isLoading?: boolean;
+  dense?: boolean;
+  highlightLatest?: boolean;
 }
 
 // Map a humanized event family to a phase tone so the timeline color-tracks the
@@ -39,9 +41,11 @@ function toneForType(type: string): string {
 interface EventRowProps {
   event: CloudEvent;
   isLast: boolean;
+  dense: boolean;
+  highlighted: boolean;
 }
 
-function EventRow({ event, isLast }: EventRowProps) {
+function EventRow({ event, isLast, dense, highlighted }: EventRowProps) {
   const [open, setOpen] = React.useState(false);
   const tone = toneForType(event.type);
   const hasData =
@@ -50,7 +54,14 @@ function EventRow({ event, isLast }: EventRowProps) {
     !(typeof event.data === "object" && Object.keys(event.data).length === 0);
 
   return (
-    <li className="relative flex gap-3 pb-3 last:pb-0">
+    <li
+      data-event-id={event.id}
+      className={cn(
+        "relative flex gap-3 rounded-md pb-3 last:pb-0",
+        dense && "px-2 pt-2",
+        highlighted && "bg-accent-soft",
+      )}
+    >
       {/* Rail + node */}
       <div className="flex flex-col items-center">
         <span
@@ -135,6 +146,8 @@ export function EventTimeline({
   events,
   className,
   isLoading,
+  dense = false,
+  highlightLatest = false,
 }: EventTimelineProps) {
   // Sort by global position descending so the latest event is on top; this is
   // a total order across the workspace stream.
@@ -162,6 +175,8 @@ export function EventTimeline({
           key={`${event.globalposition}-${event.id}`}
           event={event}
           isLast={i === ordered.length - 1}
+          dense={dense}
+          highlighted={highlightLatest && i === 0}
         />
       ))}
     </ol>

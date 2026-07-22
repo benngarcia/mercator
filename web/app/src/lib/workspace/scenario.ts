@@ -20,17 +20,69 @@ interface ScenarioBooking {
 
 const GIB = 1024 ** 3;
 
-export function fullScheduleScenarioMessages(
+export interface ScenarioCue {
+  readonly atMillis: number;
+  readonly message: WorkspaceMessage;
+}
+
+export interface ScenarioScript {
+  readonly durationMillis: number;
+  readonly initialMessages: readonly WorkspaceMessage[];
+  readonly cues: readonly ScenarioCue[];
+}
+
+export function fullScheduleScenarioScript(
   workspaceID: string,
   now = new Date(),
-): WorkspaceMessage[] {
-  const messages: WorkspaceMessage[] = [];
+): ScenarioScript {
+  const initialMessages: WorkspaceMessage[] = [];
+  const cues: ScenarioCue[] = [];
   let position = 0;
-  const append = (runID: string, type: string, data: unknown, time = now) => {
+  const event = (
+    runID: string,
+    type: string,
+    data: unknown,
+    time: Date,
+    subject?: string,
+  ): WorkspaceMessage => {
     position += 1;
-    messages.push({
+    return {
       type: "domain_event",
-      event: cloudEvent(workspaceID, runID, type, data, time, position),
+      event: cloudEvent(
+        workspaceID,
+        runID,
+        type,
+        data,
+        time,
+        position,
+        subject,
+      ),
+    };
+  };
+  const appendInitial = (
+    runID: string,
+    type: string,
+    data: unknown,
+    time = now,
+  ) => {
+    initialMessages.push(event(runID, type, data, time));
+  };
+  const appendCue = (
+    atMillis: number,
+    runID: string,
+    type: string,
+    data: unknown,
+    subject?: string,
+  ) => {
+    cues.push({
+      atMillis,
+      message: event(
+        runID,
+        type,
+        data,
+        new Date(now.getTime() + atMillis),
+        subject,
+      ),
     });
   };
   const schedule = scenario.world.rental_schedules[0];
@@ -38,7 +90,7 @@ export function fullScheduleScenarioMessages(
     throw new Error("full schedule scenario requires a RentalSchedule");
   const running = schedule.running;
   const runningMax = parseDuration(running.remaining_max_runtime);
-  append(
+  appendInitial(
     running.run,
     "compute.run.requested.v1",
     {
@@ -52,7 +104,7 @@ export function fullScheduleScenarioMessages(
     },
     new Date(now.getTime() - 30_000),
   );
-  append(
+  appendInitial(
     running.run,
     "compute.run.booking_decided.v1",
     {
@@ -63,6 +115,7 @@ export function fullScheduleScenarioMessages(
         "rental-warm",
         "running",
         schedule.version,
+        new Date(now.getTime() - 29_000),
       ),
     },
     new Date(now.getTime() - 29_000),
@@ -75,11 +128,11 @@ export function fullScheduleScenarioMessages(
       queued.expected_runtime ?? queued.max_runtime,
     );
     const max = parseDuration(queued.max_runtime);
-    append(queued.run, "compute.run.requested.v1", {
+    appendInitial(queued.run, "compute.run.requested.v1", {
       run_id: queued.run,
       workload_revision: workload(workspaceID, queued.run, expected, max),
     });
-    append(queued.run, "compute.run.booking_decided.v1", {
+    appendInitial(queued.run, "compute.run.booking_decided.v1", {
       decision: decision(
         queued.run,
         "rental-warm",
@@ -87,6 +140,7 @@ export function fullScheduleScenarioMessages(
         "rental-warm",
         "queued",
         schedule.version,
+        now,
         predecessor,
         new Date(now.getTime() + projectedStart * 1000).toISOString(),
       ),
@@ -95,7 +149,7 @@ export function fullScheduleScenarioMessages(
     predecessor = queued.booking;
   }
 
-  messages.push({
+  initialMessages.push({
     type: "offers_replaced",
     catalog: {
       workspace_id: workspaceID,
@@ -105,10 +159,10 @@ export function fullScheduleScenarioMessages(
       failures: [],
     },
   });
-  messages.push({ type: "ready", throughGlobalPosition: position });
+  initialMessages.push({ type: "ready", throughGlobalPosition: position });
 
   const freshRunID = "run-fifth";
-  append(freshRunID, "compute.run.requested.v1", {
+  appendCue(3_000, freshRunID, "compute.run.requested.v1", {
     run_id: freshRunID,
     workload_revision: workload(
       workspaceID,
@@ -117,7 +171,7 @@ export function fullScheduleScenarioMessages(
       parseDuration(scenario.request.max_runtime),
     ),
   });
-  append(freshRunID, "compute.run.booking_decided.v1", {
+  appendCue(9_000, freshRunID, "compute.run.booking_decided.v1", {
     decision: decision(
       freshRunID,
       scenario.expect.offer,
@@ -125,12 +179,65 @@ export function fullScheduleScenarioMessages(
       "rental-fresh",
       "running",
       1,
+      new Date(now.getTime() + 9_000),
     ),
   });
-  append(freshRunID, "compute.run.launch_intent_recorded.v1", {
+  appendCue(15_000, freshRunID, "compute.run.launch_intent_recorded.v1", {
     disposition: "terminate",
   });
-  return messages;
+  appendCue(30_000, freshRunID, "compute.run.external_state_observed.v1", {
+    phase: "running",
+  });
+
+  appendCue(40_000, running.run, "compute.run.outcome_recorded.v1", {
+    outcome: "succeeded",
+  });
+  appendCue(44_000, running.run, "compute.run.cleanup_requested.v1", {});
+  appendCue(48_000, running.run, "compute.run.closed.v1", {});
+  appendCue(
+    52_000,
+    "run-q1",
+    "compute.rental.booking_dispatched.v1",
+    {
+      run_id: "run-q1",
+      booking: {
+        id: "booking-q1",
+        rental_id: "rental-warm",
+        schedule_version: schedule.version + 1,
+      },
+    },
+    "rentals/rental-warm",
+  );
+  appendCue(55_000, "run-q1", "compute.run.external_state_observed.v1", {
+    phase: "running",
+  });
+
+  const sixthRunID = "run-sixth";
+  appendCue(62_000, sixthRunID, "compute.run.requested.v1", {
+    run_id: sixthRunID,
+    workload_revision: workload(workspaceID, sixthRunID, 8 * 60, 20 * 60),
+  });
+  appendCue(68_000, sixthRunID, "compute.run.booking_decided.v1", {
+    decision: decision(
+      sixthRunID,
+      "rental-warm",
+      "booking-sixth",
+      "rental-warm",
+      "queued",
+      schedule.version + 2,
+      new Date(now.getTime() + 68_000),
+      "booking-q4",
+      new Date(now.getTime() + 3 * 60_000).toISOString(),
+    ),
+  });
+
+  appendCue(74_000, freshRunID, "compute.run.outcome_recorded.v1", {
+    outcome: "succeeded",
+  });
+  appendCue(78_000, freshRunID, "compute.run.cleanup_requested.v1", {});
+  appendCue(84_000, freshRunID, "compute.run.closed.v1", {});
+
+  return { durationMillis: 90_000, initialMessages, cues };
 }
 
 function cloudEvent(
@@ -140,13 +247,14 @@ function cloudEvent(
   data: unknown,
   time: Date,
   position: number,
+  subject = `runs/${runID}`,
 ): CloudEvent {
   return {
     specversion: "1.0",
     id: `scenario-${position}`,
     source: `compute-control-plane/workspaces/${workspaceID}`,
     type,
-    subject: `runs/${runID}`,
+    subject,
     time: time.toISOString(),
     workspaceid: workspaceID,
     streamversion: position,
@@ -200,6 +308,7 @@ function decision(
   rentalID: string,
   state: "running" | "queued",
   scheduleVersion: number,
+  evaluatedAt: Date,
   afterBookingID?: string,
   projectedStartAt?: string,
 ): BookingDecision {
@@ -207,7 +316,7 @@ function decision(
     id: `dec-${runID}`,
     run_id: runID,
     workload_revision_digest: `sha256:${runID.padEnd(64, "0").slice(0, 64)}`,
-    evaluated_at: new Date().toISOString(),
+    evaluated_at: evaluatedAt.toISOString(),
     model_version: "scenario",
     policy: { objective: "balanced" },
     collection_report: {},

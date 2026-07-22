@@ -1,4 +1,4 @@
-import { useAtomMount, useAtomValue } from "@effect/atom-react";
+import { useAtomMount, useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Atom from "effect/unstable/reactivity/Atom";
@@ -11,60 +11,38 @@ import { runtime } from "@/lib/runtime";
 import {
   WorkspaceEvents,
   WorkspaceFeedError,
-  type WorkspaceFeedStatus,
   type WorkspaceSignal,
 } from "./feed";
+import type {
+  ScenarioPlaybackCommand,
+  ScenarioPlaybackSpeed,
+} from "./playback";
+import type { WorkspaceMessage } from "./reducer";
 import {
-  createWorkspace,
-  reduceWorkspace,
-  type Workspace,
-  type WorkspaceMessage,
-} from "./reducer";
+  initialWorkspaceFeedSnapshot,
+  reduceWorkspaceFeed,
+  type WorkspaceFeedSnapshot,
+} from "./snapshot";
 import { CanvasTransition } from "./transition";
 
-export interface WorkspaceFeedSnapshot {
-  readonly workspace: Workspace;
-  readonly status: WorkspaceFeedStatus;
-  readonly error: WorkspaceFeedError | null;
+export type { WorkspaceFeedSnapshot } from "./snapshot";
+
+export interface WorkspacePlaybackControls {
+  readonly play: () => void;
+  readonly pause: () => void;
+  readonly restart: () => void;
+  readonly setSpeed: (speed: ScenarioPlaybackSpeed) => void;
 }
 
-function initialSnapshot(workspaceId: string): WorkspaceFeedSnapshot {
-  return {
-    workspace: createWorkspace(workspaceId),
-    status: "idle",
-    error: null,
-  };
+export interface WorkspaceFeed extends WorkspaceFeedSnapshot {
+  readonly controls: WorkspacePlaybackControls | null;
 }
 
 const snapshotAtom = Atom.family((workspaceId: string) =>
-  Atom.make(initialSnapshot(workspaceId)).pipe(Atom.setIdleTTL("30 seconds")),
+  Atom.make(initialWorkspaceFeedSnapshot(workspaceId)).pipe(
+    Atom.setIdleTTL("30 seconds"),
+  ),
 );
-
-function messageStatus(
-  current: WorkspaceFeedStatus,
-  message: WorkspaceMessage,
-  workspace: Workspace,
-): WorkspaceFeedStatus {
-  if (message.type === "ready") return "live";
-  if (message.type === "offers_unavailable") return "degraded";
-  if (message.type === "offers_replaced" && workspace.ready) return "live";
-  return current;
-}
-
-function nextSnapshot(
-  current: WorkspaceFeedSnapshot,
-  signal: WorkspaceSignal,
-): WorkspaceFeedSnapshot {
-  if (signal.type === "connecting") {
-    return { ...current, status: "connecting" };
-  }
-  const workspace = reduceWorkspace(current.workspace, signal.message);
-  return {
-    workspace,
-    status: messageStatus(current.status, signal.message, workspace),
-    error: null,
-  };
-}
 
 function shouldAnimate(
   current: WorkspaceFeedSnapshot,
@@ -136,7 +114,7 @@ const controllerAtom = Atom.family((workspaceId: string) =>
             ) {
               const current = get.registry.get(state);
               const next = yield* Effect.try({
-                try: () => nextSnapshot(current, signal),
+                try: () => reduceWorkspaceFeed(current, signal),
                 catch: (cause) =>
                   new WorkspaceFeedError({
                     status: 0,
@@ -184,10 +162,23 @@ const controllerAtom = Atom.family((workspaceId: string) =>
   ),
 );
 
+const playbackCommandAtom = Atom.family((workspaceId: string) =>
+  runtime
+    .fn<ScenarioPlaybackCommand>()(
+      (command) =>
+        Effect.gen(function* () {
+          const events = yield* WorkspaceEvents;
+          yield* events.command(workspaceId, command);
+        }),
+      { concurrent: true },
+    )
+    .pipe(Atom.setIdleTTL("30 seconds")),
+);
+
 const inactiveSnapshotAtom = Atom.make<WorkspaceFeedSnapshot | null>(null);
 const inactiveControllerAtom = Atom.make(null);
 
-export function useWorkspaceFeed(): WorkspaceFeedSnapshot | null {
+export function useWorkspaceFeed(): WorkspaceFeed | null {
   const { token, workspace } = useSession();
   const controller =
     workspace === null
@@ -195,6 +186,19 @@ export function useWorkspaceFeed(): WorkspaceFeedSnapshot | null {
       : controllerAtom(workspace)(token);
   const snapshot =
     workspace === null ? inactiveSnapshotAtom : snapshotAtom(workspace);
+  const sendPlaybackCommand = useAtomSet(playbackCommandAtom(workspace ?? ""));
   useAtomMount(controller);
-  return useAtomValue(snapshot);
+  const value = useAtomValue(snapshot);
+  if (value === null) return null;
+  const controls =
+    value.playback === null
+      ? null
+      : {
+          play: () => sendPlaybackCommand({ type: "play" }),
+          pause: () => sendPlaybackCommand({ type: "pause" }),
+          restart: () => sendPlaybackCommand({ type: "restart" }),
+          setSpeed: (speed: ScenarioPlaybackSpeed) =>
+            sendPlaybackCommand({ type: "set_speed", speed }),
+        };
+  return { ...value, controls };
 }

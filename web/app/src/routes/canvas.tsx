@@ -32,7 +32,14 @@ function CanvasPage() {
   if (!feed || !feed.workspace.ready) {
     return <CanvasSkeleton />;
   }
-  return <WorkspaceCanvas workspace={feed.workspace} />;
+  return (
+    <WorkspaceCanvas
+      workspace={feed.workspace}
+      events={feed.events}
+      playback={feed.playback}
+      controls={feed.controls}
+    />
+  );
 }
 
 function CanvasSkeleton() {

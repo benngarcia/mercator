@@ -6,13 +6,13 @@ import {
   type Workspace,
   type WorkspaceMessage,
 } from "./reducer";
-import { fullScheduleScenarioMessages } from "./scenario";
+import { fullScheduleScenarioScript } from "./scenario";
 
 describe("Workspace event reducer", () => {
   test("projects the full-schedule fixture into time-lane state", () => {
     const workspace = reduceAll(
       createWorkspace("ws_scenario"),
-      fullScheduleScenarioMessages(
+      scenarioMessages(
         "ws_scenario",
         new Date("2030-01-01T00:00:00Z"),
       ),
@@ -21,15 +21,16 @@ describe("Workspace event reducer", () => {
     expect(workspace.ready).toBe(true);
     expect(workspace.lastChange).toBe("live");
     expect(workspace.rentals["rental-warm"]?.runningBookingID).toBe(
-      "booking-active",
+      "booking-q1",
     );
     expect(workspace.rentals["rental-warm"]?.queuedBookingIDs).toEqual([
-      "booking-q1",
       "booking-q2",
       "booking-q3",
       "booking-q4",
+      "booking-sixth",
     ]);
-    expect(workspace.rentals["rental-fresh"]?.phase).toBe("provisioning");
+    expect(workspace.rentals["rental-fresh"]?.phase).toBe("idle");
+    expect(workspace.runs["run-fifth"]?.phase).toBe("closed");
     expect(workspace.runs["run-q1"]?.expectedRuntimeSeconds).toBe(60);
     expect(workspace.runs["run-q1"]?.maxRuntimeSeconds).toBe(120);
     expect(workspace.offers.map((offer) => offer.id)).toEqual([
@@ -39,7 +40,7 @@ describe("Workspace event reducer", () => {
   });
 
   test("is deterministic for the same ordered feed", () => {
-    const messages = fullScheduleScenarioMessages(
+    const messages = scenarioMessages(
       "ws_scenario",
       new Date("2030-01-01T00:00:00Z"),
     );
@@ -50,7 +51,7 @@ describe("Workspace event reducer", () => {
   });
 
   test("rejects an expected runtime beyond the enforced maximum", () => {
-    const messages = fullScheduleScenarioMessages(
+    const messages = scenarioMessages(
       "ws_scenario",
       new Date("2030-01-01T00:00:00Z"),
     );
@@ -87,4 +88,12 @@ function reduceAll(
   messages: WorkspaceMessage[],
 ): Workspace {
   return messages.reduce(reduceWorkspace, workspace);
+}
+
+function scenarioMessages(workspaceID: string, now: Date): WorkspaceMessage[] {
+  const script = fullScheduleScenarioScript(workspaceID, now);
+  return [
+    ...script.initialMessages,
+    ...script.cues.map((cue) => cue.message),
+  ];
 }
