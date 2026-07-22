@@ -1,0 +1,105 @@
+{
+  "summary": "A warm Rental has one short running Booking and fresh capacity is slow. Two arriving Runs both receive durable queued Bookings in submission order because the full ordered wait remains faster than provisioning.",
+  "status": "target",
+  "missing_capabilities": ["rental_schedule"],
+  "world": {
+    "images": {
+      "worker:v1": {
+        "layers": [
+          {"name": "worker-base", "size": "4GB"},
+          {"name": "worker-code-v1", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["worker:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "booking": "booking-active",
+          "run": "run-active",
+          "remaining_max_runtime": "1m"
+        }
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-slow",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "30m", "p90": "45m"}
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "first",
+      "request": {
+        "image": "worker:v1",
+        "expected_runtime": "1m",
+        "max_runtime": "2m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "booking": {
+          "id": "booking-first",
+          "rental": "rental-warm",
+          "state": "queued",
+          "after": "booking-active",
+          "projected_start_in": "1m",
+          "schedule_version": 2
+        }
+      }
+    },
+    {
+      "submit": "second",
+      "request": {
+        "image": "worker:v1",
+        "expected_runtime": "1m",
+        "max_runtime": "2m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "booking": {
+          "id": "booking-second",
+          "rental": "rental-warm",
+          "state": "queued",
+          "after": "booking-first",
+          "projected_start_in": "2m",
+          "schedule_version": 3
+        },
+        "candidates": {
+          "rental-warm": {
+            "queue_seconds": 120,
+            "rental_schedule": {
+              "version": 2,
+              "running": {
+                "booking": "booking-active",
+                "run": "run-active",
+                "remaining_max_runtime": "1m"
+              },
+              "preceding": [
+                {
+                  "booking": "booking-first",
+                  "run": "run-first",
+                  "max_runtime": "2m",
+                  "expected_runtime": "1m"
+                }
+              ],
+              "projected_start_in": "2m"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

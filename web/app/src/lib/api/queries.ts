@@ -26,7 +26,7 @@ import type {
   CreateRunRequest,
   CloudEvent,
   OfferSnapshot,
-  PlacementDecision,
+  BookingDecision,
   ReplaySinkRequest,
   ResolveImageRequest,
   ResolvedImage,
@@ -226,15 +226,15 @@ export function useRunEvents(
   });
 }
 
-// useRunDecision fetches the placement decision once / on demand. A 404 means
+// useRunDecision fetches the booking decision once / on demand. A 404 means
 // the decision has not been recorded yet and resolves to null rather than an
 // error (so the panel can show a "no decision yet" state).
 export function useRunDecision(
   runID: string | undefined,
   workspaceOverride?: string,
-): UseQueryResult<PlacementDecision | null, ApiError> {
+): UseQueryResult<BookingDecision | null, ApiError> {
   const workspaceID = useWorkspaceId(workspaceOverride);
-  return useQuery<PlacementDecision | null, ApiError>({
+  return useQuery<BookingDecision | null, ApiError>({
     queryKey: queryKeys.runDecision(workspaceID ?? "", runID ?? ""),
     queryFn: async ({ signal }) => {
       try {

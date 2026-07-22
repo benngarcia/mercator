@@ -122,7 +122,7 @@ export function shortDigest(
 }
 
 // humanizeEventType turns a CloudEvent type like
-// "compute.run.placement_decided.v1" into "Placement decided". The
+// "compute.run.booking_decided.v1" into "Booking decided". The
 // "compute.run." prefix and trailing version suffix are stripped; the
 // remaining segment's underscores become spaces with sentence casing.
 export function humanizeEventType(type: string | null | undefined): string {

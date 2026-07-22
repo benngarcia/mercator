@@ -622,8 +622,11 @@ func TestAdvanceRunClosesSuccessfulFakeRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get events: %v", err)
 	}
+	if EventBookingDecided != "compute.run.booking_decided.v1" {
+		t.Fatalf("booking decision event type = %q", EventBookingDecided)
+	}
 	for _, eventType := range []string{
-		EventPlacementDecided,
+		EventBookingDecided,
 		EventAttemptCreated,
 		EventLaunchIntentRecorded,
 		EventLaunchAccepted,

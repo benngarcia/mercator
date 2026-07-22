@@ -51,7 +51,7 @@ export type Violation = ContractSchemas["Violation"];
 export type CandidateEstimates = ContractSchemas["CandidateEstimates"];
 export type CandidateDecision = ContractSchemas["CandidateDecision"];
 export type CollectionReport = ContractSchemas["CollectionReport"];
-export type PlacementDecision = ContractSchemas["PlacementDecision"];
+export type BookingDecision = ContractSchemas["BookingDecision"];
 
 export type RunRecord = ContractSchemas["Run"];
 export type Run = RunRecord;
@@ -115,8 +115,8 @@ export type PlacementPreviewRequest =
 export type RunResponse = ContractSchemas["RunResponse"];
 export type RunListResponse = ContractSchemas["RunListResponse"];
 export type EventListResponse = ContractSchemas["EventListResponse"];
-export type PlacementDecisionResponse =
-  ContractSchemas["PlacementDecisionResponse"];
+export type BookingDecisionResponse =
+  ContractSchemas["BookingDecisionResponse"];
 export type PlacementPreviewResponse =
   ContractSchemas["PlacementPreviewResponse"];
 export type OfferListResponse = ContractSchemas["OfferListResponse"];

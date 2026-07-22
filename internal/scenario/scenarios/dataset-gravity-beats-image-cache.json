@@ -1,0 +1,51 @@
+{
+  "summary": "The run declares the 40GB dataset it trains on as a cache mount. The rental holding that dataset wins over a rental with a better image-layer cache, because avoiding a 40GB transfer dwarfs a 40MB layer pull.",
+  "status": "target",
+  "missing_capabilities": ["cache_mounts", "cache_evidence"],
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-dataset",
+        "cached_layers": ["cuda-base"],
+        "named_caches": {"dataset-imagenet-2a41": "40GB"},
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-imagecache",
+        "cached_images": ["trainer:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer:v1",
+    "expected_runtime": "20m",
+    "max_runtime": "1h",
+    "cache_mounts": [
+      {"name": "dataset", "key": "dataset-imagenet-2a41", "size": "40GB"}
+    ]
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-dataset",
+    "candidates": {
+      "rental-dataset": {
+        "feasible": true,
+        "caches": {"dataset-imagenet-2a41": "hit"}
+      },
+      "rental-imagecache": {
+        "feasible": true,
+        "pull_seconds": 0,
+        "caches": {"dataset-imagenet-2a41": "miss"}
+      }
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "summary": "The cheapest marketplace offer has no working NVIDIA driver and another is silent about SSH access. Both must be rejected loudly at placement instead of failing mysteriously at launch; the well-attested host wins despite its price.",
+  "status": "target",
+  "missing_capabilities": ["host_facts"],
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "good-host",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "4m", "p90": "8m"},
+        "facts": {"ssh": true, "nvidia_driver": true}
+      },
+      {
+        "id": "driverless-host",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {"expected": "4m", "p90": "8m"},
+        "facts": {"ssh": true, "nvidia_driver": false}
+      },
+      {
+        "id": "unattested-host",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 1.2,
+        "provisioning": {"expected": "4m", "p90": "8m"},
+        "facts": {"nvidia_driver": true}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer:v1",
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "good-host",
+    "candidates": {
+      "good-host": {"feasible": true},
+      "driverless-host": {
+        "feasible": false,
+        "rejected": [{"code": "CAPABILITY_MISMATCH", "path": "facts.nvidia_driver"}]
+      },
+      "unattested-host": {
+        "feasible": false,
+        "rejected": [{"code": "UNKNOWN_FACT", "path": "facts.ssh"}]
+      }
+    }
+  }
+}

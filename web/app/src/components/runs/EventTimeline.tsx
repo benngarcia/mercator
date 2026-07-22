@@ -30,7 +30,7 @@ function toneForType(type: string): string {
   if (t.includes("start") || t.includes("running") || t.includes("launch")) {
     return "bg-phase-running";
   }
-  if (t.includes("decided") || t.includes("placement") || t.includes("accepted")) {
+  if (t.includes("decided") || t.includes("booking") || t.includes("accepted")) {
     return "bg-phase-launching";
   }
   return "bg-phase-requested";

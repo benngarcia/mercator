@@ -1,0 +1,74 @@
+{
+  "summary": "Mercator schedules the Run on a Rental projected to free in 6 minutes. The running Booking remains active past the latest acceptable start, so reconciliation removes the queued Booking and selects fresh capacity.",
+  "status": "target",
+  "missing_capabilities": ["rental_schedule", "schedule_advancement"],
+  "world": {
+    "images": {
+      "trainer:v1": {
+        "layers": [
+          {"name": "cuda-base", "size": "18GB"},
+          {"name": "trainer-code-v1", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["trainer:v1"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "booking": "booking-active",
+          "run": "run-active",
+          "remaining_max_runtime": "6m",
+          "completes_after": "30m"
+        }
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m"}
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "iteration",
+      "request": {
+        "image": "trainer:v1",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "booking": {
+          "id": "booking-iteration",
+          "rental": "rental-warm",
+          "state": "queued",
+          "after": "booking-active",
+          "projected_start_in": "6m",
+          "latest_start": "+6m",
+          "schedule_version": 2
+        }
+      }
+    },
+    {"advance": "7m"},
+    {
+      "reconcile": "iteration",
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-4090",
+        "disposition": "terminate"
+      }
+    }
+  ]
+}

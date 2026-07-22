@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"sync"
@@ -17,6 +18,20 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
+
+func TestRunEvidenceSerializesBookingDecisionVocabulary(t *testing.T) {
+	encoded, err := json.Marshal(RunEvidence{
+		ID:              "run-1",
+		BookingDecision: domain.BookingDecision{ID: "decision-1"},
+	})
+	if err != nil {
+		t.Fatalf("marshal run evidence: %v", err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, `"booking_decision"`) || strings.Contains(text, `"placement"`) {
+		t.Fatalf("run evidence uses superseded decision vocabulary: %s", text)
+	}
+}
 
 func TestRunnerVerifiesARealReportedRunAndConfirmedCleanup(t *testing.T) {
 	provider := &reportingProvider{Provider: fake.New(
@@ -45,7 +60,7 @@ func TestRunnerVerifiesARealReportedRunAndConfirmedCleanup(t *testing.T) {
 	if evidence.Inventory.Owned != 0 {
 		t.Fatalf("owned inventory = %d, want zero", evidence.Inventory.Owned)
 	}
-	if evidence.Run.Placement.SelectedOfferSnapshotID == "" || len(evidence.Run.Events) == 0 || evidence.Run.StartedAt.IsZero() {
+	if evidence.Run.BookingDecision.SelectedOfferSnapshotID == "" || len(evidence.Run.Events) == 0 || evidence.Run.StartedAt.IsZero() {
 		t.Fatalf("run evidence is incomplete: %+v", evidence.Run)
 	}
 }

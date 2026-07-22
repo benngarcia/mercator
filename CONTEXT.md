@@ -23,9 +23,25 @@ _Avoid_: Quote, instance type (alone)
 An authorized link to a provider control plane, with credentials Mercator uses to list offers and launch.
 _Avoid_: Account, integration, provider config
 
-**Placement**:
-The decision that selects an Offer for a Run (or preview) under the scheduler model.
-_Avoid_: Scheduling result (as a noun for the decision)
+**Rental**:
+Reusable machine capacity whose lifecycle and standard Docker endpoint Mercator owns.
+_Avoid_: Worker, host (alone), machine (alone)
+
+**Rental Schedule**:
+Mercator's ordered sequence of nonterminal Bookings assigned to one Rental.
+It contains at most one running Booking followed by at most four queued Bookings.
+_Avoid_: Machine queue, daemon queue
+
+**Booking Decision**:
+The audited choice to assign a Run to an existing Rental, provision an Offer,
+or fail because no feasible capacity exists.
+_Avoid_: Booking (for the decision), scheduling result
+
+**Booking**:
+The durable binding of one Run to one Rental. Its state is `running` while the
+Run executes or `queued` while it waits for every earlier Booking in the Rental
+Schedule to become terminal.
+_Avoid_: Placement, reservation, deferred run, waiter
 
 **Conformance Trial**:
 An isolated verification that launches one probe Run through a Connection and
@@ -35,7 +51,7 @@ _Avoid_: Credential check, provider test, smoke test
 
 **Evidence Bundle**:
 The sanitized record of a Conformance Trial's Connection, selected Offer, Run,
-Placement, public events, terminal outcome, cost bound, timing, primary
+Booking, public events, terminal outcome, cost bound, timing, primary
 failure, cleanup failure, and final provider inventory.
 _Avoid_: Logs, debug output
 

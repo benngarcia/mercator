@@ -94,6 +94,14 @@ func WithListOffersError(err error) Option {
 	}
 }
 
+// WithNow replaces the wall clock used to stamp receipts and observations.
+// Scenario harnesses inject a scripted clock; the default is time.Now.
+func WithNow(now func() time.Time) Option {
+	return func(a *Adapter) {
+		a.now = now
+	}
+}
+
 func New(options ...Option) *Adapter {
 	a := &Adapter{
 		now:           time.Now,

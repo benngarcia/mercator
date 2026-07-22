@@ -41,16 +41,16 @@ type OfferEvidence struct {
 }
 
 type RunEvidence struct {
-	ID           string                   `json:"id"`
-	StartedAt    time.Time                `json:"started_at,omitempty"`
-	DurationSecs float64                  `json:"duration_seconds,omitempty"`
-	Outcome      string                   `json:"outcome,omitempty"`
-	ExitCode     *int                     `json:"exit_code,omitempty"`
-	Cleanup      string                   `json:"cleanup,omitempty"`
-	Closed       bool                     `json:"closed"`
-	EventTypes   []string                 `json:"event_types,omitempty"`
-	Events       []eventlog.CloudEvent    `json:"events,omitempty"`
-	Placement    domain.PlacementDecision `json:"placement,omitempty"`
+	ID              string                 `json:"id"`
+	StartedAt       time.Time              `json:"started_at,omitempty"`
+	DurationSecs    float64                `json:"duration_seconds,omitempty"`
+	Outcome         string                 `json:"outcome,omitempty"`
+	ExitCode        *int                   `json:"exit_code,omitempty"`
+	Cleanup         string                 `json:"cleanup,omitempty"`
+	Closed          bool                   `json:"closed"`
+	EventTypes      []string               `json:"event_types,omitempty"`
+	Events          []eventlog.CloudEvent  `json:"events,omitempty"`
+	BookingDecision domain.BookingDecision `json:"booking_decision,omitempty"`
 }
 
 type InventoryEvidence struct {
