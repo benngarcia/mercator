@@ -22,7 +22,7 @@
         "rental": "rental-warm",
         "version": 1,
         "running": {
-          "placement": "placement-active",
+          "booking": "booking-active",
           "run": "run-active",
           "remaining_max_runtime": "45m"
         }

@@ -167,7 +167,7 @@ surfaces:
 ```sh
 go run ./cmd/mercator run events \
   --workspace-id "$WORKSPACE_ID" --run-id "$RUN_ID" \
-  | jq '.events[] | select(.type == "compute.run.placement_decided.v1" or .type == "compute.run.attempt_created.v1" or .type == "compute.run.launch_intent_recorded.v1" or .type == "compute.run.launch_failed.v1" or .type == "compute.run.launch_indeterminate.v1" or .type == "compute.run.launch_accepted.v1" or .type == "compute.run.cleanup_confirmed.v1" or .type == "compute.run.closed.v1") | {type, data}'
+  | jq '.events[] | select(.type == "compute.run.booking_decided.v1" or .type == "compute.run.attempt_created.v1" or .type == "compute.run.launch_intent_recorded.v1" or .type == "compute.run.launch_failed.v1" or .type == "compute.run.launch_indeterminate.v1" or .type == "compute.run.launch_accepted.v1" or .type == "compute.run.cleanup_confirmed.v1" or .type == "compute.run.closed.v1") | {type, data}'
 
 go run ./cmd/mercator run decision \
   --workspace-id "$WORKSPACE_ID" --run-id "$RUN_ID" \

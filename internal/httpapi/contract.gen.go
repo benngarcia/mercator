@@ -206,6 +206,14 @@ type AdapterListResponse struct {
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
 type AdapterManifest = adapter.Manifest
 
+// BookingDecision defines model for BookingDecision.
+type BookingDecision = domain.BookingDecision
+
+// BookingDecisionResponse defines model for BookingDecisionResponse.
+type BookingDecisionResponse struct {
+	Decision BookingDecision `json:"decision"`
+}
+
 // CPURequirement defines model for CPURequirement.
 type CPURequirement struct {
 	MinMillis int64 `json:"min_millis"`
@@ -489,14 +497,6 @@ type OfferListResponse struct {
 // OfferSnapshot defines model for OfferSnapshot.
 type OfferSnapshot = domain.OfferSnapshot
 
-// PlacementDecision defines model for PlacementDecision.
-type PlacementDecision = domain.PlacementDecision
-
-// PlacementDecisionResponse defines model for PlacementDecisionResponse.
-type PlacementDecisionResponse struct {
-	Decision PlacementDecision `json:"decision"`
-}
-
 // PlacementPolicy defines model for PlacementPolicy.
 type PlacementPolicy struct {
 	AllowUnknownPricing    bool                     `json:"allow_unknown_pricing,omitempty"`
@@ -518,7 +518,7 @@ type PlacementPreviewRequest struct {
 
 // PlacementPreviewResponse defines model for PlacementPreviewResponse.
 type PlacementPreviewResponse struct {
-	Decision PlacementDecision `json:"decision"`
+	Decision BookingDecision `json:"decision"`
 }
 
 // Platform defines model for Platform.
@@ -2971,7 +2971,7 @@ type GetRunDecisionResponseObject interface {
 	VisitGetRunDecisionResponse(w http.ResponseWriter) error
 }
 
-type GetRunDecision200JSONResponse PlacementDecisionResponse
+type GetRunDecision200JSONResponse BookingDecisionResponse
 
 func (response GetRunDecision200JSONResponse) VisitGetRunDecisionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")

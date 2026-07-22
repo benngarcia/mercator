@@ -176,7 +176,7 @@ func assertGetRunRejectsStoredEventPayloads(t *testing.T, eventType string, data
 func knownRunEventTypes() []string {
 	return []string{
 		EventRunRequested,
-		EventPlacementDecided,
+		EventBookingDecided,
 		EventAttemptCreated,
 		EventLaunchIntentRecorded,
 		EventLaunchAccepted,

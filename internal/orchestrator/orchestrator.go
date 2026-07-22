@@ -34,7 +34,7 @@ var (
 
 const (
 	EventRunRequested            = "compute.run.requested.v1"
-	EventPlacementDecided        = "compute.run.placement_decided.v1"
+	EventBookingDecided          = "compute.run.booking_decided.v1"
 	EventAttemptCreated          = "compute.run.attempt_created.v1"
 	EventLaunchIntentRecorded    = "compute.run.launch_intent_recorded.v1"
 	EventLaunchAccepted          = "compute.run.launch_accepted.v1"
@@ -340,7 +340,7 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 		return err
 	}
 	return o.appendEvents(ctx, workspaceID, runID, version, "advance:placement:"+attempt.AttemptID, []eventlog.NewEvent{
-		mustEvent(runID, "placement_decided_"+attempt.AttemptID, EventPlacementDecided, placementData{Decision: decision}, o.now()),
+		mustEvent(runID, "booking_decided_"+attempt.AttemptID, EventBookingDecided, bookingDecisionData{Decision: decision}, o.now()),
 		mustEvent(runID, "attempt_created_"+attempt.AttemptID, EventAttemptCreated, attempt, o.now()),
 		mustPrivateEvent(runID, "launch_intent_recorded_"+attempt.AttemptID, EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
 	})
@@ -503,20 +503,20 @@ func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) (
 	return open, nil
 }
 
-func (o *Orchestrator) GetPlacementDecision(ctx context.Context, workspaceID, runID string) (domain.PlacementDecision, error) {
+func (o *Orchestrator) GetBookingDecision(ctx context.Context, workspaceID, runID string) (domain.BookingDecision, error) {
 	events, err := o.GetRunEvents(ctx, workspaceID, runID)
 	if err != nil {
-		return domain.PlacementDecision{}, err
+		return domain.BookingDecision{}, err
 	}
-	var latest domain.PlacementDecision
+	var latest domain.BookingDecision
 	found := false
 	for _, event := range events {
-		if event.Type != EventPlacementDecided {
+		if event.Type != EventBookingDecided {
 			continue
 		}
-		var data placementData
+		var data bookingDecisionData
 		if err := json.Unmarshal(event.Data, &data); err != nil {
-			return domain.PlacementDecision{}, err
+			return domain.BookingDecision{}, err
 		}
 		latest = data.Decision
 		found = true
@@ -524,7 +524,7 @@ func (o *Orchestrator) GetPlacementDecision(ctx context.Context, workspaceID, ru
 	if found {
 		return latest, nil
 	}
-	return domain.PlacementDecision{}, fmt.Errorf("orchestrator: placement decision not found")
+	return domain.BookingDecision{}, fmt.Errorf("orchestrator: booking decision not found")
 }
 
 func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {

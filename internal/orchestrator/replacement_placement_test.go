@@ -56,7 +56,7 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 	if record.Closed || record.Phase != "running" {
 		t.Fatalf("replacement should keep the run alive on alternate capacity: %+v", record)
 	}
-	decision, err := orch.GetPlacementDecision(ctx, "ws_1", "run_replacement")
+	decision, err := orch.GetBookingDecision(ctx, "ws_1", "run_replacement")
 	if err != nil {
 		t.Fatalf("get latest placement: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestAdvanceRunRecordsTheDecisionThatExhaustsEligibleOffers(t *testing.T) {
 		t.Fatalf("exhaust eligible offers: %v", err)
 	}
 
-	decision, err := orch.GetPlacementDecision(t.Context(), "ws_1", "run_replacement")
+	decision, err := orch.GetBookingDecision(t.Context(), "ws_1", "run_replacement")
 	if err != nil {
 		t.Fatalf("get exhausted placement: %v", err)
 	}
@@ -398,7 +398,7 @@ func assertCompleteAttemptHistory(t *testing.T, orch *Orchestrator, runID string
 	t.Helper()
 	events := replacementEvents(t, orch, runID)
 	for eventType, want := range map[string]int{
-		EventPlacementDecided:     attempts,
+		EventBookingDecided:       attempts,
 		EventAttemptCreated:       attempts,
 		EventLaunchIntentRecorded: attempts,
 		EventLaunchFailed:         failures,
@@ -444,7 +444,7 @@ func assertClosedReason(t *testing.T, orch *Orchestrator, runID, want string) {
 	t.Fatal("run closed event not found")
 }
 
-func assertOfferRejected(t *testing.T, decision domain.PlacementDecision, offerID, reason string) {
+func assertOfferRejected(t *testing.T, decision domain.BookingDecision, offerID, reason string) {
 	t.Helper()
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID != offerID {

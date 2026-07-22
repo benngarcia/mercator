@@ -454,7 +454,7 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 	}
 }
 
-func candidateIDs(decision domain.PlacementDecision) string {
+func candidateIDs(decision domain.BookingDecision) string {
 	ids := ""
 	for _, candidate := range decision.Candidates {
 		if ids != "" {
@@ -465,7 +465,7 @@ func candidateIDs(decision domain.PlacementDecision) string {
 	return ids
 }
 
-func assertCandidateRejected(t *testing.T, decision domain.PlacementDecision, offerID, code, path string) {
+func assertCandidateRejected(t *testing.T, decision domain.BookingDecision, offerID, code, path string) {
 	t.Helper()
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID != offerID {
@@ -481,7 +481,7 @@ func assertCandidateRejected(t *testing.T, decision domain.PlacementDecision, of
 	t.Fatalf("candidate %s not found in %+v", offerID, decision.Candidates)
 }
 
-func findCandidate(t *testing.T, decision domain.PlacementDecision, offerID string) domain.CandidateDecision {
+func findCandidate(t *testing.T, decision domain.BookingDecision, offerID string) domain.CandidateDecision {
 	t.Helper()
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID == offerID {

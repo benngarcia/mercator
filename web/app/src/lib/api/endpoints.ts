@@ -17,7 +17,7 @@ import type {
   CreateWorkloadResponse,
   EventListResponse,
   OfferListResponse,
-  PlacementDecisionResponse,
+  BookingDecisionResponse,
   PlacementPreviewRequest,
   PlacementPreviewResponse,
   ReplaySinkRequest,
@@ -134,8 +134,8 @@ export function getRunEvents(
 export function getRunDecision(
   runID: string,
   arg: WorkspaceArg = {},
-): Promise<PlacementDecisionResponse> {
-  return apiFetch<PlacementDecisionResponse>(
+): Promise<BookingDecisionResponse> {
+  return apiFetch<BookingDecisionResponse>(
     `/v1/runs/${encodeURIComponent(runID)}/decision`,
     { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
   );

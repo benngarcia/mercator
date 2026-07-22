@@ -519,10 +519,10 @@ export interface components {
             workload: components["schemas"]["WorkloadRevision"];
         };
         PlacementPreviewResponse: {
-            decision: components["schemas"]["PlacementDecision"];
+            decision: components["schemas"]["BookingDecision"];
         };
-        PlacementDecisionResponse: {
-            decision: components["schemas"]["PlacementDecision"];
+        BookingDecisionResponse: {
+            decision: components["schemas"]["BookingDecision"];
         };
         AdapterListResponse: {
             adapters: components["schemas"]["AdapterManifest"][];
@@ -888,7 +888,7 @@ export interface components {
             /** Format: double */
             score_usd?: number;
         };
-        PlacementDecision: {
+        BookingDecision: {
             id: string;
             run_id?: string;
             workload_revision_digest: string;
@@ -1523,7 +1523,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlacementDecisionResponse"];
+                    "application/json": components["schemas"]["BookingDecisionResponse"];
                 };
             };
             /** @description Error response */

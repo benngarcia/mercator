@@ -133,7 +133,7 @@ function RunDetailPage() {
             ) : (
               <EmptyState
                 icon={Compass}
-                title="No placement decision yet"
+                title="No booking decision yet"
                 description="A decision appears once the scheduler evaluates offers for this run."
               />
             )}

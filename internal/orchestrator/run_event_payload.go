@@ -14,8 +14,8 @@ type runRequestedData struct {
 	Workload domain.WorkloadRevision `json:"workload_revision"`
 }
 
-type placementData struct {
-	Decision domain.PlacementDecision `json:"decision"`
+type bookingDecisionData struct {
+	Decision domain.BookingDecision `json:"decision"`
 }
 
 type attemptData struct {
@@ -111,7 +111,7 @@ func invalidRunRequested(data runRequestedData) string {
 	return ""
 }
 
-func invalidPlacement(data placementData) string {
+func invalidBookingDecision(data bookingDecisionData) string {
 	switch {
 	case data.Decision.ID == "":
 		return "decision.id is required"

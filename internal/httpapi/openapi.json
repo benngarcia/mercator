@@ -683,7 +683,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PlacementDecisionResponse"
+                  "$ref": "#/components/schemas/BookingDecisionResponse"
                 }
               }
             }
@@ -2541,18 +2541,18 @@
         ],
         "properties": {
           "decision": {
-            "$ref": "#/components/schemas/PlacementDecision"
+            "$ref": "#/components/schemas/BookingDecision"
           }
         }
       },
-      "PlacementDecisionResponse": {
+      "BookingDecisionResponse": {
         "type": "object",
         "required": [
           "decision"
         ],
         "properties": {
           "decision": {
-            "$ref": "#/components/schemas/PlacementDecision"
+            "$ref": "#/components/schemas/BookingDecision"
           }
         }
       },
@@ -3832,7 +3832,7 @@
           }
         }
       },
-      "PlacementDecision": {
+      "BookingDecision": {
         "type": "object",
         "required": [
           "id",
@@ -3883,7 +3883,7 @@
             }
           }
         },
-        "x-go-type": "domain.PlacementDecision",
+        "x-go-type": "domain.BookingDecision",
         "x-go-type-import": {
           "path": "github.com/benngarcia/mercator/internal/domain",
           "name": "domain"

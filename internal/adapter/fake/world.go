@@ -65,7 +65,7 @@ type Daemon struct {
 	// FreesAt is when the daemon is actually observed free again. It defaults
 	// to ExpectedBusyUntil; another value models a run finishing early, or
 	// overrunning its estimate up to the enforced bound, which lets a scenario
-	// hold a Rental busy past a ScheduledPlacement's latest start.
+	// hold a Rental busy past a queued Booking's latest start.
 	FreesAt time.Time
 	// LeaseExpiresAt is when the daemon's idle lease ends; zero means no
 	// lease bound. An expired daemon stops being offered, standing in for
@@ -226,8 +226,8 @@ func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domai
 	if daemon.busyAt(now) {
 		// Today's offer vocabulary marks a busy Rental unavailable. The target
 		// Broker-owned RentalSchedule will keep it feasible and create a
-		// ScheduledPlacement instead. It remains visible now so the decision
-		// records the RunningPlacement's expected (p50) remaining runtime as
+		// queued Booking instead. It remains visible now so the decision records
+		// the running Booking's expected (p50) remaining runtime as
 		// queue-delay evidence; the enforced max bound backs latest-start math.
 		offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
 		offer.Queue = &domain.QueueSnapshot{QueuedWorkSeconds: daemon.expectedRemainingAt(now).Seconds(), ActiveSlots: 1}

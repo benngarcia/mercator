@@ -43,12 +43,12 @@ func TestLoadParsesHumanReadableUnits(t *testing.T) {
           "rental": "rental-a",
           "version": 2,
           "running": {
-            "placement": "placement-active",
+            "booking": "booking-active",
             "run": "run-active",
             "remaining_max_runtime": "6m"
           },
-          "scheduled": [{
-            "placement": "placement-ahead",
+          "queued": [{
+            "booking": "booking-ahead",
             "run": "run-ahead",
             "max_runtime": "4m"
           }]
@@ -58,11 +58,11 @@ func TestLoadParsesHumanReadableUnits(t *testing.T) {
       "expect": {
         "outcome": "place",
         "offer": "rental-a",
-        "placement": {
-          "id": "placement-run",
+        "booking": {
+          "id": "booking-run",
           "rental": "rental-a",
-          "state": "scheduled",
-          "after": "placement-ahead",
+          "state": "queued",
+          "after": "booking-ahead",
           "projected_start_in": "10m",
           "latest_start": "+12m",
           "schedule_version": 3
@@ -78,10 +78,10 @@ func TestLoadParsesHumanReadableUnits(t *testing.T) {
 	if got := sc.World.RentalSchedules[0].Running.RemainingMaxRuntime.Duration(); got != 6*time.Minute {
 		t.Fatalf("remaining max runtime = %v, want 6m", got)
 	}
-	if got := sc.World.RentalSchedules[0].Scheduled[0].MaxRuntime.Duration(); got != 4*time.Minute {
-		t.Fatalf("scheduled max runtime = %v, want 4m", got)
+	if got := sc.World.RentalSchedules[0].Queued[0].MaxRuntime.Duration(); got != 4*time.Minute {
+		t.Fatalf("queued max runtime = %v, want 4m", got)
 	}
-	latestStart := sc.Expect.Placement.LatestStart.Resolve(sc.World.Start())
+	latestStart := sc.Expect.Booking.LatestStart.Resolve(sc.World.Start())
 	if want := sc.World.Start().Add(12 * time.Minute); !latestStart.Equal(want) {
 		t.Fatalf("latest start = %v, want %v", latestStart, want)
 	}
@@ -95,11 +95,29 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsSupersededPlacementVocabulary(t *testing.T) {
+	for name, fixture := range map[string]string{
+		"placement": strings.Replace(minimalGreenScenario,
+			`"expect": {"outcome": "place", "offer": "rental-a"}`,
+			`"expect": {"outcome": "place", "offer": "rental-a", "placement": {"id": "p1", "rental": "rental-a", "state": "running", "schedule_version": 1}}`, 1),
+		"scheduled": strings.Replace(minimalGreenScenario,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}], "rental_schedules": [{"rental": "rental-a", "scheduled": []}]`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadFixtureText(t, fixture)
+			if err == nil || !strings.Contains(err.Error(), "unknown field") {
+				t.Fatalf("superseded %q vocabulary must fail loudly, got %v", name, err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsFixtureMistakes(t *testing.T) {
 	cases := map[string]struct{ from, to, want string }{
 		"unknown status": {`"status": "green"`, `"status": "someday"`, "status"},
-		"scheduled Placement without running Placement": {
-			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`, `"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}], "rental_schedules": [{"rental": "rental-a", "version": 1, "scheduled": [{"placement": "p1", "run": "r1", "max_runtime": "5m"}]}]`, "require a RunningPlacement"},
+		"queued Booking without running Booking": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`, `"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}], "rental_schedules": [{"rental": "rental-a", "version": 1, "queued": [{"booking": "p1", "run": "r1", "max_runtime": "5m"}]}]`, "require a RunningBooking"},
 		"winning offer missing from world": {`"offer": "rental-a"`, `"offer": "rental-z"`, "not in the world"},
 		"unknown outcome":                  {`"outcome": "place"`, `"outcome": "defer"`, "outcome must"},
 	}
@@ -113,9 +131,9 @@ func TestLoadRejectsFixtureMistakes(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsIncoherentScheduledPlacement(t *testing.T) {
+func TestLoadRejectsIncoherentQueuedBooking(t *testing.T) {
 	const coherent = `{
-      "summary": "A scheduled placement follows the current tail.",
+      "summary": "A queued booking follows the current tail.",
       "status": "target",
       "missing_capabilities": ["rental_schedule"],
       "world": {
@@ -127,7 +145,7 @@ func TestLoadRejectsIncoherentScheduledPlacement(t *testing.T) {
           "rental": "rental-a",
           "version": 1,
           "running": {
-            "placement": "placement-active",
+            "booking": "booking-active",
             "run": "run-active",
             "remaining_max_runtime": "5m"
           }
@@ -137,11 +155,11 @@ func TestLoadRejectsIncoherentScheduledPlacement(t *testing.T) {
       "expect": {
         "outcome": "place",
         "offer": "rental-a",
-        "placement": {
-          "id": "placement-run",
+        "booking": {
+          "id": "booking-run",
           "rental": "rental-a",
-          "state": "scheduled",
-          "after": "placement-active",
+          "state": "queued",
+          "after": "booking-active",
           "projected_start_in": "5m",
           "schedule_version": 2
         }
@@ -149,13 +167,13 @@ func TestLoadRejectsIncoherentScheduledPlacement(t *testing.T) {
     }`
 
 	for name, replacement := range map[string]string{
-		"predecessor":      `"after": "placement-wrong"`,
+		"predecessor":      `"after": "booking-wrong"`,
 		"projected start":  `"projected_start_in": "6m"`,
 		"schedule version": `"schedule_version": 3`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			from := map[string]string{
-				"predecessor":      `"after": "placement-active"`,
+				"predecessor":      `"after": "booking-active"`,
 				"projected start":  `"projected_start_in": "5m"`,
 				"schedule version": `"schedule_version": 2`,
 			}[name]
@@ -183,7 +201,7 @@ func TestLoadEnforcesCapabilityDeclarations(t *testing.T) {
 
 func TestLoadEnforcesScheduleBounds(t *testing.T) {
 	const overfull = `{
-      "summary": "Five ScheduledPlacements exceed the schedule cap.",
+      "summary": "Five QueuedBookings exceed the schedule cap.",
       "status": "target",
       "missing_capabilities": ["rental_schedule"],
       "world": {
@@ -191,13 +209,13 @@ func TestLoadEnforcesScheduleBounds(t *testing.T) {
         "rental_schedules": [{
           "rental": "rental-a",
           "version": 1,
-          "running": {"placement": "p0", "run": "r0", "remaining_max_runtime": "5m"},
-          "scheduled": [
-            {"placement": "p1", "run": "r1", "max_runtime": "5m"},
-            {"placement": "p2", "run": "r2", "max_runtime": "5m"},
-            {"placement": "p3", "run": "r3", "max_runtime": "5m"},
-            {"placement": "p4", "run": "r4", "max_runtime": "5m"},
-            {"placement": "p5", "run": "r5", "max_runtime": "5m"}
+          "running": {"booking": "p0", "run": "r0", "remaining_max_runtime": "5m"},
+          "queued": [
+            {"booking": "p1", "run": "r1", "max_runtime": "5m"},
+            {"booking": "p2", "run": "r2", "max_runtime": "5m"},
+            {"booking": "p3", "run": "r3", "max_runtime": "5m"},
+            {"booking": "p4", "run": "r4", "max_runtime": "5m"},
+            {"booking": "p5", "run": "r5", "max_runtime": "5m"}
           ]
         }]
       },
@@ -205,7 +223,7 @@ func TestLoadEnforcesScheduleBounds(t *testing.T) {
       "expect": {"outcome": "fail"}
     }`
 	if _, err := loadFixtureText(t, overfull); err == nil || !strings.Contains(err.Error(), "at most 4") {
-		t.Fatalf("a fifth ScheduledPlacement must be rejected, got %v", err)
+		t.Fatalf("a fifth QueuedBooking must be rejected, got %v", err)
 	}
 }
 
@@ -220,7 +238,7 @@ func TestLoadRejectsExpectedRuntimeBeyondMaxBound(t *testing.T) {
           "rental": "rental-a",
           "version": 1,
           "running": {
-            "placement": "p0",
+            "booking": "p0",
             "run": "r0",
             "remaining_max_runtime": "5m",
             "remaining_expected_runtime": "6m"
@@ -246,13 +264,13 @@ func TestProjectedStartsWorkOffExpectedRuntimes(t *testing.T) {
           "rental": "rental-a",
           "version": 1,
           "running": {
-            "placement": "p0",
+            "booking": "p0",
             "run": "r0",
             "remaining_max_runtime": "10m",
             "remaining_expected_runtime": "3m"
           },
-          "scheduled": [
-            {"placement": "p1", "run": "r1", "max_runtime": "10m", "expected_runtime": "2m"}
+          "queued": [
+            {"booking": "p1", "run": "r1", "max_runtime": "10m", "expected_runtime": "2m"}
           ]
         }]
       },
@@ -260,10 +278,10 @@ func TestProjectedStartsWorkOffExpectedRuntimes(t *testing.T) {
       "expect": {
         "outcome": "place",
         "offer": "rental-a",
-        "placement": {
+        "booking": {
           "id": "p-new",
           "rental": "rental-a",
-          "state": "scheduled",
+          "state": "queued",
           "after": "p1",
           "projected_start_in": "5m",
           "schedule_version": 2

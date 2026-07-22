@@ -1,5 +1,5 @@
 {
-  "summary": "The warm Rental's RunningPlacement is expected to finish in 4 minutes (bounded at 6), and fresh capacity pays 5 minutes of boot plus a full pull. Mercator assigns the Run to the Rental as a ScheduledPlacement projected from the expected runtime.",
+  "summary": "The warm Rental's running Booking is expected to finish in 4 minutes (bounded at 6), and fresh capacity pays 5 minutes of boot plus a full pull. Mercator assigns the Run to the Rental as a queued Booking projected from the expected runtime.",
   "status": "target",
   "missing_capabilities": ["rental_schedule"],
   "world": {
@@ -23,7 +23,7 @@
         "rental": "rental-warm",
         "version": 1,
         "running": {
-          "placement": "placement-active",
+          "booking": "booking-active",
           "run": "run-active",
           "remaining_max_runtime": "6m",
           "remaining_expected_runtime": "4m"
@@ -47,11 +47,11 @@
   "expect": {
     "outcome": "place",
     "offer": "rental-warm",
-    "placement": {
-      "id": "placement-run",
+    "booking": {
+      "id": "booking-run",
       "rental": "rental-warm",
-      "state": "scheduled",
-      "after": "placement-active",
+      "state": "queued",
+      "after": "booking-active",
       "projected_start_in": "4m",
       "schedule_version": 2
     },
@@ -62,7 +62,7 @@
         "rental_schedule": {
           "version": 1,
           "running": {
-            "placement": "placement-active",
+            "booking": "booking-active",
             "run": "run-active",
             "remaining_max_runtime": "6m",
             "remaining_expected_runtime": "4m"

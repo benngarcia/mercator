@@ -51,8 +51,8 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		if err := world.AddDaemon(simDaemon(spec, rental, schedule, clock)); err != nil {
 			return nil, err
 		}
-		if len(schedule.Scheduled) > 0 {
-			session.note("rental %q starts with ScheduledPlacements, but the Broker has no RentalSchedule state yet", rental.ID)
+		if len(schedule.Queued) > 0 {
+			session.note("rental %q starts with QueuedBookings, but the Broker has no RentalSchedule state yet", rental.ID)
 		}
 		if len(rental.NamedCaches) > 0 {
 			session.note("rental %q holds named caches, but no offer field can advertise them yet", rental.ID)

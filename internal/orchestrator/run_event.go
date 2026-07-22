@@ -71,12 +71,12 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		state.requested = &data
 		state.createdBy = actorSubject(stored.Actor)
 
-	case EventPlacementDecided:
-		var data placementData
+	case EventBookingDecided:
+		var data bookingDecisionData
 		if err := decodePublicRunPayload(stored, &data); err != nil {
 			return err
 		}
-		if reason := invalidPlacement(data); reason != "" {
+		if reason := invalidBookingDecision(data); reason != "" {
 			return invalidRunEvent(stored, reason)
 		}
 

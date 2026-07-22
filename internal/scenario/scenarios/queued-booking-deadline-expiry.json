@@ -1,5 +1,5 @@
 {
-  "summary": "Mercator schedules the Run on a Rental projected to free in 6 minutes. The RunningPlacement remains active past the latest acceptable start, so reconciliation removes the ScheduledPlacement and selects fresh capacity.",
+  "summary": "Mercator schedules the Run on a Rental projected to free in 6 minutes. The running Booking remains active past the latest acceptable start, so reconciliation removes the queued Booking and selects fresh capacity.",
   "status": "target",
   "missing_capabilities": ["rental_schedule", "schedule_advancement"],
   "world": {
@@ -23,7 +23,7 @@
         "rental": "rental-warm",
         "version": 1,
         "running": {
-          "placement": "placement-active",
+          "booking": "booking-active",
           "run": "run-active",
           "remaining_max_runtime": "6m",
           "completes_after": "30m"
@@ -50,11 +50,11 @@
       "expect": {
         "outcome": "place",
         "offer": "rental-warm",
-        "placement": {
-          "id": "placement-iteration",
+        "booking": {
+          "id": "booking-iteration",
           "rental": "rental-warm",
-          "state": "scheduled",
-          "after": "placement-active",
+          "state": "queued",
+          "after": "booking-active",
           "projected_start_in": "6m",
           "latest_start": "+6m",
           "schedule_version": 2

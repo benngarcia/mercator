@@ -1,5 +1,5 @@
 {
-  "summary": "Two Runs arrive while a warm Rental is busy. Mercator schedules the first behind the RunningPlacement. The second decision includes that ScheduledPlacement's expected runtime, making fresh capacity faster.",
+  "summary": "Two Runs arrive while a warm Rental is busy. Mercator schedules the first behind the running Booking. The second decision includes that queued Booking's expected runtime, making fresh capacity faster.",
   "status": "target",
   "missing_capabilities": ["rental_schedule"],
   "world": {
@@ -23,7 +23,7 @@
         "rental": "rental-warm",
         "version": 1,
         "running": {
-          "placement": "placement-active",
+          "booking": "booking-active",
           "run": "run-active",
           "remaining_max_runtime": "5m"
         }
@@ -49,11 +49,11 @@
       "expect": {
         "outcome": "place",
         "offer": "rental-warm",
-        "placement": {
-          "id": "placement-first-waiter",
+        "booking": {
+          "id": "booking-first-waiter",
           "rental": "rental-warm",
-          "state": "scheduled",
-          "after": "placement-active",
+          "state": "queued",
+          "after": "booking-active",
           "projected_start_in": "5m",
           "schedule_version": 2
         }
@@ -76,13 +76,13 @@
             "rental_schedule": {
               "version": 2,
               "running": {
-                "placement": "placement-active",
+                "booking": "booking-active",
                 "run": "run-active",
                 "remaining_max_runtime": "5m"
               },
               "preceding": [
                 {
-                  "placement": "placement-first-waiter",
+                  "booking": "booking-first-waiter",
                   "run": "run-first-waiter",
                   "max_runtime": "1h",
                   "expected_runtime": "20m"

@@ -1,5 +1,5 @@
 {
-  "summary": "The warm Rental would win on score, but its RentalSchedule already holds the maximum of four ScheduledPlacements. The cap, not the score, forces the fifth Run onto fresh capacity, and the rejection records that the schedule is full.",
+  "summary": "The warm Rental would win on score, but its RentalSchedule already holds the maximum of four queued Bookings. The cap, not the score, forces the fifth Run onto fresh capacity, and the rejection records that the schedule is full.",
   "status": "target",
   "missing_capabilities": ["rental_schedule"],
   "world": {
@@ -23,15 +23,15 @@
         "rental": "rental-warm",
         "version": 5,
         "running": {
-          "placement": "placement-active",
+          "booking": "booking-active",
           "run": "run-active",
           "remaining_max_runtime": "2m"
         },
-        "scheduled": [
-          {"placement": "placement-q1", "run": "run-q1", "max_runtime": "2m", "expected_runtime": "1m"},
-          {"placement": "placement-q2", "run": "run-q2", "max_runtime": "2m", "expected_runtime": "1m"},
-          {"placement": "placement-q3", "run": "run-q3", "max_runtime": "2m", "expected_runtime": "1m"},
-          {"placement": "placement-q4", "run": "run-q4", "max_runtime": "2m", "expected_runtime": "1m"}
+        "queued": [
+          {"booking": "booking-q1", "run": "run-q1", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"booking": "booking-q2", "run": "run-q2", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"booking": "booking-q3", "run": "run-q3", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"booking": "booking-q4", "run": "run-q4", "max_runtime": "2m", "expected_runtime": "1m"}
         ]
       }
     ],
@@ -56,19 +56,19 @@
     "candidates": {
       "rental-warm": {
         "feasible": false,
-        "rejected": [{"code": "SCHEDULE_FULL", "path": "rental_schedule.scheduled"}],
+        "rejected": [{"code": "SCHEDULE_FULL", "path": "rental_schedule.queued"}],
         "rental_schedule": {
           "version": 5,
           "running": {
-            "placement": "placement-active",
+            "booking": "booking-active",
             "run": "run-active",
             "remaining_max_runtime": "2m"
           },
           "preceding": [
-            {"placement": "placement-q1", "run": "run-q1", "max_runtime": "2m", "expected_runtime": "1m"},
-            {"placement": "placement-q2", "run": "run-q2", "max_runtime": "2m", "expected_runtime": "1m"},
-            {"placement": "placement-q3", "run": "run-q3", "max_runtime": "2m", "expected_runtime": "1m"},
-            {"placement": "placement-q4", "run": "run-q4", "max_runtime": "2m", "expected_runtime": "1m"}
+            {"booking": "booking-q1", "run": "run-q1", "max_runtime": "2m", "expected_runtime": "1m"},
+            {"booking": "booking-q2", "run": "run-q2", "max_runtime": "2m", "expected_runtime": "1m"},
+            {"booking": "booking-q3", "run": "run-q3", "max_runtime": "2m", "expected_runtime": "1m"},
+            {"booking": "booking-q4", "run": "run-q4", "max_runtime": "2m", "expected_runtime": "1m"}
           ],
           "projected_start_in": "6m"
         }

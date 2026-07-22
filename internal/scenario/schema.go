@@ -1,7 +1,7 @@
 // Package scenario is the placement-scenario harness: a corpus of
 // fixture-defined worlds (rentals with running work, cached image layers and
 // named data caches, marketplace offers) plus incoming run requests, asserted
-// against the placement decisions Mercator records in its event log.
+// against the booking decisions Mercator records in its event log.
 //
 // One scenario contract, two backends: decision correctness runs against
 // simulated capacity (the fake adapter's World); mechanism correctness against
@@ -43,11 +43,11 @@ const (
 	OutcomeFail  Outcome = "fail"
 )
 
-type PlacementState string
+type BookingState string
 
 const (
-	PlacementRunning   PlacementState = "running"
-	PlacementScheduled PlacementState = "scheduled"
+	BookingRunning BookingState = "running"
+	BookingQueued  BookingState = "queued"
 )
 
 // Capability names one unbuilt semantic a target scenario is red for. The
@@ -61,7 +61,7 @@ const (
 	// appending to ordered per-Rental schedules.
 	CapabilityRentalSchedule Capability = "rental_schedule"
 	// CapabilityScheduleAdvancement is the Broker advancing schedules over
-	// time: dispatching the next Placement, expiring one past its latest
+	// time: dispatching the next Booking, expiring one past its latest
 	// start, and re-placing its Run.
 	CapabilityScheduleAdvancement Capability = "schedule_advancement"
 	// CapabilityCacheEvidence is named-cache hit/miss evidence recorded and
@@ -83,10 +83,10 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityHostFacts:           true,
 }
 
-// MaxScheduledPlacements bounds every RentalSchedule: at most this many
-// ScheduledPlacements may wait behind the RunningPlacement. A Run arriving at
+// MaxQueuedBookings bounds every RentalSchedule: at most this many queued
+// Bookings may wait behind the running Booking. A Run arriving at
 // a full schedule must go elsewhere, whatever the score says.
-const MaxScheduledPlacements = 4
+const MaxQueuedBookings = 4
 
 // defaultWorldStart is the scripted clock's origin when a fixture does not
 // state one. Every relative moment ("+6m") resolves against it.
@@ -135,7 +135,7 @@ type LayerSpec struct {
 }
 
 // RentalSpec is reusable machine capacity the broker owns. Its schedule is
-// broker state; the machine itself receives only the running Placement through
+// broker state; the machine itself receives only the running Booking through
 // its standard Docker endpoint.
 type RentalSpec struct {
 	ID string `json:"id"`
@@ -154,18 +154,18 @@ type RentalSpec struct {
 	Resources      *ResourcesSpec      `json:"resources,omitempty"`
 }
 
-// RentalScheduleSpec is Mercator's ordered sequence of nonterminal Placements
-// assigned to one Rental. At most one Placement runs; any number may wait.
+// RentalScheduleSpec is Mercator's ordered sequence of nonterminal Bookings
+// assigned to one Rental. At most one Booking runs; any number may wait.
 type RentalScheduleSpec struct {
-	RentalID  string                   `json:"rental"`
-	Version   uint64                   `json:"version,omitempty"`
-	Running   *RunningPlacementSpec    `json:"running,omitempty"`
-	Scheduled []ScheduledPlacementSpec `json:"scheduled,omitempty"`
+	RentalID string              `json:"rental"`
+	Version  uint64              `json:"version,omitempty"`
+	Running  *RunningBookingSpec `json:"running,omitempty"`
+	Queued   []QueuedBookingSpec `json:"queued,omitempty"`
 }
 
-type RunningPlacementSpec struct {
-	PlacementID string `json:"placement"`
-	RunID       string `json:"run"`
+type RunningBookingSpec struct {
+	BookingID string `json:"booking"`
+	RunID     string `json:"run"`
 	// RemainingMaxRuntime is the recorded, enforced upper bound: the basis for
 	// latest-start guarantees.
 	RemainingMaxRuntime Duration `json:"remaining_max_runtime"`
@@ -178,26 +178,26 @@ type RunningPlacementSpec struct {
 	CompletesAfter *Duration `json:"completes_after,omitempty"`
 }
 
-func (p RunningPlacementSpec) expectedRemaining() Duration {
+func (p RunningBookingSpec) expectedRemaining() Duration {
 	if p.RemainingExpectedRuntime != nil {
 		return *p.RemainingExpectedRuntime
 	}
 	return p.RemainingMaxRuntime
 }
 
-type ScheduledPlacementSpec struct {
-	PlacementID string   `json:"placement"`
-	RunID       string   `json:"run"`
-	MaxRuntime  Duration `json:"max_runtime"`
+type QueuedBookingSpec struct {
+	BookingID  string   `json:"booking"`
+	RunID      string   `json:"run"`
+	MaxRuntime Duration `json:"max_runtime"`
 	// ExpectedRuntime is the p50 runtime used for projected starts and
 	// queue-delay scoring. Defaults to the max bound.
 	ExpectedRuntime *Duration `json:"expected_runtime,omitempty"`
-	// LatestStart is the last acceptable start time for this Placement. When it
-	// expires, Mercator removes the Placement and re-evaluates its Run.
+	// LatestStart is the last acceptable start time for this Booking. When it
+	// expires, Mercator removes the Booking and re-evaluates its Run.
 	LatestStart *Moment `json:"latest_start,omitempty"`
 }
 
-func (p ScheduledPlacementSpec) expected() Duration {
+func (p QueuedBookingSpec) expected() Duration {
 	if p.ExpectedRuntime != nil {
 		return *p.ExpectedRuntime
 	}
@@ -260,11 +260,11 @@ type CacheMountSpec struct {
 type ExpectSpec struct {
 	// Outcome is the decision the event log must record: "place" (a selected
 	// offer) or "fail" (a recorded decision with no feasible offers). Selecting
-	// a busy Rental creates the Placement described by Placement.
-	Outcome   Outcome               `json:"outcome"`
-	Offer     string                `json:"offer,omitempty"`
-	Reasons   []string              `json:"reasons,omitempty"`
-	Placement *PlacementExpectation `json:"placement,omitempty"`
+	// a busy Rental creates the Booking described by Booking.
+	Outcome Outcome             `json:"outcome"`
+	Offer   string              `json:"offer,omitempty"`
+	Reasons []string            `json:"reasons,omitempty"`
+	Booking *BookingExpectation `json:"booking,omitempty"`
 	// Disposition asserts the recorded cleanup intent on the launch intent:
 	// "release" for standing rentals, "terminate" for provisioned hosts.
 	Disposition string `json:"disposition,omitempty"`
@@ -273,14 +273,14 @@ type ExpectSpec struct {
 	Candidates map[string]CandidateExpectation `json:"candidates,omitempty"`
 }
 
-type PlacementExpectation struct {
-	PlacementID     string         `json:"id"`
-	RentalID        string         `json:"rental"`
-	State           PlacementState `json:"state"`
-	AfterPlacement  string         `json:"after,omitempty"`
-	ProjectedStart  *Duration      `json:"projected_start_in,omitempty"`
-	LatestStart     *Moment        `json:"latest_start,omitempty"`
-	ScheduleVersion uint64         `json:"schedule_version"`
+type BookingExpectation struct {
+	BookingID       string       `json:"id"`
+	RentalID        string       `json:"rental"`
+	State           BookingState `json:"state"`
+	AfterBooking    string       `json:"after,omitempty"`
+	ProjectedStart  *Duration    `json:"projected_start_in,omitempty"`
+	LatestStart     *Moment      `json:"latest_start,omitempty"`
+	ScheduleVersion uint64       `json:"schedule_version"`
 }
 
 type CandidateExpectation struct {
@@ -298,36 +298,36 @@ type CandidateExpectation struct {
 }
 
 type ScheduleEvidenceExpectation struct {
-	Version        uint64                       `json:"version"`
-	Running        *RunningPlacementEvidence    `json:"running,omitempty"`
-	Preceding      []ScheduledPlacementEvidence `json:"preceding,omitempty"`
-	ProjectedStart Duration                     `json:"projected_start_in"`
+	Version        uint64                  `json:"version"`
+	Running        *RunningBookingEvidence `json:"running,omitempty"`
+	Preceding      []QueuedBookingEvidence `json:"preceding,omitempty"`
+	ProjectedStart Duration                `json:"projected_start_in"`
 }
 
-type RunningPlacementEvidence struct {
-	PlacementID         string   `json:"placement"`
+type RunningBookingEvidence struct {
+	BookingID           string   `json:"booking"`
 	RunID               string   `json:"run"`
 	RemainingMaxRuntime Duration `json:"remaining_max_runtime"`
 	// RemainingExpectedRuntime is the recorded p50; defaults to the max bound.
 	RemainingExpectedRuntime *Duration `json:"remaining_expected_runtime,omitempty"`
 }
 
-func (e RunningPlacementEvidence) expectedRemaining() Duration {
+func (e RunningBookingEvidence) expectedRemaining() Duration {
 	if e.RemainingExpectedRuntime != nil {
 		return *e.RemainingExpectedRuntime
 	}
 	return e.RemainingMaxRuntime
 }
 
-type ScheduledPlacementEvidence struct {
-	PlacementID string   `json:"placement"`
-	RunID       string   `json:"run"`
-	MaxRuntime  Duration `json:"max_runtime"`
+type QueuedBookingEvidence struct {
+	BookingID  string   `json:"booking"`
+	RunID      string   `json:"run"`
+	MaxRuntime Duration `json:"max_runtime"`
 	// ExpectedRuntime is the recorded p50; defaults to the max bound.
 	ExpectedRuntime *Duration `json:"expected_runtime,omitempty"`
 }
 
-func (e ScheduledPlacementEvidence) expected() Duration {
+func (e QueuedBookingEvidence) expected() Duration {
 	if e.ExpectedRuntime != nil {
 		return *e.ExpectedRuntime
 	}
@@ -582,7 +582,7 @@ func (sc Scenario) validateScheduleTimeline() error {
 	for _, schedule := range sc.World.RentalSchedules {
 		schedules[schedule.RentalID] = schedule
 	}
-	placementIDs, runIDs := scheduleIdentities(schedules)
+	bookingIDs, runIDs := scheduleIdentities(schedules)
 	requests := map[string]RequestSpec{}
 	var elapsed time.Duration
 	for i, step := range sc.Steps() {
@@ -591,8 +591,8 @@ func (sc Scenario) validateScheduleTimeline() error {
 			continue
 		}
 		if step.Reconcile != "" {
-			if expired, ok := expireScheduledPlacement(schedules, "run-"+step.Reconcile, sc.World.Start(), sc.World.Start().Add(elapsed)); ok {
-				delete(placementIDs, expired.PlacementID)
+			if expired, ok := expireQueuedBooking(schedules, "run-"+step.Reconcile, sc.World.Start(), sc.World.Start().Add(elapsed)); ok {
+				delete(bookingIDs, expired.BookingID)
 				delete(runIDs, expired.RunID)
 			}
 		}
@@ -613,86 +613,86 @@ func (sc Scenario) validateScheduleTimeline() error {
 				return fmt.Errorf("timeline[%d]: candidate %q: %w", i, rentalID, err)
 			}
 		}
-		if step.Expect.Placement == nil {
+		if step.Expect.Booking == nil {
 			continue
 		}
-		placement := *step.Expect.Placement
+		booking := *step.Expect.Booking
 		runID := "run-" + runName
-		if placementIDs[placement.PlacementID] {
-			return fmt.Errorf("timeline[%d]: Placement %q already exists", i, placement.PlacementID)
+		if bookingIDs[booking.BookingID] {
+			return fmt.Errorf("timeline[%d]: Booking %q already exists", i, booking.BookingID)
 		}
 		if runIDs[runID] {
-			return fmt.Errorf("timeline[%d]: Run %q already has a nonterminal Placement", i, runID)
+			return fmt.Errorf("timeline[%d]: Run %q already has a nonterminal Booking", i, runID)
 		}
-		schedule := schedules[placement.RentalID]
-		if err := validatePlacementDecision(schedule, elapsed, request, placement); err != nil {
+		schedule := schedules[booking.RentalID]
+		if err := validateBookingDecision(schedule, elapsed, request, booking); err != nil {
 			return fmt.Errorf("timeline[%d]: %w", i, err)
 		}
-		schedule.Version = placement.ScheduleVersion
-		if placement.State == PlacementRunning {
-			schedule.Running = &RunningPlacementSpec{
-				PlacementID:              placement.PlacementID,
+		schedule.Version = booking.ScheduleVersion
+		if booking.State == BookingRunning {
+			schedule.Running = &RunningBookingSpec{
+				BookingID:                booking.BookingID,
 				RunID:                    runID,
 				RemainingMaxRuntime:      *request.MaxRuntime,
 				RemainingExpectedRuntime: request.ExpectedRuntime,
 			}
 		} else {
-			schedule.Scheduled = append(schedule.Scheduled, ScheduledPlacementSpec{
-				PlacementID:     placement.PlacementID,
+			schedule.Queued = append(schedule.Queued, QueuedBookingSpec{
+				BookingID:       booking.BookingID,
 				RunID:           runID,
 				MaxRuntime:      *request.MaxRuntime,
 				ExpectedRuntime: request.ExpectedRuntime,
-				LatestStart:     placement.LatestStart,
+				LatestStart:     booking.LatestStart,
 			})
 		}
-		placementIDs[placement.PlacementID] = true
+		bookingIDs[booking.BookingID] = true
 		runIDs[runID] = true
-		schedules[placement.RentalID] = schedule
+		schedules[booking.RentalID] = schedule
 	}
 	return nil
 }
 
 func scheduleIdentities(schedules map[string]RentalScheduleSpec) (map[string]bool, map[string]bool) {
-	placementIDs := map[string]bool{}
+	bookingIDs := map[string]bool{}
 	runIDs := map[string]bool{}
 	for _, schedule := range schedules {
 		if schedule.Running != nil {
-			placementIDs[schedule.Running.PlacementID] = true
+			bookingIDs[schedule.Running.BookingID] = true
 			runIDs[schedule.Running.RunID] = true
 		}
-		for _, placement := range schedule.Scheduled {
-			placementIDs[placement.PlacementID] = true
-			runIDs[placement.RunID] = true
+		for _, booking := range schedule.Queued {
+			bookingIDs[booking.BookingID] = true
+			runIDs[booking.RunID] = true
 		}
 	}
-	return placementIDs, runIDs
+	return bookingIDs, runIDs
 }
 
-func validatePlacementDecision(schedule RentalScheduleSpec, elapsed time.Duration, request *RequestSpec, placement PlacementExpectation) error {
+func validateBookingDecision(schedule RentalScheduleSpec, elapsed time.Duration, request *RequestSpec, booking BookingExpectation) error {
 	if request == nil || request.MaxRuntime == nil {
-		return fmt.Errorf("Placement %q requires its submitted Run's max_runtime", placement.PlacementID)
+		return fmt.Errorf("Booking %q requires its submitted Run's max_runtime", booking.BookingID)
 	}
-	if want := schedule.Version + 1; placement.ScheduleVersion != want {
-		return fmt.Errorf("Placement %q schedule_version is %d, want %d", placement.PlacementID, placement.ScheduleVersion, want)
+	if want := schedule.Version + 1; booking.ScheduleVersion != want {
+		return fmt.Errorf("Booking %q schedule_version is %d, want %d", booking.BookingID, booking.ScheduleVersion, want)
 	}
-	if placement.State == PlacementRunning {
+	if booking.State == BookingRunning {
 		if schedule.Running != nil {
-			return fmt.Errorf("RunningPlacement %q requires an empty RentalSchedule", placement.PlacementID)
+			return fmt.Errorf("RunningBooking %q requires an empty RentalSchedule", booking.BookingID)
 		}
 		return nil
 	}
 	if schedule.Running == nil {
-		return fmt.Errorf("ScheduledPlacement %q requires a RunningPlacement", placement.PlacementID)
+		return fmt.Errorf("QueuedBooking %q requires a RunningBooking", booking.BookingID)
 	}
-	if len(schedule.Scheduled) >= MaxScheduledPlacements {
-		return fmt.Errorf("ScheduledPlacement %q appends to a full RentalSchedule; at most %d Placements may wait", placement.PlacementID, MaxScheduledPlacements)
+	if len(schedule.Queued) >= MaxQueuedBookings {
+		return fmt.Errorf("QueuedBooking %q appends to a full RentalSchedule; at most %d Bookings may wait", booking.BookingID, MaxQueuedBookings)
 	}
-	if want := schedule.tailPlacementID(); placement.AfterPlacement != want {
-		return fmt.Errorf("ScheduledPlacement %q follows %q, want current tail %q", placement.PlacementID, placement.AfterPlacement, want)
+	if want := schedule.tailBookingID(); booking.AfterBooking != want {
+		return fmt.Errorf("QueuedBooking %q follows %q, want current tail %q", booking.BookingID, booking.AfterBooking, want)
 	}
 	wait := schedule.projectedWait(elapsed)
-	if placement.ProjectedStart == nil || placement.ProjectedStart.Duration() != wait {
-		return fmt.Errorf("ScheduledPlacement %q projected_start_in is %v, want %v from preceding expected runtimes", placement.PlacementID, durationValue(placement.ProjectedStart), wait)
+	if booking.ProjectedStart == nil || booking.ProjectedStart.Duration() != wait {
+		return fmt.Errorf("QueuedBooking %q projected_start_in is %v, want %v from preceding expected runtimes", booking.BookingID, durationValue(booking.ProjectedStart), wait)
 	}
 	return nil
 }
@@ -702,21 +702,21 @@ func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration
 		return fmt.Errorf("schedule version is %d, want %d", expect.Version, schedule.Version)
 	}
 	if schedule.Running == nil || expect.Running == nil ||
-		expect.Running.PlacementID != schedule.Running.PlacementID ||
+		expect.Running.BookingID != schedule.Running.BookingID ||
 		expect.Running.RunID != schedule.Running.RunID ||
 		expect.Running.RemainingMaxRuntime.Duration() != schedule.runningMaxRemaining(elapsed) ||
 		expect.Running.expectedRemaining().Duration() != schedule.runningExpectedRemaining(elapsed) {
-		return fmt.Errorf("RunningPlacement evidence does not match the current schedule")
+		return fmt.Errorf("RunningBooking evidence does not match the current schedule")
 	}
-	if len(expect.Preceding) != len(schedule.Scheduled) {
-		return fmt.Errorf("preceding has %d Placements, want %d", len(expect.Preceding), len(schedule.Scheduled))
+	if len(expect.Preceding) != len(schedule.Queued) {
+		return fmt.Errorf("preceding has %d Bookings, want %d", len(expect.Preceding), len(schedule.Queued))
 	}
-	for i, placement := range schedule.Scheduled {
+	for i, booking := range schedule.Queued {
 		actual := expect.Preceding[i]
-		if actual.PlacementID != placement.PlacementID || actual.RunID != placement.RunID ||
-			actual.MaxRuntime.Duration() != placement.MaxRuntime.Duration() ||
-			actual.expected().Duration() != placement.expected().Duration() {
-			return fmt.Errorf("preceding[%d] does not match ScheduledPlacement %q", i, placement.PlacementID)
+		if actual.BookingID != booking.BookingID || actual.RunID != booking.RunID ||
+			actual.MaxRuntime.Duration() != booking.MaxRuntime.Duration() ||
+			actual.expected().Duration() != booking.expected().Duration() {
+			return fmt.Errorf("preceding[%d] does not match QueuedBooking %q", i, booking.BookingID)
 		}
 	}
 	if want := schedule.projectedWait(elapsed); expect.ProjectedStart.Duration() != want {
@@ -725,36 +725,36 @@ func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration
 	return nil
 }
 
-func expireScheduledPlacement(schedules map[string]RentalScheduleSpec, runID string, start, now time.Time) (ScheduledPlacementSpec, bool) {
+func expireQueuedBooking(schedules map[string]RentalScheduleSpec, runID string, start, now time.Time) (QueuedBookingSpec, bool) {
 	for rentalID, schedule := range schedules {
-		for i, placement := range schedule.Scheduled {
-			if placement.RunID != runID || placement.LatestStart == nil || placement.LatestStart.Resolve(start).After(now) {
+		for i, booking := range schedule.Queued {
+			if booking.RunID != runID || booking.LatestStart == nil || booking.LatestStart.Resolve(start).After(now) {
 				continue
 			}
-			schedule.Scheduled = slices.Delete(schedule.Scheduled, i, i+1)
+			schedule.Queued = slices.Delete(schedule.Queued, i, i+1)
 			schedule.Version++
 			schedules[rentalID] = schedule
-			return placement, true
+			return booking, true
 		}
 	}
-	return ScheduledPlacementSpec{}, false
+	return QueuedBookingSpec{}, false
 }
 
-func (schedule RentalScheduleSpec) tailPlacementID() string {
-	if len(schedule.Scheduled) > 0 {
-		return schedule.Scheduled[len(schedule.Scheduled)-1].PlacementID
+func (schedule RentalScheduleSpec) tailBookingID() string {
+	if len(schedule.Queued) > 0 {
+		return schedule.Queued[len(schedule.Queued)-1].BookingID
 	}
-	return schedule.Running.PlacementID
+	return schedule.Running.BookingID
 }
 
-// projectedWait is the p50 wait for the next arriving Placement: the running
-// Placement's expected remaining runtime plus every waiting Placement's
+// projectedWait is the p50 wait for the next arriving Booking: the running
+// Booking's expected remaining runtime plus every waiting Booking's
 // expected runtime. Max runtimes stay the enforced ceiling behind
 // latest-start guarantees; expectations drive projections and scoring.
 func (schedule RentalScheduleSpec) projectedWait(elapsed time.Duration) time.Duration {
 	wait := schedule.runningExpectedRemaining(elapsed)
-	for _, placement := range schedule.Scheduled {
-		wait += placement.expected().Duration()
+	for _, booking := range schedule.Queued {
+		wait += booking.expected().Duration()
 	}
 	return wait
 }
@@ -856,21 +856,21 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("rental %q needs a positive rate_per_hour_usd", rental.ID)
 		}
 	}
-	scheduledRentals := map[string]bool{}
-	placementOwners := map[string]string{}
+	rentalsWithSchedules := map[string]bool{}
+	bookingOwners := map[string]string{}
 	runOwners := map[string]string{}
 	for _, schedule := range w.RentalSchedules {
 		if !ids[schedule.RentalID] {
 			return fmt.Errorf("RentalSchedule references unknown Rental %q", schedule.RentalID)
 		}
-		if scheduledRentals[schedule.RentalID] {
+		if rentalsWithSchedules[schedule.RentalID] {
 			return fmt.Errorf("Rental %q has more than one RentalSchedule", schedule.RentalID)
 		}
-		scheduledRentals[schedule.RentalID] = true
+		rentalsWithSchedules[schedule.RentalID] = true
 		if err := schedule.validate(w.Start()); err != nil {
 			return err
 		}
-		if err := validateScheduleOwnership(schedule, placementOwners, runOwners); err != nil {
+		if err := validateScheduleOwnership(schedule, bookingOwners, runOwners); err != nil {
 			return err
 		}
 		if schedule.Running != nil && w.rental(schedule.RentalID).IdleLeaseExpiresIn != nil {
@@ -895,25 +895,25 @@ func (w WorldSpec) validate() error {
 	return nil
 }
 
-func validateScheduleOwnership(schedule RentalScheduleSpec, placementOwners, runOwners map[string]string) error {
-	check := func(placementID, runID string) error {
-		if owner := placementOwners[placementID]; owner != "" {
-			return fmt.Errorf("Placement %q belongs to both Rental %q and Rental %q", placementID, owner, schedule.RentalID)
+func validateScheduleOwnership(schedule RentalScheduleSpec, bookingOwners, runOwners map[string]string) error {
+	check := func(bookingID, runID string) error {
+		if owner := bookingOwners[bookingID]; owner != "" {
+			return fmt.Errorf("Booking %q belongs to both Rental %q and Rental %q", bookingID, owner, schedule.RentalID)
 		}
 		if owner := runOwners[runID]; owner != "" {
-			return fmt.Errorf("Run %q has nonterminal Placements on both Rental %q and Rental %q", runID, owner, schedule.RentalID)
+			return fmt.Errorf("Run %q has nonterminal Bookings on both Rental %q and Rental %q", runID, owner, schedule.RentalID)
 		}
-		placementOwners[placementID] = schedule.RentalID
+		bookingOwners[bookingID] = schedule.RentalID
 		runOwners[runID] = schedule.RentalID
 		return nil
 	}
 	if schedule.Running != nil {
-		if err := check(schedule.Running.PlacementID, schedule.Running.RunID); err != nil {
+		if err := check(schedule.Running.BookingID, schedule.Running.RunID); err != nil {
 			return err
 		}
 	}
-	for _, placement := range schedule.Scheduled {
-		if err := check(placement.PlacementID, placement.RunID); err != nil {
+	for _, booking := range schedule.Queued {
+		if err := check(booking.BookingID, booking.RunID); err != nil {
 			return err
 		}
 	}
@@ -922,8 +922,8 @@ func validateScheduleOwnership(schedule RentalScheduleSpec, placementOwners, run
 
 func (schedule RentalScheduleSpec) validate(start time.Time) error {
 	rentalID := schedule.RentalID
-	if schedule.Running == nil && len(schedule.Scheduled) > 0 {
-		return fmt.Errorf("rental %q: ScheduledPlacements require a RunningPlacement", rentalID)
+	if schedule.Running == nil && len(schedule.Queued) > 0 {
+		return fmt.Errorf("rental %q: QueuedBookings require a RunningBooking", rentalID)
 	}
 	if schedule.Running == nil {
 		if schedule.Version != 0 {
@@ -936,35 +936,35 @@ func (schedule RentalScheduleSpec) validate(start time.Time) error {
 	}
 	ids := map[string]bool{}
 	runs := map[string]bool{}
-	if err := validatePlacementIdentity(rentalID, schedule.Running.PlacementID, schedule.Running.RunID, ids, runs); err != nil {
+	if err := validateBookingIdentity(rentalID, schedule.Running.BookingID, schedule.Running.RunID, ids, runs); err != nil {
 		return err
 	}
 	if schedule.Running.RemainingMaxRuntime.Duration() <= 0 {
-		return fmt.Errorf("rental %q: RunningPlacement %q needs a positive remaining_max_runtime", rentalID, schedule.Running.PlacementID)
+		return fmt.Errorf("rental %q: RunningBooking %q needs a positive remaining_max_runtime", rentalID, schedule.Running.BookingID)
 	}
 	if expected := schedule.Running.RemainingExpectedRuntime; expected != nil &&
 		(expected.Duration() <= 0 || expected.Duration() > schedule.Running.RemainingMaxRuntime.Duration()) {
-		return fmt.Errorf("rental %q: RunningPlacement %q remaining_expected_runtime must be positive and within the max bound", rentalID, schedule.Running.PlacementID)
+		return fmt.Errorf("rental %q: RunningBooking %q remaining_expected_runtime must be positive and within the max bound", rentalID, schedule.Running.BookingID)
 	}
 	if completes := schedule.Running.CompletesAfter; completes != nil && completes.Duration() <= 0 {
-		return fmt.Errorf("rental %q: RunningPlacement %q needs a positive completes_after", rentalID, schedule.Running.PlacementID)
+		return fmt.Errorf("rental %q: RunningBooking %q needs a positive completes_after", rentalID, schedule.Running.BookingID)
 	}
-	if len(schedule.Scheduled) > MaxScheduledPlacements {
-		return fmt.Errorf("rental %q: at most %d ScheduledPlacements may wait, got %d", rentalID, MaxScheduledPlacements, len(schedule.Scheduled))
+	if len(schedule.Queued) > MaxQueuedBookings {
+		return fmt.Errorf("rental %q: at most %d QueuedBookings may wait, got %d", rentalID, MaxQueuedBookings, len(schedule.Queued))
 	}
-	for _, placement := range schedule.Scheduled {
-		if err := validatePlacementIdentity(rentalID, placement.PlacementID, placement.RunID, ids, runs); err != nil {
+	for _, booking := range schedule.Queued {
+		if err := validateBookingIdentity(rentalID, booking.BookingID, booking.RunID, ids, runs); err != nil {
 			return err
 		}
-		if placement.MaxRuntime.Duration() <= 0 {
-			return fmt.Errorf("rental %q: ScheduledPlacement %q needs a positive max_runtime", rentalID, placement.PlacementID)
+		if booking.MaxRuntime.Duration() <= 0 {
+			return fmt.Errorf("rental %q: QueuedBooking %q needs a positive max_runtime", rentalID, booking.BookingID)
 		}
-		if expected := placement.ExpectedRuntime; expected != nil &&
-			(expected.Duration() <= 0 || expected.Duration() > placement.MaxRuntime.Duration()) {
-			return fmt.Errorf("rental %q: ScheduledPlacement %q expected_runtime must be positive and within the max bound", rentalID, placement.PlacementID)
+		if expected := booking.ExpectedRuntime; expected != nil &&
+			(expected.Duration() <= 0 || expected.Duration() > booking.MaxRuntime.Duration()) {
+			return fmt.Errorf("rental %q: QueuedBooking %q expected_runtime must be positive and within the max bound", rentalID, booking.BookingID)
 		}
-		if placement.LatestStart != nil && !placement.LatestStart.Resolve(start).After(start) {
-			return fmt.Errorf("rental %q: ScheduledPlacement %q latest_start must be after the world start", rentalID, placement.PlacementID)
+		if booking.LatestStart != nil && !booking.LatestStart.Resolve(start).After(start) {
+			return fmt.Errorf("rental %q: QueuedBooking %q latest_start must be after the world start", rentalID, booking.BookingID)
 		}
 	}
 	return nil
@@ -988,17 +988,17 @@ func (w WorldSpec) rentalSchedule(rentalID string) RentalScheduleSpec {
 	return RentalScheduleSpec{RentalID: rentalID}
 }
 
-func validatePlacementIdentity(rentalID, placementID, runID string, placementIDs, runIDs map[string]bool) error {
-	if placementID == "" || runID == "" {
-		return fmt.Errorf("rental %q: Placements need stable placement and run IDs", rentalID)
+func validateBookingIdentity(rentalID, bookingID, runID string, bookingIDs, runIDs map[string]bool) error {
+	if bookingID == "" || runID == "" {
+		return fmt.Errorf("rental %q: Bookings need stable booking and run IDs", rentalID)
 	}
-	if placementIDs[placementID] {
-		return fmt.Errorf("rental %q: duplicate Placement %q", rentalID, placementID)
+	if bookingIDs[bookingID] {
+		return fmt.Errorf("rental %q: duplicate Booking %q", rentalID, bookingID)
 	}
 	if runIDs[runID] {
-		return fmt.Errorf("rental %q: Run %q appears in more than one Placement", rentalID, runID)
+		return fmt.Errorf("rental %q: Run %q appears in more than one Booking", rentalID, runID)
 	}
-	placementIDs[placementID] = true
+	bookingIDs[bookingID] = true
 	runIDs[runID] = true
 	return nil
 }
@@ -1047,33 +1047,33 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 			return fmt.Errorf("expected offer %q is not in the world", expect.Offer)
 		}
 	case OutcomeFail:
-		if expect.Offer != "" || expect.Placement != nil {
-			return fmt.Errorf("outcome \"fail\" selects no offer and creates no Placement")
+		if expect.Offer != "" || expect.Booking != nil {
+			return fmt.Errorf("outcome \"fail\" selects no offer and creates no Booking")
 		}
 	default:
 		return fmt.Errorf("outcome must be \"place\" or \"fail\", got %q", expect.Outcome)
 	}
-	if placement := expect.Placement; placement != nil {
-		if placement.PlacementID == "" || placement.RentalID == "" || placement.ScheduleVersion == 0 {
-			return fmt.Errorf("expected Placement needs id, rental, and a positive schedule_version")
+	if booking := expect.Booking; booking != nil {
+		if booking.BookingID == "" || booking.RentalID == "" || booking.ScheduleVersion == 0 {
+			return fmt.Errorf("expected Booking needs id, rental, and a positive schedule_version")
 		}
-		if !slices.ContainsFunc(w.Rentals, func(r RentalSpec) bool { return r.ID == placement.RentalID }) {
-			return fmt.Errorf("expected Placement Rental %q is not in the world", placement.RentalID)
+		if !slices.ContainsFunc(w.Rentals, func(r RentalSpec) bool { return r.ID == booking.RentalID }) {
+			return fmt.Errorf("expected Booking Rental %q is not in the world", booking.RentalID)
 		}
-		if expect.Offer != placement.RentalID {
-			return fmt.Errorf("expected Placement Rental %q must be the winning offer", placement.RentalID)
+		if expect.Offer != booking.RentalID {
+			return fmt.Errorf("expected Booking Rental %q must be the winning offer", booking.RentalID)
 		}
-		switch placement.State {
-		case PlacementRunning:
-			if placement.AfterPlacement != "" || placement.ProjectedStart != nil {
-				return fmt.Errorf("a running Placement has no predecessor or projected_start_in")
+		switch booking.State {
+		case BookingRunning:
+			if booking.AfterBooking != "" || booking.ProjectedStart != nil {
+				return fmt.Errorf("a running Booking has no predecessor or projected_start_in")
 			}
-		case PlacementScheduled:
-			if placement.AfterPlacement == "" || placement.ProjectedStart == nil {
-				return fmt.Errorf("a ScheduledPlacement needs after and projected_start_in")
+		case BookingQueued:
+			if booking.AfterBooking == "" || booking.ProjectedStart == nil {
+				return fmt.Errorf("a QueuedBooking needs after and projected_start_in")
 			}
 		default:
-			return fmt.Errorf("Placement state must be \"running\" or \"scheduled\", got %q", placement.State)
+			return fmt.Errorf("Booking state must be \"running\" or \"queued\", got %q", booking.State)
 		}
 	}
 	if expect.Disposition != "" && expect.Disposition != "release" && expect.Disposition != "terminate" {
@@ -1093,7 +1093,7 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 				return fmt.Errorf("candidate %q is not a Rental and cannot carry RentalSchedule evidence", id)
 			}
 			if candidate.Schedule.Version == 0 || candidate.Schedule.Running == nil {
-				return fmt.Errorf("candidate %q schedule evidence needs a version and RunningPlacement", id)
+				return fmt.Errorf("candidate %q schedule evidence needs a version and RunningBooking", id)
 			}
 		}
 	}

@@ -72,18 +72,18 @@ func Run(backend Backend, sc Scenario) (Result, error) {
 	return Result{Failures: failures, Notes: session.Notes()}, nil
 }
 
-// recordedDecision is the latest placement decision in a run's stream, both
-// decoded and raw. The raw form is where target-contract fields (Placement,
+// recordedDecision is the latest booking decision in a run's stream, both
+// decoded and raw. The raw form is where target-contract fields (Booking,
 // RentalSchedule evidence, cache evidence) are asserted before the domain
 // types carry them.
 type recordedDecision struct {
-	decision domain.PlacementDecision
+	decision domain.BookingDecision
 	raw      map[string]json.RawMessage
 }
 
 func latestDecision(events []eventlog.StoredEvent) (recordedDecision, bool) {
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type != orchestrator.EventPlacementDecided {
+		if events[i].Type != orchestrator.EventBookingDecided {
 			continue
 		}
 		var payload struct {
@@ -120,28 +120,28 @@ func latestDisposition(events []eventlog.StoredEvent) (string, bool) {
 	return "", false
 }
 
-// placementRecord is the target contract for the durable Placement created by
+// bookingRecord is the target contract for the durable Booking created by
 // a decision that selects an existing Rental.
-type placementRecord struct {
-	PlacementID      string         `json:"id"`
-	RentalID         string         `json:"rental_id"`
-	State            PlacementState `json:"state"`
-	AfterPlacementID string         `json:"after_placement_id,omitempty"`
-	ProjectedStartAt *time.Time     `json:"projected_start_at,omitempty"`
-	LatestStartAt    *time.Time     `json:"latest_start_at,omitempty"`
-	ScheduleVersion  uint64         `json:"schedule_version"`
+type bookingRecord struct {
+	BookingID        string       `json:"id"`
+	RentalID         string       `json:"rental_id"`
+	State            BookingState `json:"state"`
+	AfterBookingID   string       `json:"after_booking_id,omitempty"`
+	ProjectedStartAt *time.Time   `json:"projected_start_at,omitempty"`
+	LatestStartAt    *time.Time   `json:"latest_start_at,omitempty"`
+	ScheduleVersion  uint64       `json:"schedule_version"`
 }
 
-func (rec recordedDecision) placement() (placementRecord, bool) {
-	raw, ok := rec.raw["placement"]
+func (rec recordedDecision) booking() (bookingRecord, bool) {
+	raw, ok := rec.raw["booking"]
 	if !ok {
-		return placementRecord{}, false
+		return bookingRecord{}, false
 	}
-	var placement placementRecord
-	if err := json.Unmarshal(raw, &placement); err != nil {
-		return placementRecord{}, false
+	var booking bookingRecord
+	if err := json.Unmarshal(raw, &booking); err != nil {
+		return bookingRecord{}, false
 	}
-	return placement, true
+	return booking, true
 }
 
 func (rec recordedDecision) outcome() Outcome {
@@ -154,10 +154,10 @@ func (rec recordedDecision) outcome() Outcome {
 func (rec recordedDecision) describe() string {
 	switch rec.outcome() {
 	case OutcomePlace:
-		if placement, ok := rec.placement(); ok {
-			return fmt.Sprintf("placed on %q as %s Placement %q", rec.decision.SelectedOfferSnapshotID, placement.State, placement.PlacementID)
+		if booking, ok := rec.booking(); ok {
+			return fmt.Sprintf("placed on %q as %s Booking %q", rec.decision.SelectedOfferSnapshotID, booking.State, booking.BookingID)
 		}
-		return fmt.Sprintf("selected offer %q without a recorded Placement", rec.decision.SelectedOfferSnapshotID)
+		return fmt.Sprintf("selected offer %q without a recorded Booking", rec.decision.SelectedOfferSnapshotID)
 	default:
 		return fmt.Sprintf("no offer selected (reasons %v)", rec.decision.SelectionReasonCodes)
 	}
@@ -170,7 +170,7 @@ func assertExpect(session Session, start time.Time, name string, expect ExpectSp
 	}
 	rec, ok := latestDecision(events)
 	if !ok {
-		return []string{fmt.Sprintf("run %q: no placement decision recorded", name)}
+		return []string{fmt.Sprintf("run %q: no booking decision recorded", name)}
 	}
 	var failures []string
 	fail := func(format string, args ...any) {
@@ -188,8 +188,8 @@ func assertExpect(session Session, start time.Time, name string, expect ExpectSp
 			fail("expected selection reason %q, got %v", reason, rec.decision.SelectionReasonCodes)
 		}
 	}
-	if expect.Placement != nil {
-		failures = append(failures, assertPlacement(rec, start, name, *expect.Placement)...)
+	if expect.Booking != nil {
+		failures = append(failures, assertBooking(rec, start, name, *expect.Booking)...)
 	}
 	if expect.Disposition != "" {
 		disposition, ok := latestDisposition(events)
@@ -205,40 +205,40 @@ func assertExpect(session Session, start time.Time, name string, expect ExpectSp
 	return failures
 }
 
-func assertPlacement(rec recordedDecision, start time.Time, name string, expect PlacementExpectation) []string {
-	placement, ok := rec.placement()
+func assertBooking(rec recordedDecision, start time.Time, name string, expect BookingExpectation) []string {
+	booking, ok := rec.booking()
 	if !ok {
-		return []string{fmt.Sprintf("run %q: expected Placement %q, but the decision records none", name, expect.PlacementID)}
+		return []string{fmt.Sprintf("run %q: expected Booking %q, but the decision records none", name, expect.BookingID)}
 	}
 	var failures []string
 	fail := func(format string, args ...any) {
-		failures = append(failures, fmt.Sprintf("run %q: Placement %q: ", name, expect.PlacementID)+fmt.Sprintf(format, args...))
+		failures = append(failures, fmt.Sprintf("run %q: Booking %q: ", name, expect.BookingID)+fmt.Sprintf(format, args...))
 	}
-	if placement.PlacementID != expect.PlacementID {
-		fail("expected id %q, got %q", expect.PlacementID, placement.PlacementID)
+	if booking.BookingID != expect.BookingID {
+		fail("expected id %q, got %q", expect.BookingID, booking.BookingID)
 	}
-	if placement.RentalID != expect.RentalID {
-		fail("expected Rental %q, got %q", expect.RentalID, placement.RentalID)
+	if booking.RentalID != expect.RentalID {
+		fail("expected Rental %q, got %q", expect.RentalID, booking.RentalID)
 	}
-	if placement.State != expect.State {
-		fail("expected state %q, got %q", expect.State, placement.State)
+	if booking.State != expect.State {
+		fail("expected state %q, got %q", expect.State, booking.State)
 	}
-	if placement.AfterPlacementID != expect.AfterPlacement {
-		fail("expected predecessor %q, got %q", expect.AfterPlacement, placement.AfterPlacementID)
+	if booking.AfterBookingID != expect.AfterBooking {
+		fail("expected predecessor %q, got %q", expect.AfterBooking, booking.AfterBookingID)
 	}
-	if placement.ScheduleVersion != expect.ScheduleVersion {
-		fail("expected schedule version %d, got %d", expect.ScheduleVersion, placement.ScheduleVersion)
+	if booking.ScheduleVersion != expect.ScheduleVersion {
+		fail("expected schedule version %d, got %d", expect.ScheduleVersion, booking.ScheduleVersion)
 	}
 	if expect.ProjectedStart != nil {
 		want := start.Add(expect.ProjectedStart.Duration())
-		if placement.ProjectedStartAt == nil || !placement.ProjectedStartAt.Equal(want) {
-			fail("expected projected start %s, got %s", want.Format(time.RFC3339), describeTime(placement.ProjectedStartAt))
+		if booking.ProjectedStartAt == nil || !booking.ProjectedStartAt.Equal(want) {
+			fail("expected projected start %s, got %s", want.Format(time.RFC3339), describeTime(booking.ProjectedStartAt))
 		}
 	}
 	if expect.LatestStart != nil {
 		want := expect.LatestStart.Resolve(start)
-		if placement.LatestStartAt == nil || !placement.LatestStartAt.Equal(want) {
-			fail("expected latest start %s, got %s", want.Format(time.RFC3339), describeTime(placement.LatestStartAt))
+		if booking.LatestStartAt == nil || !booking.LatestStartAt.Equal(want) {
+			fail("expected latest start %s, got %s", want.Format(time.RFC3339), describeTime(booking.LatestStartAt))
 		}
 	}
 	return failures
@@ -299,13 +299,13 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 type scheduleEvidenceRecord struct {
 	Version uint64 `json:"version"`
 	Running *struct {
-		PlacementID                     string  `json:"placement_id"`
+		BookingID                       string  `json:"booking_id"`
 		RunID                           string  `json:"run_id"`
 		RemainingMaxRuntimeSeconds      float64 `json:"remaining_max_runtime_seconds"`
 		RemainingExpectedRuntimeSeconds float64 `json:"remaining_expected_runtime_seconds"`
 	} `json:"running,omitempty"`
 	Preceding []struct {
-		PlacementID            string  `json:"placement_id"`
+		BookingID              string  `json:"booking_id"`
 		RunID                  string  `json:"run_id"`
 		MaxRuntimeSeconds      float64 `json:"max_runtime_seconds"`
 		ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds"`
@@ -325,17 +325,17 @@ func assertScheduleEvidence(rec recordedDecision, name, id string, expect Schedu
 	if actual.Version != expect.Version {
 		fail("expected schedule version %d, got %d", expect.Version, actual.Version)
 	}
-	if actual.Running == nil || actual.Running.PlacementID != expect.Running.PlacementID || actual.Running.RunID != expect.Running.RunID ||
+	if actual.Running == nil || actual.Running.BookingID != expect.Running.BookingID || actual.Running.RunID != expect.Running.RunID ||
 		actual.Running.RemainingMaxRuntimeSeconds != expect.Running.RemainingMaxRuntime.Duration().Seconds() ||
 		actual.Running.RemainingExpectedRuntimeSeconds != expect.Running.expectedRemaining().Duration().Seconds() {
-		fail("running Placement evidence does not match %+v", *expect.Running)
+		fail("running Booking evidence does not match %+v", *expect.Running)
 	}
 	if len(actual.Preceding) != len(expect.Preceding) {
-		fail("expected %d preceding Placements, got %d", len(expect.Preceding), len(actual.Preceding))
+		fail("expected %d preceding Bookings, got %d", len(expect.Preceding), len(actual.Preceding))
 	} else {
 		for i, want := range expect.Preceding {
 			got := actual.Preceding[i]
-			if got.PlacementID != want.PlacementID || got.RunID != want.RunID ||
+			if got.BookingID != want.BookingID || got.RunID != want.RunID ||
 				got.MaxRuntimeSeconds != want.MaxRuntime.Duration().Seconds() ||
 				got.ExpectedRuntimeSeconds != want.expected().Duration().Seconds() {
 				fail("preceding[%d] does not match %+v", i, want)
@@ -396,7 +396,7 @@ func candidateCacheEvidence(rec recordedDecision, id, key string) (bool, bool) {
 	return false, false
 }
 
-func findCandidate(decision domain.PlacementDecision, id string) (domain.CandidateDecision, bool) {
+func findCandidate(decision domain.BookingDecision, id string) (domain.CandidateDecision, bool) {
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID == id {
 			return candidate, true

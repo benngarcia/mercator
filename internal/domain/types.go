@@ -298,7 +298,7 @@ type ReliabilityEvidence struct {
 	Confidence       float64 `json:"confidence,omitempty"`
 }
 
-type PlacementDecision struct {
+type BookingDecision struct {
 	ID                      string              `json:"id"`
 	RunID                   string              `json:"run_id,omitempty"`
 	WorkloadRevisionDigest  string              `json:"workload_revision_digest"`

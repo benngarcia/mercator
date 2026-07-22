@@ -13,7 +13,7 @@ import (
 )
 
 type Scheduler interface {
-	Evaluate(ctx context.Context, input SchedulingInput) (domain.PlacementDecision, error)
+	Evaluate(ctx context.Context, input SchedulingInput) (domain.BookingDecision, error)
 }
 
 type SchedulingInput struct {
@@ -41,9 +41,9 @@ func New() Scheduler {
 	return deterministicScheduler{}
 }
 
-func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput) (domain.PlacementDecision, error) {
+func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput) (domain.BookingDecision, error) {
 	if input.EvaluatedAt.IsZero() {
-		return domain.PlacementDecision{}, fmt.Errorf("scheduler: evaluated_at is required")
+		return domain.BookingDecision{}, fmt.Errorf("scheduler: evaluated_at is required")
 	}
 	if input.ModelVersion == "" {
 		input.ModelVersion = "latency-v1"
@@ -52,7 +52,7 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		input.Weights.StartLatencyUSDPerSecond = 0.0005
 	}
 
-	decision := domain.PlacementDecision{
+	decision := domain.BookingDecision{
 		RunID:                  input.RunID,
 		WorkloadRevisionDigest: input.Workload.Digest,
 		EvaluatedAt:            input.EvaluatedAt.UTC(),
@@ -95,7 +95,7 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		SelectedID  string
 	}{input.RunID, input.Workload.Digest, input.EvaluatedAt.UTC(), input.ModelVersion, decision.Candidates, decision.SelectedOfferSnapshotID})
 	if err != nil {
-		return domain.PlacementDecision{}, err
+		return domain.BookingDecision{}, err
 	}
 	decision.ID = "dec_" + id[len("sha256:"):24]
 	return decision, nil

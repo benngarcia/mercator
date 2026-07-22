@@ -1,13 +1,13 @@
 import { CircleSlash } from "lucide-react";
 
-import type { PlacementDecision } from "@/lib/api/types";
+import type { BookingDecision } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { phaseLabel, shortDigest } from "@/lib/format";
 import { Badge } from "@/components/ui/badge";
 import { StatBlock, CopyButton, RelativeTime } from "@/components/common";
 
 export interface DecisionPanelProps {
-  decision: PlacementDecision;
+  decision: BookingDecision;
   className?: string;
 }
 
@@ -51,7 +51,7 @@ function ConnectionGroup({ label, ids, tone }: ConnectionGroupProps) {
 }
 
 /**
- * DecisionPanel summarizes a PlacementDecision: the selected offer, the policy
+ * DecisionPanel summarizes a BookingDecision: the selected offer, the policy
  * objective and constraints, the model version, the human-readable selection
  * reason codes, and the collection report (which connections were queried,
  * served from cache, or excluded). It pairs with CandidateTable to answer
