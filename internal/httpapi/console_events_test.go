@@ -18,9 +18,59 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/scenario"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/workload"
 )
+
+func TestConsoleEventStreamRunsTheGoDashboardScenario(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	playback := scenario.NewDashboardPlayback()
+	handler := New(Deps{Scenarios: playback})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/console/events?workspace_id=ws_scenario&scenario="+scenario.DashboardScenarioName+"&play=1", nil)
+	if err != nil {
+		t.Fatalf("new scenario stream request: %v", err)
+	}
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("open scenario stream: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("scenario stream response = %d %q", response.StatusCode, response.Header.Get("Content-Type"))
+	}
+
+	reader := bufio.NewReader(response.Body)
+	reset := readSSEFrame(t, reader)
+	if reset.Event != "reset" || !bytes.Contains(reset.Data, []byte(`"offer_source":"sanitized_recordings"`)) ||
+		!bytes.Contains(reset.Data, []byte(`"adapter_type":"runpod"`)) || !bytes.Contains(reset.Data, []byte(`"adapter_type":"shadeform"`)) ||
+		!bytes.Contains(reset.Data, []byte(`"adapter_type":"vast"`)) {
+		t.Fatalf("initial scenario reset = %s", reset.Data)
+	}
+
+	commandBody := bytes.NewBufferString(`{"type":"pause"}`)
+	command, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/dev/scenario-sessions/ws_scenario/commands", commandBody)
+	if err != nil {
+		t.Fatalf("new scenario command: %v", err)
+	}
+	command.Header.Set("Content-Type", "application/json")
+	commandResponse, err := server.Client().Do(command)
+	if err != nil {
+		t.Fatalf("pause scenario: %v", err)
+	}
+	defer commandResponse.Body.Close()
+	if commandResponse.StatusCode != http.StatusOK {
+		t.Fatalf("pause response = %d", commandResponse.StatusCode)
+	}
+	paused := readSSEFrame(t, reader)
+	if paused.Event != "playback" || !bytes.Contains(paused.Data, []byte(`"status":"paused"`)) {
+		t.Fatalf("paused scenario frame = %+v", paused)
+	}
+}
 
 func TestConsoleEventStreamSnapsThenDeliversActualRunEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
