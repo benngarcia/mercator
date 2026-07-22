@@ -193,7 +193,7 @@ RunPod GPU). The broker derives each snapshot ID from both the Connection and
 the adapter-local capacity identity, so equivalent catalog items exposed by two
 Connections remain distinct placement candidates. Open the console at
 [`http://127.0.0.1:8080/?workspace_id=ws_1`](http://127.0.0.1:8080/?workspace_id=ws_1)
-and paste `dev-token` when prompted.
+without a token prompt when the source server is running with `--dev`.
 
 ### From source (contributors)
 
@@ -206,8 +206,12 @@ go build -o mercator ./cmd/mercator
 export MERCATOR_ADDR=127.0.0.1:8080
 export MERCATOR_API_TOKEN=dev-token
 export MERCATOR_SQLITE_DSN="file:$HOME/.mercator/mercator.db" && mkdir -p "$HOME/.mercator"
-./mercator serve   # then drive it with the architecture-aware request in step 2
+./mercator serve --dev   # loopback-only local browser session; CLI keeps using dev-token
 ```
+
+`--dev` refuses non-loopback listeners, signs an HTTP-only local session for
+`developer@localhost`, and leaves bearer authentication available for CLI and
+automation. Omit it to exercise token-only or configured OIDC authentication.
 
 For the full Docker runbook — preconditions, container labels, and cleanup
 verification — see

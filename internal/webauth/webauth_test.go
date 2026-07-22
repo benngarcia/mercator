@@ -336,13 +336,14 @@ func TestSessionEndpointReportsIdentity(t *testing.T) {
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, req)
 	var body struct {
+		Mode    string `json:"mode"`
 		Enabled bool   `json:"enabled"`
 		Email   string `json:"email"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode session response: %v", err)
 	}
-	if !body.Enabled || body.Email != "operator@example.com" {
+	if body.Mode != "oidc" || !body.Enabled || body.Email != "operator@example.com" {
 		t.Fatalf("unexpected session response: %+v", body)
 	}
 }

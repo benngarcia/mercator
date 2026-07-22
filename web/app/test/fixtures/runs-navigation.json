@@ -1,5 +1,4 @@
 {
-  "token": "runs-navigation-token",
   "image": {
     "reference": "busybox:latest",
     "args": ["echo", "created from Runs"],

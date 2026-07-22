@@ -30,15 +30,14 @@ function contextOptions(viewport) {
 async function prepareContext(viewport) {
   const context = await browser.newContext(contextOptions(viewport));
   await context.addInitScript(
-    ([token, workspace]) => {
-      localStorage.setItem("mercator.token", token);
+    (workspace) => {
       localStorage.setItem("mercator.workspace", workspace);
       localStorage.setItem(
         "mercator.recentWorkspaces",
         JSON.stringify([workspace]),
       );
     },
-    [fixture.token, workspaceID],
+    workspaceID,
   );
   return context;
 }
@@ -55,6 +54,24 @@ async function waitForRuns(page) {
     .getByRole("button", { name: "Create run", exact: true })
     .first()
     .waitFor();
+}
+
+async function localSessionSurvivesReload(page) {
+  // Arrange
+  await page.goto(runsURL(), { waitUntil: "domcontentloaded" });
+  await waitForRuns(page);
+
+  // Act
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForRuns(page);
+
+  // Assert
+  await page.getByText("developer@localhost", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Set API token").count(), 0);
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("mercator.token")),
+    null,
+  );
 }
 
 async function createdRunRequest(page, submit) {
@@ -280,6 +297,7 @@ page.on("pageerror", (error) => {
   console.error(`browser page error: ${error.message}`);
 });
 try {
+  await localSessionSurvivesReload(page);
   await runsScopeCancelledCreate(page);
   await page
     .getByRole("button", { name: "Create run", exact: true })
@@ -336,6 +354,7 @@ console.log(
   JSON.stringify({
     scenarios: [
       "runs_scope_cancelled_create",
+      "local_session_survives_reload",
       "minimal_image_run_created",
       "immutable_spec_run_created",
       "authoring_routes_retired",

@@ -61,3 +61,28 @@ effect("omits Workspace scope from the Workspace catalog", () =>
     expect(new URL(request.url).searchParams.has("workspace_id")).toBe(false);
   }).pipe(Effect.provide(testApiLayer)),
 );
+
+effect("decodes the local browser session at the auth boundary", () =>
+  Effect.gen(function* () {
+    // Arrange
+    globalThis.fetch = Object.assign(
+      async () =>
+        Response.json({
+          mode: "local",
+          enabled: true,
+          email: "developer@localhost",
+        }),
+      { preconnect: originalFetch.preconnect },
+    );
+
+    // Act
+    const session = yield* endpoints.getAuthSession();
+
+    // Assert
+    expect(session).toEqual({
+      mode: "local",
+      enabled: true,
+      email: "developer@localhost",
+    });
+  }).pipe(Effect.provide(testApiLayer)),
+);

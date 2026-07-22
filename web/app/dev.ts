@@ -2,7 +2,7 @@
  * Development server for the Mercator console.
  *
  * Bun's HTML import gives us bundling + HMR for the React app. A fetch fallback
- * proxies API traffic (/v1/*, /health/*, /openapi.json) to a locally running
+ * proxies API and auth traffic (/v1/*, /auth/*, /health/*, /openapi.json) to a locally running
  * `go run ./cmd/mercator` on :8080, so the SPA talks same-origin in dev exactly
  * as it will once embedded. Everything else is served by the HTML route.
  *
@@ -41,6 +41,7 @@ const server = Bun.serve({
   development: { hmr: true, console: true },
   routes: {
     "/v1/*": proxyAPI,
+    "/auth/*": proxyAPI,
     "/health/*": proxyAPI,
     "/openapi.json": proxyAPI,
     "/*": index,
@@ -48,4 +49,4 @@ const server = Bun.serve({
 });
 
 console.log(`Mercator console dev server: ${server.url}`);
-console.log(`Proxying /v1, /health, /openapi.json → ${API_TARGET}`);
+console.log(`Proxying /v1, /auth, /health, /openapi.json → ${API_TARGET}`);

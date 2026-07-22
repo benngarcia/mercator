@@ -83,14 +83,24 @@ export type WorkspaceListResponse = ContractSchemas["WorkspaceListResponse"];
 // /auth/session belongs to the browser login surface rather than the public
 // versioned HTTP contract. Decode its deliberately small response where it
 // enters the console instead of pretending it is part of the /v1 contract.
-export const AuthSessionState = Schema.Struct({
-  enabled: Schema.Boolean,
-  email: Schema.optionalKey(Schema.String),
-});
+export const AuthSessionState = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal("token"),
+    enabled: Schema.Literal(false),
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("local"),
+    enabled: Schema.Literal(true),
+    email: Schema.String,
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("oidc"),
+    enabled: Schema.Literal(true),
+    email: Schema.optionalKey(Schema.String),
+  }),
+]);
 
-export interface AuthSessionState extends Schema.Schema.Type<
-  typeof AuthSessionState
-> {}
+export type AuthSessionState = Schema.Schema.Type<typeof AuthSessionState>;
 
 export type AdapterManifest = ContractSchemas["AdapterManifest"];
 export type ConfigFieldType = AdapterManifest["config_fields"][number]["type"];

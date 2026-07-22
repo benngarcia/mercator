@@ -3,13 +3,10 @@
 // inherited by every child route, making a workspace view deep-linkable. The
 // token never enters the URL (session.ts / localStorage only, per the design).
 //
-// Two keyed resources keep the URL search param and the session workspace in sync:
-// when the param changes (deep link, back/forward) we write it into the session
-// (the canonical store the data hooks read); when the session changes (Topbar
-// WorkspaceSwitcher) we mirror it back into the URL. The session write is the
-// source of truth; the URL is a shareable projection of it.
+// Two keyed resources keep the URL search param and the session workspace in
+// sync. An explicit URL wins for deep links and back/forward navigation. When
+// the URL omits a Workspace, the persisted session fills in that default.
 
-import { useRef } from "react";
 import {
   createRootRoute,
   Link,
@@ -20,6 +17,7 @@ import {
 import { AppShell } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/hooks/useSession";
+import { useAuthSession } from "@/lib/api/queries";
 import { useMountEffect } from "@/hooks/useMountEffect";
 
 export interface RootSearch {
@@ -80,12 +78,8 @@ function WorkspaceSync() {
   const navigate = useNavigate();
   const search = useSearch({ from: "__root__" });
   const { workspace, setWorkspace } = useSession();
-  const sessionWorkspace = workspace;
-  const previousUrlWorkspace = useRef<string | undefined | null>(null);
-  const urlChanged = previousUrlWorkspace.current !== search.workspace_id;
-  previousUrlWorkspace.current = search.workspace_id;
 
-  if (search.workspace_id && urlChanged) {
+  if (search.workspace_id && search.workspace_id !== workspace) {
     return (
       <UrlWorkspaceSync
         key={search.workspace_id}
@@ -95,11 +89,11 @@ function WorkspaceSync() {
       />
     );
   }
-  return sessionWorkspace ? (
+  return workspace && !search.workspace_id ? (
     <SessionWorkspaceSync
-      key={sessionWorkspace}
+      key={workspace}
       navigate={navigate}
-      sessionWorkspace={sessionWorkspace}
+      sessionWorkspace={workspace}
       urlWorkspace={search.workspace_id}
     />
   ) : null;
@@ -130,6 +124,10 @@ function NotFoundPage() {
 }
 
 function RootComponent() {
+  const auth = useAuthSession();
+  if (auth.data === undefined && !auth.isError) {
+    return <div className="h-screen bg-background" />;
+  }
   return (
     <>
       <WorkspaceSync />

@@ -33,12 +33,13 @@ import (
 // parsing. Getenv is retained only for connections that explicitly reference an
 // environment-backed provider credential.
 type Config struct {
-	SQLiteDSN     string
-	OperatorToken string
-	MasterKey     []byte
-	PublicURL     string
-	Getenv        func(string) string
-	WebAuth       webauth.Config
+	SQLiteDSN      string
+	OperatorToken  string
+	MasterKey      []byte
+	PublicURL      string
+	Getenv         func(string) string
+	WebAuth        webauth.Config
+	LocalAuthEmail string
 
 	// ProviderFactory replaces the production catalog in lifecycle tests.
 	// Production callers leave it nil.
@@ -69,6 +70,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	}
 	if cfg.OperatorToken == "" {
 		return nil, errors.New("daemon: OperatorToken is required")
+	}
+	if cfg.WebAuth.Enabled() && cfg.LocalAuthEmail != "" {
+		return nil, errors.New("daemon: OIDC and local authentication cannot both be enabled")
 	}
 
 	storage, err := sqlitestore.Open(ctx, cfg.SQLiteDSN)
@@ -123,6 +127,12 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		authenticator, authErr := webauth.New(ctx, cfg.WebAuth)
 		if authErr != nil {
 			return nil, fmt.Errorf("daemon: initialize OIDC login: %w", authErr)
+		}
+		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator))
+	} else if cfg.LocalAuthEmail != "" {
+		authenticator, authErr := webauth.NewLocal(cfg.LocalAuthEmail)
+		if authErr != nil {
+			return nil, fmt.Errorf("daemon: initialize local login: %w", authErr)
 		}
 		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator))
 	}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	stdlog "log"
 	"net"
@@ -20,6 +21,12 @@ import (
 	"github.com/benngarcia/mercator/internal/keymaterial"
 	"github.com/benngarcia/mercator/internal/webauth"
 )
+
+const localDeveloperEmail = "developer@localhost"
+
+type serveOptions struct {
+	localAuthEmail string
+}
 
 func main() {
 	os.Exit(run(context.Background(), os.Args, environ(), os.Stdout, os.Stderr))
@@ -43,7 +50,16 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 			Stderr:      stderr,
 		})
 	}
+	options, err := parseServeOptions(args)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 2
+	}
 	addr := envValue(env, "MERCATOR_ADDR", "127.0.0.1:8080")
+	if options.localAuthEmail != "" && !isLoopbackAddress(addr) {
+		stdlog.Printf("configure local login: --dev requires a loopback MERCATOR_ADDR, got %s", addr)
+		return 1
+	}
 	apiToken, generatedToken, err := apiTokenFromEnv(env)
 	if err != nil {
 		stdlog.Printf("load api token: %v", err)
@@ -55,6 +71,10 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	webauthCfg, err := webauth.FromEnv(env)
 	if err != nil {
 		stdlog.Printf("configure OIDC login: %v", err)
+		return 1
+	}
+	if options.localAuthEmail != "" && webauthCfg.Enabled() {
+		stdlog.Printf("configure local login: --dev cannot be combined with MERCATOR_OIDC_*")
 		return 1
 	}
 	masterKey, err := masterKeyFromEnv(env)
@@ -69,12 +89,13 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		return 1
 	}
 	runtime, err := daemon.New(ctx, daemon.Config{
-		SQLiteDSN:     envValue(env, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db"),
-		OperatorToken: apiToken,
-		MasterKey:     masterKey,
-		PublicURL:     env["MERCATOR_PUBLIC_URL"],
-		Getenv:        func(name string) string { return env[name] },
-		WebAuth:       webauthCfg,
+		SQLiteDSN:      envValue(env, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db"),
+		OperatorToken:  apiToken,
+		MasterKey:      masterKey,
+		PublicURL:      env["MERCATOR_PUBLIC_URL"],
+		Getenv:         func(name string) string { return env[name] },
+		WebAuth:        webauthCfg,
+		LocalAuthEmail: options.localAuthEmail,
 	})
 	if err != nil {
 		_ = listener.Close()
@@ -105,18 +126,35 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	return exitCode
 }
 
+func parseServeOptions(args []string) (serveOptions, error) {
+	if len(args) <= 2 {
+		return serveOptions{}, nil
+	}
+	if len(args) == 3 && args[1] == "serve" && args[2] == "--dev" {
+		return serveOptions{localAuthEmail: localDeveloperEmail}, nil
+	}
+	return serveOptions{}, fmt.Errorf("usage: mercator serve [--dev]")
+}
+
 func warnIfNonLoopback(addr string) {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return
-	}
-	if host == "localhost" {
-		return
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+	if isLoopbackAddress(addr) {
 		return
 	}
 	stdlog.Printf("WARNING: listening on non-loopback address %s over plaintext HTTP; bearer tokens and run data are unencrypted in transit — put a TLS-terminating proxy in front for anything beyond local evaluation", addr)
+}
+
+func isLoopbackAddress(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 func masterKeyFromEnv(values map[string]string) ([]byte, error) {

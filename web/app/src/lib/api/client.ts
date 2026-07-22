@@ -138,7 +138,7 @@ export const layer = Layer.effect(
         try: () => response.json(),
         catch: (cause) => transportError("Api.getAuthSession.decode", cause),
       });
-      return yield* Schema.decodeUnknownEffect(AuthSessionState)(json).pipe(
+      const auth = yield* Schema.decodeUnknownEffect(AuthSessionState)(json).pipe(
         Effect.mapError(
           (cause) =>
             new ApiError({
@@ -149,6 +149,11 @@ export const layer = Layer.effect(
             }),
         ),
       );
+      const browserSession = yield* session.current;
+      if (auth.mode !== "token" && browserSession.token !== null) {
+        yield* session.setToken(null);
+      }
+      return auth;
     });
 
     const logout = Effect.fn("Api.logout")(function* () {
