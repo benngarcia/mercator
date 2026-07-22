@@ -145,22 +145,17 @@ func (p *DashboardPlayback) replaceSession(workspaceID string, session *dashboar
 
 func newDashboardPlaybackSession(transcript DashboardTranscript, autoplay bool) *dashboardPlaybackSession {
 	state := DashboardPlaybackSnapshot{
-		Status:         PlaybackPlaying,
+		Status:         PlaybackPaused,
 		CueCount:       len(transcript.Steps),
 		DurationMillis: transcript.DurationMillis,
 		Speed:          1,
 	}
-	var observed []DashboardMessage
-	if !autoplay {
-		state.Status = PlaybackFinished
-		state.Cursor = len(transcript.Steps)
-		state.ElapsedMillis = transcript.DurationMillis
-		observed = messagesThrough(transcript, state.Cursor, time.Now())
+	if autoplay {
+		state.Status = PlaybackPlaying
 	}
 	return &dashboardPlaybackSession{
 		transcript:  transcript,
 		state:       state,
-		observed:    observed,
 		subscribers: map[chan DashboardEmission]struct{}{},
 		stop:        make(chan struct{}),
 	}
@@ -284,7 +279,7 @@ func (s *dashboardPlaybackSession) tick(now time.Time) {
 }
 
 func (s *dashboardPlaybackSession) restart() {
-	s.state.Status = PlaybackPlaying
+	s.state.Status = PlaybackPaused
 	s.state.Cursor = 0
 	s.state.ElapsedMillis = 0
 	s.observed = nil

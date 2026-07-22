@@ -51,6 +51,39 @@ func TestDashboardPlaybackStepsAndRewindsEverySubscriber(t *testing.T) {
 	}
 }
 
+func TestDashboardPlaybackOpensAndRestartsPausedAtTheBeginning(t *testing.T) {
+	// Arrange
+	playback := NewDashboardPlayback()
+	emissions, err := playback.Open(t.Context(), "ws_scenario", DashboardScenarioName, false)
+	if err != nil {
+		t.Fatalf("open paused scenario: %v", err)
+	}
+	initial := <-emissions
+	if initial.Reset == nil || initial.Reset.Playback.Status != PlaybackPaused || initial.Reset.Playback.Cursor != 0 {
+		t.Fatalf("initial paused emission = %+v", initial)
+	}
+	if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandNext}); err != nil {
+		t.Fatalf("step scenario: %v", err)
+	}
+	<-emissions
+
+	// Act
+	if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandRestart}); err != nil {
+		t.Fatalf("restart scenario: %v", err)
+	}
+	restarted := <-emissions
+
+	// Assert
+	if restarted.Reset == nil || restarted.Reset.Playback.Status != PlaybackPaused || restarted.Reset.Playback.Cursor != 0 {
+		t.Fatalf("restarted emission = %+v", restarted)
+	}
+	select {
+	case advanced := <-emissions:
+		t.Fatalf("restarted scenario advanced without Play: %+v", advanced)
+	case <-time.After(2 * dashboardTick):
+	}
+}
+
 func TestDashboardPlaybackDropsAStalledSubscriber(t *testing.T) {
 	playback := NewDashboardPlayback()
 	session := newDashboardPlaybackSession(DashboardTranscript{}, true)
@@ -94,8 +127,22 @@ func TestDashboardPlaybackReplacesWorkspaceSessionWhenScenarioChanges(t *testing
 		t.Fatalf("open deadline scenario: %v", err)
 	}
 	reset := <-second
-	if reset.Reset == nil || !resetContainsRun(reset.Reset, "run-deadline-urgent") {
-		t.Fatalf("replacement reset is not the deadline scenario: %+v", reset)
+	if reset.Reset == nil || reset.Reset.Playback.Status != PlaybackPaused || reset.Reset.Playback.Cursor != 0 {
+		t.Fatalf("replacement scenario did not start paused: %+v", reset)
+	}
+	foundDeadlineRun := false
+	for cursor := 1; cursor <= reset.Reset.Playback.CueCount; cursor++ {
+		if err := playback.Command("ws_scenario", DashboardCommand{Type: CommandNext}); err != nil {
+			t.Fatalf("step deadline scenario: %v", err)
+		}
+		step := <-second
+		if step.Reset != nil && resetContainsRun(step.Reset, "run-deadline-urgent") {
+			foundDeadlineRun = true
+			break
+		}
+	}
+	if !foundDeadlineRun {
+		t.Fatal("replacement transcript is not the deadline scenario")
 	}
 	if _, open := <-first; open {
 		t.Fatal("previous scenario subscriber remained open")

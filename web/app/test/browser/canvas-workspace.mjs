@@ -36,7 +36,6 @@ try {
   const url = new URL("/canvas", baseURL);
   url.searchParams.set("workspace_id", workspaceID);
   url.searchParams.set("scenario", "warm-pool-burst");
-  url.searchParams.set("play", "1");
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
 
   await page.getByLabel("Workspace events live").waitFor();
@@ -50,12 +49,8 @@ try {
     .waitFor();
   assert.equal(await eventFeed.getByText(/Target contract:/).count(), 0);
 
-  if (await page.getByRole("button", { name: "Pause scenario" }).isVisible()) {
-    await playbackCommand(page, "Pause scenario");
-  }
-  await playbackCommand(page, "Restart scenario");
-  await playbackCommand(page, "Pause scenario");
   await waitForCursor(page, 0);
+  await page.getByRole("button", { name: "Play scenario" }).waitFor();
   const cueCount = Number(await progress.getAttribute("aria-valuemax"));
   assert.ok(cueCount > 40, `warm-pool scenario only has ${cueCount} events`);
 
@@ -88,24 +83,33 @@ try {
   await queuedDecision.getByText("off_vast_9002", { exact: true }).waitFor();
   await queuedDecision.getByText("fresh", { exact: true }).first().waitFor();
 
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await stepTo(page, progress, cueCount);
   await page.getByText(`Event ${cueCount} of ${cueCount}`, { exact: true }).waitFor();
+  await restartStaysAtBeginning(page, progress);
 
   await page.getByLabel("Placement scenario").selectOption("deadline-versus-cost");
   await page.waitForURL(/scenario=deadline-versus-cost/);
   await waitForScenario(page, "deadline-versus-cost");
   await page.getByLabel("Workspace events live").waitFor();
+  await waitForCursor(page, 0);
+  await page.getByRole("button", { name: "Play scenario" }).waitFor();
+  await stepTo(page, progress, Number(await progress.getAttribute("aria-valuemax")));
   await eventFeed.getByText("runs/run-deadline-urgent", { exact: true }).first().waitFor();
   const urgentDecision = eventFeed
     .locator("li")
     .filter({ hasText: "Booking decided" })
     .filter({ hasText: "runs/run-deadline-urgent" });
   await revealEvidence(urgentDecision, "LATENCY_SLO_EXCEEDED");
+  await restartStaysAtBeginning(page, progress);
 
   await page.getByLabel("Placement scenario").selectOption("failure-rebalance");
   await page.waitForURL(/scenario=failure-rebalance/);
   await waitForScenario(page, "failure-rebalance");
   await page.getByLabel("Workspace events live").waitFor();
+  await waitForCursor(page, 0);
+  await page.getByRole("button", { name: "Play scenario" }).waitFor();
+  await stepTo(page, progress, Number(await progress.getAttribute("aria-valuemax")));
   await eventFeed.getByText("runs/run-provider-replacement", { exact: true }).first().waitFor();
   await eventFeed.getByText("Launch failed", { exact: true }).waitFor();
   const replacementDecisions = eventFeed
@@ -116,6 +120,7 @@ try {
     replacementDecisions.first(),
     "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE",
   );
+  await restartStaysAtBeginning(page, progress);
 
   assert.deepEqual(consoleProblems, []);
   if (process.env.MERCATOR_BROWSER_SCREENSHOT) {
@@ -151,6 +156,14 @@ async function waitForCursor(page, expected) {
 
 async function playbackCommand(page, accessibleName) {
   await page.getByRole("button", { name: accessibleName }).click();
+}
+
+async function restartStaysAtBeginning(page, progress) {
+  await playbackCommand(page, "Restart scenario");
+  await waitForCursor(page, 0);
+  await page.getByRole("button", { name: "Play scenario" }).waitFor();
+  await page.waitForTimeout(2 * 250);
+  assert.equal(await progress.getAttribute("aria-valuenow"), "0");
 }
 
 async function waitForScenario(page, scenario) {
