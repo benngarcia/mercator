@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -160,12 +161,20 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Events:       logStore,
 		Scenarios:    dashboardScenarios,
 	}, serverOptions...)
+	var rootHandler http.Handler = handler
+	if cfg.LocalAuthEmail != "" {
+		// Local login mints a browser session for any request that lacks one,
+		// so a DNS-rebound hostname resolving to 127.0.0.1 must never reach
+		// it: only requests addressed to this machine by a loopback name are
+		// served in --dev mode.
+		rootHandler = loopbackHostOnly(handler)
+	}
 
 	reconcileCtx, stopReconcile := context.WithCancel(ctx)
 	workspaceJanitor := janitor.New(providerBroker, janitor.WithEventLog(logStore))
 	runtime := &Runtime{
 		server: &http.Server{
-			Handler:           handler,
+			Handler:           rootHandler,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       60 * time.Second,
 			WriteTimeout:      90 * time.Second,
@@ -305,4 +314,27 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 			log.Printf("janitor sweep %s: reclaimed %d of %d owned objects", workspaceID, result.Released, result.Found)
 		}
 	}
+}
+
+func loopbackHostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isLoopbackHost(r.Host) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "local development mode serves loopback hosts only", http.StatusMisdirectedRequest)
+	})
+}
+
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if split, _, err := net.SplitHostPort(hostport); err == nil {
+		host = split
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

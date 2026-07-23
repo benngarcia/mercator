@@ -133,7 +133,14 @@ func (c *offerCatalog) publish(workspaceID string, workspace *offerCatalogWorksp
 		select {
 		case subscriber <- snapshot:
 		default:
-			<-subscriber
+			// The subscriber may drain its buffer between the failed send above
+			// and this eviction, so the receive must not block: publish holds
+			// c.mu, and a parked publish would wedge Subscribe, Refresh, and
+			// unsubscribe with it.
+			select {
+			case <-subscriber:
+			default:
+			}
 			subscriber <- snapshot
 		}
 	}

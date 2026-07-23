@@ -241,14 +241,15 @@ function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
   const workload: WorkloadRevision = data.workload_revision;
   const expected = workload.spec.placement.expected_runtime_seconds;
   const max = workload.spec.execution.max_runtime_seconds;
-  if (expected !== undefined && expected > max) {
-    throw new Error(`${event.type} expected runtime exceeds enforced max`);
-  }
+  // A malformed expected runtime in durable history must degrade this one
+  // run, never throw: a reducer throw is a non-retryable feed error that
+  // would brick the canvas for every viewer replaying the workspace.
   const run: WorkspaceRun = {
     id: runID,
     requestedAt: event.time,
     workload,
-    expectedRuntimeSeconds: expected ?? null,
+    expectedRuntimeSeconds:
+      expected !== undefined && expected <= max ? expected : null,
     maxRuntimeSeconds: max,
     phase: "requested",
   };
@@ -527,13 +528,16 @@ function detachBooking(
   const rental = workspace.rentals[booking.rentalID];
   const rentals = { ...workspace.rentals };
   if (rental) {
+    // Detaching a queued booking must not stomp the phase of a rental whose
+    // running booking survives.
+    const runningBookingID =
+      rental.runningBookingID === bookingID
+        ? undefined
+        : rental.runningBookingID;
     const nextRental = {
       ...rental,
-      phase: "idle" as const,
-      runningBookingID:
-        rental.runningBookingID === bookingID
-          ? undefined
-          : rental.runningBookingID,
+      phase: runningBookingID ? rental.phase : ("idle" as const),
+      runningBookingID,
       queuedBookingIDs: orderedQueuedBookings(bookings, rental.id),
     };
     if (

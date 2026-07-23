@@ -89,6 +89,24 @@ func TestValidateWorkloadRevisionEnforcesV1OCIContract(t *testing.T) {
 			path: "spec.containers[0].ports[0].container_port",
 		},
 		{
+			name: "rejects expected runtime above the enforced maximum",
+			edit: func(rev *WorkloadRevision) {
+				rev.Spec.Execution.MaxRuntimeSeconds = 3600
+				rev.Spec.Placement.ExpectedRuntimeSeconds = 7200
+			},
+			code: "EXPECTED_RUNTIME_EXCEEDS_MAX",
+			path: "spec.placement.expected_runtime_seconds",
+		},
+		{
+			name: "rejects expected runtime above the default maximum when max is omitted",
+			edit: func(rev *WorkloadRevision) {
+				rev.Spec.Execution.MaxRuntimeSeconds = 0
+				rev.Spec.Placement.ExpectedRuntimeSeconds = DefaultMaxRuntimeSeconds + 1
+			},
+			code: "EXPECTED_RUNTIME_EXCEEDS_MAX",
+			path: "spec.placement.expected_runtime_seconds",
+		},
+		{
 			name: "public ports require public inbound network",
 			edit: func(rev *WorkloadRevision) {
 				rev.Spec.Containers[0].Ports = []PortSpec{{

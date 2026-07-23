@@ -80,9 +80,14 @@ function applyMessage(
   current: WorkspaceFeedSnapshot,
   message: WorkspaceMessage,
 ): WorkspaceFeedSnapshot {
+  // Positions already incorporated must be skipped, not just recent ids: a
+  // reconnect without a cursor replays the whole history onto a retained
+  // snapshot, and the id window only remembers the last EVENT_LIMIT events.
   if (
     message.type === "domain_event" &&
-    current.events.some((event) => event.id === message.event.id)
+    (message.event.globalposition <=
+      current.workspace.throughGlobalPosition ||
+      current.events.some((event) => event.id === message.event.id))
   ) {
     return current;
   }

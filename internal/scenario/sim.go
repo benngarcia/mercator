@@ -52,7 +52,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 			return nil, err
 		}
 		if len(schedule.Queued) > 0 {
-			session.note("rental %q starts with QueuedBookings, but the Broker has no RentalSchedule state yet", rental.ID)
+			session.note("rental %q starts with QueuedBookings, but the scenario backend cannot seed Broker RentalSchedule state yet", rental.ID)
 		}
 		if len(rental.NamedCaches) > 0 {
 			session.note("rental %q holds named caches, but no offer field can advertise them yet", rental.ID)

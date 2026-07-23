@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chromium } from "playwright";
 
 const baseURL = (
-  process.env.MERCATOR_BROWSER_BASE_URL ?? "http://localhost:3000"
+  process.env.MERCATOR_BROWSER_BASE_URL ?? "http://127.0.0.1:3000"
 ).replace(/\/$/, "");
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
