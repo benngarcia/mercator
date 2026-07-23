@@ -492,10 +492,20 @@ func reserveDecision(requested runRequestedData, decision domain.BookingDecision
 // into the run's single outcome and cleanup intent.
 func (o *Orchestrator) recordTerminalTransition(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
 	if !state.externalObjectPossible() {
-		return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal-before-launch", []eventlog.NewEvent{
+		events := []eventlog.NewEvent{
 			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: state.firstTerminal.Outcome}, o.now()),
 			mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
-		})
+		}
+		// A run cancelled while its Booking is still queued must release that
+		// Booking from its Rental Schedule in the same commit, or the schedule
+		// keeps a phantom entry that later promotes to running and wedges the
+		// Rental. Guarded on bookingQueued, not bookingDecision: a booking
+		// already released by a replaceable launch failure must not complete
+		// twice.
+		if state.bookingQueued() {
+			return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:terminal-before-launch", events)
+		}
+		return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal-before-launch", events)
 	}
 	return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal", []eventlog.NewEvent{
 		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: state.firstTerminal.Outcome}, o.now()),
