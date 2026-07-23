@@ -147,6 +147,30 @@ func TestAdapterLaunchRejectsForeignContainerWithSameName(t *testing.T) {
 	}
 }
 
+func TestAdapterLaunchTreatsStartFailureAfterCreateAsIndeterminate(t *testing.T) {
+	client := newFakeClient()
+	client.startErr = errors.New("docker daemon disconnected")
+	ad := New(client)
+
+	_, err := ad.Launch(context.Background(), launchRequest())
+
+	if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch error = %v, want adapter.ErrLaunchIndeterminate", err)
+	}
+}
+
+func TestAdapterLaunchTreatsInspectionFailureAfterCreateAsIndeterminate(t *testing.T) {
+	client := newFakeClient()
+	client.inspectErr = errors.New("docker daemon disconnected")
+	ad := New(client)
+
+	_, err := ad.Launch(context.Background(), launchRequest())
+
+	if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch error = %v, want adapter.ErrLaunchIndeterminate", err)
+	}
+}
+
 func TestAdapterObserveAndReleaseRejectForeignContainerWithSameName(t *testing.T) {
 	client := newFakeClient()
 	ad := New(client)
@@ -294,26 +318,31 @@ func launchRequest() adapter.LaunchRequest {
 }
 
 type fakeClient struct {
-	created []CreateContainerRequest
-	started []string
-	objects map[string]Container
+	created    []CreateContainerRequest
+	started    []string
+	objects    map[string]Container
+	startErr   error
+	inspectErr error
 }
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{objects: map[string]Container{}}
 }
 
-func (f *fakeClient) CreateContainer(_ context.Context, req CreateContainerRequest) (Container, error) {
+func (f *fakeClient) CreateContainer(_ context.Context, req CreateContainerRequest) (string, error) {
 	if existing, ok := f.objects[req.Name]; ok {
-		return existing, ErrAlreadyExists
+		return existing.ID, ErrAlreadyExists
 	}
 	container := Container{ID: "docker-" + req.Name, Name: req.Name, Labels: req.Labels, State: "created", CreatedAt: time.Now().UTC()}
 	f.objects[req.Name] = container
 	f.created = append(f.created, req)
-	return container, nil
+	return container.ID, nil
 }
 
 func (f *fakeClient) StartContainer(_ context.Context, name string) error {
+	if f.startErr != nil {
+		return f.startErr
+	}
 	container, ok := f.objects[name]
 	if !ok {
 		return ErrNotFound
@@ -325,6 +354,9 @@ func (f *fakeClient) StartContainer(_ context.Context, name string) error {
 }
 
 func (f *fakeClient) InspectContainer(_ context.Context, name string) (Container, error) {
+	if f.inspectErr != nil {
+		return Container{}, f.inspectErr
+	}
 	container, ok := f.objects[name]
 	if !ok {
 		return Container{}, ErrNotFound

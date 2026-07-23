@@ -45,9 +45,11 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 	}
 	disk := 20
 	if d := strings.TrimSpace(config["container_disk_gb"]); d != "" {
-		if n, err := strconv.Atoi(d); err == nil && n > 0 {
-			disk = n
+		n, err := strconv.Atoi(d)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("vast: container_disk_gb must be a positive integer, got %q", d)
 		}
+		disk = n
 	}
 	limit := defaultOfferLimit
 	if l := strings.TrimSpace(config["offer_limit"]); l != "" {
@@ -58,7 +60,7 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 		limit = n
 	}
 	return &Adapter{
-		api:        newAPIClient(secret, config["base_url"], http.DefaultClient),
+		api:        newAPIClient(secret, config["base_url"], &http.Client{Timeout: time.Minute}),
 		gpuNames:   gpuNames,
 		offerLimit: limit,
 		diskGB:     disk,

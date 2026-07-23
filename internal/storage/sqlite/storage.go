@@ -112,7 +112,7 @@ func (r *ConnectionRepository) CreateCredential(ctx context.Context, request eve
 			return fmt.Errorf("%w: configure MERCATOR_SECRET_KEY", connection.ErrSecretStoreDisabled)
 		}
 		if err := r.credentials.PutTx(ctx, tx, write.WorkspaceID, write.ConnectionID, sealed); err != nil {
-			return fmt.Errorf("%w: %v", connection.ErrSecretStore, err)
+			return fmt.Errorf("%w: %w", connection.ErrSecretStore, err)
 		}
 		return nil
 	})
@@ -153,7 +153,7 @@ func requireActiveWorkspace(ctx context.Context, tx *sql.Tx, workspaceID string)
 func (r *ConnectionRepository) DeleteCredential(ctx context.Context, request eventlog.AppendRequest, ref connection.CredentialRef) (eventlog.AppendResult, error) {
 	return r.AppendAtomic(ctx, request, func(ctx context.Context, tx *sql.Tx) error {
 		if err := r.credentials.DeleteTx(ctx, tx, ref.WorkspaceID, ref.ConnectionID); err != nil {
-			return fmt.Errorf("%w: %v", connection.ErrSecretStore, err)
+			return fmt.Errorf("%w: %w", connection.ErrSecretStore, err)
 		}
 		return nil
 	})

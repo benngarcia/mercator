@@ -18,8 +18,53 @@ import (
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
-	_ "modernc.org/sqlite"
+	modernsqlite "modernc.org/sqlite"
 )
+
+func TestConnectionCredentialWritePreservesStorageCause(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mercator.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	if _, err := storage.Workspaces().Create(ctx, workspace.Create{
+		ID:          "ws_1",
+		DisplayName: "Test workspace",
+		CreatedAt:   time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC),
+		CreatedBy:   "test:storage",
+	}); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	resolver := credential.NewResolver(nil, storage.CredentialStore(), []byte("0123456789abcdef0123456789abcdef"))
+	repository, err := storage.Connections(resolver)
+	if err != nil {
+		t.Fatalf("open connection repository: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE connection_secret`); err != nil {
+		t.Fatalf("remove credential table: %v", err)
+	}
+
+	_, err = connection.NewWithCredentials(repository).Create(ctx, connection.CreateRequest{
+		WorkspaceID:  "ws_1",
+		ConnectionID: "conn_1",
+		AdapterType:  "runpod",
+		Credential:   credential.Credential{Source: credential.SourceMercator},
+		Secret:       []byte("secret"),
+	})
+
+	if !errors.Is(err, connection.ErrSecretStore) {
+		t.Fatalf("create error = %v, want connection.ErrSecretStore", err)
+	}
+	var sqliteErr *modernsqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("create error = %v, want preserved SQLite cause", err)
+	}
+}
 
 func TestOpenPurgesCredentialsForDeletedConnections(t *testing.T) {
 	ctx := context.Background()

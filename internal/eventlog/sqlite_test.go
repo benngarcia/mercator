@@ -248,6 +248,26 @@ func TestSQLiteSubscribeResumesFromStoredOffset(t *testing.T) {
 	}
 }
 
+func TestSQLiteAckDoesNotMoveStoredOffsetBackward(t *testing.T) {
+	ctx := context.Background()
+	log := openTestLog(t)
+	if err := log.Ack(ctx, "sub-runs", 100); err != nil {
+		t.Fatalf("ack newer offset: %v", err)
+	}
+
+	if err := log.Ack(ctx, "sub-runs", 90); err != nil {
+		t.Fatalf("ack older offset: %v", err)
+	}
+
+	offset, ok, err := log.Offset(ctx, "sub-runs")
+	if err != nil {
+		t.Fatalf("read offset: %v", err)
+	}
+	if !ok || offset != 100 {
+		t.Fatalf("stored offset = %d, %t; want 100, true", offset, ok)
+	}
+}
+
 func openTestLog(t *testing.T) *SQLiteEventLog {
 	t.Helper()
 	log, err := OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")

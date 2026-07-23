@@ -11,9 +11,13 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	os.Exit(conformanceprobe.Run(ctx, os.Args[1:], environment(), os.Stdout, os.Stderr))
+	return conformanceprobe.Run(ctx, os.Args[1:], environment(), os.Stdout, os.Stderr)
 }
 
 func environment() map[string]string {

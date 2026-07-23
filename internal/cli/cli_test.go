@@ -154,7 +154,7 @@ func TestRunCreatePositionalImageShorthand(t *testing.T) {
 
 	// The simplest possible invocation: positional image, no --run-id (the
 	// server generates and returns one), no --idempotency-key (the CLI mints a
-	// stable one), workspace from MERCATOR_WORKSPACE_ID. Args after `--` become
+	// fresh one), workspace from MERCATOR_WORKSPACE_ID. Args after `--` become
 	// the container args.
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), Config{

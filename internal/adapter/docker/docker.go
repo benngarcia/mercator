@@ -15,7 +15,7 @@ var ErrAlreadyExists = errors.New("docker: container already exists")
 var ErrNotFound = errors.New("docker: container not found")
 
 type Client interface {
-	CreateContainer(ctx context.Context, req CreateContainerRequest) (Container, error)
+	CreateContainer(ctx context.Context, req CreateContainerRequest) (string, error)
 	StartContainer(ctx context.Context, name string) error
 	InspectContainer(ctx context.Context, name string) (Container, error)
 	RemoveContainer(ctx context.Context, name string) error
@@ -78,7 +78,7 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
 	}
-	container, err := a.client.CreateContainer(ctx, CreateContainerRequest{
+	createdID, err := a.client.CreateContainer(ctx, CreateContainerRequest{
 		Name:       name,
 		Image:      req.Image,
 		Platform:   req.Platform.String(),
@@ -89,24 +89,32 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		Labels:     dockerLabels(req),
 		GPUCount:   requestedAcceleratorCount(req.Resources.Accelerators),
 	})
+	var container Container
 	duplicate := false
 	if errors.Is(err, ErrAlreadyExists) {
 		container, err = a.client.InspectContainer(ctx, name)
 		duplicate = true
-		if err == nil && !labelsMatch(container.Labels, dockerLabels(req)) {
+		if err != nil {
+			return adapter.LaunchReceipt{}, indeterminateLaunchError("inspect existing container", err)
+		}
+		if !labelsMatch(container.Labels, dockerLabels(req)) {
 			return adapter.LaunchReceipt{}, adapter.ErrIdempotencyConflict
 		}
 	}
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
 	}
+	createdRef := createdID
+	if createdRef == "" {
+		createdRef = name
+	}
 	if !duplicate || phaseFromState(container.State, container.ExitCode) == adapter.ExternalPhaseQueued {
 		if err := a.client.StartContainer(ctx, name); err != nil {
-			return adapter.LaunchReceipt{}, err
+			return adapter.LaunchReceipt{}, indeterminateLaunchError("start created container "+createdRef, err)
 		}
 		container, err = a.client.InspectContainer(ctx, name)
 		if err != nil {
-			return adapter.LaunchReceipt{}, err
+			return adapter.LaunchReceipt{}, indeterminateLaunchError("inspect started container "+createdRef, err)
 		}
 	}
 	return adapter.LaunchReceipt{
@@ -118,6 +126,10 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		AcceptedAt:     a.now().UTC(),
 		Duplicate:      duplicate,
 	}, nil
+}
+
+func indeterminateLaunchError(operation string, err error) error {
+	return fmt.Errorf("%w: docker: %s: %w", adapter.ErrLaunchIndeterminate, operation, err)
 }
 
 func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {

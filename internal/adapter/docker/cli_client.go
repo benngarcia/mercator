@@ -44,7 +44,7 @@ func (c *CLIClient) globalArgs() []string {
 	return nil
 }
 
-func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequest) (Container, error) {
+func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequest) (string, error) {
 	args := []string{"create", "--name", req.Name}
 	if req.Platform != "" {
 		args = append(args, "--platform", req.Platform)
@@ -74,19 +74,14 @@ func (c *CLIClient) CreateContainer(ctx context.Context, req CreateContainerRequ
 	output, err := c.runAuthenticated(ctx, args...)
 	if err != nil {
 		if strings.Contains(output, "already in use") || strings.Contains(output, "Conflict.") {
-			return Container{}, ErrAlreadyExists
+			return "", ErrAlreadyExists
 		}
 		if registryAuthenticationFailed(output) {
-			return Container{}, fmt.Errorf("%w: %w: %s", adapter.ErrRegistryAuthentication, err, strings.TrimSpace(output))
+			return "", fmt.Errorf("%w: %w: %s", adapter.ErrRegistryAuthentication, err, strings.TrimSpace(output))
 		}
-		return Container{}, fmt.Errorf("%w: %s", err, strings.TrimSpace(output))
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(output))
 	}
-	id := strings.TrimSpace(output)
-	container, err := c.InspectContainer(ctx, req.Name)
-	if err != nil {
-		return Container{ID: id, Name: req.Name, Labels: req.Labels, State: "created", CreatedAt: time.Now().UTC()}, nil
-	}
-	return container, nil
+	return strings.TrimSpace(output), nil
 }
 
 func registryAuthenticationFailed(output string) bool {

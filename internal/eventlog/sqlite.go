@@ -387,7 +387,8 @@ func (l *SQLiteEventLog) Offset(ctx context.Context, subscriptionID string) (Glo
 func (l *SQLiteEventLog) Ack(ctx context.Context, subscriptionID string, position GlobalPosition) error {
 	_, err := l.db.ExecContext(ctx, `INSERT INTO subscription_offsets(subscription_id, global_position)
 		VALUES (?, ?)
-		ON CONFLICT(subscription_id) DO UPDATE SET global_position = excluded.global_position`,
+		ON CONFLICT(subscription_id) DO UPDATE SET global_position =
+			MAX(subscription_offsets.global_position, excluded.global_position)`,
 		subscriptionID, position)
 	return err
 }
