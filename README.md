@@ -33,8 +33,9 @@ how much of a run's needs a rental already has locally: the image layers it
 holds and the data caches it has populated. Warm machines start work in
 seconds because there is less to pull and nothing to re-sync.
 
-Today placement scores price and projected start latency, and can queue a
-booking on a busy rental when waiting beats provisioning. Scoring warmth
+Today placement scores price and start latency, and can queue a booking on a
+busy rental when waiting beats provisioning (the wait estimate uses each
+queued booking's expected runtime from reservation, not elapsed progress). Scoring warmth
 itself, image layers and declared cache mounts, is the current program of
 work; [Roadmap and status](#roadmap-and-status) says exactly what is shipped
 and what is being built.
@@ -235,8 +236,9 @@ is registry credential handling and the setup documentation around quotas.
 #### Warm placement
 
 Rentals, their schedules, and queued bookings are modeled, persisted, and
-scored today: placement weighs the projected wait on a busy rental against the
-cost and latency of provisioning fresh capacity. What is being built on top is
+scored today: placement weighs the expected runtime queued on a busy rental
+(measured from reservation, not from evaluation time) against the cost and
+latency of provisioning fresh capacity. What is being built on top is
 the warmth program: advancing a schedule the moment the running booking
 finishes, scoring the image layers a rental already holds, and cache mounts,
 named data mounts that persist on a rental so runs sharing data land where the

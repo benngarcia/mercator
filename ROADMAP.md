@@ -19,8 +19,8 @@ in [docs/production/known-limitations.md](docs/production/known-limitations.md).
   adapters behind the same run contract, each with a runbook and a bounded
   conformance trial that produces a sanitized evidence bundle.
 - Rentals with persisted schedules: placement can queue a booking behind the
-  run a rental is executing, weighing projected wait against the cost and
-  latency of provisioning fresh capacity.
+  run a rental is executing, weighing queued expected runtime against the
+  cost and latency of provisioning fresh capacity.
 - The Workspace canvas as the console home: each rental with its running and
   queued bookings, streamed live over SSE.
 - A placement scenario corpus (`internal/scenario`) that states the decisions
