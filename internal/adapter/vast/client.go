@@ -13,6 +13,7 @@ import (
 )
 
 const defaultBaseURL = "https://console.vast.ai"
+const maxProviderResponseBytes = 1 << 20
 
 type apiClient struct {
 	baseURL string
@@ -109,11 +110,22 @@ func (c *apiClient) do(ctx context.Context, method, path string, body any) (int,
 		return 0, nil, fmt.Errorf("vast: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readProviderResponse(resp.Body)
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
 	return resp.StatusCode, respBody, nil
+}
+
+func readProviderResponse(reader io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, maxProviderResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxProviderResponseBytes {
+		return nil, fmt.Errorf("vast: response exceeds %d bytes", maxProviderResponseBytes)
+	}
+	return body, nil
 }
 
 // httpError formats a non-2xx response WITHOUT ever including the request's

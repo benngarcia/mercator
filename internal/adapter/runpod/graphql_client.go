@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -68,7 +67,7 @@ func (c *graphqlClient) gpuTypes(ctx context.Context, gpuCount int) ([]gpuType, 
 		return nil, fmt.Errorf("runpod: gpuTypes: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readProviderResponse(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("runpod: gpuTypes read body: %w", err)
 	}

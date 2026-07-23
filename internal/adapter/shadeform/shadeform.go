@@ -93,7 +93,7 @@ func New(secret string, config map[string]string) (*Adapter, error) {
 		lifetimeHours = n
 	}
 	return &Adapter{
-		client:        newClient(secret, config["base_url"], http.DefaultClient),
+		client:        newClient(secret, config["base_url"], &http.Client{Timeout: time.Minute}),
 		shadeCloud:    shadeCloud,
 		allowedClouds: allowed,
 		osOverride:    config["os"],

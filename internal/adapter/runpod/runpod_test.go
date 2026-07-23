@@ -42,6 +42,27 @@ func TestVerifyPingsREST(t *testing.T) {
 	}
 }
 
+func TestNewRejectsInvalidContainerDiskSize(t *testing.T) {
+	_, err := New("secret", map[string]string{"container_disk_gb": "twenty"})
+
+	if err == nil || !strings.Contains(err.Error(), "container_disk_gb must be a positive integer") {
+		t.Fatalf("New error = %v, want invalid container_disk_gb error", err)
+	}
+}
+
+func TestListOffersRejectsOversizedProviderResponse(t *testing.T) {
+	body := `{"data":{"gpuTypes":[]},"padding":"` + strings.Repeat("x", maxProviderResponseBytes) + `"}`
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, body), nil
+	})
+
+	_, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("list offers error = %v, want bounded response error", err)
+	}
+}
+
 func TestListOffersUsesGraphQLAndAllowlist(t *testing.T) {
 	var body string
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {

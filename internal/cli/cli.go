@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -390,16 +389,10 @@ func splitDoubleDash(args []string) ([]string, []string) {
 	return args, nil
 }
 
-// randomToken returns a short random hex string for minting an idempotency key
-// when neither a key nor a run id is supplied.
+// randomToken returns a cryptographically random, text-safe token with at least
+// 128 bits of entropy.
 func randomToken() string {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		// rand.Read only fails if the system RNG is unavailable; fall back to a
-		// fixed token rather than panic (still unique enough per-process use).
-		return "00000000000000000000000000000000"
-	}
-	return hex.EncodeToString(buf)
+	return rand.Text()
 }
 
 func mustURL(baseURL, path string, values url.Values) string {
