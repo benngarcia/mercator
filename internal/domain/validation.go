@@ -65,6 +65,19 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 			})
 		}
 	}
+	// Compare against the effective bound so validation stays correct on
+	// revisions that have not passed NormalizeWorkloadRevision yet.
+	maxRuntime := rev.Spec.Execution.MaxRuntimeSeconds
+	if maxRuntime == 0 {
+		maxRuntime = DefaultMaxRuntimeSeconds
+	}
+	if rev.Spec.Placement.ExpectedRuntimeSeconds > float64(maxRuntime) {
+		violations = append(violations, Violation{
+			Code: "EXPECTED_RUNTIME_EXCEEDS_MAX", Path: "spec.placement.expected_runtime_seconds",
+			Required: maxRuntime, Offered: rev.Spec.Placement.ExpectedRuntimeSeconds,
+			Message: "Expected runtime cannot exceed the enforced maximum runtime.",
+		})
+	}
 	for i, port := range container.Ports {
 		if port.ContainerPort <= 0 || port.ContainerPort > 65535 {
 			violations = append(violations, Violation{
