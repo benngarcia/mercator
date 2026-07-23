@@ -24,7 +24,7 @@ type IntakeRequest struct {
 	Image          string
 	Args           []string
 	Env            map[string]domain.EnvBinding
-	ResolveImage   func(ctx context.Context, image, platform string) (string, error)
+	ResolveImage   ResolveImageFunc
 }
 
 // IntakeResult is the run after intake has recorded and advanced it.

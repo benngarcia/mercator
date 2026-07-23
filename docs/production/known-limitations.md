@@ -25,9 +25,12 @@ limits.
 
 - Docker adapter is local-host oriented and intentionally narrow.
 - Docker receives literal env bindings only.
-- Workloads must be digest-pinned before run creation.
-- Registry-backed tag resolution is not implemented; current resolver is
-  deterministic/static.
+- Tag resolution reads the broker host's Docker daemon, so a tag must name an
+  image that host already holds. Registry-backed resolution, which would let a
+  tag resolve without a local pull, is not implemented.
+- Resolution uses the broker host's Docker endpoint even when the run lands on
+  a remote Docker connection, so a remote host holding a different image set
+  can disagree with the recorded digest.
 - Docker supports one static registry credential per connection. Token
   exchange, multiple registries on one connection, and automatic rotation are
   outside the current contract.

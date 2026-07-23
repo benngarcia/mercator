@@ -136,7 +136,33 @@ type CreateRunRequest struct {
 	// digest-pinned reference AFTER the idempotency request hash is computed over
 	// the submitted (tag-form) spec. This keeps logical retries and moving tags
 	// (e.g. :latest) replay-stable while storing/launching a pinned revision.
-	ResolveImage func(ctx context.Context, image, platform string) (string, error)
+	ResolveImage ResolveImageFunc
+}
+
+// ResolveImageFunc pins one container image and reports the platform that image
+// was built for. An empty platform argument means the workload did not state
+// one, so the image decides.
+type ResolveImageFunc func(ctx context.Context, image, platform string) (pinnedImage, resolvedPlatform string, err error)
+
+// resolveWorkloadImages pins every container image in a revision and records
+// the platform each image reports. A workload that stated its platform keeps
+// it; one that did not gets the truth from the image instead of a guess.
+func resolveWorkloadImages(ctx context.Context, rev domain.WorkloadRevision, resolve ResolveImageFunc) (domain.WorkloadRevision, error) {
+	if resolve == nil {
+		return rev, nil
+	}
+	for i := range rev.Spec.Containers {
+		container := rev.Spec.Containers[i]
+		image, platform, err := resolve(ctx, container.Image, container.Platform.String())
+		if err != nil {
+			return domain.WorkloadRevision{}, fmt.Errorf("IMAGE_RESOLUTION_FAILED: %s", err.Error())
+		}
+		rev.Spec.Containers[i].Image = image
+		if parsed, ok := domain.ParsePlatform(platform); ok {
+			rev.Spec.Containers[i].Platform = parsed
+		}
+	}
+	return rev, nil
 }
 
 type CreateRunResult struct {
@@ -157,12 +183,10 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if req.Workload.WorkspaceID != "" && req.WorkspaceID != req.Workload.WorkspaceID {
 		return CreateRunResult{}, fmt.Errorf("WORKSPACE_MISMATCH: request workspace_id must match workload workspace_id")
 	}
-	// Fill omitted, defaultable fields BEFORE validation so a minimal create body
-	// (just an image) expands into a fully-specified, validatable revision.
+	// Fill omitted, defaultable fields so a minimal create body (just an image)
+	// expands toward a fully-specified revision. Architecture is not one of
+	// them: image resolution below fills it from the image itself.
 	req.Workload = domain.NormalizeWorkloadRevision(req.Workload)
-	if violations := domain.ValidateWorkloadRevision(req.Workload); len(violations) > 0 {
-		return CreateRunResult{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
-	}
 	// The request hash must be stable across logical retries that regenerate
 	// cosmetic, client-minted identifiers. The workload revision ID is one such
 	// id: a retry that re-mints it is the same logical create and must replay,
@@ -184,18 +208,16 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	// Resolve tag-form images to digest-pinned references and pin them into the
-	// stored/launched revision. This happens AFTER the hash above so replay
-	// stays stable regardless of where a moving tag currently points.
-	if req.ResolveImage != nil {
-		for i := range req.Workload.Spec.Containers {
-			c := req.Workload.Spec.Containers[i]
-			pinned, rerr := req.ResolveImage(ctx, c.Image, c.Platform.String())
-			if rerr != nil {
-				return CreateRunResult{}, fmt.Errorf("IMAGE_RESOLUTION_FAILED: %s", rerr.Error())
-			}
-			req.Workload.Spec.Containers[i].Image = pinned
-		}
+	// Resolve tag-form images to digest-pinned references and let each image
+	// declare the platform it was built for. This happens AFTER the hash above
+	// so replay stays stable regardless of where a moving tag currently points.
+	req.Workload, err = resolveWorkloadImages(ctx, req.Workload, req.ResolveImage)
+	if err != nil {
+		return CreateRunResult{}, err
+	}
+	// Validate what we are about to store and launch, not what was submitted.
+	if violations := domain.ValidateWorkloadRevision(req.Workload); len(violations) > 0 {
+		return CreateRunResult{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
 	}
 	privateData, err := json.Marshal(runRequestedData{RunID: req.RunID, Workload: req.Workload})
 	if err != nil {

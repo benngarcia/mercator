@@ -16,8 +16,13 @@ func TestNormalizeFillsOmittedDefaults(t *testing.T) {
 	if c.Name != DefaultContainerName {
 		t.Fatalf("container name: got %q want %q", c.Name, DefaultContainerName)
 	}
-	if c.Platform.OS != DefaultPlatformOS || c.Platform.Architecture != DefaultPlatformArch {
-		t.Fatalf("platform: got %q want linux/amd64", c.Platform.String())
+	if c.Platform.OS != DefaultPlatformOS {
+		t.Fatalf("platform os: got %q want %q", c.Platform.OS, DefaultPlatformOS)
+	}
+	// Architecture stays empty on purpose: only the image knows what it was
+	// built for, so image resolution fills it during run intake.
+	if c.Platform.Architecture != "" {
+		t.Fatalf("platform architecture: got %q want empty", c.Platform.Architecture)
 	}
 	if out.Spec.Resources.CPU.MinMillis != DefaultCPUMillis {
 		t.Fatalf("cpu: got %d want %d", out.Spec.Resources.CPU.MinMillis, DefaultCPUMillis)
@@ -41,9 +46,32 @@ func TestNormalizeFillsOmittedDefaults(t *testing.T) {
 		t.Fatalf("max pre-start attempts: got %d want %d", out.Spec.Execution.MaxPreStartAttempts, DefaultMaxPreStartAttempts)
 	}
 
-	// The normalized revision must pass validation with only an image supplied.
+	// Everything except the architecture is filled, so supplying the one fact
+	// only the image knows completes the revision.
+	out.Spec.Containers[0].Platform.Architecture = "arm64"
 	if v := ValidateWorkloadRevision(out); len(v) > 0 {
 		t.Fatalf("normalized minimal revision failed validation: %+v", v)
+	}
+}
+
+// An unstated architecture must never be guessed. Defaulting it to amd64
+// silently produced runs that no arm64 host could satisfy, so validation has to
+// reject the revision until image resolution supplies the real answer.
+func TestNormalizeLeavesArchitectureForImageResolution(t *testing.T) {
+	rev := WorkloadRevision{
+		Spec: WorkloadSpec{
+			Containers: []ContainerSpec{{Image: "busybox"}},
+		},
+	}
+
+	out := NormalizeWorkloadRevision(rev)
+
+	if arch := out.Spec.Containers[0].Platform.Architecture; arch != "" {
+		t.Fatalf("architecture: got %q want empty", arch)
+	}
+	violations := ValidateWorkloadRevision(out)
+	if len(violations) != 1 || violations[0].Code != "UNSUPPORTED_PLATFORM" {
+		t.Fatalf("expected a single UNSUPPORTED_PLATFORM violation, got %+v", violations)
 	}
 }
 

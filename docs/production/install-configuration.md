@@ -13,11 +13,23 @@ go build -o ./bin/mercator ./cmd/mercator
 
 The binary is cgo-free because the project uses `modernc.org/sqlite`.
 
-For evaluation without a Go toolchain, a prebuilt image is published to
-`ghcr.io/benngarcia/mercator` by CI. Use
-`docker run ghcr.io/benngarcia/mercator:latest` with the same environment
-variables and Docker-socket mount as the README quickstart instead of building
-the image locally.
+For evaluation without a Go toolchain, take a binary from the
+[releases page](https://github.com/benngarcia/mercator/releases/latest), or run
+the image CI publishes to `ghcr.io/benngarcia/mercator`:
+
+```sh
+docker run --rm \
+  -e MERCATOR_ADDR=0.0.0.0:8080 \
+  -e MERCATOR_API_TOKEN=dev-token \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -p 8080:8080 ghcr.io/benngarcia/mercator:latest serve
+```
+
+Mounting the Docker socket grants the container root-equivalent control of the
+host Docker daemon. That is fine on a machine you own for local evaluation, and
+not fine on an untrusted host. Set `MERCATOR_API_TOKEN` yourself for the
+container: the token handoff that spares a local CLI any configuration writes
+into the container filesystem, where your shell cannot read it.
 
 ## Required Runtime Configuration
 
@@ -48,10 +60,10 @@ server path.
 | Variable | Default | Use |
 | --- | --- | --- |
 | `MERCATOR_ADDR` | `127.0.0.1:8080` | HTTP listen address. |
-| `MERCATOR_SQLITE_DSN` | `file:/data/mercator.db` | SQLite event-log DSN. |
+| `MERCATOR_SQLITE_DSN` | `$XDG_DATA_HOME/mercator/mercator.db`, else `~/.local/share/mercator/mercator.db` | SQLite event-log DSN. The directory is created at startup. The container image sets this to `file:/data/mercator.db`. |
 | `MERCATOR_API_TOKEN` | generated at startup | Bearer token for `/v1/*`. Set explicitly for operations. |
 | `MERCATOR_SECRET_KEY` | none | Master key for stored connection credentials and workload reporting (32+ decoded bytes, hex or base64). A present malformed value stops startup. |
-| `MERCATOR_API_URL` | none | CLI base URL; required for CLI mode unless `--api-url` is provided. |
+| `MERCATOR_API_URL` | `http://127.0.0.1:8080` | CLI base URL. Falls back to the current context, then the local `serve` address. |
 | `MERCATOR_OIDC_ISSUER` | none | OIDC issuer URL for human console login. Setting any `MERCATOR_OIDC_*` variable requires the full set; see [authentication-workspaces.md](authentication-workspaces.md). |
 | `MERCATOR_OIDC_CLIENT_ID` | none | OIDC client ID. |
 | `MERCATOR_OIDC_CLIENT_SECRET` | none | OIDC client secret. |

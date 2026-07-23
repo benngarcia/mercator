@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -56,7 +57,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		return 2
 	}
 	addr := envValue(env, "MERCATOR_ADDR", "127.0.0.1:8080")
-	if options.localAuthEmail != "" && !isLoopbackAddress(addr) {
+	if options.localAuthEmail != "" && !isLoopback(addr) {
 		stdlog.Printf("configure local login: --dev requires a loopback MERCATOR_ADDR, got %s", addr)
 		return 1
 	}
@@ -82,14 +83,22 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("load secret key: %v", err)
 		return 1
 	}
-	warnIfNonLoopback(addr)
+	if !isLoopback(addr) {
+		stdlog.Printf("WARNING: listening on non-loopback address %s over plaintext HTTP; bearer tokens and run data are unencrypted in transit — put a TLS-terminating proxy in front for anything beyond local evaluation", addr)
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		stdlog.Printf("listen: %v", err)
 		return 1
 	}
+	dsn, err := sqliteDSN(env)
+	if err != nil {
+		_ = listener.Close()
+		stdlog.Printf("resolve database path: %v", err)
+		return 1
+	}
 	runtime, err := daemon.New(ctx, daemon.Config{
-		SQLiteDSN:      envValue(env, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db"),
+		SQLiteDSN:      dsn,
 		OperatorToken:  apiToken,
 		MasterKey:      masterKey,
 		PublicURL:      env["MERCATOR_PUBLIC_URL"],
@@ -101,6 +110,12 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		_ = listener.Close()
 		stdlog.Printf("configure server: %v", err)
 		return 1
+	}
+	// A loopback broker holding a token only this process knows is unusable
+	// until the CLI learns it. Write it down rather than making the operator
+	// copy it out of the log.
+	if generatedToken && isLoopback(addr) {
+		shareLocalContext(env, addr, apiToken)
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- runtime.Serve(listener) }()
@@ -136,14 +151,7 @@ func parseServeOptions(args []string) (serveOptions, error) {
 	return serveOptions{}, fmt.Errorf("usage: mercator serve [--dev]")
 }
 
-func warnIfNonLoopback(addr string) {
-	if isLoopbackAddress(addr) {
-		return
-	}
-	stdlog.Printf("WARNING: listening on non-loopback address %s over plaintext HTTP; bearer tokens and run data are unencrypted in transit — put a TLS-terminating proxy in front for anything beyond local evaluation", addr)
-}
-
-func isLoopbackAddress(addr string) bool {
+func isLoopback(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return false
@@ -151,10 +159,23 @@ func isLoopbackAddress(addr string) bool {
 	if host == "localhost" {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return true
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// shareLocalContext hands this machine's CLI the address and token of the
+// server just started. Failing to write it is not fatal: the token is already
+// in the log above, so the operator can still export it by hand.
+func shareLocalContext(env map[string]string, addr, token string) {
+	path := cli.DefaultConfigPath(env)
+	changed, err := cli.WriteLocalContext(path, "http://"+addr, token)
+	if err != nil {
+		stdlog.Printf("could not write the %q CLI context (%v); export MERCATOR_API_TOKEN instead", cli.LocalContextName, err)
+		return
 	}
-	return false
+	if changed {
+		stdlog.Printf("wrote the %q CLI context to %s; mercator commands on this machine need no further setup", cli.LocalContextName, path)
+	}
 }
 
 func masterKeyFromEnv(values map[string]string) ([]byte, error) {
@@ -187,6 +208,30 @@ func environ() map[string]string {
 		}
 	}
 	return values
+}
+
+// sqliteDSN resolves where the event log lives. An operator who names a path
+// gets exactly that path. Everyone else gets a per-user data directory, which
+// this creates, because a server that cannot start until you invent a database
+// location is a server nobody can try. The container image sets the variable
+// explicitly, so it keeps its own /data volume.
+func sqliteDSN(env map[string]string) (string, error) {
+	if dsn := env["MERCATOR_SQLITE_DSN"]; dsn != "" {
+		return dsn, nil
+	}
+	base := env["XDG_DATA_HOME"]
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("no MERCATOR_SQLITE_DSN and no home directory: %w", err)
+		}
+		base = filepath.Join(home, ".local", "share")
+	}
+	dir := filepath.Join(base, "mercator")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	return "file:" + filepath.Join(dir, "mercator.db"), nil
 }
 
 func envValue(values map[string]string, key, fallback string) string {

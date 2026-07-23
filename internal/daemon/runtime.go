@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
@@ -27,6 +28,7 @@ import (
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/webauth"
 	"github.com/benngarcia/mercator/internal/workload"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
 
 // Config contains the typed inputs needed to construct a production runtime.
@@ -96,6 +98,10 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		log.Printf("credential store: re-sealed %d credential(s) under the derived sealing key", migrated)
 	}
 
+	if err := seedFirstWorkspace(ctx, storage.Workspaces()); err != nil {
+		return nil, fmt.Errorf("daemon: seed first workspace: %w", err)
+	}
+
 	resolver := credential.NewResolver(cfg.Getenv, credentialStore, cfg.MasterKey)
 	connections, err := storage.Connections(resolver)
 	if err != nil {
@@ -149,7 +155,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Workloads:    workload.New(logStore),
 		Sinks:        sinks.NewManager(logStore, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  connectionService,
-		Resolver:     ociresolver.NewStaticResolver(nil),
+		Resolver:     ociresolver.NewDaemonResolver(inspectLocalImage),
 		Workspaces:   storage.Workspaces(),
 		Events:       logStore,
 		Scenarios:    dashboardScenarios,
@@ -174,6 +180,49 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	}
 	go runtime.reconcile(reconcileCtx)
 	return runtime, nil
+}
+
+// DefaultWorkspaceID names the workspace a fresh broker starts with. It is
+// readable on purpose: an operator reads it in URLs and audit records far more
+// often than they type it.
+const DefaultWorkspaceID = "ws_default"
+
+// seedFirstWorkspace gives an empty database one workspace. A broker with no
+// workspace can accept no connection and no run, so starting with zero makes
+// every first command fail on an id the operator has no way to know. Once any
+// workspace exists this does nothing, so it never fights an operator who
+// organizes their own.
+func seedFirstWorkspace(ctx context.Context, catalog *workspace.SQLiteCatalog) error {
+	existing, err := catalog.List(ctx, workspace.ListOptions{IncludeArchived: true})
+	if err != nil {
+		return err
+	}
+	if len(existing) > 0 {
+		return nil
+	}
+	_, err = catalog.Create(ctx, workspace.Create{
+		ID:          DefaultWorkspaceID,
+		DisplayName: "Default",
+		CreatedAt:   time.Now().UTC(),
+		CreatedBy:   "system:bootstrap",
+	})
+	return err
+}
+
+// inspectLocalImage reads an image's digest and platform from the broker host's
+// Docker endpoint, which is the endpoint that launches local runs. This is what
+// lets `mercator run create busybox` become a reproducible, digest-pinned run
+// without the operator pinning it by hand.
+func inspectLocalImage(ctx context.Context, ref string) (ociresolver.InspectedImage, error) {
+	info, err := dockeradapter.NewCLIClient("").InspectImage(ctx, ref)
+	if err != nil {
+		return ociresolver.InspectedImage{}, err
+	}
+	return ociresolver.InspectedImage{
+		RepoDigest:   info.RepoDigest,
+		OS:           info.OS,
+		Architecture: info.Architecture,
+	}, nil
 }
 
 // Serve runs the production HTTP server on a listener allocated by the caller.
