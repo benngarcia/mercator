@@ -24,8 +24,10 @@ export MERCATOR_API_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/mercator serve
 ```
 
-In another shell, register and verify the local Docker endpoint in the
-workspace that should place runs there:
+On a loopback address a fresh broker already seeds and authorizes a `docker`
+connection in `ws_default` when the local daemon answers, so the local endpoint
+needs no setup there. Register one explicitly when you want a named connection,
+a non-default workspace, or a remote endpoint:
 
 ```sh
 export MERCATOR_API_URL=http://127.0.0.1:8080
