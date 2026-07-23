@@ -1,12 +1,8 @@
 name: Release
 
-# Two ways to release, both deliberate — nothing here runs on ordinary pushes:
-# - push an annotated tag `v*` (the original flow), or
-# - trigger this workflow manually from the Actions tab with a version input;
-#   the run validates the version, then `gh release create --target` mints the
-#   tag at the selected branch's head as part of publishing. The tag is created
-#   inside the release job on purpose: a tag pushed by a separate workflow with
-#   the default GITHUB_TOKEN would not trigger this one.
+# Releases qualify the exact merge commit before publishing any semver name.
+# A non-semver candidate image is built once, addressed by digest, booted twice
+# against the sanitized previous-release database, and then promoted by digest.
 on:
   push:
     tags:
@@ -14,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag to create and release (e.g. v0.2.0). Releases the head of the selected branch."
+        description: "Version tag to create and release (e.g. v0.6.0). Releases the selected merge commit."
         required: true
 
 permissions:
@@ -22,37 +18,185 @@ permissions:
 
 jobs:
   version:
-    name: Resolve version
+    name: Resolve release candidate
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      candidate_sha: ${{ steps.resolve.outputs.candidate_sha }}
+      previous_version: ${{ steps.resolve.outputs.previous_version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Resolve and validate
         id: resolve
         env:
           VERSION_INPUT: ${{ inputs.version }}
         run: |
+          version="$VERSION_INPUT"
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-            exit 0
+            version="$GITHUB_REF_NAME"
           fi
-          if [[ ! "$VERSION_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::version must look like v0.2.0 or v0.2.0-rc.1, got '$VERSION_INPUT'"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::version must look like v0.6.0 or v0.6.0-rc.1, got '$version'"
             exit 1
           fi
-          if git ls-remote --exit-code origin "refs/tags/$VERSION_INPUT" >/dev/null; then
-            echo "::error::tag $VERSION_INPUT already exists; releases are immutable"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] &&
+             git ls-remote --exit-code origin "refs/tags/$version" >/dev/null; then
+            echo "::error::tag $version already exists; releases are immutable"
             exit 1
           fi
-          echo "version=$VERSION_INPUT" >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Build release artifacts
+          candidate_sha="$(git rev-parse 'HEAD^{commit}')"
+          if ! git merge-base --is-ancestor "$candidate_sha" origin/master; then
+            echo "::error::candidate $candidate_sha is not on origin/master"
+            exit 1
+          fi
+          parent_count="$(git rev-list --parents -n 1 "$candidate_sha" | awk '{print NF - 1}')"
+          if [[ "$parent_count" -lt 2 ]]; then
+            echo "::error::candidate $candidate_sha is not a merge commit"
+            exit 1
+          fi
+
+          previous_version=""
+          while IFS= read -r tag; do
+            if [[ "$tag" == "$version" ]]; then
+              continue
+            fi
+            if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              previous_version="$tag"
+              break
+            fi
+          done < <(git tag --merged "$candidate_sha" --sort=-version:refname)
+          if [[ -z "$previous_version" ]]; then
+            echo "::error::candidate has no previous semver release"
+            exit 1
+          fi
+
+          {
+            echo "version=$version"
+            echo "candidate_sha=$candidate_sha"
+            echo "previous_version=$previous_version"
+          } >> "$GITHUB_OUTPUT"
+
+  candidate:
+    name: Build daemon candidate
     needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.reference.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.candidate_sha }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Name candidate
+        id: reference
+        env:
+          CANDIDATE_SHA: ${{ needs.version.outputs.candidate_sha }}
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY}:candidate-${CANDIDATE_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Build candidate
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.reference.outputs.image }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.version.outputs.candidate_sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  probe-candidate:
+    name: Build conformance probe candidate
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.reference.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.candidate_sha }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Name candidate
+        id: reference
+        env:
+          CANDIDATE_SHA: ${{ needs.version.outputs.candidate_sha }}
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY}-conformance-probe:candidate-${CANDIDATE_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Build candidate
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./conformance/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.reference.outputs.image }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.version.outputs.candidate_sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  qualify:
+    name: Qualify persisted-state upgrade
+    needs:
+      - version
+      - candidate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.candidate_sha }}
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Boot and replay previous-release state
+        env:
+          CANDIDATE_IMAGE: ${{ needs.candidate.outputs.image }}@${{ needs.candidate.outputs.digest }}
+          CANDIDATE_SHA: ${{ needs.version.outputs.candidate_sha }}
+          PREVIOUS_VERSION: ${{ needs.version.outputs.previous_version }}
+        run: scripts/qualify-release-upgrade.sh "$CANDIDATE_IMAGE" "$PREVIOUS_VERSION" "$CANDIDATE_SHA"
+
+  artifacts:
+    name: Build release artifacts
+    needs:
+      - version
+      - qualify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.candidate_sha }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -65,16 +209,35 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: scripts/build-release-archives.sh "$VERSION" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs:
+      - version
+      - artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.candidate_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
       - name: Publish GitHub release
         env:
+          CANDIDATE_SHA: ${{ needs.version.outputs.candidate_sha }}
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           args=()
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            # Manual dispatch: create the tag at the dispatched commit as part
-            # of publishing the release.
-            args+=(--target "$GITHUB_SHA")
+            args+=(--target "$CANDIDATE_SHA")
           fi
           notes_file="docs/project/release-notes/${VERSION}.md"
           if [[ -f "$notes_file" ]]; then
@@ -84,23 +247,17 @@ jobs:
           fi
 
   image:
-    name: Publish image
-    needs: version
+    name: Promote qualified images
+    needs:
+      - version
+      - candidate
+      - probe-candidate
+      - artifacts
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - suffix: ""
-            dockerfile: ./Dockerfile
-            platforms: linux/amd64
-          - suffix: -conformance-probe
-            dockerfile: ./conformance/Dockerfile
-            platforms: linux/amd64,linux/arm64
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -108,26 +265,43 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compute image metadata
-        id: meta
+      - name: Compute daemon image metadata
+        id: daemon-meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
-          # `value:` pins the semver source to the resolved version so the same
-          # tags come out whether the run started from a tag push or a manual
-          # dispatch on a branch.
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
             type=raw,value=latest
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Promote qualified daemon
+        env:
+          CANDIDATE: ${{ needs.candidate.outputs.image }}@${{ needs.candidate.outputs.digest }}
+          SEMVER_TAGS: ${{ steps.daemon-meta.outputs.tags }}
+        run: |
+          mapfile -t tags <<< "$SEMVER_TAGS"
+          args=()
+          for tag in "${tags[@]}"; do
+            args+=(--tag "$tag")
+          done
+          docker buildx imagetools create "${args[@]}" "$CANDIDATE"
+      - name: Compute conformance probe metadata
+        id: probe-meta
+        uses: docker/metadata-action@v5
         with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: ${{ matrix.platforms }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          images: ghcr.io/${{ github.repository }}-conformance-probe
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
+            type=raw,value=latest
+      - name: Promote conformance probe
+        env:
+          CANDIDATE: ${{ needs.probe-candidate.outputs.image }}@${{ needs.probe-candidate.outputs.digest }}
+          SEMVER_TAGS: ${{ steps.probe-meta.outputs.tags }}
+        run: |
+          mapfile -t tags <<< "$SEMVER_TAGS"
+          args=()
+          for tag in "${tags[@]}"; do
+            args+=(--tag "$tag")
+          done
+          docker buildx imagetools create "${args[@]}" "$CANDIDATE"
