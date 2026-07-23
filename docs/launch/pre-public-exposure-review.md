@@ -1,3 +1,7 @@
+> **Stale:** written for the audit-first "run broker" positioning and
+> predates the 2026-07 repositioning as a warm fleet broker
+> ([ADR-0003](../adr/0003-reposition-as-warm-fleet-broker.md)). Rewrite before use.
+
 # Pre-Public Exposure Review
 
 Run this review after the launch-prep PR is merged to the default branch and

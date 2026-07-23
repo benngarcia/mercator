@@ -1,3 +1,7 @@
+> **Stale:** written for the audit-first "run broker" positioning and
+> predates the 2026-07 repositioning as a warm fleet broker
+> ([ADR-0003](../adr/0003-reposition-as-warm-fleet-broker.md)). Rewrite before use.
+
 # Public Launch Runbook
 
 This runbook starts after the launch-prep PR is approved. It covers the

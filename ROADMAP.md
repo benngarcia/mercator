@@ -1,57 +1,67 @@
 # Mercator Roadmap
 
-This roadmap is launch-facing. It summarizes what would make Mercator easier to
-try, trust, and contribute to as an open source project. Detailed V1 production
-hardening lives in [docs/production/known-limitations.md](docs/production/known-limitations.md).
+Mercator is a compute broker and fleet manager: push a container workload and
+it starts fast on the warmest machine in your fleet, rents new GPU capacity
+when none fits, and records what it decided and why. This roadmap says what is
+shipped, what is being built now, and what comes later. Operational gaps live
+in [docs/production/known-limitations.md](docs/production/known-limitations.md).
 
-## Current: V1 Evaluation
+## Now: shipped
 
-- Event-sourced run lifecycle over SQLite.
-- Docker host adapter for deterministic local evaluation.
-- Internal fake adapter backing the deterministic Go test suite.
-- Docker host adapter with guarded live integration test.
-- RunPod-oriented adapter and examples.
-- Operator console embedded in the Go binary.
-- Production evaluation runbooks.
-- OSS project scaffolding: license, security policy, contribution guide, issue
-  templates, CI/release workflows, compatibility policy, screenshots, and
-  launch scorecard.
-- Short console demo committed under `docs/assets/`, recorded against the
-  Docker quickstart (see `docs/assets/README.md` for the recording setup).
-- Threat model, package/distribution plan, CLI reference, Docker quickstart, and
-  starter contributor queue documented.
+- Event-sourced run lifecycle over SQLite, in one Go process with a JSON HTTP
+  API, a CLI, and an embedded operator console.
+- Placement with recorded booking decisions: the winning offer, every rejected
+  candidate, and reason codes, queryable per run.
+- One-command push-to-run: `mercator run create <image> -- <cmd>` resolves the
+  digest and platform from the image and defaults workspace, connection, and
+  run ids by uniqueness.
+- Docker host adapter for real local launches; RunPod, Shadeform, and Vast.ai
+  adapters behind the same run contract, each with a runbook and a bounded
+  conformance trial that produces a sanitized evidence bundle.
+- Rentals with persisted schedules: placement can queue a booking behind the
+  run a rental is executing, weighing projected wait against the cost and
+  latency of provisioning fresh capacity.
+- The Workspace canvas as the console home: each rental with its running and
+  queued bookings, streamed live over SSE.
+- A placement scenario corpus (`internal/scenario`) that states the decisions
+  placement must make. Scenarios marked `target` describe behavior that is not
+  built yet and fail CI the moment they start passing, so the corpus always
+  says exactly where the program stands.
 
-## Next: Open Source Launch Polish
+## Building: warm placement
 
-- Add a first tagged release with downloadable binaries and checksums.
-- Add public CI badges after the first GitHub Actions run succeeds.
-- Convert the starter contributor queue into labeled GitHub issues after the
-  repository is public.
-- Add one external user story or case-study style narrative once there is a
-  maintainer-approved public reference.
+The goal of the current program: the next run starts faster because the fleet
+is warm.
 
-## Next: Production Hardening
-
-- Finish registry-backed tag resolution and credential handling beyond the
-  Docker adapter's connection-scoped pull credential.
-- Decide external sink configuration for Kafka/Postgres or keep the current
-  audit sink boundary explicit.
-- Expand RunPod setup docs with a complete credential and quota checklist.
-- Exercise backup/restore and no-orphan cleanup drills in a real environment.
-- Clarify release, migration, and rollback mechanics for SQLite-backed
-  deployments.
+- Schedule advancement: dispatch the next queued booking the moment the
+  running one reaches a terminal state, re-evaluating only the tail of the
+  schedule.
+- Image warmth: score rentals by the Docker layers they already hold, so
+  workloads with similar images pack onto the same machine and pull less.
+- Cache mounts: workload-declared named mounts whose contents persist on a
+  rental across runs. Placement prefers machines whose caches are already
+  populated; what is inside the cache stays the application's business.
+- Host facts: rentals report the layers and caches they hold, so warmth
+  scoring works from evidence instead of assumptions.
 
 ## Later
 
-- Additional provider adapters with the same auditable run contract.
-- Package-manager distribution for the CLI/server.
-- More console affordances for run comparison and placement diagnostics.
-- Compatibility tests for the CLI and OpenAPI document.
+- Registry-backed tag resolution and credential handling
+  ([#125](https://github.com/benngarcia/mercator/issues/125)), so a tag
+  resolves without a local pull and remote Docker connections work.
+- Refreshed launch collateral: the material in `docs/launch/` predates the
+  repositioning and needs a rewrite before any public launch push.
+- Package-manager distribution for the CLI and server.
+- Additional provider adapters behind the same auditable run contract.
+- External sink hardening for Kafka/Postgres delivery beyond the current
+  audit sink boundary.
+- Multi-node operation: failover, TLS, per-user authorization.
 
 ## Non-Goals
 
 - Replacing Kubernetes, Slurm, or a managed batch platform.
+- Building or syncing your code into images: Mercator takes an OCI image.
 - Becoming a secret manager for workload-owned secrets.
-- Hiding provider-specific constraints behind an opaque scheduler.
-- Optimizing for multi-tenant SaaS operation before the single-process operator
-  model is trustworthy.
+- Hiding provider-specific constraints behind opaque placement.
+- Optimizing for multi-tenant SaaS operation before the single-process
+  operator model is trustworthy.
