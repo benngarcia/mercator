@@ -32,6 +32,9 @@ FROM docker:29-cli
 COPY --from=build /out/mercator /usr/local/bin/mercator
 RUN mkdir -p /data
 WORKDIR /data
+# The binary defaults its event log to a per-user data directory. In the image
+# the volume is /data, so name it explicitly rather than depending on $HOME.
+ENV MERCATOR_SQLITE_DSN=file:/data/mercator.db
 EXPOSE 8080
 ENTRYPOINT ["mercator"]
 CMD ["serve"]

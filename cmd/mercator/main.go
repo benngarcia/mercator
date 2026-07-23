@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	stdlog "log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -70,8 +72,14 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("listen: %v", err)
 		return 1
 	}
+	dsn, err := sqliteDSN(env)
+	if err != nil {
+		_ = listener.Close()
+		stdlog.Printf("resolve database path: %v", err)
+		return 1
+	}
 	runtime, err := daemon.New(ctx, daemon.Config{
-		SQLiteDSN:     envValue(env, "MERCATOR_SQLITE_DSN", "file:/data/mercator.db"),
+		SQLiteDSN:     dsn,
 		OperatorToken: apiToken,
 		MasterKey:     masterKey,
 		PublicURL:     env["MERCATOR_PUBLIC_URL"],
@@ -170,6 +178,30 @@ func environ() map[string]string {
 		}
 	}
 	return values
+}
+
+// sqliteDSN resolves where the event log lives. An operator who names a path
+// gets exactly that path. Everyone else gets a per-user data directory, which
+// this creates, because a server that cannot start until you invent a database
+// location is a server nobody can try. The container image sets the variable
+// explicitly, so it keeps its own /data volume.
+func sqliteDSN(env map[string]string) (string, error) {
+	if dsn := env["MERCATOR_SQLITE_DSN"]; dsn != "" {
+		return dsn, nil
+	}
+	base := env["XDG_DATA_HOME"]
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("no MERCATOR_SQLITE_DSN and no home directory: %w", err)
+		}
+		base = filepath.Join(home, ".local", "share")
+	}
+	dir := filepath.Join(base, "mercator")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	return "file:" + filepath.Join(dir, "mercator.db"), nil
 }
 
 func envValue(values map[string]string, key, fallback string) string {
