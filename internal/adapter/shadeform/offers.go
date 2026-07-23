@@ -113,8 +113,13 @@ func hostArchitecture(gpuType string) string {
 	if strings.Contains(t, "GH200") || strings.Contains(t, "GB200") {
 		return "arm64"
 	}
-	return domain.DefaultPlatformArch
+	return catalogFallbackArch
 }
+
+// catalogFallbackArch is what we advertise for a Shadeform catalog entry whose
+// GPU type does not identify an ARM host. Every non-Grace instance Shadeform
+// lists today is x86.
+const catalogFallbackArch = "amd64"
 
 func offerSlug(s string) string {
 	s = strings.ToLower(s)

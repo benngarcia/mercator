@@ -98,6 +98,33 @@ func saveFileConfig(path string, cfg FileConfig) error {
 	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
+// LocalContextName is the context `mercator serve` writes for a loopback
+// broker whose token it generated itself.
+const LocalContextName = "local"
+
+// WriteLocalContext records how to reach a loopback broker the operator never
+// configured a credential for, so the CLI on the same machine needs no exports
+// to talk to the server they just started. It reports whether the file changed.
+//
+// It only claims current_context when nothing else has: silently redirecting
+// commands away from an operator's chosen deployment would be far worse than
+// asking them to run `mercator context use local`.
+func WriteLocalContext(configPath, apiURL, token string) (bool, error) {
+	cfg, err := loadFileConfig(configPath)
+	if err != nil {
+		return false, err
+	}
+	if existing := cfg.Contexts[LocalContextName]; existing != nil &&
+		existing.APIURL == apiURL && existing.APIToken == token && cfg.CurrentContext != "" {
+		return false, nil
+	}
+	cfg.Contexts[LocalContextName] = &ContextConfig{APIURL: apiURL, APIToken: token}
+	if cfg.CurrentContext == "" {
+		cfg.CurrentContext = LocalContextName
+	}
+	return true, saveFileConfig(configPath, cfg)
+}
+
 // currentContext returns the active context, or nil when none is selected.
 func (f FileConfig) currentContext() (string, *ContextConfig) {
 	if f.CurrentContext == "" {
