@@ -1,0 +1,41 @@
+{
+  "type": "domain_event",
+  "event": {
+    "specversion": "1.0",
+    "id": "requested-invalid-runtime",
+    "source": "test",
+    "type": "compute.run.requested.v1",
+    "subject": "runs/run-invalid-runtime",
+    "time": "2030-01-01T00:00:00Z",
+    "workspaceid": "ws_scenario",
+    "streamversion": 1,
+    "globalposition": 1,
+    "correlationid": "run-invalid-runtime",
+    "data": {
+      "run_id": "run-invalid-runtime",
+      "workload_revision": {
+        "id": "wrev-invalid-runtime",
+        "workspace_id": "ws_scenario",
+        "workload_id": "wrk-invalid-runtime",
+        "digest": "sha256:invalid-runtime",
+        "spec": {
+          "containers": [
+            {
+              "name": "main",
+              "image": "example.invalid/worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              "platform": {"os": "linux", "architecture": "amd64"}
+            }
+          ],
+          "resources": {
+            "cpu": {"min_millis": 1000},
+            "memory": {"min_bytes": 1073741824},
+            "ephemeral_disk": {"min_bytes": 1073741824}
+          },
+          "network": {"inbound": "none"},
+          "placement": {"objective": "balanced", "expected_runtime_seconds": 60},
+          "execution": {"max_runtime_seconds": 120, "max_pre_start_attempts": 1}
+        }
+      }
+    }
+  }
+}

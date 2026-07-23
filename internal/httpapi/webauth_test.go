@@ -135,9 +135,10 @@ func TestSessionEndpointReportsDisabledWithoutWebAuth(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 	var body struct {
-		Enabled bool `json:"enabled"`
+		Mode    string `json:"mode"`
+		Enabled bool   `json:"enabled"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Enabled {
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Enabled || body.Mode != "token" {
 		t.Fatalf("without OIDC, /auth/session must report enabled=false: %s err=%v", rec.Body.String(), err)
 	}
 }

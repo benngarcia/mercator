@@ -156,7 +156,7 @@ const rootHelp = `Usage: mercator [--api-url URL] <command>
 Mercator is an OCI run broker with an HTTP API, JSON CLI, and embedded console.
 
 Commands:
-  serve                 Start the Mercator HTTP server and console
+  serve [--dev]         Start the server; --dev adds loopback local browser login
   verify --spec FILE    Launch a bounded provider Conformance Trial
   login                 Sign in through the server's OIDC login and store a CLI token
   logout                Clear the stored login credential

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -27,6 +28,27 @@ import (
 const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
+
+// Defines values for CandidateDecisionDisposition.
+const (
+	ProvisionFreshRental CandidateDecisionDisposition = "provision_fresh_rental"
+	QueueExistingRental  CandidateDecisionDisposition = "queue_existing_rental"
+	RunNowExistingRental CandidateDecisionDisposition = "run_now_existing_rental"
+)
+
+// Valid indicates whether the value is a known member of the CandidateDecisionDisposition enum.
+func (e CandidateDecisionDisposition) Valid() bool {
+	switch e {
+	case ProvisionFreshRental:
+		return true
+	case QueueExistingRental:
+		return true
+	case RunNowExistingRental:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for CapabilityProfileOfferKinds.
 const (
@@ -181,6 +203,75 @@ func (e PortSpecExposure) Valid() bool {
 	}
 }
 
+// Defines values for ScenarioPlaybackCommandSpeed.
+const (
+	ScenarioPlaybackCommandSpeedN1 ScenarioPlaybackCommandSpeed = 1
+	ScenarioPlaybackCommandSpeedN2 ScenarioPlaybackCommandSpeed = 2
+	ScenarioPlaybackCommandSpeedN4 ScenarioPlaybackCommandSpeed = 4
+)
+
+// Valid indicates whether the value is a known member of the ScenarioPlaybackCommandSpeed enum.
+func (e ScenarioPlaybackCommandSpeed) Valid() bool {
+	switch e {
+	case ScenarioPlaybackCommandSpeedN1:
+		return true
+	case ScenarioPlaybackCommandSpeedN2:
+		return true
+	case ScenarioPlaybackCommandSpeedN4:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScenarioPlaybackCommandType.
+const (
+	Next     ScenarioPlaybackCommandType = "next"
+	Pause    ScenarioPlaybackCommandType = "pause"
+	Play     ScenarioPlaybackCommandType = "play"
+	Previous ScenarioPlaybackCommandType = "previous"
+	Restart  ScenarioPlaybackCommandType = "restart"
+	SetSpeed ScenarioPlaybackCommandType = "set_speed"
+)
+
+// Valid indicates whether the value is a known member of the ScenarioPlaybackCommandType enum.
+func (e ScenarioPlaybackCommandType) Valid() bool {
+	switch e {
+	case Next:
+		return true
+	case Pause:
+		return true
+	case Play:
+		return true
+	case Previous:
+		return true
+	case Restart:
+		return true
+	case SetSpeed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StreamConsoleEventsParamsPlay.
+const (
+	StreamConsoleEventsParamsPlayN0 StreamConsoleEventsParamsPlay = "0"
+	StreamConsoleEventsParamsPlayN1 StreamConsoleEventsParamsPlay = "1"
+)
+
+// Valid indicates whether the value is a known member of the StreamConsoleEventsParamsPlay enum.
+func (e StreamConsoleEventsParamsPlay) Valid() bool {
+	switch e {
+	case StreamConsoleEventsParamsPlayN0:
+		return true
+	case StreamConsoleEventsParamsPlayN1:
+		return true
+	default:
+		return false
+	}
+}
+
 // AcceleratorInventory defines model for AcceleratorInventory.
 type AcceleratorInventory struct {
 	CanonicalModel string `json:"canonical_model,omitempty"`
@@ -206,6 +297,9 @@ type AdapterListResponse struct {
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
 type AdapterManifest = adapter.Manifest
 
+// Booking defines model for Booking.
+type Booking = domain.Booking
+
 // BookingDecision defines model for BookingDecision.
 type BookingDecision = domain.BookingDecision
 
@@ -221,15 +315,19 @@ type CPURequirement struct {
 
 // CandidateDecision defines model for CandidateDecision.
 type CandidateDecision struct {
-	AdapterType     string             `json:"adapter_type,omitempty"`
-	ConnectionId    string             `json:"connection_id,omitempty"`
-	Estimates       CandidateEstimates `json:"estimates"`
-	Feasible        bool               `json:"feasible"`
-	NativeRef       string             `json:"native_ref,omitempty"`
-	OfferSnapshotId string             `json:"offer_snapshot_id"`
-	Rejections      []Violation        `json:"rejections,omitempty"`
-	ScoreUsd        float64            `json:"score_usd,omitempty"`
+	AdapterType     string                       `json:"adapter_type,omitempty"`
+	ConnectionId    string                       `json:"connection_id,omitempty"`
+	Disposition     CandidateDecisionDisposition `json:"disposition"`
+	Estimates       CandidateEstimates           `json:"estimates"`
+	Feasible        bool                         `json:"feasible"`
+	NativeRef       string                       `json:"native_ref,omitempty"`
+	OfferSnapshotId string                       `json:"offer_snapshot_id"`
+	Rejections      []Violation                  `json:"rejections,omitempty"`
+	ScoreUsd        float64                      `json:"score_usd,omitempty"`
 }
+
+// CandidateDecisionDisposition defines model for CandidateDecision.Disposition.
+type CandidateDecisionDisposition string
 
 // CandidateEstimates defines model for CandidateEstimates.
 type CandidateEstimates struct {
@@ -641,6 +739,18 @@ type RunResponse struct {
 	RunId string `json:"run_id"`
 }
 
+// ScenarioPlaybackCommand defines model for ScenarioPlaybackCommand.
+type ScenarioPlaybackCommand struct {
+	Speed ScenarioPlaybackCommandSpeed `json:"speed,omitempty"`
+	Type  ScenarioPlaybackCommandType  `json:"type"`
+}
+
+// ScenarioPlaybackCommandSpeed defines model for ScenarioPlaybackCommand.Speed.
+type ScenarioPlaybackCommandSpeed int
+
+// ScenarioPlaybackCommandType defines model for ScenarioPlaybackCommand.Type.
+type ScenarioPlaybackCommandType string
+
 // SinkResult defines model for SinkResult.
 type SinkResult = sinks.Result
 
@@ -707,6 +817,17 @@ type DeleteConnectionParams struct {
 type AuthorizeConnectionParams struct {
 	WorkspaceId string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
+
+// StreamConsoleEventsParams defines parameters for StreamConsoleEvents.
+type StreamConsoleEventsParams struct {
+	WorkspaceId string                        `form:"workspace_id" json:"workspace_id"`
+	Scenario    string                        `form:"scenario,omitempty" json:"scenario,omitempty"`
+	Play        StreamConsoleEventsParamsPlay `form:"play,omitempty" json:"play,omitempty"`
+	LastEventID string                        `json:"Last-Event-ID,omitempty"`
+}
+
+// StreamConsoleEventsParamsPlay defines parameters for StreamConsoleEvents.
+type StreamConsoleEventsParamsPlay string
 
 // ListOffersParams defines parameters for ListOffers.
 type ListOffersParams struct {
@@ -796,6 +917,9 @@ type ListWorkspacesParams struct {
 // CreateConnectionJSONRequestBody defines body for CreateConnection for application/json ContentType.
 type CreateConnectionJSONRequestBody = CreateConnectionRequest
 
+// CommandScenarioPlaybackJSONRequestBody defines body for CommandScenarioPlayback for application/json ContentType.
+type CommandScenarioPlaybackJSONRequestBody = ScenarioPlaybackCommand
+
 // ResolveImageJSONRequestBody defines body for ResolveImage for application/json ContentType.
 type ResolveImageJSONRequestBody = ResolveImageRequest
 
@@ -846,6 +970,12 @@ type ServerInterface interface {
 
 	// (POST /v1/connections/{connection_id}/authorize)
 	AuthorizeConnection(w http.ResponseWriter, r *http.Request, connectionId string, params AuthorizeConnectionParams)
+
+	// (GET /v1/console/events)
+	StreamConsoleEvents(w http.ResponseWriter, r *http.Request, params StreamConsoleEventsParams)
+
+	// (POST /v1/dev/scenario-sessions/{workspace_id}/commands)
+	CommandScenarioPlayback(w http.ResponseWriter, r *http.Request, workspaceId string)
 
 	// (POST /v1/images:resolve)
 	ResolveImage(w http.ResponseWriter, r *http.Request)
@@ -1151,6 +1281,114 @@ func (siw *ServerInterfaceWrapper) AuthorizeConnection(w http.ResponseWriter, r 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AuthorizeConnection(w, r, connectionId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StreamConsoleEvents operation middleware
+func (siw *ServerInterfaceWrapper) StreamConsoleEvents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamConsoleEventsParams
+
+	// ------------- Required query parameter "workspace_id" -------------
+
+	if paramValue := r.URL.Query().Get("workspace_id"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "workspace_id"})
+		return
+	}
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "workspace_id", r.URL.Query(), &params.WorkspaceId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "scenario" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "scenario", r.URL.Query(), &params.Scenario, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "scenario", Err: err})
+		return
+	}
+
+	// ------------- Optional query parameter "play" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "play", r.URL.Query(), &params.Play, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "play", Err: err})
+		return
+	}
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Last-Event-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Last-Event-ID")]; found {
+		var LastEventID string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Last-Event-ID", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Last-Event-ID", valueList[0], &LastEventID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Last-Event-ID", Err: err})
+			return
+		}
+
+		params.LastEventID = LastEventID
+
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamConsoleEvents(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CommandScenarioPlayback operation middleware
+func (siw *ServerInterfaceWrapper) CommandScenarioPlayback(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "workspace_id" -------------
+	var workspaceId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace_id", r.PathValue("workspace_id"), &workspaceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace_id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CommandScenarioPlayback(w, r, workspaceId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2168,6 +2406,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("POST "+options.BaseURL+"/v1/connections", wrapper.CreateConnection)
 	m.HandleFunc("DELETE "+options.BaseURL+"/v1/connections/{connection_id}", wrapper.DeleteConnection)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/connections/{connection_id}/authorize", wrapper.AuthorizeConnection)
+	m.HandleFunc("GET "+options.BaseURL+"/v1/console/events", wrapper.StreamConsoleEvents)
+	m.HandleFunc("POST "+options.BaseURL+"/v1/dev/scenario-sessions/{workspace_id}/commands", wrapper.CommandScenarioPlayback)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/images:resolve", wrapper.ResolveImage)
 	m.HandleFunc("GET "+options.BaseURL+"/v1/offers", wrapper.ListOffers)
 	m.HandleFunc("POST "+options.BaseURL+"/v1/placements:preview", wrapper.PreviewPlacement)
@@ -2547,6 +2787,134 @@ type AuthorizeConnection502JSONResponse ErrorResponse
 func (response AuthorizeConnection502JSONResponse) VisitAuthorizeConnectionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEventsRequestObject struct {
+	Params StreamConsoleEventsParams
+}
+
+type StreamConsoleEventsResponseObject interface {
+	VisitStreamConsoleEventsResponse(w http.ResponseWriter) error
+}
+
+type StreamConsoleEvents200TexteventStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response StreamConsoleEvents200TexteventStreamResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type StreamConsoleEvents400JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents400JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEvents401JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents401JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEvents403JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents403JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEvents501JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents501JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamConsoleEvents502JSONResponse ErrorResponse
+
+func (response StreamConsoleEvents502JSONResponse) VisitStreamConsoleEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(502)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CommandScenarioPlaybackRequestObject struct {
+	WorkspaceId string `json:"workspace_id"`
+	Body        *CommandScenarioPlaybackJSONRequestBody
+}
+
+type CommandScenarioPlaybackResponseObject interface {
+	VisitCommandScenarioPlaybackResponse(w http.ResponseWriter) error
+}
+
+type CommandScenarioPlayback200JSONResponse struct {
+	Accepted bool `json:"accepted"`
+}
+
+func (response CommandScenarioPlayback200JSONResponse) VisitCommandScenarioPlaybackResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CommandScenarioPlayback400JSONResponse ErrorResponse
+
+func (response CommandScenarioPlayback400JSONResponse) VisitCommandScenarioPlaybackResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CommandScenarioPlayback401JSONResponse ErrorResponse
+
+func (response CommandScenarioPlayback401JSONResponse) VisitCommandScenarioPlaybackResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CommandScenarioPlayback404JSONResponse ErrorResponse
+
+func (response CommandScenarioPlayback404JSONResponse) VisitCommandScenarioPlaybackResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CommandScenarioPlayback501JSONResponse ErrorResponse
+
+func (response CommandScenarioPlayback501JSONResponse) VisitCommandScenarioPlaybackResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(501)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -3855,6 +4223,12 @@ type StrictServerInterface interface {
 	// (POST /v1/connections/{connection_id}/authorize)
 	AuthorizeConnection(ctx context.Context, request AuthorizeConnectionRequestObject) (AuthorizeConnectionResponseObject, error)
 
+	// (GET /v1/console/events)
+	StreamConsoleEvents(ctx context.Context, request StreamConsoleEventsRequestObject) (StreamConsoleEventsResponseObject, error)
+
+	// (POST /v1/dev/scenario-sessions/{workspace_id}/commands)
+	CommandScenarioPlayback(ctx context.Context, request CommandScenarioPlaybackRequestObject) (CommandScenarioPlaybackResponseObject, error)
+
 	// (POST /v1/images:resolve)
 	ResolveImage(ctx context.Context, request ResolveImageRequestObject) (ResolveImageResponseObject, error)
 
@@ -4153,6 +4527,65 @@ func (sh *strictHandler) AuthorizeConnection(w http.ResponseWriter, r *http.Requ
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(AuthorizeConnectionResponseObject); ok {
 		if err := validResponse.VisitAuthorizeConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamConsoleEvents operation middleware
+func (sh *strictHandler) StreamConsoleEvents(w http.ResponseWriter, r *http.Request, params StreamConsoleEventsParams) {
+	var request StreamConsoleEventsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamConsoleEvents(ctx, request.(StreamConsoleEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamConsoleEvents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StreamConsoleEventsResponseObject); ok {
+		if err := validResponse.VisitStreamConsoleEventsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CommandScenarioPlayback operation middleware
+func (sh *strictHandler) CommandScenarioPlayback(w http.ResponseWriter, r *http.Request, workspaceId string) {
+	var request CommandScenarioPlaybackRequestObject
+
+	request.WorkspaceId = workspaceId
+
+	var body CommandScenarioPlaybackJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CommandScenarioPlayback(ctx, request.(CommandScenarioPlaybackRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CommandScenarioPlayback")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CommandScenarioPlaybackResponseObject); ok {
+		if err := validResponse.VisitCommandScenarioPlaybackResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -81,6 +81,190 @@
         }
       }
     },
+    "/v1/console/events": {
+      "get": {
+        "operationId": "streamConsoleEvents",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scenario",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "play",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["0", "1"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replay-complete public Workspace event feed followed by live events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Offer catalog unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Event feed is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/dev/scenario-sessions/{workspace_id}/commands": {
+      "post": {
+        "operationId": "commandScenarioPlayback",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScenarioPlaybackCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Scenario playback command accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["accepted"],
+                  "properties": {
+                    "accepted": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Scenario playback session not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Development scenarios are disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/runs": {
       "get": {
         "operationId": "listRuns",
@@ -2873,6 +3057,21 @@
           "name": "sinks"
         }
       },
+      "ScenarioPlaybackCommand": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["play", "pause", "previous", "next", "restart", "set_speed"]
+          },
+          "speed": {
+            "type": "integer",
+            "enum": [1, 2, 4]
+          }
+        },
+        "additionalProperties": false
+      },
       "ErrorResponse": {
         "type": "object",
         "required": [
@@ -3683,6 +3882,9 @@
           "id": {
             "type": "string"
           },
+          "rental_id": {
+            "type": "string"
+          },
           "connection_id": {
             "type": "string"
           },
@@ -3798,6 +4000,7 @@
         "type": "object",
         "required": [
           "offer_snapshot_id",
+          "disposition",
           "feasible",
           "estimates"
         ],
@@ -3813,6 +4016,14 @@
           },
           "native_ref": {
             "type": "string"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "run_now_existing_rental",
+              "queue_existing_rental",
+              "provision_fresh_rental"
+            ]
           },
           "feasible": {
             "type": "boolean"
@@ -3830,6 +4041,55 @@
             "type": "number",
             "format": "double"
           }
+        }
+      },
+      "Booking": {
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "rental_id",
+          "state",
+          "schedule_version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "rental_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "queued"
+            ]
+          },
+          "after_booking_id": {
+            "type": "string"
+          },
+          "projected_start_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latest_start_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "schedule_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        },
+        "x-go-type": "domain.Booking",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
         }
       },
       "BookingDecision": {
@@ -3875,6 +4135,9 @@
           },
           "selected_offer_snapshot_id": {
             "type": "string"
+          },
+          "booking": {
+            "$ref": "#/components/schemas/Booking"
           },
           "selection_reason_codes": {
             "type": "array",

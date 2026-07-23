@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type principalContextKey struct{}
@@ -59,6 +60,12 @@ func isRunReportPath(r *http.Request) bool {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/console/events" {
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+		w.Header().Set("Cache-Control", "no-cache, no-store")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w = flushingResponseWriter{ResponseWriter: w}
+	}
 	operatorAuthRequired := s.security.Token != "" &&
 		strings.HasPrefix(r.URL.Path, "/v1/") &&
 		!isRunReportPath(r)
@@ -76,6 +83,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	}
 	s.mux.ServeHTTP(w, r)
+}
+
+type flushingResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w flushingResponseWriter) Write(data []byte) (int, error) {
+	written, err := w.ResponseWriter.Write(data)
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return written, err
+}
+
+func (w flushingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // authenticate resolves the request's principal: the machine bearer token, a

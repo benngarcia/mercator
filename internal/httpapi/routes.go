@@ -22,8 +22,8 @@ func (s *Server) routes() {
 	// them safe to cache forever.
 	assetServer := http.StripPrefix("/assets/", http.FileServer(http.FS(web.AssetsFS())))
 	s.mux.Handle("GET /assets/", immutableCache(assetServer))
-	// Human login surface. When OIDC is not configured, /auth/session still
-	// answers (enabled: false) so the console can pick the token fallback
+	// Human login surface. When browser auth is not configured, /auth/session
+	// still answers in token mode so the console can pick the token fallback
 	// without probing errors; the other /auth endpoints do not exist.
 	if s.webauth != nil {
 		// Per-method registrations: a method-less "/auth/" subtree would
@@ -33,7 +33,7 @@ func (s *Server) routes() {
 	} else {
 		s.mux.HandleFunc("GET /auth/session", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
-			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+			writeJSON(w, http.StatusOK, map[string]any{"mode": "token", "enabled": false})
 		})
 	}
 	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{

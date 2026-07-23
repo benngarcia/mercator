@@ -349,6 +349,7 @@ func cliOffer() domain.OfferSnapshot {
 	now := time.Now().UTC()
 	return domain.OfferSnapshot{
 		ID:           "offer_cli",
+		RentalID:     "offer_cli",
 		ConnectionID: "conn_cli",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,

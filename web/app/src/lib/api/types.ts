@@ -2,6 +2,7 @@
 // the console stable domain names without replacing generated fields.
 
 import type { components, operations } from "./contract.gen";
+import * as Schema from "effect/Schema";
 
 type ContractSchemas = components["schemas"];
 
@@ -52,6 +53,7 @@ export type CandidateEstimates = ContractSchemas["CandidateEstimates"];
 export type CandidateDecision = ContractSchemas["CandidateDecision"];
 export type CollectionReport = ContractSchemas["CollectionReport"];
 export type BookingDecision = ContractSchemas["BookingDecision"];
+export type Booking = ContractSchemas["Booking"];
 
 export type RunRecord = ContractSchemas["Run"];
 export type Run = RunRecord;
@@ -79,11 +81,26 @@ export type WorkspaceResponse = ContractSchemas["WorkspaceResponse"];
 export type WorkspaceListResponse = ContractSchemas["WorkspaceListResponse"];
 
 // /auth/session belongs to the browser login surface rather than the public
-// versioned HTTP contract.
-export interface AuthSessionState {
-  enabled: boolean;
-  email?: string;
-}
+// versioned HTTP contract. Decode its deliberately small response where it
+// enters the console instead of pretending it is part of the /v1 contract.
+export const AuthSessionState = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal("token"),
+    enabled: Schema.Literal(false),
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("local"),
+    enabled: Schema.Literal(true),
+    email: Schema.String,
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("oidc"),
+    enabled: Schema.Literal(true),
+    email: Schema.optionalKey(Schema.String),
+  }),
+]);
+
+export type AuthSessionState = Schema.Schema.Type<typeof AuthSessionState>;
 
 export type AdapterManifest = ContractSchemas["AdapterManifest"];
 export type ConfigFieldType = AdapterManifest["config_fields"][number]["type"];
@@ -94,8 +111,7 @@ export type AdapterSetupStep = AdapterManifest["setup_steps"][number];
 export type CreateConnectionRequest =
   ContractSchemas["CreateConnectionRequest"];
 export type ConnectionResponse = ContractSchemas["ConnectionResponse"];
-export type ConnectionListResponse =
-  ContractSchemas["ConnectionListResponse"];
+export type ConnectionListResponse = ContractSchemas["ConnectionListResponse"];
 export type DeleteConnectionResponse =
   operations["deleteConnection"]["responses"][200]["content"]["application/json"];
 export type AdapterListResponse = ContractSchemas["AdapterListResponse"];

@@ -6,6 +6,7 @@
 
 import {
   GitBranch,
+  LayoutDashboard,
   PlugZap,
   Radio,
   ScrollText,
@@ -23,6 +24,7 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
+  { to: "/canvas", label: "Workspace", icon: LayoutDashboard },
   { to: "/runs", label: "Runs", icon: ScrollText },
   { to: "/offers", label: "Offers", icon: Tags },
   { to: "/connections", label: "Connections", icon: PlugZap },
@@ -38,7 +40,7 @@ function NavLink({ item }: { item: NavItem }) {
       // decoupled from the generated route union without resorting to `any`.
       to={item.to as never}
       className={cn(
-        "group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors",
+        "group flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-muted-foreground transition-colors lg:justify-start",
         "hover:bg-foreground/[0.04] hover:text-foreground",
       )}
       activeProps={{
@@ -47,17 +49,17 @@ function NavLink({ item }: { item: NavItem }) {
       }}
     >
       <Icon className="size-[1.05rem] shrink-0" />
-      <span className="truncate">{item.label}</span>
+      <span className="hidden truncate lg:inline">{item.label}</span>
     </Link>
   );
 }
 
 export function Sidebar() {
   return (
-    <aside className="flex h-full flex-col gap-4 border-r bg-card/30 px-3 py-4">
-      <div className="flex items-center gap-2 px-1.5">
+    <aside className="flex h-full flex-col gap-4 border-r bg-card/30 px-2 py-4 lg:px-3">
+      <div className="flex items-center justify-center gap-2 px-1.5 lg:justify-start">
         <GitBranch className="size-5 text-primary" aria-hidden />
-        <div className="flex flex-col leading-none">
+        <div className="hidden flex-col leading-none lg:flex">
           <span className="text-sm font-semibold tracking-tight">Mercator</span>
           <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
             Operator Console

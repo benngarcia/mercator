@@ -1,47 +1,31 @@
-// useSession exposes the workspace default + bearer token from session.ts as
-// reactive state via useSyncExternalStore, plus setters that persist to
-// localStorage and notify all subscribers (including other tabs).
-
-import { useCallback, useSyncExternalStore } from "react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 
 import {
-  getToken,
-  getWorkspace,
-  setToken as persistToken,
-  setWorkspace as persistWorkspace,
-  snapshot,
-  subscribe,
-} from "@/lib/session";
+  sessionAtom,
+  setTokenAtom,
+  setWorkspaceAtom,
+} from "@/lib/session-atoms";
 
 export interface UseSession {
-  token: string | null;
-  workspace: string | null;
-  hasToken: boolean;
-  setToken: (token: string | null) => void;
-  setWorkspace: (workspaceID: string | null) => void;
+  readonly token: string | null;
+  readonly workspace: string | null;
+  readonly hasToken: boolean;
+  readonly setToken: (token: string | null) => void;
+  readonly setWorkspace: (workspaceID: string | null) => void;
 }
 
+const emptySession = { token: null, workspace: null } as const;
+
 export function useSession(): UseSession {
-  // snapshot() is a primitive string so useSyncExternalStore's default
-  // referential check is stable across renders without memoization.
-  const snap = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const result = useAtomValue(sessionAtom);
+  const setToken = useAtomSet(setTokenAtom);
+  const setWorkspace = useAtomSet(setWorkspaceAtom);
+  const session = AsyncResult.getOrElse(result, () => emptySession);
 
-  const setToken = useCallback((token: string | null) => {
-    persistToken(token);
-  }, []);
-
-  const setWorkspace = useCallback((workspaceID: string | null) => {
-    persistWorkspace(workspaceID);
-  }, []);
-
-  // snap is read so the hook re-runs (and re-reads the getters) on change.
-  void snap;
-
-  const token = getToken();
   return {
-    token,
-    workspace: getWorkspace(),
-    hasToken: Boolean(token),
+    ...session,
+    hasToken: session.token !== null,
     setToken,
     setWorkspace,
   };

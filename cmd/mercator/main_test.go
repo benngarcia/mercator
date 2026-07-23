@@ -60,6 +60,52 @@ func TestServeRejectsInvalidMasterKeyBeforeOpeningStorage(t *testing.T) {
 	}
 }
 
+func TestServeOptionsEnableLocalAuthentication(t *testing.T) {
+	// Arrange
+	args := []string{"mercator", "serve", "--dev"}
+
+	// Act
+	options, err := parseServeOptions(args)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("parse serve options: %v", err)
+	}
+	if options.localAuthEmail != localDeveloperEmail {
+		t.Fatalf("local email = %q, want %q", options.localAuthEmail, localDeveloperEmail)
+	}
+}
+
+func TestServeRejectsLocalAuthenticationOnNonLoopbackAddress(t *testing.T) {
+	// Arrange
+	env := map[string]string{
+		"MERCATOR_ADDR":       "0.0.0.0:8080",
+		"MERCATOR_API_TOKEN":  "operator-token",
+		"MERCATOR_SQLITE_DSN": "file:unused.db",
+	}
+
+	// Act
+	exitCode := run(context.Background(), []string{"mercator", "serve", "--dev"}, env, &bytes.Buffer{}, &bytes.Buffer{})
+
+	// Assert
+	if exitCode != 1 {
+		t.Fatalf("run() = %d, want 1", exitCode)
+	}
+}
+
+func TestServeRejectsUnknownFlags(t *testing.T) {
+	// Arrange
+	args := []string{"mercator", "serve", "--trust-everyone"}
+
+	// Act
+	_, err := parseServeOptions(args)
+
+	// Assert
+	if err == nil {
+		t.Fatal("unknown serve flag should fail")
+	}
+}
+
 func TestServeClosesStorageWhenOIDCDiscoveryFails(t *testing.T) {
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "discovery unavailable", http.StatusServiceUnavailable)

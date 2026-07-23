@@ -1,207 +1,185 @@
-// apiFetch is the single same-origin HTTP entrypoint. It injects the bearer
-// token and ?workspace_id centrally (never in components), parses the
-// { code, message, details } error envelope, throws a typed ApiError on
-// non-2xx, and auto-generates an Idempotency-Key for mutating requests unless
-// one is supplied. Auth and workspace are NEVER added by callers.
+import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import createClient from "openapi-fetch";
 
-import type { ErrorEnvelope, Violation } from "./types";
-import { getToken, getWorkspace } from "../session";
+import type { paths } from "./contract.gen";
+import { AuthSessionState, type ErrorEnvelope, type Violation } from "./types";
+import { Session } from "../session";
 
-export class ApiError extends Error {
+export class ApiError extends Data.TaggedError("ApiError")<{
   readonly status: number;
   readonly code: string;
+  readonly message: string;
   readonly details?: Violation[];
-
-  constructor(
-    status: number,
-    code: string,
-    message: string,
-    details?: Violation[],
-  ) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-
-  // serviceDisabled is true for a 501 response, which the UI degrades to a
-  // <ServiceDisabled> panel rather than a hard error. The Go server returns
-  // 501 with codes like WORKLOAD_SERVICE_DISABLED / SINKS_DISABLED /
-  // IMAGE_RESOLVER_DISABLED.
+  readonly cause?: unknown;
+}> {
   get serviceDisabled(): boolean {
     return this.status === 501;
   }
 
-  // unauthorized is true for a 401, which the UI maps to a friendly "set a
-  // token" prompt.
   get unauthorized(): boolean {
     return this.status === 401;
   }
 
-  // notFound is true for a 404; query hooks that treat missing resources as
-  // null (e.g. useRunDecision) check this.
   get notFound(): boolean {
     return this.status === 404;
   }
 }
 
-type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+type ApiResult<T> = {
+  readonly data?: T;
+  readonly error?: ErrorEnvelope;
+  readonly response: Response;
+};
 
-export interface ApiFetchOptions {
-  method?: Method;
-  body?: unknown;
-  // idempotencyKey overrides the auto-generated UUID for mutating methods.
-  idempotencyKey?: string;
-  // searchParams are merged onto the path's query string. workspace_id is
-  // injected automatically from the session unless explicitly provided here.
-  searchParams?: Record<string, string | number | boolean | undefined | null>;
-  signal?: AbortSignal;
-  // workspaceScope states whether this request uses the selected workspace,
-  // no workspace, or one explicit workspace.
-  workspaceScope?: WorkspaceScope;
+function transportError(operation: string, cause: unknown): ApiError {
+  return new ApiError({
+    status: 0,
+    code: "NETWORK_ERROR",
+    message: `${operation} could not reach the Mercator API.`,
+    cause,
+  });
 }
 
-export type WorkspaceScope =
-  | "session"
-  | "none"
-  | { workspaceId: string };
+function responseError(
+  operation: string,
+  response: Response,
+  envelope: ErrorEnvelope | undefined,
+): ApiError {
+  return new ApiError({
+    status: response.status,
+    code: envelope?.code || `HTTP_${response.status}`,
+    message:
+      envelope?.message ||
+      response.statusText ||
+      `${operation} failed with HTTP ${response.status}.`,
+    details: envelope?.details,
+  });
+}
 
-const MUTATING_METHODS: ReadonlySet<string> = new Set([
-  "POST",
-  "PUT",
-  "PATCH",
-  "DELETE",
-]);
+function decodeResult<T>(
+  operation: string,
+  result: ApiResult<T>,
+): Effect.Effect<T, ApiError> {
+  if (result.data !== undefined) {
+    return Effect.succeed(result.data);
+  }
+  return Effect.fail(responseError(operation, result.response, result.error));
+}
 
-function isMutating(method: Method): boolean {
-  return MUTATING_METHODS.has(method);
+function request<T>(
+  operation: string,
+  run: (signal: AbortSignal) => Promise<ApiResult<T>>,
+): Effect.Effect<T, ApiError> {
+  return Effect.tryPromise({
+    try: run,
+    catch: (cause) => transportError(operation, cause),
+  }).pipe(Effect.flatMap((result) => decodeResult(operation, result)));
+}
+
+function requestHeaders(token: string | null): HeadersInit {
+  return token === null ? {} : { Authorization: `Bearer ${token}` };
 }
 
 function newIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  // Extremely defensive fallback; modern browsers always have randomUUID.
-  return `idk-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return crypto.randomUUID();
 }
 
-function buildUrl(
-  path: string,
-  searchParams: ApiFetchOptions["searchParams"],
-  workspaceScope: WorkspaceScope,
-): string {
-  // Resolve against the current origin so callers pass bare paths like
-  // "/v1/runs". apiFetch is always same-origin.
-  const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-  const url = new URL(path, base);
+export interface ApiService {
+  readonly getAuthSession: () => Effect.Effect<AuthSessionState, ApiError>;
+  readonly logout: () => Effect.Effect<void, ApiError>;
+  readonly client: ReturnType<typeof createClient<paths>>;
+  readonly headers: Effect.Effect<HeadersInit>;
+  readonly request: <T>(
+    operation: string,
+    run: (signal: AbortSignal) => Promise<ApiResult<T>>,
+  ) => Effect.Effect<T, ApiError>;
+  readonly idempotencyKey: Effect.Effect<string>;
+}
 
-  // Inject workspace_id from the explicit override or session default unless
-  // the caller already supplied it in searchParams.
-  const callerWorkspace =
-    searchParams && Object.prototype.hasOwnProperty.call(searchParams, "workspace_id")
-      ? searchParams["workspace_id"]
-      : undefined;
-  const resolvedWorkspace = resolveWorkspace(workspaceScope);
-  if (
-    (callerWorkspace === undefined || callerWorkspace === null) &&
-    resolvedWorkspace
-  ) {
-    url.searchParams.set("workspace_id", resolvedWorkspace);
-  }
+export class Api extends Context.Service<Api, ApiService>()("@mercator/Api") {}
 
-  if (searchParams) {
-    for (const [key, value] of Object.entries(searchParams)) {
-      if (value === undefined || value === null) {
-        continue;
+export const layer = Layer.effect(
+  Api,
+  Effect.gen(function* () {
+    const session = yield* Session;
+    const baseUrl =
+      typeof window === "undefined"
+        ? "http://localhost"
+        : window.location.origin;
+    const client = createClient<paths>({
+      baseUrl,
+      credentials: "same-origin",
+      fetch: (request: Request) => globalThis.fetch(request),
+    });
+    const headers = session.current.pipe(
+      Effect.map((state) => requestHeaders(state.token)),
+    );
+
+    const getAuthSession = Effect.fn("Api.getAuthSession")(function* () {
+      const response = yield* Effect.tryPromise({
+        try: (signal) =>
+          fetch("/auth/session", {
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+            signal,
+          }),
+        catch: (cause) => transportError("Api.getAuthSession", cause),
+      });
+      if (!response.ok) {
+        return yield* Effect.fail(
+          responseError("Api.getAuthSession", response, undefined),
+        );
       }
-      url.searchParams.set(key, String(value));
-    }
-  }
-
-  return url.pathname + url.search;
-}
-
-function resolveWorkspace(scope: WorkspaceScope): string | undefined {
-  if (scope === "none") {
-    return undefined;
-  }
-  if (scope === "session") {
-    return getWorkspace() ?? undefined;
-  }
-  return scope.workspaceId;
-}
-
-async function parseError(response: Response): Promise<ApiError> {
-  let code = `HTTP_${response.status}`;
-  let message = response.statusText || `Request failed with ${response.status}`;
-  let details: Violation[] | undefined;
-
-  try {
-    const text = await response.text();
-    if (text) {
-      const envelope = JSON.parse(text) as Partial<ErrorEnvelope>;
-      if (typeof envelope.code === "string" && envelope.code) {
-        code = envelope.code;
+      const json = yield* Effect.tryPromise({
+        try: () => response.json(),
+        catch: (cause) => transportError("Api.getAuthSession.decode", cause),
+      });
+      const auth = yield* Schema.decodeUnknownEffect(AuthSessionState)(json).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ApiError({
+              status: response.status,
+              code: "INVALID_AUTH_SESSION",
+              message: "The authentication session response was invalid.",
+              cause,
+            }),
+        ),
+      );
+      const browserSession = yield* session.current;
+      if (auth.mode !== "token" && browserSession.token !== null) {
+        yield* session.setToken(null);
       }
-      if (typeof envelope.message === "string" && envelope.message) {
-        message = envelope.message;
+      return auth;
+    });
+
+    const logout = Effect.fn("Api.logout")(function* () {
+      const response = yield* Effect.tryPromise({
+        try: (signal) =>
+          globalThis.fetch("/auth/logout", {
+            method: "POST",
+            redirect: "manual",
+            signal,
+          }),
+        catch: (cause) => transportError("Api.logout", cause),
+      });
+      if (response.status >= 400) {
+        return yield* Effect.fail(
+          responseError("Api.logout", response, undefined),
+        );
       }
-      if (Array.isArray(envelope.details)) {
-        details = envelope.details;
-      }
-    }
-  } catch {
-    // Non-JSON error body; keep the status-derived defaults.
-  }
+    });
 
-  return new ApiError(response.status, code, message, details);
-}
-
-export async function apiFetch<T>(
-  path: string,
-  opts: ApiFetchOptions = {},
-): Promise<T> {
-  const method: Method = opts.method ?? "GET";
-  const headers = new Headers();
-  headers.set("Accept", "application/json");
-
-  const token = getToken();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-
-  let bodyInit: BodyInit | undefined;
-  if (opts.body !== undefined) {
-    headers.set("Content-Type", "application/json");
-    bodyInit = JSON.stringify(opts.body);
-  }
-
-  if (isMutating(method)) {
-    headers.set("Idempotency-Key", opts.idempotencyKey ?? newIdempotencyKey());
-  }
-
-  const url = buildUrl(path, opts.searchParams, opts.workspaceScope ?? "session");
-
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: bodyInit,
-    signal: opts.signal,
-    credentials: "same-origin",
-  });
-
-  if (!response.ok) {
-    throw await parseError(response);
-  }
-
-  // 204 No Content and empty bodies parse to undefined.
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  const text = await response.text();
-  if (!text) {
-    return undefined as T;
-  }
-  return JSON.parse(text) as T;
-}
+    return Api.of({
+      client,
+      headers,
+      request,
+      getAuthSession,
+      logout,
+      idempotencyKey: Effect.sync(newIdempotencyKey),
+    });
+  }),
+);

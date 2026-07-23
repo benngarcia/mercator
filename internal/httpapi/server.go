@@ -8,9 +8,11 @@ import (
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/reporting"
+	"github.com/benngarcia/mercator/internal/scenario"
 	sinkspkg "github.com/benngarcia/mercator/internal/sinks"
 	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
@@ -23,6 +25,12 @@ type ImageResolver interface {
 
 type OfferAggregator interface {
 	AggregateOffers(context.Context, adapter.OfferRequest) (broker.OfferAggregation, error)
+}
+
+type ConsoleEventLog interface {
+	ReadAll(context.Context, eventlog.GlobalPosition, int, eventlog.EventFilter) ([]eventlog.StoredEvent, error)
+	LatestPosition(context.Context, eventlog.EventFilter) (eventlog.GlobalPosition, error)
+	Subscribe(context.Context, eventlog.SubscriptionRequest) (<-chan eventlog.Delivery, error)
 }
 
 // singleProviderOffers adapts the fake-mode provider used by HandlerForSQLite
@@ -51,6 +59,8 @@ type Deps struct {
 	Connections  *connection.Service
 	Resolver     ImageResolver
 	Workspaces   *workspace.SQLiteCatalog
+	Events       ConsoleEventLog
+	Scenarios    *scenario.DashboardPlayback
 }
 
 type Server struct {
@@ -62,6 +72,9 @@ type Server struct {
 	conns        *connection.Service
 	resolver     ImageResolver
 	workspaces   *workspace.SQLiteCatalog
+	events       ConsoleEventLog
+	scenarios    *scenario.DashboardPlayback
+	offerCatalog *offerCatalog
 	verifier     connectionVerifier
 	security     securityConfig
 	reportSigner *reporting.Signer
@@ -132,6 +145,11 @@ func New(deps Deps, options ...Option) http.Handler {
 		conns:      deps.Connections,
 		resolver:   deps.Resolver,
 		workspaces: deps.Workspaces,
+		events:     deps.Events,
+		scenarios:  deps.Scenarios,
+	}
+	if deps.Offers != nil {
+		s.offerCatalog = newOfferCatalog(deps.Offers, offerObservationInterval)
 	}
 	for _, option := range options {
 		option(s)

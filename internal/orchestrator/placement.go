@@ -34,7 +34,7 @@ func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID 
 	if violations := domain.ValidateWorkloadRevision(workload); len(violations) > 0 {
 		return domain.BookingDecision{}, &ValidationError{Violations: violations}
 	}
-	decision, _, err := o.evaluatePlacement(ctx, runID, workload, nil)
+	decision, _, _, err := o.evaluatePlacement(ctx, runID, workload, nil)
 	return decision, err
 }
 
@@ -50,41 +50,50 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Violations[0].Code, e.Violations[0].Message)
 }
 
-func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string, attemptNumber int, excludedOfferSnapshotIDs []string) (domain.BookingDecision, attemptData, domain.OfferSnapshot, error) {
-	decision, offers, err := o.evaluatePlacement(ctx, runID, requested.Workload, excludedOfferSnapshotIDs)
+func (o *Orchestrator) decide(ctx context.Context, workspaceID string, requested runRequestedData, runID string, attemptNumber int, excludedOfferSnapshotIDs []string) (domain.BookingDecision, attemptData, domain.OfferSnapshot, domain.RentalSchedule, error) {
+	decision, offers, schedules, err := o.evaluatePlacement(ctx, runID, requested.Workload, excludedOfferSnapshotIDs)
 	if err != nil {
-		return domain.BookingDecision{}, attemptData{}, domain.OfferSnapshot{}, err
+		return domain.BookingDecision{}, attemptData{}, domain.OfferSnapshot{}, domain.RentalSchedule{}, err
 	}
 	if decision.SelectedOfferSnapshotID == "" {
-		return decision, attemptData{}, domain.OfferSnapshot{}, nil
+		return decision, attemptData{}, domain.OfferSnapshot{}, domain.RentalSchedule{}, nil
 	}
 	selectedOffer, ok := selectedOfferByID(offers, decision.SelectedOfferSnapshotID)
 	if !ok {
-		return domain.BookingDecision{}, attemptData{}, domain.OfferSnapshot{}, fmt.Errorf("orchestrator: selected offer %s not found", decision.SelectedOfferSnapshotID)
+		return domain.BookingDecision{}, attemptData{}, domain.OfferSnapshot{}, domain.RentalSchedule{}, fmt.Errorf("orchestrator: selected offer %s not found", decision.SelectedOfferSnapshotID)
 	}
-	return decision, newAttempt(workspaceID, runID, attemptNumber), selectedOffer, nil
+	schedule := schedules[decision.Booking.RentalID]
+	if schedule.RentalID == "" {
+		schedule = domain.NewRentalSchedule(decision.Booking.RentalID)
+	}
+	return decision, newAttempt(workspaceID, runID, attemptNumber), selectedOffer, schedule, nil
 }
 
 // evaluatePlacement is the shared placement path for preview and live decide:
 // fail-closed offer list, then scheduler.Evaluate.
-func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, workload domain.WorkloadRevision, excludedOfferSnapshotIDs []string) (domain.BookingDecision, []domain.OfferSnapshot, error) {
+func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, workload domain.WorkloadRevision, excludedOfferSnapshotIDs []string) (domain.BookingDecision, []domain.OfferSnapshot, map[string]domain.RentalSchedule, error) {
+	schedules, err := o.schedules.List(ctx, workload.WorkspaceID)
+	if err != nil {
+		return domain.BookingDecision{}, nil, nil, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
+	}
 	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
 		WorkspaceID: workload.WorkspaceID,
 		Resources:   workload.Spec.Resources,
 	})
 	if err != nil {
-		return domain.BookingDecision{}, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)
+		return domain.BookingDecision{}, nil, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)
 	}
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
 		RunID:                    runID,
 		Workload:                 workload,
 		Offers:                   offers,
+		Schedules:                schedules,
 		ExcludedOfferSnapshotIDs: excludedOfferSnapshotIDs,
 		ModelVersion:             "latency-v1",
 		EvaluatedAt:              o.now().UTC(),
 	})
 	if err != nil {
-		return domain.BookingDecision{}, nil, err
+		return domain.BookingDecision{}, nil, nil, err
 	}
-	return decision, offers, nil
+	return decision, offers, schedules, nil
 }

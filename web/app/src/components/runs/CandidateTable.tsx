@@ -82,7 +82,7 @@ const ESTIMATE_COLUMNS: Array<{
 ];
 
 // Total column count drives the expansion row's colSpan.
-const COLUMN_COUNT = 4 + ESTIMATE_COLUMNS.length; // offer, adapter, feasible, score + estimates
+const COLUMN_COUNT = 5 + ESTIMATE_COLUMNS.length; // offer, adapter, disposition, feasible, score + estimates
 
 interface CandidateRowProps {
   candidate: CandidateDecision;
@@ -137,6 +137,11 @@ function CandidateRow({ candidate, selected }: CandidateRowProps) {
           <span className="font-mono text-xs text-muted-foreground">
             {candidate.adapter_type ?? "—"}
           </span>
+        </TableCell>
+
+        {/* Feasible */}
+        <TableCell className="py-2 text-xs text-muted-foreground">
+          {dispositionLabel(candidate.disposition)}
         </TableCell>
 
         {/* Feasible */}
@@ -234,6 +239,9 @@ export function CandidateTable({
               Adapter
             </TableHead>
             <TableHead className="h-9 text-[0.6875rem] font-medium uppercase tracking-wider">
+              Disposition
+            </TableHead>
+            <TableHead className="h-9 text-[0.6875rem] font-medium uppercase tracking-wider">
               Feasible
             </TableHead>
             <TableHead className="h-9 text-right text-[0.6875rem] font-medium uppercase tracking-wider">
@@ -277,4 +285,15 @@ export function CandidateTable({
       </p>
     </div>
   );
+}
+
+function dispositionLabel(disposition: CandidateDecision["disposition"]): string {
+  switch (disposition) {
+    case "run_now_existing_rental":
+      return "Reuse now";
+    case "queue_existing_rental":
+      return "Queue";
+    case "provision_fresh_rental":
+      return "Fresh";
+  }
 }

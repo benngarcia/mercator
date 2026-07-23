@@ -285,7 +285,7 @@ func (a *Authenticator) logout(w http.ResponseWriter, r *http.Request) {
 // session reports login availability and the current identity so the console
 // can decide between the OIDC flow and the token fallback without guessing.
 func (a *Authenticator) session(w http.ResponseWriter, r *http.Request) {
-	response := map[string]any{"enabled": true}
+	response := map[string]any{"mode": "oidc", "enabled": true}
 	if email, ok := a.SessionEmail(r); ok {
 		response["email"] = email
 	}

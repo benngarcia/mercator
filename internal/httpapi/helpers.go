@@ -180,6 +180,7 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 		Connections:  connection.New(log),
 		Resolver:     resolver,
 		Workspaces:   workspaces,
+		Events:       log,
 	}, options...)
 	return handler, storage.Close, nil
 }
