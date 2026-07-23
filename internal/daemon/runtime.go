@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	dockeradapter "github.com/benngarcia/mercator/internal/adapter/docker"
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
@@ -133,7 +134,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Workloads:    workload.New(logStore),
 		Sinks:        sinks.NewManager(logStore, map[string]sinks.Sink{"audit": sinks.DiscardSink{}}),
 		Connections:  connectionService,
-		Resolver:     ociresolver.NewStaticResolver(nil),
+		Resolver:     ociresolver.NewDaemonResolver(inspectLocalImage),
 		Workspaces:   storage.Workspaces(),
 	}, serverOptions...)
 
@@ -156,6 +157,22 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	}
 	go runtime.reconcile(reconcileCtx)
 	return runtime, nil
+}
+
+// inspectLocalImage reads an image's digest and platform from the broker host's
+// Docker endpoint, which is the endpoint that launches local runs. This is what
+// lets `mercator run create busybox` become a reproducible, digest-pinned run
+// without the operator pinning it by hand.
+func inspectLocalImage(ctx context.Context, ref string) (ociresolver.InspectedImage, error) {
+	info, err := dockeradapter.NewCLIClient("").InspectImage(ctx, ref)
+	if err != nil {
+		return ociresolver.InspectedImage{}, err
+	}
+	return ociresolver.InspectedImage{
+		RepoDigest:   info.RepoDigest,
+		OS:           info.OS,
+		Architecture: info.Architecture,
+	}, nil
 }
 
 // Serve runs the production HTTP server on a listener allocated by the caller.

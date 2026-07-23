@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,17 @@ func (p Platform) String() string {
 		return ""
 	}
 	return p.OS + "/" + p.Architecture
+}
+
+// ParsePlatform reads an "os/arch" string back into a Platform. It reports
+// false for anything that does not name both halves, so a partial answer never
+// half-populates a workload's platform.
+func ParsePlatform(value string) (Platform, bool) {
+	os, arch, found := strings.Cut(value, "/")
+	if !found || os == "" || arch == "" {
+		return Platform{}, false
+	}
+	return Platform{OS: os, Architecture: arch}, true
 }
 
 type WorkloadRevision struct {

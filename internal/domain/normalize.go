@@ -10,7 +10,6 @@ import "slices"
 const (
 	DefaultContainerName       = "main"
 	DefaultPlatformOS          = "linux"
-	DefaultPlatformArch        = "amd64"
 	DefaultCPUMillis           = 250
 	DefaultMemoryBytes         = 256 * 1024 * 1024  // 256Mi
 	DefaultEphemeralDiskBytes  = 1024 * 1024 * 1024 // 1Gi
@@ -37,9 +36,9 @@ func NormalizeWorkloadRevision(rev WorkloadRevision) WorkloadRevision {
 		if c.Platform.OS == "" {
 			c.Platform.OS = DefaultPlatformOS
 		}
-		if c.Platform.Architecture == "" {
-			c.Platform.Architecture = DefaultPlatformArch
-		}
+		// Architecture is deliberately not defaulted. Only the image knows what
+		// it was built for, so image resolution fills it during run intake.
+		// Guessing here produced runs that no arm64 host could ever satisfy.
 		containers[0] = c
 	}
 	out.Spec.Containers = containers

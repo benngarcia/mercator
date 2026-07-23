@@ -89,20 +89,23 @@ func (s *Server) requiredWorkspace(ctx context.Context, queryWorkspaceID string)
 
 // resolveImageFn adapts the server's OCI resolver into the orchestrator's
 // ResolveImage hook. It returns nil when no resolver is configured, in which
-// case images are stored/launched as submitted (backward-compatible).
-func (s *Server) resolveImageFn() func(context.Context, string, string) (string, error) {
+// case images are stored/launched as submitted.
+func (s *Server) resolveImageFn() orchestrator.ResolveImageFunc {
 	if s.resolver == nil {
 		return nil
 	}
-	return func(ctx context.Context, image, platform string) (string, error) {
+	return func(ctx context.Context, image, platform string) (string, string, error) {
 		resolved, err := s.resolver.Resolve(ctx, ociresolver.ResolveRequest{Image: image, Platform: platform})
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		if resolved.Image != "" {
-			return resolved.Image, nil
+		if resolved.Image == "" {
+			resolved.Image = image
 		}
-		return image, nil
+		if resolved.Platform == "" {
+			resolved.Platform = platform
+		}
+		return resolved.Image, resolved.Platform, nil
 	}
 }
 
@@ -162,17 +165,34 @@ func HandlerForSQLite(ctx context.Context, dsn string, offer []domain.OfferSnaps
 	// Synthetic-digest resolution lets the minimal create path
 	// (POST /v1/runs {"image":"busybox"}) resolve an arbitrary tag to a
 	// deterministic digest with no network, keeping fake mode end-to-end
-	// exercisable without a pre-pinned image.
+	// exercisable without a pre-pinned image. Fictional images cannot be read
+	// for their platform, so the sandbox assumes the platform its own offers
+	// advertise.
+	resolver := ociresolver.NewStaticResolver(nil,
+		ociresolver.WithSyntheticDigests(),
+		ociresolver.WithAssumedPlatform(offeredPlatform(offer)),
+	)
 	handler := New(Deps{
 		Orchestrator: orchestrator.New(log, sched, ad),
 		Offers:       singleProviderOffers{provider: ad},
 		Workloads:    workload.New(log),
 		Sinks:        sinkspkg.NewManager(log, map[string]sinkspkg.Sink{"audit": sinkspkg.DiscardSink{}}),
 		Connections:  connection.New(log),
-		Resolver:     ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests()),
+		Resolver:     resolver,
 		Workspaces:   workspaces,
 	}, options...)
 	return handler, storage.Close, nil
+}
+
+// offeredPlatform reports the platform the fake sandbox's offers advertise, so
+// a synthetic image resolves to something those offers can actually accept.
+func offeredPlatform(offers []domain.OfferSnapshot) string {
+	for _, offer := range offers {
+		if platform := offer.Platform.String(); platform != "" {
+			return platform
+		}
+	}
+	return ""
 }
 
 var _ fs.FS = web.Static()
