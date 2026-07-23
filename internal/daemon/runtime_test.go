@@ -11,7 +11,63 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/daemon"
+	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
+	"github.com/benngarcia/mercator/internal/workspace"
 )
+
+func TestRuntimeStartsWithAnExistingNonDefaultWorkspace(t *testing.T) {
+	// Arrange: an existing installation whose workspace catalog predates the
+	// local quickstart defaults.
+	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
+	storage, err := sqlitestore.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	_, err = storage.Workspaces().Create(t.Context(), workspace.Create{
+		ID:          "ws_existing",
+		DisplayName: "Existing",
+		CreatedAt:   time.Date(2026, time.July, 23, 12, 0, 0, 0, time.UTC),
+		CreatedBy:   "operator:test",
+	})
+	if err != nil {
+		t.Fatalf("create existing workspace: %v", err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("close arranged storage: %v", err)
+	}
+	dockerPath, err := filepath.Abs(filepath.Join("testdata", "docker-reachable"))
+	if err != nil {
+		t.Fatalf("resolve Docker fixture path: %v", err)
+	}
+	t.Setenv("PATH", dockerPath)
+
+	// Act: start the production runtime against that catalog.
+	runtime, err := daemon.New(t.Context(), daemon.Config{
+		SQLiteDSN:     dsn,
+		OperatorToken: "operator-token",
+		MasterKey:     []byte("0123456789abcdef0123456789abcdef"),
+	})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	if err := runtime.Shutdown(t.Context()); err != nil {
+		t.Fatalf("shutdown runtime: %v", err)
+	}
+
+	// Assert: startup preserves the operator-owned workspace catalog.
+	storage, err = sqlitestore.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("reopen storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	workspaces, err := storage.Workspaces().List(t.Context(), workspace.ListOptions{IncludeArchived: true})
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+	if len(workspaces) != 1 || workspaces[0].ID != "ws_existing" {
+		t.Fatalf("workspaces = %+v, want only ws_existing", workspaces)
+	}
+}
 
 func TestRuntimeServesProductionHandlerOnCallerListener(t *testing.T) {
 	// Arrange: a production runtime backed by private, temporary SQLite and a
