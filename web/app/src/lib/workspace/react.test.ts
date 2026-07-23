@@ -66,6 +66,30 @@ test("Workspace feed resets and orders the CloudEvents that drive the canvas", (
   expect(restarted.events.map((event) => event.id)).toEqual(["event-3"]);
 });
 
+test("skips replayed events already incorporated, even outside the id window", () => {
+  const live = reduceWorkspaceFeed(initialWorkspaceFeedSnapshot("ws_1"), {
+    type: "message",
+    message: { type: "ready", throughGlobalPosition: 10 },
+  });
+  expect(live.workspace.throughGlobalPosition).toBe(10);
+  expect(live.events).toEqual([]);
+
+  const replayed = reduceWorkspaceFeed(live, {
+    type: "message",
+    message: eventMessage(cloudEvent(5)),
+  });
+
+  expect(replayed.workspace).toBe(live.workspace);
+  expect(replayed.events).toEqual([]);
+
+  const fresh = reduceWorkspaceFeed(live, {
+    type: "message",
+    message: eventMessage(cloudEvent(11)),
+  });
+  expect(fresh.events.map((event) => event.id)).toEqual(["event-11"]);
+  expect(fresh.workspace.throughGlobalPosition).toBe(11);
+});
+
 function eventMessage(event: CloudEvent) {
   return { type: "domain_event" as const, event };
 }
