@@ -19,7 +19,7 @@ Useful local checks:
 go test ./...
 go build ./...
 
-cd web/app && bun install && bun run typecheck && bun run build
+cd web/app && bun install && bun run typecheck && bun run test && bun run build
 ```
 
 The Docker integration test is opt-in:

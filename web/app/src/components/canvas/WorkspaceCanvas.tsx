@@ -141,10 +141,7 @@ function TimeAxis({
   horizonMinutes: number;
   pixelsPerMinute: number;
 }) {
-  const ticks = Array.from(
-    { length: Math.floor(horizonMinutes / 10) + 1 },
-    (_, index) => index * 10,
-  );
+  const ticks = tickMinutes(horizonMinutes);
   return (
     <div className="sticky top-0 z-20 h-10 border-b bg-background/95 backdrop-blur">
       {ticks.map((minutes) => (
@@ -186,10 +183,7 @@ function TimelineTrack({
   horizonMinutes: number;
   pixelsPerMinute: number;
 }) {
-  const ticks = Array.from(
-    { length: Math.floor(horizonMinutes / 10) + 1 },
-    (_, index) => index * 10,
-  );
+  const ticks = tickMinutes(horizonMinutes);
   return (
     <div className="relative min-h-24 overflow-hidden border-b">
       {ticks.map((minutes) => (
@@ -225,8 +219,8 @@ function RentalLane({
     .filter((booking): booking is WorkspaceBooking => Boolean(booking));
   const runningRun = running ? workspace.runs[running.runID] : undefined;
   const provision = rental.phase === "provisioning" ? rental.offer?.provisioning : undefined;
-  const provisionExpected = provision?.expected ?? provision?.p50 ?? 0;
-  const provisionMax = provision?.p90 ?? provisionExpected;
+  const { expected: provisionExpected, max: provisionMax } =
+    provisioningWindow(provision);
   let nextStartSeconds =
     provisionExpected > 0 ? provisionExpected : remainingExpected(runningRun, now);
 
@@ -309,9 +303,7 @@ function RentalLane({
 function RentalFacts({ offer }: { offer?: OfferSnapshot }) {
   if (!offer) return null;
   const accelerator = offer.resources.accelerators?.[0];
-  const hourly = offer.pricing.known
-    ? usd(offer.pricing.rate_per_second_usd * 3600)
-    : "—";
+  const hourly = hourlyRate(offer);
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
       <span className="inline-flex items-center gap-1">
@@ -536,11 +528,8 @@ function Marketplace({
 
 function MarketplaceOffer({ offer }: { offer: OfferSnapshot }) {
   const accelerator = offer.resources.accelerators?.[0];
-  const hourly = offer.pricing.known
-    ? usd(offer.pricing.rate_per_second_usd * 3600)
-    : "—";
-  const expected = offer.provisioning?.expected ?? offer.provisioning?.p50 ?? 0;
-  const max = offer.provisioning?.p90 ?? expected;
+  const hourly = hourlyRate(offer);
+  const { expected, max } = provisioningWindow(offer.provisioning);
   return (
     <Link
       to="/offers"
@@ -580,6 +569,26 @@ function MarketplaceOffer({ offer }: { offer: OfferSnapshot }) {
   );
 }
 
+function tickMinutes(horizonMinutes: number): number[] {
+  return Array.from(
+    { length: Math.floor(horizonMinutes / 10) + 1 },
+    (_, index) => index * 10,
+  );
+}
+
+function provisioningWindow(
+  provisioning: OfferSnapshot["provisioning"],
+): { expected: number; max: number } {
+  const expected = provisioning?.expected ?? provisioning?.p50 ?? 0;
+  return { expected, max: provisioning?.p90 ?? expected };
+}
+
+function hourlyRate(offer: OfferSnapshot): string {
+  return offer.pricing.known
+    ? usd(offer.pricing.rate_per_second_usd * 3600)
+    : "—";
+}
+
 function readablePixelsPerMinute(workspace: Workspace): number {
   let shortestExpectedSeconds = Number.POSITIVE_INFINITY;
   for (const rental of Object.values(workspace.rentals)) {
@@ -617,8 +626,7 @@ function workspaceHorizon(workspace: Workspace, now: number): number {
       const run = booking ? workspace.runs[booking.runID] : undefined;
       seconds = Math.max(
         seconds,
-        (provision.p90 ?? provision.expected ?? provision.p50 ?? 0) +
-          (run?.maxRuntimeSeconds ?? 0),
+        provisioningWindow(provision).max + (run?.maxRuntimeSeconds ?? 0),
       );
     }
     for (const bookingID of [

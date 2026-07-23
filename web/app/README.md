@@ -12,6 +12,9 @@ web/app/            this dir — frontend source
   index.html        entry: #root + <script src="src/main.tsx">
   src/index.css     Tailwind v4 + the canonical shadcn theme tokens (light/dark, teal accent)
   src/lib/utils.ts  cn() helper
+  src/lib/workspace/ Workspace event feed, pure reducer, and scenario playback (the /canvas model)
+  src/components/canvas/ WorkspaceCanvas time-lane board rendered at /canvas
+  src/routes/canvas.tsx  the /canvas route (console home)
   build.ts          Bun.build → ../static (hashed, minified, no sourcemaps)
   dev.ts            Bun HTML dev server (HMR) + /v1,/auth,/health proxy to :8080
 web/static/         GENERATED BUILD OUTPUT (git-ignored, embedded via //go:embed all:static)
@@ -83,6 +86,17 @@ depend on a committed bundle.
 ```sh
 cd web/app && bun run typecheck   # tsc --noEmit, strict
 ```
+
+## Canvas (console home)
+
+`/` redirects to `/canvas`, the live Workspace dashboard. A single authenticated
+composite SSE feed (`GET /v1/console/events`) drives one pure reducer whose root
+is the `Workspace`; the board renders intake, Rental schedules, marketplace
+Offers, and provisioning as Run cards move between time lanes.
+
+Outside production, the same reducer replays a deterministic scenario fixture
+instead of live traffic: `/canvas?scenario=<name>` selects a fixture and `&play=1`
+autoplays it. These params are ignored when `NODE_ENV=production`.
 
 ## Runs
 
