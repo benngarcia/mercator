@@ -18,7 +18,14 @@ func migrateLegacyRunEvents(ctx context.Context, db *sql.DB) error {
 		SELECT EXISTS (
 			SELECT 1
 			FROM events AS legacy
-			WHERE legacy.event_type = 'compute.run.placement_decided.v1'
+			WHERE (
+				legacy.event_type = 'compute.run.placement_decided.v1'
+				OR (
+					legacy.event_type = 'compute.run.booking_decided.v1'
+					AND COALESCE(json_extract(legacy.data_json, '$.decision.selected_offer_snapshot_id'), '') != ''
+					AND json_type(legacy.data_json, '$.decision.booking') IS NULL
+				)
+			)
 			  AND NOT EXISTS (
 				SELECT 1
 				FROM events AS closed
@@ -40,6 +47,7 @@ func migrateLegacyRunEvents(ctx context.Context, db *sql.DB) error {
 		SET event_type = 'compute.run.booking_decided.v1',
 		    data_json = CASE
 		      WHEN COALESCE(json_extract(data_json, '$.decision.selected_offer_snapshot_id'), '') = ''
+		        OR json_type(data_json, '$.decision.booking') IS NOT NULL
 		        THEN data_json
 		      ELSE json_set(
 		        data_json,
@@ -54,6 +62,11 @@ func migrateLegacyRunEvents(ctx context.Context, db *sql.DB) error {
 		      )
 		    END
 		WHERE event_type = 'compute.run.placement_decided.v1'
+		   OR (
+		     event_type = 'compute.run.booking_decided.v1'
+		     AND COALESCE(json_extract(data_json, '$.decision.selected_offer_snapshot_id'), '') != ''
+		     AND json_type(data_json, '$.decision.booking') IS NULL
+		   )
 	`); err != nil {
 		return fmt.Errorf("sqlite storage: migrate run event names: %w", err)
 	}
