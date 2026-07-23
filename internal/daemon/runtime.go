@@ -254,6 +254,9 @@ func seedDockerConnection(ctx context.Context, conns *connection.Service, reacha
 		AdapterType:  "docker",
 		Actor:        bootstrapActor,
 	}); err != nil {
+		if errors.Is(err, workspace.ErrNotFound) {
+			return nil
+		}
 		return err
 	}
 	if err := conns.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
