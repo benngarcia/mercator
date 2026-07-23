@@ -83,6 +83,11 @@ try {
   await queuedDecision.getByText("off_vast_9002", { exact: true }).waitFor();
   await queuedDecision.getByText("fresh", { exact: true }).first().waitFor();
 
+  await spamPlaybackCommand(page, "Next event", 4);
+  await waitForCursor(page, 12);
+  await spamPlaybackCommand(page, "Previous event", 4);
+  await waitForCursor(page, 8);
+
   await page.emulateMedia({ reducedMotion: "reduce" });
   await stepTo(page, progress, cueCount);
   await page.getByText(`Event ${cueCount} of ${cueCount}`, { exact: true }).waitFor();
@@ -156,6 +161,21 @@ async function waitForCursor(page, expected) {
 
 async function playbackCommand(page, accessibleName) {
   await page.getByRole("button", { name: accessibleName }).click();
+}
+
+async function spamPlaybackCommand(page, accessibleName, count) {
+  await page.evaluate(
+    ({ name, clicks }) => {
+      const button = document.querySelector(
+        `button[aria-label="${CSS.escape(name)}"]`,
+      );
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error(`Playback button ${name} was not found.`);
+      }
+      for (let click = 0; click < clicks; click += 1) button.click();
+    },
+    { name: accessibleName, clicks: count },
+  );
 }
 
 async function restartStaysAtBeginning(page, progress) {

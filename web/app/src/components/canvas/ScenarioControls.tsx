@@ -52,7 +52,7 @@ export function ScenarioControls({
           size="icon"
           className="size-8"
           aria-label="Previous event"
-          disabled={controls.busy || playback.cursor === 0}
+          disabled={playback.cursor === 0}
           onClick={() => void controls.previous()}
         >
           <ChevronLeft />
@@ -74,7 +74,7 @@ export function ScenarioControls({
           size="icon"
           className="size-8"
           aria-label="Next event"
-          disabled={controls.busy || playback.cursor === playback.cueCount}
+          disabled={playback.cursor === playback.cueCount}
           onClick={() => void controls.next()}
         >
           <ChevronRight />
