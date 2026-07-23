@@ -3,6 +3,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -109,6 +110,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		return nil, fmt.Errorf("daemon: init connection storage: %w", err)
 	}
 	connectionService := connection.NewWithCredentials(connections)
+	if err := seedDockerConnection(ctx, connectionService, localDockerReachable); err != nil {
+		return nil, fmt.Errorf("daemon: seed docker connection: %w", err)
+	}
 	factory := cfg.ProviderFactory
 	if factory == nil {
 		factory = providers.Factory()
@@ -215,6 +219,60 @@ func seedFirstWorkspace(ctx context.Context, catalog *workspace.SQLiteCatalog) e
 		CreatedAt:   time.Now().UTC(),
 		CreatedBy:   "system:bootstrap",
 	})
+	return err
+}
+
+// DefaultDockerConnectionID names the Docker connection a fresh broker seeds.
+// It matches the CLI's own default connection id for `connection create
+// --adapter-type docker`, so the seeded connection and a hand-made one are the
+// same record.
+const DefaultDockerConnectionID = "docker"
+
+var bootstrapActor = json.RawMessage(`{"kind":"system","id":"bootstrap"}`)
+
+// seedDockerConnection creates and authorizes the local Docker connection on a
+// broker that has never had one, so the quickstart is `serve` then `run
+// create` with no connection ceremony. It never resurrects a connection an
+// operator deleted: a used id is left untouched. When the local Docker
+// endpoint is unreachable it seeds nothing and returns, so a later start with
+// Docker running still seeds cleanly.
+func seedDockerConnection(ctx context.Context, conns *connection.Service, reachable func(context.Context) error) error {
+	inUse, err := conns.IDInUse(ctx, DefaultWorkspaceID, DefaultDockerConnectionID)
+	if err != nil {
+		return err
+	}
+	if inUse {
+		return nil
+	}
+	if err := reachable(ctx); err != nil {
+		log.Printf("local Docker endpoint unreachable (%v); skipping the %q connection seed. Start Docker and restart, or run `mercator connection create --adapter-type docker`.", err, DefaultDockerConnectionID)
+		return nil
+	}
+	if _, err := conns.Create(ctx, connection.CreateRequest{
+		WorkspaceID:  DefaultWorkspaceID,
+		ConnectionID: DefaultDockerConnectionID,
+		AdapterType:  "docker",
+		Actor:        bootstrapActor,
+	}); err != nil {
+		return err
+	}
+	if err := conns.UpdateAuthorization(ctx, connection.UpdateAuthorizationRequest{
+		WorkspaceID:  DefaultWorkspaceID,
+		ConnectionID: DefaultDockerConnectionID,
+		Authorized:   true,
+		Actor:        bootstrapActor,
+	}); err != nil {
+		return err
+	}
+	log.Printf("seeded and authorized the %q Docker connection in workspace %q", DefaultDockerConnectionID, DefaultWorkspaceID)
+	return nil
+}
+
+// localDockerReachable probes the broker host's Docker endpoint the same way
+// connection authorization does, so a seeded connection is only ever marked
+// authorized when Docker actually answers.
+func localDockerReachable(ctx context.Context) error {
+	_, err := dockeradapter.NewCLIClient("").Info(ctx)
 	return err
 }
 

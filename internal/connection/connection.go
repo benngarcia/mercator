@@ -330,6 +330,18 @@ func (s *Service) Get(ctx context.Context, workspaceID, connectionID string) (Re
 	return record, nil
 }
 
+// IDInUse reports whether a connection id has ever been created, including one
+// since deleted. A deleted connection's id cannot be reused, so callers that
+// must never resurrect a removed connection (bootstrap seeding) guard on this
+// rather than on Get, which reports a deleted connection as absent.
+func (s *Service) IDInUse(ctx context.Context, workspaceID, connectionID string) (bool, error) {
+	history, err := eventlog.ReadFullStream(ctx, s.log, connectionStream(workspaceID, connectionID))
+	if err != nil {
+		return false, err
+	}
+	return len(history.Events) > 0, nil
+}
+
 func (s *Service) List(ctx context.Context, workspaceID string) ([]Record, error) {
 	states := make(map[string]*connectionState)
 	for event, err := range eventlog.ScanAll(ctx, s.log, eventlog.EventFilter{WorkspaceID: workspaceID, StreamTypes: []string{"connection"}}) {

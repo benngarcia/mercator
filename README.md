@@ -101,25 +101,29 @@ if you would rather not build:
 go install github.com/benngarcia/mercator/cmd/mercator@latest
 ```
 
-Start the broker. On a loopback address it generates its own API token and
-writes a `local` CLI context, so nothing else on this machine needs
+Start the broker. On a loopback address it generates its own API token, writes
+a `local` CLI context, and, when the local Docker daemon answers, seeds and
+authorizes a `docker` connection, so nothing else on this machine needs
 configuring:
 
 ```sh
 mercator serve
 ```
 
-In another shell, register your Docker host and run something on it:
+In another shell, run something on it:
 
 ```sh
-mercator connection create --adapter-type docker
-mercator connection authorize
 mercator run create busybox -- echo hi
 ```
 
 `run create` resolves `busybox` against your Docker host, so the run it records
 is pinned to the image digest and the platform that image was actually built
 for. You pin nothing by hand.
+
+If Docker was not running when you started the broker, no connection is seeded:
+start Docker and restart, or add it yourself with `mercator connection create
+--adapter-type docker`. A `docker` connection you delete stays deleted; the
+broker never seeds it again.
 
 Then ask the question Mercator exists to answer:
 
