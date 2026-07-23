@@ -86,8 +86,11 @@ through Docker's ambient behavior.
 Docker workloads must satisfy the same V1 workload contract:
 
 - exactly one Linux container named `main`;
-- digest-pinned image reference, not a mutable tag;
-- `linux/amd64` or `linux/arm64` platform;
+- an image the broker host's Docker daemon holds, so a tag can be resolved to
+  the digest and platform Mercator records. What gets stored and launched is
+  always digest-pinned, whether you pinned it or the broker resolved it;
+- `linux/amd64` or `linux/arm64` platform. Leave it unset and the resolved
+  image supplies it;
 - no mounts, workdir, stdin, TTY, host networking, sidecars, setup commands, or
   raw extension payloads;
 - literal env values only. If the workload needs secrets, pass the non-secret
