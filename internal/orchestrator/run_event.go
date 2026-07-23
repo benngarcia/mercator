@@ -12,6 +12,7 @@ import (
 
 type runState struct {
 	requested                *runRequestedData
+	bookingDecision          *domain.BookingDecision
 	attempt                  *attemptData
 	launchIntent             *adapter.LaunchRequest
 	launchAccepted           bool
@@ -47,6 +48,10 @@ func (state runState) replacementEligible() bool {
 	return state.launchFailure != nil && state.launchFailure.replacementEligible()
 }
 
+func (state runState) bookingQueued() bool {
+	return state.bookingDecision != nil && state.bookingDecision.Booking != nil && state.bookingDecision.Booking.State == domain.BookingStateQueued
+}
+
 func (state runState) launchIndeterminate() bool {
 	return state.launchFailure != nil && state.launchFailure.indeterminate()
 }
@@ -79,6 +84,20 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if reason := invalidBookingDecision(data); reason != "" {
 			return invalidRunEvent(stored, reason)
 		}
+		state.bookingDecision = &data.Decision
+
+	case EventBookingDispatched:
+		var data bookingDispatchedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if state.bookingDecision == nil || state.bookingDecision.Booking == nil {
+			return invalidRunEvent(stored, "Booking dispatch requires a Booking Decision")
+		}
+		if data.Booking.ID != state.bookingDecision.Booking.ID || data.Booking.RunID != state.bookingDecision.RunID || data.Booking.State != domain.BookingStateRunning {
+			return invalidRunEvent(stored, "dispatched Booking does not match its Booking Decision")
+		}
+		state.bookingDecision.Booking = &data.Booking
 
 	case EventAttemptCreated:
 		var data attemptData

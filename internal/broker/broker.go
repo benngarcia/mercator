@@ -11,6 +11,8 @@ import (
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/rentalschedule"
 )
 
 var ErrConnectionNotFound = errors.New("broker: connection not found")
@@ -26,10 +28,11 @@ type Resolver interface {
 }
 
 type Broker struct {
-	conns    Connections
-	factory  *Factory
-	resolver Resolver
-	logger   *slog.Logger
+	conns     Connections
+	factory   *Factory
+	resolver  Resolver
+	schedules rentalschedule.Store
+	logger    *slog.Logger
 }
 
 type Option func(*Broker)
@@ -42,12 +45,32 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+func WithRentalSchedules(schedules rentalschedule.Store) Option {
+	return func(b *Broker) {
+		b.schedules = schedules
+	}
+}
+
 func NewBroker(conns Connections, factory *Factory, resolver Resolver, opts ...Option) *Broker {
 	b := &Broker{conns: conns, factory: factory, resolver: resolver, logger: slog.Default()}
 	for _, opt := range opts {
 		opt(b)
 	}
 	return b
+}
+
+func (b *Broker) List(ctx context.Context, workspaceID string) (map[string]domain.RentalSchedule, error) {
+	if b.schedules == nil {
+		return nil, fmt.Errorf("broker: Rental Schedule store is required")
+	}
+	return b.schedules.List(ctx, workspaceID)
+}
+
+func (b *Broker) Commit(ctx context.Context, event eventlog.AppendRequest, expectedVersion uint64, next domain.RentalSchedule) (eventlog.AppendResult, error) {
+	if b.schedules == nil {
+		return eventlog.AppendResult{}, fmt.Errorf("broker: Rental Schedule store is required")
+	}
+	return b.schedules.Commit(ctx, event, expectedVersion, next)
 }
 
 // Manifests exposes the registered adapters' onboarding manifests for the

@@ -20,6 +20,7 @@ type Storage struct {
 	log         *WorkspaceEventLog
 	credentials *credential.SQLiteStore
 	workspaces  *workspace.SQLiteCatalog
+	schedules   *RentalScheduleStore
 }
 
 func Open(ctx context.Context, dsn string) (*Storage, error) {
@@ -41,6 +42,10 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
+	if err := migrateRentalSchedules(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	workspaces := workspace.NewSQLiteCatalog(db)
 	credentials, err := credential.NewSQLiteStore(ctx, db)
 	if err != nil {
@@ -48,6 +53,7 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		return nil, err
 	}
 	storage := &Storage{db: db, log: log, credentials: credentials, workspaces: workspaces}
+	storage.schedules = &RentalScheduleStore{db: db, log: log}
 	if err := storage.purgeDeletedConnectionCredentials(ctx); err != nil {
 		_ = log.Close()
 		return nil, err
@@ -65,6 +71,10 @@ func (s *Storage) CredentialStore() *credential.SQLiteStore {
 
 func (s *Storage) Workspaces() *workspace.SQLiteCatalog {
 	return s.workspaces
+}
+
+func (s *Storage) RentalSchedules() *RentalScheduleStore {
+	return s.schedules
 }
 
 func (s *Storage) Connections(sealer credentialSealer) (*ConnectionRepository, error) {

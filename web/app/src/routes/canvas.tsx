@@ -14,9 +14,8 @@ interface CanvasSearch {
 
 function validateSearch(search: Record<string, unknown>): CanvasSearch {
   return {
-    scenario:
-      typeof search.scenario === "string" ? search.scenario : undefined,
-    play: search.play === "1" ? "1" : undefined,
+    scenario: typeof search.scenario === "string" ? search.scenario : undefined,
+    play: search.play === "1" || search.play === 1 ? "1" : undefined,
   };
 }
 
@@ -33,7 +32,15 @@ function CanvasPage() {
   if (!feed || !feed.workspace.ready) {
     return <CanvasSkeleton />;
   }
-  return <WorkspaceCanvas workspace={feed.workspace} />;
+  return (
+    <WorkspaceCanvas
+      workspace={feed.workspace}
+      events={feed.events}
+      playback={feed.playback}
+      fidelity={feed.fidelity}
+      controls={feed.controls}
+    />
+  );
 }
 
 function CanvasSkeleton() {

@@ -102,7 +102,7 @@ func (c *offerCatalog) snapshot(ctx context.Context, workspaceID string) offerCa
 	if err != nil {
 		return offerCatalogSnapshot{WorkspaceID: workspaceID, Err: err}
 	}
-	offers := append([]domain.OfferSnapshot(nil), aggregation.Offers...)
+	offers := append([]domain.OfferSnapshot{}, aggregation.Offers...)
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
 	failures := connectionFailureResponses(aggregation.Failures)
 	revision, err := domain.CanonicalHash(struct {
@@ -133,7 +133,14 @@ func (c *offerCatalog) publish(workspaceID string, workspace *offerCatalogWorksp
 		select {
 		case subscriber <- snapshot:
 		default:
-			<-subscriber
+			// The subscriber may drain its buffer between the failed send above
+			// and this eviction, so the receive must not block: publish holds
+			// c.mu, and a parked publish would wedge Subscribe, Refresh, and
+			// unsubscribe with it.
+			select {
+			case <-subscriber:
+			default:
+			}
 			subscriber <- snapshot
 		}
 	}

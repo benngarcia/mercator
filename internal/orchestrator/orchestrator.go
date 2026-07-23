@@ -16,6 +16,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/rentalschedule"
 	"github.com/benngarcia/mercator/internal/reporting"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
@@ -35,6 +36,7 @@ var (
 const (
 	EventRunRequested            = "compute.run.requested.v1"
 	EventBookingDecided          = "compute.run.booking_decided.v1"
+	EventBookingDispatched       = "compute.run.booking_dispatched.v1"
 	EventAttemptCreated          = "compute.run.attempt_created.v1"
 	EventLaunchIntentRecorded    = "compute.run.launch_intent_recorded.v1"
 	EventLaunchAccepted          = "compute.run.launch_accepted.v1"
@@ -56,6 +58,7 @@ type Orchestrator struct {
 	log                eventlog.WorkspaceEventLog
 	scheduler          scheduler.Scheduler
 	adapter            Adapter
+	schedules          rentalschedule.Store
 	now                func() time.Time
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
@@ -94,8 +97,23 @@ func WithClock(now func() time.Time) Option {
 	}
 }
 
+// WithRentalSchedules supplies the Broker-owned Rental Schedule store used by
+// placement and dispatch. Production injects the durable Broker boundary;
+// focused tests and local compositions use the in-memory implementation.
+func WithRentalSchedules(schedules rentalschedule.Store) Option {
+	return func(o *Orchestrator) {
+		o.schedules = schedules
+	}
+}
+
 func New(log eventlog.WorkspaceEventLog, scheduler scheduler.Scheduler, adapter Adapter, opts ...Option) *Orchestrator {
-	o := &Orchestrator{log: log, scheduler: scheduler, adapter: adapter, now: time.Now}
+	o := &Orchestrator{
+		log:       log,
+		scheduler: scheduler,
+		adapter:   adapter,
+		schedules: rentalschedule.NewMemory(log),
+		now:       time.Now,
+	}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -298,9 +316,11 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 	case state.closed:
 		return false, nil
 	case state.cleanupRequested && !state.cleanupConfirmed:
-		return true, o.releaseAndClose(ctx, workspaceID, runID, version, state.launchIntent)
+		return true, o.releaseAndCloseScheduled(ctx, workspaceID, runID, version, state)
 	case state.firstTerminal != nil && !state.outcomeRecorded:
 		return true, o.recordTerminalTransition(ctx, workspaceID, runID, version, state)
+	case state.bookingQueued():
+		return o.dispatchQueuedBooking(ctx, workspaceID, runID, version, state)
 	case state.launchIntent == nil:
 		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
 	case state.replacementEligible():
@@ -316,11 +336,76 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 	}
 }
 
+func (o *Orchestrator) dispatchQueuedBooking(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+	schedules, err := o.schedules.List(ctx, workspaceID)
+	if err != nil {
+		return false, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
+	}
+	booking, found := scheduledBooking(schedules[state.bookingDecision.Booking.RentalID], state.bookingDecision.Booking.ID)
+	if !found {
+		return false, fmt.Errorf("orchestrator: queued Booking %q is missing from its Rental Schedule", state.bookingDecision.Booking.ID)
+	}
+	if booking.State == domain.BookingStateQueued {
+		return false, nil
+	}
+	if booking.State != domain.BookingStateRunning {
+		return false, fmt.Errorf("orchestrator: queued Booking %q has invalid dispatched state %q", booking.ID, booking.State)
+	}
+	selectedOffer, err := offerFromDecision(*state.bookingDecision)
+	if err != nil {
+		return false, err
+	}
+	attempt := newAttempt(workspaceID, runID, state.attemptCount+1)
+	reportPublicURL, reportToken := "", ""
+	if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
+		reportPublicURL = o.reportingPublicURL
+		reportToken = o.reportingSigner.Token(workspaceID, runID)
+	}
+	launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
+	if err != nil {
+		return false, err
+	}
+	err = o.appendEvents(ctx, workspaceID, runID, version, "advance:dispatch:"+booking.ID, []eventlog.NewEvent{
+		mustEvent(runID, "booking_dispatched_"+booking.ID, EventBookingDispatched, bookingDispatchedData{Booking: booking}, o.now()),
+		mustEvent(runID, "attempt_created_"+attempt.AttemptID, EventAttemptCreated, attempt, o.now()),
+		mustPrivateEvent(runID, "launch_intent_recorded_"+attempt.AttemptID, EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
+	})
+	return err == nil, err
+}
+
+func scheduledBooking(schedule domain.RentalSchedule, bookingID string) (domain.Booking, bool) {
+	for _, scheduled := range schedule.Bookings {
+		if scheduled.Booking.ID == bookingID {
+			return scheduled.Booking, true
+		}
+	}
+	return domain.Booking{}, false
+}
+
+func offerFromDecision(decision domain.BookingDecision) (domain.OfferSnapshot, error) {
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID != decision.SelectedOfferSnapshotID {
+			continue
+		}
+		if candidate.Disposition != domain.CandidateDispositionQueue && candidate.Disposition != domain.CandidateDispositionRunNow {
+			return domain.OfferSnapshot{}, fmt.Errorf("orchestrator: dispatched Booking requires an existing Rental candidate")
+		}
+		return domain.OfferSnapshot{
+			ID:           candidate.OfferSnapshotID,
+			ConnectionID: candidate.ConnectionID,
+			AdapterType:  candidate.AdapterType,
+			NativeRef:    candidate.NativeRef,
+			Kind:         domain.OfferKindStanding,
+		}, nil
+	}
+	return domain.OfferSnapshot{}, fmt.Errorf("orchestrator: selected candidate %q is missing", decision.SelectedOfferSnapshotID)
+}
+
 // stepPlace decides placement and records the decision, attempt, and launch
 // intent in one append, so the intent is durable before any adapter call.
 func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
 	attemptNumber := state.attemptCount + 1
-	decision, attempt, selectedOffer, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, state.excludedOfferSnapshotIDs)
+	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, state.excludedOfferSnapshotIDs)
 	if err != nil {
 		return err
 	}
@@ -329,6 +414,22 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 			return o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
 		}
 		return ErrNoFeasibleOffers
+	}
+	nextSchedule, err := reserveDecision(*state.requested, decision, schedule)
+	if err != nil {
+		return err
+	}
+	events := []eventlog.NewEvent{
+		mustEvent(runID, "booking_decided_"+decision.Booking.ID, EventBookingDecided, bookingDecisionData{Decision: decision}, o.now()),
+	}
+	commandKey := "advance:placement:" + decision.Booking.ID
+	if decision.Booking.State == domain.BookingStateQueued {
+		request, requestErr := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
+		if requestErr != nil {
+			return requestErr
+		}
+		_, err = o.schedules.Commit(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
+		return err
 	}
 	reportPublicURL, reportToken := "", ""
 	if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
@@ -339,21 +440,72 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	if err != nil {
 		return err
 	}
-	return o.appendEvents(ctx, workspaceID, runID, version, "advance:placement:"+attempt.AttemptID, []eventlog.NewEvent{
-		mustEvent(runID, "booking_decided_"+attempt.AttemptID, EventBookingDecided, bookingDecisionData{Decision: decision}, o.now()),
+	events = append(events,
 		mustEvent(runID, "attempt_created_"+attempt.AttemptID, EventAttemptCreated, attempt, o.now()),
 		mustPrivateEvent(runID, "launch_intent_recorded_"+attempt.AttemptID, EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
+	)
+	request, err := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
+	if err != nil {
+		return err
+	}
+	_, err = o.schedules.Commit(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
+	return err
+}
+
+func reserveDecision(requested runRequestedData, decision domain.BookingDecision, schedule domain.RentalSchedule) (domain.RentalSchedule, error) {
+	if decision.Booking == nil {
+		return domain.RentalSchedule{}, fmt.Errorf("orchestrator: selected placement requires Booking")
+	}
+	expectedRuntime := requested.Workload.Spec.Placement.ExpectedRuntimeSeconds
+	maxRuntime := float64(requested.Workload.Spec.Execution.MaxRuntimeSeconds)
+	if expectedRuntime <= 0 {
+		expectedRuntime = maxRuntime
+	}
+	if schedule.RentalID != decision.Booking.RentalID || schedule.Version+1 != decision.Booking.ScheduleVersion {
+		return domain.RentalSchedule{}, fmt.Errorf("orchestrator: scheduler Booking references a stale Rental Schedule")
+	}
+	next, booking, err := schedule.Reserve(domain.BookingRequest{
+		BookingID:              decision.Booking.ID,
+		RunID:                  decision.RunID,
+		ExpectedRuntimeSeconds: expectedRuntime,
+		MaxRuntimeSeconds:      maxRuntime,
+		ReservedAt:             decision.EvaluatedAt,
 	})
+	if err != nil {
+		return domain.RentalSchedule{}, err
+	}
+	bookingHash, hashErr := domain.CanonicalHash(booking)
+	if hashErr != nil {
+		return domain.RentalSchedule{}, hashErr
+	}
+	decisionHash, hashErr := domain.CanonicalHash(decision.Booking)
+	if hashErr != nil {
+		return domain.RentalSchedule{}, hashErr
+	}
+	if bookingHash != decisionHash {
+		return domain.RentalSchedule{}, fmt.Errorf("orchestrator: scheduler Booking does not match Rental Schedule transition")
+	}
+	return next, nil
 }
 
 // recordTerminalTransition converts the first terminal fact in stream order
 // into the run's single outcome and cleanup intent.
 func (o *Orchestrator) recordTerminalTransition(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
 	if !state.externalObjectPossible() {
-		return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal-before-launch", []eventlog.NewEvent{
+		events := []eventlog.NewEvent{
 			mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: state.firstTerminal.Outcome}, o.now()),
 			mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
-		})
+		}
+		// A run cancelled while its Booking is still queued must release that
+		// Booking from its Rental Schedule in the same commit, or the schedule
+		// keeps a phantom entry that later promotes to running and wedges the
+		// Rental. Guarded on bookingQueued, not bookingDecision: a booking
+		// already released by a replaceable launch failure must not complete
+		// twice.
+		if state.bookingQueued() {
+			return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:terminal-before-launch", events)
+		}
+		return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal-before-launch", events)
 	}
 	return o.appendEvents(ctx, workspaceID, runID, version, "advance:terminal", []eventlog.NewEvent{
 		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: state.firstTerminal.Outcome}, o.now()),
@@ -764,6 +916,11 @@ func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, st
 }
 
 func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID string, version uint64, launchReq *adapter.LaunchRequest) error {
+	return o.releaseAndCloseScheduled(ctx, workspaceID, runID, version, runState{launchIntent: launchReq})
+}
+
+func (o *Orchestrator) releaseAndCloseScheduled(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
+	launchReq := state.launchIntent
 	if launchReq == nil {
 		return fmt.Errorf("orchestrator: cleanup requested without launch intent")
 	}
@@ -777,10 +934,32 @@ func (o *Orchestrator) releaseAndClose(ctx context.Context, workspaceID, runID s
 	if err := o.cleanup(ctx, workspaceID, launchReq); err != nil {
 		return o.recordCleanupFailure(ctx, workspaceID, runID, version, launchReq.LaunchKey, disposition, err)
 	}
-	return o.appendEvents(ctx, workspaceID, runID, version, "advance:cleanup", []eventlog.NewEvent{
+	events := []eventlog.NewEvent{
 		mustEvent(runID, "cleanup_confirmed", EventCleanupConfirmed, cleanupConfirmedData{LaunchKey: launchReq.LaunchKey, Disposition: disposition}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),
-	})
+	}
+	return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:cleanup", events)
+}
+
+func (o *Orchestrator) completeBookingAndAppend(ctx context.Context, workspaceID, runID string, version uint64, state runState, commandKey string, events []eventlog.NewEvent) error {
+	if state.bookingDecision == nil || state.bookingDecision.Booking == nil {
+		return fmt.Errorf("orchestrator: transition requires a recorded Booking")
+	}
+	schedules, err := o.schedules.List(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
+	}
+	schedule := schedules[state.bookingDecision.Booking.RentalID]
+	next, _, err := schedule.Complete(state.bookingDecision.Booking.ID, o.now().UTC())
+	if err != nil {
+		return err
+	}
+	request, err := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
+	if err != nil {
+		return err
+	}
+	_, err = o.schedules.Commit(ctx, request, schedule.Version, next)
+	return err
 }
 
 func (o *Orchestrator) cleanup(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
@@ -832,12 +1011,21 @@ func (o *Orchestrator) appendEvents(ctx context.Context, workspaceID, runID stri
 // their events are system observations, and the issuing command is already
 // captured on the command fact itself.
 func (o *Orchestrator) appendEventsAs(ctx context.Context, actor json.RawMessage, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) error {
-	events = scopeEventIDs(workspaceID, runID, events)
-	requestHash, err := domain.CanonicalHash(events)
+	request, err := runAppendRequest(actor, workspaceID, runID, expectedVersion, commandKey, events)
 	if err != nil {
 		return err
 	}
-	_, err = o.log.Append(ctx, eventlog.AppendRequest{
+	_, err = o.log.Append(ctx, request)
+	return err
+}
+
+func runAppendRequest(actor json.RawMessage, workspaceID, runID string, expectedVersion uint64, commandKey string, events []eventlog.NewEvent) (eventlog.AppendRequest, error) {
+	events = scopeEventIDs(workspaceID, runID, events)
+	requestHash, err := domain.CanonicalHash(events)
+	if err != nil {
+		return eventlog.AppendRequest{}, err
+	}
+	return eventlog.AppendRequest{
 		Stream:                runStream(workspaceID, runID),
 		ExpectedStreamVersion: expectedVersion,
 		CommandKey:            runID + ":" + commandKey,
@@ -846,8 +1034,7 @@ func (o *Orchestrator) appendEventsAs(ctx context.Context, actor json.RawMessage
 		CorrelationID:         runID,
 		CausationID:           commandKey,
 		Events:                events,
-	})
-	return err
+	}, nil
 }
 
 func mustEvent(runID, suffix, eventType string, data any, now time.Time) eventlog.NewEvent {

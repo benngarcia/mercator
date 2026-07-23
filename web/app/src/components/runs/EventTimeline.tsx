@@ -1,15 +1,20 @@
 import * as React from "react";
 import { ChevronRight, Radio } from "lucide-react";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 
-import type { CloudEvent } from "@/lib/api/types";
+import type { BookingDecision, CandidateDecision, CloudEvent } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
-import { humanizeEventType } from "@/lib/format";
+import { humanizeEventType, usd } from "@/lib/format";
 import { JsonViewer, RelativeTime, EmptyState, CopyButton } from "@/components/common";
+import { BookingDecidedData } from "@/lib/workspace/contracts";
 
 export interface EventTimelineProps {
-  events: CloudEvent[];
+  events: readonly CloudEvent[];
   className?: string;
   isLoading?: boolean;
+  dense?: boolean;
+  highlightLatest?: boolean;
 }
 
 // Map a humanized event family to a phase tone so the timeline color-tracks the
@@ -39,18 +44,28 @@ function toneForType(type: string): string {
 interface EventRowProps {
   event: CloudEvent;
   isLast: boolean;
+  dense: boolean;
+  highlighted: boolean;
 }
 
-function EventRow({ event, isLast }: EventRowProps) {
+function EventRow({ event, isLast, dense, highlighted }: EventRowProps) {
   const [open, setOpen] = React.useState(false);
   const tone = toneForType(event.type);
+  const decision = decisionForEvent(event);
   const hasData =
     event.data !== null &&
     event.data !== undefined &&
     !(typeof event.data === "object" && Object.keys(event.data).length === 0);
 
   return (
-    <li className="relative flex gap-3 pb-3 last:pb-0">
+    <li
+      data-event-id={event.id}
+      className={cn(
+        "relative flex gap-3 rounded-md pb-3 last:pb-0",
+        dense && "px-2 pt-2",
+        highlighted && "bg-accent-soft",
+      )}
+    >
       {/* Rail + node */}
       <div className="flex flex-col items-center">
         <span
@@ -102,8 +117,11 @@ function EventRow({ event, isLast }: EventRowProps) {
           />
         </button>
 
+        {decision ? <SelectedDecision decision={decision} /> : null}
+
         {hasData && open ? (
           <div className="mt-2 space-y-2">
+            {decision ? <CandidateEvidence candidates={decision.candidates} /> : null}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.6875rem] text-muted-foreground">
               <span className="font-mono">{event.type}</span>
               <span className="flex items-center gap-1">
@@ -125,6 +143,73 @@ function EventRow({ event, isLast }: EventRowProps) {
   );
 }
 
+function decisionForEvent(event: CloudEvent): BookingDecision | null {
+  if (event.type !== "compute.run.booking_decided.v1") return null;
+  const decoded = Schema.decodeUnknownResult(BookingDecidedData)(event.data);
+  return Result.isSuccess(decoded) ? decoded.success.decision : null;
+}
+
+function SelectedDecision({ decision }: { decision: BookingDecision }) {
+  const selected = decision.candidates.find(
+    (candidate) => candidate.offer_snapshot_id === decision.selected_offer_snapshot_id,
+  );
+  if (!selected) return null;
+  return (
+    <div className="ml-5 mt-1.5 flex items-center gap-2 text-[0.6875rem]">
+      <span className="rounded border border-primary/25 bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+        {dispositionLabel(selected.disposition)}
+      </span>
+      <span className="font-mono text-muted-foreground">
+        {selected.score_usd === undefined ? "no score" : `${usd(selected.score_usd)} score`}
+      </span>
+      <span className="text-muted-foreground">
+        {decision.candidates.length} candidates
+      </span>
+    </div>
+  );
+}
+
+function CandidateEvidence({ candidates }: { candidates: CandidateDecision[] }) {
+  return (
+    <div className="overflow-hidden rounded-md border bg-background/60">
+      {candidates.map((candidate) => (
+        <div
+          key={candidate.offer_snapshot_id}
+          className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-b px-2 py-1.5 text-[0.6875rem] last:border-b-0"
+        >
+          <div className="min-w-0">
+            <div className="truncate font-mono text-foreground">
+              {candidate.offer_snapshot_id}
+            </div>
+            <div className="text-muted-foreground">
+              {dispositionLabel(candidate.disposition)}
+              {!candidate.feasible && candidate.rejections?.[0]
+                ? ` · ${candidate.rejections[0].code}`
+                : ""}
+            </div>
+          </div>
+          <div className="self-center font-mono tabular text-muted-foreground">
+            {candidate.feasible && candidate.score_usd !== undefined
+              ? usd(candidate.score_usd)
+              : "rejected"}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function dispositionLabel(disposition: CandidateDecision["disposition"]): string {
+  switch (disposition) {
+    case "run_now_existing_rental":
+      return "reuse now";
+    case "queue_existing_rental":
+      return "queue";
+    case "provision_fresh_rental":
+      return "fresh";
+  }
+}
+
 /**
  * EventTimeline renders the public run CloudEvents as a vertical timeline. Each
  * row shows the humanized event type, its global position, subject, and
@@ -135,6 +220,8 @@ export function EventTimeline({
   events,
   className,
   isLoading,
+  dense = false,
+  highlightLatest = false,
 }: EventTimelineProps) {
   // Sort by global position descending so the latest event is on top; this is
   // a total order across the workspace stream.
@@ -162,6 +249,8 @@ export function EventTimeline({
           key={`${event.globalposition}-${event.id}`}
           event={event}
           isLast={i === ordered.length - 1}
+          dense={dense}
+          highlighted={highlightLatest && i === 0}
         />
       ))}
     </ol>

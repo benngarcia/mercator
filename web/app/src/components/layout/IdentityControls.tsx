@@ -1,11 +1,9 @@
-// IdentityControls picks the human-auth surface for the topbar from the
-// server's /auth/session answer:
-//   - OIDC configured: the signed-in email and a sign-out action (humans never
-//     paste tokens). An expired session mid-flight shows a sign-in action.
-//   - OIDC not configured (dev / token-only): the TokenField fallback, exactly
-//     the pre-OIDC console behavior.
+// IdentityControls renders the identity mode the server reports. Local
+// development has a fixed loopback identity, OIDC sessions can sign out, and
+// token-only servers retain the machine-token fallback.
 
 import { LogIn, LogOut } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,13 +11,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { signInUrl, signOut } from "@/lib/auth";
-import { useAuthSession } from "@/lib/api/queries";
+import { signInUrl } from "@/lib/auth";
+import { useAuthSession, useLogout } from "@/lib/api/queries";
 
 import { TokenField } from "./TokenField";
 
 export function IdentityControls() {
   const auth = useAuthSession();
+  const logout = useLogout();
 
   // Until the mode is known, render nothing rather than flashing the token
   // field at a signed-in operator. Treat an unreachable /auth/session like
@@ -27,11 +26,11 @@ export function IdentityControls() {
   if (auth.isLoading) {
     return null;
   }
-  if (!auth.data?.enabled) {
+  if (!auth.data || auth.data.mode === "token") {
     return <TokenField />;
   }
 
-  if (!auth.data.email) {
+  if (auth.data.mode === "oidc" && !auth.data.email) {
     return (
       <Button
         variant="outline"
@@ -41,6 +40,14 @@ export function IdentityControls() {
         <LogIn />
         Sign in
       </Button>
+    );
+  }
+
+  if (auth.data.mode === "local") {
+    return (
+      <span className="max-w-48 truncate text-xs text-muted-foreground">
+        {auth.data.email}
+      </span>
     );
   }
 
@@ -58,7 +65,13 @@ export function IdentityControls() {
             variant="ghost"
             size="icon"
             aria-label="Sign out"
-            onClick={() => void signOut()}
+            disabled={logout.isPending}
+            onClick={() =>
+              logout.mutate(undefined, {
+                onSuccess: () => window.location.assign("/"),
+                onError: (error) => toast.error(error.message),
+              })
+            }
           >
             <LogOut />
           </Button>

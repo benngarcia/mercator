@@ -7,22 +7,43 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import type { CloudEvent, OfferSnapshot } from "@/lib/api/types";
 import { duration, usd } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { OfferSnapshot } from "@/lib/api/types";
 import type {
   Rental,
   Workspace,
   WorkspaceBooking,
   WorkspaceRun,
 } from "@/lib/workspace";
+import type {
+  ScenarioFidelity,
+  ScenarioPlaybackSnapshot,
+} from "@/lib/workspace/playback";
+import type { WorkspacePlaybackControls } from "@/lib/workspace/react";
 
-const PIXELS_PER_MINUTE = 24;
+import { ScenarioControls } from "./ScenarioControls";
+import { WorkspaceEventFeed } from "./WorkspaceEventFeed";
+
+const BASE_PIXELS_PER_MINUTE = 24;
+const MINIMUM_RUN_WIDTH = 72;
 const MINIMUM_HORIZON_MINUTES = 60;
 const QUEUE_CAPACITY = 4;
 const LANE_LABEL_WIDTH = 224;
 
-export function WorkspaceCanvas({ workspace }: { workspace: Workspace }) {
+export function WorkspaceCanvas({
+  controls,
+  events,
+  fidelity,
+  playback,
+  workspace,
+}: {
+  controls: WorkspacePlaybackControls | null;
+  events: readonly CloudEvent[];
+  fidelity: ScenarioFidelity | null;
+  playback: ScenarioPlaybackSnapshot | null;
+  workspace: Workspace;
+}) {
   const now = Date.now();
   const rentals = Object.values(workspace.rentals).sort((a, b) => {
     const sourceOrder = sourceRank(a) - sourceRank(b);
@@ -34,77 +55,100 @@ export function WorkspaceCanvas({ workspace }: { workspace: Workspace }) {
   const marketplace = workspace.offers.filter(
     (offer) => offer.kind === "provisionable",
   );
+  const pixelsPerMinute = readablePixelsPerMinute(workspace);
   const horizonMinutes = workspaceHorizon(workspace, now);
-  const timelineWidth = horizonMinutes * PIXELS_PER_MINUTE;
+  const timelineWidth = horizonMinutes * pixelsPerMinute;
 
   return (
-    <div className="flex min-h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="border-b px-5 py-4">
-        <div className="flex items-baseline justify-between gap-4">
+        <div className="flex items-center justify-between gap-4">
           <h1 className="text-base font-semibold tracking-tight">Workspace</h1>
-          <span className="font-mono text-xs text-muted-foreground">
-            {workspace.id}
-          </span>
+          <div className="flex items-center gap-5">
+            {playback && controls ? (
+              <ScenarioControls playback={playback} controls={controls} />
+            ) : null}
+            <span className="font-mono text-xs text-muted-foreground">
+              {workspace.id}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div
-          className="grid min-w-full"
-          style={{
-            gridTemplateColumns: `${LANE_LABEL_WIDTH}px minmax(${timelineWidth}px, 1fr)`,
-          }}
-        >
-          <div className="sticky left-0 z-30 border-b border-r bg-background" />
-          <TimeAxis horizonMinutes={horizonMinutes} />
-
-          <LaneLabel title="Incoming">
-            <span className="size-1.5 rounded-full bg-phase-requested" />
-          </LaneLabel>
-          <TimelineTrack horizonMinutes={horizonMinutes}>
-            <div className="flex h-full items-center gap-2 px-3">
-              {incoming.map((run) => (
-                <RunBlock
-                  key={run.id}
-                  run={run}
-                  left={0}
-                  maxSeconds={run.maxRuntimeSeconds}
-                  expectedSeconds={run.expectedRuntimeSeconds}
-                  compact
-                />
-              ))}
-            </div>
-          </TimelineTrack>
-
-          {rentals.map((rental) => (
-            <RentalLane
-              key={rental.id}
-              rental={rental}
-              workspace={workspace}
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-auto">
+          <div
+            className="grid min-w-full"
+            style={{
+              gridTemplateColumns: `${LANE_LABEL_WIDTH}px minmax(${timelineWidth}px, 1fr)`,
+            }}
+          >
+            <div className="sticky left-0 z-30 border-b border-r bg-background" />
+            <TimeAxis
               horizonMinutes={horizonMinutes}
-              now={now}
+              pixelsPerMinute={pixelsPerMinute}
             />
-          ))}
-        </div>
 
-        <Marketplace offers={marketplace} available={workspace.offersAvailable} />
+            <LaneLabel title="Incoming">
+              <span className="size-1.5 rounded-full bg-phase-requested" />
+            </LaneLabel>
+            <TimelineTrack
+              horizonMinutes={horizonMinutes}
+              pixelsPerMinute={pixelsPerMinute}
+            >
+              <div className="flex h-full items-center gap-2 px-3">
+                {incoming.map((run) => (
+                  <RunBlock
+                    key={run.id}
+                    run={run}
+                    left={0}
+                    maxSeconds={run.maxRuntimeSeconds}
+                    expectedSeconds={run.expectedRuntimeSeconds}
+                    pixelsPerMinute={pixelsPerMinute}
+                    compact
+                  />
+                ))}
+              </div>
+            </TimelineTrack>
+
+            {rentals.map((rental) => (
+              <RentalLane
+                key={rental.id}
+                rental={rental}
+                workspace={workspace}
+                horizonMinutes={horizonMinutes}
+                pixelsPerMinute={pixelsPerMinute}
+                now={now}
+              />
+            ))}
+          </div>
+
+          <Marketplace
+            offers={marketplace}
+            available={workspace.offersAvailable}
+          />
+        </div>
+        <WorkspaceEventFeed events={events} fidelity={fidelity} />
       </div>
     </div>
   );
 }
 
-function TimeAxis({ horizonMinutes }: { horizonMinutes: number }) {
-  const ticks = Array.from(
-    { length: Math.floor(horizonMinutes / 10) + 1 },
-    (_, index) => index * 10,
-  );
+function TimeAxis({
+  horizonMinutes,
+  pixelsPerMinute,
+}: {
+  horizonMinutes: number;
+  pixelsPerMinute: number;
+}) {
+  const ticks = tickMinutes(horizonMinutes);
   return (
     <div className="sticky top-0 z-20 h-10 border-b bg-background/95 backdrop-blur">
       {ticks.map((minutes) => (
         <div
           key={minutes}
           className="absolute inset-y-0 border-l border-border/70"
-          style={{ left: minutes * PIXELS_PER_MINUTE }}
+          style={{ left: minutes * pixelsPerMinute }}
         >
           <span className="absolute left-1.5 top-2 font-mono text-[10px] tabular text-muted-foreground">
             {minutes === 0 ? "now" : `+${minutes}m`}
@@ -133,21 +177,20 @@ function LaneLabel({
 function TimelineTrack({
   children,
   horizonMinutes,
+  pixelsPerMinute,
 }: {
   children: ReactNode;
   horizonMinutes: number;
+  pixelsPerMinute: number;
 }) {
-  const ticks = Array.from(
-    { length: Math.floor(horizonMinutes / 10) + 1 },
-    (_, index) => index * 10,
-  );
+  const ticks = tickMinutes(horizonMinutes);
   return (
     <div className="relative min-h-24 overflow-hidden border-b">
       {ticks.map((minutes) => (
         <div
           key={minutes}
           className="pointer-events-none absolute inset-y-0 border-l border-border/50"
-          style={{ left: minutes * PIXELS_PER_MINUTE }}
+          style={{ left: minutes * pixelsPerMinute }}
         />
       ))}
       {children}
@@ -158,11 +201,13 @@ function TimelineTrack({
 function RentalLane({
   horizonMinutes,
   now,
+  pixelsPerMinute,
   rental,
   workspace,
 }: {
   horizonMinutes: number;
   now: number;
+  pixelsPerMinute: number;
   rental: Rental;
   workspace: Workspace;
 }) {
@@ -174,8 +219,8 @@ function RentalLane({
     .filter((booking): booking is WorkspaceBooking => Boolean(booking));
   const runningRun = running ? workspace.runs[running.runID] : undefined;
   const provision = rental.phase === "provisioning" ? rental.offer?.provisioning : undefined;
-  const provisionExpected = provision?.expected ?? provision?.p50 ?? 0;
-  const provisionMax = provision?.p90 ?? provisionExpected;
+  const { expected: provisionExpected, max: provisionMax } =
+    provisioningWindow(provision);
   let nextStartSeconds =
     provisionExpected > 0 ? provisionExpected : remainingExpected(runningRun, now);
 
@@ -204,12 +249,16 @@ function RentalLane({
           <QueueSlots count={queued.length} />
         </div>
       </div>
-      <TimelineTrack horizonMinutes={horizonMinutes}>
+      <TimelineTrack
+        horizonMinutes={horizonMinutes}
+        pixelsPerMinute={pixelsPerMinute}
+      >
         {provisionMax > 0 ? (
           <BoundedSpan
             leftSeconds={0}
             maxSeconds={provisionMax}
             expectedSeconds={provisionExpected}
+            pixelsPerMinute={pixelsPerMinute}
             className="top-5 h-3 border-phase-launching/50 bg-phase-launching/10"
             fillClassName="bg-phase-launching/35"
             label={`Provisioning: expected ${duration(provisionExpected)}, p90 ${duration(provisionMax)}`}
@@ -225,6 +274,7 @@ function RentalLane({
             }
             maxSeconds={remainingMax(runningRun, now)}
             expectedSeconds={remainingExpected(runningRun, now)}
+            pixelsPerMinute={pixelsPerMinute}
           />
         ) : null}
         {queued.map((booking) => {
@@ -240,6 +290,7 @@ function RentalLane({
               left={left}
               maxSeconds={run.maxRuntimeSeconds}
               expectedSeconds={run.expectedRuntimeSeconds}
+              pixelsPerMinute={pixelsPerMinute}
               queued
             />
           );
@@ -252,9 +303,7 @@ function RentalLane({
 function RentalFacts({ offer }: { offer?: OfferSnapshot }) {
   if (!offer) return null;
   const accelerator = offer.resources.accelerators?.[0];
-  const hourly = offer.pricing.known
-    ? usd(offer.pricing.rate_per_second_usd * 3600)
-    : "—";
+  const hourly = hourlyRate(offer);
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
       <span className="inline-flex items-center gap-1">
@@ -309,6 +358,7 @@ function RunBlock({
   expectedSeconds,
   left,
   maxSeconds,
+  pixelsPerMinute,
   queued = false,
   run,
 }: {
@@ -316,14 +366,15 @@ function RunBlock({
   expectedSeconds: number | null;
   left: number;
   maxSeconds: number;
+  pixelsPerMinute: number;
   queued?: boolean;
   run: WorkspaceRun;
 }) {
-  const maxWidth = Math.max(24, (maxSeconds / 60) * PIXELS_PER_MINUTE);
+  const maxWidth = Math.max(24, (maxSeconds / 60) * pixelsPerMinute);
   const expectedWidth =
     expectedSeconds === null
       ? maxWidth
-      : Math.max(24, (expectedSeconds / 60) * PIXELS_PER_MINUTE);
+      : Math.max(24, (expectedSeconds / 60) * pixelsPerMinute);
   const width = compact ? Math.max(112, maxWidth) : expectedWidth;
   const fill =
     expectedSeconds === null || maxSeconds <= 0
@@ -332,7 +383,7 @@ function RunBlock({
   const image = run.workload.spec.containers[0]?.image ?? "unknown image";
   const label = `${run.id}: ${duration(expectedSeconds)} expected within ${duration(maxSeconds)} enforced maximum`;
   const style = {
-    left: compact ? undefined : (left / 60) * PIXELS_PER_MINUTE,
+    left: compact ? undefined : (left / 60) * pixelsPerMinute,
     width,
     viewTransitionName: `run-${transitionName(run.id)}`,
   } as CSSProperties;
@@ -409,6 +460,7 @@ function BoundedSpan({
   label,
   leftSeconds,
   maxSeconds,
+  pixelsPerMinute,
 }: {
   className?: string;
   expectedSeconds: number;
@@ -416,6 +468,7 @@ function BoundedSpan({
   label: string;
   leftSeconds: number;
   maxSeconds: number;
+  pixelsPerMinute: number;
 }) {
   const fill =
     maxSeconds > 0 ? Math.min(100, (expectedSeconds / maxSeconds) * 100) : 0;
@@ -426,8 +479,8 @@ function BoundedSpan({
           aria-label={label}
           className={cn("absolute overflow-hidden rounded-full border", className)}
           style={{
-            left: (leftSeconds / 60) * PIXELS_PER_MINUTE,
-            width: Math.max(16, (maxSeconds / 60) * PIXELS_PER_MINUTE),
+            left: (leftSeconds / 60) * pixelsPerMinute,
+            width: Math.max(16, (maxSeconds / 60) * pixelsPerMinute),
           }}
         >
           <span
@@ -475,15 +528,13 @@ function Marketplace({
 
 function MarketplaceOffer({ offer }: { offer: OfferSnapshot }) {
   const accelerator = offer.resources.accelerators?.[0];
-  const hourly = offer.pricing.known
-    ? usd(offer.pricing.rate_per_second_usd * 3600)
-    : "—";
-  const expected = offer.provisioning?.expected ?? offer.provisioning?.p50 ?? 0;
-  const max = offer.provisioning?.p90 ?? expected;
+  const hourly = hourlyRate(offer);
+  const { expected, max } = provisioningWindow(offer.provisioning);
   return (
     <Link
       to="/offers"
       search={true}
+      aria-label={`${offer.id}: ${offer.adapter_type} Offer`}
       className="group relative flex h-16 w-60 items-center gap-3 overflow-hidden rounded-lg border bg-background px-3 outline-none transition-[border-color,box-shadow] hover:border-primary/35 focus-visible:ring-2 focus-visible:ring-ring"
     >
       <Box className="size-4 shrink-0 text-muted-foreground" />
@@ -518,6 +569,52 @@ function MarketplaceOffer({ offer }: { offer: OfferSnapshot }) {
   );
 }
 
+function tickMinutes(horizonMinutes: number): number[] {
+  return Array.from(
+    { length: Math.floor(horizonMinutes / 10) + 1 },
+    (_, index) => index * 10,
+  );
+}
+
+function provisioningWindow(
+  provisioning: OfferSnapshot["provisioning"],
+): { expected: number; max: number } {
+  const expected = provisioning?.expected ?? provisioning?.p50 ?? 0;
+  return { expected, max: provisioning?.p90 ?? expected };
+}
+
+function hourlyRate(offer: OfferSnapshot): string {
+  return offer.pricing.known
+    ? usd(offer.pricing.rate_per_second_usd * 3600)
+    : "—";
+}
+
+function readablePixelsPerMinute(workspace: Workspace): number {
+  let shortestExpectedSeconds = Number.POSITIVE_INFINITY;
+  for (const rental of Object.values(workspace.rentals)) {
+    for (const bookingID of [
+      rental.runningBookingID,
+      ...rental.queuedBookingIDs,
+    ]) {
+      if (!bookingID) continue;
+      const booking = workspace.bookings[bookingID];
+      const expected = booking
+        ? workspace.runs[booking.runID]?.expectedRuntimeSeconds
+        : null;
+      if (expected && expected > 0) {
+        shortestExpectedSeconds = Math.min(shortestExpectedSeconds, expected);
+      }
+    }
+  }
+  if (!Number.isFinite(shortestExpectedSeconds)) {
+    return BASE_PIXELS_PER_MINUTE;
+  }
+  return Math.max(
+    BASE_PIXELS_PER_MINUTE,
+    MINIMUM_RUN_WIDTH / (shortestExpectedSeconds / 60),
+  );
+}
+
 function workspaceHorizon(workspace: Workspace, now: number): number {
   let seconds = MINIMUM_HORIZON_MINUTES * 60;
   for (const rental of Object.values(workspace.rentals)) {
@@ -529,8 +626,7 @@ function workspaceHorizon(workspace: Workspace, now: number): number {
       const run = booking ? workspace.runs[booking.runID] : undefined;
       seconds = Math.max(
         seconds,
-        (provision.p90 ?? provision.expected ?? provision.p50 ?? 0) +
-          (run?.maxRuntimeSeconds ?? 0),
+        provisioningWindow(provision).max + (run?.maxRuntimeSeconds ?? 0),
       );
     }
     for (const bookingID of [

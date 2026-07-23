@@ -1,15 +1,32 @@
-import { flushSync } from "react-dom";
+import * as Context from "effect/Context";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as Sse from "effect/unstable/encoding/Sse";
 
-import { ApiError, apiStream } from "@/lib/api/client";
-import type { CloudEvent } from "@/lib/api/types";
+import { Session } from "@/lib/session";
 
 import {
-  createWorkspace,
-  reduceWorkspace,
-  type OfferCatalogReplacement,
-  type Workspace,
-  type WorkspaceMessage,
-} from "./reducer";
+  CloudEvent,
+  DashboardMessage,
+  DashboardPlayback,
+  DashboardReset,
+  OfferCatalogReplacement,
+  Ready,
+} from "./contracts";
+import {
+  type ScenarioPlaybackEmission,
+  type ScenarioFidelity,
+  type ScenarioPlaybackSnapshot,
+} from "./playback";
+import type { WorkspaceMessage } from "./reducer";
 
 export type WorkspaceFeedStatus =
   | "idle"
@@ -18,318 +35,320 @@ export type WorkspaceFeedStatus =
   | "degraded"
   | "error";
 
-export interface WorkspaceFeedSnapshot {
-  workspace: Workspace;
-  status: WorkspaceFeedStatus;
-  error: Error | null;
+export class WorkspaceFeedError extends Data.TaggedError("WorkspaceFeedError")<{
+  readonly status: number;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly cause?: unknown;
+}> {}
+
+export type WorkspaceSignal =
+  | { readonly type: "connecting" }
+  | ScenarioPlaybackEmission;
+
+export interface WorkspaceEventsService {
+  readonly stream: (
+    workspaceId: string,
+  ) => Stream.Stream<WorkspaceSignal, WorkspaceFeedError>;
 }
 
-export type WorkspaceMessageListener = (
-  message: WorkspaceMessage,
-  snapshot: WorkspaceFeedSnapshot,
-) => void;
+export class WorkspaceEvents extends Context.Service<
+  WorkspaceEvents,
+  WorkspaceEventsService
+>()("@mercator/WorkspaceEvents") {}
 
-export interface WorkspaceFeedStore {
-  subscribe(listener: () => void): () => void;
-  getSnapshot(): WorkspaceFeedSnapshot;
-  start(): void;
-  stop(): void;
-}
+const reconnectSchedule = Schedule.spaced("1 second").pipe(
+  Schedule.while(
+    ({ input }) => input instanceof WorkspaceFeedError && input.retryable,
+  ),
+);
 
-interface SSEFrame {
-  id: string;
-  event: string;
-  data: string;
-}
-
-export class ConsoleEventFeed implements WorkspaceFeedStore {
-  private readonly workspaceID: string;
-  private readonly onMessage?: WorkspaceMessageListener;
-  private readonly listeners = new Set<() => void>();
-  private controller: AbortController | null = null;
-  private lastEventID = "";
-  private activeTransition: ViewTransition | null = null;
-  private snapshot: WorkspaceFeedSnapshot;
-
-  constructor(workspaceID: string, onMessage?: WorkspaceMessageListener) {
-    this.workspaceID = workspaceID;
-    this.onMessage = onMessage;
-    this.snapshot = {
-      workspace: createWorkspace(workspaceID),
-      status: "idle",
-      error: null,
-    };
-  }
-
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
-
-  getSnapshot = (): WorkspaceFeedSnapshot => this.snapshot;
-
-  start(): void {
-    if (this.controller) return;
-    this.controller = new AbortController();
-    this.setConnection("connecting", null);
-    void this.connect(this.controller.signal);
-  }
-
-  stop(): void {
-    this.controller?.abort();
-    this.controller = null;
-  }
-
-  private async connect(signal: AbortSignal): Promise<void> {
-    let delayMilliseconds = 500;
-    while (!signal.aborted) {
-      try {
-        const response = await apiStream("/v1/console/events", {
-          workspaceScope: { workspaceId: this.workspaceID },
-          signal,
-          lastEventID: this.lastEventID,
-        });
-        await readSSE(response, (frame) => this.receive(frame));
-        if (signal.aborted) return;
-        this.setConnection("connecting", null);
-        delayMilliseconds = 500;
-      } catch (error) {
-        if (signal.aborted) return;
-        const resolved = error instanceof Error ? error : new Error(String(error));
-        if (isPermanentFeedError(error)) {
-          this.setConnection("error", resolved);
-          return;
-        }
-        this.setConnection("connecting", resolved);
-      }
-      await abortableDelay(delayMilliseconds, signal);
-      delayMilliseconds = Math.min(delayMilliseconds * 2, 5_000);
-    }
-  }
-
-  private receive(frame: SSEFrame): void {
-    if (frame.id) this.lastEventID = frame.id;
-    let message: WorkspaceMessage;
-    switch (frame.event) {
-      case "domain_event":
-        message = {
-          type: "domain_event",
-          event: JSON.parse(frame.data) as CloudEvent,
-        };
-        break;
-      case "offers_replaced":
-        message = {
-          type: "offers_replaced",
-          catalog: JSON.parse(frame.data) as OfferCatalogReplacement,
-        };
-        break;
-      case "offers_unavailable":
-        message = { type: "offers_unavailable" };
-        break;
-      case "ready": {
-        const ready = JSON.parse(frame.data) as {
-          through_global_position: number;
-        };
-        message = {
-          type: "ready",
-          throughGlobalPosition: ready.through_global_position,
-        };
-        break;
-      }
-      default:
-        return;
-    }
-    this.apply(message);
-  }
-
-  private apply(message: WorkspaceMessage): void {
-    const update = () => {
-      const workspace = reduceWorkspace(this.snapshot.workspace, message);
-      let status = this.snapshot.status;
-      if (message.type === "ready") status = "live";
-      if (message.type === "offers_unavailable") status = "degraded";
-      if (message.type === "offers_replaced" && workspace.ready) status = "live";
-      this.snapshot = { workspace, status, error: null };
-      for (const listener of this.listeners) listener();
-      this.onMessage?.(message, this.snapshot);
-    };
-    if (shouldAnimate(this.snapshot.workspace, message)) {
-      if (this.activeTransition) {
-        update();
-        return;
-      }
-      const transition = document.startViewTransition(() => {
-        flushSync(update);
-      });
-      this.activeTransition = transition;
-      void transition.finished.finally(() => {
-        if (this.activeTransition === transition) {
-          this.activeTransition = null;
-        }
-      });
-      return;
-    }
-    update();
-  }
-
-  private setConnection(status: WorkspaceFeedStatus, error: Error | null): void {
-    this.snapshot = { ...this.snapshot, status, error };
-    for (const listener of this.listeners) listener();
-  }
-}
-
-export class FixtureEventFeed implements WorkspaceFeedStore {
-  private readonly messages: Promise<WorkspaceMessage[]>;
-  private readonly onMessage?: WorkspaceMessageListener;
-  private readonly listeners = new Set<() => void>();
-  private readonly playbackDelay: number;
-  private generation = 0;
-  private nextMessageIndex = 0;
-  private live = false;
-  private snapshot: WorkspaceFeedSnapshot;
-
-  constructor(
-    workspaceID: string,
-    messages: WorkspaceMessage[] | Promise<WorkspaceMessage[]>,
-    onMessage?: WorkspaceMessageListener,
-    playbackDelay = 0,
-  ) {
-    this.messages = Promise.resolve(messages);
-    this.onMessage = onMessage;
-    this.playbackDelay = playbackDelay;
-    this.snapshot = {
-      workspace: createWorkspace(workspaceID),
-      status: "idle",
-      error: null,
-    };
-  }
-
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
-
-  getSnapshot = (): WorkspaceFeedSnapshot => this.snapshot;
-
-  start(): void {
-    this.generation += 1;
-    void this.play(this.generation);
-  }
-
-  stop(): void {
-    this.generation += 1;
-  }
-
-  private async play(generation: number): Promise<void> {
-    const messages = await this.messages;
-    if (generation !== this.generation) return;
-    while (this.nextMessageIndex < messages.length) {
-      if (this.live) {
-        await new Promise((resolve) =>
-          window.setTimeout(resolve, this.playbackDelay),
-        );
-      }
-      if (generation !== this.generation) return;
-      const message = messages[this.nextMessageIndex];
-      if (!message) return;
-      this.apply(message, this.live);
-      this.nextMessageIndex += 1;
-      this.live = this.live || message.type === "ready";
-    }
-  }
-
-  private apply(message: WorkspaceMessage, animate: boolean): void {
-    const update = () => {
-      this.snapshot = {
-        workspace: reduceWorkspace(this.snapshot.workspace, message),
-        status: message.type === "ready" ? "live" : this.snapshot.status,
-        error: null,
-      };
-      if (this.snapshot.status === "idle") {
-        this.snapshot = { ...this.snapshot, status: "connecting" };
-      }
-      for (const listener of this.listeners) listener();
-      this.onMessage?.(message, this.snapshot);
-    };
-    if (
-      animate &&
-      typeof document !== "undefined" &&
-      "startViewTransition" in document &&
-      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      document.startViewTransition(() => flushSync(update));
-      return;
-    }
-    update();
-  }
-}
-
-async function readSSE(
-  response: Response,
-  receive: (frame: SSEFrame) => void,
-): Promise<void> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("Console event feed returned no reader.");
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done }).replaceAll("\r\n", "\n");
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary >= 0) {
-      const raw = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const frame = parseSSEFrame(raw);
-      if (frame) receive(frame);
-      boundary = buffer.indexOf("\n\n");
-    }
-    if (done) return;
-  }
-}
-
-function parseSSEFrame(raw: string): SSEFrame | null {
-  if (raw === "" || raw.startsWith(":")) return null;
-  const frame: SSEFrame = { id: "", event: "message", data: "" };
-  const data: string[] = [];
-  for (const line of raw.split("\n")) {
-    if (line.startsWith("id:")) frame.id = line.slice(3).trimStart();
-    if (line.startsWith("event:")) frame.event = line.slice(6).trimStart();
-    if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-  }
-  frame.data = data.join("\n");
-  return frame;
-}
-
-function shouldAnimate(
-  workspace: Workspace,
-  message: WorkspaceMessage,
-): boolean {
-  return (
-    workspace.ready &&
-    message.type !== "ready" &&
-    typeof document !== "undefined" &&
-    "startViewTransition" in document &&
-    !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+function feedRequest(
+  workspaceId: string,
+  token: string | null,
+  lastEventId: string,
+  scenario: ReturnType<typeof activeScenario>,
+) {
+  let request = HttpClientRequest.get("/v1/console/events").pipe(
+    HttpClientRequest.accept("text/event-stream"),
+    HttpClientRequest.setUrlParam("workspace_id", workspaceId),
   );
-}
-
-function isPermanentFeedError(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    [400, 401, 403, 501].includes(error.status)
-  );
-}
-
-function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = window.setTimeout(resolve, milliseconds);
-    signal.addEventListener(
-      "abort",
-      () => {
-        window.clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
+  if (token !== null) {
+    request = HttpClientRequest.bearerToken(request, token);
+  }
+  if (lastEventId !== "") {
+    request = HttpClientRequest.setHeader(
+      request,
+      "Last-Event-ID",
+      lastEventId,
     );
+  }
+  if (scenario !== null) {
+    request = HttpClientRequest.setUrlParam(request, "scenario", scenario.name);
+    request = HttpClientRequest.setUrlParam(
+      request,
+      "play",
+      scenario.autoplay ? "1" : "0",
+    );
+  }
+  return request;
+}
+
+function decodeFailure(message: string, cause: unknown) {
+  return new WorkspaceFeedError({
+    status: 0,
+    message,
+    retryable: false,
+    cause,
   });
 }
+
+function decodeJson<S extends Schema.Constraint>(schema: S, data: string) {
+  return Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(data).pipe(
+    Effect.mapError((cause) =>
+      decodeFailure("The Workspace event feed sent an invalid payload.", cause),
+    ),
+  );
+}
+
+function playbackSnapshot(
+  playback: Schema.Schema.Type<typeof DashboardPlayback>,
+): ScenarioPlaybackSnapshot {
+  return {
+    status: playback.status,
+    cursor: playback.cursor,
+    cueCount: playback.cue_count,
+    elapsedMillis: playback.elapsed_millis,
+    durationMillis: playback.duration_millis,
+    speed: playback.speed,
+  };
+}
+
+function scenarioFidelity(
+  fidelity: Schema.Schema.Type<typeof DashboardReset>["fidelity"],
+): ScenarioFidelity {
+  return {
+    offerSource: fidelity.offer_source,
+    provenCapabilities: fidelity.proven_capabilities,
+    targetCapabilities: fidelity.target_capabilities,
+  };
+}
+
+function workspaceMessage(
+  message: Schema.Schema.Type<typeof DashboardMessage>,
+): WorkspaceMessage {
+  switch (message.type) {
+    case "domain_event":
+      return { type: "domain_event", event: message.event };
+    case "offers_replaced":
+      return { type: "offers_replaced", catalog: message.catalog };
+    case "offers_unavailable":
+      return { type: "offers_unavailable" };
+    case "ready":
+      return {
+        type: "ready",
+        throughGlobalPosition: message.through_global_position,
+      };
+  }
+}
+
+function decodeFrame(
+  frame: Sse.Event,
+): Effect.Effect<Option.Option<WorkspaceSignal>, WorkspaceFeedError> {
+  switch (frame.event ?? "message") {
+    case "domain_event":
+      return decodeJson(CloudEvent, frame.data).pipe(
+        Effect.map((event) =>
+          Option.some<WorkspaceSignal>({
+            type: "message",
+            message: { type: "domain_event", event },
+          }),
+        ),
+      );
+    case "offers_replaced":
+      return decodeJson(OfferCatalogReplacement, frame.data).pipe(
+        Effect.map((catalog) =>
+          Option.some<WorkspaceSignal>({
+            type: "message",
+            message: { type: "offers_replaced", catalog },
+          }),
+        ),
+      );
+    case "offers_unavailable":
+      return Effect.succeed(
+        Option.some<WorkspaceSignal>({
+          type: "message",
+          message: { type: "offers_unavailable" },
+        }),
+      );
+    case "ready":
+      return decodeJson(Ready, frame.data).pipe(
+        Effect.map((ready) =>
+          Option.some<WorkspaceSignal>({
+            type: "message",
+            message: {
+              type: "ready",
+              throughGlobalPosition: ready.through_global_position,
+            },
+          }),
+        ),
+      );
+    case "reset":
+      return decodeJson(DashboardReset, frame.data).pipe(
+        Effect.map((reset) =>
+          Option.some<WorkspaceSignal>({
+            type: "reset",
+            messages: reset.messages.map(workspaceMessage),
+            playback: playbackSnapshot(reset.playback),
+            fidelity: scenarioFidelity(reset.fidelity),
+          }),
+        ),
+      );
+    case "message":
+      return decodeJson(DashboardMessage, frame.data).pipe(
+        Effect.map((message) =>
+          Option.some<WorkspaceSignal>({
+            type: "message",
+            message: workspaceMessage(message),
+          }),
+        ),
+      );
+    case "playback":
+      return decodeJson(DashboardPlayback, frame.data).pipe(
+        Effect.map((playback) =>
+          Option.some<WorkspaceSignal>({
+            type: "playback",
+            playback: playbackSnapshot(playback),
+          }),
+        ),
+      );
+    default:
+      return Effect.succeed(Option.none());
+  }
+}
+
+function responseError(status: number) {
+  return new WorkspaceFeedError({
+    status,
+    message: `Workspace event feed failed with HTTP ${status}.`,
+    retryable: ![400, 401, 403, 501].includes(status),
+  });
+}
+
+function disconnected() {
+  return new WorkspaceFeedError({
+    status: 0,
+    message: "Workspace event feed disconnected.",
+    retryable: true,
+  });
+}
+
+function liveConnection(
+  workspaceId: string,
+  token: string | null,
+  lastEventId: Ref.Ref<string>,
+  scenario: ReturnType<typeof activeScenario>,
+) {
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      const currentLastEventId = yield* Ref.get(lastEventId);
+      const response = yield* HttpClient.execute(
+        feedRequest(workspaceId, token, currentLastEventId, scenario),
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new WorkspaceFeedError({
+              status: 0,
+              message: "Workspace event feed could not connect.",
+              retryable: true,
+              cause,
+            }),
+        ),
+      );
+      if (response.status < 200 || response.status >= 300) {
+        return yield* responseError(response.status);
+      }
+      const messages = response.stream.pipe(
+        Stream.mapError(
+          (cause) =>
+            new WorkspaceFeedError({
+              status: 0,
+              message: "Workspace event feed failed while reading.",
+              retryable: true,
+              cause,
+            }),
+        ),
+        Stream.decodeText,
+        Stream.pipeThroughChannel(Sse.decode()),
+        Stream.mapError((cause) =>
+          cause instanceof WorkspaceFeedError
+            ? cause
+            : new WorkspaceFeedError({
+                status: 0,
+                message: "Workspace event feed contained invalid SSE framing.",
+                retryable: true,
+                cause,
+              }),
+        ),
+        Stream.mapEffect((frame) =>
+          Effect.gen(function* () {
+            if (frame.id !== undefined && frame.id !== "") {
+              yield* Ref.set(lastEventId, frame.id);
+            }
+            return yield* decodeFrame(frame);
+          }),
+        ),
+        Stream.flatMap((message) =>
+          Option.match(message, {
+            onNone: () => Stream.empty,
+            onSome: Stream.succeed,
+          }),
+        ),
+      );
+      return Stream.succeed<WorkspaceSignal>({ type: "connecting" }).pipe(
+        Stream.concat(messages),
+        Stream.concat(Stream.fail(disconnected())),
+      );
+    }),
+  );
+}
+
+function activeScenario() {
+  if (process.env.NODE_ENV === "production" || typeof window === "undefined") {
+    return null;
+  }
+  const search = new URLSearchParams(window.location.search);
+  const name = search.get("scenario");
+  const play = search.get("play");
+  return name === null
+    ? null
+    : { name, autoplay: play === "1" || play === '"1"' };
+}
+
+export const layer = Layer.effect(
+  WorkspaceEvents,
+  Effect.gen(function* () {
+    const session = yield* Session;
+    const client = yield* HttpClient.HttpClient;
+
+    const stream = (workspaceId: string) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const scenario = activeScenario();
+          const state = yield* session.current;
+          const lastEventId = yield* Ref.make("");
+          return liveConnection(
+            workspaceId,
+            state.token,
+            lastEventId,
+            scenario,
+          ).pipe(
+            Stream.retry(reconnectSchedule),
+            Stream.provideService(HttpClient.HttpClient, client),
+          );
+        }),
+      );
+
+    return WorkspaceEvents.of({ stream });
+  }),
+);

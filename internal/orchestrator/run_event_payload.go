@@ -18,6 +18,10 @@ type bookingDecisionData struct {
 	Decision domain.BookingDecision `json:"decision"`
 }
 
+type bookingDispatchedData struct {
+	Booking domain.Booking `json:"booking"`
+}
+
 type attemptData struct {
 	AttemptID      string `json:"attempt_id"`
 	LaunchKey      string `json:"launch_key"`

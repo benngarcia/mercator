@@ -18,6 +18,39 @@ const workspaceID = requiredEnv("MERCATOR_BROWSER_WORKSPACE_ID");
 await fs.mkdir(outputDirectory, { recursive: true });
 
 const browser = await chromium.launch({ headless: true });
+const browserFailures = [];
+
+function expectedMissingDecision(response) {
+  const url = new URL(response.url());
+  return (
+    response.status() === 404 &&
+    response.request().method() === "GET" &&
+    /^\/v1\/runs\/[^/]+\/decision$/.test(url.pathname)
+  );
+}
+
+function recordBrowserFailures(page) {
+  page.on("console", (message) => {
+    if (
+      message.type() === "error" &&
+      !message.text().startsWith("Failed to load resource:")
+    ) {
+      browserFailures.push(message.text());
+      console.error(`browser console: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => {
+    browserFailures.push(error.message);
+    console.error(`browser page error: ${error.message}`);
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 400 && !expectedMissingDecision(response)) {
+      const failure = `${response.request().method()} ${response.url()}: ${response.status()}`;
+      browserFailures.push(failure);
+      console.error(`browser HTTP failure: ${failure}`);
+    }
+  });
+}
 
 function contextOptions(viewport) {
   return {
@@ -30,15 +63,14 @@ function contextOptions(viewport) {
 async function prepareContext(viewport) {
   const context = await browser.newContext(contextOptions(viewport));
   await context.addInitScript(
-    ([token, workspace]) => {
-      localStorage.setItem("mercator.token", token);
+    (workspace) => {
       localStorage.setItem("mercator.workspace", workspace);
       localStorage.setItem(
         "mercator.recentWorkspaces",
         JSON.stringify([workspace]),
       );
     },
-    [fixture.token, workspaceID],
+    workspaceID,
   );
   return context;
 }
@@ -55,6 +87,24 @@ async function waitForRuns(page) {
     .getByRole("button", { name: "Create run", exact: true })
     .first()
     .waitFor();
+}
+
+async function localSessionSurvivesReload(page) {
+  // Arrange
+  await page.goto(runsURL(), { waitUntil: "domcontentloaded" });
+  await waitForRuns(page);
+
+  // Act
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForRuns(page);
+
+  // Assert
+  await page.getByText("developer@localhost", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Set API token").count(), 0);
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("mercator.token")),
+    null,
+  );
 }
 
 async function createdRunRequest(page, submit) {
@@ -268,13 +318,9 @@ async function authoringRoutesRetired(page) {
 
 const desktop = await prepareContext({ width: 1280, height: 800 });
 const page = await desktop.newPage();
-const consoleErrors = [];
-page.on("console", (message) => {
-  if (message.type() === "error") consoleErrors.push(message.text());
-});
-page.on("pageerror", (error) => consoleErrors.push(error.message));
-
+recordBrowserFailures(page);
 try {
+  await localSessionSurvivesReload(page);
   await runsScopeCancelledCreate(page);
   await page
     .getByRole("button", { name: "Create run", exact: true })
@@ -297,10 +343,7 @@ try {
 const mobile = await prepareContext({ width: 390, height: 844 });
 try {
   const mobilePage = await mobile.newPage();
-  mobilePage.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
-  });
-  mobilePage.on("pageerror", (error) => consoleErrors.push(error.message));
+  recordBrowserFailures(mobilePage);
   await mobilePage.goto(runsURL(), { waitUntil: "domcontentloaded" });
   await waitForRuns(mobilePage);
   await mobilePage
@@ -315,7 +358,7 @@ try {
   await mobilePage.screenshot({
     path: path.join(outputDirectory, "create-run-spec-mobile.png"),
   });
-  assert.deepEqual(consoleErrors, []);
+  assert.deepEqual(browserFailures, []);
 } finally {
   await mobile.close();
   await browser.close();
@@ -325,6 +368,7 @@ console.log(
   JSON.stringify({
     scenarios: [
       "runs_scope_cancelled_create",
+      "local_session_survives_reload",
       "minimal_image_run_created",
       "immutable_spec_run_created",
       "authoring_routes_retired",

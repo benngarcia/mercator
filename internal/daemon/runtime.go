@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/providers"
 	"github.com/benngarcia/mercator/internal/reporting"
+	"github.com/benngarcia/mercator/internal/scenario"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	"github.com/benngarcia/mercator/internal/sinks"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
@@ -33,12 +35,13 @@ import (
 // parsing. Getenv is retained only for connections that explicitly reference an
 // environment-backed provider credential.
 type Config struct {
-	SQLiteDSN     string
-	OperatorToken string
-	MasterKey     []byte
-	PublicURL     string
-	Getenv        func(string) string
-	WebAuth       webauth.Config
+	SQLiteDSN      string
+	OperatorToken  string
+	MasterKey      []byte
+	PublicURL      string
+	Getenv         func(string) string
+	WebAuth        webauth.Config
+	LocalAuthEmail string
 
 	// ProviderFactory replaces the production catalog in lifecycle tests.
 	// Production callers leave it nil.
@@ -69,6 +72,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	}
 	if cfg.OperatorToken == "" {
 		return nil, errors.New("daemon: OperatorToken is required")
+	}
+	if cfg.WebAuth.Enabled() && cfg.LocalAuthEmail != "" {
+		return nil, errors.New("daemon: OIDC and local authentication cannot both be enabled")
 	}
 
 	storage, err := sqlitestore.Open(ctx, cfg.SQLiteDSN)
@@ -101,11 +107,12 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if factory == nil {
 		factory = providers.Factory()
 	}
-	providerBroker := broker.NewBroker(connectionService, factory, resolver)
+	providerBroker := broker.NewBroker(connectionService, factory, resolver, broker.WithRentalSchedules(storage.RentalSchedules()))
 
 	signer := reporting.NewSigner(reporting.DeriveKey(cfg.MasterKey))
 	sched := scheduler.New()
 	orchestratorOptions := []orchestrator.Option{}
+	orchestratorOptions = append(orchestratorOptions, orchestrator.WithRentalSchedules(providerBroker))
 	if signer.Enabled() && cfg.PublicURL != "" {
 		orchestratorOptions = append(orchestratorOptions, orchestrator.WithReporting(cfg.PublicURL, signer))
 	}
@@ -125,8 +132,18 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 			return nil, fmt.Errorf("daemon: initialize OIDC login: %w", authErr)
 		}
 		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator))
+	} else if cfg.LocalAuthEmail != "" {
+		authenticator, authErr := webauth.NewLocal(cfg.LocalAuthEmail)
+		if authErr != nil {
+			return nil, fmt.Errorf("daemon: initialize local login: %w", authErr)
+		}
+		serverOptions = append(serverOptions, httpapi.WithWebAuth(authenticator))
 	}
 
+	var dashboardScenarios *scenario.DashboardPlayback
+	if cfg.LocalAuthEmail != "" {
+		dashboardScenarios = scenario.NewDashboardPlayback()
+	}
 	handler := httpapi.New(httpapi.Deps{
 		Orchestrator: orch,
 		Offers:       providerBroker,
@@ -136,13 +153,22 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Resolver:     ociresolver.NewStaticResolver(nil),
 		Workspaces:   storage.Workspaces(),
 		Events:       logStore,
+		Scenarios:    dashboardScenarios,
 	}, serverOptions...)
+	var rootHandler http.Handler = handler
+	if cfg.LocalAuthEmail != "" {
+		// Local login mints a browser session for any request that lacks one,
+		// so a DNS-rebound hostname resolving to 127.0.0.1 must never reach
+		// it: only requests addressed to this machine by a loopback name are
+		// served in --dev mode.
+		rootHandler = loopbackHostOnly(handler)
+	}
 
 	reconcileCtx, stopReconcile := context.WithCancel(ctx)
 	workspaceJanitor := janitor.New(providerBroker, janitor.WithEventLog(logStore))
 	runtime := &Runtime{
 		server: &http.Server{
-			Handler:           handler,
+			Handler:           rootHandler,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       60 * time.Second,
 			WriteTimeout:      90 * time.Second,
@@ -239,4 +265,27 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 			log.Printf("janitor sweep %s: reclaimed %d of %d owned objects", workspaceID, result.Released, result.Found)
 		}
 	}
+}
+
+func loopbackHostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isLoopbackHost(r.Host) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "local development mode serves loopback hosts only", http.StatusMisdirectedRequest)
+	})
+}
+
+func isLoopbackHost(hostport string) bool {
+	host := hostport
+	if split, _, err := net.SplitHostPort(hostport); err == nil {
+		host = split
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

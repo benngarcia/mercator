@@ -85,7 +85,7 @@ export function ErrorState({
     );
   }
 
-  const oidcEnabled = Boolean(auth.data?.enabled);
+  const oidcEnabled = auth.data?.mode === "oidc";
   const sessionExpired =
     error instanceof ApiError && error.unauthorized && oidcEnabled;
   const { icon: Icon, title, message } = present(error, oidcEnabled);

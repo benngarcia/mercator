@@ -27,6 +27,9 @@ func (s *Server) StreamConsoleEvents(ctx context.Context, request StreamConsoleE
 		}
 		return StreamConsoleEvents400JSONResponse(workspaceErr.Response), nil
 	}
+	if request.Params.Scenario != "" {
+		return s.streamDashboardScenario(ctx, workspaceID, request.Params)
+	}
 	if s.events == nil || s.offerCatalog == nil {
 		return StreamConsoleEvents501JSONResponse(apiError("CONSOLE_EVENT_FEED_DISABLED", "Console event feed is not configured.")), nil
 	}
@@ -57,6 +60,29 @@ func (s *Server) StreamConsoleEvents(ctx context.Context, request StreamConsoleE
 			log.Printf("httpapi: console event feed for %s closed: %v", workspaceID, err)
 		}
 		_ = writer.Close()
+	}()
+	return StreamConsoleEvents200TexteventStreamResponse{Body: reader}, nil
+}
+
+func (s *Server) streamDashboardScenario(ctx context.Context, workspaceID string, params StreamConsoleEventsParams) (StreamConsoleEventsResponseObject, error) {
+	if s.scenarios == nil {
+		return StreamConsoleEvents501JSONResponse(apiError("DASHBOARD_SCENARIOS_DISABLED", "Dashboard scenarios are available only from the local development server.")), nil
+	}
+	emissions, err := s.scenarios.Open(ctx, workspaceID, params.Scenario, params.Play == StreamConsoleEventsParamsPlayN1)
+	if err != nil {
+		return StreamConsoleEvents400JSONResponse(apiError("INVALID_DASHBOARD_SCENARIO", err.Error())), nil
+	}
+	reader, writer := io.Pipe()
+	go func() {
+		defer writer.Close()
+		for emission := range emissions {
+			if err := writeConsoleMessage(writer, emission.Type, "", emission.Data()); err != nil {
+				if ctx.Err() == nil {
+					log.Printf("httpapi: dashboard scenario feed for %s closed: %v", workspaceID, err)
+				}
+				return
+			}
+		}
 	}()
 	return StreamConsoleEvents200TexteventStreamResponse{Body: reader}, nil
 }

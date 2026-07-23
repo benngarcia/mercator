@@ -2,7 +2,8 @@
 
 The `mercator` binary has three modes:
 
-- `mercator serve` starts the HTTP API and embedded console.
+- `mercator serve [--dev]` starts the HTTP API and embedded console. `--dev`
+  adds a loopback-only browser session for local development.
 - `mercator verify --spec FILE` starts an isolated broker and launches a real,
   bounded provider conformance Run.
 - Every other command (`run`, `sink`, `login`, `context`, ...) targets an

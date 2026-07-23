@@ -45,6 +45,52 @@ func TestSchedulerSelectsLowestDeterministicScore(t *testing.T) {
 	}
 }
 
+func TestSchedulerQueuesOnWarmRentalWhenReuseBeatsFreshCapacity(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	schedule, _, err := domain.NewRentalSchedule("rental-warm").Reserve(domain.BookingRequest{
+		BookingID:              "booking-active",
+		RunID:                  "run-active",
+		ExpectedRuntimeSeconds: 30,
+		MaxRuntimeSeconds:      60,
+		ReservedAt:             now,
+	})
+	if err != nil {
+		t.Fatalf("reserve active Booking: %v", err)
+	}
+	warm := schedulerOffer("offer-warm", now, 0.00002, 0)
+	warm.RentalID = "rental-warm"
+	warm.Capacity.Available = false
+	warm.Queue = nil
+	fresh := schedulerOffer("offer-fresh", now, 0.001, 0)
+	fresh.Kind = domain.OfferKindProvisionable
+	fresh.RentalID = ""
+	fresh.Provisioning = &domain.Estimate{Expected: 120, P90: 150}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:       "run-burst-1",
+		Workload:    schedulerRevision(),
+		Offers:      []domain.OfferSnapshot{fresh, warm},
+		Schedules:   map[string]domain.RentalSchedule{"rental-warm": schedule},
+		EvaluatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if decision.SelectedOfferSnapshotID != "offer-warm" {
+		t.Fatalf("selected Offer = %q, want warm Rental", decision.SelectedOfferSnapshotID)
+	}
+	if decision.Booking == nil || decision.Booking.State != domain.BookingStateQueued || decision.Booking.RunID != "run-burst-1" || decision.Booking.AfterBookingID != "booking-active" || decision.Booking.ScheduleVersion != 2 {
+		t.Fatalf("queued Booking = %+v", decision.Booking)
+	}
+	if candidate := findCandidate(t, decision, "offer-warm"); candidate.Disposition != domain.CandidateDispositionQueue {
+		t.Fatalf("warm candidate disposition = %q", candidate.Disposition)
+	}
+	if !containsString(decision.SelectionReasonCodes, "QUEUE_EXISTING_RENTAL") {
+		t.Fatalf("selection reasons = %v", decision.SelectionReasonCodes)
+	}
+}
+
 func TestSchedulerMintsRentalForProvisionableOffer(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	offer := schedulerOffer("off_fresh", now, 0.00012, 5)
@@ -525,4 +571,13 @@ func findCandidate(t *testing.T, decision domain.BookingDecision, offerID string
 	}
 	t.Fatalf("candidate %s not found in %+v", offerID, decision.Candidates)
 	return domain.CandidateDecision{}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
