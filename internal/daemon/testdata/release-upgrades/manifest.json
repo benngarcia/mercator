@@ -1,0 +1,26 @@
+{
+  "workspace_id": "ws_fae1688dc2d7e92e518a8348",
+  "run_id": "run_release_upgrade_fixture",
+  "sanitized": true,
+  "release_gate_version": "v0.5.4",
+  "lineage": [
+    {
+      "version": "v0.4.5",
+      "fixture": "v0.4.5.sql",
+      "decision_event_type": "compute.run.placement_decided.v1",
+      "booking_json_type": "absent"
+    },
+    {
+      "version": "v0.5.2",
+      "fixture": "v0.5.2.sql",
+      "decision_event_type": "compute.run.booking_decided.v1",
+      "booking_json_type": "absent"
+    },
+    {
+      "version": "v0.5.4",
+      "fixture": "v0.5.4.sql",
+      "decision_event_type": "compute.run.booking_decided.v1",
+      "booking_json_type": "object"
+    }
+  ]
+}
