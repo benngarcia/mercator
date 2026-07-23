@@ -32,6 +32,9 @@ func TestSchedulerSelectsLowestDeterministicScore(t *testing.T) {
 	if len(decision.Candidates) != 2 {
 		t.Fatalf("expected two audited candidates, got %+v", decision.Candidates)
 	}
+	if decision.Booking == nil || decision.Booking.RentalID != "off_fast" || decision.Booking.State != domain.BookingStateRunning || decision.Booking.ScheduleVersion != 1 {
+		t.Fatalf("selected standing Rental must receive its first running Booking, got %+v", decision.Booking)
+	}
 
 	again, err := New().Evaluate(context.Background(), input)
 	if err != nil {
@@ -39,6 +42,37 @@ func TestSchedulerSelectsLowestDeterministicScore(t *testing.T) {
 	}
 	if decision.ID != again.ID || decision.SelectedOfferSnapshotID != again.SelectedOfferSnapshotID {
 		t.Fatalf("scheduler is not deterministic:\nfirst=%+v\nsecond=%+v", decision, again)
+	}
+}
+
+func TestSchedulerMintsRentalForProvisionableOffer(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	offer := schedulerOffer("off_fresh", now, 0.00012, 5)
+	offer.Kind = domain.OfferKindProvisionable
+	offer.RentalID = ""
+	offer.Provisioning = &domain.Estimate{Expected: 5}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID: "run_1", Workload: schedulerRevision(), Offers: []domain.OfferSnapshot{offer}, ModelVersion: "latency-v1", EvaluatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.Booking == nil || !strings.HasPrefix(decision.Booking.RentalID, "rnt_") || decision.Booking.State != domain.BookingStateRunning {
+		t.Fatalf("provisionable Offer must mint a Rental and running Booking, got %+v", decision.Booking)
+	}
+}
+
+func TestSchedulerRejectsStandingOfferWithoutRentalIdentity(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	offer := schedulerOffer("off_orphaned", now, 0.00012, 5)
+	offer.RentalID = ""
+
+	_, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID: "run_1", Workload: schedulerRevision(), Offers: []domain.OfferSnapshot{offer}, ModelVersion: "latency-v1", EvaluatedAt: now,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires rental_id") {
+		t.Fatalf("evaluate error = %v, want missing Rental identity", err)
 	}
 }
 
@@ -413,6 +447,7 @@ func schedulerRevision() domain.WorkloadRevision {
 func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSeconds float64) domain.OfferSnapshot {
 	return domain.OfferSnapshot{
 		ID:           id,
+		RentalID:     id,
 		ConnectionID: "conn_1",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,

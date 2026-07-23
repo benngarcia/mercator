@@ -15,6 +15,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { applyInitialTheme } from "@/components/layout";
 import { ApiError } from "@/lib/api/client";
 import { router } from "@/routes/router";
+import { WorkspaceFeedProvider } from "@/lib/workspace";
 
 import "@fontsource-variable/figtree";
 import "@fontsource-variable/jetbrains-mono";
@@ -23,8 +24,8 @@ import "./index.css";
 // Apply the persisted (or dark-first default) theme before React mounts.
 applyInitialTheme();
 
-// A single QueryClient for the app. Polling cadences live on the individual
-// hooks; here we set sensible global defaults and a retry policy that never
+// A single QueryClient for the app. The Workspace event feed refreshes live
+// resources; here we set sensible global defaults and a retry policy that never
 // retries non-transient API errors (auth / not-found / disabled-service).
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -52,7 +53,9 @@ createRoot(rootElement).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={200}>
-        <RouterProvider router={router} />
+        <WorkspaceFeedProvider>
+          <RouterProvider router={router} />
+        </WorkspaceFeedProvider>
         <Toaster richColors closeButton position="bottom-right" />
       </TooltipProvider>
     </QueryClientProvider>

@@ -156,6 +156,7 @@ const (
 
 type OfferSnapshot struct {
 	ID           string              `json:"id"`
+	RentalID     string              `json:"rental_id,omitempty"`
 	ConnectionID string              `json:"connection_id"`
 	AdapterType  string              `json:"adapter_type"`
 	Kind         OfferKind           `json:"kind"`
@@ -298,6 +299,23 @@ type ReliabilityEvidence struct {
 	Confidence       float64 `json:"confidence,omitempty"`
 }
 
+type BookingState string
+
+const (
+	BookingStateRunning BookingState = "running"
+	BookingStateQueued  BookingState = "queued"
+)
+
+type Booking struct {
+	ID               string       `json:"id"`
+	RentalID         string       `json:"rental_id"`
+	State            BookingState `json:"state"`
+	AfterBookingID   string       `json:"after_booking_id,omitempty"`
+	ProjectedStartAt *time.Time   `json:"projected_start_at,omitempty"`
+	LatestStartAt    *time.Time   `json:"latest_start_at,omitempty"`
+	ScheduleVersion  uint64       `json:"schedule_version"`
+}
+
 type BookingDecision struct {
 	ID                      string              `json:"id"`
 	RunID                   string              `json:"run_id,omitempty"`
@@ -308,6 +326,7 @@ type BookingDecision struct {
 	CollectionReport        CollectionReport    `json:"collection_report"`
 	Candidates              []CandidateDecision `json:"candidates"`
 	SelectedOfferSnapshotID string              `json:"selected_offer_snapshot_id,omitempty"`
+	Booking                 *Booking            `json:"booking,omitempty"`
 	SelectionReasonCodes    []string            `json:"selection_reason_codes"`
 }
 

@@ -62,6 +62,13 @@ export interface ApiFetchOptions {
   workspaceScope?: WorkspaceScope;
 }
 
+export interface ApiStreamOptions {
+  searchParams?: ApiFetchOptions["searchParams"];
+  signal?: AbortSignal;
+  workspaceScope?: WorkspaceScope;
+  lastEventID?: string;
+}
+
 export type WorkspaceScope =
   | "session"
   | "none"
@@ -204,4 +211,41 @@ export async function apiFetch<T>(
     return undefined as T;
   }
   return JSON.parse(text) as T;
+}
+
+export async function apiStream(
+  path: string,
+  opts: ApiStreamOptions = {},
+): Promise<Response> {
+  const headers = new Headers();
+  headers.set("Accept", "text/event-stream");
+  if (opts.lastEventID) {
+    headers.set("Last-Event-ID", opts.lastEventID);
+  }
+  const token = getToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const url = buildUrl(
+    path,
+    opts.searchParams,
+    opts.workspaceScope ?? "session",
+  );
+  const response = await fetch(url, {
+    method: "GET",
+    headers,
+    signal: opts.signal,
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+  if (!response.body) {
+    throw new ApiError(
+      response.status,
+      "EMPTY_EVENT_STREAM",
+      "Console event feed returned no response body.",
+    );
+  }
+  return response;
 }

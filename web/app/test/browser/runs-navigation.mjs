@@ -257,7 +257,12 @@ async function authoringRoutesRetired(page) {
   ]) {
     await page.goto(runsURL(retiredPath), { waitUntil: "domcontentloaded" });
     await page.getByRole("heading", { name: "Page not found" }).waitFor();
-    await page.getByRole("link", { name: "Return to Runs" }).waitFor();
+    const returnLink = page.getByRole("link", { name: "Return to Workspace" });
+    await returnLink.waitFor();
+    assert.equal(
+      await returnLink.getAttribute("href"),
+      `/canvas?workspace_id=${workspaceID}`,
+    );
   }
 }
 

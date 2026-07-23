@@ -1,4 +1,4 @@
-// Topbar: workspace switcher, token field, a service-health dot (useHealth),
+// Topbar: workspace switcher, identity controls, live event status,
 // and the theme toggle. The workspace is bound to the session here — the
 // canonical default the data hooks read — keeping WorkspaceSwitcher a pure
 // controlled component. (Per the design, workspace_id is also a route search
@@ -14,16 +14,16 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/hooks/useSession";
-import { useHealth } from "@/lib/api/queries";
+import { useWorkspaceFeed } from "@/lib/workspace";
 
 import { IdentityControls } from "./IdentityControls";
 import { ThemeToggle } from "./ThemeToggle";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 function HealthDot() {
-  const { data, isLoading, isError } = useHealth();
+  const feed = useWorkspaceFeed();
 
-  if (isLoading) {
+  if (feed?.status === "connecting") {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -31,27 +31,25 @@ function HealthDot() {
             <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
           </span>
         </TooltipTrigger>
-        <TooltipContent>Checking server health…</TooltipContent>
+        <TooltipContent>Connecting to Workspace events</TooltipContent>
       </Tooltip>
     );
   }
 
-  const live = !isError && Boolean(data?.live);
-  const ready = !isError && Boolean(data?.ready);
-
-  // Healthy: live + ready (emerald). Degraded: live but not ready (amber).
-  // Down: not live / errored (red).
-  let tone: "ok" | "degraded" | "down";
+  let tone: "ok" | "degraded" | "down" | "idle";
   let label: string;
-  if (live && ready) {
+  if (feed?.status === "live") {
     tone = "ok";
-    label = "Server healthy (live + ready)";
-  } else if (live) {
+    label = "Workspace events live";
+  } else if (feed?.status === "degraded") {
     tone = "degraded";
-    label = "Server live but not ready";
-  } else {
+    label = "Workspace events live; Offers unavailable";
+  } else if (feed?.status === "error") {
     tone = "down";
-    label = "Server unreachable";
+    label = feed.error?.message ?? "Workspace event feed unavailable";
+  } else {
+    tone = "idle";
+    label = "Select a Workspace";
   }
 
   return (
@@ -68,6 +66,7 @@ function HealthDot() {
               tone === "ok" && "bg-phase-succeeded",
               tone === "degraded" && "bg-phase-launching",
               tone === "down" && "bg-phase-failed",
+              tone === "idle" && "bg-muted-foreground",
             )}
           />
         </span>

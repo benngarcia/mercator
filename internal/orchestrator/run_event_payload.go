@@ -123,6 +123,18 @@ func invalidBookingDecision(data bookingDecisionData) string {
 		return "decision.model_version is required"
 	case data.Decision.SelectedOfferSnapshotID == "" && !slices.Contains(data.Decision.SelectionReasonCodes, "NO_FEASIBLE_OFFERS"):
 		return "decision.selected_offer_snapshot_id is required"
+	case data.Decision.SelectedOfferSnapshotID != "" && data.Decision.Booking == nil:
+		return "decision.booking is required"
+	case data.Decision.SelectedOfferSnapshotID == "" && data.Decision.Booking != nil:
+		return "decision.booking requires a selected offer"
+	case data.Decision.Booking != nil && data.Decision.Booking.ID == "":
+		return "decision.booking.id is required"
+	case data.Decision.Booking != nil && data.Decision.Booking.RentalID == "":
+		return "decision.booking.rental_id is required"
+	case data.Decision.Booking != nil && data.Decision.Booking.State != domain.BookingStateRunning && data.Decision.Booking.State != domain.BookingStateQueued:
+		return "decision.booking.state is invalid"
+	case data.Decision.Booking != nil && data.Decision.Booking.ScheduleVersion == 0:
+		return "decision.booking.schedule_version is required"
 	default:
 		return ""
 	}

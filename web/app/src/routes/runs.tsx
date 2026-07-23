@@ -1,5 +1,5 @@
-// /runs — the runs list. Polls every 3s (useRuns), renders RunsTable, and
-// navigates to the detail route on row click. Query errors degrade to
+// /runs — the runs list. The Workspace event feed refreshes useRuns, renders
+// RunsTable, and navigates to the detail route on row click. Query errors degrade to
 // <ErrorState> (401 -> "set a token" guidance via ErrorState's handling).
 
 import {

@@ -765,6 +765,7 @@ func httpRevision() domain.WorkloadRevision {
 func httpOffer(id string, now time.Time) domain.OfferSnapshot {
 	return domain.OfferSnapshot{
 		ID:           id,
+		RentalID:     id,
 		ConnectionID: "conn_1",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,
