@@ -5,9 +5,9 @@ Mercator authenticates two kinds of principals at the HTTP boundary:
 - **Machine clients** present the static bearer token (`MERCATOR_API_TOKEN`).
   Workloads reporting exit codes use the separate per-run signed token minted
   under `MERCATOR_SECRET_KEY`.
-- **Humans** sign in to the console through OIDC when a deployment configures
-  it. Without OIDC config there is no human login surface and everything
-  behaves exactly as a token-only deployment.
+- **Humans** use a signed browser session. Production deployments establish it
+  through OIDC; loopback source development can establish it with `--dev`.
+  Without either mode, the console falls back to the machine bearer token.
 
 Human-initiated mutations (run create/cancel, connection create/authorize)
 record the acting principal in the event log envelope; run and connection
@@ -36,6 +36,20 @@ MERCATOR_API_URL=http://127.0.0.1:8080 \
 MERCATOR_API_TOKEN="$MERCATOR_API_TOKEN" \
 ./bin/mercator run list --workspace-id ws_eval
 ```
+
+## Local Browser Login
+
+Source development can remove browser token handling entirely:
+
+```sh
+./bin/mercator serve --dev
+```
+
+`--dev` refuses to start unless `MERCATOR_ADDR` is loopback, creates an
+ephemeral signing key, and establishes an HTTP-only SameSite=Lax session for
+`developer@localhost`. Browser mutations record that identity. The operator
+bearer token remains available for the CLI and automation, and `--dev` cannot
+be combined with OIDC configuration.
 
 ## Configure OIDC Login (Optional)
 
@@ -70,8 +84,8 @@ Behavior with OIDC enabled:
 - `/v1/*` requests accept the session cookie as an alternative to the bearer
   token, carrying the same instance-wide operator authority. A wrong bearer token still fails
   even if a valid session cookie accompanies it.
-- `GET /auth/session` reports `{"enabled": ..., "email": ...}` so clients can
-  discover whether login is available and who is signed in.
+- `GET /auth/session` reports the `oidc`, `local`, or `token` mode plus the
+  current email when the mode has a browser identity.
 
 The static bearer token keeps working unchanged for CI and API clients.
 

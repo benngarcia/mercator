@@ -1,7 +1,7 @@
 # Mercator Console (frontend)
 
-The operator console for Mercator. React 19 + TypeScript (strict), shadcn/ui
-(new-york), Tailwind CSS v4, TanStack Query + TanStack Router, sonner. Built by
+The operator console for Mercator. React 19 + TypeScript (strict), Effect v4,
+shadcn/ui (new-york), Tailwind CSS v4, TanStack Router, sonner. Built by
 **Bun**; the output is embedded in the Go binary and served same-origin — there
 is no second server in production.
 
@@ -12,8 +12,11 @@ web/app/            this dir — frontend source
   index.html        entry: #root + <script src="src/main.tsx">
   src/index.css     Tailwind v4 + the canonical shadcn theme tokens (light/dark, teal accent)
   src/lib/utils.ts  cn() helper
-  build.ts          Bun.build → ../static (hashed, split, minified, no sourcemaps)
-  dev.ts            Bun HTML dev server (HMR) + /v1,/health proxy to :8080
+  src/lib/workspace/ Workspace event feed, pure reducer, and scenario playback (the /canvas model)
+  src/components/canvas/ WorkspaceCanvas time-lane board rendered at /canvas
+  src/routes/canvas.tsx  the /canvas route (console home)
+  build.ts          Bun.build → ../static (hashed, minified, no sourcemaps)
+  dev.ts            Bun HTML dev server (HMR) + /v1,/auth,/health proxy to :8080
 web/static/         GENERATED BUILD OUTPUT (git-ignored, embedded via //go:embed all:static)
 ```
 
@@ -21,29 +24,33 @@ The import alias `@/*` maps to `web/app/src/*` (see `tsconfig.json`).
 
 ## Develop
 
-The Go API must be running first (it owns `/v1/*`, `/health/*`, `/openapi.json`):
+The Go API must be running first (it owns `/v1/*`, `/auth/*`, `/health/*`, `/openapi.json`):
 
 ```sh
-go run ./cmd/mercator serve    # serves 127.0.0.1:8080 (set MERCATOR_SQLITE_DSN; requires a running Docker daemon)
+go run ./cmd/mercator serve --dev # loopback-only local session on 127.0.0.1:8080
 cd web/app && bun install      # once
 bun dev                        # serves :3000 with HMR, proxies API → 127.0.0.1:8080
 ```
 
 Override the API target with `MERCATOR_API` and the port with `PORT`.
 
-Auth has two modes, discovered at runtime from `GET /auth/session`:
+Auth has three modes, discovered at runtime from `GET /auth/session`:
+
+- **Local development (`serve --dev`)**: the server establishes a signed,
+  HTTP-only session for `developer@localhost`; the console never asks for a
+  token, while CLI and automation can still use the generated operator token.
 
 - **OIDC configured on the server**: humans sign in through `/auth/login`
   (the server redirects unauthenticated page loads there); the topbar shows
   the signed-in email and a sign-out action, and requests authenticate with
   the HTTP-only session cookie. No token pasting.
-- **OIDC not configured (dev / token-only)**: the topbar shows the TokenField
+- **Token-only server**: the topbar shows the TokenField
   fallback; the bearer token lives in `localStorage`.
 
 The workspace id is a URL search param defaulting from `localStorage`. Token
-and workspace are injected centrally by `@/lib/api/client` — never call
-`fetch()` directly from a component (`@/lib/auth` owns the cookie-based
-`/auth` calls, which use no envelope, token, or workspace).
+and workspace are injected centrally by `@/lib/api/client`; components do not
+call `fetch()` directly. The Effect API service also owns cookie-based `/auth`
+calls, which use no envelope, token, or workspace.
 
 ## Build & embed (the order matters)
 
@@ -79,6 +86,17 @@ depend on a committed bundle.
 ```sh
 cd web/app && bun run typecheck   # tsc --noEmit, strict
 ```
+
+## Canvas (console home)
+
+`/` redirects to `/canvas`, the live Workspace dashboard. A single authenticated
+composite SSE feed (`GET /v1/console/events`) drives one pure reducer whose root
+is the `Workspace`; the board renders intake, Rental schedules, marketplace
+Offers, and provisioning as Run cards move between time lanes.
+
+Outside production, the same reducer replays a deterministic scenario fixture
+instead of live traffic: `/canvas?scenario=<name>` selects a fixture and `&play=1`
+autoplays it. These params are ignored when `NODE_ENV=production`.
 
 ## Runs
 

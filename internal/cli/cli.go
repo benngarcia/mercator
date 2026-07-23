@@ -85,11 +85,14 @@ func Run(ctx context.Context, cfg Config) int {
 	for _, warning := range warnings {
 		fmt.Fprintln(cfg.Stderr, "warning: "+warning)
 	}
+	// Nothing named a broker, so look where `mercator serve` listens. Being
+	// wrong here costs one connection-refused message; requiring the flag costs
+	// every local invocation an export.
 	if baseURL == "" {
-		writeCLIError(cfg.Stderr, "BASE_URL_REQUIRED", "MERCATOR_API_URL, --api-url, or a configured context is required")
-		return 2
+		baseURL = LocalBrokerURL
 	}
-	req, err := buildRequest(ctx, baseURL, workspaceID, cfg.Stdin, args)
+	current := &session{baseURL: baseURL, token: token, client: cfg.Client, workspaceID: workspaceID}
+	req, err := buildRequest(ctx, current, cfg.Stdin, args)
 	if err != nil {
 		writeCLIError(cfg.Stderr, "INVALID_ARGUMENTS", err.Error())
 		return 2
@@ -179,26 +182,27 @@ func parseFlagsAnywhere(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-func buildRequest(ctx context.Context, baseURL, defaultWorkspaceID string, stdin io.Reader, args []string) (*http.Request, error) {
+func buildRequest(ctx context.Context, s *session, stdin io.Reader, args []string) (*http.Request, error) {
 	if len(args) < 2 {
 		return nil, fmt.Errorf("%s subcommand is required", args[0])
 	}
 	switch args[0] {
 	case "run":
-		return buildRunRequest(ctx, baseURL, defaultWorkspaceID, args[1:])
+		return buildRunRequest(ctx, s, args[1:])
 	case "sink":
-		return buildSinkRequest(ctx, baseURL, args[1:])
+		return buildSinkRequest(ctx, s.baseURL, args[1:])
 	case "connection":
-		return buildConnectionRequest(ctx, baseURL, defaultWorkspaceID, stdin, args[1:])
+		return buildConnectionRequest(ctx, s, stdin, args[1:])
 	case "workload":
-		return buildWorkloadRequest(ctx, baseURL, defaultWorkspaceID, args[1:])
+		return buildWorkloadRequest(ctx, s, args[1:])
 	default:
 		return nil, fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
-func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, args []string) (*http.Request, error) {
+func buildRunRequest(ctx context.Context, s *session, args []string) (*http.Request, error) {
 	command := args[0]
+	baseURL := s.baseURL
 
 	// Split off container args after a `--` separator (used by the image
 	// shorthand, e.g. `run create busybox -- echo hi`). Everything after the
@@ -207,7 +211,7 @@ func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, ar
 
 	fs := flag.NewFlagSet("run "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", defaultWorkspaceID, "workspace id (defaults to MERCATOR_WORKSPACE_ID)")
+	workspaceID := fs.String("workspace-id", "", "workspace id (defaults to the broker's only workspace)")
 	runID := fs.String("run-id", "", "run id (optional on create; server generates one when omitted)")
 	idempotencyKey := fs.String("idempotency-key", "", "idempotency key (optional on create; derived from the run when omitted)")
 	workloadJSON := fs.String("workload-json", "", "workload revision json")
@@ -220,6 +224,24 @@ func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, ar
 	// anywhere else a stray token is a mistake worth a loud error.
 	if command != "create" && len(positional) > 0 {
 		return nil, fmt.Errorf("unexpected argument %q", positional[0])
+	}
+	// Every run command is workspace-scoped, so resolve it once here rather
+	// than making each branch restate the requirement.
+	if *workspaceID == "" {
+		resolved, err := s.workspace(ctx)
+		if err != nil {
+			return nil, err
+		}
+		*workspaceID = resolved
+	}
+	// Commands that read or act on one run default to the most recent one,
+	// which is the run you just started.
+	if *runID == "" && runCommandTargetsOneRun(command) {
+		resolved, err := s.latestRun(ctx, *workspaceID)
+		if err != nil {
+			return nil, err
+		}
+		*runID = resolved
 	}
 	switch command {
 	case "create":
@@ -236,9 +258,6 @@ func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, ar
 			containerArgs = append(append([]string{}, positional...), containerArgs...)
 		}
 
-		if *workspaceID == "" {
-			return nil, fmt.Errorf("create requires --workspace-id or MERCATOR_WORKSPACE_ID")
-		}
 		hasWorkload := *workloadJSON != ""
 		hasImage := *image != ""
 		if hasWorkload == hasImage {
@@ -286,14 +305,8 @@ func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, ar
 		req.Header.Set("Idempotency-Key", key)
 		return req, nil
 	case "list":
-		if *workspaceID == "" {
-			return nil, fmt.Errorf("list requires --workspace-id")
-		}
 		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/runs", query("workspace_id", *workspaceID)), nil)
 	case "get", "wait", "events", "decision":
-		if *workspaceID == "" || *runID == "" {
-			return nil, fmt.Errorf("%s requires --workspace-id and --run-id", command)
-		}
 		path := "/v1/runs/" + url.PathEscape(*runID)
 		if command == "wait" {
 			path += "/wait"
@@ -303,14 +316,21 @@ func buildRunRequest(ctx context.Context, baseURL, defaultWorkspaceID string, ar
 		}
 		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
 	case "refresh", "cancel":
-		if *workspaceID == "" || *runID == "" {
-			return nil, fmt.Errorf("%s requires --workspace-id and --run-id", command)
-		}
 		path := "/v1/runs/" + url.PathEscape(*runID) + "/" + command
 		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
 	default:
 		return nil, fmt.Errorf("unknown run command %q", command)
 	}
+}
+
+// runCommandTargetsOneRun reports whether a run subcommand acts on a single
+// run, and so can default to the latest one when none is named.
+func runCommandTargetsOneRun(command string) bool {
+	switch command {
+	case "get", "wait", "events", "decision", "refresh", "cancel":
+		return true
+	}
+	return false
 }
 
 func buildSinkRequest(ctx context.Context, baseURL string, args []string) (*http.Request, error) {

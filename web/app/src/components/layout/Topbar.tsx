@@ -1,11 +1,10 @@
-// Topbar: workspace switcher, token field, a service-health dot (useHealth),
-// and the theme toggle. The workspace is bound to the session here — the
-// canonical default the data hooks read — keeping WorkspaceSwitcher a pure
-// controlled component. (Per the design, workspace_id is also a route search
-// param; route modules sync the param to the session, so writing the session
-// here is the single source of truth the rest of the app observes.)
+// Topbar: workspace switcher, identity controls, live event status,
+// and the theme toggle. WorkspaceSwitcher remains controlled; a selection
+// writes the shareable URL, and the root route projects that value into the
+// session consumed by data hooks.
 
 import { Loader2 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 
 import {
   Tooltip,
@@ -14,16 +13,16 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/hooks/useSession";
-import { useHealth } from "@/lib/api/queries";
+import { useWorkspaceFeed } from "@/lib/workspace";
 
 import { IdentityControls } from "./IdentityControls";
 import { ThemeToggle } from "./ThemeToggle";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 function HealthDot() {
-  const { data, isLoading, isError } = useHealth();
+  const feed = useWorkspaceFeed();
 
-  if (isLoading) {
+  if (feed?.status === "connecting") {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -31,27 +30,25 @@ function HealthDot() {
             <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
           </span>
         </TooltipTrigger>
-        <TooltipContent>Checking server health…</TooltipContent>
+        <TooltipContent>Connecting to Workspace events</TooltipContent>
       </Tooltip>
     );
   }
 
-  const live = !isError && Boolean(data?.live);
-  const ready = !isError && Boolean(data?.ready);
-
-  // Healthy: live + ready (emerald). Degraded: live but not ready (amber).
-  // Down: not live / errored (red).
-  let tone: "ok" | "degraded" | "down";
+  let tone: "ok" | "degraded" | "down" | "idle";
   let label: string;
-  if (live && ready) {
+  if (feed?.status === "live") {
     tone = "ok";
-    label = "Server healthy (live + ready)";
-  } else if (live) {
+    label = "Workspace events live";
+  } else if (feed?.status === "degraded") {
     tone = "degraded";
-    label = "Server live but not ready";
-  } else {
+    label = "Workspace events live; Offers unavailable";
+  } else if (feed?.status === "error") {
     tone = "down";
-    label = "Server unreachable";
+    label = feed.error?.message ?? "Workspace event feed unavailable";
+  } else {
+    tone = "idle";
+    label = "Select a Workspace";
   }
 
   return (
@@ -68,6 +65,7 @@ function HealthDot() {
               tone === "ok" && "bg-phase-succeeded",
               tone === "degraded" && "bg-phase-launching",
               tone === "down" && "bg-phase-failed",
+              tone === "idle" && "bg-muted-foreground",
             )}
           />
         </span>
@@ -78,11 +76,18 @@ function HealthDot() {
 }
 
 export function Topbar() {
-  const { workspace, setWorkspace } = useSession();
+  const navigate = useNavigate();
+  const { workspace } = useSession();
+  const selectWorkspace = (workspaceID: string) => {
+    void navigate({
+      to: ".",
+      search: (previous) => ({ ...previous, workspace_id: workspaceID }),
+    });
+  };
 
   return (
     <header className="flex h-14 items-center gap-3 border-b bg-card/40 px-4 backdrop-blur">
-      <WorkspaceSwitcher value={workspace} onChange={setWorkspace} />
+      <WorkspaceSwitcher value={workspace} onChange={selectWorkspace} />
       <div className="ml-auto flex items-center gap-1">
         <HealthDot />
         <IdentityControls />

@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,17 @@ func (p Platform) String() string {
 		return ""
 	}
 	return p.OS + "/" + p.Architecture
+}
+
+// ParsePlatform reads an "os/arch" string back into a Platform. It reports
+// false for anything that does not name both halves, so a partial answer never
+// half-populates a workload's platform.
+func ParsePlatform(value string) (Platform, bool) {
+	os, arch, found := strings.Cut(value, "/")
+	if !found || os == "" || arch == "" {
+		return Platform{}, false
+	}
+	return Platform{OS: os, Architecture: arch}, true
 }
 
 type WorkloadRevision struct {
@@ -156,6 +168,7 @@ const (
 
 type OfferSnapshot struct {
 	ID           string              `json:"id"`
+	RentalID     string              `json:"rental_id,omitempty"`
 	ConnectionID string              `json:"connection_id"`
 	AdapterType  string              `json:"adapter_type"`
 	Kind         OfferKind           `json:"kind"`
@@ -298,6 +311,24 @@ type ReliabilityEvidence struct {
 	Confidence       float64 `json:"confidence,omitempty"`
 }
 
+type BookingState string
+
+const (
+	BookingStateRunning BookingState = "running"
+	BookingStateQueued  BookingState = "queued"
+)
+
+type Booking struct {
+	ID               string       `json:"id"`
+	RunID            string       `json:"run_id"`
+	RentalID         string       `json:"rental_id"`
+	State            BookingState `json:"state"`
+	AfterBookingID   string       `json:"after_booking_id,omitempty"`
+	ProjectedStartAt *time.Time   `json:"projected_start_at,omitempty"`
+	LatestStartAt    *time.Time   `json:"latest_start_at,omitempty"`
+	ScheduleVersion  uint64       `json:"schedule_version"`
+}
+
 type BookingDecision struct {
 	ID                      string              `json:"id"`
 	RunID                   string              `json:"run_id,omitempty"`
@@ -308,6 +339,7 @@ type BookingDecision struct {
 	CollectionReport        CollectionReport    `json:"collection_report"`
 	Candidates              []CandidateDecision `json:"candidates"`
 	SelectedOfferSnapshotID string              `json:"selected_offer_snapshot_id,omitempty"`
+	Booking                 *Booking            `json:"booking,omitempty"`
 	SelectionReasonCodes    []string            `json:"selection_reason_codes"`
 }
 
@@ -318,15 +350,24 @@ type CollectionReport struct {
 }
 
 type CandidateDecision struct {
-	OfferSnapshotID string             `json:"offer_snapshot_id"`
-	ConnectionID    string             `json:"connection_id,omitempty"`
-	AdapterType     string             `json:"adapter_type,omitempty"`
-	NativeRef       string             `json:"native_ref,omitempty"`
-	Feasible        bool               `json:"feasible"`
-	Rejections      []Violation        `json:"rejections,omitempty"`
-	Estimates       CandidateEstimates `json:"estimates"`
-	ScoreUSD        float64            `json:"score_usd,omitempty"`
+	OfferSnapshotID string               `json:"offer_snapshot_id"`
+	ConnectionID    string               `json:"connection_id,omitempty"`
+	AdapterType     string               `json:"adapter_type,omitempty"`
+	NativeRef       string               `json:"native_ref,omitempty"`
+	Disposition     CandidateDisposition `json:"disposition"`
+	Feasible        bool                 `json:"feasible"`
+	Rejections      []Violation          `json:"rejections,omitempty"`
+	Estimates       CandidateEstimates   `json:"estimates"`
+	ScoreUSD        float64              `json:"score_usd,omitempty"`
 }
+
+type CandidateDisposition string
+
+const (
+	CandidateDispositionRunNow    CandidateDisposition = "run_now_existing_rental"
+	CandidateDispositionQueue     CandidateDisposition = "queue_existing_rental"
+	CandidateDispositionProvision CandidateDisposition = "provision_fresh_rental"
+)
 
 type CandidateEstimates struct {
 	QueueSeconds     Estimate `json:"queue_seconds"`

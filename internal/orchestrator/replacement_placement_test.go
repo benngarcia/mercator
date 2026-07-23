@@ -12,6 +12,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/rentalschedule"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
@@ -42,7 +43,9 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 		}
 		t.Fatalf("provider launch %q happened before its durable intent", req.LaunchKey)
 	}
-	orch = newReplacementOrchestrator(t, provider)
+	log := openOrchestratorLog(t)
+	schedules := rentalschedule.NewMemory(log)
+	orch = New(log, scheduler.New(), provider, WithRentalSchedules(schedules))
 	createReplacementRun(t, orch, 2)
 
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_replacement"); err != nil {
@@ -74,6 +77,17 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 		t.Fatalf("fixture must prove identity exclusion rather than native-ref exclusion: %+v", provider.launches)
 	}
 	assertCompleteAttemptHistory(t, orch, "run_replacement", 2, 1, 1)
+	stored, err := schedules.List(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("list Rental Schedules: %v", err)
+	}
+	decisions := bookingDecisionsFromRun(t, orch, "run_replacement")
+	if len(stored[decisions[0].Booking.RentalID].Bookings) != 0 {
+		t.Fatalf("rejected Booking still occupies its Rental Schedule: %+v", stored[decisions[0].Booking.RentalID])
+	}
+	if len(stored[decisions[1].Booking.RentalID].Bookings) != 1 {
+		t.Fatalf("replacement Booking missing from its Rental Schedule: %+v", stored[decisions[1].Booking.RentalID])
+	}
 }
 
 func TestAdvanceRunClosesWithRetryExhaustedAfterBoundedAttempts(t *testing.T) {
@@ -424,6 +438,26 @@ func assertCompleteAttemptHistory(t *testing.T, orch *Orchestrator, runID string
 		seenAttempts[intent.AttemptID] = true
 		seenLaunches[intent.LaunchKey] = true
 	}
+}
+
+func bookingDecisionsFromRun(t *testing.T, orch *Orchestrator, runID string) []domain.BookingDecision {
+	t.Helper()
+	events, err := orch.GetRunEvents(t.Context(), "ws_1", runID)
+	if err != nil {
+		t.Fatalf("get Booking Decisions: %v", err)
+	}
+	decisions := []domain.BookingDecision{}
+	for _, event := range events {
+		if event.Type != EventBookingDecided {
+			continue
+		}
+		var data bookingDecisionData
+		if err := json.Unmarshal(event.Data, &data); err != nil {
+			t.Fatalf("decode Booking Decision: %v", err)
+		}
+		decisions = append(decisions, data.Decision)
+	}
+	return decisions
 }
 
 func assertClosedReason(t *testing.T, orch *Orchestrator, runID, want string) {

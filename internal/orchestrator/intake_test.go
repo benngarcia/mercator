@@ -22,8 +22,8 @@ func TestIntakeImageShorthandCreatesAndAdvances(t *testing.T) {
 		IdempotencyKey: "idem_intake_shorthand",
 		Image:          "busybox:latest",
 		Args:           []string{"echo", "hi"},
-		ResolveImage: func(_ context.Context, image, _ string) (string, error) {
-			return image + "@sha256:deadbeef", nil
+		ResolveImage: func(_ context.Context, image, _ string) (string, string, error) {
+			return image + "@sha256:deadbeef", "linux/amd64", nil
 		},
 	})
 	if err != nil {
@@ -54,8 +54,8 @@ func TestIntakeReplayReturnsOriginalRun(t *testing.T) {
 		WorkspaceID:    "ws_1",
 		IdempotencyKey: "idem_intake_replay",
 		Image:          "busybox:latest",
-		ResolveImage: func(_ context.Context, image, _ string) (string, error) {
-			return image + "@sha256:deadbeef", nil
+		ResolveImage: func(_ context.Context, image, _ string) (string, string, error) {
+			return image + "@sha256:deadbeef", "linux/amd64", nil
 		},
 	}
 	first, err := orch.Intake(context.Background(), req)

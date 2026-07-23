@@ -2,7 +2,8 @@
 
 The `mercator` binary has three modes:
 
-- `mercator serve` starts the HTTP API and embedded console.
+- `mercator serve [--dev]` starts the HTTP API and embedded console. `--dev`
+  adds a loopback-only browser session for local development.
 - `mercator verify --spec FILE` starts an isolated broker and launches a real,
   bounded provider conformance Run.
 - Every other command (`run`, `sink`, `login`, `context`, ...) targets an
@@ -44,14 +45,20 @@ trial schema and a local Docker proof.
 ## Environment And Contexts
 
 Server targeting resolves in this order: explicit flags, then environment
-variables, then the current context from the config file. Environment always
-wins over the file so CI needs no config file.
+variables, then the current context from the config file, then
+`http://127.0.0.1:8080` where `mercator serve` listens. Environment always wins
+over the file so CI needs no config file.
+
+`mercator serve` writes a `local` context holding its address and generated
+token whenever it binds a loopback address and no `MERCATOR_API_TOKEN` was set,
+so the CLI on that machine needs no configuration at all. It claims
+`current_context` only when nothing else has.
 
 | Variable | Purpose |
 | --- | --- |
 | `MERCATOR_API_URL` | API URL, for example `http://127.0.0.1:8080`. |
 | `MERCATOR_API_TOKEN` | Bearer token sent as `Authorization: Bearer ...`. |
-| `MERCATOR_WORKSPACE_ID` | Default workspace for `run` commands. |
+| `MERCATOR_WORKSPACE_ID` | Default workspace. Optional: commands resolve the broker's only workspace, and name the candidates when there are several. |
 | `MERCATOR_CONFIG` | Config file path (default `~/.config/mercator/config.json`). |
 
 The global `--api-url URL` flag overrides `MERCATOR_API_URL`.
@@ -91,60 +98,53 @@ static `MERCATOR_API_TOKEN` auth continues to work everywhere.
 
 ## Run Commands
 
-Create a run from an image reference. On the Docker adapter the image must be
-digest-pinned — a mutable tag like `busybox:latest` is rejected, and registry
-tag→digest resolution is not implemented yet (see
-[known-limitations.md](../production/known-limitations.md)), so pin the digest
-yourself:
+Create a run from an image reference:
 
 ```sh
-IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
-mercator run create "$IMAGE" -- echo hi
+mercator run create busybox -- echo hi
 ```
 
-That command omits `--run-id` and `--idempotency-key`; the server generates a
-run id, and the CLI mints or derives the idempotency key needed by the API. The
-bare `busybox` shorthand resolves only under the internal test resolver, not
-against a real Docker host.
+The broker resolves a tag against its Docker host and stores the resulting
+digest and platform, so the recorded revision is reproducible even though you
+typed a tag. The image has to be on that host already; when it is not, the
+error names the `docker pull` to run. A reference you pin yourself is kept
+verbatim.
 
-Common commands:
+That command omits `--run-id` and `--idempotency-key`. The server generates a
+run id, and the CLI mints or derives the idempotency key the API needs.
+
+Common commands. Each defaults `--run-id` to the most recent run in the
+workspace, so the run you just created needs no id:
 
 ```sh
 mercator run list
-mercator run get --run-id run_...
-mercator run wait --run-id run_...
-mercator run events --run-id run_...
-mercator run decision --run-id run_...
-mercator run refresh --run-id run_...
-mercator run cancel --run-id run_...
+mercator run get
+mercator run wait
+mercator run events
+mercator run decision
+mercator run refresh
+mercator run cancel
 ```
 
-From a source checkout, use these follow-up commands after starting the
-Docker quickstart server from the README. If you installed a release
-binary, replace `go run ./cmd/mercator` with `mercator`.
+Follow-up commands after the README quickstart. Each one defaults the
+workspace and the run, so nothing here restates an id:
 
 ```sh
-export MERCATOR_API_URL=http://127.0.0.1:8080
-export MERCATOR_API_TOKEN='dev-token'
-export MERCATOR_WORKSPACE_ID=ws_1
+mercator run create busybox -- echo hi
 
-docker pull -q busybox:latest >/dev/null
-IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
-RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
-
-go run ./cmd/mercator run list \
+mercator run list \
   | jq '.runs[] | {id, outcome, closed}'
 
-go run ./cmd/mercator run wait --run-id "$RUN_ID" \
+mercator run wait \
   | jq '{id: .run.id, outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
 
-go run ./cmd/mercator run events --run-id "$RUN_ID" \
+mercator run events \
   | jq '.events[] | .type'
 
-go run ./cmd/mercator run decision --run-id "$RUN_ID" \
+mercator run decision \
   | jq '{selected_offer_snapshot_id: .decision.selected_offer_snapshot_id, candidate_count: (.decision.candidates | length), rejected_count: ([.decision.candidates[] | select(.feasible | not)] | length)}'
 
-go run ./cmd/mercator sink status --sink-id audit \
+mercator sink status --sink-id audit \
   | jq '{sink_id, cursor}'
 ```
 
@@ -180,12 +180,16 @@ Connections register provider endpoints (Docker hosts, RunPod). These
 previously required hand-written `curl` with `Idempotency-Key` headers:
 
 ```sh
-mercator connection create --connection-id conn_runpod --adapter-type runpod \
+mercator connection create --adapter-type runpod \
   --credential-source mercator --secret-stdin < runpod-key.txt
-mercator connection authorize --connection-id conn_runpod
+mercator connection authorize
 mercator connection list
-mercator connection delete --connection-id conn_runpod
+mercator connection delete --connection-id runpod
 ```
+
+`--connection-id` defaults to the adapter type on create, and to the
+workspace's only connection on authorize and delete. Name it explicitly once a
+workspace holds more than one.
 
 `--config key=value` is repeatable for adapter config. Prefer `--secret-stdin`
 over `--secret` so secrets stay out of shell history. The create idempotency
@@ -219,10 +223,9 @@ local validation errors or non-2xx API responses. Common setup mistakes:
 Local validation example:
 
 ```sh
-unset MERCATOR_API_URL
-mercator run list --workspace-id ws_1
-# stderr, exit 2:
-# {"code":"BASE_URL_REQUIRED","message":"MERCATOR_API_URL or --api-url is required"}
+mercator run list --api-url http://127.0.0.1:9999
+# stderr, exit 1:
+# {"code":"REQUEST_FAILED","message":"... connection refused"}
 ```
 
 API response example:
@@ -276,15 +279,13 @@ Sink commands also print JSON.
 
 ## Local Smoke Test
 
-From a source checkout with a running Docker daemon, start `mercator serve`
-with the Docker adapter, then create a digest-pinned run through the CLI and
-confirm it closes successfully:
+With a running Docker daemon, start `mercator serve`, register the Docker
+adapter, and confirm a run closes successfully:
 
 ```sh
 docker pull -q busybox:latest >/dev/null
-IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' busybox:latest)"
-RUN_ID="$(go run ./cmd/mercator run create "$IMAGE" -- echo hi | jq -r '.run.id')"
-go run ./cmd/mercator run get --run-id "$RUN_ID" \
+mercator run create busybox -- echo hi
+mercator run get \
   | jq '{outcome: .run.outcome, exit_code: .run.exit_code, cleanup: .run.cleanup, closed: .run.closed}'
 ```
 

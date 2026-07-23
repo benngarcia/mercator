@@ -264,22 +264,9 @@ func (l *SQLiteEventLog) ReadAll(ctx context.Context, after GlobalPosition, limi
 	}
 	where := []string{"global_position > ?"}
 	args := []any{after}
-	if filter.WorkspaceID != "" {
-		where = append(where, "workspace_id = ?")
-		args = append(args, filter.WorkspaceID)
-	}
-	if len(filter.StreamTypes) > 0 {
-		where = append(where, "stream_type IN ("+placeholders(len(filter.StreamTypes))+")")
-		for _, value := range filter.StreamTypes {
-			args = append(args, value)
-		}
-	}
-	if len(filter.EventTypes) > 0 {
-		where = append(where, "event_type IN ("+placeholders(len(filter.EventTypes))+")")
-		for _, value := range filter.EventTypes {
-			args = append(args, value)
-		}
-	}
+	filterWhere, filterArgs := eventFilterSQL(filter)
+	where = append(where, filterWhere...)
+	args = append(args, filterArgs...)
 	args = append(args, limit)
 	rows, err := l.db.QueryContext(ctx, `SELECT global_position, event_id, workspace_id, stream_type, stream_id,
 		stream_version, event_type, schema_version, occurred_at, actor_json, correlation_id, causation_id,
@@ -295,29 +282,25 @@ func (l *SQLiteEventLog) ReadAll(ctx context.Context, after GlobalPosition, limi
 	return scanEvents(rows)
 }
 
+func (l *SQLiteEventLog) LatestPosition(ctx context.Context, filter EventFilter) (GlobalPosition, error) {
+	where, args := eventFilterSQL(filter)
+	query := "SELECT COALESCE(MAX(global_position), 0) FROM events"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	var position GlobalPosition
+	if err := l.db.QueryRowContext(ctx, query, args...).Scan(&position); err != nil {
+		return 0, err
+	}
+	return position, nil
+}
+
 // ListWorkspaceIDs returns the durable partitions that match the event index.
 // Unlike ReadAll, it never walks historical rows: SQLite answers from the
 // stream-type/event-type/workspace index, so background control loops pay for
 // live partitions rather than total event history.
 func (l *SQLiteEventLog) ListWorkspaceIDs(ctx context.Context, filter EventFilter) ([]string, error) {
-	where := make([]string, 0, 3)
-	args := make([]any, 0, 1+len(filter.StreamTypes)+len(filter.EventTypes))
-	if filter.WorkspaceID != "" {
-		where = append(where, "workspace_id = ?")
-		args = append(args, filter.WorkspaceID)
-	}
-	if len(filter.StreamTypes) > 0 {
-		where = append(where, "stream_type IN ("+placeholders(len(filter.StreamTypes))+")")
-		for _, value := range filter.StreamTypes {
-			args = append(args, value)
-		}
-	}
-	if len(filter.EventTypes) > 0 {
-		where = append(where, "event_type IN ("+placeholders(len(filter.EventTypes))+")")
-		for _, value := range filter.EventTypes {
-			args = append(args, value)
-		}
-	}
+	where, args := eventFilterSQL(filter)
 	query := "SELECT DISTINCT workspace_id FROM events"
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -339,6 +322,32 @@ func (l *SQLiteEventLog) ListWorkspaceIDs(ctx context.Context, filter EventFilte
 		return nil, err
 	}
 	return workspaceIDs, nil
+}
+
+func eventFilterSQL(filter EventFilter) ([]string, []any) {
+	where := make([]string, 0, 4)
+	args := make([]any, 0, 2+len(filter.StreamTypes)+len(filter.EventTypes))
+	if filter.WorkspaceID != "" {
+		where = append(where, "workspace_id = ?")
+		args = append(args, filter.WorkspaceID)
+	}
+	if len(filter.StreamTypes) > 0 {
+		where = append(where, "stream_type IN ("+placeholders(len(filter.StreamTypes))+")")
+		for _, value := range filter.StreamTypes {
+			args = append(args, value)
+		}
+	}
+	if len(filter.EventTypes) > 0 {
+		where = append(where, "event_type IN ("+placeholders(len(filter.EventTypes))+")")
+		for _, value := range filter.EventTypes {
+			args = append(args, value)
+		}
+	}
+	if filter.Visibility != "" {
+		where = append(where, "visibility = ?")
+		args = append(args, filter.Visibility)
+	}
+	return where, args
 }
 
 func (l *SQLiteEventLog) Subscribe(ctx context.Context, req SubscriptionRequest) (<-chan Delivery, error) {

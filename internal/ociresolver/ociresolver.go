@@ -31,6 +31,10 @@ type StaticResolver struct {
 	// minimal create path ({"image":"busybox"}) is exercisable end-to-end in
 	// fake mode with no pre-pinned digest. It is never enabled by default.
 	synthetic bool
+	// assumedPlatform answers for a caller that stated no platform. A static
+	// resolver cannot read an image, so this is a declared assumption of the
+	// sandbox that configured it, never an inference about a real image.
+	assumedPlatform string
 }
 
 type Option func(*StaticResolver)
@@ -43,6 +47,15 @@ func WithSyntheticDigests() Option {
 	}
 }
 
+// WithAssumedPlatform declares the platform a static resolver reports when the
+// caller states none. Use it only where the image set is fictional, such as
+// fake-mode tests; a real image should be read, not assumed.
+func WithAssumedPlatform(platform string) Option {
+	return func(r *StaticResolver) {
+		r.assumedPlatform = platform
+	}
+}
+
 func NewStaticResolver(images map[string]ResolvedImage, options ...Option) *StaticResolver {
 	r := &StaticResolver{images: maps.Clone(images)}
 	for _, option := range options {
@@ -52,8 +65,14 @@ func NewStaticResolver(images map[string]ResolvedImage, options ...Option) *Stat
 }
 
 func (r *StaticResolver) Resolve(_ context.Context, req ResolveRequest) (ResolvedImage, error) {
-	if req.Image == "" || req.Platform == "" {
-		return ResolvedImage{}, fmt.Errorf("ociresolver: image and platform are required")
+	if req.Image == "" {
+		return ResolvedImage{}, fmt.Errorf("ociresolver: image is required")
+	}
+	if req.Platform == "" {
+		req.Platform = r.assumedPlatform
+	}
+	if req.Platform == "" {
+		return ResolvedImage{}, fmt.Errorf("ociresolver: cannot determine the platform for image %q; state it on the workload", req.Image)
 	}
 	if digestRefPattern.MatchString(req.Image) {
 		return ResolvedImage{Image: req.Image, Digest: digestFromImage(req.Image), Platform: req.Platform, AlreadyPinned: true}, nil

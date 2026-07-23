@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/webauth"
 )
 
 func TestConsoleRunsNavigation(t *testing.T) {
@@ -36,12 +37,17 @@ func TestConsoleRunsNavigation(t *testing.T) {
 		output = t.TempDir()
 	}
 	dsn := "file:" + filepath.Join(t.TempDir(), "runs-navigation.db")
+	localAuth, err := webauth.NewLocal("developer@localhost")
+	if err != nil {
+		t.Fatalf("build local authentication: %v", err)
+	}
 
 	handler, closeHandler, err := HandlerForSQLite(
 		context.Background(),
 		dsn,
 		[]domain.OfferSnapshot{httpOffer("offer_runs_navigation", time.Now().UTC())},
 		WithBearerAuth("runs-navigation-token"),
+		WithWebAuth(localAuth),
 	)
 	if err != nil {
 		t.Fatalf("build browser handler: %v", err)

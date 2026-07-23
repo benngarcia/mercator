@@ -2,7 +2,7 @@
  * Production build for the Mercator console.
  *
  * Bun.build over index.html → ../static (web/static). It emits a rewritten
- * index.html plus content-hashed, code-split, minified JS/CSS under
+ * index.html plus content-hashed, minified JS/CSS under
  * web/static/assets/. The Go binary embeds web/static via //go:embed and serves
  * /assets/* with an immutable cache header and index.html as the SPA fallback.
  *
@@ -27,16 +27,13 @@ await writeFile(resolve(outdir, ".gitkeep"), "");
 const result = await Bun.build({
   entrypoints: [resolve(appDir, "index.html")],
   outdir,
-  // Absolute asset URLs (/assets/...). Without this the emitted index.html
-  // references assets relatively (./assets/...), which breaks on deep links like
-  // /runs/{id}: the SPA-fallback index.html resolves ./assets against /runs/,
-  // requests /runs/assets/... , gets index.html back, and fails the module MIME
-  // check. publicPath "/" makes the references root-absolute so they resolve
-  // correctly from any route depth.
+  // Root-absolute entry assets resolve from every SPA route depth. The embedded
+  // console stays in one JS entry because Bun's chunk publicPath omits the
+  // output directory, while the Go server deliberately exposes only /assets/.
   publicPath: "/",
   target: "browser",
   format: "esm",
-  splitting: true,
+  splitting: false,
   minify: true,
   // No sourcemap in the embedded production bundle: it would bake a multi-MB
   // .map into every Go binary and release archive. The dev server (bun dev)

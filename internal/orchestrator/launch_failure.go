@@ -134,7 +134,7 @@ func (o *Orchestrator) recordReplaceableLaunchFailure(ctx context.Context, works
 	if exhausted {
 		toAppend = append(toAppend, retryExhaustedEvents(runID, o.now())...)
 	}
-	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed:"+state.launchIntent.AttemptID, toAppend); err != nil {
+	if err := o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:launch_failed:"+state.launchIntent.AttemptID, toAppend); err != nil {
 		return false, err
 	}
 	return !exhausted, nil
@@ -144,7 +144,7 @@ func (o *Orchestrator) recordReplaceableLaunchFailure(ctx context.Context, works
 // not create an object, so cleanup is not required and a later poll must never
 // repeat the rejected launch.
 func (o *Orchestrator) recordTerminalLaunchFailure(ctx context.Context, workspaceID, runID string, version uint64, state runState, failure launchFailureData, launchErr error) error {
-	if err := o.appendEvents(ctx, workspaceID, runID, version, "advance:launch_failed:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
+	if err := o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:launch_failed:"+state.launchIntent.AttemptID, []eventlog.NewEvent{
 		mustPrivateEvent(runID, "launch_failed_"+state.launchIntent.AttemptID, EventLaunchFailed, failure.publicData(), failure, o.now()),
 		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true}, o.now()),

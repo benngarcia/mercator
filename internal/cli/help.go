@@ -10,11 +10,13 @@ func helpText(args []string) (string, bool) {
 	if len(tokens) == 0 {
 		return rootHelp, true
 	}
-	if isHelpArg(tokens[0]) {
-		return rootHelp, true
-	}
+	// `help <topic>` must reach the topic. Testing isHelpArg first would swallow
+	// the topic, because "help" is itself a help argument.
 	if tokens[0] == "help" {
 		return helpForTopic(tokens[1:], true)
+	}
+	if isHelpArg(tokens[0]) {
+		return rootHelp, true
 	}
 	return helpForTopic(tokens, false)
 }
@@ -154,7 +156,7 @@ const rootHelp = `Usage: mercator [--api-url URL] <command>
 Mercator is an OCI run broker with an HTTP API, JSON CLI, and embedded console.
 
 Commands:
-  serve                 Start the Mercator HTTP server and console
+  serve [--dev]         Start the server; --dev adds loopback local browser login
   verify --spec FILE    Launch a bounded provider Conformance Trial
   login                 Sign in through the server's OIDC login and store a CLI token
   logout                Clear the stored login credential

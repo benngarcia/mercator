@@ -92,6 +92,40 @@ func TestSQLiteEventLogAppendReadAndSubscribe(t *testing.T) {
 	}
 }
 
+func TestSQLiteEventLogFiltersPublicEventsAndReportsTheirHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log := openTestLog(t)
+	_, err := log.Append(ctx, AppendRequest{
+		Stream:                StreamKey{WorkspaceID: "ws_1", Type: "run", ID: "run_1"},
+		ExpectedStreamVersion: 0,
+		CommandKey:            "cmd-create-run",
+		RequestHash:           "sha256:request",
+		Events: []NewEvent{
+			{ID: "evt_public", Type: "compute.run.requested.v1", SchemaVersion: 1, OccurredAt: time.Now().UTC(), Visibility: VisibilityPublic, Data: json.RawMessage(`{"run_id":"run_1"}`)},
+			{ID: "evt_private", Type: "compute.run.secret.v1", SchemaVersion: 1, OccurredAt: time.Now().UTC(), Visibility: VisibilityPrivate, Data: json.RawMessage(`{"secret":"redacted"}`)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	filter := EventFilter{WorkspaceID: "ws_1", Visibility: VisibilityPublic}
+	events, err := log.ReadAll(ctx, 0, 10, filter)
+	if err != nil {
+		t.Fatalf("read public events: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != "evt_public" {
+		t.Fatalf("public events = %+v, want only evt_public", events)
+	}
+	head, err := log.LatestPosition(ctx, filter)
+	if err != nil {
+		t.Fatalf("latest public position: %v", err)
+	}
+	if head != events[0].GlobalPosition {
+		t.Fatalf("public head = %d, want %d", head, events[0].GlobalPosition)
+	}
+}
+
 func TestSQLiteEventLogIdempotencyAndConcurrency(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

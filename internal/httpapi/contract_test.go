@@ -64,13 +64,16 @@ func (m *recordingMux) HandleFunc(pattern string, _ func(http.ResponseWriter, *h
 
 func (*recordingMux) ServeHTTP(http.ResponseWriter, *http.Request) {}
 
-func TestEveryResponseHasAJSONSchema(t *testing.T) {
+func TestEveryResponseHasAContentSchema(t *testing.T) {
 	for path, operations := range readContract(t).Paths {
 		for method, operation := range operations {
 			for status, response := range operation.Responses {
-				mediaType, ok := response.Content["application/json"]
-				if !ok || len(mediaType.Schema) == 0 {
-					t.Errorf("%s %s response %s has no application/json schema", strings.ToUpper(method), path, status)
+				hasSchema := false
+				for _, mediaType := range response.Content {
+					hasSchema = hasSchema || len(mediaType.Schema) > 0
+				}
+				if !hasSchema {
+					t.Errorf("%s %s response %s has no content schema", strings.ToUpper(method), path, status)
 				}
 			}
 		}

@@ -1,363 +1,451 @@
-// One typed function per route in the API table. These are thin wrappers over
-// apiFetch; auth + workspace_id are injected centrally by the client. Mutating
-// endpoints accept an optional idempotencyKey (auto-generated otherwise).
+import * as Effect from "effect/Effect";
 
-import { apiFetch, type WorkspaceScope } from "./client";
-import type { operations } from "./contract.gen";
+import { Api } from "./client";
 import type {
-  AdapterListResponse,
-  AuthSessionState,
-  ConnectionListResponse,
-  ConnectionResponse,
   CreateConnectionRequest,
-  DeleteConnectionResponse,
   CreateRevisionRequest,
   CreateRunRequest,
   CreateWorkloadRequest,
-  CreateWorkloadResponse,
-  EventListResponse,
-  OfferListResponse,
-  BookingDecisionResponse,
   PlacementPreviewRequest,
-  PlacementPreviewResponse,
   ReplaySinkRequest,
   ResolveImageRequest,
-  ResolveImageResponse,
-  RunListResponse,
-  RunResponse,
-  SinkResult,
-  SinkStatus,
-  WorkloadRevisionListResponse,
-  WorkloadRevisionResponse,
-  CreateWorkspaceRequest,
-  WorkspaceListResponse,
-  WorkspaceResponse,
 } from "./types";
 
 interface WorkspaceArg {
-  workspaceId?: string;
-  signal?: AbortSignal;
+  readonly workspaceId?: string;
 }
 
-function requestWorkspaceScope(workspaceId: string | undefined): WorkspaceScope {
-  return workspaceId === undefined ? "session" : { workspaceId };
+interface MutationArg extends WorkspaceArg {
+  readonly idempotencyKey?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Health
-// ---------------------------------------------------------------------------
+const mutationKey = Effect.fn("Api.mutationKey")(function* (
+  override: string | undefined,
+) {
+  if (override !== undefined) {
+    return override;
+  }
+  const api = yield* Api;
+  return yield* api.idempotencyKey;
+});
 
-export type HealthStatus =
-  operations["healthLive"]["responses"][200]["content"]["application/json"];
+export const getAuthSession = Effect.fn("Api.getAuthSession")(function* () {
+  const api = yield* Api;
+  return yield* api.getAuthSession();
+});
 
-export function getHealthLive(signal?: AbortSignal): Promise<HealthStatus> {
-  return apiFetch<HealthStatus>("/health/live", { signal });
-}
+export const logout = Effect.fn("Api.logout")(function* () {
+  const api = yield* Api;
+  yield* api.logout();
+});
 
-export function getHealthReady(signal?: AbortSignal): Promise<HealthStatus> {
-  return apiFetch<HealthStatus>("/health/ready", { signal });
-}
-
-// ---------------------------------------------------------------------------
-// Auth session
-// ---------------------------------------------------------------------------
-
-export function getAuthSession(
-  signal?: AbortSignal,
-): Promise<AuthSessionState> {
-  return apiFetch<AuthSessionState>("/auth/session", { signal });
-}
-
-// ---------------------------------------------------------------------------
-// Workspaces
-// ---------------------------------------------------------------------------
-
-export function listWorkspaces(
+export const listWorkspaces = Effect.fn("Api.listWorkspaces")(function* (
   includeArchived: boolean,
-  signal?: AbortSignal,
-): Promise<WorkspaceListResponse> {
-  return apiFetch<WorkspaceListResponse>("/v1/workspaces", {
-    workspaceScope: "none",
-    searchParams: { include_archived: includeArchived },
-    signal,
-  });
-}
-
-export function createWorkspace(
-  body: CreateWorkspaceRequest,
-): Promise<WorkspaceResponse> {
-  return apiFetch<WorkspaceResponse>("/v1/workspaces", {
-    method: "POST",
-    body,
-    workspaceScope: "none",
-  });
-}
-
-export function archiveWorkspace(workspaceID: string): Promise<WorkspaceResponse> {
-  return apiFetch<WorkspaceResponse>(
-    `/v1/workspaces/${encodeURIComponent(workspaceID)}/archive`,
-    { method: "POST", workspaceScope: "none" },
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.listWorkspaces", (signal) =>
+    api.client.GET("/v1/workspaces", {
+      headers,
+      params: { query: { include_archived: includeArchived } },
+      signal,
+    }),
   );
-}
+});
 
-// ---------------------------------------------------------------------------
-// Runs
-// ---------------------------------------------------------------------------
-
-export function listRuns(arg: WorkspaceArg = {}): Promise<RunListResponse> {
-  return apiFetch<RunListResponse>("/v1/runs", {
-    workspaceScope: requestWorkspaceScope(arg.workspaceId),
-    signal: arg.signal,
-  });
-}
-
-export function getRun(
-  runID: string,
-  arg: WorkspaceArg = {},
-): Promise<RunResponse> {
-  return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}`, {
-    workspaceScope: requestWorkspaceScope(arg.workspaceId),
-    signal: arg.signal,
-  });
-}
-
-export function getRunEvents(
-  runID: string,
-  arg: WorkspaceArg = {},
-): Promise<EventListResponse> {
-  return apiFetch<EventListResponse>(
-    `/v1/runs/${encodeURIComponent(runID)}/events`,
-    { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
+export const createWorkspace = Effect.fn("Api.createWorkspace")(function* (
+  displayName: string,
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.createWorkspace", (signal) =>
+    api.client.POST("/v1/workspaces", {
+      body: { display_name: displayName },
+      headers,
+      signal,
+    }),
   );
-}
+});
 
-export function getRunDecision(
-  runID: string,
-  arg: WorkspaceArg = {},
-): Promise<BookingDecisionResponse> {
-  return apiFetch<BookingDecisionResponse>(
-    `/v1/runs/${encodeURIComponent(runID)}/decision`,
-    { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
+export const archiveWorkspace = Effect.fn("Api.archiveWorkspace")(function* (
+  workspaceId: string,
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.archiveWorkspace", (signal) =>
+    api.client.POST("/v1/workspaces/{workspace_id}/archive", {
+      headers,
+      params: { path: { workspace_id: workspaceId } },
+      signal,
+    }),
   );
-}
+});
 
-export function createRun(
+export const listRuns = Effect.fn("Api.listRuns")(function* (
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.listRuns", (signal) =>
+    api.client.GET("/v1/runs", {
+      headers,
+      params: { query: { workspace_id: arg.workspaceId } },
+      signal,
+    }),
+  );
+});
+
+export const getRun = Effect.fn("Api.getRun")(function* (
+  runId: string,
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.getRun", (signal) =>
+    api.client.GET("/v1/runs/{run_id}", {
+      headers,
+      params: {
+        path: { run_id: runId },
+        query: { workspace_id: arg.workspaceId },
+      },
+      signal,
+    }),
+  );
+});
+
+export const getRunEvents = Effect.fn("Api.getRunEvents")(function* (
+  runId: string,
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.getRunEvents", (signal) =>
+    api.client.GET("/v1/runs/{run_id}/events", {
+      headers,
+      params: {
+        path: { run_id: runId },
+        query: { workspace_id: arg.workspaceId },
+      },
+      signal,
+    }),
+  );
+});
+
+export const getRunDecision = Effect.fn("Api.getRunDecision")(function* (
+  runId: string,
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.getRunDecision", (signal) =>
+    api.client.GET("/v1/runs/{run_id}/decision", {
+      headers,
+      params: {
+        path: { run_id: runId },
+        query: { workspace_id: arg.workspaceId },
+      },
+      signal,
+    }),
+  );
+});
+
+export const createRun = Effect.fn("Api.createRun")(function* (
   body: CreateRunRequest,
-  opts: { idempotencyKey?: string; workspaceId?: string } = {},
-): Promise<RunResponse> {
-  return apiFetch<RunResponse>("/v1/runs", {
-    method: "POST",
-    body,
-    idempotencyKey: opts.idempotencyKey,
-    workspaceScope: requestWorkspaceScope(opts.workspaceId),
-  });
-}
-
-// Action endpoints use the `{run_id}:action` colon-verb convention.
-export function cancelRun(
-  runID: string,
-  opts: { idempotencyKey?: string; workspaceId?: string } = {},
-): Promise<RunResponse> {
-  return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}/cancel`, {
-    method: "POST",
-    idempotencyKey: opts.idempotencyKey,
-    workspaceScope: requestWorkspaceScope(opts.workspaceId),
-  });
-}
-
-export function refreshRun(
-  runID: string,
-  opts: { idempotencyKey?: string; workspaceId?: string } = {},
-): Promise<RunResponse> {
-  return apiFetch<RunResponse>(`/v1/runs/${encodeURIComponent(runID)}/refresh`, {
-    method: "POST",
-    idempotencyKey: opts.idempotencyKey,
-    workspaceScope: requestWorkspaceScope(opts.workspaceId),
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Placements
-// ---------------------------------------------------------------------------
-
-export function previewPlacement(
-  body: PlacementPreviewRequest,
-  opts: { idempotencyKey?: string; workspaceId?: string } = {},
-): Promise<PlacementPreviewResponse> {
-  return apiFetch<PlacementPreviewResponse>("/v1/placements:preview", {
-    method: "POST",
-    body,
-    idempotencyKey: opts.idempotencyKey,
-    workspaceScope: requestWorkspaceScope(opts.workspaceId),
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Offers & connections
-// ---------------------------------------------------------------------------
-
-export function listOffers(arg: WorkspaceArg = {}): Promise<OfferListResponse> {
-  return apiFetch<OfferListResponse>("/v1/offers", {
-    workspaceScope: requestWorkspaceScope(arg.workspaceId),
-    signal: arg.signal,
-  });
-}
-
-export function listConnections(
-  arg: WorkspaceArg = {},
-): Promise<ConnectionListResponse> {
-  return apiFetch<ConnectionListResponse>("/v1/connections", {
-    workspaceScope: requestWorkspaceScope(arg.workspaceId),
-    signal: arg.signal,
-  });
-}
-
-export function createConnection(
-  body: CreateConnectionRequest,
-  opts: { idempotencyKey?: string; workspaceId?: string } = {},
-): Promise<ConnectionResponse> {
-  return apiFetch<ConnectionResponse>("/v1/connections", {
-    method: "POST",
-    body,
-    idempotencyKey: opts.idempotencyKey,
-    workspaceScope: requestWorkspaceScope(opts.workspaceId),
-  });
-}
-
-export function authorizeConnection(
-  connectionId: string,
-  opts: { idempotencyKey?: string; workspaceId?: string } = {},
-): Promise<ConnectionResponse> {
-  return apiFetch<ConnectionResponse>(
-    `/v1/connections/${encodeURIComponent(connectionId)}/authorize`,
-    {
-      method: "POST",
-      idempotencyKey: opts.idempotencyKey,
-      workspaceScope: requestWorkspaceScope(opts.workspaceId),
-    },
-  );
-}
-
-export function deleteConnection(
-  connectionId: string,
-  opts: { workspaceId?: string } = {},
-): Promise<DeleteConnectionResponse> {
-  return apiFetch<DeleteConnectionResponse>(
-    `/v1/connections/${encodeURIComponent(connectionId)}`,
-    {
-      method: "DELETE",
-      workspaceScope: requestWorkspaceScope(opts.workspaceId),
-    },
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Adapter manifests
-// ---------------------------------------------------------------------------
-
-// The manifest list is static per server process and not workspace-scoped.
-export function listAdapters(signal?: AbortSignal): Promise<AdapterListResponse> {
-  return apiFetch<AdapterListResponse>("/v1/adapters", { signal });
-}
-
-// ---------------------------------------------------------------------------
-// Workloads & revisions (501 when service disabled)
-// ---------------------------------------------------------------------------
-
-export function listWorkloadRevisions(
-  workloadID: string,
-  arg: WorkspaceArg = {},
-): Promise<WorkloadRevisionListResponse> {
-  return apiFetch<WorkloadRevisionListResponse>(
-    `/v1/workloads/${encodeURIComponent(workloadID)}/revisions`,
-    { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
-  );
-}
-
-export function getWorkloadRevision(
-  workloadID: string,
-  revisionID: string,
-  arg: WorkspaceArg = {},
-): Promise<WorkloadRevisionResponse> {
-  return apiFetch<WorkloadRevisionResponse>(
-    `/v1/workloads/${encodeURIComponent(workloadID)}/revisions/${encodeURIComponent(revisionID)}`,
-    { workspaceScope: requestWorkspaceScope(arg.workspaceId), signal: arg.signal },
-  );
-}
-
-export function createWorkload(
-  body: CreateWorkloadRequest,
-  opts: { idempotencyKey?: string; workspaceId?: string } = {},
-): Promise<CreateWorkloadResponse> {
-  return apiFetch<CreateWorkloadResponse>("/v1/workloads", {
-    method: "POST",
-    body,
-    idempotencyKey: opts.idempotencyKey,
-    workspaceScope: requestWorkspaceScope(opts.workspaceId),
-  });
-}
-
-export function createRevision(
-  workloadID: string,
-  body: CreateRevisionRequest,
-  opts: { idempotencyKey?: string; workspaceId?: string } = {},
-): Promise<WorkloadRevisionResponse> {
-  return apiFetch<WorkloadRevisionResponse>(
-    `/v1/workloads/${encodeURIComponent(workloadID)}/revisions`,
-    {
-      method: "POST",
+  arg: MutationArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  const idempotencyKey = yield* mutationKey(arg.idempotencyKey);
+  return yield* api.request("Api.createRun", (signal) =>
+    api.client.POST("/v1/runs", {
       body,
-      idempotencyKey: opts.idempotencyKey,
-      workspaceScope: requestWorkspaceScope(opts.workspaceId),
-    },
+      headers,
+      params: {
+        query: { workspace_id: arg.workspaceId },
+        header: { "Idempotency-Key": idempotencyKey },
+      },
+      signal,
+    }),
   );
-}
+});
 
-// ---------------------------------------------------------------------------
-// Image resolver (501 when disabled)
-// ---------------------------------------------------------------------------
+export const cancelRun = Effect.fn("Api.cancelRun")(function* (
+  runId: string,
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.cancelRun", (signal) =>
+    api.client.POST("/v1/runs/{run_id}/cancel", {
+      headers,
+      params: {
+        path: { run_id: runId },
+        query: { workspace_id: arg.workspaceId },
+      },
+      signal,
+    }),
+  );
+});
 
-export function resolveImage(
+export const refreshRun = Effect.fn("Api.refreshRun")(function* (
+  runId: string,
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.refreshRun", (signal) =>
+    api.client.POST("/v1/runs/{run_id}/refresh", {
+      headers,
+      params: {
+        path: { run_id: runId },
+        query: { workspace_id: arg.workspaceId },
+      },
+      signal,
+    }),
+  );
+});
+
+export const previewPlacement = Effect.fn("Api.previewPlacement")(function* (
+  body: PlacementPreviewRequest,
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.previewPlacement", (signal) =>
+    api.client.POST("/v1/placements:preview", {
+      body,
+      headers,
+      params: { query: { workspace_id: arg.workspaceId } },
+      signal,
+    }),
+  );
+});
+
+export const listOffers = Effect.fn("Api.listOffers")(function* (
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.listOffers", (signal) =>
+    api.client.GET("/v1/offers", {
+      headers,
+      params: { query: { workspace_id: arg.workspaceId } },
+      signal,
+    }),
+  );
+});
+
+export const listConnections = Effect.fn("Api.listConnections")(function* (
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.listConnections", (signal) =>
+    api.client.GET("/v1/connections", {
+      headers,
+      params: { query: { workspace_id: arg.workspaceId } },
+      signal,
+    }),
+  );
+});
+
+export const createConnection = Effect.fn("Api.createConnection")(function* (
+  body: CreateConnectionRequest,
+  arg: MutationArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  const idempotencyKey = yield* mutationKey(arg.idempotencyKey);
+  return yield* api.request("Api.createConnection", (signal) =>
+    api.client.POST("/v1/connections", {
+      body,
+      headers,
+      params: {
+        query: { workspace_id: arg.workspaceId },
+        header: { "Idempotency-Key": idempotencyKey },
+      },
+      signal,
+    }),
+  );
+});
+
+export const authorizeConnection = Effect.fn("Api.authorizeConnection")(
+  function* (connectionId: string, arg: WorkspaceArg = {}) {
+    const api = yield* Api;
+    const headers = yield* api.headers;
+    return yield* api.request("Api.authorizeConnection", (signal) =>
+      api.client.POST("/v1/connections/{connection_id}/authorize", {
+        headers,
+        params: {
+          path: { connection_id: connectionId },
+          query: { workspace_id: arg.workspaceId },
+        },
+        signal,
+      }),
+    );
+  },
+);
+
+export const deleteConnection = Effect.fn("Api.deleteConnection")(function* (
+  connectionId: string,
+  arg: WorkspaceArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.deleteConnection", (signal) =>
+    api.client.DELETE("/v1/connections/{connection_id}", {
+      headers,
+      params: {
+        path: { connection_id: connectionId },
+        query: { workspace_id: arg.workspaceId },
+      },
+      signal,
+    }),
+  );
+});
+
+export const listAdapters = Effect.fn("Api.listAdapters")(function* () {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.listAdapters", (signal) =>
+    api.client.GET("/v1/adapters", { headers, signal }),
+  );
+});
+
+export const listWorkloadRevisions = Effect.fn("Api.listWorkloadRevisions")(
+  function* (workloadId: string, arg: WorkspaceArg = {}) {
+    const api = yield* Api;
+    const headers = yield* api.headers;
+    return yield* api.request("Api.listWorkloadRevisions", (signal) =>
+      api.client.GET("/v1/workloads/{workload_id}/revisions", {
+        headers,
+        params: {
+          path: { workload_id: workloadId },
+          query: { workspace_id: arg.workspaceId },
+        },
+        signal,
+      }),
+    );
+  },
+);
+
+export const getWorkloadRevision = Effect.fn("Api.getWorkloadRevision")(
+  function* (workloadId: string, revisionId: string, arg: WorkspaceArg = {}) {
+    const api = yield* Api;
+    const headers = yield* api.headers;
+    return yield* api.request("Api.getWorkloadRevision", (signal) =>
+      api.client.GET("/v1/workloads/{workload_id}/revisions/{revision_id}", {
+        headers,
+        params: {
+          path: {
+            workload_id: workloadId,
+            revision_id: revisionId,
+          },
+          query: { workspace_id: arg.workspaceId },
+        },
+        signal,
+      }),
+    );
+  },
+);
+
+export const createWorkload = Effect.fn("Api.createWorkload")(function* (
+  body: CreateWorkloadRequest,
+  arg: Pick<MutationArg, "idempotencyKey"> = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  const idempotencyKey = yield* mutationKey(arg.idempotencyKey);
+  return yield* api.request("Api.createWorkload", (signal) =>
+    api.client.POST("/v1/workloads", {
+      body,
+      headers,
+      params: { header: { "Idempotency-Key": idempotencyKey } },
+      signal,
+    }),
+  );
+});
+
+export const createRevision = Effect.fn("Api.createRevision")(function* (
+  workloadId: string,
+  body: CreateRevisionRequest,
+  arg: MutationArg = {},
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  const idempotencyKey = yield* mutationKey(arg.idempotencyKey);
+  return yield* api.request("Api.createRevision", (signal) =>
+    api.client.POST("/v1/workloads/{workload_id}/revisions", {
+      body,
+      headers,
+      params: {
+        path: { workload_id: workloadId },
+        query: { workspace_id: arg.workspaceId },
+        header: { "Idempotency-Key": idempotencyKey },
+      },
+      signal,
+    }),
+  );
+});
+
+export const resolveImage = Effect.fn("Api.resolveImage")(function* (
   body: ResolveImageRequest,
-  opts: { idempotencyKey?: string } = {},
-): Promise<ResolveImageResponse> {
-  return apiFetch<ResolveImageResponse>("/v1/images:resolve", {
-    method: "POST",
-    body,
-    idempotencyKey: opts.idempotencyKey,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Sinks (501 when disabled)
-// ---------------------------------------------------------------------------
-
-export function getSinkStatus(
-  sinkID: string,
-  signal?: AbortSignal,
-): Promise<SinkStatus> {
-  return apiFetch<SinkStatus>(`/v1/sinks/${encodeURIComponent(sinkID)}`, {
-    signal,
-  });
-}
-
-export function deliverSink(
-  sinkID: string,
-  opts: { idempotencyKey?: string } = {},
-): Promise<SinkResult> {
-  return apiFetch<SinkResult>(
-    `/v1/sinks/${encodeURIComponent(sinkID)}/deliver`,
-    { method: "POST", idempotencyKey: opts.idempotencyKey },
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.resolveImage", (signal) =>
+    api.client.POST("/v1/images:resolve", {
+      body,
+      headers,
+      signal,
+    }),
   );
+});
+
+export const getSinkStatus = Effect.fn("Api.getSinkStatus")(function* (
+  sinkId: string,
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.getSinkStatus", (signal) =>
+    api.client.GET("/v1/sinks/{sink_id}", {
+      headers,
+      params: { path: { sink_id: sinkId } },
+      signal,
+    }),
+  );
+});
+
+export const deliverSink = Effect.fn("Api.deliverSink")(function* (
+  sinkId: string,
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.deliverSink", (signal) =>
+    api.client.POST("/v1/sinks/{sink_id}/deliver", {
+      headers,
+      params: { path: { sink_id: sinkId } },
+      signal,
+    }),
+  );
+});
+
+export interface ReplaySinkVariables {
+  readonly sinkID: string;
+  readonly body: ReplaySinkRequest;
 }
 
-export function replaySink(
-  sinkID: string,
-  body: ReplaySinkRequest,
-  opts: { idempotencyKey?: string } = {},
-): Promise<SinkResult> {
-  return apiFetch<SinkResult>(
-    `/v1/sinks/${encodeURIComponent(sinkID)}/replay`,
-    { method: "POST", body, idempotencyKey: opts.idempotencyKey },
+export const replaySink = Effect.fn("Api.replaySink")(function* (
+  variables: ReplaySinkVariables,
+) {
+  const api = yield* Api;
+  const headers = yield* api.headers;
+  return yield* api.request("Api.replaySink", (signal) =>
+    api.client.POST("/v1/sinks/{sink_id}/replay", {
+      body: variables.body,
+      headers,
+      params: { path: { sink_id: variables.sinkID } },
+      signal,
+    }),
   );
-}
+});

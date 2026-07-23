@@ -1,51 +1,36 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { effect, expect } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 
-import {
-  getWorkspace,
-  setWorkspace,
-} from "./session";
+import { Session, testLayer } from "./session";
 
-// Minimal in-memory localStorage so the browser-targeted session module is
-// exercisable under Bun's DOM-less test runtime.
-class MemStorage {
-  private m = new Map<string, string>();
-  getItem(k: string): string | null {
-    return this.m.has(k) ? (this.m.get(k) as string) : null;
-  }
-  setItem(k: string, v: string): void {
-    this.m.set(k, String(v));
-  }
-  removeItem(k: string): void {
-    this.m.delete(k);
-  }
-  clear(): void {
-    this.m.clear();
-  }
-  key(i: number): string | null {
-    return [...this.m.keys()][i] ?? null;
-  }
-  get length(): number {
-    return this.m.size;
-  }
-}
+effect("stores the selected Workspace in the Session service", () =>
+  Effect.gen(function* () {
+    const session = yield* Session;
 
-beforeEach(() => {
-  (globalThis as unknown as { localStorage: Storage }).localStorage =
-    new MemStorage() as unknown as Storage;
-});
+    yield* session.setWorkspace("ws_42");
+    const current = yield* session.current;
 
-describe("getWorkspace", () => {
-  test("is null when nothing has been chosen (no hardcoded default)", () => {
-    expect(getWorkspace()).toBeNull();
-  });
+    expect(current.workspace).toBe("ws_42");
+  }).pipe(Effect.provide(testLayer({ token: null, workspace: null }))),
+);
 
-  test("returns the stored workspace once set", () => {
-    setWorkspace("ws_42");
-    expect(getWorkspace()).toBe("ws_42");
-  });
+effect("publishes Session changes", () =>
+  Effect.gen(function* () {
+    const session = yield* Session;
+    const changesFiber = yield* session.changes.pipe(
+      Stream.take(2),
+      Stream.runCollect,
+      Effect.forkChild({ startImmediately: true }),
+    );
 
-  test("does not reconstruct a default from legacy recents", () => {
-    localStorage.setItem("mercator.recentWorkspaces", JSON.stringify(["ws_old"]));
-    expect(getWorkspace()).toBeNull();
-  });
-});
+    yield* session.setToken("secret");
+    const changes = yield* Fiber.join(changesFiber);
+
+    expect(Array.from(changes)).toEqual([
+      { token: null, workspace: null },
+      { token: "secret", workspace: null },
+    ]);
+  }).pipe(Effect.provide(testLayer({ token: null, workspace: null }))),
+);

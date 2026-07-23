@@ -29,12 +29,13 @@ func (c configFlag) Set(value string) error {
 // buildConnectionRequest implements `mercator connection <list|create|authorize|delete>`,
 // covering the /v1/connections surface that previously required hand-written
 // curl with Idempotency-Key headers.
-func buildConnectionRequest(ctx context.Context, baseURL, defaultWorkspaceID string, stdin io.Reader, args []string) (*http.Request, error) {
+func buildConnectionRequest(ctx context.Context, s *session, stdin io.Reader, args []string) (*http.Request, error) {
 	command := args[0]
+	baseURL := s.baseURL
 	fs := flag.NewFlagSet("connection "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", defaultWorkspaceID, "workspace id (defaults to MERCATOR_WORKSPACE_ID)")
-	connectionID := fs.String("connection-id", "", "connection id")
+	workspaceID := fs.String("workspace-id", "", "workspace id (defaults to the broker's only workspace)")
+	connectionID := fs.String("connection-id", "", "connection id (defaults to the adapter type on create, otherwise the workspace's only connection)")
 	adapterType := fs.String("adapter-type", "", "adapter type (docker, runpod)")
 	credentialSource := fs.String("credential-source", "", "credential source (env, mercator)")
 	credentialRef := fs.String("credential-ref", "", "credential reference (e.g. env var name)")
@@ -66,15 +67,33 @@ func buildConnectionRequest(ctx context.Context, baseURL, defaultWorkspaceID str
 			return nil, fmt.Errorf("--secret-stdin read an empty secret")
 		}
 	}
+	if *workspaceID == "" {
+		resolved, err := s.workspace(ctx)
+		if err != nil {
+			return nil, err
+		}
+		*workspaceID = resolved
+	}
+	// Naming a connection is only meaningful once a workspace holds more than
+	// one. The first `docker` connection may as well be called "docker".
+	if *connectionID == "" {
+		switch command {
+		case "create":
+			*connectionID = *adapterType
+		case "authorize", "delete":
+			resolved, err := s.soleConnection(ctx, *workspaceID)
+			if err != nil {
+				return nil, err
+			}
+			*connectionID = resolved
+		}
+	}
 	switch command {
 	case "list":
-		if *workspaceID == "" {
-			return nil, fmt.Errorf("list requires --workspace-id or MERCATOR_WORKSPACE_ID")
-		}
 		return http.NewRequestWithContext(ctx, http.MethodGet, mustURL(baseURL, "/v1/connections", query("workspace_id", *workspaceID)), nil)
 	case "create":
-		if *workspaceID == "" || *connectionID == "" || *adapterType == "" {
-			return nil, fmt.Errorf("create requires --workspace-id, --connection-id, and --adapter-type")
+		if *adapterType == "" {
+			return nil, fmt.Errorf("create requires --adapter-type")
 		}
 		payload := map[string]any{
 			"workspace_id":  *workspaceID,
@@ -106,15 +125,9 @@ func buildConnectionRequest(ctx context.Context, baseURL, defaultWorkspaceID str
 		req.Header.Set("Idempotency-Key", key)
 		return req, nil
 	case "authorize":
-		if *workspaceID == "" || *connectionID == "" {
-			return nil, fmt.Errorf("authorize requires --workspace-id and --connection-id")
-		}
 		path := "/v1/connections/" + url.PathEscape(*connectionID) + "/authorize"
 		return http.NewRequestWithContext(ctx, http.MethodPost, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
 	case "delete":
-		if *workspaceID == "" || *connectionID == "" {
-			return nil, fmt.Errorf("delete requires --workspace-id and --connection-id")
-		}
 		path := "/v1/connections/" + url.PathEscape(*connectionID)
 		return http.NewRequestWithContext(ctx, http.MethodDelete, mustURL(baseURL, path, query("workspace_id", *workspaceID)), nil)
 	default:
@@ -123,17 +136,18 @@ func buildConnectionRequest(ctx context.Context, baseURL, defaultWorkspaceID str
 }
 
 // buildWorkloadRequest implements `mercator workload <create|revision ...>`.
-func buildWorkloadRequest(ctx context.Context, baseURL, defaultWorkspaceID string, args []string) (*http.Request, error) {
+func buildWorkloadRequest(ctx context.Context, s *session, args []string) (*http.Request, error) {
+	baseURL := s.baseURL
 	if args[0] == "revision" {
 		if len(args) < 2 {
 			return nil, fmt.Errorf("workload revision requires a subcommand: create, list, get")
 		}
-		return buildRevisionRequest(ctx, baseURL, defaultWorkspaceID, args[1:])
+		return buildRevisionRequest(ctx, s, args[1:])
 	}
 	command := args[0]
 	fs := flag.NewFlagSet("workload "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", defaultWorkspaceID, "workspace id (defaults to MERCATOR_WORKSPACE_ID)")
+	workspaceID := fs.String("workspace-id", "", "workspace id (defaults to the broker's only workspace)")
 	workloadID := fs.String("workload-id", "", "workload id")
 	name := fs.String("name", "", "workload display name")
 	idempotencyKey := fs.String("idempotency-key", "", "idempotency key (derived from the workload id when omitted)")
@@ -144,10 +158,17 @@ func buildWorkloadRequest(ctx context.Context, baseURL, defaultWorkspaceID strin
 	if len(positional) > 0 {
 		return nil, fmt.Errorf("unexpected argument %q", positional[0])
 	}
+	if *workspaceID == "" {
+		resolved, err := s.workspace(ctx)
+		if err != nil {
+			return nil, err
+		}
+		*workspaceID = resolved
+	}
 	switch command {
 	case "create":
-		if *workspaceID == "" || *workloadID == "" {
-			return nil, fmt.Errorf("create requires --workspace-id and --workload-id")
+		if *workloadID == "" {
+			return nil, fmt.Errorf("create requires --workload-id")
 		}
 		body, err := json.Marshal(map[string]string{
 			"workspace_id": *workspaceID,
@@ -173,11 +194,12 @@ func buildWorkloadRequest(ctx context.Context, baseURL, defaultWorkspaceID strin
 	}
 }
 
-func buildRevisionRequest(ctx context.Context, baseURL, defaultWorkspaceID string, args []string) (*http.Request, error) {
+func buildRevisionRequest(ctx context.Context, s *session, args []string) (*http.Request, error) {
 	command := args[0]
+	baseURL := s.baseURL
 	fs := flag.NewFlagSet("workload revision "+command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	workspaceID := fs.String("workspace-id", defaultWorkspaceID, "workspace id (defaults to MERCATOR_WORKSPACE_ID)")
+	workspaceID := fs.String("workspace-id", "", "workspace id (defaults to the broker's only workspace)")
 	workloadID := fs.String("workload-id", "", "workload id")
 	revisionID := fs.String("revision-id", "", "revision id (get)")
 	revisionJSON := fs.String("revision-json", "", "workload revision JSON (create)")
@@ -189,8 +211,15 @@ func buildRevisionRequest(ctx context.Context, baseURL, defaultWorkspaceID strin
 	if len(positional) > 0 {
 		return nil, fmt.Errorf("unexpected argument %q", positional[0])
 	}
-	if *workspaceID == "" || *workloadID == "" {
-		return nil, fmt.Errorf("%s requires --workspace-id and --workload-id", command)
+	if *workloadID == "" {
+		return nil, fmt.Errorf("%s requires --workload-id", command)
+	}
+	if *workspaceID == "" {
+		resolved, err := s.workspace(ctx)
+		if err != nil {
+			return nil, err
+		}
+		*workspaceID = resolved
 	}
 	base := "/v1/workloads/" + url.PathEscape(*workloadID) + "/revisions"
 	switch command {

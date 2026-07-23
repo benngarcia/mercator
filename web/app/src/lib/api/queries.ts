@@ -1,499 +1,359 @@
-// TanStack Query hooks for every endpoint in the design spec, with the
-// documented polling cadences. Conventions:
-//   - workspace_id is sourced from the session unless explicitly passed; hooks
-//     stay disabled until a workspace is known.
-//   - query errors throw ApiError -> consumed by <ErrorState>.
-//   - 404 is treated as null where the spec says so (run decision).
-//   - 501 surfaces via ApiError.serviceDisabled for <ServiceDisabled>.
-//   - mutations invalidate the precise keys they affect.
-
 import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type UseMutationResult,
-  type UseQueryResult,
-} from "@tanstack/react-query";
+  RegistryContext,
+  useAtomRefresh,
+  useAtomValue,
+} from "@effect/atom-react";
+import { useCallback, useContext } from "react";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import * as Atom from "effect/unstable/reactivity/Atom";
+import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry";
 
+import { useSession } from "@/hooks/useSession";
+import {
+  adaptersAtom,
+  archiveWorkspaceAtom,
+  authSessionAtom,
+  authorizeConnectionAtom,
+  cancelRunAtom,
+  connectionsAtom,
+  createConnectionAtom,
+  createRunAtom,
+  createWorkspaceAtom,
+  deleteConnectionAtom,
+  deliverSinkAtom,
+  logoutAtom,
+  offersAtom,
+  refreshRunAtom,
+  replaySinkAtom,
+  resolveImageAtom,
+  runAtom,
+  runDecisionAtom,
+  runEventsAtom,
+  runsAtom,
+  sinkStatusAtom,
+  workspacesAtom,
+} from "./atoms";
 import { ApiError } from "./client";
-import * as endpoints from "./endpoints";
-import { queryKeys } from "./keys";
 import type {
   AdapterManifest,
   AuthSessionState,
+  BookingDecision,
+  CloudEvent,
   ConnectionRecord,
   CreateConnectionRequest,
   CreateRunRequest,
-  CloudEvent,
   OfferSnapshot,
-  BookingDecision,
   ReplaySinkRequest,
-  ResolveImageRequest,
   ResolvedImage,
+  ResolveImageRequest,
   Run,
   RunResponse,
   SinkResult,
   SinkStatus,
   Workspace,
 } from "./types";
-import { getWorkspace } from "../session";
-import { useSession } from "@/hooks/useSession";
-import { POLL, runRefetchInterval } from "@/hooks/usePollInterval";
 
-// useWorkspaceId resolves the active workspace: an explicit override wins,
-// otherwise the session default. Returns null when none is set, which callers
-// use to disable the query.
+interface ResourceResultBase<A> {
+  readonly data: A | undefined;
+  readonly isFetching: boolean;
+  readonly isLoading: boolean;
+  readonly refetch: () => void;
+}
+
+export type ResourceResult<A> =
+  | (ResourceResultBase<A> & {
+      readonly error: ApiError;
+      readonly isError: true;
+    })
+  | (ResourceResultBase<A> & {
+      readonly error: null;
+      readonly isError: false;
+    });
+
+export interface MutationOptions<A> {
+  readonly onSuccess?: (data: A) => void;
+  readonly onError?: (error: ApiError) => void;
+  readonly onSettled?: () => void;
+}
+
+export interface MutationResult<A, Variables> {
+  readonly data: A | undefined;
+  readonly error: ApiError | null;
+  readonly isPending: boolean;
+  readonly mutate: (variables: Variables, options?: MutationOptions<A>) => void;
+  readonly mutateAsync: (variables: Variables) => Promise<A>;
+  readonly reset: () => void;
+}
+
+function inactiveResource<A>() {
+  return Atom.make(AsyncResult.initial<A, ApiError>());
+}
+
+const inactiveRunsAtom = inactiveResource<Run[]>();
+const inactiveRunAtom = inactiveResource<Run>();
+const inactiveRunEventsAtom = inactiveResource<CloudEvent[]>();
+const inactiveRunDecisionAtom = inactiveResource<BookingDecision | null>();
+const inactiveOffersAtom = inactiveResource<OfferSnapshot[]>();
+const inactiveConnectionsAtom = inactiveResource<ConnectionRecord[]>();
+const inactiveSinkStatusAtom = inactiveResource<SinkStatus>();
+
+function resultError<A>(result: AsyncResult.AsyncResult<A, ApiError>) {
+  return Option.getOrElse(
+    AsyncResult.error(result),
+    () =>
+      new ApiError({
+        status: 0,
+        code: "EFFECT_FAILURE",
+        message: "The operation failed outside its typed error channel.",
+      }),
+  );
+}
+
+function useResource<A>(
+  atom: Atom.Atom<AsyncResult.AsyncResult<A, ApiError>>,
+  enabled = true,
+): ResourceResult<A> {
+  const result = useAtomValue(atom);
+  const refetch = useAtomRefresh(atom);
+  const data = Option.getOrUndefined(AsyncResult.value(result));
+
+  const base = {
+    data,
+    isFetching: enabled && result.waiting,
+    isLoading: enabled && data === undefined && result.waiting,
+    refetch,
+  };
+  if (enabled && AsyncResult.isFailure(result)) {
+    return { ...base, error: resultError(result), isError: true };
+  }
+  return { ...base, error: null, isError: false };
+}
+
+function useMutation<A, Input, Variables>(
+  atom: Atom.AtomResultFn<Input, A, ApiError>,
+  mapVariables: (variables: Variables) => Input,
+): MutationResult<A, Variables> {
+  const registry = useContext(RegistryContext);
+  const result = useAtomValue(atom);
+
+  const mutateAsync = useCallback(
+    (variables: Variables) => {
+      registry.set(atom, mapVariables(variables));
+      return Effect.runPromise(
+        AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true }),
+      );
+    },
+    [atom, mapVariables, registry],
+  );
+
+  const mutate = useCallback(
+    (variables: Variables, options?: MutationOptions<A>) => {
+      void mutateAsync(variables)
+        .then((data) => options?.onSuccess?.(data))
+        .catch((error: unknown) => {
+          if (error instanceof ApiError) {
+            options?.onError?.(error);
+            return;
+          }
+          queueMicrotask(() => {
+            throw error;
+          });
+        })
+        .finally(() => options?.onSettled?.());
+    },
+    [mutateAsync],
+  );
+
+  const reset = useCallback(
+    () => registry.set(atom, Atom.Reset),
+    [atom, registry],
+  );
+
+  return {
+    data: Option.getOrUndefined(AsyncResult.value(result)),
+    error: AsyncResult.isFailure(result) ? resultError(result) : null,
+    isPending: result.waiting,
+    mutate,
+    mutateAsync,
+    reset,
+  };
+}
+
 function useWorkspaceId(override?: string): string | null {
   const { workspace } = useSession();
-  return override ?? workspace ?? null;
+  return override ?? workspace;
 }
 
-// Common retry policy: never retry auth (401), forbidden (403), missing (404)
-// or disabled-service (501) responses — they are not transient. Other errors
-// get a single retry.
-function defaultRetry(failureCount: number, error: unknown): boolean {
-  if (error instanceof ApiError) {
-    if ([401, 403, 404, 501].includes(error.status)) {
-      return false;
-    }
-  }
-  return failureCount < 1;
+export function useAuthSession(): ResourceResult<AuthSessionState> {
+  return useResource(authSessionAtom);
 }
 
-// ---------------------------------------------------------------------------
-// Health
-// ---------------------------------------------------------------------------
-
-export interface HealthState {
-  live: boolean;
-  ready: boolean;
+export function useLogout(): MutationResult<void, void> {
+  return useMutation(logoutAtom, () => undefined);
 }
-
-export function useHealth(): UseQueryResult<HealthState, ApiError> {
-  return useQuery<HealthState, ApiError>({
-    queryKey: queryKeys.health(),
-    queryFn: async ({ signal }) => {
-      const [live, ready] = await Promise.allSettled([
-        endpoints.getHealthLive(signal),
-        endpoints.getHealthReady(signal),
-      ]);
-      return {
-        live: live.status === "fulfilled",
-        ready: ready.status === "fulfilled",
-      };
-    },
-    refetchInterval: POLL.offers,
-    retry: false,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Auth session
-// ---------------------------------------------------------------------------
-
-// useAuthSession answers whether OIDC login is configured and who is signed
-// in. The answer only changes on login/logout (full page navigations), so the
-// query never refetches on its own.
-export function useAuthSession(): UseQueryResult<AuthSessionState, ApiError> {
-  return useQuery<AuthSessionState, ApiError>({
-    queryKey: queryKeys.authSession(),
-    queryFn: ({ signal }) => endpoints.getAuthSession(signal),
-    staleTime: Infinity,
-    retry: false,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Workspaces
-// ---------------------------------------------------------------------------
 
 export function useWorkspaces(
   includeArchived = false,
-): UseQueryResult<Workspace[], ApiError> {
-  return useQuery<Workspace[], ApiError>({
-    queryKey: queryKeys.workspaces(includeArchived),
-    queryFn: async ({ signal }) => {
-      const response = await endpoints.listWorkspaces(includeArchived, signal);
-      return response.workspaces;
-    },
-    retry: defaultRetry,
-  });
+): ResourceResult<Workspace[]> {
+  return useResource(workspacesAtom(includeArchived));
 }
 
-export function useCreateWorkspace(): UseMutationResult<
-  Workspace,
-  ApiError,
-  string
-> {
-  const queryClient = useQueryClient();
-  return useMutation<Workspace, ApiError, string>({
-    mutationFn: async (displayName) => {
-      const response = await endpoints.createWorkspace({ display_name: displayName });
-      return response.workspace;
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.workspaces(false),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.workspaces(true),
-      });
-    },
-  });
+export function useCreateWorkspace(): MutationResult<Workspace, string> {
+  return useMutation(createWorkspaceAtom, (displayName) => displayName);
 }
 
-export function useArchiveWorkspace(): UseMutationResult<
-  Workspace,
-  ApiError,
-  string
-> {
-  const queryClient = useQueryClient();
-  return useMutation<Workspace, ApiError, string>({
-    mutationFn: async (workspaceID) => {
-      const response = await endpoints.archiveWorkspace(workspaceID);
-      return response.workspace;
-    },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.workspaces(false),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.workspaces(true),
-      });
-    },
-  });
+export function useArchiveWorkspace(): MutationResult<Workspace, string> {
+  return useMutation(archiveWorkspaceAtom, (workspaceId) => workspaceId);
 }
 
-// ---------------------------------------------------------------------------
-// Runs
-// ---------------------------------------------------------------------------
-
-export function useRuns(
-  workspaceOverride?: string,
-): UseQueryResult<Run[], ApiError> {
-  const workspaceID = useWorkspaceId(workspaceOverride);
-  return useQuery<Run[], ApiError>({
-    queryKey: queryKeys.runs(workspaceID ?? ""),
-    queryFn: async ({ signal }) => {
-      const res = await endpoints.listRuns({ workspaceId: workspaceID ?? undefined, signal });
-      return res.runs;
-    },
-    enabled: Boolean(workspaceID),
-    refetchInterval: POLL.runs,
-    retry: defaultRetry,
-  });
+export function useRuns(workspaceOverride?: string): ResourceResult<Run[]> {
+  const workspaceId = useWorkspaceId(workspaceOverride);
+  return useResource(
+    workspaceId === null ? inactiveRunsAtom : runsAtom(workspaceId),
+    workspaceId !== null,
+  );
 }
 
 export function useRun(
-  runID: string | undefined,
+  runId: string | undefined,
   workspaceOverride?: string,
-): UseQueryResult<Run, ApiError> {
-  const workspaceID = useWorkspaceId(workspaceOverride);
-  return useQuery<Run, ApiError>({
-    queryKey: queryKeys.run(workspaceID ?? "", runID ?? ""),
-    queryFn: async ({ signal }) => {
-      const res = await endpoints.getRun(runID as string, {
-        workspaceId: workspaceID ?? undefined,
-        signal,
-      });
-      return res.run;
-    },
-    enabled: Boolean(workspaceID) && Boolean(runID),
-    // Poll every 2s while the run is open; stop once closed.
-    refetchInterval: (query) => runRefetchInterval(query.state.data, POLL.run),
-    retry: defaultRetry,
-  });
+): ResourceResult<Run> {
+  const workspaceId = useWorkspaceId(workspaceOverride);
+  const enabled = workspaceId !== null && runId !== undefined;
+  return useResource(
+    enabled ? runAtom(workspaceId, runId) : inactiveRunAtom,
+    enabled,
+  );
 }
 
 export function useRunEvents(
-  runID: string | undefined,
-  options?: { run?: Run | null; workspaceId?: string },
-): UseQueryResult<CloudEvent[], ApiError> {
-  const workspaceID = useWorkspaceId(options?.workspaceId);
-  return useQuery<CloudEvent[], ApiError>({
-    queryKey: queryKeys.runEvents(workspaceID ?? "", runID ?? ""),
-    queryFn: async ({ signal }) => {
-      const res = await endpoints.getRunEvents(runID as string, {
-        workspaceId: workspaceID ?? undefined,
-        signal,
-      });
-      return res.events;
-    },
-    enabled: Boolean(workspaceID) && Boolean(runID),
-    // Poll alongside the run: stop once the (passed-in) run is closed.
-    refetchInterval: () => runRefetchInterval(options?.run, POLL.events),
-    retry: defaultRetry,
-  });
-}
-
-// useRunDecision fetches the booking decision once / on demand. A 404 means
-// the decision has not been recorded yet and resolves to null rather than an
-// error (so the panel can show a "no decision yet" state).
-export function useRunDecision(
-  runID: string | undefined,
+  runId: string | undefined,
   workspaceOverride?: string,
-): UseQueryResult<BookingDecision | null, ApiError> {
-  const workspaceID = useWorkspaceId(workspaceOverride);
-  return useQuery<BookingDecision | null, ApiError>({
-    queryKey: queryKeys.runDecision(workspaceID ?? "", runID ?? ""),
-    queryFn: async ({ signal }) => {
-      try {
-        const res = await endpoints.getRunDecision(runID as string, {
-          workspaceId: workspaceID ?? undefined,
-          signal,
-        });
-        return res.decision;
-      } catch (error) {
-        if (error instanceof ApiError && error.notFound) {
-          return null;
-        }
-        throw error;
-      }
-    },
-    enabled: Boolean(workspaceID) && Boolean(runID),
-    retry: defaultRetry,
-  });
+): ResourceResult<CloudEvent[]> {
+  const workspaceId = useWorkspaceId(workspaceOverride);
+  const enabled = workspaceId !== null && runId !== undefined;
+  return useResource(
+    enabled ? runEventsAtom(workspaceId, runId) : inactiveRunEventsAtom,
+    enabled,
+  );
 }
 
-// ---------------------------------------------------------------------------
-// Offers & connections
-// ---------------------------------------------------------------------------
+export function useRunDecision(
+  runId: string | undefined,
+  workspaceOverride?: string,
+): ResourceResult<BookingDecision | null> {
+  const workspaceId = useWorkspaceId(workspaceOverride);
+  const enabled = workspaceId !== null && runId !== undefined;
+  return useResource(
+    enabled ? runDecisionAtom(workspaceId, runId) : inactiveRunDecisionAtom,
+    enabled,
+  );
+}
 
 export function useOffers(
   workspaceOverride?: string,
-): UseQueryResult<OfferSnapshot[], ApiError> {
-  const workspaceID = useWorkspaceId(workspaceOverride);
-  return useQuery<OfferSnapshot[], ApiError>({
-    queryKey: queryKeys.offers(workspaceID ?? ""),
-    queryFn: async ({ signal }) => {
-      const res = await endpoints.listOffers({ workspaceId: workspaceID ?? undefined, signal });
-      return res.offers;
-    },
-    enabled: Boolean(workspaceID),
-    refetchInterval: POLL.offers,
-    retry: defaultRetry,
-  });
+): ResourceResult<OfferSnapshot[]> {
+  const workspaceId = useWorkspaceId(workspaceOverride);
+  return useResource(
+    workspaceId === null ? inactiveOffersAtom : offersAtom(workspaceId),
+    workspaceId !== null,
+  );
 }
 
 export function useConnections(
   workspaceOverride?: string,
-): UseQueryResult<ConnectionRecord[], ApiError> {
-  const workspaceID = useWorkspaceId(workspaceOverride);
-  return useQuery<ConnectionRecord[], ApiError>({
-    queryKey: queryKeys.connections(workspaceID ?? ""),
-    queryFn: async ({ signal }) => {
-      const res = await endpoints.listConnections({
-        workspaceId: workspaceID ?? undefined,
-        signal,
-      });
-      return res.connections;
-    },
-    enabled: Boolean(workspaceID),
-    refetchInterval: POLL.connections,
-    retry: defaultRetry,
-  });
+): ResourceResult<ConnectionRecord[]> {
+  const workspaceId = useWorkspaceId(workspaceOverride);
+  return useResource(
+    workspaceId === null
+      ? inactiveConnectionsAtom
+      : connectionsAtom(workspaceId),
+    workspaceId !== null,
+  );
 }
 
-// useAdapters lists the registered adapters' onboarding manifests. The list
-// is static per server process (registration happens once at boot), so it is
-// fetched once and never refetched.
-export function useAdapters(): UseQueryResult<AdapterManifest[], ApiError> {
-  return useQuery<AdapterManifest[], ApiError>({
-    queryKey: queryKeys.adapters(),
-    queryFn: async ({ signal }) => {
-      const res = await endpoints.listAdapters(signal);
-      return res.adapters;
-    },
-    staleTime: Infinity,
-    retry: defaultRetry,
-  });
+export function useAdapters(): ResourceResult<AdapterManifest[]> {
+  return useResource(adaptersAtom);
 }
-
-// ---------------------------------------------------------------------------
-// Sinks (501 -> ApiError.serviceDisabled)
-// ---------------------------------------------------------------------------
 
 export function useSinkStatus(
-  sinkID: string | undefined,
-): UseQueryResult<SinkStatus, ApiError> {
-  return useQuery<SinkStatus, ApiError>({
-    queryKey: queryKeys.sinkStatus(sinkID ?? ""),
-    queryFn: ({ signal }) => endpoints.getSinkStatus(sinkID as string, signal),
-    enabled: Boolean(sinkID),
-    retry: defaultRetry,
-  });
+  sinkId: string | undefined,
+): ResourceResult<SinkStatus> {
+  return useResource(
+    sinkId === undefined ? inactiveSinkStatusAtom : sinkStatusAtom(sinkId),
+    sinkId !== undefined,
+  );
 }
 
-// ---------------------------------------------------------------------------
-// Mutations
-// ---------------------------------------------------------------------------
-
-// useCreateRun returns the created run's id (for navigation) on success, and
-// invalidates the runs list + seeds the run detail cache.
 export function useCreateRun(
   workspaceOverride?: string,
-): UseMutationResult<RunResponse, ApiError, CreateRunRequest> {
-  const queryClient = useQueryClient();
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<RunResponse, ApiError, CreateRunRequest>({
-    mutationFn: (body) => endpoints.createRun(body, { workspaceId: workspaceID }),
-    onSuccess: (res) => {
-      const ws = workspaceID ?? getWorkspace() ?? "";
-      void queryClient.invalidateQueries({ queryKey: queryKeys.runs(ws) });
-      queryClient.setQueryData(queryKeys.run(ws, res.run_id), res.run);
-    },
-  });
+): MutationResult<RunResponse, CreateRunRequest> {
+  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
+  return useMutation(createRunAtom, (body) => ({ body, workspaceId }));
 }
 
 export function useCancelRun(
   workspaceOverride?: string,
-): UseMutationResult<RunResponse, ApiError, string> {
-  const queryClient = useQueryClient();
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<RunResponse, ApiError, string>({
-    mutationFn: (runID) => endpoints.cancelRun(runID, { workspaceId: workspaceID }),
-    onSuccess: (res) => {
-      const ws = workspaceID ?? getWorkspace() ?? "";
-      queryClient.setQueryData(queryKeys.run(ws, res.run_id), res.run);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.runs(ws) });
-    },
-  });
+): MutationResult<RunResponse, string> {
+  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
+  return useMutation(cancelRunAtom, (runId) => ({ runId, workspaceId }));
 }
 
 export function useRefreshRun(
   workspaceOverride?: string,
-): UseMutationResult<RunResponse, ApiError, string> {
-  const queryClient = useQueryClient();
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<RunResponse, ApiError, string>({
-    mutationFn: (runID) => endpoints.refreshRun(runID, { workspaceId: workspaceID }),
-    onSuccess: (res) => {
-      const ws = workspaceID ?? getWorkspace() ?? "";
-      queryClient.setQueryData(queryKeys.run(ws, res.run_id), res.run);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.runs(ws) });
-    },
-  });
+): MutationResult<RunResponse, string> {
+  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
+  return useMutation(refreshRunAtom, (runId) => ({ runId, workspaceId }));
 }
 
-export function useResolveImage(): UseMutationResult<
+export function useResolveImage(): MutationResult<
   ResolvedImage,
-  ApiError,
   ResolveImageRequest
 > {
-  return useMutation<ResolvedImage, ApiError, ResolveImageRequest>({
-    mutationFn: async (body) => {
-      const res = await endpoints.resolveImage(body);
-      return res.image;
-    },
-  });
+  return useMutation(resolveImageAtom, (body) => body);
 }
 
-export function useDeliverSink(): UseMutationResult<SinkResult, ApiError, string> {
-  const queryClient = useQueryClient();
-  return useMutation<SinkResult, ApiError, string>({
-    mutationFn: (sinkID) => endpoints.deliverSink(sinkID),
-    onSuccess: (res) => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.sinkStatus(res.sink_id),
-      });
-    },
-  });
+export function useDeliverSink(): MutationResult<SinkResult, string> {
+  return useMutation(deliverSinkAtom, (sinkId) => sinkId);
 }
 
 export interface ReplaySinkVariables {
-  sinkID: string;
-  body: ReplaySinkRequest;
+  readonly sinkID: string;
+  readonly body: ReplaySinkRequest;
 }
 
-export function useReplaySink(): UseMutationResult<
+export function useReplaySink(): MutationResult<
   SinkResult,
-  ApiError,
   ReplaySinkVariables
 > {
-  const queryClient = useQueryClient();
-  return useMutation<SinkResult, ApiError, ReplaySinkVariables>({
-    mutationFn: ({ sinkID, body }) => endpoints.replaySink(sinkID, body),
-    onSuccess: (res) => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.sinkStatus(res.sink_id),
-      });
-    },
-  });
+  return useMutation(replaySinkAtom, (variables) => variables);
 }
 
 export function useCreateConnection(
   workspaceOverride?: string,
-): UseMutationResult<ConnectionRecord, ApiError, CreateConnectionRequest> {
-  const queryClient = useQueryClient();
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<ConnectionRecord, ApiError, CreateConnectionRequest>({
-    mutationFn: async (body) => {
-      const res = await endpoints.createConnection(body, {
-        workspaceId: workspaceID,
-      });
-      return res.connection;
-    },
-    onSuccess: () => {
-      const ws = workspaceID ?? getWorkspace() ?? "";
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.connections(ws),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.offers(ws),
-      });
-    },
-  });
+): MutationResult<ConnectionRecord, CreateConnectionRequest> {
+  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
+  return useMutation(createConnectionAtom, (body) => ({ body, workspaceId }));
 }
 
 export function useDeleteConnection(
   workspaceOverride?: string,
-): UseMutationResult<void, ApiError, string> {
-  const queryClient = useQueryClient();
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<void, ApiError, string>({
-    mutationFn: async (connectionId) => {
-      await endpoints.deleteConnection(connectionId, {
-        workspaceId: workspaceID,
-      });
-    },
-    onSuccess: () => {
-      const ws = workspaceID ?? getWorkspace() ?? "";
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.connections(ws),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.offers(ws),
-      });
-    },
-  });
+): MutationResult<void, string> {
+  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
+  return useMutation(deleteConnectionAtom, (connectionId) => ({
+    connectionId,
+    workspaceId,
+  }));
 }
 
 export function useAuthorizeConnection(
   workspaceOverride?: string,
-): UseMutationResult<ConnectionRecord, ApiError, string> {
-  const queryClient = useQueryClient();
-  const { workspace } = useSession();
-  const workspaceID = workspaceOverride ?? workspace ?? undefined;
-  return useMutation<ConnectionRecord, ApiError, string>({
-    mutationFn: async (connectionId) => {
-      const res = await endpoints.authorizeConnection(connectionId, {
-        workspaceId: workspaceID,
-      });
-      return res.connection;
-    },
-    onSuccess: () => {
-      const ws = workspaceID ?? getWorkspace() ?? "";
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.connections(ws),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.offers(ws),
-      });
-    },
-  });
+): MutationResult<ConnectionRecord, string> {
+  const workspaceId = useWorkspaceId(workspaceOverride) ?? undefined;
+  return useMutation(authorizeConnectionAtom, (connectionId) => ({
+    connectionId,
+    workspaceId,
+  }));
 }

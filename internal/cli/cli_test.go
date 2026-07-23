@@ -271,7 +271,12 @@ func newCLITestServer(t *testing.T) http.Handler {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	seedCLIWorkspace(t, dsn)
-	handler, closeFn, err := httpapi.HandlerForSQLite(context.Background(), dsn, []domain.OfferSnapshot{cliOffer()})
+	return handlerForDSN(t, dsn)
+}
+
+func handlerForDSN(t *testing.T, dsn string, options ...httpapi.Option) http.Handler {
+	t.Helper()
+	handler, closeFn, err := httpapi.HandlerForSQLite(context.Background(), dsn, []domain.OfferSnapshot{cliOffer()}, options...)
 	if err != nil {
 		t.Fatalf("build http handler: %v", err)
 	}
@@ -344,6 +349,7 @@ func cliOffer() domain.OfferSnapshot {
 	now := time.Now().UTC()
 	return domain.OfferSnapshot{
 		ID:           "offer_cli",
+		RentalID:     "offer_cli",
 		ConnectionID: "conn_cli",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,

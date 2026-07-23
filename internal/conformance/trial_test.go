@@ -231,6 +231,7 @@ func trialOffer(rate float64) domain.OfferSnapshot {
 	now := time.Now().UTC()
 	return domain.OfferSnapshot{
 		ID:         "offer_fixture",
+		RentalID:   "offer_fixture",
 		Kind:       domain.OfferKindStanding,
 		NativeRef:  "fixture-capacity",
 		ObservedAt: now.Add(-time.Second),

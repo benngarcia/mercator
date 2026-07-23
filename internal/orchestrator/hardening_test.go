@@ -106,15 +106,15 @@ func TestCreateRunPinsResolvedDigestAfterHashing(t *testing.T) {
 		RunID:          "run_pin",
 		IdempotencyKey: "idem_pin",
 		Workload:       rev,
-		ResolveImage: func(_ context.Context, image, platform string) (string, error) {
+		ResolveImage: func(_ context.Context, image, platform string) (string, string, error) {
 			resolveCalls++
 			if image != "busybox" {
 				t.Fatalf("resolver should see the submitted tag, got %q", image)
 			}
 			if platform != "linux/amd64" {
-				t.Fatalf("resolver should see normalized platform, got %q", platform)
+				t.Fatalf("resolver should see the stated platform, got %q", platform)
 			}
-			return pinned, nil
+			return pinned, platform, nil
 		},
 	})
 	if err != nil {
@@ -185,8 +185,8 @@ func TestCreateRunSurfacesResolutionFailure(t *testing.T) {
 		RunID:          "run_resolve_fail",
 		IdempotencyKey: "idem_resolve_fail",
 		Workload:       rev,
-		ResolveImage: func(context.Context, string, string) (string, error) {
-			return "", fmt.Errorf("registry unreachable")
+		ResolveImage: func(context.Context, string, string) (string, string, error) {
+			return "", "", fmt.Errorf("registry unreachable")
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "IMAGE_RESOLUTION_FAILED") {
