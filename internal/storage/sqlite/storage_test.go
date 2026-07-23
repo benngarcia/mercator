@@ -68,6 +68,38 @@ func TestConnectionCredentialWritePreservesStorageCause(t *testing.T) {
 }
 
 func TestOpenMigratesLegacyPlacementDecisionEvents(t *testing.T) {
+	ctx, db := openLegacyEventFixture(t)
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	assertMigratedLegacyBooking(t, ctx, storage)
+}
+
+func TestOpenCompletesV052BookingDecisionMigration(t *testing.T) {
+	ctx, db := openLegacyEventFixture(t)
+	if _, err := db.ExecContext(ctx, `
+		UPDATE events
+		SET event_type = 'compute.run.booking_decided.v1'
+		WHERE event_type = 'compute.run.placement_decided.v1'
+	`); err != nil {
+		t.Fatalf("apply v0.5.2 migration: %v", err)
+	}
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	assertMigratedLegacyBooking(t, ctx, storage)
+}
+
+func openLegacyEventFixture(t *testing.T) (context.Context, *sql.DB) {
+	t.Helper()
 	ctx := context.Background()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mercator.db"))
 	if err != nil {
@@ -80,13 +112,11 @@ func TestOpenMigratesLegacyPlacementDecisionEvents(t *testing.T) {
 	if _, err := db.ExecContext(ctx, string(fixture)); err != nil {
 		t.Fatalf("load legacy event fixture: %v", err)
 	}
+	return ctx, db
+}
 
-	storage, err := sqlitestore.New(ctx, db)
-	if err != nil {
-		t.Fatalf("open storage: %v", err)
-	}
-	t.Cleanup(func() { _ = storage.Close() })
-
+func assertMigratedLegacyBooking(t *testing.T, ctx context.Context, storage *sqlitestore.Storage) {
+	t.Helper()
 	events, err := storage.EventLog().ReadStream(ctx, eventlog.StreamKey{
 		WorkspaceID: "ws_1",
 		Type:        "run",
