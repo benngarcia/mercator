@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,11 +95,50 @@ func TestOpenMigratesLegacyPlacementDecisionEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migrated run: %v", err)
 	}
-	if len(events) != 1 || events[0].Type != "compute.run.booking_decided.v1" {
+	if len(events) != 2 || events[0].Type != "compute.run.booking_decided.v1" {
 		t.Fatalf("migrated events = %+v", events)
 	}
-	if string(events[0].Data) != `{"decision":{"id":"decision_1","run_id":"run_1","workload_revision_digest":"sha256:workload"}}` {
-		t.Fatalf("migration changed event data: %s", events[0].Data)
+	var payload struct {
+		Decision struct {
+			Booking *domain.Booking `json:"booking"`
+		} `json:"decision"`
+	}
+	if err := json.Unmarshal(events[0].Data, &payload); err != nil {
+		t.Fatalf("decode migrated decision: %v", err)
+	}
+	want := domain.Booking{
+		ID:              "booking_legacy_decision_1",
+		RunID:           "run_1",
+		RentalID:        "rental_legacy_offer_1",
+		State:           domain.BookingStateRunning,
+		ScheduleVersion: 1,
+	}
+	if payload.Decision.Booking == nil || *payload.Decision.Booking != want {
+		t.Fatalf("migrated Booking = %+v, want %+v", payload.Decision.Booking, want)
+	}
+}
+
+func TestOpenRejectsOpenLegacyPlacementDecisionEvents(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mercator.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	fixture, err := os.ReadFile("testdata/legacy_placement_event.sql")
+	if err != nil {
+		t.Fatalf("read legacy event fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(fixture)); err != nil {
+		t.Fatalf("load legacy event fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM events WHERE event_type = 'compute.run.closed.v1'`); err != nil {
+		t.Fatalf("reopen legacy run: %v", err)
+	}
+
+	_, err = sqlitestore.New(ctx, db)
+
+	if err == nil || !strings.Contains(err.Error(), "open legacy placement decisions") {
+		t.Fatalf("open storage error = %v", err)
 	}
 }
 
