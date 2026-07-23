@@ -42,6 +42,10 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
+	if err := migrateRunEventNames(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	if err := migrateRentalSchedules(ctx, db); err != nil {
 		_ = log.Close()
 		return nil, err

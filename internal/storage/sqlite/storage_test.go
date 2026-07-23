@@ -66,6 +66,42 @@ func TestConnectionCredentialWritePreservesStorageCause(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesLegacyPlacementDecisionEvents(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mercator.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	fixture, err := os.ReadFile("testdata/legacy_placement_event.sql")
+	if err != nil {
+		t.Fatalf("read legacy event fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(fixture)); err != nil {
+		t.Fatalf("load legacy event fixture: %v", err)
+	}
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	events, err := storage.EventLog().ReadStream(ctx, eventlog.StreamKey{
+		WorkspaceID: "ws_1",
+		Type:        "run",
+		ID:          "run_1",
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("read migrated run: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != "compute.run.booking_decided.v1" {
+		t.Fatalf("migrated events = %+v", events)
+	}
+	if string(events[0].Data) != `{"decision":{"id":"decision_1","run_id":"run_1","workload_revision_digest":"sha256:workload"}}` {
+		t.Fatalf("migration changed event data: %s", events[0].Data)
+	}
+}
+
 func TestOpenPurgesCredentialsForDeletedConnections(t *testing.T) {
 	ctx := context.Background()
 	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
