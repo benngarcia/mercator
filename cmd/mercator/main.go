@@ -62,7 +62,9 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		stdlog.Printf("load secret key: %v", err)
 		return 1
 	}
-	warnIfNonLoopback(addr)
+	if !isLoopback(addr) {
+		stdlog.Printf("WARNING: listening on non-loopback address %s over plaintext HTTP; bearer tokens and run data are unencrypted in transit — put a TLS-terminating proxy in front for anything beyond local evaluation", addr)
+	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		stdlog.Printf("listen: %v", err)
@@ -80,6 +82,12 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		_ = listener.Close()
 		stdlog.Printf("configure server: %v", err)
 		return 1
+	}
+	// A loopback broker holding a token only this process knows is unusable
+	// until the CLI learns it. Write it down rather than making the operator
+	// copy it out of the log.
+	if generatedToken && isLoopback(addr) {
+		shareLocalContext(env, addr, apiToken)
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- runtime.Serve(listener) }()
@@ -105,18 +113,31 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	return exitCode
 }
 
-func warnIfNonLoopback(addr string) {
+func isLoopback(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return
+		return false
 	}
 	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// shareLocalContext hands this machine's CLI the address and token of the
+// server just started. Failing to write it is not fatal: the token is already
+// in the log above, so the operator can still export it by hand.
+func shareLocalContext(env map[string]string, addr, token string) {
+	path := cli.DefaultConfigPath(env)
+	changed, err := cli.WriteLocalContext(path, "http://"+addr, token)
+	if err != nil {
+		stdlog.Printf("could not write the %q CLI context (%v); export MERCATOR_API_TOKEN instead", cli.LocalContextName, err)
 		return
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return
+	if changed {
+		stdlog.Printf("wrote the %q CLI context to %s; mercator commands on this machine need no further setup", cli.LocalContextName, path)
 	}
-	stdlog.Printf("WARNING: listening on non-loopback address %s over plaintext HTTP; bearer tokens and run data are unencrypted in transit — put a TLS-terminating proxy in front for anything beyond local evaluation", addr)
 }
 
 func masterKeyFromEnv(values map[string]string) ([]byte, error) {

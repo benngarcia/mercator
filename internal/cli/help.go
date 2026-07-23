@@ -10,11 +10,13 @@ func helpText(args []string) (string, bool) {
 	if len(tokens) == 0 {
 		return rootHelp, true
 	}
-	if isHelpArg(tokens[0]) {
-		return rootHelp, true
-	}
+	// `help <topic>` must reach the topic. Testing isHelpArg first would swallow
+	// the topic, because "help" is itself a help argument.
 	if tokens[0] == "help" {
 		return helpForTopic(tokens[1:], true)
+	}
+	if isHelpArg(tokens[0]) {
+		return rootHelp, true
 	}
 	return helpForTopic(tokens, false)
 }
