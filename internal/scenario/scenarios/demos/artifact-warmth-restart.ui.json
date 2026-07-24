@@ -1,0 +1,50 @@
+{
+  "schema": "mercator.lab/ui-checkpoints.v1",
+  "checkpoints": [
+    {
+      "id": "producer-placement-visible",
+      "after": {
+        "event": "compute.run.booking_decided.v1",
+        "run": "producer"
+      },
+      "assertions": [
+        {
+          "role": "heading",
+          "name": "Producer"
+        }
+      ]
+    },
+    {
+      "id": "consumer-artifact-locality-visible",
+      "after": {
+        "event": "compute.run.booking_decided.v1",
+        "run": "consumer"
+      },
+      "assertions": [
+        {
+          "role": "heading",
+          "name": "Consumer"
+        },
+        {
+          "role": "status",
+          "name": "Artifact local"
+        }
+      ],
+      "screenshot": true
+    },
+    {
+      "id": "terminal-lifecycle-visible",
+      "after": {
+        "event": "compute.run.succeeded.v1",
+        "run": "consumer"
+      },
+      "assertions": [
+        {
+          "role": "status",
+          "name": "Succeeded"
+        }
+      ],
+      "screenshot": true
+    }
+  ]
+}

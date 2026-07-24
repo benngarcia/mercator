@@ -1,25 +1,26 @@
 {
+  "schema": "mercator.lab/blueprint.v1",
   "summary": "An engineer's next iteration changes only the 40MB top layer of an 18GB image. The rental warm from the previous iteration holds every base layer, so a near-free one-layer pull beats provisioning and pulling the world.",
-  "status": "green",
+  "classification": "green",
   "world": {
     "images": {
-      "trainer:v1": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
         "layers": [
-          {"name": "cuda-base", "size": "18GB"},
-          {"name": "trainer-code-v1", "size": "40MB"}
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
         ]
       },
-      "trainer:v2": {
+      "trainer@sha256:b7227e3c5a9e4778137111a5bb1e328e2fb66cbfe58e196746c0aa7e2d793f36": {
         "layers": [
-          {"name": "cuda-base", "size": "18GB"},
-          {"name": "trainer-code-v2", "size": "40MB"}
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:fd48c4de0756cad4305c9f360fab611552debd00464796e940017adeddd7c1d3", "size": "40MB"}
         ]
       }
     },
     "rentals": [
       {
         "id": "rental-warm",
-        "cached_images": ["trainer:v1"],
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
         "rate_per_hour_usd": 2.5
       }
     ],
@@ -33,7 +34,7 @@
     ]
   },
   "request": {
-    "image": "trainer:v2",
+    "image": "trainer@sha256:b7227e3c5a9e4778137111a5bb1e328e2fb66cbfe58e196746c0aa7e2d793f36",
     "expected_runtime": "20m",
     "max_runtime": "1h"
   },

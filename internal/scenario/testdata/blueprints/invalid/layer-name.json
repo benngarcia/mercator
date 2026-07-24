@@ -1,0 +1,30 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "summary": "Layer names are legacy identity.",
+  "world": {
+    "images": {
+      "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "layers": [
+          {
+            "name": "base",
+            "size": "1GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-a",
+        "rate_per_hour_usd": 1.0
+      }
+    ]
+  },
+  "request": {
+    "image": "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-a"
+  }
+}

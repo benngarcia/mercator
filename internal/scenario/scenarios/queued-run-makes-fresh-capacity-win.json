@@ -1,20 +1,21 @@
 {
+  "schema": "mercator.lab/blueprint.v1",
   "summary": "Two Runs arrive while a warm Rental is busy. Mercator schedules the first behind the running Booking. The second decision includes that queued Booking's expected runtime, making fresh capacity faster.",
-  "status": "target",
+  "classification": "target",
   "missing_capabilities": ["rental_schedule"],
   "world": {
     "images": {
-      "trainer:v1": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
         "layers": [
-          {"name": "cuda-base", "size": "18GB"},
-          {"name": "trainer-code-v1", "size": "40MB"}
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
         ]
       }
     },
     "rentals": [
       {
         "id": "rental-warm",
-        "cached_images": ["trainer:v1"],
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
         "rate_per_hour_usd": 2.5
       }
     ],
@@ -42,7 +43,7 @@
     {
       "submit": "first-waiter",
       "request": {
-        "image": "trainer:v1",
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
         "expected_runtime": "20m",
         "max_runtime": "1h"
       },
@@ -62,7 +63,7 @@
     {
       "submit": "second-waiter",
       "request": {
-        "image": "trainer:v1",
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
         "expected_runtime": "20m",
         "max_runtime": "1h"
       },
