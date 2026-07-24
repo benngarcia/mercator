@@ -35,7 +35,9 @@ func ReadFullStream(ctx context.Context, reader StreamReader, stream StreamKey) 
 	return history, nil
 }
 
-// ScanStream yields every event in a stream without retaining its full history.
+// ScanStream yields every event in a bounded aggregate stream without
+// retaining its full history. Mercator Run streams terminate and cap retries;
+// callers that need an open-ended feed use Subscribe instead.
 func ScanStream(ctx context.Context, reader StreamReader, stream StreamKey) iter.Seq2[StoredEvent, error] {
 	return func(yield func(StoredEvent, error) bool) {
 		var after uint64

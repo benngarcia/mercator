@@ -10,6 +10,7 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/runprojection"
 )
 
 func (s *Server) CreateRun(ctx context.Context, request CreateRunRequestObject) (CreateRunResponseObject, error) {
@@ -169,11 +170,18 @@ func (s *Server) ListRuns(ctx context.Context, request ListRunsRequestObject) (L
 		}
 		return ListRuns400JSONResponse(workspaceErr.Response), nil
 	}
-	records, err := s.orch.ListRuns(ctx, workspaceID)
+	pageRequest, err := (runprojection.PageRequest{
+		After: request.Params.Cursor,
+		Limit: request.Params.Limit,
+	}).Validated()
+	if err != nil {
+		return ListRuns400JSONResponse(apiError("INVALID_RUN_PAGE", err.Error())), nil
+	}
+	page, err := s.orch.ListRuns(ctx, workspaceID, pageRequest)
 	if err != nil {
 		return ListRuns500JSONResponse(internalAPIError(http.StatusInternalServerError, "LIST_RUNS_FAILED", err)), nil
 	}
-	return ListRuns200JSONResponse{Runs: records}, nil
+	return ListRuns200JSONResponse{Runs: page.Records, NextCursor: page.NextCursor}, nil
 }
 
 func (s *Server) CancelRun(ctx context.Context, request CancelRunRequestObject) (CancelRunResponseObject, error) {

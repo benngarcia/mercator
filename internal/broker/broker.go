@@ -66,11 +66,17 @@ func (b *Broker) List(ctx context.Context, workspaceID string) (map[string]domai
 	return b.schedules.List(ctx, workspaceID)
 }
 
-func (b *Broker) Commit(ctx context.Context, event eventlog.AppendRequest, expectedVersion uint64, next domain.RentalSchedule) (eventlog.AppendResult, error) {
+func (b *Broker) Commit(
+	ctx context.Context,
+	event eventlog.AppendRequest,
+	expectedVersion uint64,
+	next domain.RentalSchedule,
+	run domain.RunRecord,
+) (eventlog.AppendResult, error) {
 	if b.schedules == nil {
 		return eventlog.AppendResult{}, fmt.Errorf("broker: Rental Schedule store is required")
 	}
-	return b.schedules.Commit(ctx, event, expectedVersion, next)
+	return b.schedules.Commit(ctx, event, expectedVersion, next, run)
 }
 
 // Manifests exposes the registered adapters' onboarding manifests for the

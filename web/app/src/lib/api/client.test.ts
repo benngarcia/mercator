@@ -36,6 +36,7 @@ effect("uses the explicit Workspace from the OpenAPI query", () =>
     expect(new URL(request.url).searchParams.get("workspace_id")).toBe(
       "ws_explicit",
     );
+    expect(new URL(request.url).searchParams.get("limit")).toBe("100");
   }).pipe(Effect.provide(testApiLayer)),
 );
 

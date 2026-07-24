@@ -15,6 +15,11 @@ interface WorkspaceArg {
   readonly workspaceId?: string;
 }
 
+interface RunPageArg extends WorkspaceArg {
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
 interface MutationArg extends WorkspaceArg {
   readonly idempotencyKey?: string;
 }
@@ -82,14 +87,20 @@ export const archiveWorkspace = Effect.fn("Api.archiveWorkspace")(function* (
 });
 
 export const listRuns = Effect.fn("Api.listRuns")(function* (
-  arg: WorkspaceArg = {},
+  arg: RunPageArg = {},
 ) {
   const api = yield* Api;
   const headers = yield* api.headers;
   return yield* api.request("Api.listRuns", (signal) =>
     api.client.GET("/v1/runs", {
       headers,
-      params: { query: { workspace_id: arg.workspaceId } },
+      params: {
+        query: {
+          workspace_id: arg.workspaceId,
+          cursor: arg.cursor,
+          limit: arg.limit ?? 100,
+        },
+      },
       signal,
     }),
   );

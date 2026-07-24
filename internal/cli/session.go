@@ -63,18 +63,35 @@ func (s *session) workspace(ctx context.Context) (string, error) {
 // I just started" means at a prompt. Run ids are UUIDv7, so the id order the
 // API returns is creation order.
 func (s *session) latestRun(ctx context.Context, workspaceID string) (string, error) {
-	var page struct {
-		Runs []struct {
-			ID string `json:"id"`
-		} `json:"runs"`
+	var latest string
+	var cursor string
+	for {
+		var page struct {
+			Runs []struct {
+				ID string `json:"id"`
+			} `json:"runs"`
+			NextCursor string `json:"next_cursor"`
+		}
+		params := query("workspace_id", workspaceID)
+		params.Set("limit", "100")
+		if cursor != "" {
+			params.Set("cursor", cursor)
+		}
+		if err := s.get(ctx, "/v1/runs", params, &page); err != nil {
+			return "", fmt.Errorf("look up runs: %w", err)
+		}
+		if len(page.Runs) > 0 {
+			latest = page.Runs[len(page.Runs)-1].ID
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
 	}
-	if err := s.get(ctx, "/v1/runs", query("workspace_id", workspaceID), &page); err != nil {
-		return "", fmt.Errorf("look up runs: %w", err)
-	}
-	if len(page.Runs) == 0 {
+	if latest == "" {
 		return "", fmt.Errorf("workspace %s has no runs yet", workspaceID)
 	}
-	return page.Runs[len(page.Runs)-1].ID, nil
+	return latest, nil
 }
 
 // soleConnection returns the workspace's only connection. A workspace with one
