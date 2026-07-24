@@ -108,7 +108,7 @@
     {
       "id": "restart-after-artifact-published",
       "trigger": {
-        "event": "compute.artifact.published.v1",
+        "event": "compute.run.outcome_recorded.v1",
         "run": "producer"
       },
       "action": "restart_control_plane"

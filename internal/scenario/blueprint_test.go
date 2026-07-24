@@ -3,6 +3,8 @@ package scenario
 import (
 	"strings"
 	"testing"
+
+	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
 func TestLoadBlueprintAdaptsLegacyPlacementFixture(t *testing.T) {
@@ -216,5 +218,31 @@ func TestLoadBlueprintRejectsTaggedImageIdentity(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "digest-pinned") {
 		t.Fatalf("tagged image identity must fail loudly, got %v", err)
+	}
+}
+
+func TestLoadBlueprintRejectsFaultsTriggeringOnUnrecordedEvents(t *testing.T) {
+	_, err := LoadBlueprint("testdata/blueprints/invalid/unknown-fault-event.json")
+
+	if err == nil || !strings.Contains(err.Error(), "unknown event") {
+		t.Fatalf("a fault on an event Mercator never records must fail loudly, got %v", err)
+	}
+}
+
+func TestCatalogFaultsTriggerOnEventsMercatorRecords(t *testing.T) {
+	catalog, err := OpenCatalog("scenarios")
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+
+	for _, entry := range catalog.Entries() {
+		for _, fault := range entry.Blueprint.Faults {
+			if fault.Trigger.Event == "" {
+				continue
+			}
+			if !orchestrator.IsRunEventType(fault.Trigger.Event) {
+				t.Errorf("Blueprint %q fault %q triggers on unrecorded event %q", entry.Blueprint.Name, fault.ID, fault.Trigger.Event)
+			}
+		}
 	}
 }

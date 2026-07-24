@@ -1,6 +1,10 @@
 package scenario
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/benngarcia/mercator/internal/orchestrator"
+)
 
 type ArrivalType string
 
@@ -147,6 +151,9 @@ func validateFaults(faults []FaultSpec, runs map[string]bool) error {
 		case FaultRestartControlPlane:
 			if fault.Trigger.Event == "" {
 				return fmt.Errorf("fault %q needs trigger.event", fault.ID)
+			}
+			if !orchestrator.IsRunEventType(fault.Trigger.Event) {
+				return fmt.Errorf("fault %q triggers on unknown event %q", fault.ID, fault.Trigger.Event)
 			}
 		default:
 			return fmt.Errorf("fault %q has unknown action %q", fault.ID, fault.Action)
