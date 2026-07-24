@@ -1,12 +1,8 @@
 name: Release
 
-# Two ways to release, both deliberate — nothing here runs on ordinary pushes:
-# - push an annotated tag `v*` (the original flow), or
-# - trigger this workflow manually from the Actions tab with a version input;
-#   the run validates the version, then `gh release create --target` mints the
-#   tag at the selected branch's head as part of publishing. The tag is created
-#   inside the release job on purpose: a tag pushed by a separate workflow with
-#   the default GITHUB_TOKEN would not trigger this one.
+# Releases qualify the exact merge commit before publishing any semver name.
+# The full Go suite boots the production daemon twice against each synthetic
+# previous-release fixture and replays its Run through the authenticated API.
 on:
   push:
     tags:
@@ -14,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag to create and release (e.g. v0.2.0). Releases the head of the selected branch."
+        description: "Version tag to create and release (e.g. v0.6.0 or v0.6.0-rc.1). Releases the selected merge commit."
         required: true
 
 permissions:
@@ -22,37 +18,64 @@ permissions:
 
 jobs:
   version:
-    name: Resolve version
+    name: Resolve release
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      candidate_sha: ${{ steps.resolve.outputs.candidate_sha }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Resolve and validate
         id: resolve
         env:
           VERSION_INPUT: ${{ inputs.version }}
         run: |
+          version="$VERSION_INPUT"
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            echo "version=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-            exit 0
+            version="$GITHUB_REF_NAME"
           fi
-          if [[ ! "$VERSION_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::version must look like v0.2.0 or v0.2.0-rc.1, got '$VERSION_INPUT'"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::version must look like v0.6.0 or v0.6.0-rc.1, got '$version'"
             exit 1
           fi
-          if git ls-remote --exit-code origin "refs/tags/$VERSION_INPUT" >/dev/null; then
-            echo "::error::tag $VERSION_INPUT already exists; releases are immutable"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] &&
+             git ls-remote --exit-code origin "refs/tags/$version" >/dev/null; then
+            echo "::error::tag $version already exists; releases are immutable"
             exit 1
           fi
-          echo "version=$VERSION_INPUT" >> "$GITHUB_OUTPUT"
+
+          candidate_sha="$(git rev-parse 'HEAD^{commit}')"
+          if ! git merge-base --is-ancestor "$candidate_sha" origin/master; then
+            echo "::error::candidate $candidate_sha is not on origin/master"
+            exit 1
+          fi
+          parent_count="$(git rev-list --parents -n 1 "$candidate_sha" | awk '{print NF - 1}')"
+          if [[ "$parent_count" -lt 2 ]]; then
+            echo "::error::candidate $candidate_sha is not a merge commit"
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+          {
+            echo "version=$version"
+            echo "candidate_sha=$candidate_sha"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
 
   release:
-    name: Build release artifacts
+    name: Qualify and publish release
     needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.candidate_sha }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -60,21 +83,25 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3"
-      - run: go test ./...
+      - name: Qualify release
+        run: go test ./...
       - name: Build archives
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: scripts/build-release-archives.sh "$VERSION" dist
       - name: Publish GitHub release
         env:
+          CANDIDATE_SHA: ${{ needs.version.outputs.candidate_sha }}
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           args=()
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            # Manual dispatch: create the tag at the dispatched commit as part
-            # of publishing the release.
-            args+=(--target "$GITHUB_SHA")
+            args+=(--target "$CANDIDATE_SHA")
+          fi
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease --latest=false)
           fi
           notes_file="docs/project/release-notes/${VERSION}.md"
           if [[ -f "$notes_file" ]]; then
@@ -85,7 +112,9 @@ jobs:
 
   image:
     name: Publish image
-    needs: version
+    needs:
+      - version
+      - release
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -101,6 +130,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.candidate_sha }}
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -113,13 +144,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}${{ matrix.suffix }}
-          # `value:` pins the semver source to the resolved version so the same
-          # tags come out whether the run started from a tag push or a manual
-          # dispatch on a branch.
+          # Stable semver receives major.minor and latest automatically.
+          # Prereleases receive only their full version tag.
           tags: |
             type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
-            type=raw,value=latest
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
