@@ -21,6 +21,7 @@ type Storage struct {
 	credentials *credential.SQLiteStore
 	workspaces  *workspace.SQLiteCatalog
 	schedules   *RentalScheduleStore
+	runs        *RunStore
 }
 
 func Open(ctx context.Context, dsn string) (*Storage, error) {
@@ -50,6 +51,10 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
+	if err := migrateRuns(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	workspaces := workspace.NewSQLiteCatalog(db)
 	credentials, err := credential.NewSQLiteStore(ctx, db)
 	if err != nil {
@@ -57,7 +62,8 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		return nil, err
 	}
 	storage := &Storage{db: db, log: log, credentials: credentials, workspaces: workspaces}
-	storage.schedules = &RentalScheduleStore{db: db, log: log}
+	storage.runs = &RunStore{db: db, log: log}
+	storage.schedules = &RentalScheduleStore{db: db, log: log, runs: storage.runs}
 	if err := storage.purgeDeletedConnectionCredentials(ctx); err != nil {
 		_ = log.Close()
 		return nil, err
@@ -79,6 +85,10 @@ func (s *Storage) Workspaces() *workspace.SQLiteCatalog {
 
 func (s *Storage) RentalSchedules() *RentalScheduleStore {
 	return s.schedules
+}
+
+func (s *Storage) Runs() *RunStore {
+	return s.runs
 }
 
 func (s *Storage) Connections(sealer credentialSealer) (*ConnectionRepository, error) {

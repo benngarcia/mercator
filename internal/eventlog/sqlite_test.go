@@ -241,7 +241,12 @@ func TestCompleteHistoryReadsPastOnePage(t *testing.T) {
 	}
 
 	var global []StoredEvent
-	for event, err := range ScanAll(ctx, log, EventFilter{WorkspaceID: "ws_1", StreamTypes: []string{"run"}}) {
+	filter := EventFilter{WorkspaceID: "ws_1", StreamTypes: []string{"run"}}
+	head, err := log.LatestPosition(ctx, filter)
+	if err != nil {
+		t.Fatalf("capture global head: %v", err)
+	}
+	for event, err := range ScanAll(ctx, log, head, filter) {
 		if err != nil {
 			t.Fatalf("scan all: %v", err)
 		}

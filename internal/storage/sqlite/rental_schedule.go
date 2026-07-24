@@ -26,8 +26,9 @@ func migrateRentalSchedules(ctx context.Context, db *sql.DB) error {
 }
 
 type RentalScheduleStore struct {
-	db  *sql.DB
-	log *WorkspaceEventLog
+	db   *sql.DB
+	log  *WorkspaceEventLog
+	runs *RunStore
 }
 
 func (store *RentalScheduleStore) List(ctx context.Context, workspaceID string) (map[string]domain.RentalSchedule, error) {
@@ -58,7 +59,13 @@ func (store *RentalScheduleStore) List(ctx context.Context, workspaceID string) 
 	return schedules, nil
 }
 
-func (store *RentalScheduleStore) Commit(ctx context.Context, event eventlog.AppendRequest, expectedVersion uint64, next domain.RentalSchedule) (eventlog.AppendResult, error) {
+func (store *RentalScheduleStore) Commit(
+	ctx context.Context,
+	event eventlog.AppendRequest,
+	expectedVersion uint64,
+	next domain.RentalSchedule,
+	run domain.RunRecord,
+) (eventlog.AppendResult, error) {
 	if event.Stream.WorkspaceID == "" || next.RentalID == "" {
 		return eventlog.AppendResult{}, fmt.Errorf("Rental Schedule commit requires Workspace and Rental identity")
 	}
@@ -87,7 +94,7 @@ func (store *RentalScheduleStore) Commit(ctx context.Context, event eventlog.App
 		if err != nil {
 			return fmt.Errorf("store Rental Schedule: %w", err)
 		}
-		return nil
+		return store.runs.putTx(ctx, tx, run)
 	})
 }
 

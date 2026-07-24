@@ -541,6 +541,8 @@ export interface components {
         };
         RunListResponse: {
             runs: components["schemas"]["Run"][];
+            /** @description Opaque cursor for the next page. Omitted on the final page. */
+            next_cursor?: string;
         };
         EventListResponse: {
             events: components["schemas"]["CloudEvent"][];
@@ -1232,6 +1234,9 @@ export interface operations {
         parameters: {
             query?: {
                 workspace_id?: string;
+                /** @description Opaque cursor returned by the previous page. */
+                cursor?: string;
+                limit?: number;
             };
             header?: never;
             path?: never;

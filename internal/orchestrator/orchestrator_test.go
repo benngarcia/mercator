@@ -15,6 +15,7 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/reporting"
+	"github.com/benngarcia/mercator/internal/runprojection"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
@@ -74,10 +75,11 @@ func TestListRunsDoesNotReadEveryStream(t *testing.T) {
 	}
 	log.streamReads = 0
 
-	records, err := orch.ListRuns(ctx, "ws_1")
+	page, err := orch.ListRuns(ctx, "ws_1", runprojection.PageRequest{})
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
+	records := page.Records
 	if len(records) != 2 {
 		t.Fatalf("listed %d runs, want 2", len(records))
 	}

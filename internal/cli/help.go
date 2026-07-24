@@ -217,9 +217,11 @@ Flags:
   --workload-json JSON    Full workload revision JSON
 `
 
-const runListHelp = `Usage: mercator run list [--workspace-id ID]
+const runListHelp = `Usage: mercator run list [--workspace-id ID] [--cursor CURSOR] [--limit N]
 
 List runs in a workspace. --workspace-id defaults to MERCATOR_WORKSPACE_ID.
+The response includes next_cursor when another page exists. Pass it back with
+--cursor. --limit accepts 1 through 100 and defaults to 50 on the server.
 `
 
 const loginHelp = `Usage: mercator login [--context NAME] [--api-url URL]

@@ -267,6 +267,36 @@ func TestRunAcceptsGlobalAPIURLFlag(t *testing.T) {
 	}
 }
 
+func TestRunListSendsCursorAndLimit(t *testing.T) {
+	var query string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		query = request.URL.RawQuery
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"runs":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), Config{
+		BaseURL: server.URL,
+		Args: []string{
+			"run", "list",
+			"--workspace-id", "ws_1",
+			"--cursor", "run_050",
+			"--limit", "25",
+		},
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+
+	if code != 0 {
+		t.Fatalf("run list failed with code %d stderr=%s", code, stderr.String())
+	}
+	if query != "cursor=run_050&limit=25&workspace_id=ws_1" {
+		t.Fatalf("query = %q, want cursor, limit, and Workspace", query)
+	}
+}
+
 func newCLITestServer(t *testing.T) http.Handler {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"

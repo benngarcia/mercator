@@ -16,6 +16,7 @@ import (
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/runprojection"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
@@ -255,7 +256,8 @@ func TestRentalScheduleCommitSurvivesStorageRestart(t *testing.T) {
 		CommandKey: "run-active:place", RequestHash: "sha256:place", CorrelationID: "run-active", CausationID: "place",
 		Events: []eventlog.NewEvent{{ID: "evt_booking_active", Type: "compute.run.booking_decided.v1", SchemaVersion: 1, OccurredAt: time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC), Data: json.RawMessage(`{}`)}},
 	}
-	if _, err := storage.RentalSchedules().Commit(ctx, request, 0, schedule); err != nil {
+	run := domain.RunRecord{ID: "run-active", WorkspaceID: "ws_schedule", Phase: "launching"}
+	if _, err := storage.RentalSchedules().Commit(ctx, request, 0, schedule, run); err != nil {
 		t.Fatalf("commit Rental Schedule: %v", err)
 	}
 	if err := storage.Close(); err != nil {
@@ -274,6 +276,13 @@ func TestRentalScheduleCommitSurvivesStorageRestart(t *testing.T) {
 	stored := schedules["rental-warm"]
 	if stored.Version != 1 || len(stored.Bookings) != 1 || stored.Bookings[0].Booking.ID != booking.ID {
 		t.Fatalf("stored Rental Schedule = %+v", stored)
+	}
+	page, err := reopened.Runs().List(ctx, "ws_schedule", runprojection.PageRequest{})
+	if err != nil {
+		t.Fatalf("list Run projection: %v", err)
+	}
+	if len(page.Records) != 1 || page.Records[0].ID != "run-active" {
+		t.Fatalf("stored Run projection = %+v, want run-active", page.Records)
 	}
 }
 
