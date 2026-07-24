@@ -1,127 +1,189 @@
 # Mercator
 
-[![CI](https://github.com/benngarcia/mercator/actions/workflows/ci.yml/badge.svg)](https://github.com/benngarcia/mercator/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/benngarcia/mercator)](https://github.com/benngarcia/mercator/releases/latest)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+Mercator runs OCI containers across Docker hosts and GPU providers, then keeps
+the evidence that explains each placement and cleanup. You get a push-to-run
+CLI on capacity you control, with one Go process and SQLite instead of a
+separate cluster control plane.
 
-Modal-style push-to-run for containers, on capacity you control: Mercator
-starts each workload fast on the warmest machine in your fleet, rents new GPU
-capacity when none fits, and records what it decided and why.
+- **One-command runs.** `mercator run create busybox -- echo hi` resolves the
+  image, generates the run identifiers, selects capacity, launches the
+  container, and tracks it through cleanup.
+- **Four adapters.** Docker, RunPod, Shadeform, and Vast.ai implement the same
+  offer, launch, observation, and cleanup contract.
+- **Explainable placement.** Every decision records the selected offer, each
+  rejected candidate, expected cost and latency, and stable reason codes.
+- **Reproducible inputs.** A local image tag becomes a recorded digest and
+  platform before the run launches.
+- **Small control plane.** One Go binary contains the HTTP API, CLI, and
+  embedded operator console, while SQLite stores the event log.
+- **Evaluation-ready.** Mercator runs real workloads end to end, but it remains
+  pre-1.0 software with [documented production gaps](docs/production/known-limitations.md).
 
-[About](#about) ·
-[How it compares](#how-it-compares) ·
-[Quickstart](#quickstart) ·
-[Documentation](#documentation) ·
-[Contributing](#contributing-and-developing) ·
-[Roadmap](#roadmap-and-status)
+```sh
+mercator run create busybox -- echo hi
+mercator run wait | jq -c '.run | {outcome, exit_code, cleanup}'
+# {"outcome":"succeeded","exit_code":0,"cleanup":"confirmed"}
+```
 
-## About
+- [Get started](#get-started)
+- [How it works](#how-it-works)
+- [Where it fits](#where-it-fits)
+- [Documentation](#documentation)
+- [Roadmap and status](#roadmap-and-status)
+- [Contributing](#contributing)
 
-Mercator is a compute broker and fleet manager for accelerated workloads. You
-hand it a container. It compares every place that could take it, machines you
-already rent and fresh capacity from your GPU provider accounts, books the
-workload where it should start fastest for the money, launches it, and watches
-it to a clean exit.
+---
 
-Four terms recur: an **offer** is a place a run could land (a Docker host, or a
-RunPod or Vast.ai GPU once connected), a **rental** is a machine Mercator keeps
-between runs, your **fleet** is the rentals you hold, and **warmth** is how much
-of a run's image and data a rental already holds locally, which is why warm
-machines start in seconds.
+## Get started
 
-Every decision is recorded. Three weeks later you can still ask what ran where,
-why there, which candidates lost and for what reason, and whether it exited
-clean, and get the answer from the event log instead of your memory. That
-audited record is the part `docker run`, and most brokers, cannot give you.
+You need Go 1.25 or newer and a running Docker daemon.
 
-It is one Go process with SQLite as the event log. No Kubernetes, no Slurm, no
-control plane. The JSON HTTP API, the CLI, and the operator console all come
-out of the same binary.
-
-![Mercator console showing runs](docs/assets/mercator-runs.png)
-
-Mercator is V1 evaluation-ready, not GA infrastructure. Read
-[known limitations](docs/production/known-limitations.md) before you rely on it
-in production.
-
-## How it compares
-
-Like Modal, you push a workload with one command and never pick a machine.
-Unlike Modal, you bring an OCI image rather than Python code, so Mercator does
-not build or sync your code, and runs land on capacity you control, with no
-serverless markup and a fleet that stays yours.
-
-Like SkyPilot, Mercator brokers one workload across many providers. Unlike
-SkyPilot, it does not bootstrap a conda environment first. The container is the
-environment, so a cold start is an image pull and a warm start skips the layers
-the machine already holds.
-
-Use it if you are a small team running recurring accelerated jobs, training,
-batch inference, image generation, on GPUs you rent, and you want Modal's
-ergonomics without serverless prices or giving up the machines. Recurring is
-where the fleet pays off: when two jobs declare the same data cache, the second
-can land on the machine that already synced it. 
-
-## Quickstart
-
-You need a running Docker daemon. Install the binary with Go, or download one
-from the [releases page](https://github.com/benngarcia/mercator/releases/latest):
+### 1. Install Mercator and pull the example image
 
 ```sh
 go install github.com/benngarcia/mercator/cmd/mercator@latest
+mercator_bin="$(go env GOBIN)"
+export PATH="${mercator_bin:-$(go env GOPATH)/bin}:$PATH"
+docker pull busybox:latest
 ```
 
-Start the broker:
+You can also download a binary from the
+[latest release](https://github.com/benngarcia/mercator/releases/latest).
+
+### 2. Start the broker
 
 ```sh
 mercator serve
 ```
 
-Then, in another shell, push a workload and ask why it landed where it did:
+On loopback, `serve` generates an API token, writes a `local` CLI context, and
+creates an authorized `docker` connection when the daemon answers. Local CLI
+commands need no further configuration.
+
+### 3. Run a container
+
+In another shell:
 
 ```sh
 mercator run create busybox -- echo hi
-mercator run decision
+mercator run wait | jq -c '.run | {outcome, exit_code, cleanup}'
+mercator run decision \
+  | jq -c '{candidates: (.decision.candidates | length), reason_codes: .decision.selection_reason_codes}'
 ```
 
-On loopback, `serve` generates its own token, writes a `local` CLI context, and
-seeds a `docker` connection when the daemon answers, so nothing else needs
-configuring. `run create` resolves `busybox` to its digest and platform against
-your host, so you pin nothing by hand. `run decision` returns the offer it
-picked, every candidate it rejected, and the reason codes; on a single host the
-one offer wins uncontested, and the record fills in as you add offers.
+The completed run reports:
 
-Open the console at [`http://127.0.0.1:8080`](http://127.0.0.1:8080) for the
-live Workspace canvas. For the broker-in-a-container setup and the full
-walkthrough with expected output, see
+```json
+{"outcome":"succeeded","exit_code":0,"cleanup":"confirmed"}
+{"candidates":1,"reason_codes":["FEASIBLE","LOWEST_SCORE","REUSE_EXISTING_RENTAL"]}
+```
+
+Open [`http://127.0.0.1:8080`](http://127.0.0.1:8080) to inspect runs and fleet
+state in the operator console.
+
+For a broker running in a container, explicit authentication, and remote
+Docker hosts, continue with
 [install and configuration](docs/production/install-configuration.md) and
 [Docker adapter operation](docs/production/docker-adapter-operation.md).
+
+---
+
+## How it works
+
+1. **Resolve the workload.** Mercator inspects a local image tag and records its
+   digest and platform, so a later replay uses the same image revision.
+2. **Collect offers.** Authorized Docker and GPU-provider connections describe
+   their available or provisionable capacity through one typed contract.
+3. **Evaluate placement.** Mercator rejects offers that cannot satisfy the
+   workload, scores the feasible candidates by expected cost and latency, and
+   books the lowest-scored offer.
+4. **Run and reconcile.** The selected adapter launches the container,
+   observes its external state, and confirms release or termination before the
+   run closes.
+5. **Preserve the evidence.** SQLite keeps the run lifecycle, placement
+   decision, provider-neutral events, outcome, and cleanup state.
+
+An **offer** is a place where a run could land. A **rental** is a machine
+Mercator retains between runs. A **fleet** is the set of rentals you hold.
+Mercator can queue work on a busy rental when waiting costs less than
+provisioning fresh capacity.
+
+![Mercator console showing runs](docs/assets/mercator-runs.png)
+
+---
+
+## Where it fits
+
+Mercator is built for small teams running recurring training, batch inference,
+image generation, and other accelerated container workloads on machines they
+rent. It fits when the team wants a short push-to-run path and a durable answer
+to what ran, where it ran, why that offer won, and whether cleanup finished.
+
+The container is the deployment unit. Mercator does not build or sync
+application code, and provider capacity stays in your own accounts. The
+current runtime uses one process and one SQLite event log, so operators do not
+need Kubernetes or Slurm to evaluate it.
+
+> Mercator is not production GA. It does not provide multi-process failover,
+> built-in TLS, per-user authorization, or a managed secret vault. Read the
+> [known limitations](docs/production/known-limitations.md) before relying on
+> it in production.
+
+---
 
 ## Documentation
 
 | Need | Start here |
 | --- | --- |
-| Install, start, health checks | [install and configuration](docs/production/install-configuration.md) |
-| First local evaluation on Docker | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
-| CLI commands and environment | [CLI reference](docs/reference/cli.md) |
-| HTTP and OpenAPI routes | [OpenAPI overview](docs/reference/openapi.md) |
-| Workload and run lifecycle | [workload and run lifecycle](docs/production/workload-run-lifecycle.md) |
-| Authentication and workspaces | [authentication and workspaces](docs/production/authentication-workspaces.md) |
-| Security boundaries | [security model](docs/production/security-model.md) |
-| What does not work yet | [known limitations](docs/production/known-limitations.md) |
+| Install, start, and check health | [Install and configuration](docs/production/install-configuration.md) |
+| Evaluate with local Docker | [Docker adapter operation](docs/production/docker-adapter-operation.md) |
+| Use CLI commands and contexts | [CLI reference](docs/reference/cli.md) |
+| Call the HTTP and OpenAPI routes | [OpenAPI overview](docs/reference/openapi.md) |
+| Understand the run lifecycle | [Workload and run lifecycle](docs/production/workload-run-lifecycle.md) |
+| Configure authentication and workspaces | [Authentication and workspaces](docs/production/authentication-workspaces.md) |
+| Review security boundaries | [Security model](docs/production/security-model.md) |
+| Check unsupported production behavior | [Known limitations](docs/production/known-limitations.md) |
 
-Provider runbooks: [RunPod](docs/production/runpod.md),
-[Shadeform](docs/production/shadeform.md), [Vast.ai](docs/production/vast.md).
-`mercator verify --spec trial.json` launches a bounded, real conformance trial
-against any of them and returns a sanitized evidence bundle. See
-[provider conformance](docs/production/provider-conformance.md). Project process
-lives under [docs/project](docs/project) and [docs/launch](docs/launch).
+Provider runbooks cover [RunPod](docs/production/runpod.md),
+[Shadeform](docs/production/shadeform.md), and
+[Vast.ai](docs/production/vast.md). These adapters remain experimental.
+`mercator verify --spec trial.json` launches a bounded conformance trial against
+an adapter and returns a sanitized evidence bundle. See
+[provider conformance](docs/production/provider-conformance.md) for the trial
+contract.
 
-## Contributing and developing
+The versioned HTTP API is available as
+[OpenAPI](docs/reference/openapi.md). Project process and launch material live
+under [docs/project](docs/project) and [docs/launch](docs/launch).
+
+---
+
+## Roadmap and status
+
+| Capability | Status |
+| --- | --- |
+| Event-sourced run lifecycle with recorded outcomes and cleanup | Shipped |
+| Placement decisions with the winner and every rejection | Shipped |
+| Local Docker launch and cleanup | Shipped |
+| Persisted rental schedules and queued bookings | Shipped |
+| Live fleet console streamed over SSE | Shipped |
+| RunPod, Shadeform, and Vast.ai adapters | Experimental |
+| Image-layer and cache-aware placement | Building |
+| Multi-node failover, built-in TLS, and per-user authorization | Planned |
+
+Rental scheduling already weighs queued runtime against the cost and latency
+of provisioning fresh capacity. Image-layer and cache warmth do not affect
+placement yet. The [placement scenario corpus](internal/scenario/README.md)
+states the decisions that the scheduler must eventually satisfy, and
+[ROADMAP.md](ROADMAP.md) tracks the wider program.
+
+---
+
+## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Keep
-changes narrow, include tests or docs evidence, and update production docs when
-behavior changes.
+changes narrow, include tests or documentation evidence, and update production
+docs when behavior changes.
 
 ```sh
 go test ./...
@@ -129,43 +191,15 @@ go build ./cmd/mercator
 scripts/check-open-source-launch.sh
 ```
 
-The console is a React app in [web/app](web/app/README.md), built into
-`web/static` and embedded in the binary. Rebuild it with `mise run ui`. Builds
-need no cgo, because Mercator uses the pure-Go SQLite driver
-`modernc.org/sqlite`. Project spaces are covered by the
-[code of conduct](CODE_OF_CONDUCT.md), maintainer decision rules are in
-[GOVERNANCE.md](GOVERNANCE.md), and security issues go privately through
+The React console lives in [web/app](web/app/README.md), builds into
+`web/static`, and embeds into the Go binary. Run `mise run ui` before building
+the binary when console source changes. Mercator uses the pure-Go
+`modernc.org/sqlite` driver, so Go builds do not require cgo.
+
+Project spaces follow the [code of conduct](CODE_OF_CONDUCT.md). Maintainer
+decision rules live in [GOVERNANCE.md](GOVERNANCE.md), support expectations in
+[SUPPORT.md](SUPPORT.md), and private vulnerability reporting in
 [SECURITY.md](SECURITY.md).
-
-## Roadmap and status
-
-Mercator runs real workloads end to end and is exercised by a full Go test
-suite. It is ready to evaluate, and it is not yet ready to be the thing you page
-someone about.
-
-| # | Step | Status |
-| :-: | --- | :-: |
-| 1 | Event-sourced run lifecycle with recorded outcomes and cleanup | ✅ |
-| 2 | Placement decisions that record the winner and every rejection | ✅ |
-| 3 | Local Docker adapter with real container launch and cleanup | ✅ |
-| 4 | GPU provider adapters behind one run contract | 🚧 |
-| 5 | Rentals with persisted schedules of queued bookings | ✅ |
-| 6 | Live fleet canvas in the console, streamed over SSE | ✅ |
-| 7 | Warmth-aware placement: image layers and cache mounts | 🚧 |
-| 8 | Multi-node operation: failover, TLS, per-user authorization | ❌ |
-
-The RunPod, Shadeform, and Vast.ai adapters share the Docker adapter's run
-contract and each has a runbook and a conformance trial, but they are
-experimental: registry credential handling and quota setup are still thin.
-Rentals and their schedules are scored today, weighing the runtime queued on a
-busy rental against the cost of provisioning fresh capacity; scoring warmth
-itself, image layers and cache mounts, is the program being built. The
-[placement scenario corpus](internal/scenario/README.md) states the decisions
-that program must satisfy, and its `target` scenarios fail CI the moment they
-start passing, so the corpus always says where the work stands. Multi-node
-operation, the gap between evaluation and production, is tracked in
-[known limitations](docs/production/known-limitations.md) and
-[the roadmap](ROADMAP.md).
 
 ## License
 
