@@ -1,8 +1,7 @@
 {
   "workspace_id": "ws_fae1688dc2d7e92e518a8348",
   "run_id": "run_release_upgrade_fixture",
-  "sanitized": true,
-  "release_gate_version": "v0.5.4",
+  "data_classification": "synthetic",
   "lineage": [
     {
       "version": "v0.4.5",

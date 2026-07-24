@@ -1,6 +1,7 @@
--- Captured through the v0.4.5 production daemon and authenticated HTTP API.
--- Sanitization retains the public closed-Run stream and its workspace while
--- removing connection events, private payload copies, and command ledgers.
+-- Generated through the v0.4.5 production daemon and authenticated HTTP API
+-- using synthetic inputs. The fixture retains the public closed-Run stream
+-- and workspace while omitting connection events, private payload copies,
+-- command ledgers, and secrets.
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 CREATE TABLE events (

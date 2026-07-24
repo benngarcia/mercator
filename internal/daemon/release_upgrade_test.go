@@ -23,8 +23,7 @@ const releaseUpgradeToken = "release-upgrade-test-token"
 type releaseUpgradeManifest struct {
 	WorkspaceID        string                  `json:"workspace_id"`
 	RunID              string                  `json:"run_id"`
-	Sanitized          bool                    `json:"sanitized"`
-	ReleaseGateVersion string                  `json:"release_gate_version"`
+	DataClassification string                  `json:"data_classification"`
 	Lineage            []releaseUpgradeFixture `json:"lineage"`
 }
 
@@ -49,6 +48,7 @@ func TestPreviousReleaseStateReplaysThroughProductionDaemon(t *testing.T) {
 		t.Run(fixture.Version, func(t *testing.T) {
 			dsn := arrangeReleaseUpgradeState(t, manifest, fixtureCount)
 			assertArrangedReleaseState(t, dsn, fixture)
+			assertReleaseUpgradeStateIsPublic(t, dsn)
 
 			bootAndReplayReleaseState(t, dsn, manifest)
 			first := readMigrationSnapshot(t, dsn)
@@ -73,11 +73,8 @@ func readReleaseUpgradeManifest(t *testing.T) releaseUpgradeManifest {
 	if err := json.Unmarshal(contents, &manifest); err != nil {
 		t.Fatalf("decode release upgrade manifest: %v", err)
 	}
-	if manifest.WorkspaceID == "" || manifest.RunID == "" || !manifest.Sanitized || manifest.ReleaseGateVersion == "" || len(manifest.Lineage) == 0 {
+	if manifest.WorkspaceID == "" || manifest.RunID == "" || manifest.DataClassification != "synthetic" || len(manifest.Lineage) == 0 {
 		t.Fatalf("incomplete release upgrade manifest: %+v", manifest)
-	}
-	if last := manifest.Lineage[len(manifest.Lineage)-1].Version; last != manifest.ReleaseGateVersion {
-		t.Fatalf("release gate version = %s, want final fixture %s", manifest.ReleaseGateVersion, last)
 	}
 	return manifest
 }
@@ -134,6 +131,29 @@ func assertArrangedReleaseState(t *testing.T, dsn string, fixture releaseUpgrade
 	}
 	if bookingType != fixture.BookingJSONType {
 		t.Fatalf("%s Booking JSON type = %q, want %q", fixture.Version, bookingType, fixture.BookingJSONType)
+	}
+}
+
+func assertReleaseUpgradeStateIsPublic(t *testing.T, dsn string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open arranged database: %v", err)
+	}
+	defer db.Close()
+	var secretCount int
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM connection_secret`).Scan(&secretCount); err != nil {
+		t.Fatalf("count fixture connection secrets: %v", err)
+	}
+	if secretCount != 0 {
+		t.Fatalf("fixture connection secrets = %d, want 0", secretCount)
+	}
+	var privateEventCount int
+	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM events WHERE private_data IS NOT NULL`).Scan(&privateEventCount); err != nil {
+		t.Fatalf("count fixture private events: %v", err)
+	}
+	if privateEventCount != 0 {
+		t.Fatalf("fixture private events = %d, want 0", privateEventCount)
 	}
 }
 

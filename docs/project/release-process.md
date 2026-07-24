@@ -55,17 +55,17 @@ in CI; this smoke proves the Docker boundary.
 Releasing is always a deliberate act; nothing publishes on ordinary pushes.
 There are two equivalent triggers.
 
-The release source must be a merge commit on `master`. The workflow builds a
-non-semver candidate image for that full Git SHA, records its image digest, and
-boots that digest twice against the sanitized previous-release SQLite fixture.
-Both boots must pass `/health/ready` and bearer-authenticated `GET /v1/runs`
-replay. The fixture version must equal the previous semver tag. Any mismatch,
-startup error, authentication regression, or replay error stops the release.
+The release source must be a merge commit on `master`. The workflow checks out
+that full Git SHA and runs `go test ./...` before creating a GitHub Release.
+The suite boots the production daemon twice against every synthetic
+previous-release SQLite fixture, requires `/health/ready`, proves bearer
+authentication, and replays the closed Run through `GET /v1/runs`. Any startup,
+migration, authentication, or replay error stops publication.
 
-After qualification, the workflow runs the Go suite and builds the archives.
-Only then can it create the GitHub Release or promote the qualified image
-digest to semver and `latest` tags. The conformance probe is also built from the
-same merge SHA and receives semver tags only after the daemon qualifies.
+After the GitHub Release succeeds, the image job builds the daemon and
+conformance probe from the same Git SHA. Stable versions receive full semver,
+major-minor, and `latest` image tags. Prereleases receive only their full
+prerelease tag and are marked as prereleases on GitHub.
 
 **Manual dispatch (preferred).** From the Actions tab, run the `Release`
 workflow on `master` with the version as input, or from a checkout:
@@ -75,9 +75,9 @@ gh workflow run release.yml --ref master -f version=v0.6.0
 ```
 
 The workflow validates the version (`vMAJOR.MINOR.PATCH`, optional prerelease
-suffix), refuses an existing tag, runs the tests, rebuilds the embedded console
-through the archive builder, and creates the tag at the branch head as part of
-publishing the release.
+suffix such as `v0.6.0-rc.1`), refuses an existing tag, runs the tests, rebuilds
+the embedded console through the archive builder, and creates the tag at the
+branch head as part of publishing the release.
 
 **Tag push.** Push an annotated tag; the workflow releases exactly that
 commit:
@@ -97,21 +97,18 @@ archive generation share the same implementation.
 
 ## Previous-Release Upgrade Fixture
 
-`internal/daemon/testdata/release-upgrades/manifest.json` names the sanitized
-fixture lineage and the previous release accepted by the gate. The base fixture
-was captured through a tagged production daemon and authenticated HTTP API. It
-retains one public, closed Run stream and its synthetic workspace. Connection
-events, private payload copies, command ledgers, credentials, and operator data
-are absent.
+`internal/daemon/testdata/release-upgrades/manifest.json` names the synthetic
+fixture lineage. The base fixture was generated through a tagged production
+daemon and authenticated HTTP API using deterministic fake inputs. Its schema
+and event shapes are historical production state; its IDs, timestamps, Run,
+workspace, and workload data are fixed test values. The test refuses fixtures
+with connection secrets or private event payloads.
 
-Before releasing the version after the manifest's `release_gate_version`, add
-the newly previous release to the lineage. Its SQL file must reproduce the
-schema and public persisted-state changes made by that tagged daemon. A release
-with no persisted-state change still gets an explicit no-op SQL fixture, so the
-reviewed lineage records that version. Set `release_gate_version` to the same
-tag, run the focused daemon test above twice, and inspect the fixture for
-private data or credentials. The release workflow independently refuses any
-fixture containing `connection_secret` rows or non-null `private_data`.
+Add a lineage fixture whenever a release changes persisted schema or public
+event shape. Its SQL file must reproduce the change made by that tagged daemon,
+including partially migrated states that a later release must repair. Releases
+with no persisted-state change do not need no-op fixtures. Run the focused
+daemon test above after every fixture change.
 
 ## Post-Release Checklist
 
