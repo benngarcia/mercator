@@ -134,6 +134,8 @@ type WorldSpec struct {
 	Rentals         []RentalSpec           `json:"rentals,omitempty"`
 	RentalSchedules []RentalScheduleSpec   `json:"rental_schedules,omitempty"`
 	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
+	Paths           []PathSpec             `json:"paths,omitempty"`
+	RuntimeModels   []RuntimeModelSpec     `json:"runtime_models,omitempty"`
 }
 
 // ArtifactSpec declares immutable, versioned content available to Runs.
@@ -164,7 +166,8 @@ type LayerSpec struct {
 // broker state; the machine itself receives only the running Booking through
 // its standard Docker endpoint.
 type RentalSpec struct {
-	ID string `json:"id"`
+	ID     string `json:"id"`
+	Region string `json:"region,omitempty"`
 	// IdleLeaseExpiresIn bounds how long the rental survives idle, measured
 	// from the world clock's start. Omitted means the lease outlives the
 	// scenario.
@@ -176,6 +179,7 @@ type RentalSpec struct {
 	ArtifactReplicas []string       `json:"artifact_replicas,omitempty"`
 	CacheMounts      []string       `json:"cache_mounts,omitempty"`
 	RatePerHourUSD   float64        `json:"rate_per_hour_usd"`
+	Billing          BillingSpec    `json:"billing,omitempty"`
 	Resources        *ResourcesSpec `json:"resources,omitempty"`
 }
 
@@ -232,7 +236,10 @@ func (p QueuedBookingSpec) expected() Duration {
 type MarketplaceOfferSpec struct {
 	ID             string           `json:"id"`
 	Provider       string           `json:"provider,omitempty"`
+	Region         string           `json:"region,omitempty"`
+	Available      *bool            `json:"available,omitempty"`
 	RatePerHourUSD float64          `json:"rate_per_hour_usd"`
+	Billing        BillingSpec      `json:"billing,omitempty"`
 	Provisioning   ProvisioningSpec `json:"provisioning"`
 	Resources      *ResourcesSpec   `json:"resources,omitempty"`
 	// Facts are the hardware facts providers owe on the offer (SSH root
@@ -240,6 +247,25 @@ type MarketplaceOfferSpec struct {
 	// an offer missing or failing one must be rejected loudly. Target
 	// ontology: no offer field carries these yet.
 	Facts map[string]bool `json:"facts,omitempty"`
+}
+
+type BillingSpec struct {
+	SetupFeeUSD   float64   `json:"setup_fee_usd,omitempty"`
+	MinimumCharge *Duration `json:"minimum_charge,omitempty"`
+}
+
+type PathSpec struct {
+	From    string  `json:"from"`
+	To      string  `json:"to"`
+	Scope   string  `json:"scope"`
+	P10Mbps float64 `json:"p10_mbps"`
+}
+
+type RuntimeModelSpec struct {
+	Run       string   `json:"run,omitempty"`
+	Candidate string   `json:"candidate"`
+	Minimum   Duration `json:"minimum"`
+	Maximum   Duration `json:"maximum"`
 }
 
 type ProvisioningSpec struct {
@@ -275,12 +301,18 @@ type RequestSpec struct {
 	CacheMounts []CacheMountSpec `json:"cache_mounts,omitempty"`
 	// ConsumesArtifacts and ProducesArtifacts refer to immutable Artifact IDs
 	// declared in the Blueprint world.
-	ConsumesArtifacts []string `json:"consumes_artifacts,omitempty"`
-	ProducesArtifacts []string `json:"produces_artifacts,omitempty"`
+	ConsumesArtifacts []string            `json:"consumes_artifacts,omitempty"`
+	ProducesArtifacts []string            `json:"produces_artifacts,omitempty"`
+	Phases            []WorkloadPhaseSpec `json:"phases,omitempty"`
 }
 
 type CacheMountSpec struct {
 	Name string `json:"name"`
+}
+
+type WorkloadPhaseSpec struct {
+	Name     string   `json:"name"`
+	Duration Duration `json:"duration"`
 }
 
 type ExpectSpec struct {
@@ -929,6 +961,9 @@ func (w WorldSpec) validate() error {
 		if rental.RatePerHourUSD <= 0 {
 			return fmt.Errorf("rental %q needs a positive rate_per_hour_usd", rental.ID)
 		}
+		if err := rental.Billing.validate("rental " + rental.ID); err != nil {
+			return err
+		}
 	}
 	rentalsWithSchedules := map[string]bool{}
 	bookingOwners := map[string]string{}
@@ -962,9 +997,44 @@ func (w WorldSpec) validate() error {
 		if offer.RatePerHourUSD <= 0 {
 			return fmt.Errorf("marketplace offer %q needs a positive rate_per_hour_usd", offer.ID)
 		}
+		if err := offer.Billing.validate("marketplace offer " + offer.ID); err != nil {
+			return err
+		}
 		if offer.Provisioning.Expected.Duration() <= 0 {
 			return fmt.Errorf("marketplace offer %q needs a provisioning estimate", offer.ID)
 		}
+	}
+	pathIDs := map[string]bool{}
+	for _, path := range w.Paths {
+		if !ids[path.From] || path.To == "" || path.Scope == "" || path.P10Mbps <= 0 {
+			return fmt.Errorf("paths need a known source, destination, scope, and positive p10_mbps")
+		}
+		key := path.From + "/" + path.To + "/" + path.Scope
+		if pathIDs[key] {
+			return fmt.Errorf("duplicate path %q", key)
+		}
+		pathIDs[key] = true
+	}
+	runtimeModels := map[string]bool{}
+	for _, model := range w.RuntimeModels {
+		if !ids[model.Candidate] || model.Minimum.Duration() <= 0 || model.Maximum.Duration() < model.Minimum.Duration() {
+			return fmt.Errorf("runtime models need a known candidate and positive ordered bounds")
+		}
+		key := model.Run + "/" + model.Candidate
+		if runtimeModels[key] {
+			return fmt.Errorf("duplicate runtime model %q", key)
+		}
+		runtimeModels[key] = true
+	}
+	return nil
+}
+
+func (billing BillingSpec) validate(owner string) error {
+	if billing.SetupFeeUSD < 0 {
+		return fmt.Errorf("%s setup fee cannot be negative", owner)
+	}
+	if billing.MinimumCharge != nil && billing.MinimumCharge.Duration() <= 0 {
+		return fmt.Errorf("%s minimum charge must be positive", owner)
 	}
 	return nil
 }
@@ -1122,6 +1192,16 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 			return fmt.Errorf("request has duplicate Cache Mount %q", mount.Name)
 		}
 		cacheMounts[mount.Name] = true
+	}
+	phases := map[string]bool{}
+	for _, phase := range req.Phases {
+		if phase.Name == "" || phase.Duration.Duration() <= 0 {
+			return fmt.Errorf("workload phases need a name and positive duration")
+		}
+		if phases[phase.Name] {
+			return fmt.Errorf("request has duplicate workload phase %q", phase.Name)
+		}
+		phases[phase.Name] = true
 	}
 	return nil
 }
