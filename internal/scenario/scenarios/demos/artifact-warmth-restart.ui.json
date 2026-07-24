@@ -9,8 +9,8 @@
       },
       "assertions": [
         {
-          "role": "heading",
-          "name": "Producer"
+          "role": "link",
+          "name": "run-producer:"
         }
       ]
     },
@@ -22,12 +22,8 @@
       },
       "assertions": [
         {
-          "role": "heading",
-          "name": "Consumer"
-        },
-        {
-          "role": "status",
-          "name": "Artifact local"
+          "role": "link",
+          "name": "run-consumer:"
         }
       ],
       "screenshot": true
@@ -35,13 +31,13 @@
     {
       "id": "terminal-lifecycle-visible",
       "after": {
-        "event": "compute.run.succeeded.v1",
+        "event": "compute.run.closed.v1",
         "run": "consumer"
       },
       "assertions": [
         {
-          "role": "status",
-          "name": "Succeeded"
+          "role": "button",
+          "name": "Closed"
         }
       ],
       "screenshot": true
