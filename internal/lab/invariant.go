@@ -42,6 +42,7 @@ type InvariantObservation struct {
 	RentalSchedules             map[string]domain.RentalSchedule
 	RunRequirements             map[string]RunArrival
 	KnownArtifactIDs            map[string]bool
+	SeededArtifactIDs           map[string]bool
 	ProjectionRebuildEquivalent bool
 }
 
@@ -295,16 +296,44 @@ func leaseFencing(observation InvariantObservation) error {
 	return nil
 }
 
+// artifactDependencies orders every consuming launch against the publication it
+// depends on. Checking the world's current replicas instead would assert what
+// the launch path itself just wrote, because a launch copies an Artifact onto
+// the Rental it starts on. Reading the effect ledger compares two different
+// writers: the launch path and the producer's completion.
 func artifactDependencies(observation InvariantObservation) error {
-	replicas := map[string]bool{}
-	for _, replica := range observation.World.ArtifactReplicas {
-		replicas[replica.ArtifactID+"/"+replica.OfferID] = true
+	publishedAt := map[string]uint64{}
+	for artifactID := range observation.SeededArtifactIDs {
+		publishedAt[artifactID] = 0
 	}
-	for _, execution := range observation.World.ActiveExecutions {
-		arrival := observation.RunRequirements[execution.RunID]
+	for _, effect := range observation.Effects {
+		if effect.Operation != OperationArtifactPut || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		var request struct {
+			ArtifactID string `json:"artifact_id"`
+		}
+		if err := json.Unmarshal(effect.Request, &request); err != nil {
+			return fmt.Errorf("decode Artifact publication %s: %w", effect.ID, err)
+		}
+		if _, published := publishedAt[request.ArtifactID]; !published {
+			publishedAt[request.ArtifactID] = effect.Sequence
+		}
+	}
+	for _, effect := range observation.Effects {
+		if effect.Operation != OperationProviderLaunch || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		arrival := observation.RunRequirements[effect.CorrelationID]
 		for _, artifactID := range arrival.Request.ConsumesArtifacts {
-			if !replicas[artifactID+"/"+execution.OfferID] {
-				return fmt.Errorf("Run %q started on %q without Artifact %q", execution.RunID, execution.OfferID, artifactID)
+			published, exists := publishedAt[artifactID]
+			if !exists || published > effect.Sequence {
+				return fmt.Errorf(
+					"Run %q launched at effect %d before Artifact %q existed",
+					effect.CorrelationID,
+					effect.Sequence,
+					artifactID,
+				)
 			}
 		}
 	}

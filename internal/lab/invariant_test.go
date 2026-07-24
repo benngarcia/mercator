@@ -70,12 +70,12 @@ func TestInvariantRegistryReportsAReplayableDuplicateExecutionViolation(t *testi
 	}
 }
 
-func TestExecutionEvaluatesConfiguredInvariantsAfterEveryTransition(t *testing.T) {
-	checks := 0
+func TestExecutionCertifiesTheStateEveryDriveReaches(t *testing.T) {
+	var observed []time.Time
 	registry, err := NewInvariantRegistry(invariantRule{
-		id: "test.transition_counter",
-		check: func(InvariantObservation) error {
-			checks++
+		id: "test.observation_clock",
+		check: func(observation InvariantObservation) error {
+			observed = append(observed, observation.Now)
 			return nil
 		},
 	})
@@ -104,9 +104,21 @@ func TestExecutionEvaluatesConfiguredInvariantsAfterEveryTransition(t *testing.T
 	if _, err := execution.Drive(context.Background(), Quiesce()); err != nil {
 		t.Fatalf("drive arrivals: %v", err)
 	}
+	checkpoint, err := execution.Drive(context.Background(), Advance(10*time.Minute))
+	if err != nil {
+		t.Fatalf("advance the control plane: %v", err)
+	}
 
-	if checks != len(tape.Events) {
-		t.Fatalf("invariant checks = %d, want one for each of %d transitions", checks, len(tape.Events))
+	if len(observed) <= len(tape.Events) {
+		t.Fatalf("invariant checks = %d, want more than the %d World Tape transitions", len(observed), len(tape.Events))
+	}
+	terminal := observed[len(observed)-1]
+	if !terminal.Equal(checkpoint.Now) {
+		t.Fatalf(
+			"last invariant observation at %s, want the terminal virtual time %s",
+			terminal.Format(time.RFC3339Nano),
+			checkpoint.Now.Format(time.RFC3339Nano),
+		)
 	}
 }
 
@@ -145,7 +157,12 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 			observation.World.ActiveExecutions = []externalExecution{{LaunchKey: "launch-1"}}
 		},
 		"safety.artifact_dependencies": func(observation *InvariantObservation) {
-			observation.World.ActiveExecutions = []externalExecution{{RunID: "run-1", OfferID: "offer-1"}}
+			observation.Effects = []EffectRecord{{
+				Sequence:      1,
+				Operation:     OperationProviderLaunch,
+				Command:       EffectCommandAccepted,
+				CorrelationID: "run-1",
+			}}
 			observation.RunRequirements["run-1"] = RunArrival{
 				Name: "run-1",
 				Request: scenario.RequestSpec{

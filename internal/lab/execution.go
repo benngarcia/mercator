@@ -180,10 +180,8 @@ func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Ch
 			}
 		}
 		execution.now = target
-		if execution.runtime != nil {
-			if err := execution.runtime.advance(ctx, target); err != nil {
-				return execution.checkpoint(), err
-			}
+		if err := execution.advance(ctx, target); err != nil {
+			return execution.checkpoint(), err
 		}
 		return execution.checkpoint(), nil
 	case driveEvent:
@@ -222,10 +220,8 @@ func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Ch
 				return execution.checkpoint(), err
 			}
 		}
-		if execution.runtime != nil {
-			if err := execution.runtime.advance(ctx, execution.now); err != nil {
-				return execution.checkpoint(), err
-			}
+		if err := execution.advance(ctx, execution.now); err != nil {
+			return execution.checkpoint(), err
 		}
 		return execution.checkpoint(), nil
 	default:
@@ -325,6 +321,20 @@ func (execution *Execution) Close() error {
 		return nil
 	}
 	return execution.runtime.close()
+}
+
+// advance moves the control plane to target and certifies the state it reaches.
+// Runs complete, Bookings release and leases expire while the control plane
+// advances rather than at a World Tape transition, so invariants that only ran
+// inside transition would certify a state the execution has already left.
+func (execution *Execution) advance(ctx context.Context, target time.Time) error {
+	if execution.runtime == nil {
+		return nil
+	}
+	if err := execution.runtime.advance(ctx, target); err != nil {
+		return err
+	}
+	return execution.evaluateInvariants(ctx)
 }
 
 func (execution *Execution) evaluateInvariants(ctx context.Context) error {

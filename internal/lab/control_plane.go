@@ -52,7 +52,7 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 	if err != nil {
 		return InvariantObservation{}, err
 	}
-	requirements, artifacts := runtime.world.invariantFacts()
+	requirements, artifacts, seededArtifacts := runtime.world.invariantFacts()
 	return InvariantObservation{
 		StartedAt:                   tape.Start,
 		Now:                         runtime.world.nowTime(),
@@ -65,6 +65,7 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		RentalSchedules:             schedules,
 		RunRequirements:             requirements,
 		KnownArtifactIDs:            artifacts,
+		SeededArtifactIDs:           seededArtifacts,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
 }
