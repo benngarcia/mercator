@@ -29,7 +29,13 @@ type FaultAction string
 
 const (
 	FaultLoseResponse        FaultAction = "lose_response"
+	FaultDelayResponse       FaultAction = "delay_response"
+	FaultDuplicateResponse   FaultAction = "duplicate_response"
+	FaultRejectCommand       FaultAction = "reject_command"
+	FaultLoseCallback        FaultAction = "lose_callback"
+	FaultDelayCallback       FaultAction = "delay_callback"
 	FaultDuplicateCallback   FaultAction = "duplicate_callback"
+	FaultReorderCallback     FaultAction = "reorder_callback"
 	FaultRestartControlPlane FaultAction = "restart_control_plane"
 )
 
@@ -37,6 +43,7 @@ type FaultSpec struct {
 	ID      string           `json:"id"`
 	Trigger FaultTriggerSpec `json:"trigger"`
 	Action  FaultAction      `json:"action"`
+	Delay   *Duration        `json:"delay,omitempty"`
 }
 
 type FaultTriggerSpec struct {
@@ -144,9 +151,24 @@ func validateFaults(faults []FaultSpec, runs map[string]bool) error {
 			return fmt.Errorf("fault %q references unknown Run %q", fault.ID, fault.Trigger.Run)
 		}
 		switch fault.Action {
-		case FaultLoseResponse, FaultDuplicateCallback:
+		case FaultLoseResponse,
+			FaultDuplicateResponse,
+			FaultRejectCommand,
+			FaultLoseCallback,
+			FaultDuplicateCallback,
+			FaultReorderCallback:
 			if fault.Trigger.Operation == "" {
 				return fmt.Errorf("fault %q needs trigger.operation", fault.ID)
+			}
+			if fault.Delay != nil {
+				return fmt.Errorf("fault %q action %q does not accept delay", fault.ID, fault.Action)
+			}
+		case FaultDelayResponse, FaultDelayCallback:
+			if fault.Trigger.Operation == "" {
+				return fmt.Errorf("fault %q needs trigger.operation", fault.ID)
+			}
+			if fault.Delay == nil || fault.Delay.Duration() <= 0 {
+				return fmt.Errorf("fault %q action %q needs a positive delay", fault.ID, fault.Action)
 			}
 		case FaultRestartControlPlane:
 			if fault.Trigger.Event == "" {
@@ -154,6 +176,9 @@ func validateFaults(faults []FaultSpec, runs map[string]bool) error {
 			}
 			if !orchestrator.IsRunEventType(fault.Trigger.Event) {
 				return fmt.Errorf("fault %q triggers on unknown event %q", fault.ID, fault.Trigger.Event)
+			}
+			if fault.Delay != nil {
+				return fmt.Errorf("fault %q action %q does not accept delay", fault.ID, fault.Action)
 			}
 		default:
 			return fmt.Errorf("fault %q has unknown action %q", fault.ID, fault.Action)

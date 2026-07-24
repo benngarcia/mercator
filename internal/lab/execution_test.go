@@ -245,7 +245,7 @@ func testLimits() Limits {
 
 func tapeWithEvents(events ...WorldEvent) WorldTape {
 	return WorldTape{
-		Schema:        WorldTapeSchemaV1,
+		Schema:        WorldTapeSchemaV2,
 		BlueprintName: "fixture",
 		Seed:          "seed:test",
 		Start:         time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
