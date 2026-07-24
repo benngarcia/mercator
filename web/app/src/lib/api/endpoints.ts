@@ -9,6 +9,7 @@ import type {
   PlacementPreviewRequest,
   ReplaySinkRequest,
   ResolveImageRequest,
+  Run,
 } from "./types";
 
 interface WorkspaceArg {
@@ -98,12 +99,28 @@ export const listRuns = Effect.fn("Api.listRuns")(function* (
         query: {
           workspace_id: arg.workspaceId,
           cursor: arg.cursor,
-          limit: arg.limit ?? 100,
+          limit: arg.limit,
         },
       },
       signal,
     }),
   );
+});
+
+// listAllRuns walks every page of /v1/runs. Run ids are UUIDv7 and the
+// projection lists them ascending, so reading only the first page would hide
+// the most recently created Runs, which are the ones an operator is watching.
+export const listAllRuns = Effect.fn("Api.listAllRuns")(function* (
+  arg: WorkspaceArg = {},
+) {
+  const runs: Run[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = yield* listRuns({ workspaceId: arg.workspaceId, cursor });
+    runs.push(...page.runs);
+    cursor = page.next_cursor;
+  } while (cursor !== undefined && cursor !== "");
+  return runs;
 });
 
 export const getRun = Effect.fn("Api.getRun")(function* (

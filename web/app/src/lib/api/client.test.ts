@@ -36,7 +36,35 @@ effect("uses the explicit Workspace from the OpenAPI query", () =>
     expect(new URL(request.url).searchParams.get("workspace_id")).toBe(
       "ws_explicit",
     );
-    expect(new URL(request.url).searchParams.get("limit")).toBe("100");
+    // The projection owns its page size; the console does not restate it.
+    expect(new URL(request.url).searchParams.get("limit")).toBeNull();
+  }).pipe(Effect.provide(testApiLayer)),
+);
+
+effect("reads every page of Runs so the newest are not hidden", () =>
+  Effect.gen(function* () {
+    const cursors: (string | null)[] = [];
+    globalThis.fetch = Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init);
+        const cursor = new URL(request.url).searchParams.get("cursor");
+        cursors.push(cursor);
+        if (cursor === null) {
+          return Response.json({
+            runs: [{ id: "run_oldest" }],
+            next_cursor: "run_oldest",
+          });
+        }
+        return Response.json({ runs: [{ id: "run_newest" }] });
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+
+    const runs = yield* endpoints.listAllRuns({ workspaceId: "ws_paged" });
+
+    expect(cursors).toEqual([null, "run_oldest"]);
+    expect(runs.map((run) => run.id)).toEqual(["run_oldest", "run_newest"]);
   }).pipe(Effect.provide(testApiLayer)),
 );
 
