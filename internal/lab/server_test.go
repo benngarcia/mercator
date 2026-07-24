@@ -70,6 +70,78 @@ func TestServerExportsAReplayableBundleAndWorldTruth(t *testing.T) {
 	t.Cleanup(func() { _ = replayed.Close() })
 }
 
+func TestWatchingTheConsoleDoesNotChangeTheExportedBundle(t *testing.T) {
+	// Arrange
+	server := openServerFixture(t)
+	httpServer := httptest.NewServer(server.Handler())
+	t.Cleanup(httpServer.Close)
+	postDrive(t, httpServer.URL, `{"kind":"quiesce"}`)
+	unwatched := exportedEffects(t, httpServer.URL)
+
+	// Act: an operator leaves the Offers page open, which polls the catalog.
+	for range 3 {
+		response := labRequest(t, http.MethodGet, httpServer.URL+"/v1/offers?workspace_id="+WorkspaceID, nil)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("observe Offers = %s", response.Status)
+		}
+		_ = response.Body.Close()
+	}
+	watched := exportedEffects(t, httpServer.URL)
+
+	// Assert
+	if len(watched) != len(unwatched) {
+		t.Fatalf("effect ledger grew from %d to %d while a browser watched", len(unwatched), len(watched))
+	}
+	for index, effect := range watched {
+		if effect.ID != unwatched[index].ID {
+			t.Fatalf("effect %d changed identity from %s to %s", index, unwatched[index].ID, effect.ID)
+		}
+	}
+}
+
+func TestObservingOffersBeforeTheFirstDriveSucceeds(t *testing.T) {
+	// Arrange
+	server := openServerFixture(t)
+	httpServer := httptest.NewServer(server.Handler())
+	t.Cleanup(httpServer.Close)
+
+	// Act
+	response := labRequest(t, http.MethodGet, httpServer.URL+"/v1/offers?workspace_id="+WorkspaceID, nil)
+	defer response.Body.Close()
+
+	// Assert
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("observe Offers before driving = %s: %s", response.Status, body)
+	}
+}
+
+func exportedEffects(t *testing.T, baseURL string) []EffectRecord {
+	t.Helper()
+	response := labRequest(t, http.MethodGet, baseURL+"/v1/lab/bundle", nil)
+	defer response.Body.Close()
+	archive, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read Run Bundle: %v", err)
+	}
+	entries, err := readBundleEntries(archive)
+	if err != nil {
+		t.Fatalf("read Run Bundle entries: %v", err)
+	}
+	var effects []EffectRecord
+	for _, line := range bytes.Split(entries["effects.jsonl"], []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var effect EffectRecord
+		if err := json.Unmarshal(line, &effect); err != nil {
+			t.Fatalf("decode effect: %v", err)
+		}
+		effects = append(effects, effect)
+	}
+	return effects
+}
+
 func TestServerRejectsUnauthenticatedLabControls(t *testing.T) {
 	// Arrange
 	server := openServerFixture(t)

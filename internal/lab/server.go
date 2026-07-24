@@ -15,7 +15,6 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/broker"
-	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/workload"
 )
@@ -273,13 +272,13 @@ func (slot *handlerSlot) Replace(handler http.Handler) {
 	slot.handler = handler
 }
 
-func (aggregator labOfferAggregator) AggregateOffers(ctx context.Context, request adapter.OfferRequest) (broker.OfferAggregation, error) {
-	offers, err := aggregator.world.ListOffers(ctx, request)
-	if offers == nil {
-		offers = []domain.OfferSnapshot{}
-	}
+// AggregateOffers serves the console and the public Offers API. It observes the
+// world rather than driving it: a browser polling the catalog must not append to
+// the effect ledger a replay has to reproduce, and it must answer before the
+// first drive, when no Run is active yet.
+func (aggregator labOfferAggregator) AggregateOffers(_ context.Context, _ adapter.OfferRequest) (broker.OfferAggregation, error) {
 	return broker.OfferAggregation{
-		Offers:   offers,
+		Offers:   aggregator.world.observeOffers(),
 		Failures: broker.ConnectionErrors{},
-	}, err
+	}, nil
 }
