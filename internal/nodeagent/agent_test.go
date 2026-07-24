@@ -194,6 +194,30 @@ func (h *harness) ref() capability.NodeRef {
 	}
 }
 
+// heartbeats counts the facts the control plane has received, which is the only
+// evidence that the agent is still telling it anything.
+func (h *harness) heartbeats(t *testing.T) int {
+	t.Helper()
+	facts, err := h.registry.Facts(context.Background(), h.ref())
+	if err != nil {
+		return 0
+	}
+	return int(facts.Host.CPUMillis)
+}
+
+func (h *harness) prepareImage(t *testing.T, operationID string) {
+	t.Helper()
+	command := capability.PrepareImageCommand{
+		ManifestDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Reference:      "ghcr.io/acme/trainer@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+	}
+	command.NodeRef = h.ref()
+	command.OperationID = operationID
+	if _, err := h.registry.PrepareImage(context.Background(), command); err != nil {
+		t.Fatalf("dispatch prepare image: %v", err)
+	}
+}
+
 func (h *harness) launch(t *testing.T, operationID string) {
 	t.Helper()
 	command := capability.LaunchWorkloadCommand{
@@ -255,18 +279,91 @@ type recordingRuntime struct {
 	mu           sync.Mutex
 	launched     []capability.LaunchWorkloadCommand
 	observations []capability.WorkloadObservation
+	// facts counts how many times the agent has read this machine's facts,
+	// which is how a case sees whether heartbeats are still flowing.
+	facts           int
+	attempted       int
+	failNextCommand bool
+	blockPrepare    chan struct{}
+	prepareStarted  chan struct{}
 }
 
 func newRecordingRuntime() *recordingRuntime { return &recordingRuntime{} }
 
 func (runtime *recordingRuntime) Facts(context.Context) (capability.NodeFacts, error) {
+	runtime.mu.Lock()
+	runtime.facts++
+	count := runtime.facts
+	runtime.mu.Unlock()
 	return capability.NodeFacts{
-		Host: capability.HostFacts{OS: "linux", Architecture: "amd64", ContainerRuntime: "docker"},
+		// CPUMillis carries the read count so a case can watch heartbeats
+		// arrive through the control plane's own view rather than the agent's.
+		Host: capability.HostFacts{OS: "linux", Architecture: "amd64", ContainerRuntime: "docker", CPUMillis: int64(count)},
 	}, nil
 }
 
 func (runtime *recordingRuntime) PrepareImage(context.Context, capability.PrepareImageCommand) error {
+	runtime.mu.Lock()
+	runtime.attempted++
+	block, started := runtime.blockPrepare, runtime.prepareStarted
+	runtime.blockPrepare = nil
+	fail := runtime.failNextCommand
+	runtime.failNextCommand = false
+	runtime.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if block != nil {
+		<-block
+	}
+	if fail {
+		return errors.New("nodeagent test: the pull failed")
+	}
 	return nil
+}
+
+func (runtime *recordingRuntime) failNext() {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.failNextCommand = true
+}
+
+// blockNextPrepare makes the next preparation hang until the returned release
+// is called, and releases it at cleanup so a case can never leak the worker.
+func (runtime *recordingRuntime) blockNextPrepare(t *testing.T) func() {
+	t.Helper()
+	runtime.mu.Lock()
+	runtime.blockPrepare = make(chan struct{})
+	runtime.prepareStarted = make(chan struct{})
+	block := runtime.blockPrepare
+	runtime.mu.Unlock()
+	var once sync.Once
+	release := func() { once.Do(func() { close(block) }) }
+	t.Cleanup(release)
+	return release
+}
+
+func (runtime *recordingRuntime) awaitPrepareStarted(t *testing.T) {
+	t.Helper()
+	runtime.mu.Lock()
+	started := runtime.prepareStarted
+	runtime.mu.Unlock()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the runtime was never asked to prepare the image")
+	}
+}
+
+func (runtime *recordingRuntime) attempts() int {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.attempted
+}
+
+func (runtime *recordingRuntime) awaitAttempts(t *testing.T, count int) {
+	t.Helper()
+	waitFor(t, func() bool { return runtime.attempts() >= count }, "the runtime was never asked to do the work")
 }
 
 func (runtime *recordingRuntime) PrepareArtifact(context.Context, capability.PrepareArtifactCommand) error {
@@ -276,7 +373,12 @@ func (runtime *recordingRuntime) PrepareArtifact(context.Context, capability.Pre
 func (runtime *recordingRuntime) LaunchWorkload(_ context.Context, command capability.LaunchWorkloadCommand) error {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
+	runtime.attempted++
 	runtime.launched = append(runtime.launched, command)
+	if runtime.failNextCommand {
+		runtime.failNextCommand = false
+		return errors.New("nodeagent test: the launch failed")
+	}
 	return nil
 }
 
@@ -367,3 +469,64 @@ func (transport *interruptibleTransport) SendResult(ctx context.Context, nodeID,
 var errLostResult = errors.New("nodeagent test: the command result was lost in flight")
 
 func exitCode(code int) *int { return &code }
+
+func TestALongRunningCommandDoesNotCostTheNodeItsLease(t *testing.T) {
+	harness := start(t)
+	// A multi-gigabyte pull takes far longer than a lease. Blocking stands in
+	// for one: the command does not return until this case releases it.
+	release := harness.runtime.blockNextPrepare(t)
+	harness.prepareImage(t, "op-slow-pull")
+	harness.runtime.awaitPrepareStarted(t)
+	before := harness.heartbeats(t)
+
+	// Act: wait for the control plane to hear from the node again while the
+	// pull is still running.
+	heard := false
+	waitFor(t, func() bool {
+		heard = harness.heartbeats(t) > before
+		return heard
+	}, "")
+	release()
+
+	if !heard {
+		t.Fatalf("heartbeats stopped at %d while a command was running; the control plane would declare this node lost mid-pull", before)
+	}
+}
+
+func TestAFailedPreparationIsRetriedAndAFailedLaunchIsNot(t *testing.T) {
+	cases := map[string]struct {
+		dispatch      func(*harness, *testing.T, string)
+		attemptsAfter int
+		why           string
+	}{
+		"a failed pull left nothing behind, so it runs again": {
+			dispatch:      (*harness).prepareImage,
+			attemptsAfter: 2,
+			why:           "a pull that errored left nothing on disk, and remembering it would tell the control plane an image is present that is not",
+		},
+		"a failed launch may have created a container, so it does not": {
+			dispatch:      (*harness).launch,
+			attemptsAfter: 1,
+			why:           "a launch that errored may still have created a container, and a second one is worse than a missed retry",
+		},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			harness := start(t)
+			// The command fails and its result is lost in flight, so the
+			// control plane still believes the command is outstanding and
+			// redelivers it on reconnect.
+			harness.transport.dropNextResult()
+			harness.runtime.failNext()
+			testCase.dispatch(harness, t, "op-1")
+			harness.runtime.awaitAttempts(t, 1)
+
+			harness.dropSession()
+			harness.awaitApplied(t, "op-1")
+
+			if attempts := harness.runtime.attempts(); attempts != testCase.attemptsAfter {
+				t.Fatalf("the runtime was asked %d times, want %d: %s", attempts, testCase.attemptsAfter, testCase.why)
+			}
+		})
+	}
+}

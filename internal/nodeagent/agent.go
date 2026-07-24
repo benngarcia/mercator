@@ -157,6 +157,15 @@ func (agent *Agent) serve(ctx context.Context) error {
 		streamed <- agent.transport.Session(sessionCtx, agent.identity.NodeID, session, commands)
 	}()
 
+	// Commands run on their own worker. Pulling a multi-gigabyte image takes
+	// far longer than a lease, so performing one on this goroutine would stop
+	// the heartbeats and have the control plane declare a healthy machine lost
+	// in the middle of the work it asked for. One worker, not a pool: a node
+	// runs one workload at a time, and preparation that raced a launch would
+	// contend for the same disk and network the launch needs.
+	work := make(chan node.Command, cap(commands))
+	go agent.work(sessionCtx, session, work)
+
 	ticker := time.NewTicker(agent.heartbeat)
 	defer ticker.Stop()
 	if err := agent.sendHeartbeat(ctx, session); err != nil {
@@ -179,6 +188,23 @@ func (agent *Agent) serve(ctx context.Context) error {
 			if err := agent.reportObservations(ctx, session); err != nil {
 				agent.logger.WarnContext(ctx, "workload observation spooled", "error", err)
 			}
+		case command := <-commands:
+			select {
+			case work <- command:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+	}
+}
+
+// work performs commands one at a time, off the loop that keeps the node's
+// lease alive.
+func (agent *Agent) work(ctx context.Context, session string, commands <-chan node.Command) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
 		case command := <-commands:
 			agent.apply(ctx, session, command)
 		}
@@ -241,8 +267,16 @@ func (agent *Agent) apply(ctx context.Context, session string, command node.Comm
 	// The operation is recorded as applied before the result is reported. A
 	// crash between the two costs a duplicate acknowledgement, never a
 	// duplicate container.
-	if err := agent.state.MarkApplied(command.OperationID); err != nil {
-		agent.logger.ErrorContext(ctx, "could not record an applied operation", "operation_id", command.OperationID, "error", err)
+	//
+	// A failure is remembered only when the command may have left something
+	// behind. A launch that errored may still have created a container, so
+	// forgetting it risks a second one; a pull that errored left nothing, and
+	// remembering it would tell the control plane an image is present that is
+	// not, and make sure the retry never happens.
+	if failure == nil || command.Kind.MayLeaveEffectOnFailure() {
+		if err := agent.state.MarkApplied(command.OperationID); err != nil {
+			agent.logger.ErrorContext(ctx, "could not record an applied operation", "operation_id", command.OperationID, "error", err)
+		}
 	}
 	result := node.Result{OperationID: command.OperationID, Applied: failure == nil, ReportedAt: agent.now().UTC()}
 	if failure != nil {
