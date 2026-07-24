@@ -64,7 +64,10 @@ The core implementation rule is:
   event log, durable Run projection, and Rental Schedule store against a
   simulated provider. Deterministic restart reconstructs the control plane
   while preserving external executions.
-- [ ] Slice 05: invariants, metamorphic tests, and reference solver.
+- [x] 2026-07-24: Complete Slice 05 transition-time invariants, bounded
+  liveness, reusable metamorphic checks, and the independent small-world
+  Placement solver. Sixteen default invariants run after every transition,
+  carry stable IDs, and persist their latest result in the Run Bundle.
 - [ ] Slice 06: generators, fuzzing, and semantic shrinking.
 - [ ] Slice 07: Lab server and normal UI path.
 - [ ] Slice 08: complete vertical proof, CI tiers, and documentation.
@@ -210,6 +213,48 @@ Artifact replicas are immutable facts keyed by Artifact ID; Cache Mounts remain
 mutable facts keyed only by mount name and node. The Run Bundle now carries
 public Mercator events, effects, prediction-versus-actual records, and summary
 metrics without private event data or effect secrets.
+
+### Slice 05
+
+On 2026-07-24, the exact reviewed worktree passed:
+
+```text
+go test -race ./internal/lab ./internal/scenario ./internal/scheduler -count=1
+go test ./...
+go vet ./...
+go build ./...
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+cd ../..
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice05
+scripts/check-open-source-launch.sh
+MERCATOR_BROWSER_TEST=1 go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
+git diff --check
+```
+
+The browser test passed outside the command sandbox in 6.130 seconds. The
+default registry covers 11 safety properties and five bounded liveness
+properties. Each liveness result records its assumptions and virtual-time
+bound. The suite includes one passing canonical execution and a deliberately
+failing fixture for every default invariant.
+
+Seven reusable metamorphic checks cover offer order, dominated candidates,
+image warming, bandwidth reduction, duplicate delivery, control-plane restart,
+and projection rebuild. A deliberately bounded, independent Placement solver
+enumerates feasible candidates and scores small worlds without calling private
+production scheduler functions. It fails loudly for dimensions outside its
+documented oracle subset.
+
+The Artifact dependency invariant exposed a real behavior gap: the dependent
+consumer entered placement before its immutable input existed. Run arrivals
+with unresolved Artifact inputs now remain pending at the Lab admission
+boundary and enter the real control plane only after the simulated Artifact
+store contains a replica.
 
 ## Public contracts
 

@@ -171,6 +171,17 @@ func (world *simulatedWorld) prepareRun(runID string, arrival RunArrival) {
 	world.runs[runID] = arrival
 }
 
+func (world *simulatedWorld) artifactDependenciesAvailable(arrival RunArrival) bool {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	for _, artifactID := range arrival.Request.ConsumesArtifacts {
+		if !hasAnyReplica(world.replicas[artifactID]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (world *simulatedWorld) setNow(now time.Time) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
@@ -220,6 +231,20 @@ func (world *simulatedWorld) effectRecords() []EffectRecord {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	return cloneEffects(world.effects)
+}
+
+func (world *simulatedWorld) invariantFacts() (map[string]RunArrival, map[string]bool) {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	runs := make(map[string]RunArrival, len(world.runs))
+	for runID, arrival := range world.runs {
+		runs[runID] = arrival
+	}
+	artifacts := make(map[string]bool, len(world.artifacts))
+	for artifactID := range world.artifacts {
+		artifacts[artifactID] = true
+	}
+	return runs, artifacts
 }
 
 func (world *simulatedWorld) recordControlPlaneRestart(ordinal uint64) {
