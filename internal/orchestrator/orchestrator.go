@@ -597,10 +597,15 @@ func (o *Orchestrator) GetRun(ctx context.Context, workspaceID, runID string) (d
 
 func (o *Orchestrator) ListRuns(ctx context.Context, workspaceID string) ([]domain.RunRecord, error) {
 	states := make(map[string]*runState)
-	for event, err := range eventlog.ScanAll(ctx, o.log, eventlog.EventFilter{
+	filter := eventlog.EventFilter{
 		WorkspaceID: workspaceID,
 		StreamTypes: []string{"run"},
-	}) {
+	}
+	head, err := o.log.LatestPosition(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for event, err := range eventlog.ScanAll(ctx, o.log, head, filter) {
 		if err != nil {
 			return nil, err
 		}
@@ -683,11 +688,16 @@ func (o *Orchestrator) AdvanceOpenRuns(ctx context.Context, workspaceID string) 
 func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) ([]string, error) {
 	var requested []string
 	closed := map[string]bool{}
-	for event, err := range eventlog.ScanAll(ctx, o.log, eventlog.EventFilter{
+	filter := eventlog.EventFilter{
 		WorkspaceID: workspaceID,
 		StreamTypes: []string{"run"},
 		EventTypes:  []string{EventRunRequested, EventRunClosed},
-	}) {
+	}
+	head, err := o.log.LatestPosition(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for event, err := range eventlog.ScanAll(ctx, o.log, head, filter) {
 		if err != nil {
 			return nil, err
 		}
