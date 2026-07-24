@@ -183,11 +183,21 @@ func noDuplicateActiveExecution(observation InvariantObservation) error {
 func exclusiveBookingCapacity(observation InvariantObservation) error {
 	for rentalID, schedule := range observation.RentalSchedules {
 		running := 0
+		var previousVersion uint64
 		for index, scheduled := range schedule.Bookings {
 			booking := scheduled.Booking
-			if booking.ScheduleVersion != schedule.Version {
-				return fmt.Errorf("Rental %q Booking %q has schedule version %d, want %d", rentalID, booking.ID, booking.ScheduleVersion, schedule.Version)
+			if booking.ScheduleVersion == 0 ||
+				booking.ScheduleVersion > schedule.Version ||
+				booking.ScheduleVersion < previousVersion {
+				return fmt.Errorf(
+					"Rental %q Booking %q has nonmonotonic schedule version %d under %d",
+					rentalID,
+					booking.ID,
+					booking.ScheduleVersion,
+					schedule.Version,
+				)
 			}
+			previousVersion = booking.ScheduleVersion
 			switch booking.State {
 			case domain.BookingStateRunning:
 				running++

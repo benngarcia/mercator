@@ -129,6 +129,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			offer:      labOffer(rental.ID, domain.OfferKindStanding, rental.RatePerHourUSD, rental.Resources),
 			heldLayers: map[string]int64{},
 		}
+		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = int64(layer.Size)
@@ -158,6 +159,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			),
 			heldLayers: map[string]int64{},
 		}
+		applyOfferWorldFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, marketplace.Billing)
 		state.offer.Provisioning = &domain.Estimate{
 			Expected: marketplace.Provisioning.Expected.Duration().Seconds(),
 			Source:   "lab-world",
@@ -169,6 +171,31 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		world.observed[marketplace.ID] = cloneObservedOffer(state)
 	}
 	return world, nil
+}
+
+func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec, offerID string, available *bool, billing scenario.BillingSpec) {
+	if available != nil {
+		offer.Capacity.Available = *available
+	}
+	offer.Pricing.SetupFeeUSD = billing.SetupFeeUSD
+	if billing.MinimumCharge != nil {
+		offer.Pricing.MinimumChargeSeconds = int64(billing.MinimumCharge.Duration().Seconds())
+	}
+	for _, path := range world.Paths {
+		if path.From != offerID {
+			continue
+		}
+		offer.Network.Download = append(offer.Network.Download, domain.NetworkFact{
+			Scope:       domain.NetworkScope(path.Scope),
+			Statistic:   "p10",
+			ValueMbps:   path.P10Mbps,
+			Source:      "lab-world",
+			SampleCount: 1,
+			ObservedAt:  world.Start(),
+			ValidUntil:  world.Start().Add(24 * time.Hour),
+			Confidence:  1,
+		})
+	}
 }
 
 func (world *simulatedWorld) prepareRun(runID string, arrival RunArrival) {
@@ -359,7 +386,7 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		Disposition:    request.Disposition,
 		Phase:          adapter.ExternalPhaseRunning,
 		StartedAt:      world.now,
-		CompletesAt:    world.now.Add(arrival.ActualRuntime.Duration()),
+		CompletesAt:    world.now.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID)),
 	}
 	world.fetchRunArtifacts(execution, arrival)
 	world.executions[request.LaunchKey] = execution
@@ -393,6 +420,13 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		world.recordLaunchEffect(request, EffectCommandAccepted, EffectResponseDuplicate, receipt, fault.ID)
 	}
 	return receipt, nil
+}
+
+func actualRuntimeForOffer(arrival RunArrival, offerID string) time.Duration {
+	if runtime := arrival.ActualRuntimeByOffer[offerID]; runtime.Duration() > 0 {
+		return runtime.Duration()
+	}
+	return arrival.ActualRuntime.Duration()
 }
 
 func (world *simulatedWorld) Observe(_ context.Context, request adapter.ObserveRequest) (adapter.ExternalObservation, error) {
@@ -717,12 +751,14 @@ func (world *simulatedWorld) matchEventFault(eventType, runID string) *scenario.
 
 func (world *simulatedWorld) recordLaunchEffect(request adapter.LaunchRequest, command EffectCommand, response EffectResponse, consequence any, faultID string) {
 	if receipt, ok := consequence.(adapter.LaunchReceipt); ok {
+		execution := world.executions[receipt.LaunchKey]
 		consequence = map[string]any{
-			"external_id": receipt.ExternalID,
-			"launch_key":  receipt.LaunchKey,
-			"phase":       receipt.Phase,
-			"accepted_at": receipt.AcceptedAt,
-			"duplicate":   receipt.Duplicate,
+			"external_id":            receipt.ExternalID,
+			"launch_key":             receipt.LaunchKey,
+			"phase":                  receipt.Phase,
+			"accepted_at":            receipt.AcceptedAt,
+			"duplicate":              receipt.Duplicate,
+			"actual_runtime_seconds": execution.CompletesAt.Sub(execution.StartedAt).Seconds(),
 		}
 	}
 	world.recordEffect(

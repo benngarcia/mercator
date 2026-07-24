@@ -123,7 +123,7 @@ func (execution *Execution) Export(ctx context.Context) (RunBundle, error) {
 	if err != nil {
 		return RunBundle{}, err
 	}
-	predictions, err := predictionActualRecords(execution.config.Tape)
+	predictions, err := predictionActualRecords(execution.config.Tape, effects)
 	if err != nil {
 		return RunBundle{}, err
 	}
@@ -172,7 +172,8 @@ func (execution *Execution) bundleRuntimeData(ctx context.Context) ([]eventlog.C
 	return events, execution.runtime.world.effectRecords(), execution.runtime.restarts, nil
 }
 
-func predictionActualRecords(tape WorldTape) ([]predictionActualRecord, error) {
+func predictionActualRecords(tape WorldTape, effects []EffectRecord) ([]predictionActualRecord, error) {
+	actuals := acceptedActualRuntimes(effects)
 	records := make([]predictionActualRecord, 0, len(tape.Events))
 	for _, event := range tape.Events {
 		if event.Kind != EventRunArrived {
@@ -186,16 +187,36 @@ func predictionActualRecords(tape WorldTape) ([]predictionActualRecord, error) {
 		if arrival.Request.ExpectedRuntime != nil {
 			predicted = arrival.Request.ExpectedRuntime.Duration().Seconds()
 		}
+		actual := arrival.ActualRuntime.Duration().Seconds()
+		if observed, exists := actuals["run-"+arrival.Name]; exists {
+			actual = observed
+		}
 		records = append(records, predictionActualRecord{
 			RunID:            "run-" + arrival.Name,
 			Metric:           "runtime_seconds",
 			PredictedSeconds: predicted,
-			ActualSeconds:    arrival.ActualRuntime.Duration().Seconds(),
+			ActualSeconds:    actual,
 			PredictionSource: "workload.expected_runtime",
 			ActualSource:     "world_tape.actual_runtime",
 		})
 	}
 	return records, nil
+}
+
+func acceptedActualRuntimes(effects []EffectRecord) map[string]float64 {
+	actuals := map[string]float64{}
+	for _, effect := range effects {
+		if effect.Operation != OperationProviderLaunch || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		var consequence struct {
+			ActualRuntimeSeconds float64 `json:"actual_runtime_seconds"`
+		}
+		if json.Unmarshal(effect.Consequence, &consequence) == nil && consequence.ActualRuntimeSeconds > 0 {
+			actuals[effect.CorrelationID] = consequence.ActualRuntimeSeconds
+		}
+	}
+	return actuals
 }
 
 func (bundle RunBundle) EntryNames() []string {

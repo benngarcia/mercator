@@ -129,7 +129,29 @@ func (blueprint Blueprint) validate() error {
 	if err := blueprint.Arrivals.validate(blueprint.World); err != nil {
 		return err
 	}
-	if err := validateFaults(blueprint.Faults, blueprint.Arrivals.runNames()); err != nil {
+	runs, err := blueprint.Arrivals.ExpandedRuns()
+	if err != nil {
+		return err
+	}
+	runNames := blueprint.Arrivals.runNames()
+	for _, model := range blueprint.World.RuntimeModels {
+		if model.Run != "" && !runNames[model.Run] {
+			return fmt.Errorf("runtime model references unknown Run %q", model.Run)
+		}
+		for _, run := range runs {
+			if model.Run != "" && model.Run != run.Name {
+				continue
+			}
+			if run.Request.MaxRuntime != nil && model.Maximum.Duration() > run.Request.MaxRuntime.Duration() {
+				return fmt.Errorf(
+					"runtime model for Run %q candidate %q exceeds max_runtime",
+					run.Name,
+					model.Candidate,
+				)
+			}
+		}
+	}
+	if err := validateFaults(blueprint.Faults, runNames); err != nil {
 		return err
 	}
 	if blueprint.Kind == KindDemo && len(blueprint.Proof) == 0 {

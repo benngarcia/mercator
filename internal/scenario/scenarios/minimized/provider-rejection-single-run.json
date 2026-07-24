@@ -1,0 +1,50 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "kind": "minimized",
+  "summary": "Minimized generated fault case preserving one rejected provider launch consequence.",
+  "seed": "minimized-provider-rejection-v1",
+  "world": {
+    "images": {
+      "registry.example/minimized@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "layers": [
+          {
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "size": "64MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-minimized",
+        "rate_per_hour_usd": 1
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "failure",
+        "at": "0s",
+        "request": {
+          "image": "registry.example/minimized@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_runtime": "1m",
+          "max_runtime": "2m"
+        }
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "rejected-provider-launch",
+      "trigger": {
+        "operation": "provider.launch",
+        "run": "failure",
+        "attempt": 1
+      },
+      "action": "reject_command"
+    }
+  ]
+}
