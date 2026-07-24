@@ -391,6 +391,10 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.Duration().String())
+}
+
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
 // ByteSize is a JSON string with a decimal unit ("40GB", "512MB", "1.5TB")
@@ -449,6 +453,10 @@ func (m *Moment) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (m Moment) MarshalJSON() ([]byte, error) {
+	return json.Marshal("+" + m.Offset.String())
+}
+
 // Resolve returns the absolute instant for a world started at start.
 func (m Moment) Resolve(start time.Time) time.Time { return start.Add(m.Offset) }
 
@@ -471,6 +479,14 @@ func (b *Bound) UnmarshalJSON(data []byte) error {
 	}
 	type bare Bound
 	return strictUnmarshal(data, (*bare)(b))
+}
+
+func (b Bound) MarshalJSON() ([]byte, error) {
+	if b.Exactly != nil {
+		return json.Marshal(*b.Exactly)
+	}
+	type bare Bound
+	return json.Marshal(bare(b))
 }
 
 // Check reports "" when actual satisfies the bound, else a description.
