@@ -60,6 +60,21 @@ jobs:
       - run: go test -count=1 ./internal/httpapi -run '^TestConsoleRunsNavigation$'
         env:
           MERCATOR_BROWSER_TEST: "1"
+      - run: go test -count=1 ./internal/lab -run '^TestLabConsoleUsesNormalAPIAndSSE$'
+        env:
+          MERCATOR_BROWSER_TEST: "1"
+
+  lab:
+    name: Lab
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race ./internal/lab ./internal/scenario ./cmd/mercator -count=1
+      - run: go test ./internal/lab -run '^$' -fuzz '^FuzzGeneratedBlueprintCompilesAndPreservesInvariants$' -fuzztime=10s -parallel=1
 
   image:
     name: Image
