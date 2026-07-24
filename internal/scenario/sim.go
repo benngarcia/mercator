@@ -224,7 +224,7 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 		WorkspaceID:    simWorkspace,
 		RunID:          runID,
 		IdempotencyKey: "create:" + runID,
-		Workload:       simWorkload(runID, req),
+		Workload:       WorkloadForRun(simWorkspace, runID, req),
 	})
 	if err != nil {
 		return err
@@ -274,7 +274,9 @@ func (s *simSession) Close() {
 	_ = s.log.Close()
 }
 
-func simWorkload(runID string, req RequestSpec) domain.WorkloadRevision {
+// WorkloadForRun translates the canonical Blueprint request into the real
+// orchestrator input shared by placement scenarios and Lab execution.
+func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadRevision {
 	spec := domain.WorkloadSpec{
 		Containers: []domain.ContainerSpec{{
 			Name:     "main",
@@ -312,7 +314,7 @@ func simWorkload(runID string, req RequestSpec) domain.WorkloadRevision {
 	}
 	return domain.WorkloadRevision{
 		ID:          "wrev_" + runID,
-		WorkspaceID: simWorkspace,
+		WorkspaceID: workspaceID,
 		WorkloadID:  "wrk_" + runID,
 		Digest:      "sha256:" + runID,
 		Spec:        spec,

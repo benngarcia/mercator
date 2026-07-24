@@ -12,7 +12,7 @@ import (
 
 type WorldTapeSchema string
 
-const WorldTapeSchemaV1 WorldTapeSchema = "mercator.lab/world-tape.v1"
+const WorldTapeSchemaV2 WorldTapeSchema = "mercator.lab/world-tape.v2"
 
 const EventRunArrived = "world.run.arrived.v1"
 
@@ -35,13 +35,14 @@ type WorldEvent struct {
 }
 
 type RunArrival struct {
-	Name    string               `json:"name"`
-	Request scenario.RequestSpec `json:"request"`
-	Policy  string               `json:"-"`
+	Name          string               `json:"name"`
+	Request       scenario.RequestSpec `json:"request"`
+	ActualRuntime scenario.Duration    `json:"actual_runtime"`
+	Policy        string               `json:"-"`
 }
 
 func (tape WorldTape) Validate() error {
-	if tape.Schema != WorldTapeSchemaV1 {
+	if tape.Schema != WorldTapeSchemaV2 {
 		return fmt.Errorf("unsupported World Tape schema %q", tape.Schema)
 	}
 	if tape.BlueprintName == "" || tape.Seed == "" || tape.Start.IsZero() {
@@ -55,6 +56,15 @@ func (tape WorldTape) Validate() error {
 		}
 		if !json.Valid(event.Data) {
 			return fmt.Errorf("World Tape event %q data is not JSON", event.ID)
+		}
+		if event.Kind == EventRunArrived {
+			var arrival RunArrival
+			if err := json.Unmarshal(event.Data, &arrival); err != nil {
+				return fmt.Errorf("decode World Tape Run arrival %q: %w", event.ID, err)
+			}
+			if arrival.Name == "" || arrival.ActualRuntime.Duration() <= 0 {
+				return fmt.Errorf("World Tape Run arrival %q needs a name and positive actual runtime", event.ID)
+			}
 		}
 		if ids[event.ID] {
 			return fmt.Errorf("duplicate World Tape event %q", event.ID)
