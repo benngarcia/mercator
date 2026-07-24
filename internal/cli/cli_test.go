@@ -66,6 +66,11 @@ func TestHelpDoesNotRequireBaseURL(t *testing.T) {
 			contains: "Usage: mercator run",
 		},
 		{
+			name:     "lab",
+			args:     []string{"help", "lab"},
+			contains: "Usage: mercator lab",
+		},
+		{
 			name:     "run create",
 			args:     []string{"run", "create", "--help"},
 			contains: "mercator run create busybox -- echo hi",

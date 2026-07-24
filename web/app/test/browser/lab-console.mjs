@@ -99,15 +99,21 @@ try {
     });
   }
 } finally {
-  await saveBundle();
-  await context.tracing.stop({
-    path: path.join(outputDirectory, "trace.zip"),
-  });
-  await context.close();
-  await browser.close();
+  await retainFailure(() =>
+    context.tracing.stop({
+      path: path.join(outputDirectory, "trace.zip"),
+    }),
+  );
+  await retainFailure(uploadEvidence);
+  await retainFailure(saveBundle);
+  await retainFailure(() => context.close());
+  await retainFailure(() => browser.close());
 }
 
-if (failure) throw failure;
+if (failure) {
+  failure.message += `\nReplay: mercator lab replay --bundle ${path.join(outputDirectory, "artifact-warmth-restart.mlab")}`;
+  throw failure;
+}
 console.log(`Lab browser proof written to ${outputDirectory}`);
 
 async function assertCheckpoint(id) {
@@ -173,8 +179,39 @@ async function saveBundle() {
   );
 }
 
+async function uploadEvidence() {
+  const form = new FormData();
+  const trace = await fs.readFile(path.join(outputDirectory, "trace.zip"));
+  form.append("trace", new Blob([trace]), "trace.zip");
+  for (const name of (await fs.readdir(outputDirectory)).sort()) {
+    if (!name.endsWith(".png")) continue;
+    const screenshot = await fs.readFile(path.join(outputDirectory, name));
+    form.append("screenshots", new Blob([screenshot]), name);
+  }
+  const response = await fetch(`${baseURL}/v1/lab/evidence`, {
+    method: "POST",
+    headers: labHeaders(),
+    body: form,
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Lab evidence upload returned ${response.status}: ${await response.text()}`,
+    );
+  }
+}
+
 function labHeaders(extra = {}) {
   return { Authorization: `Bearer ${token}`, ...extra };
+}
+
+async function retainFailure(action) {
+  try {
+    await action();
+  } catch (error) {
+    failure = failure
+      ? new AggregateError([failure, error], "Lab browser proof failed")
+      : error;
+  }
 }
 
 function escapeRegExp(value) {

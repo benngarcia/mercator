@@ -97,6 +97,13 @@ type Checkpoint struct {
 	WorldHash   string      `json:"world_hash"`
 }
 
+type DriveRecord struct {
+	Kind              string `json:"kind"`
+	Duration          string `json:"duration,omitempty"`
+	Event             string `json:"event,omitempty"`
+	TargetTransitions uint64 `json:"target_transitions,omitempty"`
+}
+
 type Execution struct {
 	config  Config
 	queue   []WorldEvent
@@ -107,6 +114,8 @@ type Execution struct {
 	processed   []WorldEvent
 	lastEvent   *WorldEvent
 	invariants  []InvariantResult
+	drives      []DriveRecord
+	recordDrive bool
 
 	sameTimestamp       time.Time
 	sameTimestampCount  uint64
@@ -143,9 +152,10 @@ func Open(ctx context.Context, config Config) (*Execution, error) {
 		config.Invariants = DefaultInvariantRegistry()
 	}
 	execution := &Execution{
-		config: config,
-		queue:  slices.Clone(config.Tape.Events),
-		now:    config.Tape.Start,
+		config:      config,
+		queue:       slices.Clone(config.Tape.Events),
+		now:         config.Tape.Start,
+		recordDrive: true,
 	}
 	if config.Blueprint.Schema == scenario.BlueprintSchemaV1 && config.Blueprint.Arrivals != nil {
 		runtime, err := newControlPlane(ctx, config.Tape)
@@ -158,6 +168,14 @@ func Open(ctx context.Context, config Config) (*Execution, error) {
 }
 
 func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Checkpoint, error) {
+	checkpoint, err := execution.drive(ctx, command)
+	if err == nil && execution.recordDrive {
+		execution.drives = append(execution.drives, driveRecord(command, checkpoint))
+	}
+	return checkpoint, err
+}
+
+func (execution *Execution) drive(ctx context.Context, command DriveCommand) (Checkpoint, error) {
 	if err := ctx.Err(); err != nil {
 		return execution.checkpoint(), err
 	}
@@ -236,6 +254,46 @@ func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Ch
 	default:
 		return execution.checkpoint(), fmt.Errorf("unknown Lab drive command")
 	}
+}
+
+func driveRecord(command DriveCommand, checkpoint Checkpoint) DriveRecord {
+	record := DriveRecord{TargetTransitions: checkpoint.Transitions}
+	switch command.kind {
+	case driveStep:
+		record.Kind = "step"
+	case driveDuration:
+		record.Kind = "advance"
+		record.Duration = command.duration.String()
+	case driveEvent:
+		record.Kind = "until_event"
+		record.Event = command.eventKind
+	case drivePredicate:
+		record.Kind = "until_predicate"
+	case driveQuiescence:
+		record.Kind = "quiesce"
+	}
+	return record
+}
+
+func (execution *Execution) DriveToCompletion(ctx context.Context) (Checkpoint, error) {
+	checkpoint, err := execution.Drive(ctx, Quiesce())
+	if err != nil {
+		return checkpoint, err
+	}
+	for _, event := range execution.config.Tape.Events {
+		if event.Kind != EventRunArrived {
+			continue
+		}
+		var arrival RunArrival
+		if err := json.Unmarshal(event.Data, &arrival); err != nil {
+			return execution.checkpoint(), fmt.Errorf("decode Run completion horizon: %w", err)
+		}
+		checkpoint, err = execution.Drive(ctx, Advance(arrival.ActualRuntime.Duration()+time.Nanosecond))
+		if err != nil {
+			return checkpoint, err
+		}
+	}
+	return checkpoint, nil
 }
 
 func (execution *Execution) transition(ctx context.Context) error {
@@ -318,7 +376,16 @@ func (execution *Execution) Restart(ctx context.Context) error {
 	if err := execution.runtime.restart(ctx); err != nil {
 		return err
 	}
-	return execution.evaluateInvariants(ctx)
+	if err := execution.evaluateInvariants(ctx); err != nil {
+		return err
+	}
+	if execution.recordDrive {
+		execution.drives = append(execution.drives, DriveRecord{
+			Kind:              "restart",
+			TargetTransitions: execution.transitions,
+		})
+	}
+	return nil
 }
 
 func (execution *Execution) Check(ctx context.Context) (Checkpoint, error) {

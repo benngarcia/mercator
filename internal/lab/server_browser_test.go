@@ -89,5 +89,26 @@ func TestLabConsoleUsesNormalAPIAndSSE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run Lab browser acceptance: %v\n%s\nartifacts: %s", err, result, output)
 	}
-	t.Logf("Lab browser acceptance: %s", result)
+	bundlePath := filepath.Join(output, "artifact-warmth-restart.mlab")
+	archive, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read browser Run Bundle: %v", err)
+	}
+	bundle, err := DecodeRunBundle(archive)
+	if err != nil {
+		t.Fatalf("decode browser Run Bundle: %v", err)
+	}
+	report, err := VerifyVerticalProof(context.Background(), bundle)
+	if err != nil {
+		t.Fatalf(
+			"verify browser Run Bundle: %v\nReplay: mercator lab replay --bundle %s",
+			err,
+			bundlePath,
+		)
+	}
+	t.Logf(
+		"Lab browser acceptance: %s15 checkpoints passed; normalized output %s",
+		result,
+		report.NormalizedSHA256,
+	)
 }

@@ -27,7 +27,33 @@ type labServeOptions struct {
 	policy    string
 }
 
-func runLabCommand(ctx context.Context, args []string, env map[string]string, stderr io.Writer) int {
+func runLabCommand(ctx context.Context, args []string, env map[string]string, stdout, stderr io.Writer) int {
+	if len(args) < 3 {
+		_, _ = fmt.Fprintln(stderr, labUsage)
+		return 2
+	}
+	if args[2] == "help" || args[2] == "-h" || args[2] == "--help" {
+		_, _ = fmt.Fprintln(stdout, labUsage)
+		return 0
+	}
+	switch args[2] {
+	case "author":
+		return runLabAuthor(args[3:], stdout, stderr)
+	case "generate":
+		return runLabGenerate(args[3:], stdout, stderr)
+	case "run":
+		return runLabExecute(ctx, args[3:], stdout, stderr)
+	case "replay":
+		return runLabReplay(ctx, args[3:], stdout, stderr)
+	case "minimize":
+		return runLabMinimize(ctx, args[3:], stdout, stderr)
+	case "promote":
+		return runLabPromote(ctx, args[3:], stdout, stderr)
+	case "serve":
+	default:
+		_, _ = fmt.Fprintln(stderr, labUsage)
+		return 2
+	}
 	options, err := parseLabServeOptions(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
@@ -35,6 +61,17 @@ func runLabCommand(ctx context.Context, args []string, env map[string]string, st
 	}
 	return runLabServe(ctx, options, env)
 }
+
+const labUsage = `usage: mercator lab <command>
+
+Commands:
+  author    Write a valid Blueprint template
+  generate  Generate a deterministic Blueprint
+  run       Execute a Blueprint and write one .mlab
+  replay    Reconstruct a run from one .mlab
+  minimize  Shrink a replayable failure
+  promote   Prove and promote a target Blueprint
+  serve     Run the isolated Lab server and production console`
 
 func parseLabServeOptions(args []string) (labServeOptions, error) {
 	if len(args) < 3 || args[1] != "lab" || args[2] != "serve" {

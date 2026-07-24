@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -185,6 +186,53 @@ func TestProductionHandlerCannotMountLabControls(t *testing.T) {
 	// Assert
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", response.Code)
+	}
+}
+
+func TestServerAddsBrowserEvidenceToDownloadedBundle(t *testing.T) {
+	server := openServerFixture(t)
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	trace, err := writer.CreateFormFile("trace", "trace.zip")
+	if err != nil {
+		t.Fatalf("create trace part: %v", err)
+	}
+	if _, err := trace.Write([]byte("trace bytes")); err != nil {
+		t.Fatalf("write trace: %v", err)
+	}
+	screenshot, err := writer.CreateFormFile("screenshots", "terminal.png")
+	if err != nil {
+		t.Fatalf("create screenshot part: %v", err)
+	}
+	if _, err := screenshot.Write([]byte("png bytes")); err != nil {
+		t.Fatalf("write screenshot: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart body: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/lab/evidence", body)
+	request.Header.Set("Authorization", "Bearer lab-test-token")
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("upload status = %d, body = %s", response.Code, response.Body.String())
+	}
+	bundleRequest := httptest.NewRequest(http.MethodGet, "/v1/lab/bundle", nil)
+	bundleRequest.Header.Set("Authorization", "Bearer lab-test-token")
+	bundleResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(bundleResponse, bundleRequest)
+	entries, err := readBundleEntries(bundleResponse.Body.Bytes())
+	if err != nil {
+		t.Fatalf("read downloaded bundle: %v", err)
+	}
+	if string(entries["ui/trace.zip"]) != "trace bytes" {
+		t.Fatal("downloaded bundle did not carry the trace")
+	}
+	if string(entries["ui/screenshots/terminal.png"]) != "png bytes" {
+		t.Fatal("downloaded bundle did not carry the screenshot")
 	}
 }
 
