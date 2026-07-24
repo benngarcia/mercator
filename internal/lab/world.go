@@ -302,6 +302,15 @@ func (world *simulatedWorld) recordControlPlaneRestart(ordinal uint64) {
 	)
 }
 
+// observeOffers reads the offers a client can see without recording an effect.
+// ListOffers is the control plane's placement read and belongs in the ledger;
+// an operator refreshing a page does not.
+func (world *simulatedWorld) observeOffers() []domain.OfferSnapshot {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	return world.offerSnapshots(world.observed)
+}
+
 func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()

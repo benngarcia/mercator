@@ -40,6 +40,9 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 	if len(args) > 1 && args[1] == "verify" {
 		return conformance.RunCommand(ctx, args[2:], env, stdout, stderr)
 	}
+	if len(args) > 1 && args[1] == "lab" {
+		return runLabCommand(ctx, args, env, stderr)
+	}
 	if len(args) > 1 && args[1] != "serve" {
 		return cli.Run(ctx, cli.Config{
 			BaseURL:     envValue(env, "MERCATOR_API_URL", ""),

@@ -106,6 +106,61 @@ func TestServeRejectsUnknownFlags(t *testing.T) {
 	}
 }
 
+func TestLabServeOptionsRequireABlueprint(t *testing.T) {
+	// Arrange
+	args := []string{"mercator", "lab", "serve"}
+
+	// Act
+	_, err := parseLabServeOptions(args)
+
+	// Assert
+	if err == nil {
+		t.Fatal("missing Blueprint should fail")
+	}
+}
+
+func TestLabServeOptionsNameEveryExecutionInput(t *testing.T) {
+	// Arrange
+	args := []string{
+		"mercator", "lab", "serve",
+		"--blueprint", "demo.json",
+		"--addr", "127.0.0.1:9090",
+		"--seed", "browser-proof",
+		"--policy", "cost-aware",
+	}
+
+	// Act
+	options, err := parseLabServeOptions(args)
+
+	// Assert
+	if err != nil {
+		t.Fatalf("parse Lab serve options: %v", err)
+	}
+	if options.blueprint != "demo.json" ||
+		options.addr != "127.0.0.1:9090" ||
+		options.seed != "browser-proof" ||
+		options.policy != "cost-aware" {
+		t.Fatalf("options = %+v", options)
+	}
+}
+
+func TestLabServeRejectsNonLoopbackAddress(t *testing.T) {
+	// Arrange
+	args := []string{
+		"mercator", "lab", "serve",
+		"--blueprint", "demo.json",
+		"--addr", "0.0.0.0:9090",
+	}
+
+	// Act
+	_, err := parseLabServeOptions(args)
+
+	// Assert
+	if err == nil {
+		t.Fatal("non-loopback Lab address should fail")
+	}
+}
+
 func TestServeClosesStorageWhenOIDCDiscoveryFails(t *testing.T) {
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "discovery unavailable", http.StatusServiceUnavailable)
