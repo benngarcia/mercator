@@ -40,6 +40,11 @@ jobs:
           bun-version: "1.3"
       - run: bun install --frozen-lockfile
         working-directory: web/app
+      # The console is embedded from web/static, which is not committed. Without
+      # this build the served page has no assets and the browser proof fails at
+      # startup.
+      - run: bun run build
+        working-directory: web/app
       - run: bunx playwright install --with-deps chromium
         working-directory: web/app
       - run: go test -count=1 ./internal/lab -run '^TestLabConsoleUsesNormalAPIAndSSE$'
