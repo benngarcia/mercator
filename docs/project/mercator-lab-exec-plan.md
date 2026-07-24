@@ -39,7 +39,15 @@ The core implementation rule is:
 - [x] 2026-07-23: Create tracking issue #146.
 - [x] 2026-07-23: Initialize `gh-stack` on
   `beng/mercator-lab-contracts` from `origin/master` at `6698032`.
-- [ ] Slice 01: contracts and executable plan.
+- [x] 2026-07-23: Keep the eight-slice graph in local `gh-stack` metadata.
+  GitHub rejected remote stack creation with exit code 9 because Stacked PRs
+  remains a private preview and this repository is not enabled. Publish the
+  same serial base-branch chain as standard pull requests until the remote
+  stack API becomes available.
+- [x] 2026-07-23: Complete Slice 01 contracts and executable plan. All 12
+  placement scenarios load through Blueprint v1 while preserving four green
+  and eight target classifications. The catalog also validates the complete
+  15-checkpoint target demonstration and its UI sidecar.
 - [ ] Slice 02: stable read models.
 - [ ] Slice 03: deterministic kernel, entropy, and World Tape.
 - [ ] Slice 04: World Truth, Observed State, effects, and real control plane.
@@ -65,6 +73,37 @@ The core implementation rule is:
   path beside the normal API/SSE feed.
 - the current top-level placement corpus contains 12 scenarios: four green and
   eight target.
+- the legacy adapter converts mutable image tags and layer names into stable
+  synthetic sha256 identities. Canonical Blueprint v1 rejects both forms and
+  requires exact digests at the source.
+- the Slice 01 review moved contract test inputs into named fixtures and made
+  `Blueprint` the strict wire representation, deleting a duplicate decode
+  structure and 292 lines of test setup.
+
+## Verification evidence
+
+### Slice 01
+
+On 2026-07-23, the exact reviewed worktree passed:
+
+```text
+go test ./internal/scenario -count=1
+go test -race ./internal/scenario -count=1
+go generate ./...
+go test ./...
+go vet ./...
+go build ./...
+scripts/build-release-archives.sh v0.0.0-ci /private/tmp/mercator-release-dist-slice01
+scripts/check-open-source-launch.sh
+cd web/app
+bun install --frozen-lockfile
+bun run generate:api
+bun run check:react-effects
+bun run typecheck
+bun run test
+bun run build
+git diff --check
+```
 
 ## Public contracts
 

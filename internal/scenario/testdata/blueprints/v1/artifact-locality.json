@@ -1,0 +1,47 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "target",
+  "summary": "A consumer prefers the Rental holding its immutable input.",
+  "missing_capabilities": ["artifacts", "artifact_evidence"],
+  "world": {
+    "artifacts": [
+      {
+        "id": "artifact:dataset:v1",
+        "size": "40GB"
+      },
+      {
+        "id": "artifact:result:v1",
+        "size": "1GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-a",
+        "artifact_replicas": ["artifact:dataset:v1"],
+        "cache_mounts": ["compiler-cache"],
+        "rate_per_hour_usd": 1.0
+      }
+    ]
+  },
+  "request": {
+    "image": "sha256:a172cedcae47474b170e81ae01adcd56a1223f9af8b95dea874433c3674ef00f",
+    "consumes_artifacts": ["artifact:dataset:v1"],
+    "produces_artifacts": ["artifact:result:v1"],
+    "cache_mounts": [
+      {
+        "name": "compiler-cache"
+      }
+    ]
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-a",
+    "candidates": {
+      "rental-a": {
+        "artifact_evidence": {
+          "artifact:dataset:v1": "hit"
+        }
+      }
+    }
+  }
+}

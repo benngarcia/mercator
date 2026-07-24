@@ -1,0 +1,30 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "summary": "Tags are mutable and cannot identify a simulated image.",
+  "world": {
+    "images": {
+      "app:v1": {
+        "layers": [
+          {
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": "1GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-a",
+        "rate_per_hour_usd": 1.0
+      }
+    ]
+  },
+  "request": {
+    "image": "app:v1"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-a"
+  }
+}

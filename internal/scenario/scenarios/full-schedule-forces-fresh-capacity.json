@@ -1,20 +1,21 @@
 {
+  "schema": "mercator.lab/blueprint.v1",
   "summary": "The warm Rental would win on score, but its RentalSchedule already holds the maximum of four queued Bookings. The cap, not the score, forces the fifth Run onto fresh capacity, and the rejection records that the schedule is full.",
-  "status": "target",
+  "classification": "target",
   "missing_capabilities": ["rental_schedule"],
   "world": {
     "images": {
-      "worker:v1": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
         "layers": [
-          {"name": "worker-base", "size": "4GB"},
-          {"name": "worker-code-v1", "size": "20MB"}
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
         ]
       }
     },
     "rentals": [
       {
         "id": "rental-warm",
-        "cached_images": ["worker:v1"],
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
         "rate_per_hour_usd": 2.5
       }
     ],
@@ -45,7 +46,7 @@
     ]
   },
   "request": {
-    "image": "worker:v1",
+    "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
     "expected_runtime": "20m",
     "max_runtime": "1h"
   },

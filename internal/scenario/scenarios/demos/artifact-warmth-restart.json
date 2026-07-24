@@ -1,0 +1,134 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "target",
+  "kind": "demo",
+  "summary": "A producer publishes an immutable Artifact on a partly warm Rental; its dependent consumer then prefers the same warm capacity, survives ambiguous provider delivery and a deterministic control-plane restart, and reaches the same replayable terminal result.",
+  "missing_capabilities": [
+    "artifacts",
+    "artifact_evidence",
+    "lab_execution",
+    "effect_ledger",
+    "control_plane_restart",
+    "run_bundle",
+    "invariants",
+    "lab_ui"
+  ],
+  "seed": "mercator-lab-vertical-v1",
+  "world": {
+    "images": {
+      "producer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "layers": [
+          {
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "size": "80MB"
+          }
+        ]
+      },
+      "consumer@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
+        "layers": [
+          {
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:model-checkpoint:v1",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_layers": [
+          "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "cache_mounts": ["compiler-cache"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m"
+        }
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "producer",
+        "at": "0s",
+        "request": {
+          "image": "producer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expected_runtime": "8m",
+          "max_runtime": "20m",
+          "produces_artifacts": ["artifact:model-checkpoint:v1"],
+          "cache_mounts": [{"name": "compiler-cache"}]
+        }
+      },
+      {
+        "name": "consumer",
+        "at": "0s",
+        "request": {
+          "image": "consumer@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "expected_runtime": "6m",
+          "max_runtime": "20m",
+          "consumes_artifacts": ["artifact:model-checkpoint:v1"]
+        }
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "lose-producer-launch-response",
+      "trigger": {
+        "operation": "provider.launch",
+        "run": "producer",
+        "attempt": 1
+      },
+      "action": "lose_response"
+    },
+    {
+      "id": "restart-after-artifact-published",
+      "trigger": {
+        "event": "compute.artifact.published.v1",
+        "run": "producer"
+      },
+      "action": "restart_control_plane"
+    }
+  ],
+  "proof": [
+    {"step": 1, "evidence": "producer_submitted"},
+    {"step": 2, "evidence": "existing_vs_fresh_compared"},
+    {"step": 3, "evidence": "partial_image_reuse"},
+    {"step": 4, "evidence": "capacity_prepared"},
+    {"step": 5, "evidence": "artifact_published"},
+    {"step": 6, "evidence": "consumer_unblocked"},
+    {"step": 7, "evidence": "warmth_observed"},
+    {"step": 8, "evidence": "queue_vs_fresh_compared"},
+    {"step": 9, "evidence": "ambiguous_delivery"},
+    {"step": 10, "evidence": "reconciled_without_duplicate"},
+    {"step": 11, "evidence": "control_plane_restarted"},
+    {"step": 12, "evidence": "restart_equivalent"},
+    {"step": 13, "evidence": "ui_rendered"},
+    {"step": 14, "evidence": "bundle_replayed"},
+    {"step": 15, "evidence": "invariants_passed"}
+  ]
+}
