@@ -1,11 +1,13 @@
 # CLI Reference
 
-The `mercator` binary has three modes:
+The `mercator` binary has four modes:
 
 - `mercator serve [--dev]` starts the HTTP API and embedded console. `--dev`
   adds a loopback-only browser session for local development.
 - `mercator verify --spec FILE` starts an isolated broker and launches a real,
   bounded provider conformance Run.
+- `mercator lab <command>` authors, executes, replays, minimizes, and proves
+  deterministic scenarios. See [Mercator Lab](mercator-lab.md).
 - Every other command (`run`, `sink`, `login`, `context`, ...) targets an
   existing Mercator API and prints JSON responses.
 

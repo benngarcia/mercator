@@ -69,6 +69,10 @@ func LoadBlueprint(path string) (Blueprint, error) {
 	if err != nil {
 		return Blueprint{}, err
 	}
+	return DecodeBlueprint(path, data)
+}
+
+func DecodeBlueprint(path string, data []byte) (Blueprint, error) {
 	var header struct {
 		Schema BlueprintSchema `json:"schema"`
 	}
@@ -76,14 +80,44 @@ func LoadBlueprint(path string) (Blueprint, error) {
 		return Blueprint{}, fmt.Errorf("%s: %w", path, err)
 	}
 	if header.Schema == "" {
-		data, err = adaptLegacyBlueprint(data)
+		adapted, err := adaptLegacyBlueprint(data)
 		if err != nil {
 			return Blueprint{}, fmt.Errorf("%s: adapt legacy placement fixture: %w", path, err)
 		}
+		data = adapted
 	} else if header.Schema != BlueprintSchemaV1 {
 		return Blueprint{}, fmt.Errorf("%s: unsupported Blueprint schema %q", path, header.Schema)
 	}
 	return decodeBlueprintV1(path, data)
+}
+
+func EncodeBlueprint(blueprint Blueprint) ([]byte, error) {
+	if blueprint.Kind == "" {
+		blueprint.Kind = KindRegression
+	}
+	if !knownKinds[blueprint.Kind] {
+		return nil, fmt.Errorf("unknown Blueprint kind %q", blueprint.Kind)
+	}
+	if err := blueprint.validate(); err != nil {
+		return nil, err
+	}
+	encoded, err := json.MarshalIndent(blueprint, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
+}
+
+func PromoteBlueprint(blueprint Blueprint) (Blueprint, error) {
+	if blueprint.Classification != ClassificationTarget {
+		return Blueprint{}, fmt.Errorf("only target Blueprints can be promoted")
+	}
+	blueprint.Classification = ClassificationGreen
+	blueprint.MissingCapabilities = nil
+	if err := blueprint.validate(); err != nil {
+		return Blueprint{}, fmt.Errorf("promoted Blueprint is invalid: %w", err)
+	}
+	return blueprint, nil
 }
 
 func decodeBlueprintV1(path string, data []byte) (Blueprint, error) {

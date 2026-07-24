@@ -41,7 +41,7 @@ func run(ctx context.Context, args []string, env map[string]string, stdout, stde
 		return conformance.RunCommand(ctx, args[2:], env, stdout, stderr)
 	}
 	if len(args) > 1 && args[1] == "lab" {
-		return runLabCommand(ctx, args, env, stderr)
+		return runLabCommand(ctx, args, env, stdout, stderr)
 	}
 	if len(args) > 1 && args[1] != "serve" {
 		return cli.Run(ctx, cli.Config{

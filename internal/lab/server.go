@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"strings"
@@ -36,6 +37,7 @@ type Server struct {
 	production *handlerSlot
 
 	mu           sync.Mutex
+	uiEvidence   UIEvidence
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
@@ -75,6 +77,7 @@ func NewServer(ctx context.Context, config ServerConfig) (*Server, error) {
 	mux.Handle("POST /v1/lab/drive", server.labOnly(http.HandlerFunc(server.drive)))
 	mux.Handle("POST /v1/lab/restart", server.labOnly(http.HandlerFunc(server.restart)))
 	mux.Handle("GET /v1/lab/truth", server.labOnly(http.HandlerFunc(server.truth)))
+	mux.Handle("POST /v1/lab/evidence", server.labOnlyBytes(16<<20, http.HandlerFunc(server.uploadEvidence)))
 	mux.Handle("GET /v1/lab/bundle", server.labOnly(http.HandlerFunc(server.bundle)))
 	mux.Handle("/", server.production)
 	server.handler = mux
@@ -121,6 +124,10 @@ func (server *Server) Shutdown(ctx context.Context) error {
 }
 
 func (server *Server) labOnly(next http.Handler) http.Handler {
+	return server.labOnlyBytes(1<<20, next)
+}
+
+func (server *Server) labOnlyBytes(maxBytes int64, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		authorization := request.Header.Get("Authorization")
 		if !strings.HasPrefix(authorization, "Bearer ") {
@@ -132,7 +139,7 @@ func (server *Server) labOnly(next http.Handler) http.Handler {
 			writeLabError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Lab operator token is required.")
 			return
 		}
-		request.Body = http.MaxBytesReader(w, request.Body, 1<<20)
+		request.Body = http.MaxBytesReader(w, request.Body, maxBytes)
 		next.ServeHTTP(w, request)
 	})
 }
@@ -180,12 +187,86 @@ func (server *Server) truth(w http.ResponseWriter, _ *http.Request) {
 	writeLabJSON(w, http.StatusOK, server.execution.runtime.world.truthSnapshot())
 }
 
+func (server *Server) uploadEvidence(w http.ResponseWriter, request *http.Request) {
+	if err := request.ParseMultipartForm(16 << 20); err != nil {
+		writeLabError(w, http.StatusBadRequest, "INVALID_UI_EVIDENCE", err.Error())
+		return
+	}
+	defer request.MultipartForm.RemoveAll()
+	if len(request.MultipartForm.Value) > 0 {
+		writeLabError(w, http.StatusBadRequest, "INVALID_UI_EVIDENCE", "UI evidence accepts files only.")
+		return
+	}
+	for field := range request.MultipartForm.File {
+		if field != "trace" && field != "screenshots" {
+			writeLabError(w, http.StatusBadRequest, "INVALID_UI_EVIDENCE", "Unknown UI evidence field.")
+			return
+		}
+	}
+	evidence, err := readUIEvidence(request)
+	if err != nil {
+		writeLabError(w, http.StatusBadRequest, "INVALID_UI_EVIDENCE", err.Error())
+		return
+	}
+	if _, err := (RunBundle{}).WithUIEvidence(evidence); err != nil {
+		writeLabError(w, http.StatusBadRequest, "INVALID_UI_EVIDENCE", err.Error())
+		return
+	}
+	server.mu.Lock()
+	server.uiEvidence = evidence
+	server.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func readUIEvidence(request *http.Request) (UIEvidence, error) {
+	evidence := UIEvidence{Screenshots: map[string][]byte{}}
+	traces := request.MultipartForm.File["trace"]
+	if len(traces) > 1 {
+		return UIEvidence{}, errors.New("UI evidence accepts one trace")
+	}
+	if len(traces) == 1 {
+		data, err := readMultipartFile(traces[0])
+		if err != nil {
+			return UIEvidence{}, fmt.Errorf("read UI trace: %w", err)
+		}
+		evidence.Trace = data
+	}
+	for _, file := range request.MultipartForm.File["screenshots"] {
+		if _, exists := evidence.Screenshots[file.Filename]; exists {
+			return UIEvidence{}, fmt.Errorf("duplicate UI screenshot %q", file.Filename)
+		}
+		data, err := readMultipartFile(file)
+		if err != nil {
+			return UIEvidence{}, fmt.Errorf("read UI screenshot %q: %w", file.Filename, err)
+		}
+		evidence.Screenshots[file.Filename] = data
+	}
+	if len(evidence.Trace) == 0 && len(evidence.Screenshots) == 0 {
+		return UIEvidence{}, errors.New("UI evidence needs a trace or screenshot")
+	}
+	return evidence, nil
+}
+
+func readMultipartFile(header *multipart.FileHeader) ([]byte, error) {
+	file, err := header.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
+}
+
 func (server *Server) bundle(w http.ResponseWriter, request *http.Request) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	bundle, err := server.execution.Export(request.Context())
 	if err != nil {
 		writeLabError(w, http.StatusInternalServerError, "BUNDLE_EXPORT_FAILED", err.Error())
+		return
+	}
+	bundle, err = bundle.WithUIEvidence(server.uiEvidence)
+	if err != nil {
+		writeLabError(w, http.StatusInternalServerError, "BUNDLE_EVIDENCE_FAILED", err.Error())
 		return
 	}
 	data, err := bundle.Bytes()

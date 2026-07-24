@@ -26,6 +26,10 @@ func helpForTopic(tokens []string, explicit bool) (string, bool) {
 		return rootHelp, true
 	}
 	switch tokens[0] {
+	case "lab":
+		if explicit || (len(tokens) > 1 && isHelpArg(tokens[1])) {
+			return labHelp, true
+		}
 	case "run":
 		if explicit && len(tokens) == 1 {
 			return runHelp, true
@@ -157,6 +161,7 @@ Mercator is an OCI run broker with an HTTP API, JSON CLI, and embedded console.
 
 Commands:
   serve [--dev]         Start the server; --dev adds loopback local browser login
+  lab <command>         Author, execute, replay, minimize, and prove scenarios
   verify --spec FILE    Launch a bounded provider Conformance Trial
   login                 Sign in through the server's OIDC login and store a CLI token
   logout                Clear the stored login credential
@@ -178,6 +183,20 @@ Examples:
   mercator login
   mercator run create busybox -- echo hi
   mercator context use production
+`
+
+const labHelp = `Usage: mercator lab <command>
+
+Lab commands:
+  author    Write a valid Blueprint template
+  generate  Generate a deterministic Blueprint
+  run       Execute a Blueprint and write one .mlab
+  replay    Reconstruct a run from one .mlab
+  minimize  Shrink a replayable failure
+  promote   Prove and promote a target Blueprint
+  serve     Run an isolated Lab server and production console
+
+See docs/reference/mercator-lab.md for fidelity levels and complete examples.
 `
 
 const runHelp = `Usage: mercator run <command> [flags]
