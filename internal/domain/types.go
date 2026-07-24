@@ -166,12 +166,43 @@ const (
 	OfferKindProvisionable OfferKind = "provisionable"
 )
 
+// ExecutionLane answers whether Mercator can run a second workload here
+// without allocating new capacity. It is orthogonal to OfferKind, which
+// answers who owns the host: a standing Docker host with an enrolled node and
+// a provisioned VM with an enrolled node are both reusable, while a
+// provider-native one-shot container is ephemeral however it was allocated.
+//
+// Only reusable offers may become Rentals, carry Rental Schedules, or accrue
+// Warmth that survives a Run.
+type ExecutionLane string
+
+const (
+	// LaneReusable is capacity Mercator controls through an enrolled node
+	// runtime capable of executing successive workloads.
+	LaneReusable ExecutionLane = "reusable"
+	// LaneEphemeral is a provider-native one-shot execution product. Mercator
+	// controls no host runtime between workloads.
+	LaneEphemeral ExecutionLane = "ephemeral"
+)
+
+func (lane ExecutionLane) Valid() bool {
+	return lane == LaneReusable || lane == LaneEphemeral
+}
+
+// Reusable reports whether this lane may become a Rental. It reads as the
+// question callers actually ask.
+func (lane ExecutionLane) Reusable() bool { return lane == LaneReusable }
+
 type OfferSnapshot struct {
-	ID           string              `json:"id"`
-	RentalID     string              `json:"rental_id,omitempty"`
-	ConnectionID string              `json:"connection_id"`
-	AdapterType  string              `json:"adapter_type"`
-	Kind         OfferKind           `json:"kind"`
+	ID           string    `json:"id"`
+	RentalID     string    `json:"rental_id,omitempty"`
+	ConnectionID string    `json:"connection_id"`
+	AdapterType  string    `json:"adapter_type"`
+	Kind         OfferKind `json:"kind"`
+	// Lane is the offer's reuse semantics, stamped by the Broker from the
+	// backend's negotiated capability Declaration rather than claimed by the
+	// adapter itself. An adapter cannot advertise reuse it cannot perform.
+	Lane         ExecutionLane       `json:"lane"`
 	NativeRef    string              `json:"native_ref"`
 	ObservedAt   time.Time           `json:"observed_at"`
 	ExpiresAt    time.Time           `json:"expires_at"`
@@ -367,6 +398,11 @@ const (
 	CandidateDispositionRunNow    CandidateDisposition = "run_now_existing_rental"
 	CandidateDispositionQueue     CandidateDisposition = "queue_existing_rental"
 	CandidateDispositionProvision CandidateDisposition = "provision_fresh_rental"
+	// CandidateDispositionEphemeral is a one-shot launch on a provider-native
+	// execution product. It reads differently from the three Rental
+	// dispositions because it is a different thing: nothing is held afterwards,
+	// so no later Run can queue behind it or inherit its warmth.
+	CandidateDispositionEphemeral CandidateDisposition = "launch_ephemeral"
 )
 
 type CandidateEstimates struct {

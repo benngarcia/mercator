@@ -25,9 +25,28 @@ _Avoid_: Quote, instance type (alone)
 An authorized link to a provider control plane, with credentials Mercator uses to list offers and launch.
 _Avoid_: Account, integration, provider config
 
+**Execution Lane**:
+Whether Mercator can run a second workload on capacity without allocating new
+capacity. Reusable capacity is controlled through an enrolled Node and may
+become a Rental; ephemeral capacity is a provider-native one-shot product that
+holds nothing after its workload exits. The lane is orthogonal to an Offer's
+kind, which says who owns the host rather than what survives the workload. The
+Broker stamps it from the backend's negotiated capabilities, so an adapter
+cannot advertise reuse it cannot perform.
+_Avoid_: Type (alone), mode, reusability flag
+
 **Rental**:
-Reusable machine capacity whose lifecycle and standard Docker endpoint Mercator owns.
+The capacity lease: machine capacity a workspace holds from a Connection, with
+its own billing interval and lifecycle generation. Only capacity in the
+reusable lane becomes a Rental.
 _Avoid_: Worker, host (alone), machine (alone)
+
+**Node**:
+The enrolled Mercator runtime on one Rental generation. It is the authority on
+node liveness, host and inventory facts, and container lifecycle, and it is
+what makes a Rental capable of executing successive workloads. A Rental without
+a Node is capacity nothing can run on.
+_Avoid_: Agent (for the concept), daemon, instance
 
 **Fleet**:
 The set of Rentals a workspace currently owns, across all its Connections.
@@ -64,7 +83,8 @@ _Avoid_: Code plane, data plane, cache affinity, locality (alone)
 
 **Booking Decision**:
 The audited choice to assign a Run to an existing Rental, provision an Offer,
-or fail because no feasible capacity exists.
+launch a one-shot ephemeral execution, or fail because no feasible capacity
+exists.
 _Avoid_: Booking (for the decision), scheduling result
 
 **Booking**:

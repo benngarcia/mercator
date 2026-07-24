@@ -3777,6 +3777,7 @@
           "connection_id",
           "adapter_type",
           "kind",
+          "lane",
           "native_ref",
           "observed_at",
           "expires_at",
@@ -3807,7 +3808,16 @@
             "enum": [
               "standing",
               "provisionable"
-            ]
+            ],
+            "description": "Who owns the host: standing capacity Mercator borrows a slot on, or provisionable capacity Mercator creates and must destroy."
+          },
+          "lane": {
+            "type": "string",
+            "enum": [
+              "reusable",
+              "ephemeral"
+            ],
+            "description": "Whether Mercator can run a second workload here without allocating new capacity. Reusable capacity is held across Runs through an enrolled node runtime and may become a Rental; ephemeral capacity is a provider-native one-shot product that holds nothing afterwards. The Broker stamps this from the connection's negotiated capabilities, so an adapter cannot advertise reuse it cannot perform."
           },
           "native_ref": {
             "type": "string"

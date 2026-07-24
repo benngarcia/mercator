@@ -1,7 +1,6 @@
 package adapter
 
 import (
-	"context"
 	"errors"
 	"time"
 
@@ -54,26 +53,6 @@ func (p ExternalPhase) Valid() bool {
 	default:
 		return false
 	}
-}
-
-// Provider is the complete contract implemented by one configured provider
-// connection. Aggregates across connections expose consumer-owned subsets of
-// these capabilities instead of pretending to be a Provider.
-type Provider interface {
-	// Verify performs a cheap credential/reachability check for the authorize
-	// flow. It does not launch anything.
-	Verify(ctx context.Context) error
-	ListOffers(ctx context.Context, req OfferRequest) ([]domain.OfferSnapshot, error)
-	Launch(ctx context.Context, req LaunchRequest) (LaunchReceipt, error)
-	Observe(ctx context.Context, req ObserveRequest) (ExternalObservation, error)
-	// Release removes only our job/container from a pool we DON'T own (standing
-	// capacity). It never touches the host. Used for disposition=release.
-	Release(ctx context.Context, req ReleaseRequest) (ReleaseReceipt, error)
-	// Terminate destroys a resource WE OWN (a provisioned host/instance). Used
-	// for disposition=terminate. Standing-pool adapters return
-	// ErrTerminateUnsupported.
-	Terminate(ctx context.Context, req TerminateRequest) (TerminateReceipt, error)
-	ListOwned(ctx context.Context, req OwnershipQuery) ([]OwnedExternalObject, error)
 }
 
 type OfferRequest struct {

@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 type Status string
@@ -63,6 +65,10 @@ const (
 	// time: dispatching the next Booking, expiring one past its latest
 	// start, and re-placing its Run.
 	CapabilityScheduleAdvancement Capability = "schedule_advancement"
+	// CapabilityNodeRuntime is Mercator controlling a persistent host runtime
+	// through an enrolled node agent, which is what makes capacity reusable at
+	// all: without it, provisioned capacity executes one workload and is gone.
+	CapabilityNodeRuntime Capability = "node_runtime"
 	// CapabilityHostFacts is providers advertising SSH and NVIDIA-driver
 	// facts on offers, rejected loudly when absent or false.
 	CapabilityHostFacts Capability = "host_facts"
@@ -90,6 +96,7 @@ const (
 )
 
 var knownCapabilities = map[Capability]bool{
+	CapabilityNodeRuntime:         true,
 	CapabilityRentalSchedule:      true,
 	CapabilityScheduleAdvancement: true,
 	CapabilityHostFacts:           true,
@@ -136,6 +143,15 @@ type WorldSpec struct {
 	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
 	Paths           []PathSpec             `json:"paths,omitempty"`
 	RuntimeModels   []RuntimeModelSpec     `json:"runtime_models,omitempty"`
+}
+
+// ExecutionLane reports what this offer becomes once allocated, defaulting to
+// reusable capacity.
+func (spec MarketplaceOfferSpec) ExecutionLane() domain.ExecutionLane {
+	if spec.Lane == "" {
+		return domain.LaneReusable
+	}
+	return spec.Lane
 }
 
 // ArtifactSpec declares immutable, versioned content available to Runs.
@@ -234,14 +250,20 @@ func (p QueuedBookingSpec) expected() Duration {
 }
 
 type MarketplaceOfferSpec struct {
-	ID             string           `json:"id"`
-	Provider       string           `json:"provider,omitempty"`
-	Region         string           `json:"region,omitempty"`
-	Available      *bool            `json:"available,omitempty"`
-	RatePerHourUSD float64          `json:"rate_per_hour_usd"`
-	Billing        BillingSpec      `json:"billing,omitempty"`
-	Provisioning   ProvisioningSpec `json:"provisioning"`
-	Resources      *ResourcesSpec   `json:"resources,omitempty"`
+	ID       string `json:"id"`
+	Provider string `json:"provider,omitempty"`
+	// Lane is what this offer becomes once allocated. "reusable" capacity is
+	// held across Runs through an enrolled node; "ephemeral" is a
+	// provider-native one-shot product that holds nothing afterwards.
+	// Defaulting to reusable keeps a marketplace offer meaning the same thing
+	// it always has in this corpus; a scenario about the one-shot lane says so.
+	Lane           domain.ExecutionLane `json:"lane,omitempty"`
+	Region         string               `json:"region,omitempty"`
+	Available      *bool                `json:"available,omitempty"`
+	RatePerHourUSD float64              `json:"rate_per_hour_usd"`
+	Billing        BillingSpec          `json:"billing,omitempty"`
+	Provisioning   ProvisioningSpec     `json:"provisioning"`
+	Resources      *ResourcesSpec       `json:"resources,omitempty"`
 	// Facts are the hardware facts providers owe on the offer (SSH root
 	// access, working NVIDIA driver). Omitted map entries are unknown facts;
 	// an offer missing or failing one must be rejected loudly. Target
@@ -342,11 +364,15 @@ type BookingExpectation struct {
 }
 
 type CandidateExpectation struct {
-	Feasible         *bool           `json:"feasible,omitempty"`
-	Rejected         []RejectionSpec `json:"rejected,omitempty"`
-	QueueSeconds     *Bound          `json:"queue_seconds,omitempty"`
-	ProvisionSeconds *Bound          `json:"provision_seconds,omitempty"`
-	PullSeconds      *Bound          `json:"pull_seconds,omitempty"`
+	Feasible *bool `json:"feasible,omitempty"`
+	// Disposition asserts what Placement recorded this candidate as: reusing,
+	// queueing on, or provisioning a Rental, or launching a one-shot ephemeral
+	// execution that holds nothing afterwards.
+	Disposition      domain.CandidateDisposition `json:"disposition,omitempty"`
+	Rejected         []RejectionSpec             `json:"rejected,omitempty"`
+	QueueSeconds     *Bound                      `json:"queue_seconds,omitempty"`
+	ProvisionSeconds *Bound                      `json:"provision_seconds,omitempty"`
+	PullSeconds      *Bound                      `json:"pull_seconds,omitempty"`
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`

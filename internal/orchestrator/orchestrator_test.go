@@ -893,6 +893,7 @@ func orchOffer(id string, now time.Time) domain.OfferSnapshot {
 		ConnectionID: "conn_1",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,
+		Lane:         domain.LaneReusable,
 		ObservedAt:   now.Add(-time.Minute),
 		ExpiresAt:    now.Add(time.Minute),
 		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},

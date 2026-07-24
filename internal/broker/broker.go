@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -83,13 +84,13 @@ func (b *Broker) Commit(
 // HTTP API's GET /v1/adapters.
 func (b *Broker) Manifests() []adapter.Manifest { return b.factory.Manifests() }
 
-// build constructs the adapter for one connection (no caching yet — YAGNI).
-func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Record) (adapter.Provider, error) {
+// build constructs the Backend for one connection (no caching yet — YAGNI).
+func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Record) (Backend, error) {
 	secret := ""
 	if c.Credential.Source != "" {
 		s, err := b.resolver.Resolve(ctx, workspaceID, c.Credential)
 		if err != nil {
-			return nil, fmt.Errorf("broker: resolve credential for %s: %w", c.ID, err)
+			return Backend{}, fmt.Errorf("broker: resolve credential for %s: %w", c.ID, err)
 		}
 		secret = s
 	}
@@ -100,18 +101,29 @@ func (b *Broker) build(ctx context.Context, workspaceID string, c connection.Rec
 // Unlike ListOffers and ListOwned, this intentionally does NOT filter on Authorized.
 // Post-launch operations (Observe/Cancel/Release/Terminate) must still reach a run that was
 // launched on a connection which has since been de-authorized, so cleanup is never stranded.
-func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (connection.Record, adapter.Provider, error) {
+func (b *Broker) connByID(ctx context.Context, workspaceID, connectionID string) (connection.Record, Backend, error) {
 	recs, err := b.conns.List(ctx, workspaceID)
 	if err != nil {
-		return connection.Record{}, nil, err
+		return connection.Record{}, Backend{}, err
 	}
 	for _, c := range recs {
 		if c.ID == connectionID {
-			ad, err := b.build(ctx, workspaceID, c)
-			return c, ad, err
+			backend, err := b.build(ctx, workspaceID, c)
+			return c, backend, err
 		}
 	}
-	return connection.Record{}, nil, fmt.Errorf("%w: %s", ErrConnectionNotFound, connectionID)
+	return connection.Record{}, Backend{}, fmt.Errorf("%w: %s", ErrConnectionNotFound, connectionID)
+}
+
+// executorByID resolves one connection's one-shot execution contract. Runs on
+// reusable capacity never come through here: they are dispatched to the node
+// runtime that owns the machine.
+func (b *Broker) executorByID(ctx context.Context, workspaceID, connectionID string) (capability.EphemeralExecutor, error) {
+	_, backend, err := b.connByID(ctx, workspaceID, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	return backend.Ephemeral()
 }
 
 func (b *Broker) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
@@ -131,11 +143,19 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		return OfferAggregation{}, err
 	}
 	results := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]domain.OfferSnapshot, error) {
-		provider, err := b.build(ctx, req.WorkspaceID, c)
+		backend, err := b.build(ctx, req.WorkspaceID, c)
 		if err != nil {
 			return nil, err
 		}
-		return provider.ListOffers(ctx, req)
+		executor, err := backend.Ephemeral()
+		if err != nil {
+			return nil, err
+		}
+		offers, err := executor.ListOffers(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return capability.StampLane(backend.Declaration, offers), nil
 	})
 	aggregation := OfferAggregation{
 		Offers:   []domain.OfferSnapshot{},
@@ -154,7 +174,10 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 				return OfferAggregation{}, err
 			}
 			result.items[i].ID = id
-			if result.items[i].Kind == domain.OfferKindStanding {
+			// Only reusable capacity becomes a Rental. A standing offer in
+			// the ephemeral lane is a pool Mercator borrows a slot from, not
+			// a machine it holds across Runs.
+			if result.items[i].Lane.Reusable() && result.items[i].Kind == domain.OfferKindStanding {
 				result.items[i].RentalID = id
 			}
 		}
@@ -182,12 +205,12 @@ func offerSnapshotID(connectionID, adapterOfferID string) (string, error) {
 }
 
 func (b *Broker) Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.SelectedOfferConnectionID)
+	executor, err := b.executorByID(ctx, req.WorkspaceID, req.SelectedOfferConnectionID)
 	if err != nil {
 		b.logLaunchFailure(ctx, req, err)
 		return adapter.LaunchReceipt{}, err
 	}
-	receipt, err := ad.Launch(ctx, req)
+	receipt, err := executor.Launch(ctx, req)
 	if err != nil {
 		b.logLaunchFailure(ctx, req, err)
 	}
@@ -235,27 +258,27 @@ func (b *Broker) logLaunchFailure(ctx context.Context, req adapter.LaunchRequest
 }
 
 func (b *Broker) Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	executor, err := b.executorByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
 		return adapter.ExternalObservation{}, err
 	}
-	return ad.Observe(ctx, req)
+	return executor.Observe(ctx, req)
 }
 
 func (b *Broker) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	executor, err := b.executorByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
 		return adapter.ReleaseReceipt{}, err
 	}
-	return ad.Release(ctx, req)
+	return executor.Release(ctx, req)
 }
 
 func (b *Broker) Terminate(ctx context.Context, req adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
-	_, ad, err := b.connByID(ctx, req.WorkspaceID, req.ConnectionID)
+	executor, err := b.executorByID(ctx, req.WorkspaceID, req.ConnectionID)
 	if err != nil {
 		return adapter.TerminateReceipt{}, err
 	}
-	return ad.Terminate(ctx, req)
+	return executor.Terminate(ctx, req)
 }
 
 func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
@@ -264,11 +287,15 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 		return nil, err
 	}
 	results := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]adapter.OwnedExternalObject, error) {
-		provider, err := b.build(ctx, req.WorkspaceID, c)
+		backend, err := b.build(ctx, req.WorkspaceID, c)
 		if err != nil {
 			return nil, err
 		}
-		return provider.ListOwned(ctx, req)
+		executor, err := backend.Ephemeral()
+		if err != nil {
+			return nil, err
+		}
+		return executor.ListOwned(ctx, req)
 	})
 	var all []adapter.OwnedExternalObject
 	var failures ConnectionErrors
@@ -311,9 +338,9 @@ func sortConnectionErrors(failures ConnectionErrors) {
 // current Authorized state — authorize runs before the flag is set) and calls
 // its cheap Verify check. Used by the connection authorize flow.
 func (b *Broker) VerifyConnection(ctx context.Context, workspaceID, connectionID string) error {
-	_, ad, err := b.connByID(ctx, workspaceID, connectionID)
+	_, backend, err := b.connByID(ctx, workspaceID, connectionID)
 	if err != nil {
 		return err
 	}
-	return ad.Verify(ctx)
+	return backend.Verify(ctx)
 }

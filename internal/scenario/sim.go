@@ -86,7 +86,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Daemon {
 	start := clock.Now()
 	daemon := &fake.Daemon{
-		Offer:      simOffer(rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources),
+		Offer:      simRentalOffer(rental),
 		HeldLayers: map[string]int64{},
 		HeldCaches: map[string]int64{},
 	}
@@ -111,6 +111,14 @@ func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, c
 	return daemon
 }
 
+// simRentalOffer builds the offer for a Rental. A Rental is machine capacity
+// Mercator holds across Runs, so it is reusable by definition.
+func simRentalOffer(rental RentalSpec) domain.OfferSnapshot {
+	offer := simOffer(rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
+	offer.Lane = domain.LaneReusable
+	return offer
+}
+
 func simMarketplaceOffer(spec MarketplaceOfferSpec) domain.OfferSnapshot {
 	offer := simOffer(spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Resources)
 	provisioning := &domain.Estimate{
@@ -121,6 +129,7 @@ func simMarketplaceOffer(spec MarketplaceOfferSpec) domain.OfferSnapshot {
 		provisioning.P90 = spec.Provisioning.P90.Duration().Seconds()
 	}
 	offer.Provisioning = provisioning
+	offer.Lane = spec.ExecutionLane()
 	return offer
 }
 

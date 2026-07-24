@@ -388,6 +388,7 @@ func cliOffer() domain.OfferSnapshot {
 		ConnectionID: "conn_cli",
 		AdapterType:  "fake",
 		Kind:         domain.OfferKindStanding,
+		Lane:         domain.LaneReusable,
 		NativeRef:    "fake://cli",
 		ObservedAt:   now.Add(-time.Minute),
 		ExpiresAt:    now.Add(time.Hour),

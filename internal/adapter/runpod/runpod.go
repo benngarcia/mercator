@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -312,4 +313,21 @@ func phaseFromPod(p pod) adapter.ExternalPhase {
 	}
 }
 
-var _ adapter.Provider = (*Adapter)(nil)
+var _ capability.EphemeralExecutor = (*Adapter)(nil)
+
+// EphemeralSupport states what a RunPod connection can do today. Each launch
+// creates a pod for one workload and terminates it afterwards, so RunPod stays
+// in the ephemeral lane until a node agent is proven to bootstrap on a pod.
+func (a *Adapter) EphemeralSupport() capability.EphemeralSupport {
+	return capability.EphemeralSupport{
+		ReusableBetweenRuns: false,
+		// A fresh pod reports nothing about what it already holds, so its
+		// locality is unknown rather than cold.
+		ObservableLocality: false,
+		CancelQueued:       false,
+		ProviderTTL:        false,
+		IdempotentLaunch:   "launch_key",
+		ListOwned:          true,
+		ExactPricing:       true,
+	}
+}
