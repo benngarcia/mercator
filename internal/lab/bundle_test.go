@@ -95,6 +95,18 @@ func TestRunBundleIsDeterministicAndReplayable(t *testing.T) {
 			t.Fatalf("bundle entry %q is empty", name)
 		}
 	}
+	var invariantResults []InvariantResult
+	if err := json.Unmarshal(bundleEntryData(t, first, "invariants.json"), &invariantResults); err != nil {
+		t.Fatalf("decode invariant results: %v", err)
+	}
+	if len(invariantResults) == 0 {
+		t.Fatal("Run Bundle has no invariant results")
+	}
+	for _, result := range invariantResults {
+		if result.Status != InvariantPassed {
+			t.Fatalf("bundled invariant did not pass: %+v", result)
+		}
+	}
 	for _, forbidden := range [][]byte{[]byte("PrivateData"), []byte("private_data")} {
 		if bytes.Contains(firstBytes, forbidden) {
 			t.Fatalf("Run Bundle contains private field %q", forbidden)

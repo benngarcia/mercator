@@ -73,16 +73,21 @@ type worldOperation struct {
 type simulatedWorld struct {
 	mu sync.Mutex
 
-	seed        string
-	now         time.Time
-	images      map[string][]scenario.LayerSpec
-	truth       map[string]observedOffer
-	observed    map[string]observedOffer
-	activeRun   string
-	runs        map[string]RunArrival
-	artifacts   map[string]int64
-	replicas    map[string]map[string]bool
-	cacheMounts map[string]map[string]uint64
+	seed      string
+	now       time.Time
+	images    map[string][]scenario.LayerSpec
+	truth     map[string]observedOffer
+	observed  map[string]observedOffer
+	activeRun string
+	runs      map[string]RunArrival
+	artifacts map[string]int64
+	replicas  map[string]map[string]bool
+	// seededArtifacts are the Artifacts a Rental already held when the world was
+	// built. They are available to a consuming Run without any producer having
+	// published them, so invariants that order launches against publication
+	// treat them as present from virtual time zero.
+	seededArtifacts map[string]bool
+	cacheMounts     map[string]map[string]uint64
 
 	executions  map[string]externalExecution
 	operations  map[string]worldOperation
@@ -96,20 +101,21 @@ type simulatedWorld struct {
 
 func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	world := &simulatedWorld{
-		seed:        tape.Seed,
-		now:         tape.Start,
-		images:      make(map[string][]scenario.LayerSpec, len(tape.InitialWorld.Images)),
-		truth:       map[string]observedOffer{},
-		observed:    map[string]observedOffer{},
-		runs:        map[string]RunArrival{},
-		artifacts:   map[string]int64{},
-		replicas:    map[string]map[string]bool{},
-		cacheMounts: map[string]map[string]uint64{},
-		executions:  map[string]externalExecution{},
-		operations:  map[string]worldOperation{},
-		launchCount: map[string]int{},
-		faults:      slices.Clone(tape.Faults),
-		usedFaults:  map[string]bool{},
+		seed:            tape.Seed,
+		now:             tape.Start,
+		images:          make(map[string][]scenario.LayerSpec, len(tape.InitialWorld.Images)),
+		truth:           map[string]observedOffer{},
+		observed:        map[string]observedOffer{},
+		runs:            map[string]RunArrival{},
+		artifacts:       map[string]int64{},
+		replicas:        map[string]map[string]bool{},
+		seededArtifacts: map[string]bool{},
+		cacheMounts:     map[string]map[string]uint64{},
+		executions:      map[string]externalExecution{},
+		operations:      map[string]worldOperation{},
+		launchCount:     map[string]int{},
+		faults:          slices.Clone(tape.Faults),
+		usedFaults:      map[string]bool{},
 	}
 	for reference, image := range tape.InitialWorld.Images {
 		world.images[reference] = slices.Clone(image.Layers)
@@ -135,6 +141,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		world.observed[rental.ID] = cloneObservedOffer(state)
 		for _, artifactID := range rental.ArtifactReplicas {
 			world.replicas[artifactID][rental.ID] = true
+			world.seededArtifacts[artifactID] = true
 		}
 		world.cacheMounts[rental.ID] = map[string]uint64{}
 		for _, name := range rental.CacheMounts {
@@ -169,6 +176,17 @@ func (world *simulatedWorld) prepareRun(runID string, arrival RunArrival) {
 	defer world.mu.Unlock()
 	world.activeRun = runID
 	world.runs[runID] = arrival
+}
+
+func (world *simulatedWorld) artifactDependenciesAvailable(arrival RunArrival) bool {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	for _, artifactID := range arrival.Request.ConsumesArtifacts {
+		if !hasAnyReplica(world.replicas[artifactID]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (world *simulatedWorld) setNow(now time.Time) {
@@ -220,6 +238,24 @@ func (world *simulatedWorld) effectRecords() []EffectRecord {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	return cloneEffects(world.effects)
+}
+
+func (world *simulatedWorld) invariantFacts() (map[string]RunArrival, map[string]bool, map[string]bool) {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	runs := make(map[string]RunArrival, len(world.runs))
+	for runID, arrival := range world.runs {
+		runs[runID] = arrival
+	}
+	artifacts := make(map[string]bool, len(world.artifacts))
+	for artifactID := range world.artifacts {
+		artifacts[artifactID] = true
+	}
+	seeded := make(map[string]bool, len(world.seededArtifacts))
+	for artifactID := range world.seededArtifacts {
+		seeded[artifactID] = true
+	}
+	return runs, artifacts, seeded
 }
 
 func (world *simulatedWorld) recordControlPlaneRestart(ordinal uint64) {

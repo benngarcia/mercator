@@ -41,6 +41,7 @@ type Config struct {
 	Blueprint        scenario.Blueprint `json:"-"`
 	Tape             WorldTape          `json:"-"`
 	Samples          []Sample           `json:"-"`
+	Invariants       InvariantRegistry  `json:"-"`
 	Limits           Limits             `json:"limits"`
 	Policy           string             `json:"policy"`
 	MercatorRevision string             `json:"mercator_revision"`
@@ -96,6 +97,7 @@ type Execution struct {
 	transitions uint64
 	processed   []WorldEvent
 	lastEvent   *WorldEvent
+	invariants  []InvariantResult
 
 	sameTimestamp       time.Time
 	sameTimestampCount  uint64
@@ -128,6 +130,9 @@ func Open(ctx context.Context, config Config) (*Execution, error) {
 	config.Blueprint = blueprint
 	config.Tape = tape
 	config.Samples = cloneSamples(config.Samples)
+	if config.Invariants.Empty() {
+		config.Invariants = DefaultInvariantRegistry()
+	}
 	execution := &Execution{
 		config: config,
 		queue:  slices.Clone(config.Tape.Events),
@@ -175,10 +180,8 @@ func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Ch
 			}
 		}
 		execution.now = target
-		if execution.runtime != nil {
-			if err := execution.runtime.advance(ctx, target); err != nil {
-				return execution.checkpoint(), err
-			}
+		if err := execution.advance(ctx, target); err != nil {
+			return execution.checkpoint(), err
 		}
 		return execution.checkpoint(), nil
 	case driveEvent:
@@ -217,10 +220,8 @@ func (execution *Execution) Drive(ctx context.Context, command DriveCommand) (Ch
 				return execution.checkpoint(), err
 			}
 		}
-		if execution.runtime != nil {
-			if err := execution.runtime.advance(ctx, execution.now); err != nil {
-				return execution.checkpoint(), err
-			}
+		if err := execution.advance(ctx, execution.now); err != nil {
+			return execution.checkpoint(), err
 		}
 		return execution.checkpoint(), nil
 	default:
@@ -298,14 +299,21 @@ func (execution *Execution) transition(ctx context.Context) error {
 	eventCopy := event
 	eventCopy.Data = slices.Clone(event.Data)
 	execution.lastEvent = &eventCopy
-	return nil
+	return execution.evaluateInvariants(ctx)
 }
 
 func (execution *Execution) Restart(ctx context.Context) error {
 	if execution.runtime == nil {
 		return fmt.Errorf("Lab execution has no control plane to restart")
 	}
-	return execution.runtime.restart(ctx)
+	if err := execution.runtime.restart(ctx); err != nil {
+		return err
+	}
+	return execution.evaluateInvariants(ctx)
+}
+
+func (execution *Execution) Check(ctx context.Context) (Checkpoint, error) {
+	return execution.checkpoint(), execution.evaluateInvariants(ctx)
 }
 
 func (execution *Execution) Close() error {
@@ -313,6 +321,38 @@ func (execution *Execution) Close() error {
 		return nil
 	}
 	return execution.runtime.close()
+}
+
+// advance moves the control plane to target and certifies the state it reaches.
+// Runs complete, Bookings release and leases expire while the control plane
+// advances rather than at a World Tape transition, so invariants that only ran
+// inside transition would certify a state the execution has already left.
+func (execution *Execution) advance(ctx context.Context, target time.Time) error {
+	if execution.runtime == nil {
+		return nil
+	}
+	if err := execution.runtime.advance(ctx, target); err != nil {
+		return err
+	}
+	return execution.evaluateInvariants(ctx)
+}
+
+func (execution *Execution) evaluateInvariants(ctx context.Context) error {
+	if execution.runtime == nil {
+		return nil
+	}
+	observation, err := execution.runtime.invariantObservation(ctx, execution.config.Tape, execution.transitions)
+	if err != nil {
+		return fmt.Errorf("observe Lab invariants: %w", err)
+	}
+	results := execution.config.Invariants.Evaluate(observation)
+	execution.invariants = append(execution.invariants, results...)
+	for _, result := range results {
+		if result.Status == InvariantFailed {
+			return &InvariantViolationError{Result: result}
+		}
+	}
+	return nil
 }
 
 func cloneBlueprint(blueprint scenario.Blueprint) (scenario.Blueprint, error) {

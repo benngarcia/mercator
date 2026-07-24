@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/runprojection"
 	"github.com/benngarcia/mercator/internal/scenario"
 	"github.com/benngarcia/mercator/internal/scheduler"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
@@ -20,8 +23,67 @@ type controlPlane struct {
 	storage       *sqlitestore.Storage
 	world         *simulatedWorld
 	orchestrator  *orchestrator.Orchestrator
+	pending       []RunArrival
 	restarts      uint64
 	faultPosition eventlog.GlobalPosition
+}
+
+func (runtime *controlPlane) invariantObservation(ctx context.Context, tape WorldTape, transition uint64) (InvariantObservation, error) {
+	stored, err := runtime.mercatorEvents(ctx)
+	if err != nil {
+		return InvariantObservation{}, err
+	}
+	events := make([]eventlog.CloudEvent, len(stored))
+	for index, event := range stored {
+		events[index] = event.CloudEvent()
+	}
+	runs, err := runtime.allRuns(ctx)
+	if err != nil {
+		return InvariantObservation{}, err
+	}
+	if err := runtime.orchestrator.RebuildRunProjection(ctx, labWorkspace); err != nil {
+		return InvariantObservation{}, err
+	}
+	rebuiltRuns, err := runtime.allRuns(ctx)
+	if err != nil {
+		return InvariantObservation{}, err
+	}
+	schedules, err := runtime.storage.RentalSchedules().List(ctx, labWorkspace)
+	if err != nil {
+		return InvariantObservation{}, err
+	}
+	requirements, artifacts, seededArtifacts := runtime.world.invariantFacts()
+	return InvariantObservation{
+		StartedAt:                   tape.Start,
+		Now:                         runtime.world.nowTime(),
+		Transition:                  transition,
+		Blueprint:                   tape.BlueprintName,
+		World:                       runtime.world.truthSnapshot(),
+		MercatorEvents:              events,
+		Effects:                     runtime.world.effectRecords(),
+		Runs:                        runs,
+		RentalSchedules:             schedules,
+		RunRequirements:             requirements,
+		KnownArtifactIDs:            artifacts,
+		SeededArtifactIDs:           seededArtifacts,
+		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
+	}, nil
+}
+
+func (runtime *controlPlane) allRuns(ctx context.Context) ([]domain.RunRecord, error) {
+	var records []domain.RunRecord
+	request := runprojection.PageRequest{Limit: runprojection.MaxPageSize}
+	for {
+		page, err := runtime.orchestrator.ListRuns(ctx, labWorkspace, request)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, page.Records...)
+		if page.NextCursor == "" {
+			return records, nil
+		}
+		request.After = page.NextCursor
+	}
 }
 
 func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error) {
@@ -71,6 +133,14 @@ func (runtime *controlPlane) handleRunArrival(ctx context.Context, event WorldEv
 	if err := json.Unmarshal(event.Data, &arrival); err != nil {
 		return fmt.Errorf("decode Run arrival event %q: %w", event.ID, err)
 	}
+	if !runtime.world.artifactDependenciesAvailable(arrival) {
+		runtime.pending = append(runtime.pending, arrival)
+		return nil
+	}
+	return runtime.admitRun(ctx, arrival)
+}
+
+func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) error {
 	runID := "run-" + arrival.Name
 	runtime.world.prepareRun(runID, arrival)
 	if _, err := runtime.orchestrator.CreateRun(ctx, orchestrator.CreateRunRequest{
@@ -99,13 +169,34 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return err
 		}
+		if err := runtime.admitPendingRuns(ctx); err != nil {
+			return err
+		}
 		return runtime.applyEventFaults(ctx)
 	}
 	_, reconciliationErr := runtime.orchestrator.AdvanceOpenRuns(ctx, labWorkspace)
 	if reconciliationErr != nil {
 		return reconciliationErr
 	}
+	if err := runtime.admitPendingRuns(ctx); err != nil {
+		return err
+	}
 	return runtime.applyEventFaults(ctx)
+}
+
+func (runtime *controlPlane) admitPendingRuns(ctx context.Context) error {
+	pending := runtime.pending[:0]
+	for _, arrival := range runtime.pending {
+		if !runtime.world.artifactDependenciesAvailable(arrival) {
+			pending = append(pending, arrival)
+			continue
+		}
+		if err := runtime.admitRun(ctx, arrival); err != nil {
+			return err
+		}
+	}
+	runtime.pending = pending
+	return nil
 }
 
 func (runtime *controlPlane) restart(ctx context.Context) error {
