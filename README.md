@@ -60,15 +60,7 @@ Use it if you are a small team running recurring accelerated jobs, training,
 batch inference, image generation, on GPUs you rent, and you want Modal's
 ergonomics without serverless prices or giving up the machines. Recurring is
 where the fleet pays off: when two jobs declare the same data cache, the second
-can land on the machine that already synced it. It also fits ordinary container
-workloads that have outgrown `ssh in && docker run` but are nowhere near
-Kubernetes. Skip it if you need multi-node failover, per-user authorization, or
-TLS today, or if you only ever target one local host and never need the audit
-trail, where a shell script around `docker run` is genuinely fine.
-
-Mercator is built by a solo maintainer, in the open, with nothing to sell: no
-company, no upsell, no telemetry. For the right person that is a feature. Set
-your support expectations accordingly, and see [SUPPORT.md](SUPPORT.md).
+can land on the machine that already synced it. 
 
 ## Quickstart
 
