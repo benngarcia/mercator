@@ -21,6 +21,21 @@ limits.
   flow exists. Workloads/runtimes own their secret-management backend.
 - Health, OpenAPI, and UI shell are public on the listen interface.
 
+## Capacity Reuse
+
+- Every current backend is in the ephemeral lane. Docker, RunPod, Shadeform, and
+  Vast each create capacity for one workload and destroy it afterwards, so no
+  machine survives a Run and nothing is warm for the next one. Reusable capacity
+  needs the Mercator node runtime, which is not implemented
+  ([#155](https://github.com/benngarcia/mercator/issues/155) phase 2).
+- An ephemeral execution still commits a Booking against a single-use Rental
+  identity. Placement makes that binding unqueueable and records the honest
+  `launch_ephemeral` disposition, but the Booking record type is shared with
+  reusable placements, so a reader of the schema alone cannot tell them apart.
+- Rental Schedules exist in the domain model and the console, but nothing
+  populates them across Runs yet: queueing behind a running Booking is a target
+  scenario, not shipped behavior.
+
 ## Adapters And Workloads
 
 - Docker adapter is local-host oriented and intentionally narrow.

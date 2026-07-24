@@ -65,6 +65,10 @@ const (
 	// time: dispatching the next Booking, expiring one past its latest
 	// start, and re-placing its Run.
 	CapabilityScheduleAdvancement Capability = "schedule_advancement"
+	// CapabilityNodeRuntime is Mercator controlling a persistent host runtime
+	// through an enrolled node agent, which is what makes capacity reusable at
+	// all: without it, provisioned capacity executes one workload and is gone.
+	CapabilityNodeRuntime Capability = "node_runtime"
 	// CapabilityHostFacts is providers advertising SSH and NVIDIA-driver
 	// facts on offers, rejected loudly when absent or false.
 	CapabilityHostFacts Capability = "host_facts"
@@ -92,6 +96,7 @@ const (
 )
 
 var knownCapabilities = map[Capability]bool{
+	CapabilityNodeRuntime:         true,
 	CapabilityRentalSchedule:      true,
 	CapabilityScheduleAdvancement: true,
 	CapabilityHostFacts:           true,
@@ -359,11 +364,15 @@ type BookingExpectation struct {
 }
 
 type CandidateExpectation struct {
-	Feasible         *bool           `json:"feasible,omitempty"`
-	Rejected         []RejectionSpec `json:"rejected,omitempty"`
-	QueueSeconds     *Bound          `json:"queue_seconds,omitempty"`
-	ProvisionSeconds *Bound          `json:"provision_seconds,omitempty"`
-	PullSeconds      *Bound          `json:"pull_seconds,omitempty"`
+	Feasible *bool `json:"feasible,omitempty"`
+	// Disposition asserts what Placement recorded this candidate as: reusing,
+	// queueing on, or provisioning a Rental, or launching a one-shot ephemeral
+	// execution that holds nothing afterwards.
+	Disposition      domain.CandidateDisposition `json:"disposition,omitempty"`
+	Rejected         []RejectionSpec             `json:"rejected,omitempty"`
+	QueueSeconds     *Bound                      `json:"queue_seconds,omitempty"`
+	ProvisionSeconds *Bound                      `json:"provision_seconds,omitempty"`
+	PullSeconds      *Bound                      `json:"pull_seconds,omitempty"`
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`

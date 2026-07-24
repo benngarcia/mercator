@@ -126,7 +126,9 @@ function replaceOffers(
   const rentals = { ...workspace.rentals };
   const standingRentalIDs = new Set<string>();
   for (const offer of offers) {
-    if (offer.kind !== "standing" || !offer.rental_id) continue;
+    // Only reusable capacity is a Rental. A one-shot execution holds nothing
+    // after its workload exits, so the fleet never shows it as a machine.
+    if (offer.lane !== "reusable" || offer.kind !== "standing" || !offer.rental_id) continue;
     standingRentalIDs.add(offer.rental_id);
     const existing = rentals[offer.rental_id];
     rentals[offer.rental_id] = {
