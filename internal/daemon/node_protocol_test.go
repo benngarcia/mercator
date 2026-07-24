@@ -25,20 +25,20 @@ func TestNodeProtocolIsMountedAndSeparateFromTheOperatorAPI(t *testing.T) {
 		wantStatus int
 	}{
 		"enrollment without valid material is refused rather than missing": {
-			path:       "/v1/nodes/enroll",
+			path:       "/v1/node-agent/enroll",
 			wantStatus: http.StatusUnauthorized,
 		},
 		"a session needs a node credential": {
-			path:       "/v1/nodes/nod_unknown/session",
+			path:       "/v1/node-agent/nod_unknown/session",
 			wantStatus: http.StatusUnauthorized,
 		},
 		"the operator token does not authenticate a node session": {
-			path:       "/v1/nodes/nod_unknown/session",
+			path:       "/v1/node-agent/nod_unknown/session",
 			token:      "operator-token",
 			wantStatus: http.StatusUnauthorized,
 		},
 		"the operator token does not let a caller report node events": {
-			path:       "/v1/nodes/nod_unknown/events",
+			path:       "/v1/node-agent/nod_unknown/events",
 			token:      "operator-token",
 			wantStatus: http.StatusUnauthorized,
 		},
@@ -69,10 +69,16 @@ func TestNodeProtocolIsMountedAndSeparateFromTheOperatorAPI(t *testing.T) {
 
 func startRuntime(t *testing.T) string {
 	t.Helper()
+	return startRuntimeWithLease(t, 0)
+}
+
+func startRuntimeWithLease(t *testing.T, lease time.Duration) string {
+	t.Helper()
 	runtime, err := daemon.New(t.Context(), daemon.Config{
 		SQLiteDSN:     "file:" + filepath.Join(t.TempDir(), "mercator.db"),
 		OperatorToken: "operator-token",
 		MasterKey:     []byte("0123456789abcdef0123456789abcdef"),
+		NodeLease:     lease,
 	})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)

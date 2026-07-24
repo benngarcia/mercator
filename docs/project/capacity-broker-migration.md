@@ -63,6 +63,16 @@ complete because it works against a live provider.
   orchestrator commit path, and the Lab's simulated world.
 - [x] 2026-07-24: Approve the lane ontology and the three contracts. ADR 0005.
 - [x] 2026-07-24: Create tracking issue #155.
+- [x] 2026-07-24: Route Placement to nodes. Enrolled nodes are aggregated as
+  reusable-lane offers beside provider offers, priced from the shadow price the
+  operator configured at invitation. The launch intent records the selected
+  offer's lane, and the run lifecycle dispatches launch, observation, and
+  release on that recorded value, so a Run that landed on a node still reaches
+  that node after a restart. `POST /v1/nodes` and `GET /v1/nodes` are the
+  operator surface; the agent protocol moved to `/v1/node-agent` so the two
+  audiences share no URL space. The agent now watches its runtime on every
+  heartbeat, which is how an exit reaches Mercator without the application
+  saying anything.
 - [x] 2026-07-24: Complete the phase 2 node runtime. `internal/node` owns node
   identity, leases, fencing, durable command records, and reconciliation, and
   implements `capability.NodeRuntime`. `internal/nodeapi` is the outbound
@@ -85,7 +95,7 @@ complete because it works against a live provider.
 | Phase | What it delivers | Status |
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
-| 2 | Node protocol and Go agent | protocol, agent, and registry done; Placement does not route to nodes yet |
+| 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | not started |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
@@ -109,17 +119,20 @@ The corpus is 14 regression Blueprints: 5 green and 9 target.
 
 ## What phase 2 does not yet do
 
-The node runtime exists and is proved against injected faults, but Placement
-still routes every Run through the ephemeral seam. Making a Run land on an
-enrolled node means teaching the orchestrator to dispatch a Booking to a
-NodeRuntime instead of an EphemeralExecutor, and teaching the Broker to build a
-reusable-lane Backend from an enrolled node rather than from a connection's
-adapter. Until that lands, `enrolled-node-survives-its-first-run` stays a target
-scenario and every production backend stays in the ephemeral lane.
+Placement now routes Runs to enrolled nodes, and one node runs successive
+workloads. What is still missing is how a node comes to exist on capacity
+Mercator rents: a provisioned machine arrives with no agent, so only a node an
+operator enrolled by hand is reusable. That is phase 5, and it is why
+`enrolled-node-survives-its-first-run` stays a target scenario alongside the
+Rental Schedule work.
 
-Local Docker enrollment is likewise not automatic: `mercator serve` mounts the
-node protocol and can invite a node, but nothing yet starts an agent against the
-local daemon as part of the quickstart.
+Enrolling the local Docker host is a manual two-step: invite a node through
+`POST /v1/nodes`, then run `mercator-node` with the returned bootstrap. There is
+no CLI command or quickstart step for it yet.
+
+A node's price is whatever the operator configured at invitation. The rest of
+the owned-capacity economics the goal asks for, committed billing intervals,
+idle-tail expectation, and warm-capacity opportunity cost, is phase 4.
 
 ## Known residual conflation
 
@@ -129,6 +142,19 @@ honestly, but the record type is shared with reusable placements. Phase 2
 introduces the Node and separates the two bindings.
 
 ## Verification evidence
+
+### Phase 2 placement
+
+On 2026-07-24, three cases in `internal/daemon` drove one production daemon, one
+real agent over the real node protocol, and a runtime that records what it was
+asked to run:
+
+- one enrolled node runs two workloads in sequence, and the second Run records
+  that it reused the Rental rather than creating one;
+- a container that exits non-zero closes its Run failed on the node's authority
+  alone, with nothing reported by the application;
+- a node that stops heartbeating stops being offered before its lease elapses,
+  so Placement never chooses a machine Mercator has stopped hearing from.
 
 ### Phase 2
 

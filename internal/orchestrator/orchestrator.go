@@ -909,6 +909,7 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		SelectedOfferConnectionID: selectedOffer.ConnectionID,
 		SelectedOfferAdapterType:  selectedOffer.AdapterType,
 		SelectedOfferNativeRef:    selectedOffer.NativeRef,
+		SelectedOfferLane:         selectedOffer.Lane,
 		// Derive the cleanup disposition from the selected offer's Kind and RECORD
 		// it on the launch intent now. This recorded value — not the offer kind
 		// looked up later — is the source of truth for cleanup.
@@ -946,6 +947,10 @@ func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, st
 		LaunchKey:      state.launchIntent.LaunchKey,
 		OwnershipToken: state.launchIntent.OwnershipToken,
 		RequestHash:    state.launchIntent.RequestHash,
+		Lane:           state.launchIntent.SelectedOfferLane,
+		NativeRef:      state.launchIntent.SelectedOfferNativeRef,
+		RunID:          state.launchIntent.RunID,
+		AttemptID:      state.launchIntent.AttemptID,
 	})
 	if err != nil {
 		return adapter.ExternalObservation{}, err
@@ -1057,7 +1062,17 @@ func (o *Orchestrator) terminate(ctx context.Context, workspaceID string, launch
 }
 
 func (o *Orchestrator) release(ctx context.Context, workspaceID string, launchReq *adapter.LaunchRequest) error {
-	request := adapter.ReleaseRequest{WorkspaceID: workspaceID, ConnectionID: launchReq.SelectedOfferConnectionID, OperationKey: "release_" + launchReq.AttemptID, LaunchKey: launchReq.LaunchKey, OwnershipToken: launchReq.OwnershipToken, LaunchRequestHash: launchReq.RequestHash}
+	request := adapter.ReleaseRequest{
+		WorkspaceID:       workspaceID,
+		ConnectionID:      launchReq.SelectedOfferConnectionID,
+		OperationKey:      "release_" + launchReq.AttemptID,
+		LaunchKey:         launchReq.LaunchKey,
+		OwnershipToken:    launchReq.OwnershipToken,
+		LaunchRequestHash: launchReq.RequestHash,
+		Lane:              launchReq.SelectedOfferLane,
+		NativeRef:         launchReq.SelectedOfferNativeRef,
+		RunID:             launchReq.RunID,
+	}
 	hash, err := domain.CanonicalHash(request)
 	if err != nil {
 		return err

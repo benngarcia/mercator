@@ -50,6 +50,10 @@ type Config struct {
 	// run. It is recorded on every invitation, so an operator can see which
 	// build a node was told to be and which one it turned out to be.
 	AgentVersion string
+	// NodeLease is how long the control plane believes a node absent a
+	// heartbeat. Zero takes the registry's default. Tests shorten it so lease
+	// expiry is stated rather than waited for.
+	NodeLease time.Duration
 
 	// ProviderFactory replaces the production catalog in lifecycle tests.
 	// Production callers leave it nil.
@@ -67,6 +71,7 @@ type Runtime struct {
 
 	stopReconcile context.CancelFunc
 	reconcileDone chan struct{}
+	nodes         *node.Registry
 
 	shutdownOnce sync.Once
 	shutdownErr  error
@@ -122,7 +127,26 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	if factory == nil {
 		factory = providers.Factory()
 	}
-	providerBroker := broker.NewBroker(connectionService, factory, resolver, broker.WithRentalSchedules(storage.RentalSchedules()))
+	nodeOptions := []node.Option{}
+	if cfg.AgentVersion != "" {
+		nodeOptions = append(nodeOptions, node.WithAgentVersion(cfg.AgentVersion))
+	}
+	if cfg.NodeLease > 0 {
+		nodeOptions = append(nodeOptions, node.WithLease(cfg.NodeLease))
+	}
+	nodes := node.NewRegistry(
+		storage.Nodes(),
+		node.NewSigner(node.DeriveKey(cfg.MasterKey)),
+		cfg.PublicURL,
+		nodeOptions...,
+	)
+	providerBroker := broker.NewBroker(
+		connectionService,
+		factory,
+		resolver,
+		broker.WithRentalSchedules(storage.RentalSchedules()),
+		broker.WithNodes(nodes),
+	)
 
 	signer := reporting.NewSigner(reporting.DeriveKey(cfg.MasterKey))
 	sched := scheduler.New()
@@ -155,6 +179,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		httpapi.WithBearerAuth(cfg.OperatorToken),
 		httpapi.WithVerifier(providerBroker),
 		httpapi.WithAdapterManifests(providerBroker.Manifests),
+		httpapi.WithNodes(nodes),
 	}
 	if signer.Enabled() {
 		serverOptions = append(serverOptions, httpapi.WithReportSigner(signer))
@@ -186,16 +211,6 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	// The node protocol is mounted beside the operator API rather than inside
 	// it: different audience, different credentials, and an operator token
 	// must never be able to act as a node.
-	nodeOptions := []node.Option{}
-	if cfg.AgentVersion != "" {
-		nodeOptions = append(nodeOptions, node.WithAgentVersion(cfg.AgentVersion))
-	}
-	nodes := node.NewRegistry(
-		storage.Nodes(),
-		node.NewSigner(node.DeriveKey(cfg.MasterKey)),
-		cfg.PublicURL,
-		nodeOptions...,
-	)
 	var rootHandler http.Handler = mountNodeProtocol(handler, nodeapi.New(nodes))
 	if cfg.LocalAuthEmail != "" {
 		// Local login mints a browser session for any request that lacks one,
@@ -221,6 +236,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		janitor:       workspaceJanitor,
 		stopReconcile: stopReconcile,
 		reconcileDone: make(chan struct{}),
+		nodes:         nodes,
 	}
 	go runtime.reconcile(reconcileCtx)
 	return runtime, nil
@@ -378,6 +394,17 @@ func (r *Runtime) reconcile(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// A node whose lease elapsed stops being offered and its workloads
+			// become unobserved. Expiring here, on the same sweep that advances
+			// Runs, is what keeps Placement from choosing a machine Mercator has
+			// stopped hearing from.
+			if lost, err := r.nodes.ExpireLeases(ctx); err != nil {
+				log.Printf("expire node leases: %v", err)
+			} else {
+				for _, record := range lost {
+					log.Printf("node %s stopped heartbeating; its workloads need reconciliation", record.ID)
+				}
+			}
 			reconcileWorkspaces(ctx, r.orch, r.janitor)
 		}
 	}
@@ -437,7 +464,7 @@ func isLoopbackHost(hostport string) bool {
 // route.
 func mountNodeProtocol(operator, nodes http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/v1/nodes/") {
+		if strings.HasPrefix(r.URL.Path, "/v1/node-agent/") {
 			nodes.ServeHTTP(w, r)
 			return
 		}

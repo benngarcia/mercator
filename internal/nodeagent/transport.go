@@ -42,7 +42,7 @@ func NewHTTPTransport(baseURL string, client *http.Client) *HTTPTransport {
 
 func (transport *HTTPTransport) Enroll(ctx context.Context, request capability.EnrollmentRequest) (capability.Enrollment, error) {
 	var response nodeapi.EnrollmentResponse
-	if err := transport.post(ctx, "/v1/nodes/enroll", "", request, &response); err != nil {
+	if err := transport.post(ctx, "/v1/node-agent/enroll", "", request, &response); err != nil {
 		return capability.Enrollment{}, err
 	}
 	enrollment := capability.Enrollment{
@@ -63,7 +63,7 @@ func (transport *HTTPTransport) Enroll(ctx context.Context, request capability.E
 // Session holds the command stream open until the connection ends or ctx is
 // cancelled. Commands arrive as newline-delimited JSON.
 func (transport *HTTPTransport) Session(ctx context.Context, nodeID, sessionToken string, commands chan<- node.Command) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, transport.baseURL+"/v1/nodes/"+nodeID+"/session", http.NoBody)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, transport.baseURL+"/v1/node-agent/"+nodeID+"/session", http.NoBody)
 	if err != nil {
 		return err
 	}
@@ -100,11 +100,11 @@ func (transport *HTTPTransport) Session(ctx context.Context, nodeID, sessionToke
 }
 
 func (transport *HTTPTransport) SendEvents(ctx context.Context, nodeID, sessionToken string, events []node.Event) error {
-	return transport.post(ctx, "/v1/nodes/"+nodeID+"/events", sessionToken, nodeapi.EventBatch{Events: events}, nil)
+	return transport.post(ctx, "/v1/node-agent/"+nodeID+"/events", sessionToken, nodeapi.EventBatch{Events: events}, nil)
 }
 
 func (transport *HTTPTransport) SendResult(ctx context.Context, nodeID, sessionToken string, result node.Result) error {
-	return transport.post(ctx, "/v1/nodes/"+nodeID+"/results", sessionToken, result, nil)
+	return transport.post(ctx, "/v1/node-agent/"+nodeID+"/results", sessionToken, result, nil)
 }
 
 func (transport *HTTPTransport) post(ctx context.Context, path, sessionToken string, body, into any) error {

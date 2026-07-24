@@ -35,11 +35,20 @@ limits.
 - Rental Schedules exist in the domain model and the console, but nothing
   populates them across Runs yet: queueing behind a running Booking is a target
   scenario, not shipped behavior.
-- The Mercator node agent and its protocol exist and are mounted, but Placement
-  does not route Runs to enrolled nodes yet. A node can enroll, hold a session,
-  receive commands, and report container lifecycle; nothing in the run lifecycle
-  sends it work. Enrolling the local Docker host is a manual step, not part of
-  the quickstart.
+- Reuse works only on nodes an operator enrolled by hand. Provisioned capacity
+  arrives with no agent on it, so renting a machine still produces one-shot
+  execution. Bootstrapping the agent through a provider is
+  [#155](https://github.com/benngarcia/mercator/issues/155) phase 5.
+- Enrolling a node is a manual two-step: `POST /v1/nodes` for the bootstrap,
+  then run `mercator-node` with it. There is no CLI command and no quickstart
+  step.
+- A node's price is the shadow price configured at invitation, and nothing else.
+  Committed billing intervals, idle-tail expectation, and warm-capacity
+  opportunity cost are not modelled, so a node's cost in a Booking Decision is
+  a flat rate rather than an economic estimate.
+- A node runs one workload at a time and Rental Schedules are not populated, so
+  a second Run arriving while a node is busy provisions elsewhere instead of
+  queueing behind it.
 
 ## Adapters And Workloads
 

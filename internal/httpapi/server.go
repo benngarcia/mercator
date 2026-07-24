@@ -85,6 +85,7 @@ type Server struct {
 	reportSigner *reporting.Signer
 	webauth      WebAuth
 	manifests    func() []adapter.Manifest
+	nodes        NodeRegistry
 }
 
 // WebAuth is the human-login surface the server mounts at /auth/ when OIDC is
