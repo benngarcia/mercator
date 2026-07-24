@@ -131,11 +131,11 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 	request := blueprint.Arrivals.Runs[0].Request
 	workload := scenario.WorkloadForRun(labWorkspace, "run-reference", request)
 	now := blueprint.World.Start()
-	warm := labOffer("rental-warm", domain.OfferKindStanding, 2.5, request.Resources)
+	warm := labOffer("rental-warm", domain.OfferKindStanding, domain.LaneReusable, 2.5, request.Resources)
 	warm.ObservedAt = now
 	warm.ExpiresAt = now.Add(time.Minute)
 	warm.ImageCache = domain.ImageCacheEvidence{Known: true, MissingBytes: 80_000_000}
-	fresh := labOffer("fresh-4090", domain.OfferKindProvisionable, 4, request.Resources)
+	fresh := labOffer("fresh-4090", domain.OfferKindProvisionable, domain.LaneReusable, 4, request.Resources)
 	fresh.ObservedAt = now
 	fresh.ExpiresAt = now.Add(time.Minute)
 	fresh.ImageCache = domain.ImageCacheEvidence{Known: true, MissingBytes: 18_080_000_000}

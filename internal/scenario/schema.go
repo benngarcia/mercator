@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 type Status string
@@ -138,6 +140,15 @@ type WorldSpec struct {
 	RuntimeModels   []RuntimeModelSpec     `json:"runtime_models,omitempty"`
 }
 
+// ExecutionLane reports what this offer becomes once allocated, defaulting to
+// reusable capacity.
+func (spec MarketplaceOfferSpec) ExecutionLane() domain.ExecutionLane {
+	if spec.Lane == "" {
+		return domain.LaneReusable
+	}
+	return spec.Lane
+}
+
 // ArtifactSpec declares immutable, versioned content available to Runs.
 type ArtifactSpec struct {
 	ID   string   `json:"id"`
@@ -234,14 +245,20 @@ func (p QueuedBookingSpec) expected() Duration {
 }
 
 type MarketplaceOfferSpec struct {
-	ID             string           `json:"id"`
-	Provider       string           `json:"provider,omitempty"`
-	Region         string           `json:"region,omitempty"`
-	Available      *bool            `json:"available,omitempty"`
-	RatePerHourUSD float64          `json:"rate_per_hour_usd"`
-	Billing        BillingSpec      `json:"billing,omitempty"`
-	Provisioning   ProvisioningSpec `json:"provisioning"`
-	Resources      *ResourcesSpec   `json:"resources,omitempty"`
+	ID       string `json:"id"`
+	Provider string `json:"provider,omitempty"`
+	// Lane is what this offer becomes once allocated. "reusable" capacity is
+	// held across Runs through an enrolled node; "ephemeral" is a
+	// provider-native one-shot product that holds nothing afterwards.
+	// Defaulting to reusable keeps a marketplace offer meaning the same thing
+	// it always has in this corpus; a scenario about the one-shot lane says so.
+	Lane           domain.ExecutionLane `json:"lane,omitempty"`
+	Region         string               `json:"region,omitempty"`
+	Available      *bool                `json:"available,omitempty"`
+	RatePerHourUSD float64              `json:"rate_per_hour_usd"`
+	Billing        BillingSpec          `json:"billing,omitempty"`
+	Provisioning   ProvisioningSpec     `json:"provisioning"`
+	Resources      *ResourcesSpec       `json:"resources,omitempty"`
 	// Facts are the hardware facts providers owe on the offer (SSH root
 	// access, working NVIDIA driver). Omitted map entries are unknown facts;
 	// an offer missing or failing one must be rejected loudly. Target

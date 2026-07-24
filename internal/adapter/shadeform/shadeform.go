@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -570,4 +571,20 @@ func phaseFromStatus(status string) adapter.ExternalPhase {
 	}
 }
 
-var _ adapter.Provider = (*Adapter)(nil)
+var _ capability.EphemeralExecutor = (*Adapter)(nil)
+
+// EphemeralSupport states what a Shadeform connection can do today. Every
+// launch provisions an instance for one workload and auto_delete reclaims it,
+// so Shadeform is ephemeral until it provisions capacity a node agent enrolls
+// on.
+func (a *Adapter) EphemeralSupport() capability.EphemeralSupport {
+	return capability.EphemeralSupport{
+		ReusableBetweenRuns: false,
+		ObservableLocality:  false,
+		CancelQueued:        true,
+		ProviderTTL:         true,
+		IdempotentLaunch:    "launch_key",
+		ListOwned:           true,
+		ExactPricing:        true,
+	}
+}

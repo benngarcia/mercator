@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
@@ -138,8 +139,14 @@ func TestRequestedAllocationSchedulesAndReachesPodCreation(t *testing.T) {
 			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveCheapest, ExpectedRuntimeSeconds: 60},
 		},
 	}
+	// Placement sees offers as the Broker hands them over, with the lane
+	// stamped from the connection's negotiated Declaration.
+	declaration, err := capability.Declare("runpod", a)
+	if err != nil {
+		t.Fatalf("declare runpod capabilities: %v", err)
+	}
 	decision, err := scheduler.New().Evaluate(context.Background(), scheduler.SchedulingInput{
-		RunID: "run_2", Workload: workload, Offers: offers, EvaluatedAt: now,
+		RunID: "run_2", Workload: workload, Offers: capability.StampLane(declaration, offers), EvaluatedAt: now,
 	})
 	if err != nil {
 		t.Fatalf("schedule: %v", err)

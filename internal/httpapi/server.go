@@ -32,11 +32,19 @@ type ConsoleEventLog interface {
 	Subscribe(context.Context, eventlog.SubscriptionRequest) (<-chan eventlog.Delivery, error)
 }
 
+// offerLister is the only thing singleProviderOffers needs from a backend:
+// what capacity it can see right now. Lane stamping stays with the Broker,
+// which is what knows a connection's negotiated Declaration; a single-provider
+// composition takes the lane its offers already state.
+type offerLister interface {
+	ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error)
+}
+
 // singleProviderOffers adapts the fake-mode provider used by HandlerForSQLite
 // to the aggregate contract. A single provider cannot produce connection-level
 // partial failures.
 type singleProviderOffers struct {
-	provider adapter.Provider
+	provider offerLister
 }
 
 func (s singleProviderOffers) AggregateOffers(ctx context.Context, request adapter.OfferRequest) (broker.OfferAggregation, error) {

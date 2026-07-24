@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -24,7 +25,7 @@ func (nilResolver) Resolve(context.Context, string, credential.Credential) (stri
 }
 
 type fanoutAdapter struct {
-	adapter.Provider
+	oneShotLane
 	listOffers func(context.Context) ([]domain.OfferSnapshot, error)
 	listOwned  func(context.Context) ([]adapter.OwnedExternalObject, error)
 }
@@ -37,10 +38,10 @@ func (a fanoutAdapter) ListOwned(ctx context.Context, _ adapter.OwnershipQuery) 
 	return a.listOwned(ctx)
 }
 
-func fanoutBroker(t *testing.T, adapters map[string]adapter.Provider) *Broker {
+func fanoutBroker(t *testing.T, adapters map[string]capability.EphemeralExecutor) *Broker {
 	t.Helper()
 	factory := NewFactory()
-	factory.Register(adapter.Manifest{Type: "stub"}, func(config map[string]string, _ string) (adapter.Provider, error) {
+	factory.Register(adapter.Manifest{Type: "stub"}, func(config map[string]string, _ string) (capability.Backend, error) {
 		return adapters[config["id"]], nil
 	})
 	records := make([]connection.Record, 0, len(adapters))
@@ -52,7 +53,7 @@ func fanoutBroker(t *testing.T, adapters map[string]adapter.Provider) *Broker {
 
 func TestBrokerAggregateOffersReturnsPartialResultsAndConnectionErrors(t *testing.T) {
 	providerErr := errors.New("provider unavailable")
-	broker := fanoutBroker(t, map[string]adapter.Provider{
+	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
 		"good": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
 			return []domain.OfferSnapshot{{ID: "offer_good"}}, nil
 		}},
@@ -76,7 +77,7 @@ func TestBrokerAggregateOffersReturnsPartialResultsAndConnectionErrors(t *testin
 
 func TestBrokerListOffersRejectsPartialResults(t *testing.T) {
 	providerErr := errors.New("provider unavailable")
-	broker := fanoutBroker(t, map[string]adapter.Provider{
+	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
 		"good": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
 			return []domain.OfferSnapshot{{ID: "offer_good"}}, nil
 		}},
@@ -106,7 +107,7 @@ func TestBrokerListOffersQueriesConnectionsConcurrently(t *testing.T) {
 			return []domain.OfferSnapshot{{ID: "offer_" + id}}, nil
 		}
 	}
-	broker := fanoutBroker(t, map[string]adapter.Provider{
+	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
 		"a": fanoutAdapter{listOffers: query("a")},
 		"b": fanoutAdapter{listOffers: query("b")},
 	})
@@ -130,7 +131,7 @@ func TestBrokerListOffersQueriesConnectionsConcurrently(t *testing.T) {
 }
 
 func TestBrokerListOffersSortsConcurrentResultsDeterministically(t *testing.T) {
-	broker := fanoutBroker(t, map[string]adapter.Provider{
+	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
 		"b": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
 			return []domain.OfferSnapshot{{ID: "offer_z"}, {ID: "offer_a"}}, nil
 		}},
@@ -171,7 +172,7 @@ func TestBrokerListOffersScopesOfferIdentityToConnection(t *testing.T) {
 	sharedOffer := func(context.Context) ([]domain.OfferSnapshot, error) {
 		return []domain.OfferSnapshot{{ID: "off_shared"}}, nil
 	}
-	broker := fanoutBroker(t, map[string]adapter.Provider{
+	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
 		"a": fanoutAdapter{listOffers: sharedOffer},
 		"b": fanoutAdapter{listOffers: sharedOffer},
 	})
@@ -196,7 +197,7 @@ func TestBrokerListOffersScopesOfferIdentityToConnection(t *testing.T) {
 }
 
 func TestBrokerListOffersPropagatesCancellation(t *testing.T) {
-	broker := fanoutBroker(t, map[string]adapter.Provider{
+	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
 		"slow": fanoutAdapter{listOffers: func(ctx context.Context) ([]domain.OfferSnapshot, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -217,7 +218,7 @@ func TestBrokerListOffersPropagatesCancellation(t *testing.T) {
 
 func TestBrokerListOwnedRejectsPartialResultsWithConnectionErrors(t *testing.T) {
 	providerErr := errors.New("ownership lookup failed")
-	broker := fanoutBroker(t, map[string]adapter.Provider{
+	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
 		"good": fanoutAdapter{listOwned: func(context.Context) ([]adapter.OwnedExternalObject, error) {
 			return []adapter.OwnedExternalObject{{ExternalID: "external_good"}}, nil
 		}},
@@ -239,7 +240,7 @@ func TestBrokerListOwnedRejectsPartialResultsWithConnectionErrors(t *testing.T) 
 
 // recording adapter that reports which connection launched or observed.
 type recAdapter struct {
-	adapter.Provider
+	oneShotLane
 	id       string
 	launched *string
 	observed *string
@@ -267,7 +268,7 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 		{ID: "conn_unauth", AdapterType: "stub", Authorized: false},
 	}}
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (adapter.Provider, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (capability.Backend, error) {
 		return recAdapter{id: "x"}, nil
 	})
 	b := NewBroker(conns, f, nilResolver{})
@@ -283,7 +284,7 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 func TestBrokerRoutesLaunchByConnection(t *testing.T) {
 	var launchedBy string
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Provider, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (capability.Backend, error) {
 		return recAdapter{id: cfg["id"], launched: &launchedBy}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -314,7 +315,7 @@ func TestBrokerLaunchUnknownConnectionErrors(t *testing.T) {
 
 // ownedAdapter is a stub adapter whose ListOwned returns one object tagged with its id.
 type ownedAdapter struct {
-	adapter.Provider
+	oneShotLane
 	id string
 }
 
@@ -324,7 +325,7 @@ func (a ownedAdapter) ListOwned(_ context.Context, _ adapter.OwnershipQuery) ([]
 
 func TestBrokerListOwnedFansOut(t *testing.T) {
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Provider, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (capability.Backend, error) {
 		return ownedAdapter{id: cfg["id"]}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -344,7 +345,7 @@ func TestBrokerListOwnedFansOut(t *testing.T) {
 func TestBrokerRoutesObserveByConnection(t *testing.T) {
 	var observedBy string
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Provider, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (capability.Backend, error) {
 		return recAdapter{id: cfg["id"], observed: &observedBy}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -366,7 +367,7 @@ func TestBrokerRoutesObserveByConnection(t *testing.T) {
 
 // verifyAdapter is a stub adapter that records which connection had its Verify called.
 type verifyAdapter struct {
-	adapter.Provider
+	oneShotLane
 	id       string
 	verified *string
 }
@@ -379,7 +380,7 @@ func (a verifyAdapter) Verify(context.Context) error {
 func TestBrokerVerifyConnectionBuildsAndVerifies(t *testing.T) {
 	var verified string
 	f := NewFactory()
-	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (adapter.Provider, error) {
+	f.Register(adapter.Manifest{Type: "stub"}, func(cfg map[string]string, _ string) (capability.Backend, error) {
 		return verifyAdapter{id: cfg["id"], verified: &verified}, nil
 	})
 	conns := fakeConns{recs: []connection.Record{
@@ -395,4 +396,12 @@ func TestBrokerVerifyConnectionBuildsAndVerifies(t *testing.T) {
 	if err := b.VerifyConnection(context.Background(), "ws_1", "nope"); !errors.Is(err, ErrConnectionNotFound) {
 		t.Fatalf("expected ErrConnectionNotFound, got %v", err)
 	}
+}
+
+// oneShotLane supplies the ephemeral lane declaration every stub in this
+// package shares, so a double states only the calls its case is about.
+type oneShotLane struct{ capability.EphemeralExecutor }
+
+func (oneShotLane) EphemeralSupport() capability.EphemeralSupport {
+	return capability.EphemeralSupport{IdempotentLaunch: "launch_key", ListOwned: true}
 }

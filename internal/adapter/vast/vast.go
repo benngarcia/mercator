@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -361,4 +362,19 @@ func phaseFromInstance(i instance) adapter.ExternalPhase {
 	}
 }
 
-var _ adapter.Provider = (*Adapter)(nil)
+var _ capability.EphemeralExecutor = (*Adapter)(nil)
+
+// EphemeralSupport states what a Vast.ai connection can do today. Every launch
+// rents an instance for one workload and destroys it afterwards, so Vast is
+// ephemeral until it provisions capacity a node agent enrolls on.
+func (a *Adapter) EphemeralSupport() capability.EphemeralSupport {
+	return capability.EphemeralSupport{
+		ReusableBetweenRuns: false,
+		ObservableLocality:  false,
+		CancelQueued:        false,
+		ProviderTTL:         false,
+		IdempotentLaunch:    "launch_key",
+		ListOwned:           true,
+		ExactPricing:        true,
+	}
+}

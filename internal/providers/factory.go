@@ -8,6 +8,7 @@ import (
 	shadeformadapter "github.com/benngarcia/mercator/internal/adapter/shadeform"
 	vastadapter "github.com/benngarcia/mercator/internal/adapter/vast"
 	"github.com/benngarcia/mercator/internal/broker"
+	"github.com/benngarcia/mercator/internal/capability"
 )
 
 // Factory returns the complete production provider catalog. A provider is
@@ -16,13 +17,13 @@ import (
 func Factory() *broker.Factory {
 	factory := broker.NewFactory()
 	factory.Register(dockeradapter.Manifest(), newDocker)
-	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
+	factory.Register(runpodadapter.Manifest(), func(config map[string]string, secret string) (capability.Backend, error) {
 		return runpodadapter.New(secret, config)
 	})
-	factory.Register(shadeformadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
+	factory.Register(shadeformadapter.Manifest(), func(config map[string]string, secret string) (capability.Backend, error) {
 		return shadeformadapter.New(secret, config)
 	})
-	factory.Register(vastadapter.Manifest(), func(config map[string]string, secret string) (adapter.Provider, error) {
+	factory.Register(vastadapter.Manifest(), func(config map[string]string, secret string) (capability.Backend, error) {
 		return vastadapter.New(secret, config)
 	})
 	return factory
@@ -38,7 +39,7 @@ func Manifest(adapterType string) (adapter.Manifest, bool) {
 	return adapter.Manifest{}, false
 }
 
-func newDocker(config map[string]string, secret string) (adapter.Provider, error) {
+func newDocker(config map[string]string, secret string) (capability.Backend, error) {
 	registry, err := dockeradapter.NewRegistryCredential(config["registry_server"], config["registry_username"], secret)
 	if err != nil {
 		return nil, err
