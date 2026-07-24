@@ -35,6 +35,11 @@ limits.
 - Rental Schedules exist in the domain model and the console, but nothing
   populates them across Runs yet: queueing behind a running Booking is a target
   scenario, not shipped behavior.
+- The Mercator node agent and its protocol exist and are mounted, but Placement
+  does not route Runs to enrolled nodes yet. A node can enroll, hold a session,
+  receive commands, and report container lifecycle; nothing in the run lifecycle
+  sends it work. Enrolling the local Docker host is a manual step, not part of
+  the quickstart.
 
 ## Adapters And Workloads
 

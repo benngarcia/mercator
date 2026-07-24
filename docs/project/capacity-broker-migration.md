@@ -63,6 +63,14 @@ complete because it works against a live provider.
   orchestrator commit path, and the Lab's simulated world.
 - [x] 2026-07-24: Approve the lane ontology and the three contracts. ADR 0005.
 - [x] 2026-07-24: Create tracking issue #155.
+- [x] 2026-07-24: Complete the phase 2 node runtime. `internal/node` owns node
+  identity, leases, fencing, durable command records, and reconciliation, and
+  implements `capability.NodeRuntime`. `internal/nodeapi` is the outbound
+  transport, mounted beside the operator API so neither credential can stand in
+  for the other. `internal/nodeagent` and `cmd/mercator-node` are the agent:
+  local durable memory of applied operations, an event spool, a heartbeat, and
+  a Docker runtime behind a narrow interface. `nodetest.RunStoreSuite` runs the
+  same promises against the in-memory and SQLite stores.
 - [x] 2026-07-24: Complete phase 1. `internal/capability` declares
   CapacityProvider, NodeRuntime, and EphemeralExecutor with negotiated support
   sets. `Declare` derives a backend's lane from the contracts it satisfies and
@@ -77,7 +85,7 @@ complete because it works against a live provider.
 | Phase | What it delivers | Status |
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
-| 2 | Node protocol and Go agent; repeated workloads on one node | next |
+| 2 | Node protocol and Go agent | protocol, agent, and registry done; Placement does not route to nodes yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | not started |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
@@ -99,6 +107,20 @@ Phase 1 added:
 
 The corpus is 14 regression Blueprints: 5 green and 9 target.
 
+## What phase 2 does not yet do
+
+The node runtime exists and is proved against injected faults, but Placement
+still routes every Run through the ephemeral seam. Making a Run land on an
+enrolled node means teaching the orchestrator to dispatch a Booking to a
+NodeRuntime instead of an EphemeralExecutor, and teaching the Broker to build a
+reusable-lane Backend from an enrolled node rather than from a connection's
+adapter. Until that lands, `enrolled-node-survives-its-first-run` stays a target
+scenario and every production backend stays in the ephemeral lane.
+
+Local Docker enrollment is likewise not automatic: `mercator serve` mounts the
+node protocol and can invite a node, but nothing yet starts an agent against the
+local daemon as part of the quickstart.
+
 ## Known residual conflation
 
 An ephemeral execution still commits a Booking against a single-use Rental
@@ -107,6 +129,21 @@ honestly, but the record type is shared with reusable placements. Phase 2
 introduces the Node and separates the two bindings.
 
 ## Verification evidence
+
+### Phase 2
+
+On 2026-07-24, the reviewed worktree passed:
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/node/... ./internal/nodeagent ./internal/nodeapi -count=1
+go test ./internal/nodeagent -run 'Redelivered|Restarts' -count=3
+```
+
+The two idempotency cases inject real faults through the real transport: a lost
+command result, and a machine reboot before the control plane learned the
+outcome. Both were vacuous until the faults were real, because the registry
+deduplicates before the wire.
 
 ### Phase 1
 

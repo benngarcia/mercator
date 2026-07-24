@@ -20,6 +20,8 @@ import (
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/janitor"
+	"github.com/benngarcia/mercator/internal/node"
+	"github.com/benngarcia/mercator/internal/nodeapi"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/providers"
@@ -44,6 +46,10 @@ type Config struct {
 	Getenv         func(string) string
 	WebAuth        webauth.Config
 	LocalAuthEmail string
+	// AgentVersion is the node agent build a bootstrapped machine is asked to
+	// run. It is recorded on every invitation, so an operator can see which
+	// build a node was told to be and which one it turned out to be.
+	AgentVersion string
 
 	// ProviderFactory replaces the production catalog in lifecycle tests.
 	// Production callers leave it nil.
@@ -177,13 +183,26 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		Workspaces:   storage.Workspaces(),
 		Events:       logStore,
 	}, serverOptions...)
-	var rootHandler http.Handler = handler
+	// The node protocol is mounted beside the operator API rather than inside
+	// it: different audience, different credentials, and an operator token
+	// must never be able to act as a node.
+	nodeOptions := []node.Option{}
+	if cfg.AgentVersion != "" {
+		nodeOptions = append(nodeOptions, node.WithAgentVersion(cfg.AgentVersion))
+	}
+	nodes := node.NewRegistry(
+		storage.Nodes(),
+		node.NewSigner(node.DeriveKey(cfg.MasterKey)),
+		cfg.PublicURL,
+		nodeOptions...,
+	)
+	var rootHandler http.Handler = mountNodeProtocol(handler, nodeapi.New(nodes))
 	if cfg.LocalAuthEmail != "" {
 		// Local login mints a browser session for any request that lacks one,
 		// so a DNS-rebound hostname resolving to 127.0.0.1 must never reach
 		// it: only requests addressed to this machine by a loopback name are
 		// served in --dev mode.
-		rootHandler = loopbackHostOnly(handler)
+		rootHandler = loopbackHostOnly(rootHandler)
 	}
 
 	reconcileCtx, stopReconcile := context.WithCancel(ctx)
@@ -410,4 +429,18 @@ func isLoopbackHost(hostport string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// mountNodeProtocol routes the node protocol's own prefix to the node handler
+// and everything else to the operator API. The two never share authentication:
+// a node credential reaches nothing here, and an operator token reaches no node
+// route.
+func mountNodeProtocol(operator, nodes http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/nodes/") {
+			nodes.ServeHTTP(w, r)
+			return
+		}
+		operator.ServeHTTP(w, r)
+	})
 }

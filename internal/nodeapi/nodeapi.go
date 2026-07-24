@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/node"
@@ -106,6 +107,13 @@ func (handler *server) session(w http.ResponseWriter, r *http.Request) {
 	flusher, streamable := w.(http.Flusher)
 	if !streamable {
 		writeError(w, http.StatusInternalServerError, "STREAMING_UNSUPPORTED", "This server cannot stream node commands.")
+		return
+	}
+	// A session is a long-lived read, so the server's ordinary write deadline
+	// would cut a healthy node off on a schedule. Clearing it here keeps that
+	// deadline protecting every other route.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		writeError(w, http.StatusInternalServerError, "STREAMING_UNSUPPORTED", "This server cannot hold a node session open.")
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
