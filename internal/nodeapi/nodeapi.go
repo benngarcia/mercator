@@ -42,10 +42,10 @@ const maxBody = 1 << 20
 // its own prefix and never shares authentication with the operator API.
 func New(registry Registry) http.Handler {
 	handler := &server{registry: registry, mux: http.NewServeMux()}
-	handler.mux.HandleFunc("POST /v1/nodes/enroll", handler.enroll)
-	handler.mux.HandleFunc("POST /v1/nodes/{node}/session", handler.session)
-	handler.mux.HandleFunc("POST /v1/nodes/{node}/events", handler.events)
-	handler.mux.HandleFunc("POST /v1/nodes/{node}/results", handler.results)
+	handler.mux.HandleFunc("POST /v1/node-agent/enroll", handler.enroll)
+	handler.mux.HandleFunc("POST /v1/node-agent/{node}/session", handler.session)
+	handler.mux.HandleFunc("POST /v1/node-agent/{node}/events", handler.events)
+	handler.mux.HandleFunc("POST /v1/node-agent/{node}/results", handler.results)
 	return handler
 }
 

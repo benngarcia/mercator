@@ -172,6 +172,13 @@ func (agent *Agent) serve(ctx context.Context) error {
 			if err := agent.sendHeartbeat(ctx, session); err != nil {
 				agent.logger.WarnContext(ctx, "heartbeat spooled", "error", err)
 			}
+			// Container lifecycle is the node's own authority, so the agent
+			// watches the runtime rather than waiting for the application to
+			// say something. Without this, an exit would only surface on the
+			// next reconnection.
+			if err := agent.reportObservations(ctx, session); err != nil {
+				agent.logger.WarnContext(ctx, "workload observation spooled", "error", err)
+			}
 		case command := <-commands:
 			agent.apply(ctx, session, command)
 		}
@@ -289,14 +296,21 @@ func (agent *Agent) sendHeartbeat(ctx context.Context, session string) error {
 }
 
 // reportObservations tells the control plane what containers this machine
-// actually has, which is how a restart on either side converges without
+// actually has. It is how an exit reaches Mercator whatever the application
+// did or did not report, and how a restart on either side converges without
 // guessing.
+//
+// Only transitions are sent. Repeating an unchanged phase every tick would
+// bury the record in noise without telling anyone anything new.
 func (agent *Agent) reportObservations(ctx context.Context, session string) error {
 	observations, err := agent.runtime.Observe(ctx)
 	if err != nil {
 		return fmt.Errorf("observe workloads: %w", err)
 	}
 	for _, observation := range observations {
+		if !agent.state.WorkloadChanged(observation) {
+			continue
+		}
 		if err := agent.send(ctx, session, node.Event{
 			ID:         agent.state.NextEventID(),
 			NodeID:     agent.identity.NodeID,
@@ -306,6 +320,7 @@ func (agent *Agent) reportObservations(ctx context.Context, session string) erro
 		}); err != nil {
 			return err
 		}
+		agent.state.RecordWorkload(observation)
 	}
 	return nil
 }

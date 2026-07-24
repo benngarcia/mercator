@@ -369,7 +369,10 @@ func (clock *testClock) Advance(by time.Duration) { clock.now = clock.now.Add(by
 
 func invite(t *testing.T, registry *node.Registry) capability.NodeBootstrap {
 	t.Helper()
-	bootstrap, err := registry.Invite(context.Background(), testWorkspace, testNode, testRental, 1)
+	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: testWorkspace, NodeID: testNode, RentalID: testRental, Generation: 1,
+		ShadowPriceUSDPerHour: 1.5,
+	})
 	if err != nil {
 		t.Fatalf("invite node: %v", err)
 	}

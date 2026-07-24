@@ -924,6 +924,108 @@
         }
       }
     },
+    "/v1/nodes": {
+      "get": {
+        "operationId": "listNodes",
+        "summary": "List the nodes enrolled in a workspace",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Enrolled nodes",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NodeListResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Node registry failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "inviteNode",
+        "summary": "Reserve a node identity and mint its enrollment material",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InviteNodeRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Node invited",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NodeBootstrapResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "Node identity already exists",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Node registry failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/workspaces": {
       "get": {
         "operationId": "listWorkspaces",
@@ -4189,6 +4291,70 @@
         "required": ["workspace"],
         "properties": {
           "workspace": { "$ref": "#/components/schemas/Workspace" }
+        }
+      },
+      "InviteNodeRequest": {
+        "type": "object",
+        "required": ["workspace_id", "shadow_price_usd_per_hour"],
+        "properties": {
+          "workspace_id": { "type": "string" },
+          "node_id": {
+            "type": "string",
+            "description": "Node identity to reserve. Generated when omitted."
+          },
+          "rental_id": {
+            "type": "string",
+            "description": "The Rental this node belongs to. Generated when omitted."
+          },
+          "shadow_price_usd_per_hour": {
+            "type": "number",
+            "description": "What holding this machine costs. Placement needs a price to weigh a node against fresh capacity; a node invited at zero has unknown pricing and is refused rather than treated as free."
+          }
+        }
+      },
+      "NodeBootstrapResponse": {
+        "type": "object",
+        "required": ["control_plane_url", "node_id", "rental_id", "generation", "enrollment_token", "agent_version"],
+        "properties": {
+          "control_plane_url": { "type": "string" },
+          "node_id": { "type": "string" },
+          "rental_id": { "type": "string" },
+          "generation": { "type": "integer", "format": "int64" },
+          "enrollment_token": {
+            "type": "string",
+            "description": "Short-lived and redeemable once. It is returned exactly this once and is never stored in a readable form."
+          },
+          "agent_version": { "type": "string" }
+        }
+      },
+      "NodeSummary": {
+        "type": "object",
+        "required": ["id", "rental_id", "generation", "state", "shadow_price_usd_per_hour"],
+        "properties": {
+          "id": { "type": "string" },
+          "rental_id": { "type": "string" },
+          "generation": { "type": "integer", "format": "int64" },
+          "state": {
+            "type": "string",
+            "enum": ["enrolling", "ready", "lost", "retired"],
+            "description": "What the control plane believes about this node. A lost node is unobserved, not dead."
+          },
+          "agent_version": { "type": "string" },
+          "lease_expires": { "type": "string", "format": "date-time" },
+          "last_heartbeat_at": { "type": "string", "format": "date-time" },
+          "shadow_price_usd_per_hour": { "type": "number" },
+          "container_runtime": { "type": "string" },
+          "accelerators": { "type": "integer" }
+        }
+      },
+      "NodeListResponse": {
+        "type": "object",
+        "required": ["nodes"],
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/NodeSummary" }
+          }
         }
       },
       "WorkspaceListResponse": {
