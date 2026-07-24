@@ -49,6 +49,11 @@ limits.
 - A node runs one workload at a time and Rental Schedules are not populated, so
   a second Run arriving while a node is busy provisions elsewhere instead of
   queueing behind it.
+- A Run placed on a node that then goes quiet stays open indefinitely. The node
+  stops being offered for new work, but the Run already on it is never
+  adjudicated: nothing re-places it and nothing fails it. Adjudicating a lost
+  node's Bookings needs a declared grace window and restart policy, which is
+  replanning work ([#163](https://github.com/benngarcia/mercator/issues/163)).
 
 ## Adapters And Workloads
 

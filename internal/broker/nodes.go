@@ -58,7 +58,12 @@ func (b *Broker) launchOnNode(ctx context.Context, req adapter.LaunchRequest) (a
 	}
 	command.NodeRef = ref
 	command.OperationID = req.OperationKey
-	command.FencingToken = 0
+	// A fresh launch carries no fencing token of its own. It is stamped with
+	// whatever the node's current enrollment is at dispatch, which is what the
+	// caller wants: if the node re-enrolled between resolving it and sending
+	// this, the command should reach the new session rather than be refused as
+	// stale. Fencing protects commands issued under a superseded enrollment,
+	// and this one was not.
 	receipt, err := b.nodes.LaunchWorkload(ctx, command)
 	if err != nil {
 		return adapter.LaunchReceipt{}, err
