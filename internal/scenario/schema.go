@@ -164,7 +164,12 @@ type WorldSpec struct {
 // the local Docker daemon in production. It is the only world entry that
 // separates the lane's half of OfferSnapshot.KeepsWhatItRuns from the kind's.
 type HostSpec struct {
-	ID             string         `json:"id"`
+	ID string `json:"id"`
+	// CachedImages is what this machine happens to hold. Nothing of Mercator's
+	// runs on it, so nothing can ask it and no offer reports it: the content is
+	// world truth that Placement cannot see, which is the position an operator's
+	// own Docker host is in.
+	CachedImages   []string       `json:"cached_images,omitempty"`
 	RatePerHourUSD float64        `json:"rate_per_hour_usd"`
 	Billing        BillingSpec    `json:"billing,omitempty"`
 	Resources      *ResourcesSpec `json:"resources,omitempty"`
@@ -281,19 +286,12 @@ type RentalSpec struct {
 	// work from running it, and a fixture that could not say so could not tell a
 	// machine that is ready from one that is only close. Omitted means unpacked,
 	// which is what a completed pull leaves behind.
-	Unpacked *bool `json:"unpacked,omitempty"`
-	// InventoryValidFor is how long this host stands behind what it says it
-	// holds, measured from the world's start. Stating it makes this a host that
-	// looked once and has not looked since, which is how a fixture writes down
-	// locality that has gone stale. Omitted means the host re-enumerates
-	// whenever it is asked and states no bound, which is what an enrolled node
-	// heartbeating into the control plane does.
-	InventoryValidFor *Duration      `json:"inventory_valid_for,omitempty"`
-	ArtifactReplicas  []string       `json:"artifact_replicas,omitempty"`
-	CacheMounts       []string       `json:"cache_mounts,omitempty"`
-	RatePerHourUSD    float64        `json:"rate_per_hour_usd"`
-	Billing           BillingSpec    `json:"billing,omitempty"`
-	Resources         *ResourcesSpec `json:"resources,omitempty"`
+	Unpacked         *bool          `json:"unpacked,omitempty"`
+	ArtifactReplicas []string       `json:"artifact_replicas,omitempty"`
+	CacheMounts      []string       `json:"cache_mounts,omitempty"`
+	RatePerHourUSD   float64        `json:"rate_per_hour_usd"`
+	Billing          BillingSpec    `json:"billing,omitempty"`
+	Resources        *ResourcesSpec `json:"resources,omitempty"`
 }
 
 // IsUnpacked reports whether this host assembled the content it was seeded

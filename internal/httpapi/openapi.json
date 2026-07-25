@@ -3833,12 +3833,7 @@
           "observed_at": {
             "type": "string",
             "format": "date-time",
-            "description": "When the holder last looked. Locality decays, so the age of this answer is material."
-          },
-          "valid_until": {
-            "type": "string",
-            "format": "date-time",
-            "description": "How long the holder stands behind this enumeration. Only the holder knows how often it looks, so only the holder can say when its answer stops being one. Past it, what is here is a question again rather than a fact, and a stale answer is priced as uncertainty rather than as warmth."
+            "description": "When the holder last looked. Locality decays, so the age of this answer is material. How long anyone stands behind it is the offer's own expiry: the enumeration and the capacity claim come out of one observation, and an expired offer is refused whole."
           },
           "image_digests": {
             "type": "array",

@@ -139,7 +139,7 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
 		provision = offer.Provisioning.Expected
 	}
-	work, _ := input.Image.StartWork(input.EvaluatedAt, offer.Images)
+	work, _ := input.Image.StartWork(offer.Images)
 	pull := referenceStartWorkSeconds(work, offer.RegistryDownloadMbps())
 	start := queue + provision + pull + 1
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds

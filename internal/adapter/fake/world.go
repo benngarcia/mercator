@@ -110,11 +110,6 @@ type Machine struct {
 	// learns a layer's identity by unpacking it. Everything else it holds is
 	// assembled, because a pull that lands unpacks as it goes.
 	Packed map[string]bool
-	// InventoryValidUntil is how long this machine stands behind what it says
-	// it holds, and InventoryObservedAt when it last looked. Zero on both is a
-	// machine that re-enumerates whenever it is asked and states no bound.
-	InventoryObservedAt time.Time
-	InventoryValidUntil time.Time
 	// HeldCaches maps named data cache key (e.g. a dataset GID) to bytes
 	// materialized on the machine's local disk. No offer field carries this
 	// today; the world holds it so cache-evidence milestones can surface it.
@@ -240,11 +235,14 @@ func (m *Machine) keep(image string, layers []Layer) {
 // fetch is the scheduler's subtraction against the manifest, so the world
 // asserts no answer about an image the offer does not name.
 func (m *Machine) inventory(now time.Time) domain.ImageInventory {
-	observed := now
-	if !m.InventoryObservedAt.IsZero() {
-		observed = m.InventoryObservedAt
+	if !m.Offer.Lane.Reusable() {
+		// Nothing of Mercator's runs on capacity it borrows a slot on, so
+		// nothing enumerates it. Every provider adapter in the tree says
+		// exactly this about the machines it sells, and a world that answered
+		// for them would be lending Placement knowledge no deployment has.
+		return domain.ImageInventory{}
 	}
-	inventory := domain.ImageInventory{Known: true, ObservedAt: observed, ValidUntil: m.InventoryValidUntil}
+	inventory := domain.ImageInventory{Known: true, ObservedAt: now}
 	for _, image := range slices.Sorted(maps.Keys(m.HeldImages)) {
 		if m.Packed[image] {
 			inventory.PulledImageDigests = append(inventory.PulledImageDigests, image)

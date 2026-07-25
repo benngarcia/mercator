@@ -173,14 +173,20 @@ type ImageLocality struct {
 	// spaces makes possible. Both lists name layers this node has assembled
 	// into a mountable chain: content a runtime has fetched and not unpacked is
 	// content it cannot name a layer identity for, which is why an image that
-	// is here and not ready says so with State and Unpacked instead.
+	// is here and not ready says so with ContentPresent instead.
 	LayerDiffIDs []string `json:"layer_diff_ids,omitempty"`
-	// Unpacked reports whether the image is ready to run, not merely pulled.
-	Unpacked bool `json:"unpacked"`
-	// State is how much of this image the node established it has: hot when
-	// every layer is unpacked, partial when some are, cold when the image is
-	// here and none of it is assembled, and unknown when the runtime would not
-	// describe it at all.
+	// ContentPresent reports that every byte of this image is on this machine,
+	// whether or not the chain a container starts on is assembled. Fetching and
+	// unpacking are separate acts and only the node can say which it has done:
+	// what is left on content already here is local work rather than a pull,
+	// and an operator sent after a network problem for bytes on the disk finds
+	// nothing to fix. A runtime that cannot establish it says so with State
+	// unknown rather than guessing in either direction.
+	ContentPresent bool `json:"content_present"`
+	// State is how much of this image the node established it has: hot when the
+	// whole chain is assembled and a container can start on it now, partial
+	// when some of it is here, cold when none of it is, and unknown when the
+	// runtime could not establish which.
 	State          domain.LocalityState `json:"state"`
 	LastVerifiedAt time.Time            `json:"last_verified_at"`
 }

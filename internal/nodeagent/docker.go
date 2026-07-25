@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"slices"
@@ -56,7 +59,11 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 	if slices.Contains(info.runtimeNames(), "nvidia") {
 		facts.Host.AcceleratorToolkit = "nvidia-container-toolkit"
 	}
-	images, err := docker.images(ctx)
+	store, err := docker.openImageStore(ctx, info)
+	if err != nil {
+		return capability.NodeFacts{}, err
+	}
+	images, err := docker.images(ctx, store)
 	if err != nil {
 		return capability.NodeFacts{}, err
 	}
@@ -192,6 +199,27 @@ type dockerInfo struct {
 	Runtimes        map[string]struct {
 		Path string `json:"path"`
 	} `json:"Runtimes"`
+	// DriverStatus is the image store's own account of itself. It is the only
+	// thing in `docker info` that tells the two Docker image stores apart: both
+	// report a driver name, and the snapshotter's "overlayfs" and the graph
+	// driver's "overlay2" are different machinery answering different questions
+	// about the same image.
+	DriverStatus [][2]string `json:"DriverStatus"`
+}
+
+// snapshotterDriverType is what a daemon keeping images in the containerd
+// content store reports its storage backend to be (moby, LayerStoreStatus in
+// daemon/containerd/service.go). That store is the default for Docker Engine 29
+// on Linux, so this is the ordinary case rather than the exotic one.
+const snapshotterDriverType = "io.containerd.snapshotter.v1"
+
+func (info dockerInfo) keepsContentStore() bool {
+	for _, status := range info.DriverStatus {
+		if status[0] == "driver-type" && status[1] == snapshotterDriverType {
+			return true
+		}
+	}
+	return false
 }
 
 func (info dockerInfo) runtimeNames() []string {
@@ -229,8 +257,8 @@ func (docker *DockerRuntime) info(ctx context.Context) (dockerInfo, error) {
 // layer chain is not assembled cannot start a container, and this node used to
 // call every image it could list hot and unpacked, which is a claim about
 // readiness made from a listing that says nothing about it. Each image now
-// states what the daemon established: how much of it is mounted, and whether
-// that is all of it.
+// states what its image store established, and the two Docker image stores
+// establish it in different ways.
 //
 // One image the daemon will not describe is one image reported unknown. It is
 // not the whole report: a host with forty images, one of which was pruned
@@ -238,7 +266,7 @@ func (docker *DockerRuntime) info(ctx context.Context) (dockerInfo, error) {
 // stopped it from stating. Failing the report would have cost this node its
 // session, and a node with no session yet its enrollment, over a fact about one
 // image.
-func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLocality, error) {
+func (docker *DockerRuntime) images(ctx context.Context, store imageStore) ([]capability.ImageLocality, error) {
 	out, err := docker.run(ctx, "images", "--digests", "--no-trunc", "--format", "{{json .}}")
 	if err != nil {
 		return nil, fmt.Errorf("docker images: %w", err)
@@ -272,86 +300,56 @@ func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLoca
 			})
 			continue
 		}
-		locality = append(locality, described.locality(image.Digest, docker.now().UTC()))
+		locality = append(locality, described.locality(image.Digest, store.assembly(image.ID, described), docker.now().UTC()))
 	}
 	return locality, nil
 }
 
 // describedImage is what the daemon can say about one image it holds: which
-// build it is, the uncompressed layer identities its config declares, and the
-// storage chain it has actually assembled for them. The build matters because a
-// multi-platform image is listed under one index digest whichever platform was
-// pulled, so a host that fetched the arm64 build and a host that fetched the
-// amd64 build report the same name for different content.
+// build it is, and the uncompressed layer identities its config declares. The
+// build matters because a multi-platform image is listed under one index digest
+// whichever platform was pulled, so a host that fetched the arm64 build and a
+// host that fetched the amd64 build report the same name for different content.
 type describedImage struct {
 	OS           string   `json:"os"`
 	Architecture string   `json:"architecture"`
 	DiffIDs      []string `json:"diff_ids"`
-	// MountChain is the storage driver's own account of what it can mount for
-	// this image, which is the only evidence a daemon offers that content was
-	// unpacked rather than merely fetched. A graph driver names one directory
-	// per layer; a content-store daemon holding an image it has not unpacked
-	// names none at all.
-	MountChain map[string]string `json:"mount_chain"`
 }
 
 func (described describedImage) platform() domain.Platform {
 	return domain.Platform{OS: described.OS, Architecture: described.Architecture}
 }
 
-// unpackedLayers is how many of this image's layers the daemon has assembled.
-// The chain is ordered from the base up, exactly as the config orders diff IDs,
-// so a chain of n directories is the image's first n layers and no others.
-func (described describedImage) unpackedLayers() int {
-	depth := 0
-	for _, key := range []string{"LowerDir", "UpperDir"} {
-		for directory := range strings.SplitSeq(described.MountChain[key], ":") {
-			if strings.TrimSpace(directory) != "" {
-				depth++
-			}
-		}
-	}
-	return min(depth, len(described.DiffIDs))
-}
-
 // locality is what this daemon established about one image, and nothing beyond
-// it. Only the layers it can mount are reported held: a layer whose bytes are
-// somewhere in the daemon's store and whose chain is not assembled is content a
-// container cannot be started on, and reporting it would tell Placement this
-// machine is ready when it is minutes of local work away.
-func (described describedImage) locality(manifestDigest string, at time.Time) capability.ImageLocality {
-	unpacked := described.unpackedLayers()
+// it. Layers are reported held only for an image a container can be started on:
+// a chain the daemon has not assembled is content nothing can be mounted from,
+// and reporting it would tell Placement this machine is ready when it is
+// minutes of local work away.
+func (described describedImage) locality(manifestDigest string, assembly imageAssembly, at time.Time) capability.ImageLocality {
 	reported := capability.ImageLocality{
 		ManifestDigest: manifestDigest,
 		Platform:       described.platform(),
-		LayerDiffIDs:   described.DiffIDs[:unpacked],
+		ContentPresent: assembly.ContentPresent,
+		State:          assembly.State,
 		LastVerifiedAt: at,
 	}
-	switch {
-	case len(described.DiffIDs) == 0:
-		reported.State = domain.LocalityUnknown
-	case unpacked == len(described.DiffIDs):
-		reported.Unpacked, reported.State = true, domain.LocalityHot
-	case unpacked == 0:
-		reported.State = domain.LocalityCold
-	default:
-		reported.State = domain.LocalityPartial
+	if assembly.State == domain.LocalityHot {
+		reported.LayerDiffIDs = described.DiffIDs
 	}
 	return reported
 }
 
-// describe reads what one image is, what it is made of, and how much of it this
-// daemon can mount. An image reported hot with no layers is indistinguishable
-// downstream from a host holding no part of it, and an image reported without
-// its platform is one nothing can tell from another platform's build under the
-// same digest, so a daemon that will not answer yields an unknown image rather
-// than a confident wrong one.
+// describe reads what one image is and what it is made of. An image reported
+// with no layers is indistinguishable downstream from a host holding no part of
+// it, and an image reported without its platform is one nothing can tell from
+// another platform's build under the same digest, so a daemon that will not
+// answer either yields an unknown image rather than a confident wrong one.
 func (docker *DockerRuntime) describe(ctx context.Context, imageID string) (describedImage, error) {
 	if imageID == "" {
 		return describedImage{}, fmt.Errorf("the daemon listed an image with no ID, so nothing can read it")
 	}
 	out, err := docker.run(ctx, "image", "inspect", imageID, "--format",
-		`{"os":"{{.Os}}","architecture":"{{.Architecture}}","diff_ids":{{json .RootFS.Layers}},"mount_chain":{{json .GraphDriver.Data}}}`)
+		`{"os":"{{.Os}}","architecture":"{{.Architecture}}","diff_ids":{{json .RootFS.Layers}}}`)
 	if err != nil {
 		return describedImage{}, fmt.Errorf("read image %s: %w", imageID, err)
 	}
@@ -359,7 +357,195 @@ func (docker *DockerRuntime) describe(ctx context.Context, imageID string) (desc
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &described); err != nil {
 		return describedImage{}, fmt.Errorf("decode image %s: %w", imageID, err)
 	}
+	if len(described.DiffIDs) == 0 {
+		return describedImage{}, fmt.Errorf("the daemon described image %s without naming any of its content", imageID)
+	}
 	return described, nil
+}
+
+// imageAssembly is what an image store established about one image: whether a
+// container can be started on it now, and whether its bytes are on this machine
+// at all. The two are separate answers because fetching and unpacking are
+// separate acts, and a host that has done the first and not the second owes
+// local work rather than a pull.
+type imageAssembly struct {
+	State          domain.LocalityState
+	ContentPresent bool
+}
+
+// imageStore is the daemon's own account of what it can start a container on.
+// Docker has two of them and they establish that differently, so which one is
+// answering decides what counts as evidence. Reading one store's evidence on
+// the other is how a node ends up stating a measurement it never made.
+type imageStore interface {
+	assembly(imageID string, described describedImage) imageAssembly
+}
+
+// openImageStore picks the evidence this daemon actually offers.
+func (docker *DockerRuntime) openImageStore(ctx context.Context, info dockerInfo) (imageStore, error) {
+	if !info.keepsContentStore() {
+		return graphDriverStore{}, nil
+	}
+	return docker.readContentStore(ctx)
+}
+
+// graphDriverStore is a daemon whose images live in a graph driver. Its layer
+// store holds applied layers only and an image is registered once the last of
+// its layers is unpacked, so an image this daemon lists and describes is one a
+// container can start on, and the bytes are here by the same construction.
+//
+// The chain a driver names for an image is not evidence of anything further and
+// most drivers name none: btrfs returns no metadata at all, vfs and zfs return
+// one directory rather than a chain, and only overlay2 names one entry per
+// layer. Reading it told working hosts on three of the four drivers that they
+// held nothing.
+type graphDriverStore struct{}
+
+func (graphDriverStore) assembly(string, describedImage) imageAssembly {
+	return imageAssembly{State: domain.LocalityHot, ContentPresent: true}
+}
+
+// contentStore is a daemon whose images live in the containerd content store,
+// which is the default for Docker Engine 29 on Linux. Content and snapshots are
+// separate there: an image can be listed with its content missing, and it can
+// hold every byte with no snapshot chain to start from. Its CLI reports neither
+// (moby returns GraphDriver.Data as null for this store, unconditionally, in
+// daemon/containerd/image_inspect.go), so the agent asks the daemon's API for
+// the only account of it that exists.
+type contentStore struct {
+	manifests map[string][]manifestSummary
+}
+
+func (store contentStore) assembly(imageID string, described describedImage) imageAssembly {
+	for _, summary := range store.manifests[imageID] {
+		if !summary.describes(described.platform()) {
+			continue
+		}
+		switch {
+		case summary.ImageData.Size.Unpacked > 0:
+			return imageAssembly{State: domain.LocalityHot, ContentPresent: summary.Available}
+		case summary.Available:
+			return imageAssembly{State: domain.LocalityPartial, ContentPresent: true}
+		default:
+			return imageAssembly{State: domain.LocalityCold}
+		}
+	}
+	return imageAssembly{State: domain.LocalityUnknown}
+}
+
+// manifestSummary is one platform's build inside one listed image, as the
+// daemon accounts for it. Available is whether every blob it references is
+// here. Unpacked is the usage of the snapshot named by the image's full chain
+// ID, which the daemon reports as zero when that snapshot does not exist
+// (moby, ImageManifest.SnapshotUsage), so anything above zero is the whole
+// chain and exactly the question "can a container start on this".
+type manifestSummary struct {
+	Available bool   `json:"Available"`
+	Kind      string `json:"Kind"`
+	ImageData *struct {
+		Platform struct {
+			OS           string `json:"os"`
+			Architecture string `json:"architecture"`
+		} `json:"Platform"`
+		Size struct {
+			Unpacked int64 `json:"Unpacked"`
+		} `json:"Size"`
+	} `json:"ImageData"`
+}
+
+// describes reports whether this entry is the build the daemon would run here.
+// An index lists one manifest per platform and its attestations besides, and
+// another platform's entry says nothing about the content this host would use.
+func (summary manifestSummary) describes(platform domain.Platform) bool {
+	return summary.Kind == "image" && summary.ImageData != nil &&
+		domain.Platform{OS: summary.ImageData.Platform.OS, Architecture: summary.ImageData.Platform.Architecture} == platform
+}
+
+// contentStoreAPIVersion is the first Engine API version that reports per
+// manifest content availability and unpacked size. A daemon on the content
+// store below it cannot say which of its images are runnable, and a node that
+// cannot say that must not be guessing about it.
+const contentStoreAPIVersion = "v1.48"
+
+// readContentStore asks the daemon what it holds and what it has unpacked. It
+// fails rather than degrading: an image store this agent cannot read is a node
+// whose warmth is unknowable, and reporting that machine cold would send its own
+// work elsewhere while reporting it hot would promise starts it cannot make.
+func (docker *DockerRuntime) readContentStore(ctx context.Context) (contentStore, error) {
+	endpoint, err := docker.endpoint(ctx)
+	if err != nil {
+		return contentStore{}, err
+	}
+	client, base, err := daemonClient(endpoint)
+	if err != nil {
+		return contentStore{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		base+"/"+contentStoreAPIVersion+"/images/json?manifests=1", nil)
+	if err != nil {
+		return contentStore{}, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return contentStore{}, fmt.Errorf("read the daemon's image store at %s: %w", endpoint, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return contentStore{}, fmt.Errorf(
+			"the daemon at %s answered %s for its image store, so this node cannot say which of its images are runnable",
+			endpoint, response.Status)
+	}
+	var listed []struct {
+		ID        string            `json:"Id"`
+		Manifests []manifestSummary `json:"Manifests"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&listed); err != nil {
+		return contentStore{}, fmt.Errorf("decode the daemon's image store: %w", err)
+	}
+	store := contentStore{manifests: make(map[string][]manifestSummary, len(listed))}
+	for _, image := range listed {
+		store.manifests[image.ID] = image.Manifests
+	}
+	return store, nil
+}
+
+// endpoint is where the daemon this agent drives listens, taken from the same
+// place the CLI takes it so that the two are describing one machine.
+func (docker *DockerRuntime) endpoint(ctx context.Context) (string, error) {
+	if host := os.Getenv("DOCKER_HOST"); host != "" {
+		return host, nil
+	}
+	out, err := docker.run(ctx, "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+	if err != nil {
+		return "", fmt.Errorf("find the daemon this agent drives: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// daemonClient dials one daemon endpoint. A local socket and a TCP port are the
+// two a node agent meets, because the agent runs on the machine it reports. An
+// endpoint reached over SSH or TLS is a daemon this code cannot open, and it
+// says so rather than reporting a machine that holds everything as holding
+// nothing.
+func daemonClient(endpoint string) (*http.Client, string, error) {
+	transport, address, found := strings.Cut(endpoint, "://")
+	if !found {
+		return nil, "", fmt.Errorf("the daemon endpoint %q names no transport", endpoint)
+	}
+	switch transport {
+	case "unix":
+		return &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", address)
+			},
+		}}, "http://docker", nil
+	case "tcp", "http":
+		return &http.Client{}, "http://" + address, nil
+	default:
+		return nil, "", fmt.Errorf(
+			"this agent cannot read the image store of a daemon reached over %q, so it cannot say what %s holds",
+			transport, endpoint)
+	}
 }
 
 type dockerContainer struct {

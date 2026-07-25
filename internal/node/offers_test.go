@@ -3,7 +3,6 @@ package node_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -39,7 +38,7 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 				ManifestDigest: trainerV2,
 				Platform:       hostPlatform,
 				State:          domain.LocalityHot,
-				Unpacked:       true,
+				ContentPresent: true,
 				LayerDigests:   []string{baseLayer, topLayer},
 			}},
 			wantWhole: true,
@@ -52,7 +51,8 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 			held: []capability.ImageLocality{{
 				ManifestDigest: trainerV2,
 				Platform:       hostPlatform,
-				State:          domain.LocalityCold,
+				State:          domain.LocalityPartial,
+				ContentPresent: true,
 			}},
 			wantWhole:  false,
 			wantPulled: true,
@@ -63,10 +63,26 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 				ManifestDigest: trainerV2,
 				Platform:       hostPlatform,
 				State:          domain.LocalityPartial,
+				ContentPresent: true,
 				LayerDigests:   []string{baseLayer},
 			}},
 			wantWhole:  false,
 			wantPulled: true,
+			wantLayer:  true,
+		},
+		// The bytes of some layer are missing, so the machine owes a transfer
+		// for it. Filing it as pulled would charge local assembly for content
+		// nobody has fetched and block the Run on a pull the decision said was
+		// disk work.
+		"a node missing part of an image reports its layers and not the image": {
+			held: []capability.ImageLocality{{
+				ManifestDigest: trainerV2,
+				Platform:       hostPlatform,
+				State:          domain.LocalityPartial,
+				LayerDigests:   []string{baseLayer},
+			}},
+			wantWhole:  false,
+			wantPulled: false,
 			wantLayer:  true,
 		},
 		// The same digest, another machine's build of it. Reading the name alone
@@ -77,7 +93,7 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 				ManifestDigest: trainerV2,
 				Platform:       domain.Platform{OS: "linux", Architecture: "arm64"},
 				State:          domain.LocalityHot,
-				Unpacked:       true,
+				ContentPresent: true,
 				LayerDigests:   []string{armBaseLayer},
 			}},
 			wantWhole: false,
@@ -125,29 +141,30 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 	}
 }
 
-// TestANodeStopsStandingBehindWhatItSaidWhenItStopsLooking is why an inventory
-// carries a validity and not only an age. A node states what it holds as of a
-// heartbeat; a decision made long enough after that heartbeat is made against a
-// machine nobody has heard from, and reading the old answer as warmth is
-// betting a placement on content that may have been reclaimed an hour ago.
-func TestANodeStopsStandingBehindWhatItSaidWhenItStopsLooking(t *testing.T) {
+// TestANodeOfferStopsBeingSelectableBeforeItsFactsGoStale is the one bound on
+// how old an answer about a machine may be. The inventory and the capacity claim
+// come out of one heartbeat, so an offer built from facts nobody has refreshed
+// expires whole rather than half: there is no moment at which Placement may
+// choose this machine and disbelieve what it said it holds.
+func TestANodeOfferStopsBeingSelectableBeforeItsFactsGoStale(t *testing.T) {
 	registry := readyNode(t, []capability.ImageLocality{{
 		ManifestDigest: trainerV2,
 		Platform:       hostPlatform,
 		State:          domain.LocalityHot,
-		Unpacked:       true,
+		ContentPresent: true,
 	}})
 	offers, err := registry.Offers(context.Background(), nodeWorkspace)
 	if err != nil {
 		t.Fatalf("list node offers: %v", err)
 	}
-	inventory := offers[0].Images
+	offer := offers[0]
 
-	if !inventory.Answers(inventory.ObservedAt.Add(time.Second)) {
-		t.Fatal("a node's own heartbeat is an answer a second after it arrives")
+	if !offer.ExpiresAt.After(offer.Images.ObservedAt) {
+		t.Fatal("a node offer expired at the instant its facts were observed")
 	}
-	if inventory.Answers(inventory.ValidUntil.Add(time.Second)) {
-		t.Fatalf("the node still answered past %s, so nothing bounds how stale a warm claim may be", inventory.ValidUntil)
+	if offer.Images.ObservedAt != offer.ObservedAt {
+		t.Fatalf("the inventory was observed at %s and the offer at %s, so the two could disagree about the same machine",
+			offer.Images.ObservedAt, offer.ObservedAt)
 	}
 }
 
@@ -165,7 +182,6 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 			{Digest: topLayer, CompressedBytes: 80_000_000},
 		},
 	}
-	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	cases := map[string]struct {
 		inventory    domain.ImageInventory
 		wantWork     domain.ImageWork
@@ -199,22 +215,18 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000},
 			wantLocality: domain.LocalityCold,
 		},
-		"a host that cannot say is unknown rather than free": {
+		// Silence is not warmth. The image has to arrive from somewhere and
+		// nothing here says any of it is already on this machine, so a host
+		// nobody can describe owes what a host holding nothing owes.
+		"a host that cannot say owes the whole image rather than nothing": {
 			inventory:    domain.ImageInventory{Known: false},
-			wantLocality: domain.LocalityUnknown,
-		},
-		"a host that stopped standing behind its answer is unknown rather than warm": {
-			inventory: domain.ImageInventory{
-				Known:        true,
-				ImageDigests: []string{trainerV2},
-				ValidUntil:   now.Add(-time.Second),
-			},
+			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000},
 			wantLocality: domain.LocalityUnknown,
 		},
 	}
 	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {
-			work, locality := manifest.StartWork(now, testCase.inventory)
+			work, locality := manifest.StartWork(testCase.inventory)
 
 			if work != testCase.wantWork || locality != testCase.wantLocality {
 				t.Fatalf("start work = %+v (%q), want %+v (%q)", work, locality, testCase.wantWork, testCase.wantLocality)
@@ -228,10 +240,9 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 // charge a host holding nothing the same zero as one holding everything.
 func TestAManifestWithoutLayersCanConfirmAHitAndCannotPriceAMiss(t *testing.T) {
 	layerless := domain.ImageManifest{Known: true, Digest: trainerV2}
-	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 
-	_, hit := layerless.StartWork(now, domain.ImageInventory{Known: true, ImageDigests: []string{trainerV2}})
-	_, miss := layerless.StartWork(now, domain.ImageInventory{Known: true})
+	_, hit := layerless.StartWork(domain.ImageInventory{Known: true, ImageDigests: []string{trainerV2}})
+	_, miss := layerless.StartWork(domain.ImageInventory{Known: true})
 
 	if hit != domain.LocalityHot {
 		t.Fatalf("a host holding the image is %q, want hot", hit)
@@ -246,12 +257,11 @@ func TestAManifestWithoutLayersCanConfirmAHitAndCannotPriceAMiss(t *testing.T) {
 // is absent for everyone rather than favouring whoever happens to report most.
 func TestAnUnresolvedManifestLeavesEveryCandidateIndistinguishable(t *testing.T) {
 	unresolved := domain.ImageManifest{}
-	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	warm := domain.ImageInventory{Known: true, ImageDigests: []string{trainerV2}}
 	cold := domain.ImageInventory{Known: true}
 
-	warmWork, warmLocality := unresolved.StartWork(now, warm)
-	coldWork, coldLocality := unresolved.StartWork(now, cold)
+	warmWork, warmLocality := unresolved.StartWork(warm)
+	coldWork, coldLocality := unresolved.StartWork(cold)
 
 	if warmLocality != domain.LocalityUnknown || coldLocality != domain.LocalityUnknown {
 		t.Fatalf("an unresolved manifest produced %q and %q, want unknown for everyone", warmLocality, coldLocality)

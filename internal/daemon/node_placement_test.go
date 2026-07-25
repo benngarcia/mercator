@@ -501,6 +501,8 @@ func (runtime *scriptedRuntime) hold(digest string, platform domain.Platform, di
 // unpacked: every byte is here and no container can be started on it. That is
 // where a container runtime sits whenever content has landed and the snapshot
 // chain has not been built, and it is the state this node used to report as hot.
+// The node says partial for it, and so does the decision: one vocabulary, one
+// meaning, on both surfaces an operator can read.
 func (runtime *scriptedRuntime) holdUnassembled(digest string, platform domain.Platform) {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
@@ -532,7 +534,8 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 			images = append(images, capability.ImageLocality{
 				ManifestDigest: digest,
 				Platform:       runtime.platformOf(digest),
-				State:          domain.LocalityCold,
+				ContentPresent: true,
+				State:          domain.LocalityPartial,
 			})
 			continue
 		}
@@ -540,8 +543,8 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 			ManifestDigest: digest,
 			Platform:       runtime.platformOf(digest),
 			LayerDiffIDs:   runtime.unpacks[digest],
+			ContentPresent: true,
 			State:          domain.LocalityHot,
-			Unpacked:       true,
 		})
 	}
 	return capability.NodeFacts{

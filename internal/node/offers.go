@@ -115,7 +115,7 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		Network:  domain.NetworkFacts{Download: host.Network},
 		Pricing:  shadowPrice(record),
 		Queue:    &domain.QueueSnapshot{},
-		Images:   imageInventory(record.Facts, platform, registry.offerFreshness()),
+		Images:   imageInventory(record.Facts, platform),
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
@@ -150,23 +150,18 @@ func shadowPrice(record Record) domain.PriceModel {
 // as nothing to do. Layers need no such test: they are content-addressed, so
 // another platform's layers simply do not match.
 //
-// An image this machine has and cannot start is projected as pulled rather than
-// held. Counting only hot images and dropping the rest made partial reuse
-// invisible: a host halfway through assembling an image looked exactly like one
-// that had never heard of it, and the decision sent an operator after a network
-// problem for local work.
-func imageInventory(facts capability.NodeFacts, host domain.Platform, freshness time.Duration) domain.ImageInventory {
+// An image whose content is here and which cannot start is projected as pulled
+// rather than held. Counting only hot images and dropping the rest made partial
+// reuse invisible: a host halfway through assembling an image looked exactly
+// like one that had never heard of it, and the decision sent an operator after
+// a network problem for local work.
+func imageInventory(facts capability.NodeFacts, host domain.Platform) domain.ImageInventory {
 	inventory := domain.ImageInventory{
 		// An enrolled node always enumerates. An empty inventory from a node is
 		// the truthful claim that it holds nothing, which is a different fact
 		// from a provider that cannot look.
 		Known:      !facts.ObservedAt.IsZero(),
 		ObservedAt: facts.ObservedAt,
-		// The node stands behind this enumeration exactly as long as the offer
-		// built from it: a machine Mercator has stopped hearing from has also
-		// stopped saying what it holds, and a cached offer replayed past that
-		// moment states an inventory nobody is standing behind.
-		ValidUntil: facts.ObservedAt.Add(freshness),
 	}
 	for _, image := range facts.Images {
 		if image.ManifestDigest != "" && image.Platform == host {
@@ -179,14 +174,18 @@ func imageInventory(facts capability.NodeFacts, host domain.Platform, freshness 
 }
 
 // recordImage files one image under what the node established about it: ready
-// to run, here and not assembled, or neither. An image the runtime could not
-// describe says nothing about this machine's identity for it, so it is filed
-// nowhere and priced as the pull it may well be.
+// to run, here and not assembled, or neither. Only a node that says the bytes
+// are here files an image as pulled, because that list is what makes the
+// scheduler charge local assembly instead of a transfer, and a machine that
+// cannot account for content it does not hold would be billed for work it
+// cannot do. An image the runtime could not describe says nothing about this
+// machine's identity for it, so it is filed nowhere and priced as the pull it
+// may well be.
 func recordImage(inventory domain.ImageInventory, image capability.ImageLocality) domain.ImageInventory {
 	switch {
-	case image.State == domain.LocalityHot && image.Unpacked:
+	case image.State == domain.LocalityHot:
 		inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
-	case image.State == domain.LocalityPartial, image.State == domain.LocalityCold:
+	case image.ContentPresent:
 		inventory.PulledImageDigests = append(inventory.PulledImageDigests, image.ManifestDigest)
 	}
 	return inventory

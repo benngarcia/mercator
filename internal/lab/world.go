@@ -83,12 +83,6 @@ type hostState struct {
 	// reportsDiffIDs makes this host enumerate its layers the way a Docker
 	// daemon does: uncompressed diff IDs, never compressed blob digests.
 	reportsDiffIDs bool
-	// verifiedAt is when this host last enumerated itself, and validUntil how
-	// long it stands behind that answer. A host that keeps looking answers as
-	// of now and states no bound; one the World Tape declared to have looked
-	// once says so, and its answer stops being one when the bound passes.
-	verifiedAt time.Time
-	validUntil time.Time
 }
 
 // missing is what launching this image here would still have to fetch, and how
@@ -143,11 +137,14 @@ func (state hostState) seededDigests() map[string]bool {
 // to name the compressed blob a registry served it, so answering in both spaces
 // would be the world lending a machine knowledge it does not have.
 func (state hostState) inventory(at time.Time) domain.ImageInventory {
-	observed := at
-	if !state.verifiedAt.IsZero() {
-		observed = state.verifiedAt
+	if !state.offer.Lane.Reusable() {
+		// Nothing of Mercator's runs on capacity it borrows a slot on, so
+		// nothing enumerates it. Every provider adapter in the tree says
+		// exactly this about the machines it sells, and a world that answered
+		// for them would be lending Placement knowledge no deployment has.
+		return domain.ImageInventory{}
 	}
-	inventory := domain.ImageInventory{Known: true, ObservedAt: observed, ValidUntil: state.validUntil}
+	inventory := domain.ImageInventory{Known: true, ObservedAt: at}
 	for _, image := range slices.Sorted(maps.Keys(state.heldImages)) {
 		if state.packed[image] {
 			inventory.PulledImageDigests = append(inventory.PulledImageDigests, image)
@@ -285,10 +282,6 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			packed:         map[string]bool{},
 			reportsDiffIDs: rental.ReportsDiffIDs,
 		}
-		if rental.InventoryValidFor != nil {
-			state.verifiedAt = tape.InitialWorld.Start()
-			state.validUntil = state.verifiedAt.Add(rental.InventoryValidFor.Duration())
-		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
@@ -319,6 +312,12 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			heldLayers: map[string]scenario.LayerSpec{},
 			heldImages: map[string]bool{},
 			packed:     map[string]bool{},
+		}
+		for _, reference := range host.CachedImages {
+			for _, layer := range tape.InitialWorld.Images[reference].Layers {
+				state.heldLayers[layer.Digest] = layer
+			}
+			state.heldImages[domain.ReferenceDigest(reference)] = true
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
 		world.seededLocality[host.ID] = state.seededDigests()
@@ -1300,8 +1299,6 @@ func cloneHostState(state hostState) hostState {
 		heldImages:     cloneMap(state.heldImages),
 		packed:         cloneMap(state.packed),
 		reportsDiffIDs: state.reportsDiffIDs,
-		verifiedAt:     state.verifiedAt,
-		validUntil:     state.validUntil,
 	}
 }
 

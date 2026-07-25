@@ -238,34 +238,75 @@ complete because it works against a live provider.
     `TestResolverStatesEveryLayerInBothDigestSpaces` and the Docker conformance
     case. The claim now says what the case actually holds and names the tests
     that hold the rest.
-- [x] 2026-07-25: Make a node report what it established rather than what it
-  could list, and withdraw the four capabilities it declared and does not
-  perform. `internal/nodeagent/docker.go` hardcoded `Unpacked: true` and
-  `State: hot` for every image `docker images --digests` returned, so a machine
-  holding content it cannot start a container on was priced an instant start,
-  and partial reuse was invisible on any real node. Being listed says the
-  content arrived; only the storage driver's own layer chain says the image is
-  assembled. The runtime now reads that chain beside `RootFS.Layers` in one
-  `docker image inspect`, reports only the layers it can mount, and states hot,
-  partial, cold, or unknown for what it found. The chain is ordered from the
-  base up exactly as the config orders diff IDs, so a chain of n directories is
-  the image's first n layers and no others.
-  - `domain.ImageInventory` gained `PulledImageDigests` and `ValidUntil`, and
-    `TransferBytes` became `StartWork`, which answers with two kinds of work and
-    a `domain.LocalityState`. Fetching and unpacking are different work over
+- [x] 2026-07-25: Ask each Docker image store the question it can answer, and
+  correct the record of the change that shipped the day before. `internal/
+  nodeagent/docker.go` hardcoded `Unpacked: true` and `State: hot` for every
+  image `docker images --digests` returned, so a machine holding content it
+  cannot start a container on was priced an instant start. The first fix read
+  the storage chain out of `GraphDriver.Data`, on the stated premise that a
+  content-store daemon reports no chain for content it has not unpacked. That
+  premise is false and was refuted from moby's source: `daemon/containerd/
+  image_inspect.go` returns `GraphDriver` with a driver name and no data at all,
+  unconditionally, for every image on the containerd image store, which is the
+  default store for Docker Engine 29 on Linux (`daemon/image_store_choice.go`).
+  Three of the four graph drivers name no chain either: btrfs returns no
+  metadata, vfs and zfs return one directory rather than a chain. So the rule
+  reported every image on the majority configuration cold, and on overlay2 it
+  could never report anything but hot, because a graph driver's layer store
+  holds applied layers only.
+  - The runtime now reads which image store it is talking to and takes evidence
+    only from that store. A graph-driver daemon registers an image once its last
+    layer is applied, so listing and describing it is the evidence a container
+    can start on it. A content-store daemon is asked over the Engine API, which
+    is the only place moby reports whether an image's content is present
+    (`Manifests[].Available`) and whether its chain is unpacked
+    (`ImageData.Size.Unpacked`, the usage of the snapshot named by the image's
+    full chain ID, zero when that snapshot does not exist). The CLI exposes
+    neither. A content store this agent cannot read fails the whole report
+    rather than guessing: calling that machine cold sends its own work to a host
+    that has to fetch the image, and calling it hot promises a start it may not
+    be able to make.
+  - `capability.ImageLocality` states content presence as its own fact rather
+    than leaving it inferred from a state. `PulledImageDigests` is what makes
+    the scheduler charge local assembly instead of a transfer, so only a node
+    that says the bytes are here may put an image in it. It also removes the
+    collision the previous change introduced, where a node reporting `cold` for
+    an image became `partial` in the Booking Decision for the same machine.
+  - `domain.ImageInventory` gained `PulledImageDigests`, and `TransferBytes`
+    became `StartWork`, which answers with two kinds of work and a
+    `domain.LocalityState`. Fetching and unpacking are different work over
     different resources: a host that fetched an image and never assembled it
     owes local assembly at `AssumedUnpackMBps` and no transfer, and charging it
     a pull would bill the network twice for bytes already on the disk while
     sending an operator after a problem that is not there.
+  - Unknown locality is priced as the whole image rather than as zero seconds. A
+    host that will not say what it holds is not a host with nothing to do: the
+    image has to arrive from somewhere, and nothing says any of it is already
+    there. Pricing silence at zero scored a machine nobody can describe exactly
+    like one that is provably ready, and the only term that could have
+    compensated, `Weights.UncertaintyPenaltyUSD`, is multiplied by zero in
+    production. An unresolved manifest is still zero for everyone, because then
+    no candidate can be told from another and the comparison is unaffected.
+  - Both simulated worlds stopped answering for capacity Mercator does not
+    control. Nothing of Mercator's runs on a machine it borrows a slot on, so
+    nothing enumerates it, and every provider adapter in the tree publishes
+    `Known: false` for exactly that reason. The worlds were reporting those
+    machines as having enumerated and found nothing, which is a different fact
+    and a more confident one. `WorldSpec.hosts` gained `cached_images` so a
+    fixture can state what such a machine truly holds while no offer carries it,
+    which is the position an operator's own Docker host is in.
+  - `ImageInventory.ValidUntil` is deleted along with the `inventory_stale`
+    reason. The node stood behind its enumeration exactly as long as the offer
+    built from it, byte for byte the same instant, and Placement refuses an
+    expired offer outright, so no evaluation time existed at which a candidate
+    was selectable and its inventory stale. A green Blueprint asserted that
+    combination and only reached it because both simulated worlds set the two
+    bounds independently.
   - The decision records which of the four states each candidate was found in.
     Only the control plane can state it: the host says what it holds, the
     manifest says what the image is, and the answer is the subtraction.
     `capability.LocalityState` is gone, because two vocabularies for one answer
     is how they drift.
-  - `ObservedAt` said the age of an inventory was material and nothing read it.
-    A holder now states how long it stands behind what it enumerated, and past
-    that moment its answer is `inventory_stale` rather than warmth. The node
-    stands behind its enumeration exactly as long as the offer built from it.
   - `node.Registry.NodeSupport` declared ArtifactReplicas, CacheMounts, Prewarm,
     and GarbageCollection true while the Docker runtime implemented none of
     them, which is the failure ADR 0005 exists to prevent one layer down: a
@@ -348,16 +389,19 @@ Phase 3 added:
   because one is waited out and the other is a network path to repair. Deleting
   either classification from `ociresolver.Unreadable` collapses both onto
   `registry_unreadable` and fails it.
-- `unpacked-is-not-the-same-as-pulled` (green): four machines hold every byte of
-  one 18.04GB image and are not in the same condition. The one that assembled it
-  wins at zero seconds; the one that fetched it and never unpacked it is
-  recorded partial and priced the assembly it still owes, which is what stops a
-  machine sitting on the image from being priced either an instant start or a
-  fresh pull. The last two differ only in how long they stand behind what they
-  said, so half an hour in one is `inventory_stale` and unknown while the other
-  is still hot. No new Lab invariant: what a node says it holds is an
-  observation, and the rule that matters is `safety.locality_provenance`, which
-  now reads unassembled content too.
+- `unpacked-is-not-the-same-as-pulled` (green): four machines are offered at one
+  price for one 18.04GB image, so nothing but what each holds can decide the
+  placement. The one that assembled it wins at zero seconds; the one that
+  fetched it and never unpacked it is recorded partial and priced the assembly
+  it still owes, which is what stops a machine sitting on the image from being
+  priced either an instant start or a fresh pull; the one holding nothing is
+  priced the whole fetch; and the one that cannot say what it holds is priced
+  that same whole fetch and recorded `unknown` with source `inventory_unknown`.
+  Silence costs what absence costs, and the decision records which of the two it
+  was. Every rate is equal on purpose: a fixture whose price gap decides the
+  winner proves nothing about locality. No new Lab invariant: what a node says
+  it holds is an observation, and the rule that matters is
+  `safety.locality_provenance`, which now reads unassembled content too.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, and only capacity Mercator keeps holds anything beyond
@@ -441,11 +485,19 @@ On 2026-07-25, `unpacked-is-not-the-same-as-pulled` was written against the
 world and promoted in the same change once green. Each claim it makes is held by
 a deliberate break that fails it:
 
-- reporting every layer the config declares rather than every layer the storage
-  driver can mount fails `TestDockerRuntimeSeparatesWhatItUnpackedFromWhatItPulled`
-  three ways at once, starting with `an image missing part of its chain was
-  reported ... Unpacked:true State:hot, want partial`;
-- projecting a whole-image identity without requiring `Unpacked`, and dropping
+- reporting a content-store image as runnable on the strength of its content
+  being present fails `TestDockerRuntimeSeparatesWhatItUnpackedFromWhatItPulled`
+  with `an image whose bytes are here and whose chain is not built was reported
+  ... ContentPresent:true State:hot, want partial with no mountable layer`;
+- reading a graph driver's images as anything but assembled fails
+  `TestEveryImageAGraphDriverDaemonListsIsRunnable` and, against the daemon on
+  this machine, `TestEveryImageThisDaemonHoldsIsAssembled` on every image it
+  holds: `was reported "cold" ... and this daemon can run every image it lists`;
+- filing an image as pulled on a state rather than on stated content presence
+  fails `TestANodeOffersTheContentItActuallyHolds` with `pulled and not
+  assembled = true, want false` for the host missing part of an image, which is
+  the case that would have been charged local assembly for bytes nobody fetched;
+- projecting a whole-image identity without requiring assembly, and dropping
   the pulled projection, fails `TestANodeOffersTheContentItActuallyHolds` on both
   new cases with `pulled and not assembled = false, want true`, and fails the
   daemon case with `the node never reported the image it fetched and never
@@ -455,10 +507,16 @@ a deliberate break that fails it:
   win, but the decision placed on "pulled-host"` and including `image_locality:
   want "partial", got "hot"`, and fails
   `TestWhatANodeHoldsDecidesWhatItStillHasToDo` on the two assembly cases;
-- letting an inventory answer forever fails the Blueprint with `pull_source:
-  want "inventory_stale", got "image_inventory"` and `image_locality: want
-  "unknown", got "hot"` for the host that looked once, and fails
-  `TestANodeStopsStandingBehindWhatItSaidWhenItStopsLooking`;
+- pricing a host that cannot enumerate itself at zero seconds fails three green
+  Blueprints, starting with `candidate "silent-host": pull_seconds: want at
+  least 285, got 0` and `pull_confidence: want 0.5, got 0`, and taking
+  `unenrolled-host-holds-nothing` and `ephemeral-execution-is-never-a-rental` with
+  it, because borrowed capacity is exactly the capacity nobody can enumerate. It
+  also fails `TestWhatANodeHoldsDecidesWhatItStillHasToDo` on the silent host;
+- letting a simulated world answer for capacity Mercator does not control fails
+  the Blueprint with `pull_source: want "inventory_unknown", got
+  "image_inventory"` and `image_locality: want "unknown", got "hot"`, which is
+  the world lending Placement knowledge no deployment has;
 - restoring any of the four unearned declarations fails
   `TestANodeDeclaresOnlyWhatItsRuntimePerforms` with `the node declares
   artifact_replicas, and nothing on the machine performs it`;
@@ -477,26 +535,31 @@ overlay2 store:
 - `TestDockerRuntimeReportsTheLayersItUnpacked` asserts the reported diff IDs
   match `docker image inspect --format '{{json .RootFS.Layers}}'` exactly, the
   reported platform matches the build the daemon holds, and the image comes back
-  hot and unpacked;
+  hot with its content present;
 - `TestEveryImageThisDaemonHoldsIsAssembled` is the rule's other half. Every
   image this daemon lists is one it can run, so every one must come back hot: a
   readiness test that called a working host partial would price local assembly
-  nobody owes. Checked by hand across the 12 images on this machine, the mount
-  chain depth equals `len(.RootFS.Layers)` for every one.
+  nobody owes, and one that called it cold would send its own work to a machine
+  that has to fetch what this one is sitting on.
 
-Two limits are worth stating rather than hiding.
+Three limits are worth stating rather than hiding.
 
-The daemon is the only authority on its own storage, and the agent does not stat
-it. A node agent may run beside a daemon whose filesystem it cannot see, which is
-true of every Docker Desktop and OrbStack install, so statting the paths
-`GraphDriver.Data` names would report every image on such a host as unassembled.
-What the runtime reads is the daemon's own account of the chain it can mount,
-which is exactly the evidence a graph-driver daemon and a content-store daemon
-both offer: the latter reports no chain at all for an image it has fetched and
-not unpacked, which is where the state routinely occurs. Constructing a broken
-chain on a live daemon requires writing inside its storage root, so the partial
-and cold arms are driven by a scripted daemon rather than by damaging the one on
-this machine.
+The content-store arm has no live daemon behind it here. This machine runs the
+overlay2 graph driver, and standing up a daemon on the containerd image store
+needs a privileged container this environment refuses, so that arm is held by
+moby's source and by a scripted daemon whose API answers the shapes moby
+documents (`api/types/image/manifest.go`). What was verified live is the graph
+driver arm, on every image this machine holds, plus the two facts the
+content-store arm turns on: `docker info --format '{{json .DriverStatus}}'`
+reports the graph driver's own status here and reports `driver-type` as
+`io.containerd.snapshotter.v1` under the content store, and `docker image
+inspect --format '{{json .Manifests}}'` returns `null` on this daemon because
+the CLI never requests manifests, which is why the agent asks the API instead.
+
+The agent does not stat the daemon's storage root. A node agent may run beside a
+daemon whose filesystem it cannot see, which is true of every Docker Desktop and
+OrbStack install, so statting storage paths would report every image on such a
+host as unassembled.
 
 Neither simulated world models the time assembly takes. A fixture's `unpacked`
 flag says what a host reports, and the world's own transfer model is unchanged,
@@ -698,7 +761,7 @@ that holds it.
   `pull_seconds: want exactly 0, got 289.14`. The host holds the image when its
   bytes have arrived, not when the container was dispatched;
 - deleting the `KeepsWhatItRuns` guard from the fake world's pull fails
-  `ephemeral-execution-holds-nothing` with
+  `ephemeral-execution-is-never-a-rental` with
   `one-shot-second: pull_seconds: want at least 200, got 0`. Deleting only its
   lane term fails `unenrolled-host-holds-nothing` with
   `borrowed-second: pull_seconds: want at least 200, got 0`, and deleting only

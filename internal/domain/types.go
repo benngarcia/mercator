@@ -409,14 +409,11 @@ type ImageInventory struct {
 	Known bool `json:"known"`
 	// ObservedAt is when the holder last looked. Locality decays: content can
 	// be reclaimed between one heartbeat and the next, so the age of this
-	// answer is material to how much it is worth.
+	// answer is material to how much it is worth. How long anyone stands behind
+	// it is the offer's own expiry: the enumeration and the capacity claim come
+	// from one observation, and Placement refuses an expired offer outright
+	// rather than reading half of it.
 	ObservedAt time.Time `json:"observed_at,omitzero"`
-	// ValidUntil is how long the holder stands behind this enumeration. Only
-	// the holder knows how often it looks, so only the holder can say when its
-	// answer stops being one. Past it, what is here is a question again rather
-	// than a fact, and a stale answer is priced as uncertainty rather than as
-	// warmth. Zero states no bound, exactly as it does on NetworkFact.
-	ValidUntil time.Time `json:"valid_until,omitzero"`
 	// ImageDigests is every image manifest the host holds whole AND has
 	// unpacked, so it can start a container on it now.
 	ImageDigests []string `json:"image_digests,omitempty"`
@@ -449,14 +446,6 @@ func (inventory ImageInventory) Holds(imageDigest string) bool {
 // assembling it.
 func (inventory ImageInventory) Pulled(imageDigest string) bool {
 	return imageDigest != "" && slices.Contains(inventory.PulledImageDigests, imageDigest)
-}
-
-// Answers reports whether this enumeration is still an answer as of at. A
-// holder states how long it stands behind what it found, because only the
-// holder knows how often it looks; past that moment what is here is a question
-// again. Zero states no bound, exactly as it does on NetworkFact.
-func (inventory ImageInventory) Answers(at time.Time) bool {
-	return inventory.Known && (inventory.ValidUntil.IsZero() || at.Before(inventory.ValidUntil))
 }
 
 // LocalityState is how much of some content a host has, as an answer rather
@@ -522,15 +511,20 @@ type ImageWork struct {
 func (work ImageWork) None() bool { return work.TransferBytes == 0 && work.UnpackBytes == 0 }
 
 // StartWork is what this host still owes before the image can start, and what
-// that amounts to as an answer. LocalityUnknown means nobody could say, so the
-// work is the absence of an answer rather than zero of one: an unknown manifest
-// and a host that will not enumerate itself are both silence, and silence is
-// not warmth.
-func (manifest ImageManifest) StartWork(at time.Time, inventory ImageInventory) (ImageWork, LocalityState) {
-	if !manifest.Known || !inventory.Answers(at) {
+// that amounts to as an answer. LocalityUnknown means nobody could say what is
+// here, which is not the same as nobody owing anything: an image has to arrive
+// from somewhere, so a host that will not enumerate itself owes the whole image
+// until something says otherwise. Pricing that silence at zero seconds scored a
+// machine nobody can describe exactly like one that is provably ready, which is
+// the "silence is warmth" error in the one place it costs a placement.
+func (manifest ImageManifest) StartWork(inventory ImageInventory) (ImageWork, LocalityState) {
+	if !manifest.Known {
+		// Nothing resolved the image, so no candidate can be told from another
+		// on locality: the term is the same silence for every one of them and
+		// the comparison is unaffected.
 		return ImageWork{}, LocalityUnknown
 	}
-	if inventory.Holds(manifest.Digest) {
+	if inventory.Known && inventory.Holds(manifest.Digest) {
 		return ImageWork{}, LocalityHot
 	}
 	// A manifest that names no layers can confirm a hit and cannot price a
@@ -539,6 +533,9 @@ func (manifest ImageManifest) StartWork(at time.Time, inventory ImageInventory) 
 	// this type replaced.
 	if len(manifest.Layers) == 0 {
 		return ImageWork{}, LocalityUnknown
+	}
+	if !inventory.Known {
+		return ImageWork{TransferBytes: manifest.compressedBytes()}, LocalityUnknown
 	}
 	// A host that says it pulled this image and cannot run it holds the bytes
 	// of every layer it did not enumerate as unpacked: what it owes on those is
@@ -565,6 +562,15 @@ func (manifest ImageManifest) StartWork(at time.Time, inventory ImageInventory) 
 	default:
 		return work, LocalityPartial
 	}
+}
+
+// compressedBytes is everything this image would cost to fetch from a registry.
+func (manifest ImageManifest) compressedBytes() int64 {
+	total := int64(0)
+	for _, layer := range manifest.Layers {
+		total += layer.CompressedBytes
+	}
+	return total
 }
 
 // ImageLayer is one layer named in both digest spaces at once. Digest is the

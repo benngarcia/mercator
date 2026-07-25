@@ -508,14 +508,11 @@ type ImageInventory struct {
 	// LayerDigests Compressed layer blobs this host holds unpacked, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first.
 	LayerDigests []string `json:"layer_digests,omitempty"`
 
-	// ObservedAt When the holder last looked. Locality decays, so the age of this answer is material.
+	// ObservedAt When the holder last looked. Locality decays, so the age of this answer is material. How long anyone stands behind it is the offer's own expiry: the enumeration and the capacity claim come out of one observation, and an expired offer is refused whole.
 	ObservedAt time.Time `json:"observed_at,omitempty"`
 
 	// PulledImageDigests Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull.
 	PulledImageDigests []string `json:"pulled_image_digests,omitempty"`
-
-	// ValidUntil How long the holder stands behind this enumeration. Only the holder knows how often it looks, so only the holder can say when its answer stops being one. Past it, what is here is a question again rather than a fact, and a stale answer is priced as uncertainty rather than as warmth.
-	ValidUntil time.Time `json:"valid_until,omitempty"`
 }
 
 // InviteNodeRequest defines model for InviteNodeRequest.

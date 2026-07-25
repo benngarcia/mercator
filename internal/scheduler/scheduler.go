@@ -301,7 +301,7 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) (domai
 	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
 		provision = offer.Provisioning.Expected
 	}
-	pull, locality := pullEstimate(input.EvaluatedAt, input.Image, offer, input.ModelVersion)
+	pull, locality := pullEstimate(input.Image, offer, input.ModelVersion)
 	expected := queue + provision + pull.Expected + 1
 	start := domain.Estimate{Expected: expected, P50: expected, P90: expected * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion}
 	// A measured latency estimate for this offer overrides the derived one.
@@ -370,62 +370,60 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 }
 
 // pullEstimate prices what this candidate still owes before the image can
-// start, and states how much that answer is worth. Zero seconds means "nothing
-// left to do" only when the source says an inventory answered; otherwise it
-// means nobody could say, and the source names which silence it was so a reader
-// of the decision has something to act on.
+// start, and states how much that answer is worth. Zero seconds is reserved for
+// a host an inventory says holds the image, or for an image nothing could
+// resolve, where the same nothing is charged to every candidate and the
+// comparison is unaffected. A host that will not say what it holds is charged
+// the whole image, because the bytes have to come from somewhere and nothing
+// here says they are already there.
 //
 // A host that fetched the image and has not assembled it owes local work rather
 // than a transfer, over a different resource at a different rate, so the two
 // are added as what they are. Charging that host a pull would bill the network
 // twice for bytes that are already on the machine.
 //
-// Confidence is about the duration, not the bytes. Bytes are counted from a
-// manifest and an inventory that both spoke, so a host that holds everything is
-// certainly zero seconds away from starting. A host with work left is that many
-// bytes away over rates, and the duration is worth what the least-supported
-// rate in it is worth: what a published measurement says, and
-// AssumedLinkConfidence for anything nothing has measured.
-func pullEstimate(at time.Time, manifest domain.ImageManifest, offer domain.OfferSnapshot, modelVersion string) (domain.Estimate, domain.LocalityState) {
-	work, locality := manifest.StartWork(at, offer.Images)
-	if locality == domain.LocalityUnknown {
-		return domain.Estimate{Source: unpricedReason(at, manifest, offer.Images), ModelVersion: modelVersion}, locality
+// Confidence is about the duration, not the bytes. Bytes counted from a
+// manifest and an inventory that both spoke are certain, so a host that holds
+// everything is certainly zero seconds away from starting. Bytes assumed
+// because a host said nothing are not, and neither is a duration over a rate
+// nothing measured, so either one caps the answer at AssumedLinkConfidence.
+func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, modelVersion string) (domain.Estimate, domain.LocalityState) {
+	work, locality := manifest.StartWork(offer.Images)
+	estimate := domain.Estimate{
+		Source:       localitySource(locality, manifest, offer.Images),
+		ModelVersion: modelVersion,
 	}
 	if work.None() {
-		return domain.Estimate{Source: "image_inventory", Confidence: 1, ModelVersion: modelVersion}, locality
+		if locality != domain.LocalityUnknown {
+			estimate.Confidence = 1
+		}
+		return estimate, locality
 	}
 	link := offer.RegistryDownload()
 	seconds := float64(work.TransferBytes*8)/1_000_000/link.Mbps +
 		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
-	confidence := link.Confidence
-	if work.UnpackBytes > 0 {
-		confidence = min(confidence, domain.AssumedLinkConfidence)
+	estimate.Expected, estimate.P50, estimate.P90 = seconds, seconds, seconds*1.5
+	estimate.Confidence = link.Confidence
+	if work.UnpackBytes > 0 || locality == domain.LocalityUnknown {
+		estimate.Confidence = min(estimate.Confidence, domain.AssumedLinkConfidence)
 	}
-	return domain.Estimate{
-		Expected:     seconds,
-		P50:          seconds,
-		P90:          seconds * 1.5,
-		Source:       "image_inventory",
-		Confidence:   confidence,
-		ModelVersion: modelVersion,
-	}, locality
+	return estimate, locality
 }
 
-// unpricedReason names why no answer exists. "Unknown" alone made a registry
-// Mercator could not read indistinguishable from a host that cannot enumerate
-// itself, and those are fixed by different people. A host that enumerated
-// itself and no longer stands behind the answer is a third: nothing is wrong
-// with the machine, and nothing it said is current enough to bet a placement on.
-func unpricedReason(at time.Time, manifest domain.ImageManifest, inventory domain.ImageInventory) string {
+// localitySource names where this answer came from, and when there is no
+// answer, which silence it was. "Unknown" alone made a registry Mercator could
+// not read indistinguishable from a host that cannot enumerate itself, and
+// those are fixed by different people.
+func localitySource(locality domain.LocalityState, manifest domain.ImageManifest, inventory domain.ImageInventory) string {
 	switch {
+	case locality != domain.LocalityUnknown:
+		return "image_inventory"
 	case !manifest.Known && manifest.Unreadable != "":
 		return manifest.Unreadable
 	case !manifest.Known:
 		return "manifest_unresolved"
 	case !inventory.Known:
 		return "inventory_unknown"
-	case !inventory.Answers(at):
-		return "inventory_stale"
 	default:
 		return "manifest_without_layers"
 	}

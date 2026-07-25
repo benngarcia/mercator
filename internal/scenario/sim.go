@@ -60,7 +60,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		}
 	}
 	for _, host := range spec.Hosts {
-		if err := world.AddMachine(&fake.Machine{Offer: simHostOffer(host)}); err != nil {
+		if err := world.AddMachine(simHost(spec, host)); err != nil {
 			return nil, err
 		}
 	}
@@ -116,10 +116,6 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 			machine.Pack(layer.Digest, layer.DiffID)
 		}
 	}
-	if rental.InventoryValidFor != nil {
-		machine.InventoryObservedAt = start
-		machine.InventoryValidUntil = start.Add(rental.InventoryValidFor.Duration())
-	}
 	if running := schedule.Running; running != nil {
 		machine.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
 		machine.ExpectedBusyUntil = start.Add(running.expectedRemaining().Duration())
@@ -143,10 +139,29 @@ func simRentalOffer(rental RentalSpec) domain.OfferSnapshot {
 	return offer
 }
 
-// simHostOffer builds the offer for a host Mercator has not enrolled. The machine
-// exists, so the offer is standing and owes no provisioning; nothing on it can
-// hold content or run a second workload for Mercator, so it is in the ephemeral
-// lane and reports an inventory it cannot enumerate.
+// simHost is a machine Mercator has not enrolled. It may hold content, and
+// nothing on it can be asked about it, so what it holds is world truth that no
+// offer carries.
+func simHost(spec WorldSpec, host HostSpec) *fake.Machine {
+	machine := &fake.Machine{
+		Offer:       simHostOffer(host),
+		HeldLayers:  map[string]int64{},
+		HeldDiffIDs: map[string]bool{},
+		HeldImages:  map[string]bool{},
+	}
+	for _, ref := range host.CachedImages {
+		for _, layer := range spec.Images[ref].Layers {
+			machine.Hold(fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)})
+		}
+		machine.HeldImages[domain.ReferenceDigest(ref)] = true
+	}
+	return machine
+}
+
+// simHostOffer builds the offer for a host Mercator has not enrolled. The
+// machine exists, so the offer is standing and owes no provisioning; nothing on
+// it can hold content or run a second workload for Mercator, so it is in the
+// ephemeral lane and reports an inventory it cannot enumerate.
 func simHostOffer(host HostSpec) domain.OfferSnapshot {
 	offer := simOffer(host.ID, "conn_hosts", host.RatePerHourUSD, host.Resources)
 	offer.Kind = domain.OfferKindStanding

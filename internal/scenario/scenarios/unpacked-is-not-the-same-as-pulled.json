@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Four machines hold every byte of the same 18.04GB image and they are not in the same condition. One has it assembled and can start a container on it now. One fetched the layers and never unpacked them, which is where a container runtime sits whenever content has landed and the snapshot chain has not been built: the decision records that as partial, prices it the local assembly it still owes, and prefers the machine that is ready. Pricing it a pull would be wrong in the more expensive direction, because those bytes are on the disk and an operator sent after a network problem would find nothing to fix. The last two differ only in how long they stand behind what they said. Half an hour in, the one that looked once and stated a five-minute bound is no longer answering, so what it holds is recorded unknown rather than hot: that is uncertainty about a machine that may well still be warm, which is the honest reading of an answer nobody has refreshed. The one that stated a two-hour bound is still answering and is still hot.",
+  "summary": "Four machines are offered at one price for one 18.04GB image, so nothing but what each of them holds can decide the placement. One has it assembled and can start a container on it now. One fetched every byte and never unpacked them, which is where a container runtime sits whenever content has landed and the snapshot chain has not been built: that is recorded partial and priced the local assembly it still owes, because pricing it a pull would send an operator after a network problem for bytes already on its disk. One holds nothing and is priced the whole fetch. The last cannot say what it holds, which is what a machine reached only through a provider's API is, and it is priced that same whole fetch: the image has to arrive from somewhere and nothing here says any of it is already there. Silence costs what absence costs, and the decision records which of the two this was.",
   "classification": "green",
   "world": {
     "images": {
@@ -32,23 +32,19 @@
         "cached_images": ["trainer@sha256:1d12367e38d42cbadc64e72ba3e2093db9d6ed002d28bf5a29f8209d5e08db57"]
       },
       {
-        "id": "unwatched-host",
-        "rate_per_hour_usd": 2.5,
-        "inventory_valid_for": "5m",
-        "cached_images": ["trainer@sha256:1d12367e38d42cbadc64e72ba3e2093db9d6ed002d28bf5a29f8209d5e08db57"]
-      },
+        "id": "empty-host",
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "hosts": [
       {
-        "id": "watched-host",
-        "rate_per_hour_usd": 2.5,
-        "inventory_valid_for": "2h",
+        "id": "silent-host",
+        "rate_per_hour_usd": 2.0,
         "cached_images": ["trainer@sha256:1d12367e38d42cbadc64e72ba3e2093db9d6ed002d28bf5a29f8209d5e08db57"]
       }
     ]
   },
   "timeline": [
-    {
-      "advance": "30m"
-    },
     {
       "submit": "trainer",
       "request": {
@@ -76,19 +72,19 @@
             "pull_source": "image_inventory",
             "pull_confidence": 0.5
           },
-          "unwatched-host": {
+          "empty-host": {
+            "feasible": true,
+            "image_locality": "cold",
+            "pull_seconds": {"at_least": 285, "at_most": 292},
+            "pull_source": "image_inventory",
+            "pull_confidence": 0.5
+          },
+          "silent-host": {
             "feasible": true,
             "image_locality": "unknown",
-            "pull_seconds": 0,
-            "pull_source": "inventory_stale",
-            "pull_confidence": 0
-          },
-          "watched-host": {
-            "feasible": true,
-            "image_locality": "hot",
-            "pull_seconds": 0,
-            "pull_source": "image_inventory",
-            "pull_confidence": 1
+            "pull_seconds": {"at_least": 285, "at_most": 292},
+            "pull_source": "inventory_unknown",
+            "pull_confidence": 0.5
           }
         }
       }

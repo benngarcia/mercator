@@ -866,14 +866,9 @@ export interface components {
             known: boolean;
             /**
              * Format: date-time
-             * @description When the holder last looked. Locality decays, so the age of this answer is material.
+             * @description When the holder last looked. Locality decays, so the age of this answer is material. How long anyone stands behind it is the offer's own expiry: the enumeration and the capacity claim come out of one observation, and an expired offer is refused whole.
              */
             observed_at?: string;
-            /**
-             * Format: date-time
-             * @description How long the holder stands behind this enumeration. Only the holder knows how often it looks, so only the holder can say when its answer stops being one. Past it, what is here is a question again rather than a fact, and a stale answer is priced as uncertainty rather than as warmth.
-             */
-            valid_until?: string;
             /** @description Image manifests this host holds whole and has unpacked, so it can start a container on one now. */
             image_digests?: string[];
             /** @description Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull. */

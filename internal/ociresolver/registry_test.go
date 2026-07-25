@@ -176,7 +176,7 @@ func TestResolvedManifestRecognisesAHostThatOnlyKnowsDiffIDs(t *testing.T) {
 	}
 
 	dockerHost := domain.ImageInventory{Known: true, LayerDiffIDs: []string{baseDiffID, topDiffID}}
-	work, locality := manifest.StartWork(time.Now(), dockerHost)
+	work, locality := manifest.StartWork(dockerHost)
 
 	if locality != domain.LocalityHot || !work.None() {
 		t.Fatalf("a host holding every diff ID owes %+v and is %q, want nothing and hot", work, locality)
