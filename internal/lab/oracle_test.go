@@ -113,6 +113,50 @@ func TestTheReferenceModelPricesArtifactLocalityTheSameWayProductionDoes(t *test
 	}
 }
 
+// TestBothModelsChargeAHostForRoomItHasToMake keeps the two models together on
+// the disk. A machine holding 18GB of the image with ten gigabytes free has
+// nowhere to put a 40GB dataset, so it gives up content it holds and fetches it
+// again, and a reference model blind to that would call it the warmest candidate
+// in the world and disagree with production about the winner for a reason
+// belonging to neither model. It stays feasible either way, because locality is
+// never a hard constraint.
+func TestBothModelsChargeAHostForRoomItHasToMake(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Artifacts = []domain.ArtifactVersion{labArtifactVersion(input.EvaluatedAt)}
+	for index := range input.Offers {
+		if input.Offers[index].ID != "rental-warm" {
+			continue
+		}
+		input.Offers[index].Artifacts = domain.ArtifactInventory{Known: true, ObservedAt: input.EvaluatedAt}
+		input.Offers[index].Resources.EphemeralDiskBytes = 10_000_000_000
+	}
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	warm := candidateFor(t, production, "rental-warm")
+	reference := referenceEstimates(input, offerFor(t, input, "rental-warm"))
+
+	if !warm.Feasible {
+		t.Fatalf("a machine short of disk was refused outright: %+v", warm.Rejections)
+	}
+	// The whole 18GB it holds is content it has to give up, on top of the 80MB
+	// layer it never had, so its transfer is the image over again.
+	if want := float64((18_080_000_000)*8) / 1_000_000 / domain.DefaultRegistryDownloadMbps; warm.Estimates.PullSeconds.Expected < want {
+		t.Fatalf("production priced %v seconds of transfer, want at least %v: this host has to refetch what it deletes",
+			warm.Estimates.PullSeconds.Expected, want)
+	}
+	if reference.PullSeconds.Expected != warm.Estimates.PullSeconds.Expected {
+		t.Fatalf("reference priced %v seconds of image work, production priced %v",
+			reference.PullSeconds.Expected, warm.Estimates.PullSeconds.Expected)
+	}
+	if reference.ArtifactSeconds.Expected != warm.Estimates.ArtifactSeconds.Expected {
+		t.Fatalf("reference priced %v seconds of Artifact fetch, production priced %v",
+			reference.ArtifactSeconds.Expected, warm.Estimates.ArtifactSeconds.Expected)
+	}
+}
+
 // TestNeitherModelPricesAnUncheckedCopyAsWarmth is what verification buys at
 // placement time. A host sitting on bytes nobody hashed is not a host that saves
 // this Run a read: the copy may be anything, so the Run still owes the whole

@@ -150,14 +150,27 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	queue := referenceQueue(input, offer)
 	provision := referenceProvision(offer)
 	work, locality := input.Image.StartWork(offer.Images)
-	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes))
+	// A candidate that cannot hold everything this Run needs gives up content it
+	// holds and fetches it again. The reference model accounts for it because
+	// production does: a model blind to the disk would call a machine with
+	// nowhere to put the dataset the warmest in the world and disagree about the
+	// winner for a reason belonging to neither model.
+	eviction := domain.DiskDemand{
+		FreeBytes:          offer.Resources.EphemeralDiskBytes,
+		ImageHeldBytes:     input.Image.ResidentBytes(work),
+		ArtifactHeldBytes:  domain.ArtifactResidentBytes(input.Artifacts, fetchBytes),
+		ImageFetchBytes:    work.TransferBytes,
+		ArtifactFetchBytes: fetchBytes,
+	}.Eviction()
+	work.TransferBytes += eviction.ImageBytes
+	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
+	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes + eviction.ArtifactBytes))
 	establishedPull := domain.Estimate{}
 	if locality != domain.LocalityUnknown {
 		establishedPull = pull
 	}
-	establishedBytes := int64(0)
+	establishedBytes := eviction.ArtifactBytes
 	for _, found := range evidence {
 		if found.Locality != domain.LocalityUnknown {
 			establishedBytes += found.FetchBytes

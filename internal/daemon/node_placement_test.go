@@ -419,20 +419,7 @@ type bookingDecision struct {
 		Disposition     string                    `json:"disposition"`
 		ImageLocality   domain.LocalityState      `json:"image_locality"`
 		Estimates       domain.CandidateEstimates `json:"estimates"`
-		Violations      []domain.Violation        `json:"violations"`
 	} `json:"candidates"`
-}
-
-// rejection is the first code one candidate was struck out for, which is how a
-// case asserts that a refusal names the requirement it was made against.
-func (decision bookingDecision) rejection(offerID string) string {
-	for _, candidate := range decision.Candidates {
-		if candidate.OfferSnapshotID != offerID || len(candidate.Violations) == 0 {
-			continue
-		}
-		return candidate.Violations[0].Code
-	}
-	return ""
 }
 
 func (decision bookingDecision) imageLocality() domain.LocalityState {
