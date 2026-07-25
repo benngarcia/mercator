@@ -732,7 +732,7 @@ export interface components {
         };
         /** @description The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine. */
         ArtifactRequirements: {
-            /** @description Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine. */
+            /** @description Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine. A Mercator with no object store configured cannot establish that any of them exists, and refuses the request with ARTIFACT_CATALOG_UNAVAILABLE rather than accepting a Run it could never place. */
             consumes?: string[];
             /** @description Artifact version identities this workload publishes. A version is immutable, so a workload may not also consume one it produces. */
             produces?: string[];

@@ -129,7 +129,12 @@ const borrowedWarmthImage = "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b9
 
 func openConformanceExecution(t *testing.T, name string) *Execution {
 	t.Helper()
-	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/conformance/" + name + ".json")
+	return openBlueprintExecution(t, "../scenario/scenarios/conformance/"+name+".json", testLimits())
+}
+
+func openBlueprintExecution(t *testing.T, path string, limits Limits) *Execution {
+	t.Helper()
+	blueprint, err := scenario.LoadBlueprint(path)
 	if err != nil {
 		t.Fatalf("load Blueprint: %v", err)
 	}
@@ -141,7 +146,7 @@ func openConformanceExecution(t *testing.T, name string) *Execution {
 		Blueprint:        blueprint,
 		Tape:             tape,
 		Samples:          samples,
-		Limits:           testLimits(),
+		Limits:           limits,
 		Policy:           "policy:test",
 		MercatorRevision: "revision:test",
 	})

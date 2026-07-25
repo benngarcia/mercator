@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -96,6 +97,17 @@ func recordedWorkloads(events []eventlog.StoredEvent) (map[string]domain.Workloa
 		workloads[payload.RunID] = payload.Workload
 	}
 	return workloads, nil
+}
+
+// holdsOpenRun answers whether Mercator still owes an answer for a Run it
+// accepted. That is what a Run parked by admission looks like from outside: in
+// the projection, not closed, and waiting on something the world may never do.
+func (runtime *controlPlane) holdsOpenRun(ctx context.Context) (bool, error) {
+	runs, err := runtime.allRuns(ctx)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(runs, func(run domain.RunRecord) bool { return !run.Closed }), nil
 }
 
 func (runtime *controlPlane) allRuns(ctx context.Context) ([]domain.RunRecord, error) {

@@ -85,9 +85,13 @@ submission instead would make a declared dependency unexpressible until its
 producer had finished.
 
 A Mercator with no artifact catalog configured refuses a Run that reads an
-Artifact, loudly, at the first advance. It cannot establish that the content
-exists, and placing the workload anyway would hand it a path to bytes nobody
-confirmed are there. Nothing in production configures one yet, because there is
+Artifact, loudly, where the Run is submitted, as `400
+ARTIFACT_CATALOG_UNAVAILABLE` naming the version it cannot establish. Placing
+the workload anyway would hand it a path to bytes nobody confirmed are there,
+and accepting it would leave an arrival nothing can ever move: the refusal is a
+fact about this deployment rather than about this moment, so no later advance
+could answer differently. Nothing in production configures one yet, because
+there is
 no object-store client: the Lab's `objectStore` is the only implementation, and
 it is the object store in that world rather than a stand-in for one.
 

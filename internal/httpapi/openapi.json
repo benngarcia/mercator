@@ -3383,7 +3383,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine."
+            "description": "Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine. A Mercator with no object store configured cannot establish that any of them exists, and refuses the request with ARTIFACT_CATALOG_UNAVAILABLE rather than accepting a Run it could never place."
           },
           "produces": {
             "type": "array",

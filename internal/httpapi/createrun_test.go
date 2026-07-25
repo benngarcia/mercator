@@ -154,6 +154,42 @@ func TestCreateRunFullWorkloadTakesPrecedenceOverShorthand(t *testing.T) {
 	}
 }
 
+// TestCreateRunRefusesAnArtifactReadThisMercatorCannotEstablish is the answer a
+// caller gets from a Mercator with no object store. Nothing here can establish
+// that the version exists, and no later moment can either, so the request is
+// refused with the reason rather than accepted into a phase it would never
+// leave.
+func TestCreateRunRefusesAnArtifactReadThisMercatorCannotEstablish(t *testing.T) {
+	handler := newMinimalCreateServer(t, adapter.ExternalPhaseSucceeded)
+
+	body := []byte(`{"run_id":"run_consumer","workload":{"spec":{"containers":[{"image":"busybox"}],"artifacts":{"consumes":["artifact:ds:v1"]}}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_consumer")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("submitting a Run that reads an Artifact returned %d: %s", rec.Code, rec.Body.String())
+	}
+	var refusal ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &refusal); err != nil {
+		t.Fatalf("decode the refusal: %v", err)
+	}
+	if refusal.Code != "ARTIFACT_CATALOG_UNAVAILABLE" {
+		t.Fatalf("the refusal is %+v, and the caller has to be able to tell why this Run cannot be taken", refusal)
+	}
+	if !strings.Contains(refusal.Message, "artifact:ds:v1") {
+		t.Fatalf("the refusal says %q, and it has to name the Artifact nothing can establish", refusal.Message)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_consumer?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("the refused Run reads %d from the API, and Mercator never accepted it", rec.Code)
+	}
+}
+
 func newMinimalCreateServer(t *testing.T, outcome adapter.ExternalPhase, extra ...fake.Option) http.Handler {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")

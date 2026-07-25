@@ -144,6 +144,18 @@ func (registry InvariantRegistry) Empty() bool {
 	return len(registry.invariants) == 0
 }
 
+// longestBound is the furthest into an execution any rule here is stated
+// against. A driver that ended an execution before it would stop at a moment
+// no liveness rule can speak about yet, and report as passing what it never
+// gave the registry the chance to judge.
+func (registry InvariantRegistry) longestBound() time.Duration {
+	var longest time.Duration
+	for _, invariant := range registry.invariants {
+		longest = max(longest, invariant.VirtualTimeBound())
+	}
+	return longest
+}
+
 func (registry InvariantRegistry) Evaluate(observation InvariantObservation) []InvariantResult {
 	results := make([]InvariantResult, 0, len(registry.invariants))
 	for _, invariant := range registry.invariants {

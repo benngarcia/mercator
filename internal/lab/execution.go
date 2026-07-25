@@ -283,6 +283,9 @@ func driveRecord(command DriveCommand, checkpoint Checkpoint) DriveRecord {
 //
 // The bound is one round per arrival plus one per Artifact, because those are
 // the two things a round can settle: a Run finishing, and a publication landing.
+// What the world owes is not all there is: a Run Mercator accepted and never
+// placed is owed by Mercator, so the execution ends at the liveness bound
+// instead of at the last transfer.
 func (execution *Execution) DriveToCompletion(ctx context.Context) (Checkpoint, error) {
 	checkpoint, err := execution.Drive(ctx, Quiesce())
 	if err != nil {
@@ -292,14 +295,34 @@ func (execution *Execution) DriveToCompletion(ctx context.Context) (Checkpoint, 
 	for range rounds {
 		horizon := execution.runtime.world.executionHorizon()
 		if horizon.IsZero() {
-			return checkpoint, nil
+			break
 		}
 		checkpoint, err = execution.Drive(ctx, Advance(horizon.Sub(execution.runtime.world.nowTime())+time.Nanosecond))
 		if err != nil {
 			return checkpoint, err
 		}
 	}
-	return checkpoint, nil
+	return execution.settleHeldRuns(ctx, checkpoint)
+}
+
+// settleHeldRuns drives past the longest bound any standing rule is stated
+// against while Mercator is still holding a Run open. A Run waiting on a
+// publication that never lands leaves the world with nothing in flight, so the
+// horizon rounds settle instantly and stopping there would export a green
+// execution in which a declared arrival never ran. Virtual time reaching the
+// bound is what lets the liveness rules adjudicate it, which is the only place
+// that answer belongs: the driver ends the execution and the registry decides
+// whether ending it there was a violation.
+func (execution *Execution) settleHeldRuns(ctx context.Context, checkpoint Checkpoint) (Checkpoint, error) {
+	holding, err := execution.runtime.holdsOpenRun(ctx)
+	if err != nil || !holding {
+		return checkpoint, err
+	}
+	bound := execution.config.Tape.Start.Add(execution.config.Invariants.longestBound() + time.Nanosecond)
+	if !bound.After(execution.now) {
+		return checkpoint, nil
+	}
+	return execution.Drive(ctx, Advance(bound.Sub(execution.now)))
 }
 
 func (execution *Execution) transition(ctx context.Context) error {

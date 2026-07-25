@@ -467,6 +467,36 @@ complete because it works against a live provider.
     image is defined, which is now refused when the arrival is prepared. Two
     findings were rejected and are recorded under the verification evidence
     below.
+- [x] 2026-07-25: Answer the second review of the Artifact commit. Two reviewers
+  found the same two defects, and both were the same shape: a rule that exists
+  at one layer and is discarded at the layer that answers.
+  - The refusal reaches the caller. `Intake` accepted the Run, appended
+    `run_requested`, threw away the error `inputsAreDurable` raised, and
+    answered 202 with phase `requested`, after which the minute reconcile sweep
+    logged the same refusal to the daemon's stdout forever. No production
+    daemon wires an `ArtifactCatalog`, so that was every Run that read an
+    Artifact: accepted, unplaceable, and never terminal. A Run whose declared
+    inputs this Mercator cannot ask about is now refused in `CreateRun`, before
+    the Run is recorded, as `400 ARTIFACT_CATALOG_UNAVAILABLE` naming the
+    version. The refusal belongs at the door because the answer can never
+    change: it is a fact about the deployment, not a provider failure the Run's
+    recorded state could represent, which is what `Intake`'s best-effort
+    advancement is for.
+  - Virtual time reaches the liveness bound. `liveness.admitted_run_progress`
+    fails an admitted Run past 24 hours, and no execution could get there:
+    `DriveToCompletion` stopped as soon as `executionHorizon` was zero, and a
+    Run parked by admission is neither a running execution nor an upload in
+    flight, so a publication that never landed still exported a fully green
+    bundle with a declared arrival that never ran. The world is not the only
+    thing an execution can be waiting on. The driver now ends an execution past
+    the longest bound any standing rule is stated against whenever Mercator is
+    still holding a Run open, and the registry decides whether ending it there
+    was a violation.
+  - Judgment calls. The failing case is a Blueprint in `internal/lab/testdata`
+    rather than in the corpus: it is a claim about the Lab's own driver, and its
+    correct outcome is a red execution, which no catalog classification can
+    state. The bound the driver drives to is read from the invariant registry
+    rather than written twice.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -699,11 +729,15 @@ is held by a deliberate break that fails it:
   a 500 Mbps link in 160s`. The gap is asserted exactly rather than as a lower
   bound, because settling on the world's clock makes it exact;
 - withholding the Run instead of holding it, which is what the harness gate did,
-  fails `TestARunHeldByAdmissionIsVisibleAndBounded` with `Run
-  "run-checkpoint-consumer" is in none of Mercator's records`. That case also
-  reads the same observation a day later and requires
-  `liveness.admitted_run_progress` to fail it, so a publication that never lands
-  can no longer produce a green execution;
+  fails `TestARunHeldByAdmissionIsVisible` with `Run "run-checkpoint-consumer"
+  is in none of Mercator's records`;
+- ending an execution as soon as the world owes nothing fails
+  `TestAPublicationThatNeverLandsIsNotAGreenExecution` with `driving a Blueprint
+  whose publication never lands gave <nil>, and its consumer never ran`. That
+  Blueprint rejects the producer's only launch, so nothing publishes and nothing
+  is left in flight; `DriveToCompletion` reaches the liveness bound anyway and
+  comes back with `liveness.admitted_run_progress`, which is what makes a
+  publication that never lands unable to produce a green execution;
 - deleting the per-host Artifact clause from `safety.locality_provenance` fails
   `TestLocalityProvenanceCoversArtifactCopiesToo` with `a host reported holding
   a copy of an Artifact nothing delivered to it and nothing objected`;
@@ -739,6 +773,9 @@ Five limits are worth stating rather than hiding.
 Nothing in production implements `orchestrator.ArtifactCatalog`. There is no
 object-store client, no artifact controller, and no node-side fetch, so a
 production Mercator refuses a Run that reads an Artifact rather than guessing.
+The refusal is answered where the Run is submitted, as `400
+ARTIFACT_CATALOG_UNAVAILABLE` naming the version nothing can establish, because
+there is no later moment at which this deployment could answer differently.
 That refusal is the honest state: no production path publishes a version either,
 so no production Run has an Artifact it could legitimately read. Placement also
 scores nothing from `OfferSnapshot.Artifacts`, because producer-consumer
@@ -748,7 +785,8 @@ settled.
 The fake world used by the placement corpus holds replicas and advertises them
 on offers, and has no object store. The two `dataset-gravity` Blueprints are
 target scenarios that consume an Artifact, and they now report why they are
-pending in the words of the thing that is missing: `Run reads Artifact
+pending in the words of the thing that is missing, at the step that submits the
+Run: `step 1: submit "run": ARTIFACT_CATALOG_UNAVAILABLE: Run reads Artifact
 "artifact:imagenet:v2.41" and this Mercator has no artifact catalog to establish
 that it exists`. The Lab is where publication has a moment.
 
@@ -757,6 +795,16 @@ workspace and the corpus cannot state that one workspace's Artifact is
 invisible to another. The catalog entry carries the scope, and
 `ArtifactVersion` answers nothing for a workspace that is not the Lab's, which
 is a unit-level fact rather than a corpus one.
+
+Nothing walks the conformance Blueprints through `mercator lab run`, and three
+of the four are red from the CLI while their L1 cases pass. `DriveToCompletion`
+begins by quiescing the World Tape, which jumps virtual time to the last arrival
+before Mercator observes anything, so a Run that finished at 15m is half an hour
+stale the first time it is looked at and `liveness.stale_lease_expiry` fires.
+That predates this slice and reproduces on the commit before it. Advancing to
+the nearest deadline the world owes rather than to the last event changes the
+drive record of every exported bundle, so it is its own slice, tracked as
+[#169](https://github.com/benngarcia/mercator/issues/169).
 
 Two review findings were rejected rather than fixed, and both are recorded as
 issues rather than as silence.

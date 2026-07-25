@@ -278,6 +278,9 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if violations := domain.ValidateWorkloadRevision(req.Workload); len(violations) > 0 {
 		return CreateRunResult{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
 	}
+	if err := o.refuseUnknowableInputs(req.Workload); err != nil {
+		return CreateRunResult{}, err
+	}
 	privateData, err := json.Marshal(runRequestedData{RunID: req.RunID, Workload: req.Workload})
 	if err != nil {
 		return CreateRunResult{}, err

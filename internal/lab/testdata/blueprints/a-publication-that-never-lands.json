@@ -1,0 +1,69 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The producer's only launch is rejected, so it closes with its retries exhausted and the Artifact it was going to write is never durable. Its consumer is a Run Mercator accepted and can never place. Nothing is executing and nothing is uploading, so the world owes nothing, and an execution that ended there would export green with a declared arrival that never ran. This Blueprint is the Lab's own failing case: driving it must reach the liveness bound and report liveness.admitted_run_progress.",
+  "seed": "mercator-lab-publication-never-lands-v1",
+  "world": {
+    "images": {
+      "worker@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f": {
+        "layers": [
+          {
+            "digest": "sha256:11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a11a1",
+            "size": "1GB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:checkpoint:v1",
+        "content_digest": "sha256:c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+        "size": "10GB",
+        "produced_by": "producer"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "producer-rental",
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "producer",
+        "at": "0s",
+        "request": {
+          "image": "worker@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f",
+          "expected_runtime": "5m",
+          "max_runtime": "20m",
+          "produces_artifacts": ["artifact:checkpoint:v1"]
+        }
+      },
+      {
+        "name": "checkpoint-consumer",
+        "at": "0s",
+        "request": {
+          "image": "worker@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f",
+          "expected_runtime": "5m",
+          "max_runtime": "20m",
+          "consumes_artifacts": ["artifact:checkpoint:v1"]
+        }
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "reject-the-producers-only-launch",
+      "trigger": {
+        "operation": "provider.launch",
+        "run": "producer",
+        "attempt": 1
+      },
+      "action": "reject_command"
+    }
+  ]
+}

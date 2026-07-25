@@ -3,6 +3,8 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,13 +67,13 @@ func TestAConsumerWaitsForDurabilityAndNotForACopy(t *testing.T) {
 	}
 }
 
-// TestARunHeldByAdmissionIsVisibleAndBounded is what makes the gate safe to
-// have. A Run waiting on a publication is a Run Mercator has accepted and not
-// placed: it is in the projection, it has no Booking Decision, and if the
-// publication never lands the liveness rule says so. A gate that kept the Run
-// out of Mercator instead would produce a green execution in which a declared
-// arrival silently never ran.
-func TestARunHeldByAdmissionIsVisibleAndBounded(t *testing.T) {
+// TestARunHeldByAdmissionIsVisible is half of what makes the gate safe to have.
+// A Run waiting on a publication is a Run Mercator has accepted and not placed:
+// it is in the projection and it has no Booking Decision. A gate that kept the
+// Run out of Mercator instead would hide it from every rule that watches
+// admitted work make progress. The other half, that the rule actually fires
+// when the publication never lands, is the case below.
+func TestARunHeldByAdmissionIsVisible(t *testing.T) {
 	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
 	defer func() {
 		if err := execution.Close(); err != nil {
@@ -100,12 +102,34 @@ func TestARunHeldByAdmissionIsVisibleAndBounded(t *testing.T) {
 	); err == nil {
 		t.Fatal("Mercator placed a Run whose input is not durable")
 	}
+}
 
-	// The same Run a day later, with the publication still missing, is the
-	// failure a withheld arrival could never produce.
-	observation.Now = observation.StartedAt.Add(25 * time.Hour)
-	if err := admittedRunProgress(observation); err == nil {
-		t.Fatal("a Run held by admission for a day past its bound was reported as progressing")
+// TestAPublicationThatNeverLandsIsNotAGreenExecution is the other half. The
+// producer's only launch is rejected, so nothing publishes the checkpoint and
+// its consumer is held by admission forever. Nothing is executing and nothing
+// is uploading, so the world owes nothing, and a driver that ended there would
+// export a bundle with every invariant passing and a declared arrival that
+// never ran. Driving this Blueprint has to reach the liveness bound and come
+// back with the violation.
+func TestAPublicationThatNeverLandsIsNotAGreenExecution(t *testing.T) {
+	execution := openBlueprintExecution(t, "testdata/blueprints/a-publication-that-never-lands.json", DefaultLimits())
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	_, err := execution.DriveToCompletion(context.Background())
+
+	var violation *InvariantViolationError
+	if !errors.As(err, &violation) {
+		t.Fatalf("driving a Blueprint whose publication never lands gave %v, and its consumer never ran", err)
+	}
+	if violation.Result.ID != "liveness.admitted_run_progress" {
+		t.Fatalf("the execution failed on %q, and a Run that never moved is what this Blueprint is about", violation.Result.ID)
+	}
+	if !strings.Contains(violation.Result.Violation, "run-checkpoint-consumer") {
+		t.Fatalf("the violation names %q", violation.Result.Violation)
 	}
 }
 

@@ -81,10 +81,12 @@ func TestARunIsNotPlacedUntilItsInputIsDurable(t *testing.T) {
 	}
 }
 
-// TestARunReadingAnArtifactNeedsAnObjectStoreToAskAbout is the loud half. A
-// Mercator with no artifact catalog cannot establish that an Artifact exists,
-// and placing the Run anyway would hand a workload a path to content nobody has
-// confirmed is there.
+// TestARunReadingAnArtifactNeedsAnObjectStoreToAskAbout is the loud half, and
+// it is loud at the door. A Mercator with no artifact catalog cannot establish
+// that an Artifact exists, and there is no later moment at which it could, so
+// the Run is refused where it is submitted. Recording it instead would leave an
+// arrival nothing in the system can ever move, with the caller told Mercator
+// had taken the work.
 func TestARunReadingAnArtifactNeedsAnObjectStoreToAskAbout(t *testing.T) {
 	ctx := context.Background()
 	orch := New(
@@ -92,12 +94,21 @@ func TestARunReadingAnArtifactNeedsAnObjectStoreToAskAbout(t *testing.T) {
 		scheduler.New(),
 		fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})),
 	)
-	createConsumingRun(t, ctx, orch)
+	revision := orchRevision()
+	revision.Spec.Artifacts = domain.ArtifactRequirements{Consumes: []string{checkpointArtifact}}
 
-	err := orch.AdvanceRun(ctx, "ws_1", "run_1")
+	_, err := orch.Intake(ctx, IntakeRequest{
+		WorkspaceID:    "ws_1",
+		RunID:          "run_1",
+		IdempotencyKey: "idem_create",
+		Workload:       revision,
+	})
 
 	if err == nil || !strings.Contains(err.Error(), "no artifact catalog") {
-		t.Fatalf("advancing a Run that reads an Artifact with no object store configured returned %v", err)
+		t.Fatalf("submitting a Run that reads an Artifact with no object store configured returned %v", err)
+	}
+	if _, err := orch.GetRun(ctx, "ws_1", "run_1"); err == nil {
+		t.Fatal("the refused Run is in Mercator's records, and a Run nothing can ever place must not be one Mercator holds")
 	}
 }
 
