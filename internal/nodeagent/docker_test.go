@@ -585,14 +585,29 @@ esac
 // standInDaemon is a scripted `docker` that answers what this case needs and
 // fails the read it is about, which is the only way to drive a daemon that is
 // listing images and refusing to describe them.
+//
+// Every stand-in answers the disk probe, because a facts report starts with how
+// much room the machine has and a daemon that cannot say makes no report at all.
+// None of these cases are about the disk, so the answer is prepended here rather
+// than written into each script.
 func standInDaemon(t *testing.T, script string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "docker")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	answered := strings.Replace(script, "#!/bin/sh\n", "#!/bin/sh\n"+diskProbeAnswer, 1)
+	if err := os.WriteFile(path, []byte(answered), 0o755); err != nil {
 		t.Fatalf("write the stand-in daemon: %v", err)
 	}
 	return path
 }
+
+// diskProbeAnswer is a 200GiB root filesystem with 180GiB free, in the columns
+// POSIX df prints them.
+const diskProbeAnswer = `if [ "$1" = "run" ]; then
+  echo 'Filesystem     1024-blocks      Used Available Capacity Mounted on'
+  echo 'overlay          209715200  20971520 188743680      10% /'
+  exit 0
+fi
+`
 
 func requireDocker(t *testing.T) {
 	t.Helper()
@@ -627,5 +642,125 @@ func TestTheDockerRuntimeRefusesTheWorkItDoesNotDo(t *testing.T) {
 
 	if !errors.Is(err, capability.ErrCapabilityUnsupported) {
 		t.Fatalf("preparing an Artifact returned %v, want an unsupported-capability refusal", err)
+	}
+}
+
+// TestANodeReportsTheDiskItsDaemonHas is the disk half of a facts report. Every
+// enrolled node advertised zero ephemeral disk before this, because
+// HostFacts.DiskTotalBytes and DiskFreeBytes were declared and nothing wrote
+// them, and the offer projection mapped that zero straight onto the resource a
+// workload's disk minimum is compared against. So a Run asking for a gigabyte
+// was refused on every node in the fleet.
+func TestANodeReportsTheDiskItsDaemonHas(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "info --format") echo '{"OperatingSystem":"linux","Architecture":"x86_64","ServerVersion":"29.4.0","NCPU":8,"MemTotal":1}' ;;
+  "images --digests") ;;
+esac
+`)
+
+	facts, err := NewDockerRuntime(daemon).Facts(context.Background())
+
+	if err != nil {
+		t.Fatalf("read node facts: %v", err)
+	}
+	if facts.Host.DiskTotalBytes != 200<<30 {
+		t.Errorf("disk total = %d, want the 200GiB filesystem the daemon reported", facts.Host.DiskTotalBytes)
+	}
+	if facts.Host.DiskFreeBytes != 180<<30 {
+		t.Errorf("disk free = %d, want the 180GiB available the daemon reported", facts.Host.DiskFreeBytes)
+	}
+}
+
+// TestADaemonThatCannotSayHowMuchDiskItHasMakesNoReport is the loud half. There
+// is no honest silence available here: HostFacts states disk as a number, a node
+// advertising zero is refused every workload with a disk minimum, and a node
+// advertising a guess sends work to a machine that may have nowhere to put it.
+// This is deliberately unlike an image or a cache the daemon will not describe,
+// which costs one entry: the disk is a fact about the whole machine.
+func TestADaemonThatCannotSayHowMuchDiskItHasMakesNoReport(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "info --format") echo '{"OperatingSystem":"linux","Architecture":"x86_64","ServerVersion":"29.4.0","NCPU":8,"MemTotal":1}' ;;
+  "images --digests") ;;
+esac
+`)
+	// The prepended probe answer is what every other stand-in uses; this daemon
+	// refuses the probe instead.
+	refusing := strings.Replace(readScript(t, daemon), `if [ "$1" = "run" ]; then`,
+		`if [ "$1" = "run" ]; then echo 'no space left on device' >&2; exit 1;`, 1)
+	writeScript(t, daemon, refusing)
+
+	_, err := NewDockerRuntime(daemon).Facts(context.Background())
+
+	if err == nil {
+		t.Fatal("a daemon that could not be asked for its disk still produced a facts report")
+	}
+	if !strings.Contains(err.Error(), "measure this daemon's disk") {
+		t.Fatalf("facts failed with %v, want the disk measurement named", err)
+	}
+}
+
+// TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet is the same claim against the
+// daemon on this machine. A workload's writable layer, its image layers, and its
+// volumes all land on the storage driver's filesystem, so what a probe container
+// sees at / is what the next workload here can use.
+func TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet(t *testing.T) {
+	requireDocker(t)
+	pull(t, diskProbeImage)
+
+	facts, err := NewDockerRuntime("").Facts(context.Background())
+
+	if err != nil {
+		t.Fatalf("read node facts: %v", err)
+	}
+	if facts.Host.DiskTotalBytes <= 0 || facts.Host.DiskFreeBytes <= 0 {
+		t.Fatalf("this daemon reported %d total and %d free bytes of disk", facts.Host.DiskTotalBytes, facts.Host.DiskFreeBytes)
+	}
+	if facts.Host.DiskFreeBytes > facts.Host.DiskTotalBytes {
+		t.Fatalf("free disk %d exceeds the whole filesystem %d", facts.Host.DiskFreeBytes, facts.Host.DiskTotalBytes)
+	}
+	total, free := containerRootFilesystem(t)
+	if facts.Host.DiskTotalBytes != total {
+		t.Errorf("reported %d bytes of disk, and a container of this daemon's sees %d", facts.Host.DiskTotalBytes, total)
+	}
+	// Free space moves between two probes on a working machine, so this asserts
+	// the same filesystem rather than the same instant: a tenth of a percent of
+	// a multi-terabyte disk is a lot of bytes and none of them are a different
+	// mount.
+	if drift := facts.Host.DiskFreeBytes - free; drift > total/1000 || drift < -total/1000 {
+		t.Errorf("reported %d bytes free, and a container of this daemon's sees %d", facts.Host.DiskFreeBytes, free)
+	}
+}
+
+// containerRootFilesystem reads the same measurement through the docker CLI
+// directly, so the case checks the runtime against the daemon rather than
+// against its own parser.
+func containerRootFilesystem(t *testing.T) (total, free int64) {
+	t.Helper()
+	output, err := exec.Command("docker", "run", "--rm", "--network=none", diskProbeImage, "df", "-Pk", "/").CombinedOutput()
+	if err != nil {
+		t.Fatalf("df in a probe container: %v\n%s", err, output)
+	}
+	total, free, err = parseDiskFacts(string(output))
+	if err != nil {
+		t.Fatalf("parse df: %v", err)
+	}
+	return total, free
+}
+
+func readScript(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the stand-in daemon: %v", err)
+	}
+	return string(content)
+}
+
+func writeScript(t *testing.T, path, script string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write the stand-in daemon: %v", err)
 	}
 }

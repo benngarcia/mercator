@@ -318,6 +318,19 @@ func (f *fleet) submitRunWithCaches(t *testing.T, caches ...domain.CacheMountReq
 	})
 }
 
+// submitRunNeedingDisk submits a Run that states how much room it needs, which
+// is a requirement rather than a preference: a machine that cannot meet it is
+// struck out however warm it is.
+func (f *fleet) submitRunNeedingDisk(t *testing.T, bytes int64) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		resources := revision["spec"].(map[string]any)["resources"].(map[string]any)
+		resources["ephemeral_disk"] = map[string]any{"min_bytes": bytes}
+		return revision
+	})
+}
+
 func (f *fleet) submitWorkload(t *testing.T, revision func(name string) map[string]any) string {
 	t.Helper()
 	f.submitted++
@@ -406,7 +419,20 @@ type bookingDecision struct {
 		Disposition     string                    `json:"disposition"`
 		ImageLocality   domain.LocalityState      `json:"image_locality"`
 		Estimates       domain.CandidateEstimates `json:"estimates"`
+		Violations      []domain.Violation        `json:"violations"`
 	} `json:"candidates"`
+}
+
+// rejection is the first code one candidate was struck out for, which is how a
+// case asserts that a refusal names the requirement it was made against.
+func (decision bookingDecision) rejection(offerID string) string {
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID != offerID || len(candidate.Violations) == 0 {
+			continue
+		}
+		return candidate.Violations[0].Code
+	}
+	return ""
 }
 
 func (decision bookingDecision) imageLocality() domain.LocalityState {
@@ -436,6 +462,13 @@ func (decision bookingDecision) pullEstimate() domain.Estimate {
 	return domain.Estimate{}
 }
 
+// refuseToPlace drives one Run forward the way the reconcile sweep does and
+// expects the daemon to answer that it found nowhere to put it.
+func (f *fleet) refuseToPlace(t *testing.T, runID string) {
+	t.Helper()
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusBadGateway)
+}
+
 func (f *fleet) decision(t *testing.T, runID string) bookingDecision {
 	t.Helper()
 	var response struct {
@@ -449,6 +482,7 @@ type offerSnapshot struct {
 	ID        string                   `json:"id"`
 	Lane      string                   `json:"lane"`
 	ExpiresAt time.Time                `json:"expires_at"`
+	Resources domain.ResourceInventory `json:"resources"`
 	Images    domain.ImageInventory    `json:"images"`
 	Artifacts domain.ArtifactInventory `json:"artifacts"`
 }
@@ -953,5 +987,51 @@ func TestPlacementChargesTheWholePullForAnotherPlatformsBuild(t *testing.T) {
 	}
 	if pull.Confidence != domain.AssumedLinkConfidence {
 		t.Fatalf("pull confidence = %v, want %v", pull.Confidence, domain.AssumedLinkConfidence)
+	}
+}
+
+// TestANodeOffersTheDiskItsHostReported is the seam the whole disk requirement
+// runs through. HostFacts.DiskFreeBytes was declared and never populated, and
+// the offer projection maps it straight onto the resource a workload's disk
+// minimum is compared against, so every enrolled node advertised zero bytes and
+// every Run declaring any disk at all was refused on all of them. The node
+// runtime fills the fact in now; this holds the projection that carries it.
+func TestANodeOffersTheDiskItsHostReported(t *testing.T) {
+	fleet := startFleet(t)
+
+	offered := fleet.nodeOffer(t).Resources.EphemeralDiskBytes
+
+	if offered != 400<<30 {
+		t.Fatalf("the node offered %d bytes of ephemeral disk, want the 400GiB free its host reported", offered)
+	}
+}
+
+// TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout is the observable half
+// of the same bug, end to end through the public API. One Run asks for less
+// disk than the node has and lands on it, which before this commit no Run
+// declaring any disk at all could do. One asks for more than the machine has,
+// and the daemon answers that it found nowhere to put it and never asks the node
+// to run it.
+//
+// The refusal is read from the daemon's answer rather than from a recorded
+// rejection because a Run that finds no feasible offer records no Booking
+// Decision at all today, which is its own gap in the explanation record. What
+// the refusal names is asserted where a decision exists: the Blueprint
+// a-host-that-cannot-hold-the-data-is-not-warm holds RESOURCE_INSUFFICIENT
+// against the disk the Run asked for.
+func TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout(t *testing.T) {
+	fleet := startFleet(t)
+
+	fits := fleet.submitRunNeedingDisk(t, 100<<30)
+	fleet.completeWorkload(t, fits, 0)
+	fleet.awaitOutcome(t, fits, "succeeded")
+	oversized := fleet.submitRunNeedingDisk(t, 900<<30)
+	fleet.refuseToPlace(t, oversized)
+
+	if selected := fleet.decision(t, fits).SelectedOfferSnapshotID; selected != fleet.nodeID {
+		t.Fatalf("a Run needing 100GiB landed on %q, and the node has 400GiB free", selected)
+	}
+	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, oversized) {
+		t.Fatalf("a Run needing 900GiB was sent to a machine with 400GiB free: %v", launched)
 	}
 }

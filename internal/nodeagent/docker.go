@@ -59,6 +59,10 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 	if slices.Contains(info.runtimeNames(), "nvidia") {
 		facts.Host.AcceleratorToolkit = "nvidia-container-toolkit"
 	}
+	facts.Host.DiskTotalBytes, facts.Host.DiskFreeBytes, err = docker.diskFacts(ctx)
+	if err != nil {
+		return capability.NodeFacts{}, err
+	}
 	store, err := docker.openImageStore(ctx, info)
 	if err != nil {
 		return capability.NodeFacts{}, err
