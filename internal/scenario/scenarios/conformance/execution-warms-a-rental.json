@@ -1,0 +1,56 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "Two identical cold Rentals under the real control plane. The first Run pays the whole 18GB pull on the cheaper one; half an hour later a second Run of the same image is offered that Rental at zero pull seconds and the untouched one at a full pull. This is the placement corpus's warming claim asserted at L1, where the offer catalog is the only thing Placement may read.",
+  "seed": "mercator-lab-execution-warms-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "held-4090",
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "spare-4090",
+        "rate_per_hour_usd": 2.05
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "first",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "expected_runtime": "8m",
+          "max_runtime": "20m"
+        }
+      },
+      {
+        "name": "second",
+        "at": "30m",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "expected_runtime": "8m",
+          "max_runtime": "20m"
+        }
+      }
+    ]
+  }
+}

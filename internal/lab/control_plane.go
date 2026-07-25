@@ -26,9 +26,6 @@ type controlPlane struct {
 	pending       []RunArrival
 	restarts      uint64
 	faultPosition eventlog.GlobalPosition
-	// lastWorld is the world truth the invariants last saw. Monotonicity is a
-	// claim about two snapshots, so one of them has to be remembered.
-	lastWorld WorldTruthSnapshot
 }
 
 func (runtime *controlPlane) invariantObservation(ctx context.Context, tape WorldTape, transition uint64) (InvariantObservation, error) {
@@ -56,16 +53,12 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		return InvariantObservation{}, err
 	}
 	facts := runtime.world.invariantFacts()
-	world := runtime.world.truthSnapshot()
-	previous := runtime.lastWorld
-	runtime.lastWorld = world
 	return InvariantObservation{
 		StartedAt:                   tape.Start,
 		Now:                         runtime.world.nowTime(),
 		Transition:                  transition,
 		Blueprint:                   tape.BlueprintName,
-		World:                       world,
-		PreviousWorld:               previous,
+		World:                       runtime.world.truthSnapshot(),
 		MercatorEvents:              events,
 		Effects:                     runtime.world.effectRecords(),
 		Runs:                        runs,

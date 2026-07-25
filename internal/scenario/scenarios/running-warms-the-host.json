@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Two identical cold Rentals. The first Run takes the cheaper one and pays the whole 18GB pull. Fifteen minutes later a second Run of the same image sees that Rental at zero pull seconds and the untouched one still at a full pull, because executing the workload is what left the image on the host. Every other fixture seeds warmth at construction; this one earns it. The second Run still goes to the cold Rental, since 45 minutes of queue costs more than the pull it saves.",
+  "summary": "Two identical cold Rentals. The first Run takes the cheaper one and pays the whole 18GB pull. Fifteen minutes later, which is long enough for those bytes to have arrived, a second Run of the same image sees that Rental at zero pull seconds and the untouched one still at a full pull, because executing the workload is what left the image on the host. Every other fixture seeds warmth at construction; this one earns it. The second Run still goes to the cold Rental, since 45 minutes of queue costs more than the pull it saves.",
   "classification": "green",
   "world": {
     "images": {

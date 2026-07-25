@@ -27,17 +27,15 @@ const simWorkspace = "ws_scenario"
 
 // SimBackend executes scenarios against simulated capacity: the fake
 // adapter's World under the real orchestrator, scheduler, and a real SQLite
-// event log. Decision correctness only; no network, no daemons.
+// event log. Decision correctness only; no network, no machines.
 type SimBackend struct{}
 
 func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	clock := fake.NewClock(spec.Start())
 	world := fake.NewWorld(clock)
 	session := &simSession{
-		world:     world,
-		runs:      map[string]string{},
-		images:    map[string]string{},
-		hasImages: len(spec.Images) > 0,
+		world: world,
+		runs:  map[string]string{},
 	}
 	for ref, image := range spec.Images {
 		layers := make([]fake.Layer, 0, len(image.Layers))
@@ -48,7 +46,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	}
 	for _, rental := range spec.Rentals {
 		schedule := spec.rentalSchedule(rental.ID)
-		if err := world.AddDaemon(simDaemon(spec, rental, schedule, clock)); err != nil {
+		if err := world.AddMachine(simMachine(spec, rental, schedule, clock)); err != nil {
 			return nil, err
 		}
 		if len(schedule.Queued) > 0 {
@@ -84,9 +82,9 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	return session, nil
 }
 
-func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Daemon {
+func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Machine {
 	start := clock.Now()
-	daemon := &fake.Daemon{
+	machine := &fake.Machine{
 		Offer:      simRentalOffer(rental),
 		HeldLayers: map[string]int64{},
 		HeldImages: map[string]bool{},
@@ -94,24 +92,24 @@ func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, c
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
-			daemon.HeldLayers[layer.Digest] = int64(layer.Size)
+			machine.HeldLayers[layer.Digest] = int64(layer.Size)
 		}
-		daemon.HeldImages[ref] = true
+		machine.HeldImages[ref] = true
 	}
 	for _, name := range rental.CachedLayers {
-		daemon.HeldLayers[name] = int64(layerSize(spec, name))
+		machine.HeldLayers[name] = int64(layerSize(spec, name))
 	}
 	if running := schedule.Running; running != nil {
-		daemon.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
-		daemon.ExpectedBusyUntil = start.Add(running.expectedRemaining().Duration())
+		machine.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
+		machine.ExpectedBusyUntil = start.Add(running.expectedRemaining().Duration())
 		if running.CompletesAfter != nil {
-			daemon.FreesAt = start.Add(running.CompletesAfter.Duration())
+			machine.FreesAt = start.Add(running.CompletesAfter.Duration())
 		}
 	}
 	if rental.IdleLeaseExpiresIn != nil {
-		daemon.LeaseExpiresAt = start.Add(rental.IdleLeaseExpiresIn.Duration())
+		machine.LeaseExpiresAt = start.Add(rental.IdleLeaseExpiresIn.Duration())
 	}
-	return daemon
+	return machine
 }
 
 // simRentalOffer builds the offer for a Rental. A Rental is machine capacity
@@ -208,11 +206,7 @@ type simSession struct {
 	log   *eventlog.SQLiteEventLog
 	orch  *orchestrator.Orchestrator
 	runs  map[string]string
-	// images remembers each run's image so reevaluation lists offers with the
-	// same honest layer evidence.
-	images    map[string]string
-	hasImages bool
-	notes     []string
+	notes []string
 }
 
 func (s *simSession) note(format string, args ...any) {
@@ -220,8 +214,8 @@ func (s *simSession) note(format string, args ...any) {
 }
 
 func (s *simSession) Submit(name string, req RequestSpec) error {
-	if err := s.preparePlacement(req.Image); err != nil {
-		return err
+	if req.Image == "" {
+		return fmt.Errorf("requests need an image")
 	}
 	if len(req.CacheMounts) > 0 {
 		s.note("run %q declares cache mounts, but the container spec cannot carry them yet", name)
@@ -231,7 +225,6 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	}
 	runID := "run-" + name
 	s.runs[name] = runID
-	s.images[name] = req.Image
 	_, err := s.orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{
 		WorkspaceID:    simWorkspace,
 		RunID:          runID,
@@ -249,23 +242,7 @@ func (s *simSession) Reconcile(name string) error {
 	if !ok {
 		return fmt.Errorf("run %q was never submitted", name)
 	}
-	if err := s.preparePlacement(s.images[name]); err != nil {
-		return err
-	}
 	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
-}
-
-// preparePlacement declares which image the coming evaluation is for, so the
-// world's offers carry honest layer evidence. A world with no image catalog
-// places layerless images and needs no declaration.
-func (s *simSession) preparePlacement(image string) error {
-	if image == "" {
-		return fmt.Errorf("requests need an image")
-	}
-	if !s.hasImages {
-		return nil
-	}
-	return s.world.SetPlacementImage(image)
 }
 
 func (s *simSession) AdvanceClock(d time.Duration) {

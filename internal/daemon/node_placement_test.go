@@ -8,12 +8,14 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/daemon"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/nodeagent"
 )
 
@@ -47,6 +49,25 @@ func TestOneEnrolledNodeRunsTwoWorkloadsInSequence(t *testing.T) {
 	if reused := fleet.decision(t, second); reused.disposition() != "run_now_existing_rental" {
 		t.Fatalf("the second Run recorded disposition %q, want it to reuse the Rental it already had", reused.disposition())
 	}
+}
+
+// TestANodeHoldsTheImageItRan is the production half of what the corpus proves
+// under simulation: running a workload is what makes a machine warm, and the
+// offer catalog Placement reads says so. Nothing seeds this node; the only way
+// the image reaches its inventory is by having been run.
+func TestANodeHoldsTheImageItRan(t *testing.T) {
+	fleet := startFleet(t)
+	if fleet.nodeOffer(t).Images.Holds(trainerImage) {
+		t.Fatal("the node reports holding an image it has never run")
+	}
+
+	runID := fleet.submitRun(t)
+	fleet.completeWorkload(t, runID, 0)
+	fleet.awaitOutcome(t, runID, "succeeded")
+
+	waitFor(t, func() bool {
+		return fleet.nodeOffer(t).Images.Holds(trainerImage)
+	}, "the node never reported holding the image it ran, so a second Run would be priced a pull it does not owe")
 }
 
 // TestAWorkloadThatFailsOnANodeClosesTheRunFailed holds the node's authority
@@ -282,9 +303,10 @@ func (f *fleet) decision(t *testing.T, runID string) bookingDecision {
 }
 
 type offerSnapshot struct {
-	ID        string    `json:"id"`
-	Lane      string    `json:"lane"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID        string                `json:"id"`
+	Lane      string                `json:"lane"`
+	ExpiresAt time.Time             `json:"expires_at"`
+	Images    domain.ImageInventory `json:"images"`
 }
 
 func (f *fleet) offers(t *testing.T) []offerSnapshot {
@@ -294,6 +316,19 @@ func (f *fleet) offers(t *testing.T) []offerSnapshot {
 	}
 	f.call(t, http.MethodGet, "/v1/offers?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
 	return response.Offers
+}
+
+// nodeOffer is the enrolled node as Placement sees it, through the same catalog
+// the scheduler reads.
+func (f *fleet) nodeOffer(t *testing.T) offerSnapshot {
+	t.Helper()
+	for _, offer := range f.offers(t) {
+		if offer.ID == f.nodeID {
+			return offer
+		}
+	}
+	t.Fatalf("the enrolled node %q is not being offered", f.nodeID)
+	return offerSnapshot{}
 }
 
 func (f *fleet) call(t *testing.T, method, path string, body, into any, wantStatus int) {
@@ -346,8 +381,11 @@ func waitFor(t *testing.T, satisfied func() bool, message string) {
 // reports exits when the test says so, which is how a container's lifecycle is
 // driven without a daemon.
 type scriptedRuntime struct {
-	mu           sync.Mutex
-	launched     []string
+	mu       sync.Mutex
+	launched []string
+	// held is every image manifest this machine holds, which is what running a
+	// workload leaves behind and what the node reports on its next heartbeat.
+	held         []string
 	observations map[string]capability.WorkloadObservation
 }
 
@@ -355,7 +393,20 @@ func newScriptedRuntime() *scriptedRuntime {
 	return &scriptedRuntime{observations: map[string]capability.WorkloadObservation{}}
 }
 
+// Facts reports what this machine holds now, which is nothing until it has run
+// something. A runtime that answers with a fixed inventory could never show a
+// node becoming warm by running a workload, which is the whole claim.
 func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, error) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	images := make([]capability.ImageLocality, 0, len(runtime.held))
+	for _, digest := range runtime.held {
+		images = append(images, capability.ImageLocality{
+			ManifestDigest: digest,
+			State:          capability.LocalityHot,
+			Unpacked:       true,
+		})
+	}
 	return capability.NodeFacts{
 		ObservedAt: time.Now().UTC(),
 		Host: capability.HostFacts{
@@ -368,11 +419,7 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 			DiskTotalBytes:   500 << 30,
 			DiskFreeBytes:    400 << 30,
 		},
-		Images: []capability.ImageLocality{{
-			ManifestDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-			State:          capability.LocalityHot,
-			Unpacked:       true,
-		}},
+		Images: images,
 	}, nil
 }
 
@@ -388,6 +435,9 @@ func (runtime *scriptedRuntime) LaunchWorkload(_ context.Context, command capabi
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	runtime.launched = append(runtime.launched, command.RunID)
+	if !slices.Contains(runtime.held, command.ManifestDigest) {
+		runtime.held = append(runtime.held, command.ManifestDigest)
+	}
 	runtime.observations[command.RunID] = capability.WorkloadObservation{
 		RunID:      command.RunID,
 		AttemptID:  command.AttemptID,

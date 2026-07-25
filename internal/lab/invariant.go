@@ -37,7 +37,6 @@ type InvariantObservation struct {
 	Transition        uint64
 	Blueprint         string
 	World             WorldTruthSnapshot
-	PreviousWorld     WorldTruthSnapshot
 	MercatorEvents    []eventlog.CloudEvent
 	Effects           []EffectRecord
 	Runs              []domain.RunRecord
@@ -414,41 +413,47 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 
 // localityProvenance is the standing guard on how a host becomes warm. Content
 // arrives on a machine exactly two ways: the World Tape seeded it there, or an
-// accepted image pull left it there. Warming is monotone, so no host ever
-// reports less than it reported before. And capacity that does not survive its
-// workload holds nothing beyond its seed, because there is no machine left to
-// hold it once the one-shot execution exits.
+// accepted image pull retained it there. And only capacity Mercator keeps holds
+// anything beyond its seed at all.
+//
+// It deliberately says nothing about a host holding less than it held before.
+// Locality decays, which is why ImageInventory carries the age of the answer:
+// content reclaimed under disk pressure or lost with the machine is a fact to
+// model, not a control-plane failure.
 func localityProvenance(observation InvariantObservation) error {
-	previous := offersByID(observation.PreviousWorld.Offers)
-	pulled, err := retainedByOffer(observation.Effects)
+	retained, err := retainedByOffer(observation.Effects)
 	if err != nil {
 		return err
 	}
 	for _, offer := range observation.World.Offers {
-		if before, known := previous[offer.ID]; known {
-			if err := CheckWarmingDoesNotShrinkInventory(before, offer); err != nil {
-				return fmt.Errorf("offer %q: %w", offer.ID, err)
-			}
-		}
-		if err := oneShotHoldsOnlyItsSeed(offer, observation.SeededLocality[offer.ID]); err != nil {
+		if err := onlyKeptCapacityHoldsWhatItRan(offer, observation.SeededLocality[offer.ID]); err != nil {
 			return err
 		}
-		if err := heldContentIsExplained(offer, observation.SeededLocality[offer.ID], pulled[offer.ID]); err != nil {
+		if err := heldContentIsExplained(offer, observation.SeededLocality[offer.ID], retained[offer.ID]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func oneShotHoldsOnlyItsSeed(offer domain.OfferSnapshot, seeded map[string]bool) error {
-	if offer.Kind == domain.OfferKindStanding && offer.Lane.Reusable() {
+// onlyKeptCapacityHoldsWhatItRan holds the line the lane split draws. It names
+// the reason the offer cannot have accumulated content, because a provisionable
+// offer and a one-shot product fail this for different reasons: one is a
+// machine that does not exist yet, the other exists only for its workload.
+func onlyKeptCapacityHoldsWhatItRan(offer domain.OfferSnapshot, seeded map[string]bool) error {
+	if offer.KeepsWhatItRuns() {
 		return nil
+	}
+	reason := "is a machine that does not exist yet"
+	if !offer.Lane.Reusable() {
+		reason = "holds nothing once its workload exits"
 	}
 	for _, digest := range heldDigests(offer.Images) {
 		if !seeded[digest] {
 			return fmt.Errorf(
-				"offer %q does not outlive its workload and holds %s beyond what the World Tape seeded",
+				"offer %q %s, and holds %s beyond what the World Tape seeded",
 				offer.ID,
+				reason,
 				digest,
 			)
 		}
@@ -456,9 +461,9 @@ func oneShotHoldsOnlyItsSeed(offer domain.OfferSnapshot, seeded map[string]bool)
 	return nil
 }
 
-func heldContentIsExplained(offer domain.OfferSnapshot, seeded, pulled map[string]bool) error {
+func heldContentIsExplained(offer domain.OfferSnapshot, seeded, retained map[string]bool) error {
 	for _, digest := range heldDigests(offer.Images) {
-		if seeded[digest] || pulled[digest] {
+		if seeded[digest] || retained[digest] {
 			continue
 		}
 		return fmt.Errorf(
@@ -472,7 +477,7 @@ func heldContentIsExplained(offer domain.OfferSnapshot, seeded, pulled map[strin
 
 // retainedByOffer reads back what the effect ledger says each host kept. A pull
 // that retained nothing explains nothing, which is exactly the record a one-shot
-// execution leaves.
+// execution leaves, and so is a pull onto a host that already held the image.
 func retainedByOffer(effects []EffectRecord) (map[string]map[string]bool, error) {
 	retained := map[string]map[string]bool{}
 	for _, effect := range effects {
@@ -503,14 +508,6 @@ func retainedByOffer(effects []EffectRecord) (map[string]map[string]bool, error)
 
 func heldDigests(inventory domain.ImageInventory) []string {
 	return append(slices.Clone(inventory.ImageDigests), inventory.LayerDigests...)
-}
-
-func offersByID(offers []domain.OfferSnapshot) map[string]domain.OfferSnapshot {
-	indexed := make(map[string]domain.OfferSnapshot, len(offers))
-	for _, offer := range offers {
-		indexed[offer.ID] = offer
-	}
-	return indexed
 }
 
 func selectedCandidate(decision domain.BookingDecision) *domain.CandidateDecision {

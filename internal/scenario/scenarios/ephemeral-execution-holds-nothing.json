@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "One workload runs on the Rental Mercator holds, then the same image runs twice on a provider-native one-shot product. The one-shot pays the whole 18GB pull both times, because the machine does not survive its workload and nothing it fetched outlives the execution that fetched it. The Rental, which ran the image once, is warm. Holding nothing is only a claim worth making beside capacity that holds something.",
+  "summary": "One workload runs on the Rental Mercator holds, then the same image runs twice on a provider-native one-shot product. The one-shot pays the whole 18GB pull both times: Mercator keeps no machine there, so nothing the first execution fetched is anywhere when the second asks. The Rental, which ran the image once, is warm fifteen minutes later. Holding nothing is only a claim worth making beside capacity that holds something, which is why the fixture carries both.",
   "classification": "green",
   "world": {
     "images": {

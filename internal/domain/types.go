@@ -219,6 +219,17 @@ type OfferSnapshot struct {
 	Reliability  ReliabilityEvidence `json:"reliability,omitempty"`
 }
 
+// KeepsWhatItRuns answers whether content a workload fetches here is still here
+// when the next Run asks. The two halves are separate reasons for the same
+// answer: a provisionable offer names a machine that does not exist yet, so it
+// is a template rather than a host, and an ephemeral-lane offer is a one-shot
+// product that holds nothing once its workload exits however it was allocated.
+// A standing reusable offer is the only capacity Mercator keeps, which makes it
+// the only place Warmth can accumulate.
+func (offer OfferSnapshot) KeepsWhatItRuns() bool {
+	return offer.Kind == OfferKindStanding && offer.Lane.Reusable()
+}
+
 type ResourceInventory struct {
 	CPUMillis          int64                  `json:"cpu_millis"`
 	MemoryBytes        int64                  `json:"memory_bytes"`
