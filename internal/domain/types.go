@@ -611,6 +611,15 @@ func (manifest ImageManifest) StartWork(inventory ImageInventory) (ImageWork, Lo
 	}
 }
 
+// ResidentBytes is how much of this image is already on a host that still owes
+// this much work for it: everything the manifest names, less what would have to
+// be fetched. Bytes here and not yet unpacked count, because they are taking up
+// the disk either way, and content nobody could enumerate does not, because
+// nothing said it is here.
+func (manifest ImageManifest) ResidentBytes(work ImageWork) int64 {
+	return manifest.compressedBytes() - work.TransferBytes
+}
+
 // compressedBytes is everything this image would cost to fetch from a registry.
 func (manifest ImageManifest) compressedBytes() int64 {
 	total := int64(0)

@@ -106,7 +106,64 @@ type WorldTruthSnapshot struct {
 	ActiveExecutions []externalExecution    `json:"active_executions"`
 	ArtifactReplicas []ArtifactReplica      `json:"artifact_replicas"`
 	CacheMounts      []CacheMountState      `json:"cache_mounts"`
+	// Disk is what each machine's content is taking up, stated as World Truth
+	// because an offer states only what is left. A rule that read the remainder
+	// could never catch a world that lost track of the difference.
+	Disk []DiskLedger `json:"disk"`
 }
+
+// DiskLedger is one machine's account of its own disk: the room it has, every
+// item of content taking some of it, and the bytes promised to content that is
+// still arriving. Disk is a real resource here for the same reason it is on a
+// machine: content Mercator puts somewhere has to fit, and an offer that stated
+// a fixed number whatever it was holding is an offer that never says no.
+type DiskLedger struct {
+	OfferID string `json:"offer_id"`
+	// CapacityBytes is the machine's whole disk, which is what the Blueprint
+	// declared for it.
+	CapacityBytes int64 `json:"capacity_bytes"`
+	// Resident is every item of content on this machine, each named by the
+	// content it is. It is stated item by item rather than as a total, because a
+	// sum cannot be checked for counting one thing twice.
+	Resident []ResidentContent `json:"resident,omitempty"`
+	// ReservedBytes is room committed to content still moving onto this machine.
+	// A transfer in flight has not landed and its room is already spoken for, so
+	// a ledger that counted only what arrived would let a host promise the same
+	// gigabytes to two Runs.
+	ReservedBytes int64 `json:"reserved_bytes,omitempty"`
+}
+
+// ResidentBytes is what this machine's content adds up to.
+func (ledger DiskLedger) ResidentBytes() int64 {
+	total := int64(0)
+	for _, item := range ledger.Resident {
+		total += item.SizeBytes
+	}
+	return total
+}
+
+// FreeBytes is the room left for anything else, which is what an offer for this
+// machine states.
+func (ledger DiskLedger) FreeBytes() int64 {
+	return max(ledger.CapacityBytes-ledger.ResidentBytes()-ledger.ReservedBytes, 0)
+}
+
+// ResidentContent is one item taking room on one machine, named by whatever
+// makes it that content: a layer's blob digest, an Artifact version's ID, or a
+// Cache Mount's identity.
+type ResidentContent struct {
+	Kind      ResidentKind `json:"kind"`
+	Name      string       `json:"name"`
+	SizeBytes int64        `json:"size_bytes"`
+}
+
+type ResidentKind string
+
+const (
+	ResidentLayer    ResidentKind = "layer"
+	ResidentArtifact ResidentKind = "artifact"
+	ResidentCache    ResidentKind = "cache"
+)
 
 type hostState struct {
 	offer domain.OfferSnapshot
@@ -235,12 +292,15 @@ type worldOperation struct {
 // The pull is named by the launch that asked for it, because an execution that
 // is released or terminated mid-transfer leaves nothing behind.
 type pendingPull struct {
-	offerID     string
-	runID       string
-	launchKey   string
-	image       string
-	layers      []scenario.LayerSpec
-	fetched     []string
+	offerID   string
+	runID     string
+	launchKey string
+	image     string
+	layers    []scenario.LayerSpec
+	fetched   []string
+	// bytes is the room this pull has already claimed on the host. Content in
+	// flight is not resident and its space is not free either.
+	bytes       int64
 	completesAt time.Time
 }
 
@@ -249,10 +309,13 @@ type pendingPull struct {
 // when the launch that wanted it was accepted. Like a pull it is named by the
 // launch, because an execution released mid-transfer leaves nothing behind.
 type pendingReplica struct {
-	offerID     string
-	runID       string
-	launchKey   string
-	artifactID  string
+	offerID    string
+	runID      string
+	launchKey  string
+	artifactID string
+	// bytes is the room this copy has already claimed on the host, for the same
+	// reason a pull claims its own.
+	bytes       int64
 	completesAt time.Time
 }
 
@@ -421,8 +484,28 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		}
 		world.truth[marketplace.ID] = cloneHostState(state)
 	}
+	if err := world.refuseOversubscribedDisks(); err != nil {
+		return nil, err
+	}
 	world.publishObservations()
 	return world, nil
+}
+
+// refuseOversubscribedDisks is this world declining to exist as described. A
+// Blueprint that puts more content on a machine than the machine has disk is
+// stating something no machine can be in, and letting it through would produce
+// offers with negative room and a corpus that proves placements against a world
+// that cannot happen.
+func (world *simulatedWorld) refuseOversubscribedDisks() error {
+	for _, ledger := range world.diskLedgers() {
+		if resident := ledger.ResidentBytes(); resident > ledger.CapacityBytes {
+			return fmt.Errorf(
+				"Lab world machine %q was seeded with %d bytes of content and has %d bytes of disk",
+				ledger.OfferID, resident, ledger.CapacityBytes,
+			)
+		}
+	}
+	return nil
 }
 
 // seedReplicas is what one machine was already holding when this world began.
@@ -844,6 +927,7 @@ func (world *simulatedWorld) truthSnapshot() WorldTruthSnapshot {
 		ActiveExecutions: executions,
 		ArtifactReplicas: world.artifactReplicas(),
 		CacheMounts:      world.cacheMountStates(),
+		Disk:             world.diskLedgers(),
 	}
 }
 
@@ -976,6 +1060,14 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		world.recordLaunchEffect(request, EffectCommandRejected, EffectResponseDelivered, nil, "")
 		return adapter.LaunchReceipt{}, &adapter.ProviderFailure{
 			Kind:       adapter.ProviderFailureInvalidRequest,
+			SideEffect: adapter.SideEffectNone,
+		}
+	}
+	if !world.launchFitsOnDisk(request, arrival) {
+		world.recordLaunchEffect(request, EffectCommandRejected, EffectResponseDelivered, nil, "")
+		return adapter.LaunchReceipt{}, &adapter.ProviderFailure{
+			Kind:       adapter.ProviderFailureCapacityUnavailable,
+			Retryable:  false,
 			SideEffect: adapter.SideEffectNone,
 		}
 	}
@@ -1202,6 +1294,12 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time
 		offer := state.offer
 		offer.ObservedAt = at
 		offer.ExpiresAt = at.Add(5 * time.Minute)
+		// What a machine offers is the room it has left, not the disk it was
+		// built with. An offer that restated its capacity whatever it was
+		// holding is an offer that can never say no, and every Run reading its
+		// disk would be reading a number that stopped being true the first time
+		// anything landed here.
+		offer.Resources.EphemeralDiskBytes = world.diskLedger(state).FreeBytes()
 		offer.Images = state.inventory(at)
 		offer.Artifacts = world.artifactInventory(offer.ID, at)
 		offer.Caches = world.cacheInventory(offer.ID, at)
@@ -1209,6 +1307,101 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time
 	}
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
 	return offers
+}
+
+// diskLedgers is what every machine in this world has room for and what is
+// using it, in offer order. It is World Truth: an offer states the room that is
+// left, and the difference between the two is exactly what a rule about disk
+// accounting has to be able to see.
+func (world *simulatedWorld) diskLedgers() []DiskLedger {
+	ledgers := make([]DiskLedger, 0, len(world.truth))
+	for _, id := range slices.Sorted(maps.Keys(world.truth)) {
+		ledgers = append(ledgers, world.diskLedger(world.truth[id]))
+	}
+	return ledgers
+}
+
+// diskLedger is one machine's room, everything resident on it, and everything
+// on its way there. Layers are named by the blob digest that identifies the
+// bytes, so content two images share takes room once here exactly as it takes
+// room once on a disk.
+func (world *simulatedWorld) diskLedger(state hostState) DiskLedger {
+	offerID := state.offer.ID
+	ledger := DiskLedger{
+		OfferID:       offerID,
+		CapacityBytes: state.offer.Resources.EphemeralDiskBytes,
+		ReservedBytes: world.reservedBytes(offerID),
+	}
+	for _, digest := range slices.Sorted(maps.Keys(state.heldLayers)) {
+		ledger.Resident = append(ledger.Resident, ResidentContent{
+			Kind:      ResidentLayer,
+			Name:      digest,
+			SizeBytes: int64(state.heldLayers[digest].Size),
+		})
+	}
+	for _, artifactID := range slices.Sorted(maps.Keys(world.replicas)) {
+		replica, held := world.replicas[artifactID][offerID]
+		if !held {
+			continue
+		}
+		ledger.Resident = append(ledger.Resident, ResidentContent{
+			Kind:      ResidentArtifact,
+			Name:      artifactID,
+			SizeBytes: replica.SizeBytes,
+		})
+	}
+	for _, identity := range slices.Sorted(maps.Keys(world.cacheMounts[offerID])) {
+		ledger.Resident = append(ledger.Resident, ResidentContent{
+			Kind:      ResidentCache,
+			Name:      identity,
+			SizeBytes: world.cacheMounts[offerID][identity].SizeBytes,
+		})
+	}
+	return ledger
+}
+
+// reservedBytes is room this machine has already promised to content that is
+// still moving onto it. A transfer in flight occupies nothing yet and cannot be
+// treated as free space either: two Runs told the same gigabytes were available
+// is how a machine ends up with neither of them able to finish.
+func (world *simulatedWorld) reservedBytes(offerID string) int64 {
+	reserved := int64(0)
+	for _, pull := range world.pulls {
+		if pull.offerID == offerID {
+			reserved += pull.bytes
+		}
+	}
+	for _, fetch := range world.replicating {
+		if fetch.offerID == offerID {
+			reserved += fetch.bytes
+		}
+	}
+	return reserved
+}
+
+// launchFitsOnDisk is the machine deciding whether it has anywhere to put what
+// this launch needs: the image bytes it does not hold, the inputs it would have
+// to read out of the object store, and the caches the workload declared. A host
+// that runs out of disk partway through does not run the workload slowly, it
+// fails with nothing to show, so the world refuses rather than creating content
+// its own ledger cannot hold. Mercator is meant to have priced such a candidate
+// down long before this, and this is what makes that pricing matter.
+func (world *simulatedWorld) launchFitsOnDisk(request adapter.LaunchRequest, arrival RunArrival) bool {
+	state := world.truth[request.SelectedOfferSnapshotID]
+	_, needed := state.missing(request.Image, world.images[request.Image].Layers)
+	for _, artifactID := range arrival.Request.ConsumesArtifacts {
+		if replica, held := world.replicas[artifactID][state.offer.ID]; !held || !replica.State.Usable() {
+			version, _ := world.store.entry(artifactID)
+			needed += version.SizeBytes
+		}
+	}
+	for _, mount := range request.CacheMounts {
+		identity := domain.CacheIdentity(request.WorkspaceID, mount)
+		if _, held := world.cacheMounts[state.offer.ID][identity]; !held {
+			needed += mount.SizeBytes
+		}
+	}
+	return needed <= world.diskLedger(state).FreeBytes()
 }
 
 // publishedOffers is what the provider can say about the machines it sells, as
@@ -1266,6 +1459,7 @@ func (world *simulatedWorld) pullRunImage(execution externalExecution, image str
 			image:       image,
 			layers:      layers,
 			fetched:     fetched,
+			bytes:       bytes,
 			completesAt: completesAt,
 		})
 		world.settlePulls()
@@ -1313,11 +1507,13 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 		if !held || !replica.State.Usable() {
 			source = "object_store"
 			completesAt = world.now.Add(world.store.transferDuration(artifactID))
+			version, _ := world.store.entry(artifactID)
 			world.replicating = append(world.replicating, pendingReplica{
 				offerID:     execution.OfferID,
 				runID:       execution.RunID,
 				launchKey:   execution.LaunchKey,
 				artifactID:  artifactID,
+				bytes:       version.SizeBytes,
 				completesAt: completesAt,
 			})
 		}

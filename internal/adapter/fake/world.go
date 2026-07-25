@@ -145,9 +145,12 @@ type Machine struct {
 // fetch, the mutable caches the workload declared, and when the bytes have
 // finished moving, which is when the workload starts.
 type transfer struct {
-	image       string
-	layers      []Layer
-	caches      []domain.CacheMount
+	image  string
+	layers []Layer
+	caches []domain.CacheMount
+	// bytes is the room this transfer has already claimed on the machine.
+	// Content in flight is not resident and its space is not free either.
+	bytes       int64
 	completesAt time.Time
 }
 
@@ -179,6 +182,7 @@ func (m *Machine) startExecution(image string, layers []Layer, caches []domain.C
 		image:       image,
 		layers:      layers,
 		caches:      caches,
+		bytes:       bytes,
 		completesAt: now.Add(transferDuration(bytes)),
 	})
 }
@@ -261,6 +265,36 @@ func (m *Machine) publishedCaches(now time.Time) domain.CacheInventory {
 		inventory.Mounts = append(inventory.Mounts, m.HeldCaches[identity])
 	}
 	return inventory
+}
+
+// residentBytes is what this machine's content takes up: the layers it holds
+// and the Artifact copies on it. A Cache Mount is missing from the sum on
+// purpose, because nothing in this world's vocabulary can size one: a container
+// runtime prices a volume only by walking every volume on the host, so the
+// record a machine reports carries no size and this world reports exactly what a
+// machine could. The Lab states cache sizes where it states World Truth, which
+// is a different claim made by a different authority.
+func (m *Machine) residentBytes() int64 {
+	resident := int64(0)
+	for _, bytes := range m.HeldLayers {
+		resident += bytes
+	}
+	for _, replica := range m.ArtifactReplicas {
+		resident += replica.SizeBytes
+	}
+	return resident
+}
+
+// freeDiskBytes is the room this machine has left: its disk, less what is on it,
+// less what it has promised to content still arriving. It is what an offer for
+// this machine states, because a machine that advertised its whole disk however
+// full it was could never turn work away.
+func (m *Machine) freeDiskBytes() int64 {
+	free := m.Offer.Resources.EphemeralDiskBytes - m.residentBytes()
+	for _, pull := range m.fetching {
+		free -= pull.bytes
+	}
+	return max(free, 0)
 }
 
 // Hold puts one layer on this machine under every name that content answers
@@ -466,6 +500,12 @@ func (w *World) AddMachine(m *Machine) error {
 	if m.Offer.Kind == "" || m.Offer.Lane == "" {
 		return fmt.Errorf("fake: machine %q needs an offer kind and an execution lane", m.Offer.ID)
 	}
+	if resident := m.residentBytes(); resident > m.Offer.Resources.EphemeralDiskBytes {
+		return fmt.Errorf(
+			"fake: machine %q holds %d bytes of content and has %d bytes of disk",
+			m.Offer.ID, resident, m.Offer.Resources.EphemeralDiskBytes,
+		)
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	m.Offer.RentalID = ""
@@ -584,6 +624,10 @@ func (w *World) machineOffer(machine *Machine, now time.Time) domain.OfferSnapsh
 	offer := machine.Offer
 	offer.ObservedAt = now
 	offer.ExpiresAt = now.Add(5 * time.Minute)
+	// What a machine offers is the room it has left rather than the disk it was
+	// built with, because content it is already holding is not room a Run can
+	// have.
+	offer.Resources.EphemeralDiskBytes = machine.freeDiskBytes()
 	offer.Images = machine.publishedInventory(now)
 	offer.Artifacts = machine.publishedArtifacts(now)
 	offer.Caches = machine.publishedCaches(now)

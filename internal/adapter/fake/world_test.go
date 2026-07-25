@@ -272,8 +272,16 @@ func TestWorldRefusesCapacityThatNamesNoKindOrLane(t *testing.T) {
 
 // rentalOffer is capacity Mercator holds: a machine that exists, with an
 // enrolled runtime that can execute successive workloads on it.
+// rentalOffer is a Rental with room for whatever a case puts on it. The disk is
+// stated because content has to fit somewhere: a machine holding layers on no
+// disk is a machine this world refuses to build.
 func rentalOffer(id string) domain.OfferSnapshot {
-	return domain.OfferSnapshot{ID: id, Kind: domain.OfferKindStanding, Lane: domain.LaneReusable}
+	return domain.OfferSnapshot{
+		ID:        id,
+		Kind:      domain.OfferKindStanding,
+		Lane:      domain.LaneReusable,
+		Resources: domain.ResourceInventory{EphemeralDiskBytes: 200 << 30},
+	}
 }
 
 func worldLaunch(offerID, image string) adapter.LaunchRequest {

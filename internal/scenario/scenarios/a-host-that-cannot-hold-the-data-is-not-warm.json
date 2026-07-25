@@ -1,0 +1,99 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Two machines hold the same 18GB layer of the same image at the same price, and one of them has nowhere to put the 40GB dataset the Run reads. Locality is never a hard constraint, so the cramped machine stays feasible: what changes is what it is priced. Room it has to make comes out of the content it holds, and content it gives up is content it fetches again, so its transfer estimate carries the eviction and it loses on cost rather than on refusal. The second Run states a disk floor of its own, which is a requirement rather than a preference, and the machine that cannot meet it is struck out with RESOURCE_INSUFFICIENT: until an offer stated real disk, that rejection was unreachable on capacity Mercator controls and every node in the fleet advertised zero bytes.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-cramped",
+        "cached_layers": ["sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de"],
+        "resources": {"disk": "55GB"},
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-roomy",
+        "cached_layers": ["sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.5
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "reads-the-dataset",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "expected_runtime": "20m",
+        "max_runtime": "1h",
+        "consumes_artifacts": ["artifact:imagenet:v2.41"]
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-roomy",
+        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "disposition": "release",
+        "candidates": {
+          "rental-cramped": {
+            "feasible": true,
+            "image_locality": "partial",
+            "pull_seconds": {"at_least": 49, "at_most": 51},
+            "pull_source": "disk_eviction",
+            "artifact_seconds": {"at_least": 639, "at_most": 641},
+            "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+          },
+          "rental-roomy": {
+            "feasible": true,
+            "image_locality": "partial",
+            "pull_seconds": {"at_least": 1, "at_most": 2},
+            "pull_source": "image_inventory",
+            "artifact_seconds": {"at_least": 639, "at_most": 641},
+            "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+          }
+        }
+      }
+    },
+    {
+      "advance": "1m"
+    },
+    {
+      "submit": "needs-the-room",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "resources": {"disk": "100GB"},
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-roomy",
+        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "candidates": {
+          "rental-cramped": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
+          "rental-roomy": {
+            "feasible": true,
+            "image_locality": "hot",
+            "pull_seconds": 0
+          }
+        }
+      }
+    }
+  ]
+}

@@ -168,6 +168,19 @@ func ArtifactFetchWork(versions []ArtifactVersion, inventory ArtifactInventory) 
 	return fetch, evidence
 }
 
+// ArtifactResidentBytes is how much of the content one Run reads is already on
+// one host: every version it declared, less what that host would still have to
+// read out of the object store. A version nobody could enumerate is charged its
+// whole size and is resident nowhere, which is the same silence the fetch answer
+// above prices.
+func ArtifactResidentBytes(versions []ArtifactVersion, fetchBytes int64) int64 {
+	declared := int64(0)
+	for _, version := range versions {
+		declared += version.SizeBytes
+	}
+	return declared - fetchBytes
+}
+
 // ArtifactRequirements is what a workload reads and what it publishes, by
 // version ID. Consuming is a dependency with blocked-until-durable semantics:
 // a Run is not admitted until every version it names is in the object store.

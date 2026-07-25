@@ -373,8 +373,9 @@ type contentWork struct {
 func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candidateWork {
 	queue := queueEstimate(input, offer)
 	provision := provisionEstimate(input, offer)
-	image, locality := pullEstimate(input.Image, offer, input.ModelVersion)
-	inputs, evidence := artifactEstimate(input.Artifacts, offer.Artifacts, input.ModelVersion)
+	content := contentFor(input, offer)
+	image := pullEstimate(input.Image, offer, content, input.ModelVersion)
+	inputs := artifactEstimate(offer.Artifacts, content, input.ModelVersion)
 	return candidateWork{
 		estimates: domain.CandidateEstimates{
 			QueueSeconds:            queue,
@@ -385,8 +386,41 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 			EstablishedStartSeconds: startEstimate(input, offer, queue, provision, image.established, inputs.established),
 			CostUSD:                 costEstimate(input, offer),
 		},
-		image:     locality,
-		artifacts: evidence,
+		image:     content.locality,
+		artifacts: content.evidence,
+	}
+}
+
+// candidateContent is everything this Run's content amounts to on one
+// candidate: what each kind of it the host was found holding, what it still
+// owes, and what the room it has left forces it to give up. The three answers
+// are made together because the disk they compete for is one resource, and
+// answered before either estimate prices anything, because what a machine has
+// to delete is not a property of the image or of the Artifact alone.
+type candidateContent struct {
+	image    domain.ImageWork
+	locality domain.LocalityState
+	fetch    int64
+	evidence []domain.ArtifactEvidence
+	eviction domain.DiskEviction
+}
+
+func contentFor(input SchedulingInput, offer domain.OfferSnapshot) candidateContent {
+	work, locality := input.Image.StartWork(offer.Images)
+	fetch, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	demand := domain.DiskDemand{
+		FreeBytes:          offer.Resources.EphemeralDiskBytes,
+		ImageHeldBytes:     input.Image.ResidentBytes(work),
+		ArtifactHeldBytes:  domain.ArtifactResidentBytes(input.Artifacts, fetch),
+		ImageFetchBytes:    work.TransferBytes,
+		ArtifactFetchBytes: fetch,
+	}
+	return candidateContent{
+		image:    work,
+		locality: locality,
+		fetch:    fetch,
+		evidence: evidence,
+		eviction: demand.Eviction(),
 	}
 }
 
@@ -540,27 +574,34 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 // everything is certainly zero seconds away from starting. Bytes assumed
 // because a host said nothing are not, and neither is a duration over a rate
 // nothing measured, so either one caps the answer at AssumedLinkConfidence.
-func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, modelVersion string) (contentWork, domain.LocalityState) {
-	work, locality := manifest.StartWork(offer.Images)
+//
+// A host too short of disk to hold everything this Run needs is charged for the
+// image content it would have to delete to make room, because content it gives
+// up is content it fetches again. That charge lands here rather than beside the
+// subtraction it corrects, because what a candidate owes before it can start is
+// one number and this is part of it.
+func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, content candidateContent, modelVersion string) contentWork {
+	work, locality := content.image, content.locality
+	transfer := work.TransferBytes + content.eviction.ImageBytes
 	estimate := domain.Estimate{
-		Source:       localitySource(locality, manifest, offer.Images),
+		Source:       pullSource(locality, manifest, offer.Images, content.eviction),
 		ModelVersion: modelVersion,
 	}
-	if work.None() {
+	if transfer == 0 && work.UnpackBytes == 0 {
 		if locality != domain.LocalityUnknown {
 			estimate.Confidence = 1
 		}
-		return establishedIfDescribed(estimate, locality), locality
+		return establishedIfDescribed(estimate, locality)
 	}
 	link := offer.RegistryDownload()
-	seconds := float64(work.TransferBytes*8)/1_000_000/link.Mbps +
+	seconds := float64(transfer*8)/1_000_000/link.Mbps +
 		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
 	estimate.Expected, estimate.P50, estimate.P90 = seconds, seconds, seconds*1.5
 	estimate.Confidence = link.Confidence
 	if work.UnpackBytes > 0 || locality == domain.LocalityUnknown {
 		estimate.Confidence = min(estimate.Confidence, domain.AssumedLinkConfidence)
 	}
-	return establishedIfDescribed(estimate, locality), locality
+	return establishedIfDescribed(estimate, locality)
 }
 
 // establishedIfDescribed splits one image prediction into the whole price and
@@ -589,16 +630,22 @@ func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalitySt
 // Confidence follows the same rule transfers already follow: a host that owes
 // nothing is certainly zero seconds away, and every other answer crosses a link
 // nothing has measured.
-func artifactEstimate(versions []domain.ArtifactVersion, inventory domain.ArtifactInventory, modelVersion string) (contentWork, []domain.ArtifactEvidence) {
-	fetch, evidence := domain.ArtifactFetchWork(versions, inventory)
-	source := artifactSource(inventory, evidence)
-	if len(evidence) == 0 {
-		return contentWork{predicted: domain.Estimate{Source: source, ModelVersion: modelVersion}}, nil
+//
+// A host with nowhere to put all of this is charged for the copies it would
+// have to delete, on the same rule the image transfer is: bytes given up are
+// bytes read again. That part of the answer is established wherever the copies
+// it is charged against were, because a machine only gives up content something
+// said was there.
+func artifactEstimate(inventory domain.ArtifactInventory, content candidateContent, modelVersion string) contentWork {
+	evicted := content.eviction.ArtifactBytes
+	source := artifactSource(inventory, content.evidence, content.eviction)
+	if len(content.evidence) == 0 {
+		return contentWork{predicted: domain.Estimate{Source: source, ModelVersion: modelVersion}}
 	}
 	return contentWork{
-		predicted:   objectStoreRead(fetch, source, modelVersion),
-		established: objectStoreRead(establishedFetchBytes(evidence), source, modelVersion),
-	}, evidence
+		predicted:   objectStoreRead(content.fetch+evicted, source, modelVersion),
+		established: objectStoreRead(establishedFetchBytes(content.evidence)+evicted, source, modelVersion),
+	}
 }
 
 // objectStoreRead is what reading these bytes out of the object store costs.
@@ -643,10 +690,12 @@ func objectStoreSeconds(bytes int64) float64 {
 // none, whose silence it was. A host that cannot enumerate its copies and a host
 // that enumerated and holds nothing are priced the same seconds and are
 // different problems for an operator.
-func artifactSource(inventory domain.ArtifactInventory, evidence []domain.ArtifactEvidence) string {
+func artifactSource(inventory domain.ArtifactInventory, evidence []domain.ArtifactEvidence, eviction domain.DiskEviction) string {
 	switch {
 	case len(evidence) == 0:
 		return ""
+	case eviction.ArtifactBytes > 0:
+		return diskEvictionSource
 	case inventory.Known:
 		return "artifact_inventory"
 	default:
@@ -654,12 +703,21 @@ func artifactSource(inventory domain.ArtifactInventory, evidence []domain.Artifa
 	}
 }
 
+// diskEvictionSource names the machine's own free disk as what this answer
+// rests on. It replaces the inventory that produced the subtraction, because a
+// reader who took the inventory at its word could not arrive at this number: the
+// bytes charged are bytes the host holds, and what put them back on the bill is
+// the room it has left rather than anything about the content.
+const diskEvictionSource = "disk_eviction"
+
 // localitySource names where this answer came from, and when there is no
 // answer, which silence it was. "Unknown" alone made a registry Mercator could
 // not read indistinguishable from a host that cannot enumerate itself, and
 // those are fixed by different people.
-func localitySource(locality domain.LocalityState, manifest domain.ImageManifest, inventory domain.ImageInventory) string {
+func pullSource(locality domain.LocalityState, manifest domain.ImageManifest, inventory domain.ImageInventory, eviction domain.DiskEviction) string {
 	switch {
+	case eviction.ImageBytes > 0:
+		return diskEvictionSource
 	case locality != domain.LocalityUnknown:
 		return "image_inventory"
 	case !manifest.Known && manifest.Unreadable != "":
