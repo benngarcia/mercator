@@ -259,15 +259,20 @@ func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLoca
 }
 
 // layerDiffIDs reads the uncompressed layer identities one image is made of.
-// An image the daemon cannot inspect between the listing and the read has gone,
-// which is a machine losing content rather than an error to fail a heartbeat on.
+// A read the daemon will not answer fails the whole report rather than yielding
+// an image with no layers, because the two are indistinguishable downstream and
+// only one of them is true: a node that reported an image it could not describe
+// would be priced a full cold pull, with full confidence, for content it is
+// holding. Losing a heartbeat is how a machine says it does not currently know
+// what it holds. An image removed between the listing and this read costs one
+// heartbeat, and the next one has the answer.
 func (docker *DockerRuntime) layerDiffIDs(ctx context.Context, imageID string) ([]string, error) {
 	if imageID == "" {
-		return nil, nil
+		return nil, fmt.Errorf("the daemon listed an image with no ID, so nothing can read its layers")
 	}
 	out, err := docker.run(ctx, "image", "inspect", imageID, "--format", "{{json .RootFS.Layers}}")
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("read the layers of image %s: %w", imageID, err)
 	}
 	var diffIDs []string
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &diffIDs); err != nil {

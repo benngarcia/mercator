@@ -134,10 +134,12 @@ func shadowPrice(record Record) domain.PriceModel {
 	}
 }
 
-// imageInventory projects what the node reported holding. It states digests
-// rather than a missing-byte count, because the node cannot know the size of an
-// image it never pulled, and answering that question with a zero is what made
-// every node look fully warm.
+// imageInventory projects what the node reported holding, in whichever digest
+// space its runtime can enumerate. It states what is here rather than what is
+// missing, because the node cannot know the size of an image it never pulled,
+// and answering that question with a zero is what made every node look fully
+// warm. What a Run still owes is the scheduler's subtraction against the
+// image's manifest, and only the scheduler holds both halves.
 func imageInventory(facts capability.NodeFacts) domain.ImageInventory {
 	inventory := domain.ImageInventory{
 		// An enrolled node always enumerates. An empty inventory from a node is

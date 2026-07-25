@@ -158,27 +158,27 @@ const (
 	LocalityUnknown LocalityState = "unknown"
 )
 
-// ImageLocality is exact OCI image presence on one node.
+// ImageLocality is exact OCI image presence on one node. Every field states
+// what this machine HOLDS. What an image still needs is a subtraction between
+// this and a resolved manifest, and only the control plane holds both: a node
+// that answered it would be restating a manifest it has no way to read.
 type ImageLocality struct {
-	// ManifestDigest identifies the image exactly. A tag is never image
-	// identity.
+	// ManifestDigest is the digest this image was pulled by, which for a
+	// multi-platform image is the index digest and never the platform manifest
+	// underneath it. It is the identity a Run is pinned to. A tag is never
+	// image identity.
 	ManifestDigest string          `json:"manifest_digest"`
 	Platform       domain.Platform `json:"platform"`
-	// LayerDigests is every compressed layer blob the manifest names, in
-	// manifest order. A container daemon cannot enumerate these: it discards the
-	// compressed form when it unpacks an image, which is why LayerDiffIDs sits
-	// beside this rather than instead of it.
+	// LayerDigests is the compressed layer blobs this node holds, named the way
+	// a registry names them. A container daemon cannot enumerate these: it
+	// discards the compressed form when it unpacks an image, which is why
+	// LayerDiffIDs sits beside this rather than instead of it.
 	LayerDigests []string `json:"layer_digests,omitempty"`
-	// LayerDiffIDs is the same layers named by their uncompressed content, in
-	// manifest order. This is what a Docker daemon can actually report, and
-	// comparing it against a registry manifest is what a resolved manifest
-	// carrying both spaces makes possible.
+	// LayerDiffIDs is the same held content named by its uncompressed form.
+	// This is what a Docker daemon can actually report, and comparing it
+	// against a registry manifest is what a resolved manifest carrying both
+	// spaces makes possible.
 	LayerDiffIDs []string `json:"layer_diff_ids,omitempty"`
-	// MissingLayerDigests is the subset the node does not hold.
-	MissingLayerDigests []string `json:"missing_layer_digests,omitempty"`
-	// MissingCompressedBytes is what still has to cross the network, which is
-	// the quantity transfer prediction actually needs.
-	MissingCompressedBytes int64 `json:"missing_compressed_bytes"`
 	// Unpacked reports whether the image is ready to run, not merely pulled.
 	Unpacked       bool          `json:"unpacked"`
 	State          LocalityState `json:"state"`

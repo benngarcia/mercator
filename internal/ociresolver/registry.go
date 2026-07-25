@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
@@ -28,6 +29,26 @@ var (
 	ErrManifestUnresolvable = errors.New("ociresolver: the registry has this image but no manifest for this platform")
 	ErrUnauthorized         = errors.New("ociresolver: the registry refused the credentials offered")
 )
+
+// Unreadable names why a resolution failed, in the vocabulary a Booking
+// Decision records. A throttled or unreachable registry is its own answer and
+// not one of the three refusals: it is the one an operator fixes by waiting or
+// by looking at the network, and recording it as a plain unknown is what let a
+// rate limit look like every candidate being equally warm.
+func Unreadable(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrImageUnknown):
+		return "registry_image_unknown"
+	case errors.Is(err, ErrManifestUnresolvable):
+		return "registry_manifest_unresolvable"
+	case errors.Is(err, ErrUnauthorized):
+		return "registry_unauthorized"
+	default:
+		return "registry_unreadable"
+	}
+}
 
 const (
 	mediaTypeDockerManifest     = "application/vnd.docker.distribution.manifest.v2+json"
@@ -57,10 +78,24 @@ type CredentialFunc func(registryHost string) BasicAuth
 //
 // Registry v2 is token auth over HTTP plus JSON, so it is net/http and
 // encoding/json. Nothing here needs a client library.
+//
+// Resolution happens on the run-create path, so a resolver that read again for
+// every placement would spend a registry's rate limit on an answer that cannot
+// change: a digest names one document forever. Resolved manifests are therefore
+// remembered, and only the reads that failed are ever repeated.
 type RegistryResolver struct {
 	client      *http.Client
 	credentials CredentialFunc
+
+	mu       sync.Mutex
+	resolved map[string]domain.ImageManifest
 }
+
+// resolvedLimit bounds what one process remembers. A daemon that has placed
+// thousands of distinct images has learned nothing worth keeping about the
+// oldest of them, and forgetting all of it costs one read each the next time
+// they are placed.
+const resolvedLimit = 4096
 
 type RegistryOption func(*RegistryResolver)
 
@@ -79,6 +114,7 @@ func NewRegistryResolver(options ...RegistryOption) *RegistryResolver {
 	resolver := &RegistryResolver{
 		client:      &http.Client{Timeout: 30 * time.Second},
 		credentials: func(string) BasicAuth { return BasicAuth{} },
+		resolved:    map[string]domain.ImageManifest{},
 	}
 	for _, option := range options {
 		option(resolver)
@@ -92,19 +128,55 @@ func NewRegistryResolver(options ...RegistryOption) *RegistryResolver {
 // not image identity and Mercator has already pinned the reference by the time
 // placement asks.
 func (r *RegistryResolver) ResolveManifest(ctx context.Context, imageRef string, platform domain.Platform) (domain.ImageManifest, error) {
+	key := imageRef + "|" + platform.String()
+	if manifest, remembered := r.recall(key); remembered {
+		return manifest, nil
+	}
+	manifest, err := r.read(ctx, imageRef, platform)
+	if err != nil {
+		return domain.ImageManifest{}, err
+	}
+	r.remember(key, manifest)
+	return manifest, nil
+}
+
+// read is one resolution: the platform manifest, then the config blob naming
+// the same layers uncompressed. Both share one bearer token, because they are
+// one scope on one repository and a registry counts every mint.
+func (r *RegistryResolver) read(ctx context.Context, imageRef string, platform domain.Platform) (domain.ImageManifest, error) {
 	ref, err := parseDigestRef(imageRef)
 	if err != nil {
 		return domain.ImageManifest{}, err
 	}
-	manifest, digest, err := r.platformManifest(ctx, ref, platform)
+	read := &registryRead{ref: ref}
+	manifest, err := r.platformManifest(ctx, read, platform)
 	if err != nil {
 		return domain.ImageManifest{}, err
 	}
-	diffIDs, err := r.configDiffIDs(ctx, ref, manifest.Config.Digest)
+	diffIDs, err := r.configDiffIDs(ctx, read, manifest.Config.Digest)
 	if err != nil {
 		return domain.ImageManifest{}, err
 	}
-	return assembleManifest(digest, manifest.Layers, diffIDs)
+	// The image is named by the digest the Run is pinned to, which is the name
+	// a host reports having pulled. The platform manifest under an index is how
+	// its content was found and is a name no container daemon ever says.
+	return assembleManifest(ref.Digest, manifest.Layers, diffIDs)
+}
+
+func (r *RegistryResolver) recall(key string) (domain.ImageManifest, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	manifest, remembered := r.resolved[key]
+	return manifest, remembered
+}
+
+func (r *RegistryResolver) remember(key string, manifest domain.ImageManifest) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.resolved) >= resolvedLimit {
+		clear(r.resolved)
+	}
+	r.resolved[key] = manifest
 }
 
 // assembleManifest zips the two digest spaces together. The OCI image
@@ -131,38 +203,38 @@ func assembleManifest(digest string, layers []registryLayer, diffIDs []string) (
 
 // platformManifest follows an index to the one manifest built for this
 // platform. A registry that serves a single manifest is already the answer.
-func (r *RegistryResolver) platformManifest(ctx context.Context, ref digestRef, platform domain.Platform) (registryManifest, string, error) {
-	body, contentType, err := r.get(ctx, ref, "manifests/"+ref.Digest, manifestAccept)
+func (r *RegistryResolver) platformManifest(ctx context.Context, read *registryRead, platform domain.Platform) (registryManifest, error) {
+	body, contentType, err := r.get(ctx, read, "manifests/"+read.ref.Digest, manifestAccept)
 	if err != nil {
-		return registryManifest{}, "", err
+		return registryManifest{}, err
 	}
 	var document registryManifest
 	if err := json.Unmarshal(body, &document); err != nil {
-		return registryManifest{}, "", fmt.Errorf("ociresolver: decode manifest for %s: %w", ref, err)
+		return registryManifest{}, fmt.Errorf("ociresolver: decode manifest for %s: %w", read.ref, err)
 	}
 	if !isIndex(contentType, document) {
-		return document, ref.Digest, nil
+		return document, nil
 	}
 	selected, err := selectPlatform(document.Manifests, platform)
 	if err != nil {
-		return registryManifest{}, "", fmt.Errorf("%w: %s on %s", err, ref, platform)
+		return registryManifest{}, fmt.Errorf("%w: %s on %s", err, read.ref, platform)
 	}
-	body, _, err = r.get(ctx, ref, "manifests/"+selected, manifestAccept)
+	body, _, err = r.get(ctx, read, "manifests/"+selected, manifestAccept)
 	if err != nil {
-		return registryManifest{}, "", err
+		return registryManifest{}, err
 	}
 	var child registryManifest
 	if err := json.Unmarshal(body, &child); err != nil {
-		return registryManifest{}, "", fmt.Errorf("ociresolver: decode manifest %s for %s: %w", selected, ref, err)
+		return registryManifest{}, fmt.Errorf("ociresolver: decode manifest %s for %s: %w", selected, read.ref, err)
 	}
-	return child, selected, nil
+	return child, nil
 }
 
-func (r *RegistryResolver) configDiffIDs(ctx context.Context, ref digestRef, configDigest string) ([]string, error) {
+func (r *RegistryResolver) configDiffIDs(ctx context.Context, read *registryRead, configDigest string) ([]string, error) {
 	if configDigest == "" {
-		return nil, fmt.Errorf("%w: %s names no config blob", ErrManifestUnresolvable, ref)
+		return nil, fmt.Errorf("%w: %s names no config blob", ErrManifestUnresolvable, read.ref)
 	}
-	body, _, err := r.get(ctx, ref, "blobs/"+configDigest, "application/json")
+	body, _, err := r.get(ctx, read, "blobs/"+configDigest, "application/json")
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +244,7 @@ func (r *RegistryResolver) configDiffIDs(ctx context.Context, ref digestRef, con
 		} `json:"rootfs"`
 	}
 	if err := json.Unmarshal(body, &config); err != nil {
-		return nil, fmt.Errorf("ociresolver: decode config %s for %s: %w", configDigest, ref, err)
+		return nil, fmt.Errorf("ociresolver: decode config %s for %s: %w", configDigest, read.ref, err)
 	}
 	return config.RootFS.DiffIDs, nil
 }
@@ -181,12 +253,22 @@ var manifestAccept = strings.Join([]string{
 	mediaTypeOCIIndex, mediaTypeOCIManifest, mediaTypeDockerManifestList, mediaTypeDockerManifest,
 }, ", ")
 
+// registryRead is one resolution's conversation with one registry: the
+// reference being read and the bearer token minted for it. A manifest takes
+// three reads of the same repository at the same scope, and minting a token for
+// each would spend three times the rate limit on one answer.
+type registryRead struct {
+	ref   digestRef
+	token string
+}
+
 // get performs one registry read, obtaining a bearer token first if the
 // registry asks for one. The token exchange is the whole of registry v2 auth:
 // the 401 names the realm, the service, and the scope, and the realm mints a
 // token for exactly that scope.
-func (r *RegistryResolver) get(ctx context.Context, ref digestRef, path, accept string) ([]byte, string, error) {
-	response, err := r.do(ctx, ref, path, accept, "")
+func (r *RegistryResolver) get(ctx context.Context, read *registryRead, path, accept string) ([]byte, string, error) {
+	ref := read.ref
+	response, err := r.do(ctx, read, path, accept)
 	if err != nil {
 		return nil, "", err
 	}
@@ -200,11 +282,10 @@ func (r *RegistryResolver) get(ctx context.Context, ref digestRef, path, accept 
 		if challenge.Realm == "" {
 			return nil, "", fmt.Errorf("%w: %s refused the read of %s and challenged with %q", ErrUnauthorized, ref.Registry, ref, header)
 		}
-		token, tokenErr := r.token(ctx, ref, challenge)
-		if tokenErr != nil {
-			return nil, "", tokenErr
+		if read.token, err = r.token(ctx, ref, challenge); err != nil {
+			return nil, "", err
 		}
-		if response, err = r.do(ctx, ref, path, accept, token); err != nil {
+		if response, err = r.do(ctx, read, path, accept); err != nil {
 			return nil, "", err
 		}
 	}
@@ -225,7 +306,8 @@ func (r *RegistryResolver) get(ctx context.Context, ref digestRef, path, accept 
 	}
 }
 
-func (r *RegistryResolver) do(ctx context.Context, ref digestRef, path, accept, token string) (*http.Response, error) {
+func (r *RegistryResolver) do(ctx context.Context, read *registryRead, path, accept string) (*http.Response, error) {
+	ref := read.ref
 	endpoint := ref.Scheme() + "://" + ref.Registry + "/v2/" + ref.Repository + "/" + path
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -233,8 +315,8 @@ func (r *RegistryResolver) do(ctx context.Context, ref digestRef, path, accept, 
 	}
 	request.Header.Set("Accept", accept)
 	switch credentials := r.credentials(ref.Registry); {
-	case token != "":
-		request.Header.Set("Authorization", "Bearer "+token)
+	case read.token != "":
+		request.Header.Set("Authorization", "Bearer "+read.token)
 	case credentials.Username != "":
 		request.SetBasicAuth(credentials.Username, credentials.Password)
 	}

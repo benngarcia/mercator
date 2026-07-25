@@ -237,16 +237,34 @@ func (offer OfferSnapshot) KeepsWhatItRuns() bool {
 // has nothing to do with either model.
 const DefaultRegistryDownloadMbps = 500.0
 
-// RegistryDownloadMbps is how fast this host pulls image content: its own
-// measured pessimistic (p10) registry throughput when something measured it,
-// and the standing assumption otherwise.
-func (offer OfferSnapshot) RegistryDownloadMbps() float64 {
+// AssumedLinkConfidence is how much a transfer duration is worth when the bytes
+// that have to move are measured and the link they cross is not. It is
+// deliberately short of certainty: nothing measures a host's registry
+// throughput today, so a full-confidence duration would be an assumption
+// wearing a measurement's clothes. What is certain in that case is the byte
+// count, which is what tells a warm candidate from a cold one; the seconds it
+// takes are the guess.
+const AssumedLinkConfidence = 0.5
+
+// MeasuredRegistryDownloadMbps is this host's own pessimistic (p10) registry
+// throughput, and whether anything measured it. The second answer is the one
+// that keeps an estimate honest: a duration derived from the standing
+// assumption is not worth what a measured one is.
+func (offer OfferSnapshot) MeasuredRegistryDownloadMbps() (float64, bool) {
 	for _, fact := range offer.Network.Download {
 		if fact.Scope == NetworkScopeRegistry && fact.Statistic == "p10" && fact.ValueMbps > 0 {
-			return fact.ValueMbps
+			return fact.ValueMbps, true
 		}
 	}
-	return DefaultRegistryDownloadMbps
+	return DefaultRegistryDownloadMbps, false
+}
+
+// RegistryDownloadMbps is how fast this host pulls image content: its own
+// measured throughput when something measured it, and the standing assumption
+// otherwise.
+func (offer OfferSnapshot) RegistryDownloadMbps() float64 {
+	mbps, _ := offer.MeasuredRegistryDownloadMbps()
+	return mbps
 }
 
 type ResourceInventory struct {
@@ -410,7 +428,19 @@ type ImageManifest struct {
 	// be told apart on image locality, so the term is zero for all of them and
 	// the comparison is unaffected. The only cost is understating absolute
 	// start latency, which is recorded rather than hidden.
-	Known  bool         `json:"known"`
+	Known bool `json:"known"`
+	// Unreadable is why nothing could state this image's content, when Known is
+	// false. An image nobody pushed, a platform nothing was built for,
+	// credentials a registry refused, and a registry that could not be reached
+	// at all are four different things for an operator to fix, and the Booking
+	// Decision is where they look for the reason a placement stopped telling
+	// warm hosts from cold ones.
+	Unreadable string `json:"unreadable,omitempty"`
+	// Digest is the identity the Run is pinned by, which is the same digest a
+	// host reports having pulled. For a multi-platform image that is the index
+	// digest and not the platform manifest underneath it: the layers below
+	// describe one platform's build, but the name both sides can agree on is
+	// the one the reference carries.
 	Digest string       `json:"digest,omitempty"`
 	Layers []ImageLayer `json:"layers,omitempty"`
 }
@@ -451,6 +481,18 @@ type ImageLayer struct {
 	Digest          string `json:"digest"`
 	DiffID          string `json:"diff_id,omitempty"`
 	CompressedBytes int64  `json:"compressed_bytes"`
+}
+
+// ReferenceDigest is the digest an image reference is pinned to, and empty for
+// a reference that names a tag instead. It is the only part of a reference two
+// machines can compare: a registry host and a repository path are how content
+// is reached, and the digest is what the content is.
+func ReferenceDigest(reference string) string {
+	_, digest, found := strings.Cut(reference, "@")
+	if !found {
+		return ""
+	}
+	return digest
 }
 
 type CapacityEvidence struct {

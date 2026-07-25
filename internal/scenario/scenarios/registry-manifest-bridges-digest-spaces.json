@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "A registry manifest is the only thing that can state a layer in both digest spaces at once, and this fixture is what needs it. The warm candidate is a Docker host: it enumerates its layers as uncompressed diff IDs, because that is the only name a container daemon has for content it has already unpacked, and it can never pronounce the compressed blob digest the registry served. The manifest carries both names for the same bytes, so the host is recognised as holding the image whole and pays nothing, while an identical but cheaper host holding neither pays the full 24.3GB transfer and loses on it. The second Run asks for an image the registry cannot resolve a manifest for. Every candidate then records zero pull seconds with source \"unknown\" and no confidence, which is silence staying uncertainty instead of turning into warmth: the cheapest machine wins because nothing could be told apart on locality, not because anything was found to be warm.",
+  "summary": "A registry manifest is the only thing that can state a layer in both digest spaces at once, and this fixture is what needs it. The warm candidate is a Docker host: it enumerates its layers as uncompressed diff IDs, because that is the only name a container daemon has for content it has already unpacked, and it can never pronounce the compressed blob digest the registry served. The manifest carries both names for the same bytes, so the host is recognised as holding every layer and pays nothing, while an identical but cheaper host holding neither pays the full 24.3GB transfer and loses on it. That cold answer is confident about the bytes and not about the link they cross, which nothing has measured. The second Run asks for an image the registry refuses to describe to Mercator while the machines can still pull it, which is what a control plane without a registry credential actually looks like. Every candidate then records zero pull seconds with the reason the registry gave and no confidence, which is silence staying uncertainty instead of turning into warmth: the cheapest machine wins because nothing could be told apart on locality, not because anything was found to be warm.",
   "classification": "green",
   "world": {
     "images": {
@@ -19,7 +19,14 @@
         ]
       },
       "mystery@sha256:4a90ab7a93e3324470f02fba88cf9f7b528798a067f860391e0a1aba595abb0f": {
-        "registry": "unresolvable"
+        "registry": "unauthorized",
+        "layers": [
+          {
+            "digest": "sha256:c0ffee9e1d4f2a3b5c6d7e8f9012345678901234567890abcdef1234567890ab",
+            "diff_id": "sha256:d1f5ee0b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789ab",
+            "size": "800MB"
+          }
+        ]
       }
     },
     "rentals": [
@@ -63,7 +70,7 @@
               "at_least": 380
             },
             "pull_source": "image_inventory",
-            "pull_confidence": 1
+            "pull_confidence": 0.5
           }
         }
       }
@@ -72,7 +79,7 @@
       "advance": "30m"
     },
     {
-      "submit": "unresolvable",
+      "submit": "unreadable",
       "request": {
         "image": "mystery@sha256:4a90ab7a93e3324470f02fba88cf9f7b528798a067f860391e0a1aba595abb0f",
         "expected_runtime": "10m",
@@ -86,13 +93,13 @@
           "docker-host": {
             "feasible": true,
             "pull_seconds": 0,
-            "pull_source": "unknown",
+            "pull_source": "registry_unauthorized",
             "pull_confidence": 0
           },
           "bare-host": {
             "feasible": true,
             "pull_seconds": 0,
-            "pull_source": "unknown",
+            "pull_source": "registry_unauthorized",
             "pull_confidence": 0
           }
         }

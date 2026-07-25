@@ -31,7 +31,9 @@ func TestPlacementReadsTheHostAWorkloadWarmed(t *testing.T) {
 		t.Fatalf("list offers: %v", err)
 	}
 	offer := offerByID(t, offers, "rental-warm")
-	if !offer.Images.Holds(arrival.Request.Image) {
+	// The host reports the image under the digest it pulled by, which is what a
+	// resolved manifest names it too.
+	if !offer.Images.Holds(domain.ReferenceDigest(arrival.Request.Image)) {
 		t.Fatalf("Placement cannot see the image the host just ran: %+v", offer.Images)
 	}
 	if !offer.Images.ObservedAt.Equal(world.nowTime()) {
@@ -352,12 +354,12 @@ func TestARentalHoldsWhatItRanOnlyOnceThePullCompletes(t *testing.T) {
 	}
 
 	dispatched := offerByID(t, world.truthSnapshot().Offers, "rental-warm").Images
-	if dispatched.Holds(arrival.Request.Image) {
+	if dispatched.Holds(domain.ReferenceDigest(arrival.Request.Image)) {
 		t.Fatalf("the host holds the image at dispatch, before its bytes moved: %+v", dispatched)
 	}
 	world.setNow(world.nowTime().Add(time.Hour))
 	held := offerByID(t, world.truthSnapshot().Offers, "rental-warm").Images
-	if !held.Holds(arrival.Request.Image) {
+	if !held.Holds(domain.ReferenceDigest(arrival.Request.Image)) {
 		t.Fatalf("Rental that ran %q does not hold it whole: %+v", arrival.Request.Image, held)
 	}
 	for _, layer := range world.images[arrival.Request.Image].Layers {

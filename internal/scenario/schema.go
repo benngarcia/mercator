@@ -194,12 +194,28 @@ func (w WorldSpec) Start() time.Time {
 }
 
 type ImageSpec struct {
+	// Layers is what this image is made of, which is world truth and stands
+	// however the registry answers. A host can hold an image nothing can look
+	// up, which is what makes a refused manifest uncertainty rather than
+	// absence.
 	Layers []LayerSpec `json:"layers,omitempty"`
 	// Registry is what the simulated registry answers when asked to resolve
 	// this image. The default is a manifest. The alternatives are the other
 	// ways a real registry says no, which a scenario needs to be able to tell
 	// apart because an operator acts on them differently.
 	Registry RegistryAnswer `json:"registry,omitempty"`
+}
+
+// diffIDCount is how many of this image's layers state the name a container
+// daemon knows them by.
+func (image ImageSpec) diffIDCount() int {
+	named := 0
+	for _, layer := range image.Layers {
+		if layer.DiffID != "" {
+			named++
+		}
+	}
+	return named
 }
 
 // RegistryAnswer is how the simulated registry responds to a resolution. An
@@ -999,14 +1015,11 @@ func (w WorldSpec) validate() error {
 		if !image.Registry.valid() {
 			return fmt.Errorf("image %q: unknown registry answer %q", ref, image.Registry)
 		}
-		// An image the registry cannot resolve names no layers, because naming
-		// them would be the fixture asserting content nothing could have read.
-		if image.Registry != RegistryResolves {
-			if len(image.Layers) > 0 {
-				return fmt.Errorf("image %q answers %q and cannot also state layers", ref, image.Registry)
-			}
-			continue
-		}
+		// An image states its content whatever the registry will say about it.
+		// What is running and what can be read about it are two different facts,
+		// and the commonest real failure is exactly their disagreement: a
+		// control plane that cannot resolve a manifest against a node that can
+		// still pull the image.
 		if len(image.Layers) == 0 {
 			return fmt.Errorf("image %q needs at least one layer", ref)
 		}
@@ -1018,6 +1031,19 @@ func (w WorldSpec) validate() error {
 				return fmt.Errorf("image %q: layer %s states an inexact diff ID %q", ref, layer.Digest, layer.DiffID)
 			}
 		}
+		// A real resolver reads diff IDs from one config blob that names one for
+		// every layer, so an image names them all or names none. Half would let
+		// a fixture encode a manifest production cannot produce, and silently
+		// double-charge exactly the layers that omitted one.
+		if named := image.diffIDCount(); named != 0 && named != len(image.Layers) {
+			return fmt.Errorf(
+				"image %q names %d diff IDs for %d layers: a config blob names one for every layer or none",
+				ref, named, len(image.Layers),
+			)
+		}
+	}
+	if err := w.validateDiffIDReporting(); err != nil {
+		return err
 	}
 	artifactIDs := map[string]bool{}
 	for _, artifact := range w.Artifacts {
@@ -1146,6 +1172,34 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("duplicate runtime model %q", key)
 		}
 		runtimeModels[key] = true
+	}
+	return nil
+}
+
+// validateDiffIDReporting refuses a world where a host speaks a vocabulary the
+// catalog never writes. A Rental that reports diff IDs enumerates nothing at all
+// for a layer that names none, so it would offer an inventory that is Known and
+// empty: a machine holding every byte, priced a full cold pull at full
+// confidence, with the fixture green either way. That is a world the Lab must
+// not be able to state.
+func (w WorldSpec) validateDiffIDReporting() error {
+	reporter := ""
+	for _, rental := range w.Rentals {
+		if rental.ReportsDiffIDs {
+			reporter = rental.ID
+			break
+		}
+	}
+	if reporter == "" {
+		return nil
+	}
+	for ref, image := range w.Images {
+		if image.diffIDCount() == 0 {
+			return fmt.Errorf(
+				"rental %q reports diff IDs and image %q names none, so that host would report holding nothing it holds",
+				reporter, ref,
+			)
+		}
 	}
 	return nil
 }

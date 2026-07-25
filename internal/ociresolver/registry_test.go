@@ -135,8 +135,12 @@ func TestResolverStatesEveryLayerInBothDigestSpaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if !manifest.Known || manifest.Digest != amd64Digest {
-		t.Fatalf("manifest = %+v, want the amd64 child manifest", manifest)
+	// The layers are the amd64 build's, and the image's name is the digest the
+	// reference pinned. That is the only name a host ever says back: a container
+	// daemon records the digest it pulled by and has no word for the platform
+	// manifest the registry selected underneath it.
+	if !manifest.Known || manifest.Digest != indexDigest {
+		t.Fatalf("manifest = %+v, want the amd64 layers named by the pinned digest %s", manifest, indexDigest)
 	}
 	want := []domain.ImageLayer{
 		{Digest: baseBlobDigest, DiffID: baseDiffID, CompressedBytes: 24_000_000_000},
@@ -178,16 +182,70 @@ func TestResolverObtainsATokenForTheScopeTheRegistryAsked(t *testing.T) {
 		t.Fatalf("resolve: %v", err)
 	}
 
-	if len(registry.tokenRequests) == 0 {
-		t.Fatal("the resolver never asked for a token")
+	// One token for the three reads. A registry counts every mint against the
+	// same limit it counts reads against, and the three reads are one scope on
+	// one repository, so minting per read spends a rate limit on nothing.
+	if len(registry.tokenRequests) != 1 {
+		t.Fatalf("token requests = %v, want one token reused across the reads it authorizes", registry.tokenRequests)
 	}
-	for _, scope := range registry.tokenRequests {
-		if scope != "repository:library/trainer:pull" {
-			t.Errorf("token scope = %q, want the scope the challenge named", scope)
-		}
+	if scope := registry.tokenRequests[0]; scope != "repository:library/trainer:pull" {
+		t.Errorf("token scope = %q, want the scope the challenge named", scope)
 	}
 	if registry.authorizedReads != 3 {
 		t.Errorf("authorized reads = %d, want the index, the child manifest, and the config", registry.authorizedReads)
+	}
+}
+
+// TestResolverReadsOneImageOnce is what keeps placement off a registry's rate
+// limit. A digest names one document forever, so the second placement of the
+// same image has nothing to learn from asking again, and a registry that
+// answers 429 to the thirty-fourth placement would silently take every
+// candidate back to looking equally warm.
+func TestResolverReadsOneImageOnce(t *testing.T) {
+	registry := &fakeRegistry{documents: fullCatalog()}
+	resolver, host := startRegistry(t, registry)
+	reference := host + "/library/trainer@" + indexDigest
+
+	first, err := resolver.ResolveManifest(context.Background(), reference, linuxAMD64)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	second, err := resolver.ResolveManifest(context.Background(), reference, linuxAMD64)
+	if err != nil {
+		t.Fatalf("resolve again: %v", err)
+	}
+
+	if registry.authorizedReads != 3 || len(registry.tokenRequests) != 1 {
+		t.Errorf(
+			"the second resolution cost %d further reads and %d further tokens, want none",
+			registry.authorizedReads-3, len(registry.tokenRequests)-1,
+		)
+	}
+	if second.Digest != first.Digest || len(second.Layers) != len(first.Layers) {
+		t.Errorf("remembered manifest = %+v, want what the registry answered: %+v", second, first)
+	}
+}
+
+// TestResolverRetriesAnImageItCouldNotRead is the other half of remembering: a
+// refusal is a fact about a moment, not about the image, so a registry that
+// recovers is asked again rather than being permanently believed.
+func TestResolverRetriesAnImageItCouldNotRead(t *testing.T) {
+	registry := &fakeRegistry{documents: map[string]string{}}
+	resolver, host := startRegistry(t, registry)
+	reference := host + "/library/trainer@" + indexDigest
+
+	if _, err := resolver.ResolveManifest(context.Background(), reference, linuxAMD64); !errors.Is(err, ErrImageUnknown) {
+		t.Fatalf("resolve error = %v, want %v", err, ErrImageUnknown)
+	}
+	registry.documents = fullCatalog()
+
+	manifest, err := resolver.ResolveManifest(context.Background(), reference, linuxAMD64)
+
+	if err != nil {
+		t.Fatalf("resolve after the registry recovered: %v", err)
+	}
+	if !manifest.Known {
+		t.Fatal("the resolver kept answering with the failure instead of reading the image the registry now serves")
 	}
 }
 

@@ -13,6 +13,11 @@ import (
 
 var worldStart = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 
+// wideImage is digest-pinned, like every reference Mercator places. A tag names
+// no content, so a host could not report holding it and a manifest could not
+// name it.
+const wideImage = "wide@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
 func newLayeredWorld(t *testing.T) *World {
 	t.Helper()
 	world := NewWorld(NewClock(worldStart))
@@ -152,20 +157,20 @@ func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 // absent at the instant the container was dispatched.
 func TestWorldHoldsARunningImageOnlyOnceItsBytesHaveArrived(t *testing.T) {
 	world := newLayeredWorld(t)
-	world.DefineImage("wide:v1", Image{Layers: []Layer{{Digest: "layer-wide", Bytes: 125_000_000}}})
+	world.DefineImage(wideImage, Image{Layers: []Layer{{Digest: "layer-wide", Bytes: 125_000_000}}})
 	if err := world.AddMachine(&Machine{Offer: rentalOffer("rental-cold")}); err != nil {
 		t.Fatalf("add machine: %v", err)
 	}
 
-	if _, err := world.Launch(context.Background(), worldLaunch("rental-cold", "wide:v1")); err != nil {
+	if _, err := world.Launch(context.Background(), worldLaunch("rental-cold", wideImage)); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 
-	if held := worldOffers(t, world)["rental-cold"].Images; held.Holds("wide:v1") {
+	if held := worldOffers(t, world)["rental-cold"].Images; held.Holds(domain.ReferenceDigest(wideImage)) {
 		t.Fatalf("the host holds the image at dispatch, before any byte moved: %+v", held)
 	}
 	world.Clock().Advance(2 * time.Second)
-	if held := worldOffers(t, world)["rental-cold"].Images; !held.Holds("wide:v1") || !held.HoldsLayer(domain.ImageLayer{Digest: "layer-wide"}) {
+	if held := worldOffers(t, world)["rental-cold"].Images; !held.Holds(domain.ReferenceDigest(wideImage)) || !held.HoldsLayer(domain.ImageLayer{Digest: "layer-wide"}) {
 		t.Fatalf("the host does not hold what it finished pulling: %+v", held)
 	}
 }

@@ -213,6 +213,26 @@ func TestLoadBlueprintRequiresExactLayerDigests(t *testing.T) {
 	}
 }
 
+// TestLoadBlueprintRejectsAWorldNoRegistryCouldServe holds the two shapes that
+// would let a fixture read green while stating a world production cannot
+// produce. A real config blob names one diff ID for every layer or none, and a
+// host that reports diff IDs against layers naming none enumerates nothing at
+// all: it would offer an inventory that is Known and empty, so a machine
+// holding every byte would be priced a full cold pull at full confidence while
+// the world's own transfer model moved nothing.
+func TestLoadBlueprintRejectsAWorldNoRegistryCouldServe(t *testing.T) {
+	for _, testCase := range []struct{ path, want string }{
+		{path: "testdata/blueprints/invalid/half-named-diff-ids.json", want: "one for every layer or none"},
+		{path: "testdata/blueprints/invalid/diff-id-host-without-diff-ids.json", want: "reports diff IDs"},
+	} {
+		_, err := LoadBlueprint(testCase.path)
+
+		if err == nil || !strings.Contains(err.Error(), testCase.want) {
+			t.Fatalf("loading %s gave %v, want a refusal naming %q", testCase.path, err, testCase.want)
+		}
+	}
+}
+
 func TestLoadBlueprintRejectsTaggedImageIdentity(t *testing.T) {
 	_, err := LoadBlueprint("testdata/blueprints/invalid/image-tag.json")
 

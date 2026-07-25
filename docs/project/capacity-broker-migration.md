@@ -138,6 +138,59 @@ complete because it works against a live provider.
   resolver, which is what stops image locality from being dead outside the Lab:
   it had no manifest source, so every manifest was unknown and every candidate
   in the real product scored identically on locality.
+- [x] 2026-07-24: Make the two sides of image identity the same string, and stop
+  three answers from being stated more confidently than they were known. Two
+  reviews falsified parts of the commit above, and each defect was a place where
+  a name or a confidence was asserted rather than established:
+  - the resolver named an image by the platform manifest it selected, while a
+    Docker host reports the digest it pulled by, which for a multi-platform image
+    is the index above that manifest. The whole-image fast path in
+    `TransferBytes` could therefore never fire in production. The manifest is now
+    named by the digest the Run is pinned to, which is the one name both sides
+    can say;
+  - `broker.launchOnNode` stamped the whole reference into
+    `LaunchWorkloadCommand.ManifestDigest`, so the agent built
+    `repo@repo@sha256:...` to run and reported an image under a name no manifest
+    could match. It carries the digest;
+  - `nodeagent.layerDiffIDs` discarded every error from `docker image inspect`
+    and still reported the image hot with no layers, which prices a fully warm
+    host a full cold pull at full confidence. A daemon that will not describe
+    what it listed now fails the report, and the node loses a heartbeat instead
+    of inventing an answer about itself;
+  - `capability.ImageLocality` defined `LayerDigests` as every layer the manifest
+    names and carried a `MissingLayerDigests` subset nothing wrote or read, while
+    the one consumer treated the list as content held. Every field now states
+    what the machine holds, and the two unread fields are gone: what is missing
+    is a subtraction only the control plane can make;
+  - `pullEstimate` stamped confidence 1 on a duration whose speed was
+    `DefaultRegistryDownloadMbps`, an explicitly unmeasured assumption that no
+    production node overrides. Bytes and seconds are now separated: a host that
+    holds everything is certainly zero seconds away, and a host that has to fetch
+    carries `domain.AssumedLinkConfidence` until something measures its link;
+  - an unresolved manifest recorded source `unknown` for every candidate, so a
+    throttled registry was indistinguishable from a host that cannot enumerate
+    itself. `ImageManifest.Unreadable` carries why, `ociresolver.Unreadable`
+    classifies it, and the estimate's source names it;
+  - resolution ran unbounded and uncached on the run-create path: nine requests
+    and three token mints per placement, which reaches Docker Hub's anonymous
+    limit in about thirty-three placements, and a registry that accepts a
+    connection and answers nothing could outlive the request. A digest names one
+    document forever, so successful resolutions are remembered, one token serves
+    the three reads of one resolution, and Placement gives a registry a bounded
+    budget;
+  - the Blueprint launched an image the registry refused to describe and had the
+    world retain it after a zero-byte pull, so the corpus asserted a host warming
+    on content nothing could serve. `WorldSpec` no longer forbids an unreadable
+    image from stating its layers, because what is running and what can be read
+    about it are two facts: the fixture is now the case an operator actually has,
+    a control plane without a registry credential placing onto machines that can
+    still pull;
+  - a fixture could declare a diff-ID-reporting host against layers naming no
+    diff IDs, producing an inventory that is `Known` and empty. Both shapes a
+    registry cannot serve are refused at load;
+  - the diff-ID clause added to `CheckWarmingDoesNotShrinkInventory` was
+    unreachable by any test. Every clause of that law is now shown failing on the
+    transform it exists to catch.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -285,28 +338,46 @@ Each claim it makes is held by a deliberate break that fails it:
   bridge itself: nothing else in the tree can tell that a compressed blob digest
   and an uncompressed diff ID name the same bytes;
 - making `pullEstimate` claim confidence in an unknown answer fails its second
-  step on all four assertions, `pull_source: want "unknown", got
-  "image_inventory"` and `pull_confidence: want 0, got 1` for both candidates, so
-  the fixture really is what keeps silence from becoming warmth;
+  step, `pull_source: want "registry_unauthorized", got "unknown"` for both
+  candidates, so the fixture really is what keeps silence from becoming warmth;
+- letting `pullEstimate` claim full confidence in a duration derived from the
+  unmeasured 500 Mbps assumption fails it on the cold candidate, and fails
+  `TestPlacementPricesAWarmNodeFromTheResolvedManifest` with `pull confidence =
+  1, want 0.5: the bytes are counted and the link they cross is assumed`;
 - removing `orchestrator.WithImageManifests` from `internal/daemon/runtime.go`
-  fails `TestPlacementPricesAWarmNodeFromTheResolvedManifest` with
-  `pull estimate = {... Confidence:0 Source:unknown ...}`. That is exactly the
-  state the production daemon shipped in: no manifest source, so every candidate
-  looked alike on locality however warm it was;
+  fails `TestPlacementPricesAWarmNodeFromTheResolvedManifest`. That is exactly
+  the state the production daemon shipped in: no manifest source, so every
+  candidate looked alike on locality however warm it was;
 - dropping the diff-ID projection from `internal/node/offers.go` fails the same
   test with `the node never reported the layers it unpacked`;
 - returning no diff IDs from the resolver fails the network-gated conformance
-  case with `layer 0 diff ID = , the daemon reports sha256:66cb17ea...`.
+  case with `layer 0 diff ID = , the daemon reports sha256:66cb17ea...`;
+- naming the resolved manifest after the platform manifest instead of the pinned
+  digest fails the conformance case with `resolved digest =
+  sha256:e0e8b3cb..., the daemon holds this image under sha256:fd8d9aa6...: no
+  host could ever be recognised as holding it whole`, and fails
+  `TestResolverStatesEveryLayerInBothDigestSpaces`;
+- restoring the whole reference into `LaunchWorkloadCommand.ManifestDigest`
+  fails all three node-placement warmth cases in `internal/daemon`, starting with
+  `the node never reported holding the image it ran`;
+- restoring `return nil, nil` to `nodeagent.layerDiffIDs` fails
+  `TestDockerRuntimeReportsNothingWhenItCannotReadWhatItHolds` with the agent
+  reporting `State:hot ... LayerDiffIDs:[]` for a daemon that answered nothing;
+- deleting any clause of `CheckWarmingDoesNotShrinkInventory` fails
+  `TestSchedulingMetamorphisms/warming_that_loses_content`, which drives each
+  clause with the one shrinking transform it exists to catch.
 
-Two conformance cases run against registries that are real rather than
-simulated, and skip rather than fail when the machine has no network or no
+Three conformance cases run against registries and daemons that are real rather
+than simulated, and skip rather than fail when the machine has no network or no
 Docker daemon:
 
 - `TestRegistryResolverAgreesWithDockerAboutAPublicImage` resolves
-  `docker.io/library/busybox` through anonymous registry token auth and asserts
-  the layer blob digests and compressed sizes match `docker manifest inspect`
-  and the diff IDs match `docker image inspect --format '{{json
-  .RootFS.Layers}}'` for the same digest;
+  `docker.io/library/busybox` through anonymous registry token auth. It asserts
+  the resolved digest is the one the daemon holds the image under, which is the
+  index digest and not the platform manifest below it, and that the layer blob
+  digests and compressed sizes match `docker manifest inspect` of the platform
+  child read back through the index, and the diff IDs match `docker image
+  inspect --format '{{json .RootFS.Layers}}'`;
 - `TestRegistryResolverAuthenticatesAgainstAPrivateRegistry` starts `registry:2`
   behind the committed htpasswd fixture through the local Docker daemon, pushes
   an image into it, and resolves it with credentials. The same read without
@@ -314,16 +385,49 @@ Docker daemon:
   could have been doing nothing;
 - `TestDockerRuntimeReportsTheLayersItUnpacked` reads node facts from the real
   Docker daemon and asserts the agent reports exactly the diff IDs the daemon
-  holds.
+  holds, under the digest `docker images --digests` names it by. Together with
+  the case above, that is the whole identity agreement: the resolver and the
+  agent are each checked against Docker rather than against each other.
 
-Two limits are worth stating rather than hiding. The three registry refusals are
-distinguishable at both simulated registries and at the real one, and every
-consumer today prices all three as uncertainty, so only the world unit tests and
-the resolver tests separate them; the corpus cannot, because an empty manifest
-and an unresolvable one both leave the transfer unknown. And `selectPlatform`
-matches an index entry on OS and architecture alone, because `domain.Platform`
-has no variant, so an image published for `arm/v5` and `arm/v7` resolves to
-whichever the index lists first.
+The production path is driven end to end in `internal/daemon`, against a
+registry the test serves over the real registry v2 protocol on loopback and a
+node speaking the real node protocol:
+
+- `TestPlacementPricesAWarmNodeFromTheResolvedManifest` runs one version of a
+  multi-platform image and then places the next version, which shares the 18GB
+  base layer and nothing else. The host holds no version of the new image, so
+  the whole-image shortcut cannot fire and the only way to see the warmth is to
+  recognise the manifest's compressed blob digests as the diff IDs the daemon
+  unpacked. It asserts only the rebuilt layer is charged, at
+  `AssumedLinkConfidence`;
+- `TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds` is the other half:
+  zero seconds and full confidence, which holds only because the digest the
+  registry names an image by and the digest the node reports are one string;
+- `TestPlacementBoundsWhatItWaitsForAManifest` and
+  `TestPlacementRecordsWhyAManifestCouldNotBeRead` pin the two halves of a
+  registry that will not answer: Placement never hands one an unbounded context,
+  and each refusal reaches the decision under its own name.
+
+Four limits are worth stating rather than hiding.
+
+Every registry refusal is still priced as the same uncertainty, because a host
+may hold an image nothing can describe. What differs now is the record: the
+estimate's source names which refusal it was, and the corpus asserts that name.
+
+`selectPlatform` matches an index entry on OS and architecture alone, because
+`domain.Platform` has no variant, so an image published for `arm/v5` and
+`arm/v7` resolves to whichever the index lists first.
+
+`domain.AssumedLinkConfidence` is 0.5, which is a stated placeholder rather than
+a measurement. Nothing measures a host's registry throughput yet, so the only
+honest properties available today are that a transfer of no bytes is certain and
+a transfer over an unmeasured link is not. Phase 4 replaces the number with a
+distribution and is where the `P90 = 1.5 × P50` spread stops being arbitrary too.
+
+The simulated registries answer with the digest a reference pins, exactly as the
+real one does, and both simulated worlds record held images under the same name.
+Neither models a pull that fails, is throttled, or half-completes, so a Blueprint
+still cannot express a node whose pull is refused after Placement priced it.
 
 ```text
 go build ./... && go vet ./... && go test ./...

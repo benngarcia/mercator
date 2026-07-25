@@ -101,7 +101,7 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 		for _, layer := range spec.Images[ref].Layers {
 			machine.Hold(fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)})
 		}
-		machine.HeldImages[ref] = true
+		machine.HeldImages[domain.ReferenceDigest(ref)] = true
 	}
 	for _, digest := range rental.CachedLayers {
 		machine.Hold(findLayer(spec, digest))

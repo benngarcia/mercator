@@ -97,12 +97,12 @@ func (state hostState) missing(image string, layers []scenario.LayerSpec) ([]sce
 }
 
 // keep records content that finished arriving on this host: the layers the pull
-// moved, and the image itself.
+// moved, and the image itself, under the name a machine reports holding it by.
 func (state *hostState) keep(image string, layers []scenario.LayerSpec) {
 	for _, layer := range layers {
 		state.heldLayers[layer.Digest] = layer
 	}
-	state.heldImages[image] = true
+	state.heldImages[domain.ReferenceDigest(image)] = true
 }
 
 // seededDigests is everything the World Tape put on this host before any Run
@@ -264,7 +264,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = layer
 			}
-			state.heldImages[reference] = true
+			state.heldImages[domain.ReferenceDigest(reference)] = true
 		}
 		for _, digest := range rental.CachedLayers {
 			state.heldLayers[digest] = findLayer(tape.InitialWorld, digest)
@@ -836,7 +836,7 @@ func (world *simulatedWorld) pullRunImage(execution externalExecution, image str
 	state := world.truth[execution.OfferID]
 	layers := world.images[image].Layers
 	fetchedLayers, bytes := state.missing(image, layers)
-	fetched := fetchedNames(image, state.heldImages[image], fetchedLayers)
+	fetched := fetchedNames(image, state.heldImages[domain.ReferenceDigest(image)], fetchedLayers)
 	completesAt := world.now.Add(transferDuration(bytes, state.offer.RegistryDownloadMbps()))
 	world.recordEffect(
 		OperationImagePull,
@@ -878,7 +878,7 @@ func fetchedNames(image string, alreadyHeld bool, layers []scenario.LayerSpec) [
 		names = append(names, layerNames(layer)...)
 	}
 	if !alreadyHeld {
-		names = append(names, image)
+		names = append(names, domain.ReferenceDigest(image))
 	}
 	return names
 }
@@ -1157,7 +1157,10 @@ func (world *simulatedWorld) ResolveManifest(_ context.Context, imageDigest stri
 	case scenario.RegistryUnauthorized:
 		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrUnauthorized, imageDigest)
 	}
-	manifest := domain.ImageManifest{Known: true, Digest: imageDigest}
+	// The image is named by the digest the reference pins, which is the name a
+	// real machine reports holding it under. A registry that answered with the
+	// whole reference would be handing the scheduler a name no host can say.
+	manifest := domain.ImageManifest{Known: true, Digest: domain.ReferenceDigest(imageDigest)}
 	for _, layer := range image.Layers {
 		manifest.Layers = append(manifest.Layers, domain.ImageLayer{
 			Digest:          layer.Digest,

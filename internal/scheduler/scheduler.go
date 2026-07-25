@@ -300,8 +300,8 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
 		provision = offer.Provisioning.Expected
 	}
-	pull, pullKnown := estimatePullSeconds(input.Image, offer)
-	expected := queue + provision + pull + 1
+	pull := pullEstimate(input.Image, offer, input.ModelVersion)
+	expected := queue + provision + pull.Expected + 1
 	start := domain.Estimate{Expected: expected, P50: expected, P90: expected * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion}
 	// A measured latency estimate for this offer overrides the derived one.
 	if estimate, ok := input.LatencyEstimates[offer.ID]; ok && estimate.SampleCount > 0 {
@@ -323,7 +323,7 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 	return domain.CandidateEstimates{
 		QueueSeconds:     domain.Estimate{Expected: queue, P50: queue, P90: queue, Source: "offer", ModelVersion: input.ModelVersion},
 		ProvisionSeconds: domain.Estimate{Expected: provision, P50: provision, P90: provision, Source: "offer", ModelVersion: input.ModelVersion},
-		PullSeconds:      pullEstimate(pull, pullKnown, input.ModelVersion),
+		PullSeconds:      pull,
 		StartSeconds:     start,
 		CostUSD:          domain.Estimate{Expected: cost, Source: "price_model", ModelVersion: input.ModelVersion},
 	}
@@ -368,41 +368,55 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 	}
 }
 
-// pullEstimate records the transfer answer together with how much it is worth.
-// An unknown transfer carries no confidence, so a reader of the decision can
-// tell "nothing to fetch" apart from "nobody could say", which the previous
-// contract made indistinguishable.
-func pullEstimate(seconds float64, known bool, modelVersion string) domain.Estimate {
-	estimate := domain.Estimate{
+// pullEstimate prices what this candidate would still have to fetch, and states
+// how much that answer is worth. Zero seconds means "nothing to fetch" only
+// when the source says an inventory answered; otherwise it means nobody could
+// say, and the source names which silence it was so a reader of the decision
+// has something to act on.
+//
+// Confidence is about the duration, not the bytes. Bytes are counted from a
+// manifest and an inventory that both spoke, so a host that holds everything is
+// certainly zero seconds away from starting. A host that has to fetch is that
+// many bytes away over a link nothing has measured, which is worth less than
+// certainty and says so.
+func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, modelVersion string) domain.Estimate {
+	missing, known := manifest.TransferBytes(offer.Images)
+	if !known {
+		return domain.Estimate{Source: unpricedReason(manifest, offer.Images), ModelVersion: modelVersion}
+	}
+	if missing <= 0 {
+		return domain.Estimate{Source: "image_inventory", Confidence: 1, ModelVersion: modelVersion}
+	}
+	mbps, measured := offer.MeasuredRegistryDownloadMbps()
+	seconds := float64(missing*8)/1_000_000/mbps + 0.5
+	confidence := domain.AssumedLinkConfidence
+	if measured {
+		confidence = 1
+	}
+	return domain.Estimate{
 		Expected:     seconds,
 		P50:          seconds,
 		P90:          seconds * 1.5,
 		Source:       "image_inventory",
+		Confidence:   confidence,
 		ModelVersion: modelVersion,
 	}
-	if known {
-		estimate.Confidence = 1
-	} else {
-		estimate.Source = "unknown"
-	}
-	return estimate
 }
 
-// estimatePullSeconds prices what this candidate would still have to fetch. It
-// reports whether the answer is known: when the manifest or the host's
-// inventory is silent, no candidate can be told apart on locality, so every one
-// of them gets zero and the comparison is unaffected. That understates absolute
-// start latency, which the candidate records rather than hides.
-func estimatePullSeconds(manifest domain.ImageManifest, offer domain.OfferSnapshot) (float64, bool) {
-	missing, known := manifest.TransferBytes(offer.Images)
-	if !known {
-		return 0, false
+// unpricedReason names why no transfer answer exists. "Unknown" alone made a
+// registry Mercator could not read indistinguishable from a host that cannot
+// enumerate itself, and those are fixed by different people.
+func unpricedReason(manifest domain.ImageManifest, inventory domain.ImageInventory) string {
+	switch {
+	case !manifest.Known && manifest.Unreadable != "":
+		return manifest.Unreadable
+	case !manifest.Known:
+		return "manifest_unresolved"
+	case !inventory.Known:
+		return "inventory_unknown"
+	default:
+		return "manifest_without_layers"
 	}
-	if missing <= 0 {
-		return 0, true
-	}
-	mbits := float64(missing*8) / 1_000_000
-	return mbits/offer.RegistryDownloadMbps() + 0.5, true
 }
 
 func downloadRequirementSatisfied(now time.Time, req domain.NetworkDownloadRequirement, facts []domain.NetworkFact) bool {

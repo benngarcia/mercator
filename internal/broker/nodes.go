@@ -39,9 +39,13 @@ func (b *Broker) launchOnNode(ctx context.Context, req adapter.LaunchRequest) (a
 		return adapter.LaunchReceipt{}, err
 	}
 	command := capability.LaunchWorkloadCommand{
-		RunID:             req.RunID,
-		AttemptID:         req.AttemptID,
-		ManifestDigest:    req.Image,
+		RunID:     req.RunID,
+		AttemptID: req.AttemptID,
+		// The digest, not the reference carrying it. The node splices this back
+		// onto the repository to pin what it runs, and reports it back as what
+		// it holds, so a whole reference here would both build an unrunnable
+		// image name and name the image something no host could match.
+		ManifestDigest:    domain.ReferenceDigest(req.Image),
 		Environment:       nodeEnvironment(req.Environment),
 		MaxRuntimeSeconds: req.MaxRuntimeSeconds,
 		Workload: domain.WorkloadSpec{

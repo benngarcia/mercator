@@ -25,6 +25,13 @@ const (
 	conformancePassword = "conformance-only"
 )
 
+// TestRegistryResolverAgreesWithDockerAboutAPublicImage checks the resolver
+// against a registry that is real, on the one question production actually
+// asks: does the name the resolver gives an image match the name the machine
+// running it gives the same image? busybox is multi-platform, so its reference
+// pins an index and the layers below it belong to one child manifest. Naming
+// the image after that child would produce a digest no Docker daemon has ever
+// heard of, and the whole-image fast path would silently never fire.
 func TestRegistryResolverAgreesWithDockerAboutAPublicImage(t *testing.T) {
 	requireDockerHubReachable(t)
 	requireDocker(t)
@@ -37,8 +44,43 @@ func TestRegistryResolverAgreesWithDockerAboutAPublicImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve %s: %v", pinned, err)
 	}
-	assertMatchesDockerManifest(t, manifest, "busybox@"+manifest.Digest)
+	_, reported, _ := strings.Cut(pinned, "@")
+	if manifest.Digest != reported {
+		t.Fatalf(
+			"resolved digest = %s, the daemon holds this image under %s: no host could ever be recognised as holding it whole",
+			manifest.Digest, reported,
+		)
+	}
+	assertMatchesDockerManifest(t, manifest, platformManifestReference(t, pinned, platform))
 	assertMatchesDockerDiffIDs(t, manifest, "busybox:latest")
+}
+
+// platformManifestReference is the child manifest under an index, which is
+// where `docker manifest inspect` keeps the layers. Reading it through the
+// index rather than through the resolver's own answer is what makes this a
+// check and not an echo.
+func platformManifestReference(t *testing.T, pinned string, platform domain.Platform) string {
+	t.Helper()
+	var index struct {
+		Manifests []struct {
+			Digest   string `json:"digest"`
+			Platform struct {
+				OS           string `json:"os"`
+				Architecture string `json:"architecture"`
+			} `json:"platform"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal([]byte(docker(t, "manifest", "inspect", pinned)), &index); err != nil {
+		t.Fatalf("decode docker manifest inspect %s: %v", pinned, err)
+	}
+	repository, _, _ := strings.Cut(pinned, "@")
+	for _, entry := range index.Manifests {
+		if entry.Platform.OS == platform.OS && entry.Platform.Architecture == platform.Architecture {
+			return repository + "@" + entry.Digest
+		}
+	}
+	// A single-platform image is already the manifest it was pinned to.
+	return pinned
 }
 
 // TestRegistryResolverAuthenticatesAgainstAPrivateRegistry proves the

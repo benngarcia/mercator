@@ -59,12 +59,34 @@ func TestSchedulingMetamorphisms(t *testing.T) {
 	})
 
 	t.Run("warming", func(t *testing.T) {
-		before := input.Offers[0]
+		before := heldEverySpace(input.Offers[0])
 		after := before
-		// Warming is a host acquiring content, so the inventory grows.
-		after.Images.LayerDigests = append(slices.Clone(before.Images.LayerDigests), baseLayerDigest)
+		// Warming is a host acquiring content, so the inventory grows, in
+		// whichever space the host names that content in.
+		after.Images.LayerDigests = append(slices.Clone(before.Images.LayerDigests), topLayerDigest)
+		after.Images.LayerDiffIDs = append(slices.Clone(before.Images.LayerDiffIDs), topLayerDiffID)
 		if err := CheckWarmingDoesNotShrinkInventory(before, after); err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	// A law nothing can break is not a law. Each clause is shown failing on the
+	// one transform it exists to catch. The diff-ID clause matters most: a
+	// Docker daemon names its layers that way and no other, so a host losing a
+	// diff ID has lost content exactly as a host losing a blob digest has.
+	t.Run("warming that loses content", func(t *testing.T) {
+		before := heldEverySpace(input.Offers[0])
+		for name, shrunk := range map[string]domain.ImageInventory{
+			"stopped enumerating its content": {Known: false},
+			"lost a blob digest it held":      {Known: true, LayerDiffIDs: before.Images.LayerDiffIDs, ImageDigests: before.Images.ImageDigests},
+			"lost a diff ID it held":          {Known: true, LayerDigests: before.Images.LayerDigests, ImageDigests: before.Images.ImageDigests},
+			"lost an image it held whole":     {Known: true, LayerDigests: before.Images.LayerDigests, LayerDiffIDs: before.Images.LayerDiffIDs},
+		} {
+			after := before
+			after.Images = shrunk
+			if err := CheckWarmingDoesNotShrinkInventory(before, after); err == nil {
+				t.Errorf("a host that %s was reported as lawfully warmed", name)
+			}
 		}
 	})
 
@@ -175,8 +197,22 @@ func equalStrings(left, right []string) bool {
 }
 
 // The reference world's two layers: a large shared base and a small top layer,
-// which is what makes a warm host cheap and a cold one expensive.
+// which is what makes a warm host cheap and a cold one expensive. Each is named
+// in both spaces, because a host reports whichever one its runtime can say.
 const (
 	baseLayerDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	topLayerDigest  = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	baseLayerDiffID = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	topLayerDiffID  = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	warmImageDigest = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
 )
+
+// heldEverySpace is a host that has something to lose in each of the three
+// vocabularies an inventory speaks, which is what a law about losing content
+// has to be checked against.
+func heldEverySpace(offer domain.OfferSnapshot) domain.OfferSnapshot {
+	offer.Images.LayerDigests = []string{baseLayerDigest}
+	offer.Images.LayerDiffIDs = []string{baseLayerDiffID}
+	offer.Images.ImageDigests = []string{warmImageDigest}
+	return offer
+}

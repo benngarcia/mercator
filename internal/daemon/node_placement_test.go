@@ -21,9 +21,13 @@ import (
 	"github.com/benngarcia/mercator/internal/nodeagent"
 )
 
-// The image every fleet run places. It is served by a registry the test starts
-// on loopback, so the daemon resolves a real manifest over the real registry v2
-// protocol without reaching the network.
+// Two versions of one image, served by a registry the test starts on loopback,
+// so the daemon resolves real manifests over the real registry v2 protocol
+// without reaching the network. Both are multi-platform, which is the shape
+// that separates the digest a Run is pinned to from the platform manifest
+// underneath it, and they share an 18GB base layer: the second version is what
+// makes a host warm without holding the image whole, which is the only case the
+// diff-ID bridge is load-bearing for.
 const (
 	trainerIndexDigest    = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	trainerManifestDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
@@ -32,6 +36,15 @@ const (
 	trainerBaseDiffID     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
 	trainerTopBlob        = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
 	trainerTopDiffID      = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+
+	rebuiltIndexDigest    = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+	rebuiltManifestDigest = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+	rebuiltConfigDigest   = "sha256:aaaa111111111111111111111111111111111111111111111111111111111111"
+	rebuiltTopBlob        = "sha256:bbbb222222222222222222222222222222222222222222222222222222222222"
+	rebuiltTopDiffID      = "sha256:cccc333333333333333333333333333333333333333333333333333333333333"
+
+	// What the rebuilt version adds over the base layer both versions share.
+	rebuiltTopBytes = 60_000_000
 )
 
 // TestOneEnrolledNodeRunsTwoWorkloadsInSequence is the claim the reusable lane
@@ -68,9 +81,12 @@ func TestOneEnrolledNodeRunsTwoWorkloadsInSequence(t *testing.T) {
 // under simulation: running a workload is what makes a machine warm, and the
 // offer catalog Placement reads says so. Nothing seeds this node; the only way
 // the image reaches its inventory is by having been run.
+// The identity is the digest and never the reference carrying it: a container
+// daemon records what it pulled by, so a control plane comparing a whole
+// reference against it would find no host warm anywhere.
 func TestANodeHoldsTheImageItRan(t *testing.T) {
 	fleet := startFleet(t)
-	if fleet.nodeOffer(t).Images.Holds(fleet.image) {
+	if fleet.nodeOffer(t).Images.Holds(trainerIndexDigest) {
 		t.Fatal("the node reports holding an image it has never run")
 	}
 
@@ -79,7 +95,7 @@ func TestANodeHoldsTheImageItRan(t *testing.T) {
 	fleet.awaitOutcome(t, runID, "succeeded")
 
 	waitFor(t, func() bool {
-		return fleet.nodeOffer(t).Images.Holds(fleet.image)
+		return fleet.nodeOffer(t).Images.Holds(trainerIndexDigest)
 	}, "the node never reported holding the image it ran, so a second Run would be priced a pull it does not owe")
 }
 
@@ -124,11 +140,13 @@ type fleet struct {
 	token   string
 	nodeID  string
 	// image is the digest-pinned reference every fleet Run places, served by
-	// this fleet's own registry.
-	image     string
-	runtime   *scriptedRuntime
-	stop      context.CancelFunc
-	submitted int
+	// this fleet's own registry. rebuiltImage is the next version of it, which
+	// shares the base layer and nothing else.
+	image        string
+	rebuiltImage string
+	runtime      *scriptedRuntime
+	stop         context.CancelFunc
+	submitted    int
 }
 
 func startFleet(t *testing.T) *fleet {
@@ -140,12 +158,16 @@ func startFleet(t *testing.T) *fleet {
 	registry := startTrainerRegistry(t)
 	address := startRuntimeWithLease(t, 900*time.Millisecond)
 	harness := &fleet{
-		address: address,
-		token:   "operator-token",
-		image:   registry + "/acme/trainer@" + trainerIndexDigest,
-		// The machine knows its layers by the uncompressed diff IDs its runtime
-		// unpacked, which is the only vocabulary a container daemon has.
-		runtime: newScriptedRuntime(trainerBaseDiffID, trainerTopDiffID),
+		address:      address,
+		token:        "operator-token",
+		image:        registry + "/acme/trainer@" + trainerIndexDigest,
+		rebuiltImage: registry + "/acme/trainer@" + rebuiltIndexDigest,
+		// Running an image leaves its unpacked layers behind, named the only way
+		// a container daemon can name them.
+		runtime: newScriptedRuntime(map[string][]string{
+			trainerIndexDigest: {trainerBaseDiffID, trainerTopDiffID},
+			rebuiltIndexDigest: {trainerBaseDiffID, rebuiltTopDiffID},
+		}),
 	}
 	bootstrap := harness.invite(t)
 	harness.nodeID = bootstrap.NodeID
@@ -221,6 +243,11 @@ func (f *fleet) stopAgent() { f.stop() }
 
 func (f *fleet) submitRun(t *testing.T) string {
 	t.Helper()
+	return f.submitRunFor(t, f.image)
+}
+
+func (f *fleet) submitRunFor(t *testing.T, image string) string {
+	t.Helper()
 	f.submitted++
 	name := fmt.Sprintf("run-%d", f.submitted)
 	var created struct {
@@ -233,7 +260,7 @@ func (f *fleet) submitRun(t *testing.T) string {
 	// this case is about where a Run lands, not about resolution.
 	f.call(t, http.MethodPost, "/v1/runs", map[string]any{
 		"workspace_id": daemon.DefaultWorkspaceID,
-		"workload":     workloadRevision(name, f.image),
+		"workload":     workloadRevision(name, image),
 	}, &created, http.StatusAccepted)
 	if created.Run.ID == "" {
 		t.Fatal("create run returned no run id")
@@ -420,15 +447,16 @@ type scriptedRuntime struct {
 	// held is every image manifest this machine holds, which is what running a
 	// workload leaves behind and what the node reports on its next heartbeat.
 	held []string
-	// diffIDs is what a container daemon can say about the layers under those
-	// images: the uncompressed content it unpacked, never the compressed blobs
+	// unpacks is what this machine ends up with for each image it runs: the
+	// uncompressed layer identities its runtime unpacked, which is the only
+	// vocabulary a container daemon has. It can never name the compressed blobs
 	// the registry served.
-	diffIDs      []string
+	unpacks      map[string][]string
 	observations map[string]capability.WorkloadObservation
 }
 
-func newScriptedRuntime(diffIDs ...string) *scriptedRuntime {
-	return &scriptedRuntime{diffIDs: diffIDs, observations: map[string]capability.WorkloadObservation{}}
+func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
+	return &scriptedRuntime{unpacks: unpacks, observations: map[string]capability.WorkloadObservation{}}
 }
 
 // Facts reports what this machine holds now, which is nothing until it has run
@@ -441,7 +469,7 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 	for _, digest := range runtime.held {
 		images = append(images, capability.ImageLocality{
 			ManifestDigest: digest,
-			LayerDiffIDs:   runtime.diffIDs,
+			LayerDiffIDs:   runtime.unpacks[digest],
 			State:          capability.LocalityHot,
 			Unpacked:       true,
 		})
@@ -527,10 +555,11 @@ func (runtime *scriptedRuntime) awaitLaunch(t *testing.T, runID string) {
 	}, "the node was never asked to run "+runID)
 }
 
-// startTrainerRegistry serves one image over the registry v2 protocol on
-// loopback: a token challenge, an index, the platform manifest under it, and
-// the config blob that names the uncompressed layers. It is what makes the
-// daemon's manifest resolution exercisable without reaching the network.
+// startTrainerRegistry serves both versions of the image over the registry v2
+// protocol on loopback: a token challenge, an index per version, the platform
+// manifest under each, and the config blob that names the uncompressed layers.
+// It is what makes the daemon's manifest resolution exercisable without
+// reaching the network.
 func startTrainerRegistry(t *testing.T) string {
 	t.Helper()
 	var realm string
@@ -543,6 +572,14 @@ func startTrainerRegistry(t *testing.T) string {
 			{"digest":"` + trainerTopBlob + `","size":40000000}
 		]}`,
 		trainerConfigDigest: `{"rootfs":{"type":"layers","diff_ids":["` + trainerBaseDiffID + `","` + trainerTopDiffID + `"]}}`,
+		rebuiltIndexDigest: `{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[
+			{"digest":"` + rebuiltManifestDigest + `","platform":{"os":"linux","architecture":"amd64"}}
+		]}`,
+		rebuiltManifestDigest: `{"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"` + rebuiltConfigDigest + `"},"layers":[
+			{"digest":"` + trainerBaseBlob + `","size":18000000000},
+			{"digest":"` + rebuiltTopBlob + `","size":60000000}
+		]}`,
+		rebuiltConfigDigest: `{"rootfs":{"type":"layers","diff_ids":["` + trainerBaseDiffID + `","` + rebuiltTopDiffID + `"]}}`,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -569,11 +606,14 @@ func startTrainerRegistry(t *testing.T) string {
 }
 
 // TestPlacementPricesAWarmNodeFromTheResolvedManifest is what the manifest
-// resolver exists for, driven through the production daemon. The node reports
-// the layers it holds as uncompressed diff IDs, because that is all a container
-// daemon knows, and the registry manifest lists compressed blob digests. Only a
-// manifest carrying both names can tell that they are the same bytes; without
-// it the decision would record "unknown" and every candidate would look alike.
+// resolver exists for, driven through the production daemon, on the case where
+// nothing else could answer. The node has run one version of the image and is
+// asked to run the next, so it holds most of what the new one needs and does
+// not hold the new image at all: the whole-image shortcut cannot fire, and the
+// only way to know the host is warm is to recognise the compressed blob digests
+// in the registry manifest as the uncompressed diff IDs the daemon unpacked.
+// Without the bridge the decision reads "the host holds nothing" and prices a
+// fresh 18GB pull.
 func TestPlacementPricesAWarmNodeFromTheResolvedManifest(t *testing.T) {
 	fleet := startFleet(t)
 	first := fleet.submitRun(t)
@@ -583,15 +623,47 @@ func TestPlacementPricesAWarmNodeFromTheResolvedManifest(t *testing.T) {
 		return len(fleet.nodeOffer(t).Images.LayerDiffIDs) == 2
 	}, "the node never reported the layers it unpacked")
 
+	rebuilt := fleet.submitRunFor(t, fleet.rebuiltImage)
+	fleet.completeWorkload(t, rebuilt, 0)
+	fleet.awaitOutcome(t, rebuilt, "succeeded")
+
+	pull := fleet.decision(t, rebuilt).pullEstimate()
+	if pull.Source != "image_inventory" {
+		t.Fatalf("pull estimate = %+v, want an answer sourced from the host's own inventory", pull)
+	}
+	// Only the layer this version added crosses the network. The seconds it
+	// takes are worth less than the bytes are: nothing has measured this host's
+	// link to a registry.
+	want := float64(rebuiltTopBytes*8) / 1_000_000 / domain.DefaultRegistryDownloadMbps
+	if pull.Expected < want || pull.Expected > want+1 {
+		t.Fatalf("pull expected = %v seconds, want about %v: only the rebuilt layer is missing", pull.Expected, want)
+	}
+	if pull.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("pull confidence = %v, want %v: the bytes are counted and the link they cross is assumed",
+			pull.Confidence, domain.AssumedLinkConfidence)
+	}
+}
+
+// TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds is the other half:
+// the host holds the image whole, so the answer is zero seconds and certain,
+// because no link speed enters an answer about content that does not move. It
+// only holds if the digest the registry names an image by and the digest a node
+// reports having pulled are the same string.
+func TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds(t *testing.T) {
+	fleet := startFleet(t)
+	first := fleet.submitRun(t)
+	fleet.completeWorkload(t, first, 0)
+	fleet.awaitOutcome(t, first, "succeeded")
+	waitFor(t, func() bool {
+		return fleet.nodeOffer(t).Images.Holds(trainerIndexDigest)
+	}, "the node never reported holding the image it ran")
+
 	second := fleet.submitRun(t)
 	fleet.completeWorkload(t, second, 0)
 	fleet.awaitOutcome(t, second, "succeeded")
 
 	pull := fleet.decision(t, second).pullEstimate()
-	if pull.Source != "image_inventory" || pull.Confidence != 1 {
-		t.Fatalf("pull estimate = %+v, want a known answer sourced from the host's inventory", pull)
-	}
-	if pull.Expected != 0 {
-		t.Fatalf("pull expected = %v seconds, want nothing: the node holds every layer of the image", pull.Expected)
+	if pull.Source != "image_inventory" || pull.Confidence != 1 || pull.Expected != 0 {
+		t.Fatalf("pull estimate = %+v, want nothing to fetch and no doubt about it", pull)
 	}
 }

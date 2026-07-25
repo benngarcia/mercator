@@ -200,7 +200,9 @@ func (m *Machine) keep(image string, layers []Layer) {
 	for _, layer := range layers {
 		m.Hold(layer)
 	}
-	m.HeldImages[image] = true
+	// The name a machine holds an image under is the digest it pulled by, which
+	// is the only name a resolved manifest and a real host can both say.
+	m.HeldImages[domain.ReferenceDigest(image)] = true
 }
 
 // inventory is what this machine says it holds, whatever Run is being placed,
@@ -388,7 +390,7 @@ func (w *World) ResolveManifest(_ context.Context, imageDigest string, _ domain.
 	case RegistryUnauthorized:
 		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrUnauthorized, imageDigest)
 	}
-	manifest := domain.ImageManifest{Known: true, Digest: imageDigest}
+	manifest := domain.ImageManifest{Known: true, Digest: domain.ReferenceDigest(imageDigest)}
 	for _, layer := range image.Layers {
 		manifest.Layers = append(manifest.Layers, domain.ImageLayer{
 			Digest:          layer.Digest,
