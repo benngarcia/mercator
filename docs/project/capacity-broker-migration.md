@@ -55,15 +55,21 @@ complete because it works against a live provider.
 - `C1`: `internal/capability` owns the three contracts; `internal/adapter` keeps
   the ephemeral lane's wire types. Relocating 458 references would bury the
   contract split in a rename.
-- `V1`: the Lab's provider seam answers from world state at the moment it is
-  asked, which is what the production Broker does when Placement lists offers.
-  The separate observed catalog it replaced was written once at construction and
-  refreshed by nothing outside a test, so every Lab placement priced a frozen
-  world and stamped that frozen answer with the current virtual time. ADR 0004's
-  separation is kept where it is load-bearing: Mercator reads only what
-  `offerSnapshots` projects and never world state. A provider whose own answer
-  is stale is modelled on `ImageInventory.ObservedAt` when a fixture needs it,
-  rather than by a lag no fixture asked for.
+- `V1`: the Lab keeps a published observation catalog separate from World Truth,
+  which is what ADR 0004 requires. The catalog this replaced was written once at
+  construction and refreshed by nothing outside a test, so every Lab placement
+  priced a frozen world; answering from world state instead was tried and
+  reverted, because it is the alternative the ADR names as rejected and it leaves
+  staleness inexpressible. The provider republishes when virtual time advances
+  and after each command it carries out itself, and an offer states the time of
+  the publication rather than of the read. What a scenario can leave unpublished
+  is what the world did behind the provider's back, which is how a fixture writes
+  down capacity that was reclaimed after the snapshot Placement scored.
+- `V2`: a pull takes the world's own transfer time and an execution starts when
+  its bytes have landed, so a launch has three moments: accepted, started,
+  completed. Predicted start latency is calibrated against `started - accepted`,
+  and no Run can be adjudicated on a host that did not hold its image while it
+  ran.
 
 ## Progress
 
@@ -102,16 +108,29 @@ complete because it works against a live provider.
   worlds wrote held layers only at construction and read them only when
   snapshotting offers, so the corpus proved a warm Rental wins and never proved
   that running makes a Rental warm. Launching now pulls what the host is missing
-  and leaves it there once the bytes have arrived, which is when the pull's
-  simulated duration has elapsed and not when the container was dispatched. The
-  Lab records every pull in the effect ledger with what it fetched and what the
-  host kept, so a warm start reads back as a pull that moved nothing. This is
-  also the first writer of `ImageInventory.ImageDigests`, which makes the
-  whole-image fast path in `TransferBytes` live rather than dead.
+  and leaves it there once the bytes have arrived. This is also the first writer
+  of `ImageInventory.ImageDigests`, which makes the whole-image fast path in
+  `TransferBytes` live rather than dead.
   `domain.OfferSnapshot.KeepsWhatItRuns` is the single answer to whether content
   survives here, read by both simulators and the Lab invariant so they cannot
   drift: a provisionable offer is a machine that does not exist yet, and an
   ephemeral-lane offer holds nothing once its workload exits.
+- [x] 2026-07-24: Make a Run wait for its own image. The pull took simulated time
+  for locality and no time for execution, so a Run was adjudicated succeeded on a
+  host that provably did not hold its image while it ran, and its Booking
+  Decision predicted 290 seconds of start latency against an actual of zero. An
+  execution now starts when its bytes have landed, the ledger separates the pull
+  a launch dispatched (`image.pull`) from the content a host kept
+  (`image.retained`, written when it lands), releasing an execution cancels the
+  transfer it was waiting on, and `safety.locality_provenance` reads retention so
+  a host holding content nothing delivered is a violation. The observed offer
+  catalog is restored beside World Truth, per ADR 0004.
+- [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
+  `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
+  the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
+  makes the lane half of `KeepsWhatItRuns` load-bearing for the first time. Both
+  simulators now take the kind and lane the caller states instead of overwriting
+  them, and grant Rental identity only to capacity that keeps what it runs.
 - [x] 2026-07-24: Complete phase 1. `internal/capability` declares
   CapacityProvider, NodeRuntime, and EphemeralExecutor with negotiated support
   sets. `Declare` derives a backend's lane from the contracts it satisfies and
@@ -159,14 +178,20 @@ Phase 3 added:
 - `execution-warms-a-rental` (conformance): the same claim at L1, driven through
   the real orchestrator, event log, and Run projection, asserted on the Booking
   Decisions the control plane recorded rather than on world state.
+- `unenrolled-host-holds-nothing` (green): a Docker host Mercator has not
+  enrolled runs the same image twice and pays the whole pull both times, beside
+  the Rental that ran it once and is warm. It is the only fixture in either
+  simulator that separates the lane from the kind, and deleting the lane term
+  from `KeepsWhatItRuns` fails it.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
-  either seeded by the World Tape or retained by an accepted `image.pull`
-  against that same host, and only capacity Mercator keeps holds anything beyond
-  its seed. It says nothing about a host holding less than before: locality
-  decays, and a machine that lost what it held is a fact the World Tape must be
-  able to state.
+  either seeded by the World Tape or recorded as retained there by an
+  `image.retained` effect, and only capacity Mercator keeps holds anything beyond
+  its seed. Retention is written when the bytes land, so a host that holds
+  content nothing has delivered fails the rule. It says nothing about a host
+  holding less than before: locality decays, and a machine that lost what it held
+  is a fact the World Tape must be able to state.
 
-The corpus is 16 regression Blueprints: 7 green and 9 target, beside one demo,
+The corpus is 17 regression Blueprints: 8 green and 9 target, beside one demo,
 one minimized case, and one conformance Blueprint.
 
 ## What phase 2 does not yet do
@@ -204,19 +229,27 @@ Run can see it. `enrolled-node-survives-its-first-run` declares
 `execution_warms_capacity` alongside `node_bootstrap` and `rental_schedule`,
 which is the corpus stating what its second step was always waiting on.
 
-Neither simulator can construct a standing offer in the ephemeral lane, so the
-lane half of `KeepsWhatItRuns` is unexercised by the corpus. That quadrant is
-real in production: the local Docker host is standing capacity in the ephemeral
-lane until an agent enrols it, and it reports `Images.Known: false` because
-nothing there can enumerate what it holds. Making a fixture that constructs one
-is what the corpus still owes this guard.
+Standing capacity in the ephemeral lane is now constructible through
+`WorldSpec.hosts` and asserted by `unenrolled-host-holds-nothing`, but only in
+the placement corpus: no L1 or conformance Blueprint declares a host yet. The
+Lab world builds them, so writing one is a fixture rather than a capability.
 
-Neither simulator models a pull that fails, is throttled, or half-completes, and
-no fixture holds back a provider observation. The Lab world answers `ListOffers`
-from its own state at the moment it is asked, which is what the production
-Broker does; a provider whose own facts are stale is a fidelity gap, and the
-place it would be modelled is the age already carried on
-`ImageInventory.ObservedAt`.
+A host Mercator has not enrolled still reports `Images.Known: true` holding
+nothing. In production that machine cannot enumerate its own content at all and
+reports `Images.Known: false`, which is uncertainty rather than emptiness. The
+two are priced identically today because nothing in the scheduler treats an
+unknown inventory differently from an empty one; phase 4 is where that becomes a
+difference worth modelling.
+
+Neither simulator models a pull that fails, is throttled, or half-completes. A
+transfer moves whole or not at all, which is why cancelling one on release leaves
+the host exactly as cold as it was.
+
+No fixture yet leaves a provider observation unpublished. The mechanism exists
+(`setOfferAvailable` changes the world without republishing, and
+`TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed` drives it), but no
+Blueprint places a Run against capacity that vanished between the snapshot and
+the launch.
 
 ## Verification evidence
 
@@ -227,18 +260,30 @@ exactly one assertion (`pull_seconds: want exactly 0, got 289.14`), and green
 after, at which point `TestPlacementScenarios` failed them for passing and they
 were promoted in the same commit.
 
-Two independent reviews then refuted parts of that commit, and the claims it
-made were re-established by deliberate breaks rather than by argument:
+Two independent reviews then refuted parts of that commit, and two more refuted
+parts of the correction. What survived is stated below with the deliberate break
+that holds it.
 
 - changing `running-warms-the-host`'s advance from `15m` to `1s` fails it with
   `pull_seconds: want exactly 0, got 289.14`. The host holds the image when its
   bytes have arrived, not when the container was dispatched;
 - deleting the `KeepsWhatItRuns` guard from the fake world's pull fails
   `ephemeral-execution-holds-nothing` with
-  `one-shot-second: pull_seconds: want at least 200, got 0`, and fails
-  `TestWorldCapacityItDoesNotKeepHoldsNothingItRan`. Marketplace offers and
-  Rentals are now the same kind of entry in that world, so the guard is the only
-  thing separating them and it is reachable;
+  `one-shot-second: pull_seconds: want at least 200, got 0`. Deleting only its
+  lane term fails `unenrolled-host-holds-nothing` with
+  `borrowed-second: pull_seconds: want at least 200, got 0`, and deleting only
+  its kind term fails `TestOneShotCapacityKeepsNothingItPulled`, so both halves
+  of the predicate are load-bearing;
+- keeping content at dispatch rather than when it lands fails
+  `safety.locality_provenance` in ten Lab tests with `offer "rental-warm" holds
+  producer@sha256:aaaa... with no World Tape seed and no content retained against
+  that host`;
+- completing an execution a sampled runtime after acceptance, ignoring the pull,
+  fails `TestWorldActualRuntimeComesFromTheTape` and the generated-blueprint
+  execution; dropping the pull cancellation fails
+  `TestAnAbandonedPullLeavesNothingBehind`;
+- answering `ListOffers` from world state rather than from the published
+  observation fails `TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed`;
 - deleting the image loop from `imageInventory` in `internal/node/offers.go`
   fails `TestANodeHoldsTheImageItRan`, which drives a real agent over the real
   node protocol and reads the offer catalog over HTTP. The scripted runtime
@@ -255,7 +300,15 @@ to be monotone between world snapshots. That law is true of one warming
 transform, where `internal/lab/oracle.go` still holds it, and false between
 arbitrary snapshots, where it would have made eviction a control-plane safety
 violation and the dominant real-world locality failure mode impossible to write
-down. `TestLocalityProvenanceAllowsAHostToLoseWhatItHeld` pins the new answer.
+down.
+
+No test pins that deletion, and an earlier version of this section claimed one
+did. `InvariantObservation.PreviousWorld` was the only input the clause read and
+it was deleted with the clause, so no test in the package can express the rule to
+fail it. What is pinned is the rule that replaced it:
+`TestLocalityProvenanceAllowsAHostToLoseWhatItHeld` presents a host still holding
+one seeded digest and one it retained while a third has gone missing, so both
+halves of the invariant inspect real content and neither objects.
 
 ```text
 go build ./... && go vet ./... && go test ./...
