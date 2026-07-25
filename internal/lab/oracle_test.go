@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -60,8 +61,9 @@ func TestSchedulingMetamorphisms(t *testing.T) {
 	t.Run("warming", func(t *testing.T) {
 		before := input.Offers[0]
 		after := before
-		after.ImageCache.MissingBytes /= 2
-		if err := CheckWarmingDoesNotIncreaseMissingBytes(before, after); err != nil {
+		// Warming is a host acquiring content, so the inventory grows.
+		after.Images.LayerDigests = append(slices.Clone(before.Images.LayerDigests), baseLayerDigest)
+		if err := CheckWarmingDoesNotShrinkInventory(before, after); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -134,15 +136,25 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 	warm := labOffer("rental-warm", domain.OfferKindStanding, domain.LaneReusable, 2.5, request.Resources)
 	warm.ObservedAt = now
 	warm.ExpiresAt = now.Add(time.Minute)
-	warm.ImageCache = domain.ImageCacheEvidence{Known: true, MissingBytes: 80_000_000}
+	// The warm host holds the 18GB base layer and not the 80MB top layer.
+	warm.Images = domain.ImageInventory{Known: true, ObservedAt: now, LayerDigests: []string{baseLayerDigest}}
 	fresh := labOffer("fresh-4090", domain.OfferKindProvisionable, domain.LaneReusable, 4, request.Resources)
 	fresh.ObservedAt = now
 	fresh.ExpiresAt = now.Add(time.Minute)
-	fresh.ImageCache = domain.ImageCacheEvidence{Known: true, MissingBytes: 18_080_000_000}
+	// A machine that does not exist yet holds nothing, and says so.
+	fresh.Images = domain.ImageInventory{Known: true, ObservedAt: now}
 	fresh.Provisioning = &domain.Estimate{Expected: 240}
 	return scheduler.SchedulingInput{
-		RunID:        "run-reference",
-		Workload:     workload,
+		RunID:    "run-reference",
+		Workload: workload,
+		Image: domain.ImageManifest{
+			Known:  true,
+			Digest: request.Image,
+			Layers: []domain.ImageLayer{
+				{Digest: baseLayerDigest, CompressedBytes: 18_000_000_000},
+				{Digest: topLayerDigest, CompressedBytes: 80_000_000},
+			},
+		},
 		Offers:       []domain.OfferSnapshot{warm, fresh},
 		Schedules:    map[string]domain.RentalSchedule{},
 		ModelVersion: "latency-v1",
@@ -161,3 +173,10 @@ func equalStrings(left, right []string) bool {
 	}
 	return true
 }
+
+// The reference world's two layers: a large shared base and a small top layer,
+// which is what makes a warm host cheap and a cold one expensive.
+const (
+	baseLayerDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	topLayerDigest  = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+)

@@ -250,10 +250,10 @@ func trialOffer(rate float64) domain.OfferSnapshot {
 			Pricing:   domain.PricingCapabilities{Known: true},
 			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "deterministic_name", ListOwned: true},
 		},
-		Pricing:    domain.PriceModel{Currency: "USD", RatePerSecondUSD: rate, Known: true},
-		Queue:      &domain.QueueSnapshot{},
-		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
-		ImageCache: domain.ImageCacheEvidence{Known: true, ManifestCached: true},
+		Pricing:  domain.PriceModel{Currency: "USD", RatePerSecondUSD: rate, Known: true},
+		Queue:    &domain.QueueSnapshot{},
+		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+		Images:   domain.ImageInventory{Known: true},
 	}
 }
 

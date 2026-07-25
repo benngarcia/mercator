@@ -297,10 +297,11 @@ function RentalFacts({ offer }: { offer?: OfferSnapshot }) {
           : `${Math.max(1, Math.floor(offer.resources.cpu_millis / 1000))} vCPU`}
       </span>
       <span className="font-mono tabular">{hourly}/h</span>
-      {offer.image_cache.known && offer.image_cache.manifest_cached ? (
+      {(offer.images.image_digests?.length ?? 0) > 0 ||
+      (offer.images.layer_digests?.length ?? 0) > 0 ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Snowflake className="size-3.5 text-phase-running" aria-label="Image cached" />
+            <Snowflake className="size-3.5 text-phase-running" aria-label="Holds image content" />
           </TooltipTrigger>
           <TooltipContent>Selected image is cached</TooltipContent>
         </Tooltip>

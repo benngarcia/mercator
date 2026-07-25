@@ -56,8 +56,10 @@ func TestWorldIdleDaemonAdvertisesHonestLayerEvidence(t *testing.T) {
 	if !offer.Capacity.Available {
 		t.Fatalf("idle daemon must advertise available capacity")
 	}
-	if got := offer.ImageCache; !got.Known || got.MissingBytes != 10 || got.ManifestCached {
-		t.Fatalf("image cache evidence = %+v, want known with 10 missing bytes", got)
+	// The daemon holds the shared base layer and not the top one, which is what
+	// makes the next version of the same image cheap to start here.
+	if got := offer.Images; !got.Known || !got.HoldsLayer("layer-base") || got.HoldsLayer("layer-top") {
+		t.Fatalf("inventory = %+v, want the base layer held and the top layer missing", got)
 	}
 	if !offer.ExpiresAt.After(worldStart) {
 		t.Fatalf("offer must expire in the scripted future, got %v", offer.ExpiresAt)
@@ -136,8 +138,8 @@ func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 	if offer.Kind != domain.OfferKindProvisionable {
 		t.Fatalf("marketplace offer kind = %q, want provisionable", offer.Kind)
 	}
-	if got := offer.ImageCache; !got.Known || got.MissingBytes != 1010 {
-		t.Fatalf("image cache evidence = %+v, want the full 1010 bytes missing", got)
+	if got := offer.Images; !got.Known || len(got.LayerDigests) != 0 {
+		t.Fatalf("inventory = %+v, want a machine that does not exist yet holding nothing", got)
 	}
 }
 

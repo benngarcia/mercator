@@ -860,11 +860,19 @@ export interface components {
             sample_count?: number;
             model_version?: string;
         };
-        ImageCacheEvidence: {
-            manifest_cached: boolean;
-            /** Format: int64 */
-            missing_bytes: number;
+        /** @description What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves. */
+        ImageInventory: {
+            /** @description Whether the holder enumerated its content at all. False is an honest answer rather than a failure: a provider that cannot say what a fresh machine holds says so, and the uncertainty is priced rather than mistaken for warmth. */
             known: boolean;
+            /**
+             * Format: date-time
+             * @description When the holder last looked. Locality decays, so the age of this answer is material.
+             */
+            observed_at?: string;
+            /** @description Image manifests this host holds whole. */
+            image_digests?: string[];
+            /** @description Layer blobs this host holds. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first. */
+            layer_digests?: string[];
         };
         CapacityEvidence: {
             available: boolean;
@@ -906,7 +914,7 @@ export interface components {
             pricing: components["schemas"]["PriceModel"];
             queue?: components["schemas"]["QueueSnapshot"];
             provisioning?: components["schemas"]["Estimate"];
-            image_cache: components["schemas"]["ImageCacheEvidence"];
+            images: components["schemas"]["ImageInventory"];
             capacity: components["schemas"]["CapacityEvidence"];
             reliability: components["schemas"]["ReliabilityEvidence"];
         };

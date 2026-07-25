@@ -24,8 +24,12 @@ type SchedulingInput struct {
 	ExcludedOfferSnapshotIDs []string
 	ModelVersion             string
 	EvaluatedAt              time.Time
-	Weights                  ScoreWeights
-	LatencyEstimates         map[string]domain.Estimate
+	// Image is the content every candidate is being asked to run. It travels
+	// with the request because it is a property of the image: an offer that
+	// restated it could disagree with the others about the same image.
+	Image            domain.ImageManifest
+	Weights          ScoreWeights
+	LatencyEstimates map[string]domain.Estimate
 }
 
 type ScoreWeights struct {
@@ -259,9 +263,10 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	if requiresPublicInbound(container) && offer.Capabilities.Network.Inbound != domain.InboundNetworkPublicPort {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "network.inbound", Required: domain.InboundNetworkPublicPort, Offered: offer.Capabilities.Network.Inbound, Message: "Offer cannot expose inbound public ports."})
 	}
-	if !offer.ImageCache.Known {
-		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "image_cache", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown image cache facts."})
-	}
+	// A host that cannot say what it holds is not infeasible. Unknown locality
+	// is uncertainty to price, and the goal is explicit that it must not be
+	// mistaken for a hard constraint. The transfer estimate records the silence
+	// with no confidence, so the decision says which it was.
 	if req := workload.Spec.Network.Download; req != nil {
 		if !downloadRequirementSatisfied(input.EvaluatedAt, *req, offer.Network.Download) {
 			code := "NETWORK_FACT_UNSATISFIED"
@@ -295,7 +300,7 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
 		provision = offer.Provisioning.Expected
 	}
-	pull := estimatePullSeconds(offer)
+	pull, pullKnown := estimatePullSeconds(input.Image, offer)
 	expected := queue + provision + pull + 1
 	start := domain.Estimate{Expected: expected, P50: expected, P90: expected * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion}
 	// A measured latency estimate for this offer overrides the derived one.
@@ -318,7 +323,7 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 	return domain.CandidateEstimates{
 		QueueSeconds:     domain.Estimate{Expected: queue, P50: queue, P90: queue, Source: "offer", ModelVersion: input.ModelVersion},
 		ProvisionSeconds: domain.Estimate{Expected: provision, P50: provision, P90: provision, Source: "offer", ModelVersion: input.ModelVersion},
-		PullSeconds:      domain.Estimate{Expected: pull, P50: pull, P90: pull * 1.5, Source: "image_cache", ModelVersion: input.ModelVersion},
+		PullSeconds:      pullEstimate(pull, pullKnown, input.ModelVersion),
 		StartSeconds:     start,
 		CostUSD:          domain.Estimate{Expected: cost, Source: "price_model", ModelVersion: input.ModelVersion},
 	}
@@ -363,14 +368,40 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 	}
 }
 
-func estimatePullSeconds(offer domain.OfferSnapshot) float64 {
-	if offer.ImageCache.Known && offer.ImageCache.MissingBytes == 0 {
-		return 0
+// pullEstimate records the transfer answer together with how much it is worth.
+// An unknown transfer carries no confidence, so a reader of the decision can
+// tell "nothing to fetch" apart from "nobody could say", which the previous
+// contract made indistinguishable.
+func pullEstimate(seconds float64, known bool, modelVersion string) domain.Estimate {
+	estimate := domain.Estimate{
+		Expected:     seconds,
+		P50:          seconds,
+		P90:          seconds * 1.5,
+		Source:       "image_inventory",
+		ModelVersion: modelVersion,
 	}
-	if offer.ImageCache.MissingBytes <= 0 {
-		return 0
+	if known {
+		estimate.Confidence = 1
+	} else {
+		estimate.Source = "unknown"
 	}
-	mbits := float64(offer.ImageCache.MissingBytes*8) / 1_000_000
+	return estimate
+}
+
+// estimatePullSeconds prices what this candidate would still have to fetch. It
+// reports whether the answer is known: when the manifest or the host's
+// inventory is silent, no candidate can be told apart on locality, so every one
+// of them gets zero and the comparison is unaffected. That understates absolute
+// start latency, which the candidate records rather than hides.
+func estimatePullSeconds(manifest domain.ImageManifest, offer domain.OfferSnapshot) (float64, bool) {
+	missing, known := manifest.TransferBytes(offer.Images)
+	if !known {
+		return 0, false
+	}
+	if missing <= 0 {
+		return 0, true
+	}
+	mbits := float64(missing*8) / 1_000_000
 	speed := 500.0
 	for _, fact := range offer.Network.Download {
 		if fact.Scope == domain.NetworkScopeRegistry && fact.Statistic == "p10" && fact.ValueMbps > 0 {
@@ -378,7 +409,7 @@ func estimatePullSeconds(offer domain.OfferSnapshot) float64 {
 			break
 		}
 	}
-	return mbits/speed + 0.5
+	return mbits/speed + 0.5, true
 }
 
 func downloadRequirementSatisfied(now time.Time, req domain.NetworkDownloadRequirement, facts []domain.NetworkFact) bool {

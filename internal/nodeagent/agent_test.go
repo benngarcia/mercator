@@ -169,8 +169,22 @@ func (h *harness) runAgent(t *testing.T) {
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
-	t.Cleanup(cancel)
-	go func() { _ = h.agent.Run(ctx) }()
+	stopped := make(chan struct{})
+	// Waiting for Run to return is what stops the agent from writing its state
+	// file into a directory the test framework is already removing. Cancelling
+	// only asks it to stop.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Error("the agent did not stop when its context was cancelled")
+		}
+	})
+	go func() {
+		defer close(stopped)
+		_ = h.agent.Run(ctx)
+	}()
 }
 
 // restartAgent stops the agent and starts a new one over the same local state,

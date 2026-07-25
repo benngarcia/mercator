@@ -49,6 +49,15 @@ limits.
 - A node runs one workload at a time and Rental Schedules are not populated, so
   a second Run arriving while a node is busy provisions elsewhere instead of
   queueing behind it.
+- Nothing resolves an image's layer list in production, so Mercator cannot tell
+  a warm candidate from a cold one on a real deployment. Every candidate's
+  transfer estimate is recorded as unknown, which leaves the comparison
+  unaffected and understates absolute start latency. Registry-backed manifest
+  resolution is the next slice
+  ([#125](https://github.com/benngarcia/mercator/issues/125) is the related
+  credential work).
+- The Docker adapter can enumerate what its daemon holds and does not, so a
+  Docker offer reports a silent inventory rather than its real content.
 - A Run placed on a node that then goes quiet stays open indefinitely. The node
   stops being offered for new work, but the Run already on it is never
   adjudicated: nothing re-places it and nothing fails it. Adjudicating a lost

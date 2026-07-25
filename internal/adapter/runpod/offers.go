@@ -99,7 +99,9 @@ func appendCloudOffer(offers []domain.OfferSnapshot, g gpuType, cloud string, pr
 		// the host's cache state, but the fact must be KNOWN (not "unknown")
 		// or the scheduler policy rejects the offer with UNKNOWN_FACT. Report
 		// a known "not cached" fact (a pull is expected).
-		ImageCache: domain.ImageCacheEvidence{Known: true},
+		// A fresh pod reports nothing about what it holds, so its inventory is
+		// silent rather than empty.
+		Images: domain.ImageInventory{Known: false},
 	})
 }
 

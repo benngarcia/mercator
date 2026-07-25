@@ -429,7 +429,7 @@ func cliOffer() domain.OfferSnapshot {
 			GranularitySeconds:   1,
 			Known:                true,
 		},
-		ImageCache: domain.ImageCacheEvidence{Known: true, ManifestCached: true},
-		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
+		Images:   domain.ImageInventory{Known: true},
+		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }

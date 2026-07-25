@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
@@ -163,8 +164,21 @@ func (agent *Agent) serve(ctx context.Context) error {
 	// in the middle of the work it asked for. One worker, not a pool: a node
 	// runs one workload at a time, and preparation that raced a launch would
 	// contend for the same disk and network the launch needs.
+	//
+	// The session does not end until the worker has stopped. An agent that
+	// returned while a command was still running would be claiming to have
+	// stopped while still changing the machine.
 	work := make(chan node.Command, cap(commands))
-	go agent.work(sessionCtx, session, work)
+	var working sync.WaitGroup
+	working.Add(1)
+	go func() {
+		defer working.Done()
+		agent.work(sessionCtx, session, work)
+	}()
+	defer func() {
+		endSession()
+		working.Wait()
+	}()
 
 	ticker := time.NewTicker(agent.heartbeat)
 	defer ticker.Stop()

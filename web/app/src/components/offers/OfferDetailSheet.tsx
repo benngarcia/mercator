@@ -344,20 +344,19 @@ export function OfferDetailSheet({
                     mono
                   />
                   <StatBlock
-                    label="Manifest cached"
+                    label="Images held"
                     value={
-                      offer.image_cache.known ? (
-                        <YesNo value={offer.image_cache.manifest_cached} />
-                      ) : (
-                        "unknown"
-                      )
+                      offer.images.known
+                        ? (offer.images.image_digests?.length ?? 0)
+                        : "unknown"
                     }
+                    mono
                   />
                   <StatBlock
-                    label="Missing bytes"
+                    label="Layers held"
                     value={
-                      offer.image_cache.known
-                        ? bytes(offer.image_cache.missing_bytes)
+                      offer.images.known
+                        ? (offer.images.layer_digests?.length ?? 0)
                         : "unknown"
                     }
                     mono

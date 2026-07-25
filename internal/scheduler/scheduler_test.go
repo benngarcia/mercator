@@ -190,18 +190,15 @@ func TestSchedulerRejectsConservativeFactAndResourceGaps(t *testing.T) {
 	zeroMaxContainers.Capabilities.Container.MaxContainers = 0
 	unavailable := schedulerOffer("off_unavailable", now, 0.00001, 1)
 	unavailable.Capacity.Available = false
-	unknownImageCache := schedulerOffer("off_unknown_image_cache", now, 0.00001, 1)
-	unknownImageCache.ImageCache.Known = false
 	tooExpensive := schedulerOffer("off_too_expensive", now, 0.001, 1)
 	tooExpensive.Resources.Accelerators = []domain.AcceleratorInventory{{Vendor: "nvidia", Model: "a10", CanonicalModel: "nvidia-a10", Count: 1, MemoryBytes: 24 << 30}}
 	tooExpensive.Capabilities.Resources.GPUVendors = []string{"nvidia"}
-	tooExpensive.ImageCache.Known = true
-	tooExpensive.ImageCache.MissingBytes = 0
+	tooExpensive.Images.Known = true
 
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
 		Workload:     rev,
-		Offers:       []domain.OfferSnapshot{noGPU, zeroMaxContainers, unavailable, unknownImageCache, tooExpensive},
+		Offers:       []domain.OfferSnapshot{noGPU, zeroMaxContainers, unavailable, tooExpensive},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
 	})
@@ -214,7 +211,6 @@ func TestSchedulerRejectsConservativeFactAndResourceGaps(t *testing.T) {
 	assertCandidateRejected(t, decision, "off_no_gpu", "RESOURCE_INSUFFICIENT", "resources.accelerators")
 	assertCandidateRejected(t, decision, "off_zero_containers", "UNKNOWN_FACT", "container.max_containers")
 	assertCandidateRejected(t, decision, "off_unavailable", "CAPACITY_UNAVAILABLE", "capacity.available")
-	assertCandidateRejected(t, decision, "off_unknown_image_cache", "UNKNOWN_FACT", "image_cache")
 	assertCandidateRejected(t, decision, "off_too_expensive", "COST_LIMIT_EXCEEDED", "placement.max_expected_cost_usd")
 }
 
@@ -523,11 +519,7 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 		Pricing:  domain.PriceModel{Currency: "USD", RatePerSecondUSD: ratePerSecondUSD, Known: true, GranularitySeconds: 1},
 		Queue:    &domain.QueueSnapshot{QueuedWorkSeconds: startSeconds},
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
-		ImageCache: domain.ImageCacheEvidence{
-			ManifestCached: true,
-			MissingBytes:   0,
-			Known:          true,
-		},
+		Images:   domain.ImageInventory{Known: true},
 		Reliability: domain.ReliabilityEvidence{
 			StartFailureRate: 0.01,
 			InterruptionRate: 0.01,

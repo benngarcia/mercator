@@ -110,11 +110,11 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 			Pricing:       domain.PricingCapabilities{Known: record.ShadowPriceUSDPerHour > 0},
 			Observability: domain.ObservabilityCapabilities{Logs: "container"},
 		},
-		Network:    domain.NetworkFacts{Download: host.Network},
-		Pricing:    shadowPrice(record),
-		Queue:      &domain.QueueSnapshot{},
-		ImageCache: imageCacheEvidence(record.Facts),
-		Capacity:   domain.CapacityEvidence{Available: true, Confidence: 1},
+		Network:  domain.NetworkFacts{Download: host.Network},
+		Pricing:  shadowPrice(record),
+		Queue:    &domain.QueueSnapshot{},
+		Images:   imageInventory(record.Facts),
+		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
 
@@ -133,11 +133,29 @@ func shadowPrice(record Record) domain.PriceModel {
 	}
 }
 
-// imageCacheEvidence summarizes what the node holds. Exact per-image locality
-// is the next slice; today an offer states only that the inventory is known,
-// which is already more than a provider that cannot say anything.
-func imageCacheEvidence(facts capability.NodeFacts) domain.ImageCacheEvidence {
-	return domain.ImageCacheEvidence{Known: len(facts.Images) > 0}
+// imageInventory projects what the node reported holding. It states digests
+// rather than a missing-byte count, because the node cannot know the size of an
+// image it never pulled, and answering that question with a zero is what made
+// every node look fully warm.
+func imageInventory(facts capability.NodeFacts) domain.ImageInventory {
+	inventory := domain.ImageInventory{
+		// An enrolled node always enumerates. An empty inventory from a node is
+		// the truthful claim that it holds nothing, which is a different fact
+		// from a provider that cannot look.
+		Known:      !facts.ObservedAt.IsZero(),
+		ObservedAt: facts.ObservedAt,
+	}
+	for _, image := range facts.Images {
+		if image.State == capability.LocalityHot && image.ManifestDigest != "" {
+			inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
+		}
+		for _, layer := range image.LayerDigests {
+			if !inventory.HoldsLayer(layer) {
+				inventory.LayerDigests = append(inventory.LayerDigests, layer)
+			}
+		}
+	}
+	return inventory
 }
 
 // hostOS normalizes what a container runtime reports about its host ("Docker

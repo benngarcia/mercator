@@ -80,8 +80,12 @@ func TestBuildOffersMapsMarketplaceFacts(t *testing.T) {
 	if o.Reliability.InterruptionRate < 0.019 || o.Reliability.InterruptionRate > 0.021 {
 		t.Errorf("interruption rate = %v", o.Reliability.InterruptionRate)
 	}
-	if !o.Pricing.Known || !o.Capacity.Available || !o.ImageCache.Known {
-		t.Errorf("facts must be known: %+v", o)
+	if !o.Pricing.Known || !o.Capacity.Available {
+		t.Errorf("price and capacity facts must be known: %+v", o)
+	}
+	// A machine that does not exist yet cannot enumerate what it holds.
+	if o.Images.Known {
+		t.Errorf("a fresh instance cannot report an inventory, got %+v", o.Images)
 	}
 }
 

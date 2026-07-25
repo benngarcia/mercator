@@ -3819,23 +3819,31 @@
           }
         }
       },
-      "ImageCacheEvidence": {
+      "ImageInventory": {
         "type": "object",
+        "description": "What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves.",
         "required": [
-          "manifest_cached",
-          "missing_bytes",
           "known"
         ],
         "properties": {
-          "manifest_cached": {
-            "type": "boolean"
-          },
-          "missing_bytes": {
-            "type": "integer",
-            "format": "int64"
-          },
           "known": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Whether the holder enumerated its content at all. False is an honest answer rather than a failure: a provider that cannot say what a fresh machine holds says so, and the uncertainty is priced rather than mistaken for warmth."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the holder last looked. Locality decays, so the age of this answer is material."
+          },
+          "image_digests": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Image manifests this host holds whole."
+          },
+          "layer_digests": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Layer blobs this host holds. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first."
           }
         }
       },
@@ -3888,7 +3896,7 @@
           "capabilities",
           "network",
           "pricing",
-          "image_cache",
+          "images",
           "capacity",
           "reliability"
         ],
@@ -3953,8 +3961,8 @@
           "provisioning": {
             "$ref": "#/components/schemas/Estimate"
           },
-          "image_cache": {
-            "$ref": "#/components/schemas/ImageCacheEvidence"
+          "images": {
+            "$ref": "#/components/schemas/ImageInventory"
           },
           "capacity": {
             "$ref": "#/components/schemas/CapacityEvidence"
