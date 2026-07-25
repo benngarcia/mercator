@@ -377,8 +377,9 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 // Confidence is about the duration, not the bytes. Bytes are counted from a
 // manifest and an inventory that both spoke, so a host that holds everything is
 // certainly zero seconds away from starting. A host that has to fetch is that
-// many bytes away over a link nothing has measured, which is worth less than
-// certainty and says so.
+// many bytes away over a link, and the duration is worth exactly what the link
+// speed is worth: what a published measurement says it is worth, and
+// AssumedLinkConfidence when nothing has measured it.
 func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, modelVersion string) domain.Estimate {
 	missing, known := manifest.TransferBytes(offer.Images)
 	if !known {
@@ -387,18 +388,14 @@ func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, mod
 	if missing <= 0 {
 		return domain.Estimate{Source: "image_inventory", Confidence: 1, ModelVersion: modelVersion}
 	}
-	mbps, measured := offer.MeasuredRegistryDownloadMbps()
-	seconds := float64(missing*8)/1_000_000/mbps + 0.5
-	confidence := domain.AssumedLinkConfidence
-	if measured {
-		confidence = 1
-	}
+	link := offer.RegistryDownload()
+	seconds := float64(missing*8)/1_000_000/link.Mbps + 0.5
 	return domain.Estimate{
 		Expected:     seconds,
 		P50:          seconds,
 		P90:          seconds * 1.5,
 		Source:       "image_inventory",
-		Confidence:   confidence,
+		Confidence:   link.Confidence,
 		ModelVersion: modelVersion,
 	}
 }

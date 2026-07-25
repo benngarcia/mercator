@@ -246,25 +246,38 @@ const DefaultRegistryDownloadMbps = 500.0
 // takes are the guess.
 const AssumedLinkConfidence = 0.5
 
-// MeasuredRegistryDownloadMbps is this host's own pessimistic (p10) registry
-// throughput, and whether anything measured it. The second answer is the one
-// that keeps an estimate honest: a duration derived from the standing
-// assumption is not worth what a measured one is.
-func (offer OfferSnapshot) MeasuredRegistryDownloadMbps() (float64, bool) {
-	for _, fact := range offer.Network.Download {
-		if fact.Scope == NetworkScopeRegistry && fact.Statistic == "p10" && fact.ValueMbps > 0 {
-			return fact.ValueMbps, true
-		}
-	}
-	return DefaultRegistryDownloadMbps, false
+// LinkSpeed is how fast content moves onto a host and how much a duration
+// derived from that number is worth. The two travel together because they are
+// one answer: a speed nothing stands behind cannot produce a confident
+// duration, however precise the arithmetic on it looks.
+type LinkSpeed struct {
+	Mbps       float64
+	Confidence float64
 }
 
-// RegistryDownloadMbps is how fast this host pulls image content: its own
-// measured throughput when something measured it, and the standing assumption
-// otherwise.
+// RegistryDownload is this host's pessimistic (p10) registry throughput. A
+// published fact is only worth what its publisher said it was worth, and only
+// while it is still valid as of the moment this offer was observed: a fact
+// carries its own confidence and its own expiry, and reading the mere existence
+// of one as a measurement is how an unmeasured constant becomes a certainty.
+// Absent a valid fact the answer is the standing assumption, saying so.
+func (offer OfferSnapshot) RegistryDownload() LinkSpeed {
+	for _, fact := range offer.Network.Download {
+		if fact.Scope != NetworkScopeRegistry || fact.Statistic != "p10" || fact.ValueMbps <= 0 {
+			continue
+		}
+		if !fact.ValidUntil.IsZero() && !fact.ValidUntil.After(offer.ObservedAt) {
+			continue
+		}
+		return LinkSpeed{Mbps: fact.ValueMbps, Confidence: fact.Confidence}
+	}
+	return LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence}
+}
+
+// RegistryDownloadMbps is the speed alone, for the simulators that have to move
+// bytes rather than predict how long moving them takes.
 func (offer OfferSnapshot) RegistryDownloadMbps() float64 {
-	mbps, _ := offer.MeasuredRegistryDownloadMbps()
-	return mbps
+	return offer.RegistryDownload().Mbps
 }
 
 type ResourceInventory struct {

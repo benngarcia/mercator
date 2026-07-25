@@ -71,6 +71,7 @@ func (registry *Registry) Ref(ctx context.Context, workspaceID, nodeID string) (
 func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapshot {
 	host := record.Facts.Host
 	support := registry.NodeSupport()
+	platform := domain.Platform{OS: hostOS(host.OS), Architecture: host.Architecture}
 	return domain.OfferSnapshot{
 		ID:           record.ID,
 		RentalID:     record.RentalID,
@@ -84,7 +85,7 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		// on their age is what stops Placement from choosing a machine whose
 		// last word is minutes old.
 		ExpiresAt: record.Facts.ObservedAt.Add(registry.offerFreshness()),
-		Platform:  domain.Platform{OS: hostOS(host.OS), Architecture: host.Architecture},
+		Platform:  platform,
 		Resources: domain.ResourceInventory{
 			CPUMillis:          host.CPUMillis,
 			MemoryBytes:        host.MemoryBytes,
@@ -114,7 +115,7 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		Network:  domain.NetworkFacts{Download: host.Network},
 		Pricing:  shadowPrice(record),
 		Queue:    &domain.QueueSnapshot{},
-		Images:   imageInventory(record.Facts),
+		Images:   imageInventory(record.Facts, platform),
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
@@ -140,7 +141,14 @@ func shadowPrice(record Record) domain.PriceModel {
 // and answering that question with a zero is what made every node look fully
 // warm. What a Run still owes is the scheduler's subtraction against the
 // image's manifest, and only the scheduler holds both halves.
-func imageInventory(facts capability.NodeFacts) domain.ImageInventory {
+//
+// An image counts as held whole only when the build this machine holds is the
+// build this machine runs. A multi-platform image is listed under one index
+// digest whichever platform was fetched, so a host that pulled the arm64 build
+// reports the same name an amd64 Run is pinned to, and reading that name alone
+// would price a full 18GB fetch as nothing to do. Layers need no such test:
+// they are content-addressed, so another platform's layers simply do not match.
+func imageInventory(facts capability.NodeFacts, host domain.Platform) domain.ImageInventory {
 	inventory := domain.ImageInventory{
 		// An enrolled node always enumerates. An empty inventory from a node is
 		// the truthful claim that it holds nothing, which is a different fact
@@ -149,7 +157,7 @@ func imageInventory(facts capability.NodeFacts) domain.ImageInventory {
 		ObservedAt: facts.ObservedAt,
 	}
 	for _, image := range facts.Images {
-		if image.State == capability.LocalityHot && image.ManifestDigest != "" {
+		if image.State == capability.LocalityHot && image.ManifestDigest != "" && image.Platform == host {
 			inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
 		}
 		inventory.LayerDigests = addNew(inventory.LayerDigests, image.LayerDigests)

@@ -154,9 +154,8 @@ complete because it works against a live provider.
     could match. It carries the digest;
   - `nodeagent.layerDiffIDs` discarded every error from `docker image inspect`
     and still reported the image hot with no layers, which prices a fully warm
-    host a full cold pull at full confidence. A daemon that will not describe
-    what it listed now fails the report, and the node loses a heartbeat instead
-    of inventing an answer about itself;
+    host a full cold pull at full confidence. An image a daemon will not describe
+    is now reported unknown rather than hot;
   - `capability.ImageLocality` defined `LayerDigests` as every layer the manifest
     names and carried a `MissingLayerDigests` subset nothing wrote or read, while
     the one consumer treated the list as content held. Every field now states
@@ -191,6 +190,53 @@ complete because it works against a live provider.
   - the diff-ID clause added to `CheckWarmingDoesNotShrinkInventory` was
     unreachable by any test. Every clause of that law is now shown failing on the
     transform it exists to catch.
+- [x] 2026-07-24: Answer the second round of review on the same commit. Two more
+  reviews falsified five things, and each was again a claim wider than what was
+  established:
+  - failing a node's whole facts report over one un-inspectable image does not
+    cost one heartbeat, whatever the comment and this plan said. It ends the
+    agent's session, and on an agent with no session yet it blocks enrollment
+    entirely, so one image pruned between `docker images` and `docker image
+    inspect` could keep a forty-image host out of the fleet. An image the daemon
+    will not describe is now one image reported `LocalityUnknown`, which is
+    priced a full pull and never mistaken for warmth. A read that failed because
+    the agent is shutting down still fails the report, because that says nothing
+    about the machine;
+  - naming the resolved manifest by the digest the Run is pinned to made
+    `ImageInventory.Holds` platform-blind. An index digest names one image per
+    platform, so an amd64 host that pulled the arm64 build reported exactly the
+    digest an amd64 Run is pinned to and was priced zero pull seconds at full
+    confidence for content it does not have. `capability.ImageLocality.Platform`
+    is now populated by the Docker runtime and read by the node's offer
+    projection: an image counts as held whole only when the build the machine
+    holds is the build it runs. Layers need no such test, being
+    content-addressed;
+  - the 429 judgment call was wrong, and its stated reason was false: the
+    resolution error is discarded at `orchestrator.imageManifest`, so nothing
+    downstream could recover a status code from it and a throttled registry read
+    exactly like a hung one. `ociresolver.ErrThrottled` and
+    `ociresolver.ErrUnreachable` are classified where the response is, and the
+    Blueprint contract gained the two matching `RegistryAnswer` states so the
+    corpus can state the difference;
+  - `MeasuredRegistryDownloadMbps` decided an answer was measured from the mere
+    existence of a registry p10 fact, ignoring the fact's own confidence and its
+    expiry, while the only production publisher of that fact was a literal 100
+    Mbps in the Docker adapter. The adapter publishes no throughput fact at all
+    now, because nothing has measured that link, and `OfferSnapshot.
+    RegistryDownload` returns a speed with what its publisher said it is worth,
+    valid as of the moment the offer was observed;
+  - the `Known` clause of `CheckWarmingDoesNotShrinkInventory` was still driven
+    by nothing: the transform that was supposed to catch it supplied an empty
+    inventory, which the layer clauses reject first. The transform now keeps
+    every digest and only stops enumerating, so one clause catches it and
+    deleting that clause fails the Lab;
+  - `TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds` claimed to hold
+    the whole-image identity and does not: its host holds every layer too, so the
+    layer subtraction reaches zero whatever the manifest is named. Verified by
+    breaking the resolver's naming, which leaves that case green and fails
+    `TestResolverStatesEveryLayerInBothDigestSpaces` and the Docker conformance
+    case. The claim now says what the case actually holds and names the tests
+    that hold the rest.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -261,6 +307,13 @@ Phase 3 added:
   uncertainty rather than becoming warmth. No Lab invariant: manifest resolution
   is a read that mints no external consequence, and the fact it produces is
   already policed by `safety.locality_provenance`.
+- `registry-silence-has-a-name` (green): the two silences an operator cannot fix
+  by fixing credentials. A registry rate limiting Mercator and a registry that
+  answered nothing at all are priced identically, as zero seconds carrying no
+  confidence, and recorded as `registry_throttled` and `registry_unreachable`,
+  because one is waited out and the other is a network path to repair. Deleting
+  either classification from `ociresolver.Unreadable` collapses both onto
+  `registry_unreadable` and fails it.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, and only capacity Mercator keeps holds anything beyond
@@ -269,7 +322,7 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 18 regression Blueprints: 9 green and 9 target, beside one demo,
+The corpus is 19 regression Blueprints: 10 green and 9 target, beside one demo,
 one minimized case, and one conformance Blueprint.
 
 ## What phase 2 does not yet do
@@ -316,7 +369,19 @@ difference worth modelling.
 
 Neither simulator models a pull that fails, is throttled, or half-completes. A
 transfer moves whole or not at all, which is why cancelling one on release leaves
-the host exactly as cold as it was.
+the host exactly as cold as it was. What a Blueprint can now state is a registry
+that refuses to describe an image, in all five of the ways a real one does; what
+it still cannot state is a machine whose pull is refused after Placement priced
+it.
+
+A Blueprint cannot state per-platform builds of one image. `WorldSpec` images
+have one layer set, both simulated resolvers ignore the platform they are asked
+for, and every simulated offer is `linux/amd64`, so the corpus cannot express a
+host holding another platform's build of the digest a Run is pinned to. That
+case is held at L1 instead, by
+`TestPlacementChargesTheWholePullForAnotherPlatformsBuild` in `internal/daemon`
+and by the node's own projection test, and it is the reason the platform fix
+lands without a Blueprint of its own.
 
 No fixture yet leaves a provider observation unpublished. The mechanism exists
 (`setOfferAvailable` changes the world without republishing, and
@@ -360,12 +425,44 @@ Each claim it makes is held by a deliberate break that fails it:
 - restoring the whole reference into `LaunchWorkloadCommand.ManifestDigest`
   fails all three node-placement warmth cases in `internal/daemon`, starting with
   `the node never reported holding the image it ran`;
-- restoring `return nil, nil` to `nodeagent.layerDiffIDs` fails
-  `TestDockerRuntimeReportsNothingWhenItCannotReadWhatItHolds` with the agent
-  reporting `State:hot ... LayerDiffIDs:[]` for a daemon that answered nothing;
+- reporting an image the daemon would not describe as hot with no layers fails
+  `TestDockerRuntimeSaysWhichImageItCannotDescribe`, and failing the whole report
+  over it fails the same case with `read node facts: read image sha256:gone`;
 - deleting any clause of `CheckWarmingDoesNotShrinkInventory` fails
-  `TestSchedulingMetamorphisms/warming_that_loses_content`, which drives each
-  clause with the one shrinking transform it exists to catch.
+  `TestSchedulingMetamorphisms/warming_that_loses_content`. Deleting the `Known`
+  clause fails it with `a host that stopped enumerating its content was reported
+  as lawfully warmed`, which it did not do until the transform stopped emptying
+  the inventory it was supposed to leave intact.
+
+The second review round is held by these breaks:
+
+- deleting the `registry_throttled` and `registry_unreachable` arms from
+  `ociresolver.Unreadable` fails `registry-silence-has-a-name` on all four
+  candidates with `pull_source: want "registry_throttled", got
+  "registry_unreadable"`. The sentinels themselves are held against real
+  responses by `TestRegistryRefusalsStayDistinguishable/a_registry_rate_limiting
+  _this_client`, `TestARegistryNothingCanReachIsItsOwnAnswer`, and
+  `TestARegistryThatAnswersNothingInTimeIsUnreachable`;
+- deleting the platform term from `node.imageInventory` fails
+  `TestPlacementChargesTheWholePullForAnotherPlatformsBuild` with `the node
+  reports holding an image whole on the strength of a name it shares with another
+  platform's build`, and fails the node's own projection case with `holds the
+  whole image = true, want false`. Not populating `ImageLocality.Platform` in the
+  Docker runtime fails the conformance case with `reported platform = , the
+  daemon holds the linux/arm64 build`;
+- reading a throughput fact's existence as a measurement fails
+  `TestARegistryLinkIsWorthWhatItsPublisherSaid` with `registry link = {Mbps:250
+  Confidence:1}, want {Mbps:250 Confidence:0.9}`, and ignoring its expiry adds
+  `{Mbps:250 Confidence:1}, want {Mbps:500 Confidence:0.5}`. Restoring the
+  Docker adapter's literal 100 Mbps fact fails
+  `TestStandingOfferPublishesNoThroughputNothingMeasured`;
+- naming the resolved manifest after anything but the pinned digest leaves
+  `TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds` green, which is why
+  that case no longer claims to hold digest identity. It fails
+  `TestResolverStatesEveryLayerInBothDigestSpaces` and the Docker conformance
+  case; the machine half is held by
+  `TestANodeHoldsTheImageItRan`, which fails when
+  `broker.launchOnNode` stamps the whole reference again.
 
 Three conformance cases run against registries and daemons that are real rather
 than simulated, and skip rather than fail when the machine has no network or no
@@ -385,9 +482,10 @@ Docker daemon:
   could have been doing nothing;
 - `TestDockerRuntimeReportsTheLayersItUnpacked` reads node facts from the real
   Docker daemon and asserts the agent reports exactly the diff IDs the daemon
-  holds, under the digest `docker images --digests` names it by. Together with
-  the case above, that is the whole identity agreement: the resolver and the
-  agent are each checked against Docker rather than against each other.
+  holds, under the digest `docker images --digests` names it by, and for the
+  build `docker image inspect` says it holds. Together with the case above, that
+  is the whole identity agreement: the resolver and the agent are each checked
+  against Docker rather than against each other.
 
 The production path is driven end to end in `internal/daemon`, against a
 registry the test serves over the real registry v2 protocol on loopback and a
@@ -401,18 +499,35 @@ node speaking the real node protocol:
   unpacked. It asserts only the rebuilt layer is charged, at
   `AssumedLinkConfidence`;
 - `TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds` is the other half:
-  zero seconds and full confidence, which holds only because the digest the
-  registry names an image by and the digest the node reports are one string;
+  a node that ran an image is charged zero seconds at full confidence to run it
+  again. It is the end-to-end statement and not the proof of digest identity,
+  because that host holds every layer as well as the image, so the layer
+  subtraction reaches zero too. Identity is held by
+  `TestResolverStatesEveryLayerInBothDigestSpaces` on the registry side and
+  `TestANodeHoldsTheImageItRan` on the machine side, each against Docker in the
+  conformance cases;
+- `TestPlacementChargesTheWholePullForAnotherPlatformsBuild` is where holding an
+  image whole stops being a question about a name: an operator pulled the arm64
+  build by hand, the machine reports exactly the digest the amd64 Run is pinned
+  to, and the decision charges the whole 18.04GB rather than nothing;
 - `TestPlacementBoundsWhatItWaitsForAManifest` and
   `TestPlacementRecordsWhyAManifestCouldNotBeRead` pin the two halves of a
   registry that will not answer: Placement never hands one an unbounded context,
   and each refusal reaches the decision under its own name.
 
-Four limits are worth stating rather than hiding.
+Five limits are worth stating rather than hiding.
 
 Every registry refusal is still priced as the same uncertainty, because a host
 may hold an image nothing can describe. What differs now is the record: the
-estimate's source names which refusal it was, and the corpus asserts that name.
+estimate's source names which of the five refusals it was, and the corpus asserts
+that name. A refusal the resolver never classified stays `registry_unreadable`,
+which is the honest answer for a status nothing has taught it to read.
+
+Nothing in production publishes a measured registry throughput, so every transfer
+duration today carries `AssumedLinkConfidence`. The measured branch is exercised
+only by the Lab, where a Blueprint's declared path is a world fact. That is the
+state phase 4 changes, and it is better than the literal it replaced: an adapter
+was stamping full confidence on a number nobody measured.
 
 `selectPlatform` matches an index entry on OS and architecture alone, because
 `domain.Platform` has no variant, so an image published for `arm/v5` and
@@ -432,10 +547,14 @@ still cannot express a node whose pull is refused after Placement priced it.
 ```text
 go build ./... && go vet ./... && go test ./...
 go test -race ./internal/ociresolver ./internal/domain ./internal/scheduler \
-  ./internal/lab ./internal/scenario ./internal/adapter/fake ./internal/node \
-  ./internal/nodeagent ./internal/daemon -count=1
+  ./internal/lab ./internal/scenario ./internal/adapter/fake \
+  ./internal/adapter/docker ./internal/node ./internal/nodeagent \
+  ./internal/daemon ./internal/orchestrator ./internal/broker \
+  ./internal/capability -count=1
 cd web/app && bun run typecheck && bun run test && bun run build
 ```
+
+Run with Docker and the network available, so no conformance case skipped.
 
 ### Phase 3 warming
 

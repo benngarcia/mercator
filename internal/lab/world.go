@@ -1143,7 +1143,7 @@ func (world *simulatedWorld) recordEffect(
 // ResolveManifest answers what an image contains from the World Tape's catalog.
 // It is the simulated registry: Placement subtracts what a host holds from what
 // this returns, exactly as it would against a real one, and it says no the same
-// three ways a real one does.
+// five ways a real one does.
 func (world *simulatedWorld) ResolveManifest(_ context.Context, imageDigest string, _ domain.Platform) (domain.ImageManifest, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
@@ -1156,6 +1156,10 @@ func (world *simulatedWorld) ResolveManifest(_ context.Context, imageDigest stri
 		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrManifestUnresolvable, imageDigest)
 	case scenario.RegistryUnauthorized:
 		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrUnauthorized, imageDigest)
+	case scenario.RegistryThrottled:
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrThrottled, imageDigest)
+	case scenario.RegistryUnreachable:
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrUnreachable, imageDigest)
 	}
 	// The image is named by the digest the reference pins, which is the name a
 	// real machine reports holding it under. A registry that answered with the

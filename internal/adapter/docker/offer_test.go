@@ -292,3 +292,22 @@ func stampedLane(t *testing.T, offers []domain.OfferSnapshot) []domain.OfferSnap
 	}
 	return capability.StampLane(declaration, offers)
 }
+
+// TestStandingOfferPublishesNoThroughputNothingMeasured keeps this endpoint
+// from asserting a link speed. The offer used to carry a literal 100 Mbps p10
+// registry fact at full confidence, which is an assumption wearing a
+// measurement's clothes: every transfer duration predicted for this host was
+// then stamped certain, beside enrolled nodes honestly recording an assumption.
+func TestStandingOfferPublishesNoThroughputNothingMeasured(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+
+	offer := StandingOffer(DeriveIdentity("", ""), "", HostInfo{NCPU: 4, MemTotalBytes: 1 << 30}, 0, nil, now)
+
+	if len(offer.Network.Download) != 0 {
+		t.Fatalf("offer publishes %+v, want no throughput fact until something measures this link", offer.Network.Download)
+	}
+	link := offer.RegistryDownload()
+	if link.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("registry link = %+v, want the standing assumption at %v confidence", link, domain.AssumedLinkConfidence)
+	}
+}

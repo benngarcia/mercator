@@ -18,23 +18,26 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
-// A registry answers three different questions with three different failures,
-// and collapsing them loses the only information an operator can act on: an
-// image nobody pushed, a manifest that exists but names no build for this
-// platform, and a registry that will not talk to the credentials Mercator has.
-// Placement prices all three as uncertainty, because a host may still hold the
-// image; what changes is what a human is told to fix.
+// A registry says no in five different ways, and collapsing them loses the only
+// information an operator can act on: an image nobody pushed, a manifest that
+// exists but names no build for this platform, a registry that will not talk to
+// the credentials Mercator has, a registry refusing reads for now, and a
+// registry nothing could reach. Placement prices all five as uncertainty,
+// because a host may still hold the image; what changes is what a human is told
+// to fix, and waiting out a rate limit is a different act from repairing a
+// network path.
 var (
 	ErrImageUnknown         = errors.New("ociresolver: the registry does not have this image")
 	ErrManifestUnresolvable = errors.New("ociresolver: the registry has this image but no manifest for this platform")
 	ErrUnauthorized         = errors.New("ociresolver: the registry refused the credentials offered")
+	ErrThrottled            = errors.New("ociresolver: the registry is rate limiting this client")
+	ErrUnreachable          = errors.New("ociresolver: the registry could not be reached")
 )
 
 // Unreadable names why a resolution failed, in the vocabulary a Booking
-// Decision records. A throttled or unreachable registry is its own answer and
-// not one of the three refusals: it is the one an operator fixes by waiting or
-// by looking at the network, and recording it as a plain unknown is what let a
-// rate limit look like every candidate being equally warm.
+// Decision records. The classification happens where the answer is known, at
+// the response the registry sent, because nothing downstream can recover a
+// status code from a sentence.
 func Unreadable(err error) string {
 	switch {
 	case err == nil:
@@ -45,6 +48,10 @@ func Unreadable(err error) string {
 		return "registry_manifest_unresolvable"
 	case errors.Is(err, ErrUnauthorized):
 		return "registry_unauthorized"
+	case errors.Is(err, ErrThrottled):
+		return "registry_throttled"
+	case errors.Is(err, ErrUnreachable):
+		return "registry_unreachable"
 	default:
 		return "registry_unreadable"
 	}
@@ -301,6 +308,8 @@ func (r *RegistryResolver) get(ctx context.Context, read *registryRead, path, ac
 		return nil, "", fmt.Errorf("%w: %s rejected the read of %s", ErrUnauthorized, ref.Registry, ref)
 	case response.StatusCode == http.StatusNotFound:
 		return nil, "", fmt.Errorf("%w: %s has no %s", ErrImageUnknown, ref.Registry, ref)
+	case response.StatusCode == http.StatusTooManyRequests:
+		return nil, "", fmt.Errorf("%w: %s answered %s for %s", ErrThrottled, ref.Registry, response.Status, path)
 	default:
 		return nil, "", fmt.Errorf("ociresolver: %s answered %s for %s", ref.Registry, response.Status, path)
 	}
@@ -322,7 +331,12 @@ func (r *RegistryResolver) do(ctx context.Context, read *registryRead, path, acc
 	}
 	response, err := r.client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("ociresolver: reach %s: %w", endpoint, err)
+		// A registry that refuses the connection, resolves to nothing, or
+		// accepts the connection and then answers nothing all reach the caller
+		// here, and they are one fact: the read never happened. It is named
+		// where that is known, because the error text a transport produces is
+		// not something a Booking Decision can classify later.
+		return nil, fmt.Errorf("%w: %s: %w", ErrUnreachable, endpoint, err)
 	}
 	return response, nil
 }
@@ -355,9 +369,12 @@ func (r *RegistryResolver) token(ctx context.Context, ref digestRef, challenge a
 	}
 	response, err := r.client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("ociresolver: reach the token endpoint for %s: %w", ref.Registry, err)
+		return "", fmt.Errorf("%w: the token endpoint for %s: %w", ErrUnreachable, ref.Registry, err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusTooManyRequests {
+		return "", fmt.Errorf("%w: %s answered %s to the token request", ErrThrottled, ref.Registry, response.Status)
+	}
 	if response.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%w: %s answered %s to the token request", ErrUnauthorized, ref.Registry, response.Status)
 	}

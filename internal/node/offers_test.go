@@ -14,7 +14,14 @@ const (
 	baseLayer = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	topLayer  = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 	trainerV2 = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	// What the arm64 build of the same image is made of. One index digest names
+	// one image per platform, so two builds share a name and no bytes.
+	armBaseLayer = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
 )
+
+// hostPlatform is the build this node runs, and therefore the build a Run
+// placed here is pinned to.
+var hostPlatform = domain.Platform{OS: "linux", Architecture: "amd64"}
 
 // TestANodeOffersTheContentItActuallyHolds is the guard on the defect this
 // contract exists to delete. An offer used to report zero missing bytes
@@ -27,14 +34,34 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 		wantLayer bool
 	}{
 		"a node holding the exact image reports it whole": {
-			held:      []capability.ImageLocality{{ManifestDigest: trainerV2, State: capability.LocalityHot, LayerDigests: []string{baseLayer, topLayer}}},
+			held:      []capability.ImageLocality{{ManifestDigest: trainerV2, Platform: hostPlatform, State: capability.LocalityHot, LayerDigests: []string{baseLayer, topLayer}}},
 			wantWhole: true,
 			wantLayer: true,
 		},
 		"a node part way through a pull reports its layers and not the image": {
-			held:      []capability.ImageLocality{{ManifestDigest: trainerV2, State: capability.LocalityPartial, LayerDigests: []string{baseLayer}}},
+			held:      []capability.ImageLocality{{ManifestDigest: trainerV2, Platform: hostPlatform, State: capability.LocalityPartial, LayerDigests: []string{baseLayer}}},
 			wantWhole: false,
 			wantLayer: true,
+		},
+		// The same digest, another machine's build of it. Reading the name alone
+		// would price this host as holding an image it cannot run and has none
+		// of the bytes of.
+		"a node holding another platform's build of that digest does not hold the image": {
+			held: []capability.ImageLocality{{
+				ManifestDigest: trainerV2,
+				Platform:       domain.Platform{OS: "linux", Architecture: "arm64"},
+				State:          capability.LocalityHot,
+				LayerDigests:   []string{armBaseLayer},
+			}},
+			wantWhole: false,
+			wantLayer: false,
+		},
+		// An image the daemon listed and would not describe. It is here and
+		// nothing can say what it is, which is uncertainty rather than warmth.
+		"a node holding an image it could not describe does not report holding it": {
+			held:      []capability.ImageLocality{{ManifestDigest: trainerV2, State: capability.LocalityUnknown}},
+			wantWhole: false,
+			wantLayer: false,
 		},
 		"a node holding nothing reports nothing rather than looking warm": {
 			held:      nil,

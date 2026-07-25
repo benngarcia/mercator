@@ -37,6 +37,12 @@ const (
 	trainerTopBlob        = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
 	trainerTopDiffID      = "sha256:7777777777777777777777777777777777777777777777777777777777777777"
 
+	// What the arm64 build of the trainer image unpacks to. It lives under the
+	// same index digest as the amd64 build and shares none of its bytes, which
+	// is what makes the digest alone an unsafe answer to "is this here".
+	trainerArmBaseDiffID = "sha256:dddd444444444444444444444444444444444444444444444444444444444444"
+	trainerArmTopDiffID  = "sha256:eeee555555555555555555555555555555555555555555555555555555555555"
+
 	rebuiltIndexDigest    = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
 	rebuiltManifestDigest = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
 	rebuiltConfigDigest   = "sha256:aaaa111111111111111111111111111111111111111111111111111111111111"
@@ -451,17 +457,47 @@ type scriptedRuntime struct {
 	// uncompressed layer identities its runtime unpacked, which is the only
 	// vocabulary a container daemon has. It can never name the compressed blobs
 	// the registry served.
-	unpacks      map[string][]string
+	unpacks map[string][]string
+	// platforms is which build of each digest this machine holds. Anything it
+	// ran is a build it can run; anything an operator fetched by hand may not
+	// be, which is why this is stated per image rather than assumed from the
+	// host.
+	platforms    map[string]domain.Platform
 	observations map[string]capability.WorkloadObservation
 }
 
 func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
-	return &scriptedRuntime{unpacks: unpacks, observations: map[string]capability.WorkloadObservation{}}
+	return &scriptedRuntime{
+		unpacks:      unpacks,
+		platforms:    map[string]domain.Platform{},
+		observations: map[string]capability.WorkloadObservation{},
+	}
+}
+
+// hold puts an image on this machine without Mercator having run it, which is
+// what `docker pull` on the host does.
+func (runtime *scriptedRuntime) hold(digest string, platform domain.Platform, diffIDs []string) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.held = append(runtime.held, digest)
+	runtime.platforms[digest] = platform
+	runtime.unpacks[digest] = diffIDs
+}
+
+// platformOf is the build this machine holds one image as: what it was told
+// when the image was placed there by hand, and the host's own build for
+// anything it ran itself.
+func (runtime *scriptedRuntime) platformOf(digest string) domain.Platform {
+	if platform, stated := runtime.platforms[digest]; stated {
+		return platform
+	}
+	return domain.Platform{OS: "linux", Architecture: "amd64"}
 }
 
 // Facts reports what this machine holds now, which is nothing until it has run
-// something. A runtime that answers with a fixed inventory could never show a
-// node becoming warm by running a workload, which is the whole claim.
+// something or an operator put something there. A runtime that answers with a
+// fixed inventory could never show a node becoming warm by running a workload,
+// which is the whole claim.
 func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, error) {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
@@ -469,6 +505,7 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 	for _, digest := range runtime.held {
 		images = append(images, capability.ImageLocality{
 			ManifestDigest: digest,
+			Platform:       runtime.platformOf(digest),
 			LayerDiffIDs:   runtime.unpacks[digest],
 			State:          capability.LocalityHot,
 			Unpacked:       true,
@@ -645,10 +682,14 @@ func TestPlacementPricesAWarmNodeFromTheResolvedManifest(t *testing.T) {
 }
 
 // TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds is the other half:
-// the host holds the image whole, so the answer is zero seconds and certain,
-// because no link speed enters an answer about content that does not move. It
-// only holds if the digest the registry names an image by and the digest a node
-// reports having pulled are the same string.
+// a node that ran an image is charged nothing to run it again, at full
+// confidence, because no link speed enters an answer about content that does
+// not move. It is the end-to-end statement and not the proof of digest
+// identity: this host holds every layer as well as the image, so the layer
+// subtraction would reach zero too. What holds the two digest spaces to one
+// string is TestResolverStatesEveryLayerInBothDigestSpaces on the registry
+// side, TestANodeHoldsTheImageItRan on the machine side, and the Docker
+// conformance cases against each.
 func TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds(t *testing.T) {
 	fleet := startFleet(t)
 	first := fleet.submitRun(t)
@@ -665,5 +706,36 @@ func TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds(t *testing.T) {
 	pull := fleet.decision(t, second).pullEstimate()
 	if pull.Source != "image_inventory" || pull.Confidence != 1 || pull.Expected != 0 {
 		t.Fatalf("pull estimate = %+v, want nothing to fetch and no doubt about it", pull)
+	}
+}
+
+// TestPlacementChargesTheWholePullForAnotherPlatformsBuild is where holding an
+// image whole stops being a question about a name. An index digest names one
+// image per platform, so an operator who pulled the arm64 build by hand leaves
+// this amd64 machine reporting exactly the digest an amd64 Run is pinned to,
+// holding none of the bytes that Run needs. Reading the digest alone priced an
+// 18GB fetch as nothing to do, at full confidence.
+func TestPlacementChargesTheWholePullForAnotherPlatformsBuild(t *testing.T) {
+	fleet := startFleet(t)
+	fleet.runtime.hold(trainerIndexDigest, domain.Platform{OS: "linux", Architecture: "arm64"},
+		[]string{trainerArmBaseDiffID, trainerArmTopDiffID})
+	waitFor(t, func() bool {
+		return slices.Contains(fleet.nodeOffer(t).Images.LayerDiffIDs, trainerArmBaseDiffID)
+	}, "the node never reported the build an operator put on it")
+	if fleet.nodeOffer(t).Images.Holds(trainerIndexDigest) {
+		t.Fatal("the node reports holding an image whole on the strength of a name it shares with another platform's build")
+	}
+
+	runID := fleet.submitRun(t)
+	fleet.completeWorkload(t, runID, 0)
+	fleet.awaitOutcome(t, runID, "succeeded")
+
+	pull := fleet.decision(t, runID).pullEstimate()
+	want := float64((18_000_000_000+40_000_000)*8) / 1_000_000 / domain.DefaultRegistryDownloadMbps
+	if pull.Expected < want || pull.Expected > want+1 {
+		t.Fatalf("pull expected = %v seconds, want about %v: none of the amd64 build is here", pull.Expected, want)
+	}
+	if pull.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("pull confidence = %v, want %v", pull.Confidence, domain.AssumedLinkConfidence)
 	}
 }

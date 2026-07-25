@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
 )
@@ -35,6 +36,10 @@ type fakeRegistry struct {
 	documents map[string]string
 	// requiredAuth, when set, is the credential the token endpoint accepts.
 	requiredAuth *BasicAuth
+	// refuseWith, when set, is the status every authorized read is answered
+	// with. It is how a registry that is reachable and will not serve gets
+	// written down, which is a different fact from one nothing could reach.
+	refuseWith int
 	// tokenRequests records the scopes the resolver asked tokens for.
 	tokenRequests []string
 	// authorizedReads counts reads that presented the minted bearer token.
@@ -65,6 +70,10 @@ func (registry *fakeRegistry) handler(t *testing.T) http.Handler {
 			return
 		}
 		registry.authorizedReads++
+		if registry.refuseWith != 0 {
+			w.WriteHeader(registry.refuseWith)
+			return
+		}
 		document, ok := registry.documents[digestOf(r.URL.Path)]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
@@ -277,11 +286,12 @@ func TestRegistryRefusalsStayDistinguishable(t *testing.T) {
 	]}`
 
 	testCases := []struct {
-		name      string
-		documents map[string]string
-		auth      *BasicAuth
-		reference string
-		want      error
+		name       string
+		documents  map[string]string
+		auth       *BasicAuth
+		refuseWith int
+		reference  string
+		want       error
 	}{
 		{
 			name:      "an image nobody pushed",
@@ -302,10 +312,19 @@ func TestRegistryRefusalsStayDistinguishable(t *testing.T) {
 			reference: "/library/trainer@" + indexDigest,
 			want:      ErrUnauthorized,
 		},
+		{
+			// The anonymous pull limit, which an operator fixes by waiting or by
+			// authenticating, and not by looking at the network.
+			name:       "a registry rate limiting this client",
+			documents:  catalog,
+			refuseWith: http.StatusTooManyRequests,
+			reference:  "/library/trainer@" + indexDigest,
+			want:       ErrThrottled,
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			registry := &fakeRegistry{documents: testCase.documents, requiredAuth: testCase.auth}
+			registry := &fakeRegistry{documents: testCase.documents, requiredAuth: testCase.auth, refuseWith: testCase.refuseWith}
 			resolver, host := startRegistry(t, registry)
 
 			_, err := resolver.ResolveManifest(context.Background(), host+testCase.reference, linuxAMD64)
@@ -314,6 +333,44 @@ func TestRegistryRefusalsStayDistinguishable(t *testing.T) {
 				t.Fatalf("resolve error = %v, want %v", err, testCase.want)
 			}
 		})
+	}
+}
+
+// TestARegistryNothingCanReachIsItsOwnAnswer is the other half of the
+// distinction. A registry that answers 429 is up and saying wait; a registry
+// nothing can open a connection to, or one that accepts a connection and then
+// answers nothing until the budget runs out, is a network path to look at.
+// Recording both as one unreadable answer tells an operator to do neither.
+func TestARegistryNothingCanReachIsItsOwnAnswer(t *testing.T) {
+	dead := httptest.NewServer(http.NotFoundHandler())
+	host := strings.TrimPrefix(dead.URL, "http://")
+	client := dead.Client()
+	dead.Close()
+	resolver := NewRegistryResolver(WithHTTPClient(client))
+
+	_, err := resolver.ResolveManifest(context.Background(), host+"/library/trainer@"+indexDigest, linuxAMD64)
+
+	if !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("resolve error = %v, want %v", err, ErrUnreachable)
+	}
+}
+
+// TestARegistryThatAnswersNothingInTimeIsUnreachable holds the case the
+// placement budget exists for: the connection is accepted and the answer never
+// comes, which reaches the caller as the same fact as a refused connection.
+func TestARegistryThatAnswersNothingInTimeIsUnreachable(t *testing.T) {
+	silence := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(silence.Close)
+	resolver := NewRegistryResolver(WithHTTPClient(silence.Client()))
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := resolver.ResolveManifest(ctx, strings.TrimPrefix(silence.URL, "http://")+"/library/trainer@"+indexDigest, linuxAMD64)
+
+	if !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("resolve error = %v, want %v", err, ErrUnreachable)
 	}
 }
 

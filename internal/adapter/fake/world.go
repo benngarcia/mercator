@@ -68,7 +68,7 @@ type Image struct {
 }
 
 // RegistryAnswer is how the simulated registry responds to a resolution. A real
-// registry says no three distinguishable ways and an operator acts on each
+// registry says no five distinguishable ways and an operator acts on each
 // differently, so collapsing them into one empty manifest is a fidelity bug.
 type RegistryAnswer string
 
@@ -76,6 +76,8 @@ const (
 	RegistryResolves     RegistryAnswer = ""
 	RegistryUnresolvable RegistryAnswer = "unresolvable"
 	RegistryUnauthorized RegistryAnswer = "unauthorized"
+	RegistryThrottled    RegistryAnswer = "throttled"
+	RegistryUnreachable  RegistryAnswer = "unreachable"
 )
 
 // Machine is one host in the simulated world: a Rental Mercator holds, or a
@@ -375,7 +377,7 @@ func (w *World) recordExecution(offerID, image string) {
 
 // ResolveManifest answers what an image contains from this world's catalog. It
 // is the simulated stand-in for a registry: the scheduler subtracts what a host
-// holds from what this returns, and it says no the same three ways a real
+// holds from what this returns, and it says no the same five ways a real
 // registry does.
 func (w *World) ResolveManifest(_ context.Context, imageDigest string, _ domain.Platform) (domain.ImageManifest, error) {
 	w.mu.Lock()
@@ -389,6 +391,10 @@ func (w *World) ResolveManifest(_ context.Context, imageDigest string, _ domain.
 		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrManifestUnresolvable, imageDigest)
 	case RegistryUnauthorized:
 		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrUnauthorized, imageDigest)
+	case RegistryThrottled:
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrThrottled, imageDigest)
+	case RegistryUnreachable:
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrUnreachable, imageDigest)
 	}
 	manifest := domain.ImageManifest{Known: true, Digest: domain.ReferenceDigest(imageDigest)}
 	for _, layer := range image.Layers {

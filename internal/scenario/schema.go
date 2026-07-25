@@ -227,11 +227,18 @@ const (
 	RegistryResolves     RegistryAnswer = ""
 	RegistryUnresolvable RegistryAnswer = "unresolvable"
 	RegistryUnauthorized RegistryAnswer = "unauthorized"
+	// RegistryThrottled is a registry refusing reads for now, and
+	// RegistryUnreachable one that answered nothing at all. They are separate
+	// answers because an operator waits the first one out and repairs the
+	// second, and a fixture that could not tell them apart would be asserting
+	// the collapse this vocabulary exists to prevent.
+	RegistryThrottled   RegistryAnswer = "throttled"
+	RegistryUnreachable RegistryAnswer = "unreachable"
 )
 
 func (answer RegistryAnswer) valid() bool {
 	switch answer {
-	case RegistryResolves, RegistryUnresolvable, RegistryUnauthorized:
+	case RegistryResolves, RegistryUnresolvable, RegistryUnauthorized, RegistryThrottled, RegistryUnreachable:
 		return true
 	default:
 		return false

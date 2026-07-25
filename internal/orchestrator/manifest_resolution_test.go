@@ -50,8 +50,11 @@ func TestPlacementBoundsWhatItWaitsForAManifest(t *testing.T) {
 // TestPlacementRecordsWhyAManifestCouldNotBeRead is what keeps a registry
 // failure from reading as every candidate being equally warm. The transfer
 // answer is unknown either way; what the decision has to carry is which silence
-// it was, because an image nobody pushed, credentials a registry refused, and a
-// registry that would not answer at all are fixed by different people.
+// it was, because an image nobody pushed, credentials a registry refused, a
+// registry rate limiting Mercator, and a registry that answered nothing at all
+// are fixed by different people doing different things. The classification is
+// the resolver's, made where the response is: a failure it never named stays
+// unreadable rather than being guessed at from its text.
 func TestPlacementRecordsWhyAManifestCouldNotBeRead(t *testing.T) {
 	log := openOrchestratorLog(t)
 	for _, testCase := range []struct {
@@ -62,8 +65,9 @@ func TestPlacementRecordsWhyAManifestCouldNotBeRead(t *testing.T) {
 		{name: "nobody pushed it", failure: fmt.Errorf("read manifest: %w", ociresolver.ErrImageUnknown), want: "registry_image_unknown"},
 		{name: "no build for this platform", failure: fmt.Errorf("read manifest: %w", ociresolver.ErrManifestUnresolvable), want: "registry_manifest_unresolvable"},
 		{name: "credentials refused", failure: fmt.Errorf("read manifest: %w", ociresolver.ErrUnauthorized), want: "registry_unauthorized"},
-		{name: "throttled", failure: errors.New("registry-1.docker.io answered 429 Too Many Requests"), want: "registry_unreadable"},
-		{name: "answered nothing in time", failure: context.DeadlineExceeded, want: "registry_unreadable"},
+		{name: "rate limiting this client", failure: fmt.Errorf("read manifest: %w", ociresolver.ErrThrottled), want: "registry_throttled"},
+		{name: "answered nothing in time", failure: fmt.Errorf("%w: %w", ociresolver.ErrUnreachable, context.DeadlineExceeded), want: "registry_unreachable"},
+		{name: "a refusal nothing has classified", failure: errors.New("the registry answered 503 Service Unavailable"), want: "registry_unreadable"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			resolver := &recordingResolver{failure: testCase.failure}

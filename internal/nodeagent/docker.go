@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 // DockerRuntime executes workloads through the local Docker daemon. It is the
@@ -223,6 +224,13 @@ func (docker *DockerRuntime) info(ctx context.Context) (dockerInfo, error) {
 // served, because it discarded them, so the layers are reported as what the
 // daemon can actually see and matched against a resolved manifest that carries
 // both names.
+//
+// One image the daemon will not describe is one image reported unknown. It is
+// not the whole report: a host with forty images, one of which was pruned
+// between the listing and the read, holds thirty-nine images that nothing has
+// stopped it from stating. Failing the report would have cost this node its
+// session, and a node with no session yet its enrollment, over a fact about one
+// image.
 func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLocality, error) {
 	out, err := docker.run(ctx, "images", "--digests", "--no-trunc", "--format", "{{json .}}")
 	if err != nil {
@@ -243,13 +251,24 @@ func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLoca
 		if image.Digest == "" || image.Digest == "<none>" {
 			continue
 		}
-		diffIDs, err := docker.layerDiffIDs(ctx, image.ID)
+		described, err := docker.describe(ctx, image.ID)
 		if err != nil {
-			return nil, err
+			// A read that ended because this agent is shutting down says
+			// nothing about the machine, so it is the report that failed.
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			locality = append(locality, capability.ImageLocality{
+				ManifestDigest: image.Digest,
+				State:          capability.LocalityUnknown,
+				LastVerifiedAt: docker.now().UTC(),
+			})
+			continue
 		}
 		locality = append(locality, capability.ImageLocality{
 			ManifestDigest: image.Digest,
-			LayerDiffIDs:   diffIDs,
+			Platform:       described.platform(),
+			LayerDiffIDs:   described.DiffIDs,
 			Unpacked:       true,
 			State:          capability.LocalityHot,
 			LastVerifiedAt: docker.now().UTC(),
@@ -258,27 +277,40 @@ func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLoca
 	return locality, nil
 }
 
-// layerDiffIDs reads the uncompressed layer identities one image is made of.
-// A read the daemon will not answer fails the whole report rather than yielding
-// an image with no layers, because the two are indistinguishable downstream and
-// only one of them is true: a node that reported an image it could not describe
-// would be priced a full cold pull, with full confidence, for content it is
-// holding. Losing a heartbeat is how a machine says it does not currently know
-// what it holds. An image removed between the listing and this read costs one
-// heartbeat, and the next one has the answer.
-func (docker *DockerRuntime) layerDiffIDs(ctx context.Context, imageID string) ([]string, error) {
+// describedImage is what the daemon can say about one image it holds: which
+// build it is, and the uncompressed layer identities it unpacked. The build
+// matters because a multi-platform image is listed under one index digest
+// whichever platform was pulled, so a host that fetched the arm64 build and a
+// host that fetched the amd64 build report the same name for different content.
+type describedImage struct {
+	OS           string   `json:"os"`
+	Architecture string   `json:"architecture"`
+	DiffIDs      []string `json:"diff_ids"`
+}
+
+func (described describedImage) platform() domain.Platform {
+	return domain.Platform{OS: described.OS, Architecture: described.Architecture}
+}
+
+// describe reads what one image is and what it is made of. An image reported
+// hot with no layers is indistinguishable downstream from a host holding no
+// part of it, and an image reported without its platform is one nothing can
+// tell from another platform's build under the same digest, so a daemon that
+// will not answer yields an unknown image rather than a confident wrong one.
+func (docker *DockerRuntime) describe(ctx context.Context, imageID string) (describedImage, error) {
 	if imageID == "" {
-		return nil, fmt.Errorf("the daemon listed an image with no ID, so nothing can read its layers")
+		return describedImage{}, fmt.Errorf("the daemon listed an image with no ID, so nothing can read it")
 	}
-	out, err := docker.run(ctx, "image", "inspect", imageID, "--format", "{{json .RootFS.Layers}}")
+	out, err := docker.run(ctx, "image", "inspect", imageID, "--format",
+		`{"os":"{{.Os}}","architecture":"{{.Architecture}}","diff_ids":{{json .RootFS.Layers}}}`)
 	if err != nil {
-		return nil, fmt.Errorf("read the layers of image %s: %w", imageID, err)
+		return describedImage{}, fmt.Errorf("read image %s: %w", imageID, err)
 	}
-	var diffIDs []string
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &diffIDs); err != nil {
-		return nil, fmt.Errorf("decode the layers of image %s: %w", imageID, err)
+	var described describedImage
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &described); err != nil {
+		return describedImage{}, fmt.Errorf("decode image %s: %w", imageID, err)
 	}
-	return diffIDs, nil
+	return described, nil
 }
 
 type dockerContainer struct {

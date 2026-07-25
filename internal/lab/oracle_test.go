@@ -77,10 +77,20 @@ func TestSchedulingMetamorphisms(t *testing.T) {
 	t.Run("warming that loses content", func(t *testing.T) {
 		before := heldEverySpace(input.Offers[0])
 		for name, shrunk := range map[string]domain.ImageInventory{
-			"stopped enumerating its content": {Known: false},
-			"lost a blob digest it held":      {Known: true, LayerDiffIDs: before.Images.LayerDiffIDs, ImageDigests: before.Images.ImageDigests},
-			"lost a diff ID it held":          {Known: true, LayerDigests: before.Images.LayerDigests, ImageDigests: before.Images.ImageDigests},
-			"lost an image it held whole":     {Known: true, LayerDigests: before.Images.LayerDigests, LayerDiffIDs: before.Images.LayerDiffIDs},
+			// Each transform loses exactly one thing, so exactly one clause can
+			// catch it. A host that stopped enumerating still lists what it
+			// listed before: an empty inventory would be caught by the layer
+			// clauses first and leave the Known clause driven by nothing, which
+			// is how a law acquires a term no test can break.
+			"stopped enumerating its content": {
+				Known:        false,
+				LayerDigests: before.Images.LayerDigests,
+				LayerDiffIDs: before.Images.LayerDiffIDs,
+				ImageDigests: before.Images.ImageDigests,
+			},
+			"lost a blob digest it held":  {Known: true, LayerDiffIDs: before.Images.LayerDiffIDs, ImageDigests: before.Images.ImageDigests},
+			"lost a diff ID it held":      {Known: true, LayerDigests: before.Images.LayerDigests, ImageDigests: before.Images.ImageDigests},
+			"lost an image it held whole": {Known: true, LayerDigests: before.Images.LayerDigests, LayerDiffIDs: before.Images.LayerDiffIDs},
 		} {
 			after := before
 			after.Images = shrunk

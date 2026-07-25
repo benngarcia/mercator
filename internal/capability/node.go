@@ -167,8 +167,12 @@ type ImageLocality struct {
 	// multi-platform image is the index digest and never the platform manifest
 	// underneath it. It is the identity a Run is pinned to. A tag is never
 	// image identity.
-	ManifestDigest string          `json:"manifest_digest"`
-	Platform       domain.Platform `json:"platform"`
+	ManifestDigest string `json:"manifest_digest"`
+	// Platform is which build of that digest this machine holds. An index
+	// digest names one image per platform, so the digest alone cannot say
+	// whether what is here is what this host would run: a machine that fetched
+	// another platform's build holds the same name and none of the bytes.
+	Platform domain.Platform `json:"platform"`
 	// LayerDigests is the compressed layer blobs this node holds, named the way
 	// a registry names them. A container daemon cannot enumerate these: it
 	// discards the compressed form when it unpacks an image, which is why
