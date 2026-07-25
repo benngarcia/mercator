@@ -49,6 +49,43 @@ func TestExecutionWarmsARentalUnderTheRealControlPlane(t *testing.T) {
 	}
 }
 
+// TestABorrowedSlotIsPricedTheWholePullEveryTime is the lane's claim at L1. The
+// machine exists and keeps running, so the offer is standing capacity; nothing
+// Mercator has enrolled on it survives the container, so every Run there pays
+// for the image again while the Rental beside it stays warm.
+func TestABorrowedSlotIsPricedTheWholePullEveryTime(t *testing.T) {
+	execution := openConformanceExecution(t, "borrowed-slot-holds-nothing")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	// Runs arrive on the half hour and each occupies its host for a pull plus a
+	// runtime. The Lab reconciles only when it is driven, and liveness.stale_lease_expiry
+	// allows an execution five minutes past its deadline, so this drives at the
+	// cadence a control plane would poll at rather than in one jump.
+	for range 16 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrivals: %v", err)
+		}
+	}
+
+	decisions := bookingDecisions(t, execution)
+	for _, name := range []string{"run-borrowed-first", "run-borrowed-second"} {
+		decision := decisions[name]
+		if decision.SelectedOfferSnapshotID != "local-docker" {
+			t.Fatalf("%s landed on %q, want the cheap borrowed slot", name, decision.SelectedOfferSnapshotID)
+		}
+		if pull := candidatePullSeconds(t, decision, "local-docker"); pull < 200 {
+			t.Fatalf("%s was priced %.2fs of pull on capacity Mercator keeps nothing on", name, pull)
+		}
+	}
+	if pull := candidatePullSeconds(t, decisions["run-borrowed-second"], "held-4090"); pull != 0 {
+		t.Fatalf("the Rental that ran the image is priced %.2fs of pull", pull)
+	}
+}
+
 func openConformanceExecution(t *testing.T, name string) *Execution {
 	t.Helper()
 	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/conformance/" + name + ".json")

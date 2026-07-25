@@ -183,6 +183,8 @@ Phase 3 added:
   the Rental that ran it once and is warm. It is the only fixture in either
   simulator that separates the lane from the kind, and deleting the lane term
   from `KeepsWhatItRuns` fails it.
+- `borrowed-slot-holds-nothing` (conformance): the same claim at L1, through the
+  real orchestrator, event log, and Run projection.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, and only capacity Mercator keeps holds anything beyond
@@ -229,11 +231,6 @@ Run can see it. `enrolled-node-survives-its-first-run` declares
 `execution_warms_capacity` alongside `node_bootstrap` and `rental_schedule`,
 which is the corpus stating what its second step was always waiting on.
 
-Standing capacity in the ephemeral lane is now constructible through
-`WorldSpec.hosts` and asserted by `unenrolled-host-holds-nothing`, but only in
-the placement corpus: no L1 or conformance Blueprint declares a host yet. The
-Lab world builds them, so writing one is a fixture rather than a capability.
-
 A host Mercator has not enrolled still reports `Images.Known: true` holding
 nothing. In production that machine cannot enumerate its own content at all and
 reports `Images.Known: false`, which is uncertainty rather than emptiness. The
@@ -273,7 +270,9 @@ that holds it.
   lane term fails `unenrolled-host-holds-nothing` with
   `borrowed-second: pull_seconds: want at least 200, got 0`, and deleting only
   its kind term fails `TestOneShotCapacityKeepsNothingItPulled`, so both halves
-  of the predicate are load-bearing;
+  of the predicate are load-bearing. The lane break also fails
+  `TestABorrowedSlotIsPricedTheWholePullEveryTime` at L1 with `run-borrowed-second
+  was priced 0.00s of pull on capacity Mercator keeps nothing on`;
 - keeping content at dispatch rather than when it lands fails
   `safety.locality_provenance` in ten Lab tests with `offer "rental-warm" holds
   producer@sha256:aaaa... with no World Tape seed and no content retained against
