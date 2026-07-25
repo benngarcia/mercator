@@ -37,6 +37,46 @@ func TestSmallWorldReferenceSolverAgreesWithProductionFeasibilityAndWinner(t *te
 	}
 }
 
+// TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes keeps the two
+// models from drifting where they now have a second kind of work to account
+// for. A host that fetched an image and never assembled it owes local work and
+// no transfer, and a reference model that folded the two together would disagree
+// with the scheduler about every half-built host for a reason that has nothing
+// to do with either model, which is exactly what an independent oracle exists
+// to rule out.
+func TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes(t *testing.T) {
+	input := smallSchedulingInput(t)
+	for index := range input.Offers {
+		if input.Offers[index].ID != "rental-warm" {
+			continue
+		}
+		// Every byte is here and none of it is ready to mount.
+		input.Offers[index].Images = domain.ImageInventory{
+			Known:              true,
+			ObservedAt:         input.EvaluatedAt,
+			PulledImageDigests: []string{input.Image.Digest},
+		}
+	}
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	warm := candidateFor(t, production, "rental-warm")
+	reference := referenceEstimates(input, offerFor(t, input, "rental-warm"))
+
+	if warm.ImageLocality != domain.LocalityPartial {
+		t.Fatalf("image locality = %q, want partial: the bytes are here and the chain is not", warm.ImageLocality)
+	}
+	if reference.PullSeconds.Expected != warm.Estimates.PullSeconds.Expected {
+		t.Fatalf("reference priced %v seconds of image work, production priced %v",
+			reference.PullSeconds.Expected, warm.Estimates.PullSeconds.Expected)
+	}
+	if warm.Estimates.PullSeconds.Expected == 0 {
+		t.Fatal("assembling 18GB was priced at nothing by both models, so neither is accounting for it")
+	}
+}
+
 func TestSchedulingMetamorphisms(t *testing.T) {
 	input := smallSchedulingInput(t)
 	production := scheduler.New()
@@ -192,6 +232,28 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
 	}
+}
+
+func candidateFor(t *testing.T, decision domain.BookingDecision, offerID string) domain.CandidateDecision {
+	t.Helper()
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == offerID {
+			return candidate
+		}
+	}
+	t.Fatalf("the decision records no candidate for %q", offerID)
+	return domain.CandidateDecision{}
+}
+
+func offerFor(t *testing.T, input scheduler.SchedulingInput, offerID string) domain.OfferSnapshot {
+	t.Helper()
+	for _, offer := range input.Offers {
+		if offer.ID == offerID {
+			return offer
+		}
+	}
+	t.Fatalf("the input carries no offer %q", offerID)
+	return domain.OfferSnapshot{}
 }
 
 func equalStrings(left, right []string) bool {

@@ -338,8 +338,18 @@ type bookingDecision struct {
 	Candidates              []struct {
 		OfferSnapshotID string                    `json:"offer_snapshot_id"`
 		Disposition     string                    `json:"disposition"`
+		ImageLocality   domain.LocalityState      `json:"image_locality"`
 		Estimates       domain.CandidateEstimates `json:"estimates"`
 	} `json:"candidates"`
+}
+
+func (decision bookingDecision) imageLocality() domain.LocalityState {
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == decision.SelectedOfferSnapshotID {
+			return candidate.ImageLocality
+		}
+	}
+	return ""
 }
 
 func (decision bookingDecision) disposition() string {
@@ -462,7 +472,10 @@ type scriptedRuntime struct {
 	// ran is a build it can run; anything an operator fetched by hand may not
 	// be, which is why this is stated per image rather than assumed from the
 	// host.
-	platforms    map[string]domain.Platform
+	platforms map[string]domain.Platform
+	// unassembled is every image whose content is here and whose layer chain
+	// this runtime never built, which it reports as held and not runnable.
+	unassembled  []string
 	observations map[string]capability.WorkloadObservation
 }
 
@@ -484,6 +497,18 @@ func (runtime *scriptedRuntime) hold(digest string, platform domain.Platform, di
 	runtime.unpacks[digest] = diffIDs
 }
 
+// holdUnassembled puts an image on this machine that arrived and was never
+// unpacked: every byte is here and no container can be started on it. That is
+// where a container runtime sits whenever content has landed and the snapshot
+// chain has not been built, and it is the state this node used to report as hot.
+func (runtime *scriptedRuntime) holdUnassembled(digest string, platform domain.Platform) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.held = append(runtime.held, digest)
+	runtime.platforms[digest] = platform
+	runtime.unassembled = append(runtime.unassembled, digest)
+}
+
 // platformOf is the build this machine holds one image as: what it was told
 // when the image was placed there by hand, and the host's own build for
 // anything it ran itself.
@@ -503,11 +528,19 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 	defer runtime.mu.Unlock()
 	images := make([]capability.ImageLocality, 0, len(runtime.held))
 	for _, digest := range runtime.held {
+		if slices.Contains(runtime.unassembled, digest) {
+			images = append(images, capability.ImageLocality{
+				ManifestDigest: digest,
+				Platform:       runtime.platformOf(digest),
+				State:          domain.LocalityCold,
+			})
+			continue
+		}
 		images = append(images, capability.ImageLocality{
 			ManifestDigest: digest,
 			Platform:       runtime.platformOf(digest),
 			LayerDiffIDs:   runtime.unpacks[digest],
-			State:          capability.LocalityHot,
+			State:          domain.LocalityHot,
 			Unpacked:       true,
 		})
 	}
@@ -706,6 +739,42 @@ func TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds(t *testing.T) {
 	pull := fleet.decision(t, second).pullEstimate()
 	if pull.Source != "image_inventory" || pull.Confidence != 1 || pull.Expected != 0 {
 		t.Fatalf("pull estimate = %+v, want nothing to fetch and no doubt about it", pull)
+	}
+}
+
+// TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked is the node half
+// of "unpacked is not the same as pulled", driven through the production daemon
+// against a real registry. Every byte of the image is on this machine and no
+// container can start on it, which is exactly what the node used to report as
+// hot and unpacked for anything it could list. The decision now records partial
+// and charges the local assembly that is left, at less than full confidence,
+// rather than either an instant start or a pull of content already on the disk.
+func TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked(t *testing.T) {
+	fleet := startFleet(t)
+	fleet.runtime.holdUnassembled(trainerIndexDigest, domain.Platform{OS: "linux", Architecture: "amd64"})
+	waitFor(t, func() bool {
+		return fleet.nodeOffer(t).Images.Pulled(trainerIndexDigest)
+	}, "the node never reported the image it fetched and never assembled")
+	if fleet.nodeOffer(t).Images.Holds(trainerIndexDigest) {
+		t.Fatal("the node reports being able to run an image whose layer chain it never built")
+	}
+
+	runID := fleet.submitRun(t)
+	fleet.completeWorkload(t, runID, 0)
+	fleet.awaitOutcome(t, runID, "succeeded")
+
+	decision := fleet.decision(t, runID)
+	if decision.imageLocality() != domain.LocalityPartial {
+		t.Fatalf("image locality = %q, want partial: every byte is here and none of it is ready", decision.imageLocality())
+	}
+	pull := decision.pullEstimate()
+	want := float64(18_000_000_000+40_000_000) / 1_000_000 / domain.AssumedUnpackMBps
+	if pull.Expected < want || pull.Expected > want+1 {
+		t.Fatalf("pull expected = %v seconds, want about %v: the bytes are here and the chain is not", pull.Expected, want)
+	}
+	if pull.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("pull confidence = %v, want %v: nothing has measured how fast this machine unpacks",
+			pull.Confidence, domain.AssumedLinkConfidence)
 	}
 }
 

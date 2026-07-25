@@ -74,9 +74,21 @@ type hostState struct {
 	// is a property of its runtime.
 	heldLayers map[string]scenario.LayerSpec
 	heldImages map[string]bool
+	// packed is content this host fetched and never unpacked, keyed by layer
+	// blob digest and by image digest. It holds those bytes and cannot start a
+	// container on them, so it can name no layer identity for them: a runtime
+	// learns a layer's identity by unpacking it. Everything else it holds is
+	// assembled, because a pull that lands unpacks as it goes.
+	packed map[string]bool
 	// reportsDiffIDs makes this host enumerate its layers the way a Docker
 	// daemon does: uncompressed diff IDs, never compressed blob digests.
 	reportsDiffIDs bool
+	// verifiedAt is when this host last enumerated itself, and validUntil how
+	// long it stands behind that answer. A host that keeps looking answers as
+	// of now and states no bound; one the World Tape declared to have looked
+	// once says so, and its answer stops being one when the bound passes.
+	verifiedAt time.Time
+	validUntil time.Time
 }
 
 // missing is what launching this image here would still have to fetch, and how
@@ -101,8 +113,10 @@ func (state hostState) missing(image string, layers []scenario.LayerSpec) ([]sce
 func (state *hostState) keep(image string, layers []scenario.LayerSpec) {
 	for _, layer := range layers {
 		state.heldLayers[layer.Digest] = layer
+		delete(state.packed, layer.Digest)
 	}
 	state.heldImages[domain.ReferenceDigest(image)] = true
+	delete(state.packed, domain.ReferenceDigest(image))
 }
 
 // seededDigests is everything the World Tape put on this host before any Run
@@ -124,17 +138,28 @@ func (state hostState) seededDigests() map[string]bool {
 }
 
 // inventory is what this host says it holds, in the digest space its runtime
-// can enumerate. A Docker host names its layers by uncompressed diff ID and has
-// no way to name the compressed blob a registry served it, so answering in both
-// spaces would be the world lending a machine knowledge it does not have.
+// can enumerate, and separating what it can start on from what it has only
+// fetched. A Docker host names its layers by uncompressed diff ID and has no way
+// to name the compressed blob a registry served it, so answering in both spaces
+// would be the world lending a machine knowledge it does not have.
 func (state hostState) inventory(at time.Time) domain.ImageInventory {
-	inventory := domain.ImageInventory{
-		Known:        true,
-		ObservedAt:   at,
-		ImageDigests: slices.Sorted(maps.Keys(state.heldImages)),
+	observed := at
+	if !state.verifiedAt.IsZero() {
+		observed = state.verifiedAt
+	}
+	inventory := domain.ImageInventory{Known: true, ObservedAt: observed, ValidUntil: state.validUntil}
+	for _, image := range slices.Sorted(maps.Keys(state.heldImages)) {
+		if state.packed[image] {
+			inventory.PulledImageDigests = append(inventory.PulledImageDigests, image)
+			continue
+		}
+		inventory.ImageDigests = append(inventory.ImageDigests, image)
 	}
 	for _, digest := range slices.Sorted(maps.Keys(state.heldLayers)) {
 		layer := state.heldLayers[digest]
+		if state.packed[digest] {
+			continue
+		}
 		if state.reportsDiffIDs {
 			if layer.DiffID != "" {
 				inventory.LayerDiffIDs = append(inventory.LayerDiffIDs, layer.DiffID)
@@ -257,17 +282,25 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			offer:          labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
 			heldLayers:     map[string]scenario.LayerSpec{},
 			heldImages:     map[string]bool{},
+			packed:         map[string]bool{},
 			reportsDiffIDs: rental.ReportsDiffIDs,
+		}
+		if rental.InventoryValidFor != nil {
+			state.verifiedAt = tape.InitialWorld.Start()
+			state.validUntil = state.verifiedAt.Add(rental.InventoryValidFor.Duration())
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = layer
+				state.packed[layer.Digest] = !rental.IsUnpacked()
 			}
 			state.heldImages[domain.ReferenceDigest(reference)] = true
+			state.packed[domain.ReferenceDigest(reference)] = !rental.IsUnpacked()
 		}
 		for _, digest := range rental.CachedLayers {
 			state.heldLayers[digest] = findLayer(tape.InitialWorld, digest)
+			state.packed[digest] = !rental.IsUnpacked()
 		}
 		world.seededLocality[rental.ID] = state.seededDigests()
 		world.truth[rental.ID] = cloneHostState(state)
@@ -285,6 +318,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			offer:      labOffer(host.ID, domain.OfferKindStanding, domain.LaneEphemeral, host.RatePerHourUSD, host.Resources),
 			heldLayers: map[string]scenario.LayerSpec{},
 			heldImages: map[string]bool{},
+			packed:     map[string]bool{},
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
 		world.seededLocality[host.ID] = state.seededDigests()
@@ -1264,7 +1298,10 @@ func cloneHostState(state hostState) hostState {
 		offer:          state.offer,
 		heldLayers:     cloneMap(state.heldLayers),
 		heldImages:     cloneMap(state.heldImages),
+		packed:         cloneMap(state.packed),
 		reportsDiffIDs: state.reportsDiffIDs,
+		verifiedAt:     state.verifiedAt,
+		validUntil:     state.validUntil,
 	}
 }
 

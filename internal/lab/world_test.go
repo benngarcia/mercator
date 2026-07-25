@@ -581,6 +581,33 @@ func TestLocalityProvenanceAllowsAHostToLoseWhatItHeld(t *testing.T) {
 	}
 }
 
+// TestLocalityProvenanceCoversContentAHostFetchedAndNeverAssembled closes the
+// gap the pulled-but-not-unpacked vocabulary opened. Content is content whether
+// or not a container can be started on it, so a host reporting an image nothing
+// delivered is the same violation under either name. A rule that only inspected
+// what was ready to run would have left the other half of every inventory
+// unpoliced.
+func TestLocalityProvenanceCoversContentAHostFetchedAndNeverAssembled(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "rental-warm",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneReusable,
+			Images: domain.ImageInventory{
+				Known:              true,
+				PulledImageDigests: []string{"trainer@sha256:never-delivered"},
+			},
+		}}},
+		SeededLocality: map[string]map[string]bool{"rental-warm": {}},
+	}
+
+	err := localityProvenance(observation)
+
+	if err == nil {
+		t.Fatal("a host reported holding unassembled content nothing delivered and nothing objected")
+	}
+}
+
 // TestSimulatedRegistryRefusesTheSameThreeWaysARealOneDoes keeps the Lab honest
 // about what it is standing in for. A registry that collapses "nobody pushed
 // this", "there is no build for this platform", and "your credentials were

@@ -100,11 +100,25 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
 			machine.Hold(fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)})
+			if !rental.IsUnpacked() {
+				machine.Pack(layer.Digest, layer.DiffID)
+			}
 		}
 		machine.HeldImages[domain.ReferenceDigest(ref)] = true
+		if !rental.IsUnpacked() {
+			machine.Pack(domain.ReferenceDigest(ref))
+		}
 	}
 	for _, digest := range rental.CachedLayers {
-		machine.Hold(findLayer(spec, digest))
+		layer := findLayer(spec, digest)
+		machine.Hold(layer)
+		if !rental.IsUnpacked() {
+			machine.Pack(layer.Digest, layer.DiffID)
+		}
+	}
+	if rental.InventoryValidFor != nil {
+		machine.InventoryObservedAt = start
+		machine.InventoryValidUntil = start.Add(rental.InventoryValidFor.Duration())
 	}
 	if running := schedule.Running; running != nil {
 		machine.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())

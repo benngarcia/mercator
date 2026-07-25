@@ -176,10 +176,10 @@ func TestResolvedManifestRecognisesAHostThatOnlyKnowsDiffIDs(t *testing.T) {
 	}
 
 	dockerHost := domain.ImageInventory{Known: true, LayerDiffIDs: []string{baseDiffID, topDiffID}}
-	bytes, known := manifest.TransferBytes(dockerHost)
+	work, locality := manifest.StartWork(time.Now(), dockerHost)
 
-	if !known || bytes != 0 {
-		t.Fatalf("a host holding every diff ID transfers %d bytes (known=%v), want 0", bytes, known)
+	if locality != domain.LocalityHot || !work.None() {
+		t.Fatalf("a host holding every diff ID owes %+v and is %q, want nothing and hot", work, locality)
 	}
 }
 

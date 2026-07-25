@@ -510,7 +510,11 @@ func retainedByOffer(effects []EffectRecord) (map[string]map[string]bool, error)
 }
 
 func heldDigests(inventory domain.ImageInventory) []string {
-	return append(slices.Clone(inventory.ImageDigests), inventory.LayerDigests...)
+	held := append(slices.Clone(inventory.ImageDigests), inventory.LayerDigests...)
+	// Content a host fetched and never assembled is content it holds. Whether
+	// it can start on those bytes is the offer projection's business; where
+	// they came from is this rule's, and they came from somewhere.
+	return append(held, inventory.PulledImageDigests...)
 }
 
 func selectedCandidate(decision domain.BookingDecision) *domain.CandidateDecision {

@@ -50,6 +50,30 @@ func (e CandidateDecisionDisposition) Valid() bool {
 	}
 }
 
+// Defines values for CandidateDecisionImageLocality.
+const (
+	Cold    CandidateDecisionImageLocality = "cold"
+	Hot     CandidateDecisionImageLocality = "hot"
+	Partial CandidateDecisionImageLocality = "partial"
+	Unknown CandidateDecisionImageLocality = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the CandidateDecisionImageLocality enum.
+func (e CandidateDecisionImageLocality) Valid() bool {
+	switch e {
+	case Cold:
+		return true
+	case Hot:
+		return true
+	case Partial:
+		return true
+	case Unknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CapabilityProfileOfferKinds.
 const (
 	Provisionable CapabilityProfileOfferKinds = "provisionable"
@@ -270,19 +294,25 @@ type CPURequirement struct {
 
 // CandidateDecision defines model for CandidateDecision.
 type CandidateDecision struct {
-	AdapterType     string                       `json:"adapter_type,omitempty"`
-	ConnectionId    string                       `json:"connection_id,omitempty"`
-	Disposition     CandidateDecisionDisposition `json:"disposition"`
-	Estimates       CandidateEstimates           `json:"estimates"`
-	Feasible        bool                         `json:"feasible"`
-	NativeRef       string                       `json:"native_ref,omitempty"`
-	OfferSnapshotId string                       `json:"offer_snapshot_id"`
-	Rejections      []Violation                  `json:"rejections,omitempty"`
-	ScoreUsd        float64                      `json:"score_usd,omitempty"`
+	AdapterType  string                       `json:"adapter_type,omitempty"`
+	ConnectionId string                       `json:"connection_id,omitempty"`
+	Disposition  CandidateDecisionDisposition `json:"disposition"`
+	Estimates    CandidateEstimates           `json:"estimates"`
+	Feasible     bool                         `json:"feasible"`
+
+	// ImageLocality How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility.
+	ImageLocality   CandidateDecisionImageLocality `json:"image_locality,omitempty"`
+	NativeRef       string                         `json:"native_ref,omitempty"`
+	OfferSnapshotId string                         `json:"offer_snapshot_id"`
+	Rejections      []Violation                    `json:"rejections,omitempty"`
+	ScoreUsd        float64                        `json:"score_usd,omitempty"`
 }
 
 // CandidateDecisionDisposition defines model for CandidateDecision.Disposition.
 type CandidateDecisionDisposition string
+
+// CandidateDecisionImageLocality How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility.
+type CandidateDecisionImageLocality string
 
 // CandidateEstimates defines model for CandidateEstimates.
 type CandidateEstimates struct {
@@ -466,20 +496,26 @@ type ExecutionPolicy struct {
 
 // ImageInventory What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves.
 type ImageInventory struct {
-	// ImageDigests Image manifests this host holds whole.
+	// ImageDigests Image manifests this host holds whole and has unpacked, so it can start a container on one now.
 	ImageDigests []string `json:"image_digests,omitempty"`
 
 	// Known Whether the holder enumerated its content at all. False is an honest answer rather than a failure: a provider that cannot say what a fresh machine holds says so, and the uncertainty is priced rather than mistaken for warmth.
 	Known bool `json:"known"`
 
-	// LayerDiffIds The same content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in.
+	// LayerDiffIds The same unpacked content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in.
 	LayerDiffIds []string `json:"layer_diff_ids,omitempty"`
 
-	// LayerDigests Compressed layer blobs this host holds, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first.
+	// LayerDigests Compressed layer blobs this host holds unpacked, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first.
 	LayerDigests []string `json:"layer_digests,omitempty"`
 
 	// ObservedAt When the holder last looked. Locality decays, so the age of this answer is material.
 	ObservedAt time.Time `json:"observed_at,omitempty"`
+
+	// PulledImageDigests Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull.
+	PulledImageDigests []string `json:"pulled_image_digests,omitempty"`
+
+	// ValidUntil How long the holder stands behind this enumeration. Only the holder knows how often it looks, so only the holder can say when its answer stops being one. Past it, what is here is a question again rather than a fact, and a stale answer is priced as uncertainty rather than as warmth.
+	ValidUntil time.Time `json:"valid_until,omitempty"`
 }
 
 // InviteNodeRequest defines model for InviteNodeRequest.

@@ -110,7 +110,8 @@ complete because it works against a live provider.
   that running makes a Rental warm. Launching now pulls what the host is missing
   and leaves it there once the bytes have arrived. This is also the first writer
   of `ImageInventory.ImageDigests`, which makes the whole-image fast path in
-  `TransferBytes` live rather than dead.
+  the manifest subtraction (then `TransferBytes`, now `StartWork`) live rather
+  than dead.
   `domain.OfferSnapshot.KeepsWhatItRuns` is the single answer to whether content
   survives here, read by both simulators and the Lab invariant so they cannot
   drift: a provisionable offer is a machine that does not exist yet, and an
@@ -237,6 +238,39 @@ complete because it works against a live provider.
     `TestResolverStatesEveryLayerInBothDigestSpaces` and the Docker conformance
     case. The claim now says what the case actually holds and names the tests
     that hold the rest.
+- [x] 2026-07-25: Make a node report what it established rather than what it
+  could list, and withdraw the four capabilities it declared and does not
+  perform. `internal/nodeagent/docker.go` hardcoded `Unpacked: true` and
+  `State: hot` for every image `docker images --digests` returned, so a machine
+  holding content it cannot start a container on was priced an instant start,
+  and partial reuse was invisible on any real node. Being listed says the
+  content arrived; only the storage driver's own layer chain says the image is
+  assembled. The runtime now reads that chain beside `RootFS.Layers` in one
+  `docker image inspect`, reports only the layers it can mount, and states hot,
+  partial, cold, or unknown for what it found. The chain is ordered from the
+  base up exactly as the config orders diff IDs, so a chain of n directories is
+  the image's first n layers and no others.
+  - `domain.ImageInventory` gained `PulledImageDigests` and `ValidUntil`, and
+    `TransferBytes` became `StartWork`, which answers with two kinds of work and
+    a `domain.LocalityState`. Fetching and unpacking are different work over
+    different resources: a host that fetched an image and never assembled it
+    owes local assembly at `AssumedUnpackMBps` and no transfer, and charging it
+    a pull would bill the network twice for bytes already on the disk while
+    sending an operator after a problem that is not there.
+  - The decision records which of the four states each candidate was found in.
+    Only the control plane can state it: the host says what it holds, the
+    manifest says what the image is, and the answer is the subtraction.
+    `capability.LocalityState` is gone, because two vocabularies for one answer
+    is how they drift.
+  - `ObservedAt` said the age of an inventory was material and nothing read it.
+    A holder now states how long it stands behind what it enumerated, and past
+    that moment its answer is `inventory_stale` rather than warmth. The node
+    stands behind its enumeration exactly as long as the offer built from it.
+  - `node.Registry.NodeSupport` declared ArtifactReplicas, CacheMounts, Prewarm,
+    and GarbageCollection true while the Docker runtime implemented none of
+    them, which is the failure ADR 0005 exists to prevent one layer down: a
+    negotiated capability set is a promise Placement routes work against. Each
+    becomes true again in the slice that earns it.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -258,7 +292,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, and registry manifest resolution done at L1 and against real registries; artifacts, caches, and prefetch remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; artifacts, caches, and prefetch remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -314,6 +348,16 @@ Phase 3 added:
   because one is waited out and the other is a network path to repair. Deleting
   either classification from `ociresolver.Unreadable` collapses both onto
   `registry_unreadable` and fails it.
+- `unpacked-is-not-the-same-as-pulled` (green): four machines hold every byte of
+  one 18.04GB image and are not in the same condition. The one that assembled it
+  wins at zero seconds; the one that fetched it and never unpacked it is
+  recorded partial and priced the assembly it still owes, which is what stops a
+  machine sitting on the image from being priced either an instant start or a
+  fresh pull. The last two differ only in how long they stand behind what they
+  said, so half an hour in one is `inventory_stale` and unknown while the other
+  is still hot. No new Lab invariant: what a node says it holds is an
+  observation, and the rule that matters is `safety.locality_provenance`, which
+  now reads unassembled content too.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, and only capacity Mercator keeps holds anything beyond
@@ -322,7 +366,7 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 19 regression Blueprints: 10 green and 9 target, beside one demo,
+The corpus is 20 regression Blueprints: 11 green and 9 target, beside one demo,
 one minimized case, and one conformance Blueprint.
 
 ## What phase 2 does not yet do
@@ -390,6 +434,84 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 3 exact node reporting
+
+On 2026-07-25, `unpacked-is-not-the-same-as-pulled` was written against the
+world and promoted in the same change once green. Each claim it makes is held by
+a deliberate break that fails it:
+
+- reporting every layer the config declares rather than every layer the storage
+  driver can mount fails `TestDockerRuntimeSeparatesWhatItUnpackedFromWhatItPulled`
+  three ways at once, starting with `an image missing part of its chain was
+  reported ... Unpacked:true State:hot, want partial`;
+- projecting a whole-image identity without requiring `Unpacked`, and dropping
+  the pulled projection, fails `TestANodeOffersTheContentItActuallyHolds` on both
+  new cases with `pulled and not assembled = false, want true`, and fails the
+  daemon case with `the node never reported the image it fetched and never
+  assembled`;
+- pricing content a host pulled and never assembled at nothing fails the
+  Blueprint on four assertions at once, starting with `expected "ready-host" to
+  win, but the decision placed on "pulled-host"` and including `image_locality:
+  want "partial", got "hot"`, and fails
+  `TestWhatANodeHoldsDecidesWhatItStillHasToDo` on the two assembly cases;
+- letting an inventory answer forever fails the Blueprint with `pull_source:
+  want "inventory_stale", got "image_inventory"` and `image_locality: want
+  "unknown", got "hot"` for the host that looked once, and fails
+  `TestANodeStopsStandingBehindWhatItSaidWhenItStopsLooking`;
+- restoring any of the four unearned declarations fails
+  `TestANodeDeclaresOnlyWhatItsRuntimePerforms` with `the node declares
+  artifact_replicas, and nothing on the machine performs it`;
+- dropping the assembly term from the Lab's reference model fails
+  `TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes` with `reference
+  priced 0.5 seconds of image work, production priced 72.82`. That case exists
+  because the generated oracle worlds hold no unassembled content, so without it
+  the reference model's new term was driven by nothing;
+- dropping unassembled content from `heldDigests` fails
+  `TestLocalityProvenanceCoversContentAHostFetchedAndNeverAssembled` with `a host
+  reported holding unassembled content nothing delivered and nothing objected`.
+
+Against the Docker 29.4.0 daemon on this machine, over the OrbStack VM's
+overlay2 store:
+
+- `TestDockerRuntimeReportsTheLayersItUnpacked` asserts the reported diff IDs
+  match `docker image inspect --format '{{json .RootFS.Layers}}'` exactly, the
+  reported platform matches the build the daemon holds, and the image comes back
+  hot and unpacked;
+- `TestEveryImageThisDaemonHoldsIsAssembled` is the rule's other half. Every
+  image this daemon lists is one it can run, so every one must come back hot: a
+  readiness test that called a working host partial would price local assembly
+  nobody owes. Checked by hand across the 12 images on this machine, the mount
+  chain depth equals `len(.RootFS.Layers)` for every one.
+
+Two limits are worth stating rather than hiding.
+
+The daemon is the only authority on its own storage, and the agent does not stat
+it. A node agent may run beside a daemon whose filesystem it cannot see, which is
+true of every Docker Desktop and OrbStack install, so statting the paths
+`GraphDriver.Data` names would report every image on such a host as unassembled.
+What the runtime reads is the daemon's own account of the chain it can mount,
+which is exactly the evidence a graph-driver daemon and a content-store daemon
+both offer: the latter reports no chain at all for an image it has fetched and
+not unpacked, which is where the state routinely occurs. Constructing a broken
+chain on a live daemon requires writing inside its storage root, so the partial
+and cold arms are driven by a scripted daemon rather than by damaging the one on
+this machine.
+
+Neither simulated world models the time assembly takes. A fixture's `unpacked`
+flag says what a host reports, and the world's own transfer model is unchanged,
+so a Run placed on a half-assembled host in the Lab would start as soon as its
+bytes were there. `unpacked-is-not-the-same-as-pulled` is a placement fixture
+for that reason: it asserts the Booking Decision and does not run the workload.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/capability ./internal/scheduler \
+  ./internal/lab ./internal/scenario ./internal/adapter/fake ./internal/node \
+  ./internal/nodeagent ./internal/daemon ./internal/ociresolver \
+  ./internal/httpapi -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
 
 ### Phase 3 registry manifest resolution
 
@@ -506,6 +628,11 @@ node speaking the real node protocol:
   `TestResolverStatesEveryLayerInBothDigestSpaces` on the registry side and
   `TestANodeHoldsTheImageItRan` on the machine side, each against Docker in the
   conformance cases;
+- `TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked` is the machine
+  half of "unpacked is not the same as pulled" through the production daemon:
+  every byte of the image is on the node, no container can start on it, and the
+  decision records partial and charges the assembly rather than an instant start
+  or a pull of content already on the disk;
 - `TestPlacementChargesTheWholePullForAnotherPlatformsBuild` is where holding an
   image whole stops being a question about a name: an operator pulled the arm64
   build by hand, the machine reports exactly the digest the amd64 Run is pinned

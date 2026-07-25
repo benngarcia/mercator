@@ -470,3 +470,30 @@ func report(t *testing.T, registry *node.Registry, nodeID, sessionToken string, 
 }
 
 func exitCode(code int) *int { return &code }
+
+// TestANodeDeclaresOnlyWhatItsRuntimePerforms is ADR 0005 one layer down. A
+// negotiated capability set is a promise Placement will route work against, so
+// a declaration the runtime cannot honour is capacity Mercator believes in and
+// does not have. This node declared Artifact replicas, Cache Mounts, prewarming,
+// and garbage collection while the Docker runtime implemented none of them; each
+// becomes true again in the slice that earns it.
+func TestANodeDeclaresOnlyWhatItsRuntimePerforms(t *testing.T) {
+	registry, _ := newRegistry(t)
+
+	support := registry.NodeSupport()
+
+	if !support.ExactImageInventory {
+		t.Error("the agent enumerates the images and layers it unpacked, so this one is earned")
+	}
+	unearned := map[string]bool{
+		"artifact_replicas":  support.ArtifactReplicas,
+		"cache_mounts":       support.CacheMounts,
+		"prewarm":            support.Prewarm,
+		"garbage_collection": support.GarbageCollection,
+	}
+	for name, declared := range unearned {
+		if declared {
+			t.Errorf("the node declares %s, and nothing on the machine performs it", name)
+		}
+	}
+}

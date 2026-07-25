@@ -320,12 +320,12 @@ func TestADockerHostIsWarmAgainstAManifestItCannotPronounce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	bytes, known := manifest.TransferBytes(inventory)
+	work, locality := manifest.StartWork(worldStart, inventory)
 
 	if len(inventory.LayerDigests) != 0 {
 		t.Fatalf("a Docker host reported compressed blob digests it cannot see: %+v", inventory.LayerDigests)
 	}
-	if !known || bytes != 0 {
-		t.Fatalf("the host transfers %d bytes (known=%v), want nothing: it holds every layer", bytes, known)
+	if locality != domain.LocalityHot || !work.None() {
+		t.Fatalf("the host owes %+v and is %q, want nothing and hot: it holds every layer", work, locality)
 	}
 }

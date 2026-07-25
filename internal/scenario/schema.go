@@ -274,13 +274,32 @@ type RentalSpec struct {
 	// daemon does, in uncompressed diff IDs and never in the compressed blob
 	// digests a registry manifest lists. It changes nothing about what the host
 	// holds, only which name it has for it.
-	ReportsDiffIDs   bool           `json:"reports_diff_ids,omitempty"`
-	ArtifactReplicas []string       `json:"artifact_replicas,omitempty"`
-	CacheMounts      []string       `json:"cache_mounts,omitempty"`
-	RatePerHourUSD   float64        `json:"rate_per_hour_usd"`
-	Billing          BillingSpec    `json:"billing,omitempty"`
-	Resources        *ResourcesSpec `json:"resources,omitempty"`
+	ReportsDiffIDs bool `json:"reports_diff_ids,omitempty"`
+	// Unpacked states whether the cached content above is assembled into a
+	// layer chain a container can start on. Fetching and unpacking are separate
+	// acts: a host can hold every byte of an image and still be minutes of local
+	// work from running it, and a fixture that could not say so could not tell a
+	// machine that is ready from one that is only close. Omitted means unpacked,
+	// which is what a completed pull leaves behind.
+	Unpacked *bool `json:"unpacked,omitempty"`
+	// InventoryValidFor is how long this host stands behind what it says it
+	// holds, measured from the world's start. Stating it makes this a host that
+	// looked once and has not looked since, which is how a fixture writes down
+	// locality that has gone stale. Omitted means the host re-enumerates
+	// whenever it is asked and states no bound, which is what an enrolled node
+	// heartbeating into the control plane does.
+	InventoryValidFor *Duration      `json:"inventory_valid_for,omitempty"`
+	ArtifactReplicas  []string       `json:"artifact_replicas,omitempty"`
+	CacheMounts       []string       `json:"cache_mounts,omitempty"`
+	RatePerHourUSD    float64        `json:"rate_per_hour_usd"`
+	Billing           BillingSpec    `json:"billing,omitempty"`
+	Resources         *ResourcesSpec `json:"resources,omitempty"`
 }
+
+// IsUnpacked reports whether this host assembled the content it was seeded
+// with. A fixture that says nothing is describing the ordinary case: a machine
+// whose pulls completed.
+func (spec RentalSpec) IsUnpacked() bool { return spec.Unpacked == nil || *spec.Unpacked }
 
 // RentalScheduleSpec is Mercator's ordered sequence of nonterminal Bookings
 // assigned to one Rental. At most one Booking runs; any number may wait.
@@ -462,6 +481,11 @@ type CandidateExpectation struct {
 	// these two fields tell them apart.
 	PullSource     string   `json:"pull_source,omitempty"`
 	PullConfidence *float64 `json:"pull_confidence,omitempty"`
+	// ImageLocality asserts how much of the Run's image this candidate was
+	// found to have: hot, partial, cold, or unknown. It is the qualitative half
+	// of the pull answer, and the only one that separates a machine that has to
+	// fetch from one that only has to finish unpacking.
+	ImageLocality domain.LocalityState `json:"image_locality,omitempty"`
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`

@@ -869,11 +869,18 @@ export interface components {
              * @description When the holder last looked. Locality decays, so the age of this answer is material.
              */
             observed_at?: string;
-            /** @description Image manifests this host holds whole. */
+            /**
+             * Format: date-time
+             * @description How long the holder stands behind this enumeration. Only the holder knows how often it looks, so only the holder can say when its answer stops being one. Past it, what is here is a question again rather than a fact, and a stale answer is priced as uncertainty rather than as warmth.
+             */
+            valid_until?: string;
+            /** @description Image manifests this host holds whole and has unpacked, so it can start a container on one now. */
             image_digests?: string[];
-            /** @description Compressed layer blobs this host holds, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first. */
+            /** @description Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull. */
+            pulled_image_digests?: string[];
+            /** @description Compressed layer blobs this host holds unpacked, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first. */
             layer_digests?: string[];
-            /** @description The same content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in. */
+            /** @description The same unpacked content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in. */
             layer_diff_ids?: string[];
         };
         CapacityEvidence: {
@@ -941,6 +948,11 @@ export interface components {
             disposition: "run_now_existing_rental" | "queue_existing_rental" | "provision_fresh_rental";
             feasible: boolean;
             rejections?: components["schemas"]["Violation"][];
+            /**
+             * @description How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility.
+             * @enum {string}
+             */
+            image_locality?: "hot" | "partial" | "cold" | "unknown";
             estimates: components["schemas"]["CandidateEstimates"];
             /** Format: double */
             score_usd?: number;

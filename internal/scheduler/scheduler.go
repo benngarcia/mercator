@@ -179,7 +179,7 @@ func runtimeBounds(workload domain.WorkloadRevision) (float64, float64) {
 
 func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
 	rejections := feasibilityViolations(input, offer)
-	estimates := estimateCandidate(input, offer)
+	estimates, locality := estimateCandidate(input, offer)
 	score := estimates.CostUSD.Expected +
 		input.Weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
 		input.Weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
@@ -197,6 +197,7 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 		Disposition:     candidateDisposition(input, offer),
 		Feasible:        len(rejections) == 0,
 		Rejections:      rejections,
+		ImageLocality:   locality,
 		Estimates:       estimates,
 		ScoreUSD:        round(score, 6),
 	}
@@ -279,7 +280,7 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	if !offer.Pricing.Known && !workload.Spec.Placement.AllowUnknownPricing {
 		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "pricing", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown pricing."})
 	}
-	estimates := estimateCandidate(input, offer)
+	estimates, _ := estimateCandidate(input, offer)
 	if workload.Spec.Placement.MaxP90StartSeconds > 0 && estimates.StartSeconds.P90 > workload.Spec.Placement.MaxP90StartSeconds {
 		violations = append(violations, domain.Violation{Code: "LATENCY_SLO_EXCEEDED", Path: "placement.max_p90_start_seconds", Required: workload.Spec.Placement.MaxP90StartSeconds, Offered: estimates.StartSeconds.P90, Message: "Offer exceeds the requested p90 start latency."})
 	}
@@ -289,7 +290,7 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	return violations
 }
 
-func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
+func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) (domain.CandidateEstimates, domain.LocalityState) {
 	queue := 0.0
 	if schedule, ok := input.Schedules[offer.RentalID]; ok {
 		queue = schedule.ExpectedWaitSeconds()
@@ -300,7 +301,7 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
 		provision = offer.Provisioning.Expected
 	}
-	pull := pullEstimate(input.Image, offer, input.ModelVersion)
+	pull, locality := pullEstimate(input.EvaluatedAt, input.Image, offer, input.ModelVersion)
 	expected := queue + provision + pull.Expected + 1
 	start := domain.Estimate{Expected: expected, P50: expected, P90: expected * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion}
 	// A measured latency estimate for this offer overrides the derived one.
@@ -326,7 +327,7 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) domain
 		PullSeconds:      pull,
 		StartSeconds:     start,
 		CostUSD:          domain.Estimate{Expected: cost, Source: "price_model", ModelVersion: input.ModelVersion},
-	}
+	}, locality
 }
 
 // queueable reports whether a Run may wait behind work already assigned here.
@@ -368,42 +369,54 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 	}
 }
 
-// pullEstimate prices what this candidate would still have to fetch, and states
-// how much that answer is worth. Zero seconds means "nothing to fetch" only
-// when the source says an inventory answered; otherwise it means nobody could
-// say, and the source names which silence it was so a reader of the decision
-// has something to act on.
+// pullEstimate prices what this candidate still owes before the image can
+// start, and states how much that answer is worth. Zero seconds means "nothing
+// left to do" only when the source says an inventory answered; otherwise it
+// means nobody could say, and the source names which silence it was so a reader
+// of the decision has something to act on.
+//
+// A host that fetched the image and has not assembled it owes local work rather
+// than a transfer, over a different resource at a different rate, so the two
+// are added as what they are. Charging that host a pull would bill the network
+// twice for bytes that are already on the machine.
 //
 // Confidence is about the duration, not the bytes. Bytes are counted from a
 // manifest and an inventory that both spoke, so a host that holds everything is
-// certainly zero seconds away from starting. A host that has to fetch is that
-// many bytes away over a link, and the duration is worth exactly what the link
-// speed is worth: what a published measurement says it is worth, and
-// AssumedLinkConfidence when nothing has measured it.
-func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, modelVersion string) domain.Estimate {
-	missing, known := manifest.TransferBytes(offer.Images)
-	if !known {
-		return domain.Estimate{Source: unpricedReason(manifest, offer.Images), ModelVersion: modelVersion}
+// certainly zero seconds away from starting. A host with work left is that many
+// bytes away over rates, and the duration is worth what the least-supported
+// rate in it is worth: what a published measurement says, and
+// AssumedLinkConfidence for anything nothing has measured.
+func pullEstimate(at time.Time, manifest domain.ImageManifest, offer domain.OfferSnapshot, modelVersion string) (domain.Estimate, domain.LocalityState) {
+	work, locality := manifest.StartWork(at, offer.Images)
+	if locality == domain.LocalityUnknown {
+		return domain.Estimate{Source: unpricedReason(at, manifest, offer.Images), ModelVersion: modelVersion}, locality
 	}
-	if missing <= 0 {
-		return domain.Estimate{Source: "image_inventory", Confidence: 1, ModelVersion: modelVersion}
+	if work.None() {
+		return domain.Estimate{Source: "image_inventory", Confidence: 1, ModelVersion: modelVersion}, locality
 	}
 	link := offer.RegistryDownload()
-	seconds := float64(missing*8)/1_000_000/link.Mbps + 0.5
+	seconds := float64(work.TransferBytes*8)/1_000_000/link.Mbps +
+		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
+	confidence := link.Confidence
+	if work.UnpackBytes > 0 {
+		confidence = min(confidence, domain.AssumedLinkConfidence)
+	}
 	return domain.Estimate{
 		Expected:     seconds,
 		P50:          seconds,
 		P90:          seconds * 1.5,
 		Source:       "image_inventory",
-		Confidence:   link.Confidence,
+		Confidence:   confidence,
 		ModelVersion: modelVersion,
-	}
+	}, locality
 }
 
-// unpricedReason names why no transfer answer exists. "Unknown" alone made a
-// registry Mercator could not read indistinguishable from a host that cannot
-// enumerate itself, and those are fixed by different people.
-func unpricedReason(manifest domain.ImageManifest, inventory domain.ImageInventory) string {
+// unpricedReason names why no answer exists. "Unknown" alone made a registry
+// Mercator could not read indistinguishable from a host that cannot enumerate
+// itself, and those are fixed by different people. A host that enumerated
+// itself and no longer stands behind the answer is a third: nothing is wrong
+// with the machine, and nothing it said is current enough to bet a placement on.
+func unpricedReason(at time.Time, manifest domain.ImageManifest, inventory domain.ImageInventory) string {
 	switch {
 	case !manifest.Known && manifest.Unreadable != "":
 		return manifest.Unreadable
@@ -411,6 +424,8 @@ func unpricedReason(manifest domain.ImageManifest, inventory domain.ImageInvento
 		return "manifest_unresolved"
 	case !inventory.Known:
 		return "inventory_unknown"
+	case !inventory.Answers(at):
+		return "inventory_stale"
 	default:
 		return "manifest_without_layers"
 	}

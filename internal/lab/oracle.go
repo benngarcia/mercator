@@ -139,8 +139,8 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
 		provision = offer.Provisioning.Expected
 	}
-	missing, _ := input.Image.TransferBytes(offer.Images)
-	pull := referenceTransferSeconds(missing, offer.RegistryDownloadMbps())
+	work, _ := input.Image.StartWork(input.EvaluatedAt, offer.Images)
+	pull := referenceStartWorkSeconds(work, offer.RegistryDownloadMbps())
 	start := queue + provision + pull + 1
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
@@ -159,11 +159,18 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	}
 }
 
-func referenceTransferSeconds(bytes int64, bandwidthMbps float64) float64 {
-	if bytes <= 0 {
+// referenceStartWorkSeconds is the reference model's own account of how long a
+// candidate is from starting: bytes over the wire, plus bytes already here that
+// still have to be unpacked. Fetching and unpacking are separate work over
+// separate resources, so an independent model that folded them together would
+// disagree with the scheduler about every half-assembled host for a reason that
+// has nothing to do with either model.
+func referenceStartWorkSeconds(work domain.ImageWork, bandwidthMbps float64) float64 {
+	if work.None() {
 		return 0
 	}
-	return float64(bytes*8)/1_000_000/bandwidthMbps + 0.5
+	return float64(work.TransferBytes*8)/1_000_000/bandwidthMbps +
+		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
 }
 
 func referenceUncertainty(offer domain.OfferSnapshot) float64 {
@@ -248,7 +255,8 @@ func CheckReducedBandwidthDoesNotReduceTransferDuration(bytes int64, fasterMbps,
 	if bytes <= 0 || fasterMbps <= slowerMbps || slowerMbps <= 0 {
 		return fmt.Errorf("bandwidth metamorphism requires positive bytes and faster > slower > 0")
 	}
-	if referenceTransferSeconds(bytes, slowerMbps) < referenceTransferSeconds(bytes, fasterMbps) {
+	transfer := domain.ImageWork{TransferBytes: bytes}
+	if referenceStartWorkSeconds(transfer, slowerMbps) < referenceStartWorkSeconds(transfer, fasterMbps) {
 		return fmt.Errorf("reducing bandwidth reduced transfer duration")
 	}
 	return nil

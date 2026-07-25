@@ -104,6 +104,17 @@ type Machine struct {
 	// HeldImages is every image reference the machine holds whole, which is what
 	// lets a repeat of the same image skip layer arithmetic entirely.
 	HeldImages map[string]bool
+	// Packed is content this machine fetched and never unpacked, keyed by layer
+	// blob digest and by image digest. It holds those bytes and cannot start a
+	// container on them, so it can name no layer identity for them: a runtime
+	// learns a layer's identity by unpacking it. Everything else it holds is
+	// assembled, because a pull that lands unpacks as it goes.
+	Packed map[string]bool
+	// InventoryValidUntil is how long this machine stands behind what it says
+	// it holds, and InventoryObservedAt when it last looked. Zero on both is a
+	// machine that re-enumerates whenever it is asked and states no bound.
+	InventoryObservedAt time.Time
+	InventoryValidUntil time.Time
 	// HeldCaches maps named data cache key (e.g. a dataset GID) to bytes
 	// materialized on the machine's local disk. No offer field carries this
 	// today; the world holds it so cache-evidence milestones can surface it.
@@ -184,8 +195,24 @@ func (m *Machine) Hold(layer Layer) {
 		m.HeldDiffIDs = map[string]bool{}
 	}
 	m.HeldLayers[layer.Digest] = layer.Bytes
+	delete(m.Packed, layer.Digest)
 	if layer.DiffID != "" {
 		m.HeldDiffIDs[layer.DiffID] = true
+		delete(m.Packed, layer.DiffID)
+	}
+}
+
+// Pack marks content this machine holds and has not unpacked, under every name
+// that content answers to. Unpacking is what a pull does on arrival, so this is
+// only ever a fixture's statement about a machine it found in that condition.
+func (m *Machine) Pack(names ...string) {
+	if m.Packed == nil {
+		m.Packed = map[string]bool{}
+	}
+	for _, name := range names {
+		if name != "" {
+			m.Packed[name] = true
+		}
 	}
 }
 
@@ -205,6 +232,7 @@ func (m *Machine) keep(image string, layers []Layer) {
 	// The name a machine holds an image under is the digest it pulled by, which
 	// is the only name a resolved manifest and a real host can both say.
 	m.HeldImages[domain.ReferenceDigest(image)] = true
+	delete(m.Packed, domain.ReferenceDigest(image))
 }
 
 // inventory is what this machine says it holds, whatever Run is being placed,
@@ -212,16 +240,35 @@ func (m *Machine) keep(image string, layers []Layer) {
 // fetch is the scheduler's subtraction against the manifest, so the world
 // asserts no answer about an image the offer does not name.
 func (m *Machine) inventory(now time.Time) domain.ImageInventory {
-	inventory := domain.ImageInventory{
-		Known:        true,
-		ObservedAt:   now,
-		ImageDigests: slices.Sorted(maps.Keys(m.HeldImages)),
+	observed := now
+	if !m.InventoryObservedAt.IsZero() {
+		observed = m.InventoryObservedAt
 	}
-	if m.ReportsDiffIDs {
-		inventory.LayerDiffIDs = slices.Sorted(maps.Keys(m.HeldDiffIDs))
+	inventory := domain.ImageInventory{Known: true, ObservedAt: observed, ValidUntil: m.InventoryValidUntil}
+	for _, image := range slices.Sorted(maps.Keys(m.HeldImages)) {
+		if m.Packed[image] {
+			inventory.PulledImageDigests = append(inventory.PulledImageDigests, image)
+			continue
+		}
+		inventory.ImageDigests = append(inventory.ImageDigests, image)
+	}
+	for _, digest := range slices.Sorted(maps.Keys(m.HeldLayers)) {
+		if m.Packed[digest] {
+			continue
+		}
+		inventory.LayerDigests = append(inventory.LayerDigests, digest)
+	}
+	if !m.ReportsDiffIDs {
 		return inventory
 	}
-	inventory.LayerDigests = slices.Sorted(maps.Keys(m.HeldLayers))
+	// A Docker host has no word for the compressed blob a registry served it,
+	// so it answers about the same content in the only vocabulary it has.
+	inventory.LayerDigests = nil
+	for _, diffID := range slices.Sorted(maps.Keys(m.HeldDiffIDs)) {
+		if !m.Packed[diffID] {
+			inventory.LayerDiffIDs = append(inventory.LayerDiffIDs, diffID)
+		}
+	}
 	return inventory
 }
 

@@ -289,6 +289,9 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 	if expect.PullConfidence != nil && candidate.Estimates.PullSeconds.Confidence != *expect.PullConfidence {
 		fail("pull_confidence: want %v, got %v", *expect.PullConfidence, candidate.Estimates.PullSeconds.Confidence)
 	}
+	if expect.ImageLocality != "" && candidate.ImageLocality != expect.ImageLocality {
+		fail("image_locality: want %q, got %q", expect.ImageLocality, candidate.ImageLocality)
+	}
 	if expect.Schedule != nil {
 		failures = append(failures, assertScheduleEvidence(rec, name, id, *expect.Schedule)...)
 	}

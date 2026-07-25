@@ -115,7 +115,7 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		Network:  domain.NetworkFacts{Download: host.Network},
 		Pricing:  shadowPrice(record),
 		Queue:    &domain.QueueSnapshot{},
-		Images:   imageInventory(record.Facts, platform),
+		Images:   imageInventory(record.Facts, platform, registry.offerFreshness()),
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
@@ -143,25 +143,51 @@ func shadowPrice(record Record) domain.PriceModel {
 // image's manifest, and only the scheduler holds both halves.
 //
 // An image counts as held whole only when the build this machine holds is the
-// build this machine runs. A multi-platform image is listed under one index
-// digest whichever platform was fetched, so a host that pulled the arm64 build
-// reports the same name an amd64 Run is pinned to, and reading that name alone
-// would price a full 18GB fetch as nothing to do. Layers need no such test:
-// they are content-addressed, so another platform's layers simply do not match.
-func imageInventory(facts capability.NodeFacts, host domain.Platform) domain.ImageInventory {
+// build this machine runs, and only when the machine has unpacked it. A
+// multi-platform image is listed under one index digest whichever platform was
+// fetched, so a host that pulled the arm64 build reports the same name an amd64
+// Run is pinned to, and reading that name alone would price a full 18GB fetch
+// as nothing to do. Layers need no such test: they are content-addressed, so
+// another platform's layers simply do not match.
+//
+// An image this machine has and cannot start is projected as pulled rather than
+// held. Counting only hot images and dropping the rest made partial reuse
+// invisible: a host halfway through assembling an image looked exactly like one
+// that had never heard of it, and the decision sent an operator after a network
+// problem for local work.
+func imageInventory(facts capability.NodeFacts, host domain.Platform, freshness time.Duration) domain.ImageInventory {
 	inventory := domain.ImageInventory{
 		// An enrolled node always enumerates. An empty inventory from a node is
 		// the truthful claim that it holds nothing, which is a different fact
 		// from a provider that cannot look.
 		Known:      !facts.ObservedAt.IsZero(),
 		ObservedAt: facts.ObservedAt,
+		// The node stands behind this enumeration exactly as long as the offer
+		// built from it: a machine Mercator has stopped hearing from has also
+		// stopped saying what it holds, and a cached offer replayed past that
+		// moment states an inventory nobody is standing behind.
+		ValidUntil: facts.ObservedAt.Add(freshness),
 	}
 	for _, image := range facts.Images {
-		if image.State == capability.LocalityHot && image.ManifestDigest != "" && image.Platform == host {
-			inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
+		if image.ManifestDigest != "" && image.Platform == host {
+			inventory = recordImage(inventory, image)
 		}
 		inventory.LayerDigests = addNew(inventory.LayerDigests, image.LayerDigests)
 		inventory.LayerDiffIDs = addNew(inventory.LayerDiffIDs, image.LayerDiffIDs)
+	}
+	return inventory
+}
+
+// recordImage files one image under what the node established about it: ready
+// to run, here and not assembled, or neither. An image the runtime could not
+// describe says nothing about this machine's identity for it, so it is filed
+// nowhere and priced as the pull it may well be.
+func recordImage(inventory domain.ImageInventory, image capability.ImageLocality) domain.ImageInventory {
+	switch {
+	case image.State == domain.LocalityHot && image.Unpacked:
+		inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
+	case image.State == domain.LocalityPartial, image.State == domain.LocalityCold:
+		inventory.PulledImageDigests = append(inventory.PulledImageDigests, image.ManifestDigest)
 	}
 	return inventory
 }

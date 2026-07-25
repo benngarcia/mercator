@@ -147,17 +147,6 @@ type HostFacts struct {
 	Network          []domain.NetworkFact          `json:"network,omitempty"`
 }
 
-// LocalityState is how sure Mercator is that content is present. Unknown is a
-// first-class answer: it means uncertainty to price, not infeasibility.
-type LocalityState string
-
-const (
-	LocalityHot     LocalityState = "hot"
-	LocalityPartial LocalityState = "partial"
-	LocalityCold    LocalityState = "cold"
-	LocalityUnknown LocalityState = "unknown"
-)
-
 // ImageLocality is exact OCI image presence on one node. Every field states
 // what this machine HOLDS. What an image still needs is a subtraction between
 // this and a resolved manifest, and only the control plane holds both: a node
@@ -173,20 +162,27 @@ type ImageLocality struct {
 	// whether what is here is what this host would run: a machine that fetched
 	// another platform's build holds the same name and none of the bytes.
 	Platform domain.Platform `json:"platform"`
-	// LayerDigests is the compressed layer blobs this node holds, named the way
-	// a registry names them. A container daemon cannot enumerate these: it
-	// discards the compressed form when it unpacks an image, which is why
-	// LayerDiffIDs sits beside this rather than instead of it.
+	// LayerDigests is the compressed layer blobs this node holds unpacked,
+	// named the way a registry names them. A container daemon cannot enumerate
+	// these: it discards the compressed form when it unpacks an image, which is
+	// why LayerDiffIDs sits beside this rather than instead of it.
 	LayerDigests []string `json:"layer_digests,omitempty"`
-	// LayerDiffIDs is the same held content named by its uncompressed form.
+	// LayerDiffIDs is the same unpacked content named by its uncompressed form.
 	// This is what a Docker daemon can actually report, and comparing it
 	// against a registry manifest is what a resolved manifest carrying both
-	// spaces makes possible.
+	// spaces makes possible. Both lists name layers this node has assembled
+	// into a mountable chain: content a runtime has fetched and not unpacked is
+	// content it cannot name a layer identity for, which is why an image that
+	// is here and not ready says so with State and Unpacked instead.
 	LayerDiffIDs []string `json:"layer_diff_ids,omitempty"`
 	// Unpacked reports whether the image is ready to run, not merely pulled.
-	Unpacked       bool          `json:"unpacked"`
-	State          LocalityState `json:"state"`
-	LastVerifiedAt time.Time     `json:"last_verified_at"`
+	Unpacked bool `json:"unpacked"`
+	// State is how much of this image the node established it has: hot when
+	// every layer is unpacked, partial when some are, cold when the image is
+	// here and none of it is assembled, and unknown when the runtime would not
+	// describe it at all.
+	State          domain.LocalityState `json:"state"`
+	LastVerifiedAt time.Time            `json:"last_verified_at"`
 }
 
 // ArtifactLocality is one immutable artifact replica on one node. Object
@@ -195,11 +191,11 @@ type ArtifactLocality struct {
 	ArtifactID string `json:"artifact_id"`
 	// ContentDigest is the manifest or content digest the replica was verified
 	// against.
-	ContentDigest  string        `json:"content_digest"`
-	SizeBytes      int64         `json:"size_bytes"`
-	Verified       bool          `json:"verified"`
-	State          LocalityState `json:"state"`
-	LastVerifiedAt time.Time     `json:"last_verified_at"`
+	ContentDigest  string               `json:"content_digest"`
+	SizeBytes      int64                `json:"size_bytes"`
+	Verified       bool                 `json:"verified"`
+	State          domain.LocalityState `json:"state"`
+	LastVerifiedAt time.Time            `json:"last_verified_at"`
 }
 
 // CacheLocality is one mutable, application-owned cache on one node. Its

@@ -3835,20 +3835,30 @@
             "format": "date-time",
             "description": "When the holder last looked. Locality decays, so the age of this answer is material."
           },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "How long the holder stands behind this enumeration. Only the holder knows how often it looks, so only the holder can say when its answer stops being one. Past it, what is here is a question again rather than a fact, and a stale answer is priced as uncertainty rather than as warmth."
+          },
           "image_digests": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Image manifests this host holds whole."
+            "description": "Image manifests this host holds whole and has unpacked, so it can start a container on one now."
+          },
+          "pulled_image_digests": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull."
           },
           "layer_digests": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Compressed layer blobs this host holds, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first."
+            "description": "Compressed layer blobs this host holds unpacked, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first."
           },
           "layer_diff_ids": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "The same content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in."
+            "description": "The same unpacked content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in."
           }
         }
       },
@@ -4069,6 +4079,16 @@
             "items": {
               "$ref": "#/components/schemas/Violation"
             }
+          },
+          "image_locality": {
+            "type": "string",
+            "enum": [
+              "hot",
+              "partial",
+              "cold",
+              "unknown"
+            ],
+            "description": "How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility."
           },
           "estimates": {
             "$ref": "#/components/schemas/CandidateEstimates"

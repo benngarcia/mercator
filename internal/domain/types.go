@@ -246,6 +246,14 @@ const DefaultRegistryDownloadMbps = 500.0
 // takes are the guess.
 const AssumedLinkConfidence = 0.5
 
+// AssumedUnpackMBps is how fast a host is assumed to decompress content it
+// already holds into a runnable layer chain, when nothing has measured its
+// storage. It stands beside DefaultRegistryDownloadMbps for the same reason and
+// with the same standing: a stated assumption rather than a measurement, so a
+// duration derived from it is worth AssumedLinkConfidence, which is what any
+// duration over an unmeasured rate is worth.
+const AssumedUnpackMBps = 250.0
+
 // LinkSpeed is how fast content moves onto a host and how much a duration
 // derived from that number is worth. The two travel together because they are
 // one answer: a speed nothing stands behind cannot produce a confident
@@ -403,8 +411,22 @@ type ImageInventory struct {
 	// be reclaimed between one heartbeat and the next, so the age of this
 	// answer is material to how much it is worth.
 	ObservedAt time.Time `json:"observed_at,omitzero"`
-	// ImageDigests is every image manifest the host holds whole.
+	// ValidUntil is how long the holder stands behind this enumeration. Only
+	// the holder knows how often it looks, so only the holder can say when its
+	// answer stops being one. Past it, what is here is a question again rather
+	// than a fact, and a stale answer is priced as uncertainty rather than as
+	// warmth. Zero states no bound, exactly as it does on NetworkFact.
+	ValidUntil time.Time `json:"valid_until,omitzero"`
+	// ImageDigests is every image manifest the host holds whole AND has
+	// unpacked, so it can start a container on it now.
 	ImageDigests []string `json:"image_digests,omitempty"`
+	// PulledImageDigests is every image whose content arrived here and which is
+	// not assembled into a runnable layer chain. Fetching and unpacking are
+	// separate acts, and a host that has done the first and not the second is
+	// neither warm nor cold: what is left is local work rather than a pull, and
+	// an operator told "cold" about a machine sitting on the image would go
+	// looking for a network problem that is not there.
+	PulledImageDigests []string `json:"pulled_image_digests,omitempty"`
 	// LayerDigests is every compressed layer blob the host holds, named the way
 	// a registry manifest names it. A host can hold layers of an image it has
 	// never held whole, which is the entire reason a second version of the same
@@ -418,10 +440,36 @@ type ImageInventory struct {
 	LayerDiffIDs []string `json:"layer_diff_ids,omitempty"`
 }
 
-// Holds reports whether this host holds one image whole.
+// Holds reports whether this host holds one image whole and ready to run.
 func (inventory ImageInventory) Holds(imageDigest string) bool {
 	return imageDigest != "" && slices.Contains(inventory.ImageDigests, imageDigest)
 }
+
+// Pulled reports whether this host fetched one image and has not finished
+// assembling it.
+func (inventory ImageInventory) Pulled(imageDigest string) bool {
+	return imageDigest != "" && slices.Contains(inventory.PulledImageDigests, imageDigest)
+}
+
+// Answers reports whether this enumeration is still an answer as of at. A
+// holder states how long it stands behind what it found, because only the
+// holder knows how often it looks; past that moment what is here is a question
+// again. Zero states no bound, exactly as it does on NetworkFact.
+func (inventory ImageInventory) Answers(at time.Time) bool {
+	return inventory.Known && (inventory.ValidUntil.IsZero() || at.Before(inventory.ValidUntil))
+}
+
+// LocalityState is how much of some content a host has, as an answer rather
+// than a number. Unknown is first-class: it says nobody could look, which is
+// uncertainty to price and never infeasibility.
+type LocalityState string
+
+const (
+	LocalityHot     LocalityState = "hot"
+	LocalityPartial LocalityState = "partial"
+	LocalityCold    LocalityState = "cold"
+	LocalityUnknown LocalityState = "unknown"
+)
 
 // HoldsLayer reports whether this host holds one layer, in either digest space.
 // Which space a host answers in is a property of its runtime and not of the
@@ -458,29 +506,65 @@ type ImageManifest struct {
 	Layers []ImageLayer `json:"layers,omitempty"`
 }
 
-// TransferBytes is what a host holding inventory would still have to fetch to
-// run this image. An unknown manifest transfers an unknown amount, which is not
-// the same as nothing.
-func (manifest ImageManifest) TransferBytes(inventory ImageInventory) (bytes int64, known bool) {
-	if !manifest.Known || !inventory.Known {
-		return 0, false
+// ImageWork is what one host still owes before this image can run: bytes to
+// fetch from a registry, and bytes already on the machine that are not yet
+// unpacked into a layer chain a container can be started on. The two are
+// separate because they are different work over different resources, and
+// because a host that already paid the network is not cold however much local
+// assembly is left.
+type ImageWork struct {
+	TransferBytes int64
+	UnpackBytes   int64
+}
+
+// None reports that this image can start here with nothing fetched and nothing
+// assembled first.
+func (work ImageWork) None() bool { return work.TransferBytes == 0 && work.UnpackBytes == 0 }
+
+// StartWork is what this host still owes before the image can start, and what
+// that amounts to as an answer. LocalityUnknown means nobody could say, so the
+// work is the absence of an answer rather than zero of one: an unknown manifest
+// and a host that will not enumerate itself are both silence, and silence is
+// not warmth.
+func (manifest ImageManifest) StartWork(at time.Time, inventory ImageInventory) (ImageWork, LocalityState) {
+	if !manifest.Known || !inventory.Answers(at) {
+		return ImageWork{}, LocalityUnknown
 	}
 	if inventory.Holds(manifest.Digest) {
-		return 0, true
+		return ImageWork{}, LocalityHot
 	}
 	// A manifest that names no layers can confirm a hit and cannot price a
 	// miss. Subtracting an empty layer set would charge a host that holds
 	// nothing the same zero as one holding the whole image, which is the error
 	// this type replaced.
 	if len(manifest.Layers) == 0 {
-		return 0, false
+		return ImageWork{}, LocalityUnknown
 	}
+	// A host that says it pulled this image and cannot run it holds the bytes
+	// of every layer it did not enumerate as unpacked: what it owes on those is
+	// assembly, not a transfer. Charging it the network again would price a
+	// machine sitting on 18GB exactly like one that has never seen the image.
+	pulled := inventory.Pulled(manifest.Digest)
+	work, here := ImageWork{}, 0
 	for _, layer := range manifest.Layers {
-		if !inventory.HoldsLayer(layer) {
-			bytes += layer.CompressedBytes
+		switch {
+		case inventory.HoldsLayer(layer):
+			here++
+		case pulled:
+			work.UnpackBytes += layer.CompressedBytes
+			here++
+		default:
+			work.TransferBytes += layer.CompressedBytes
 		}
 	}
-	return bytes, true
+	switch {
+	case work.None():
+		return work, LocalityHot
+	case here == 0:
+		return work, LocalityCold
+	default:
+		return work, LocalityPartial
+	}
 }
 
 // ImageLayer is one layer named in both digest spaces at once. Digest is the
@@ -565,8 +649,16 @@ type CandidateDecision struct {
 	Disposition     CandidateDisposition `json:"disposition"`
 	Feasible        bool                 `json:"feasible"`
 	Rejections      []Violation          `json:"rejections,omitempty"`
-	Estimates       CandidateEstimates   `json:"estimates"`
-	ScoreUSD        float64              `json:"score_usd,omitempty"`
+	// ImageLocality is how much of the Run's image this candidate was found to
+	// have. It is the qualitative half of the pull estimate, and only the
+	// control plane can state it: the host says what it holds, the manifest
+	// says what the image is, and the answer is the subtraction. A reader of
+	// the decision needs it to tell a machine that has to pull from one that
+	// only has to finish unpacking, which are the same seconds and different
+	// problems.
+	ImageLocality LocalityState      `json:"image_locality,omitempty"`
+	Estimates     CandidateEstimates `json:"estimates"`
+	ScoreUSD      float64            `json:"score_usd,omitempty"`
 }
 
 type CandidateDisposition string

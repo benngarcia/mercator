@@ -225,6 +225,13 @@ func (docker *DockerRuntime) info(ctx context.Context) (dockerInfo, error) {
 // daemon can actually see and matched against a resolved manifest that carries
 // both names.
 //
+// Being listed is not being runnable. An image whose content is here and whose
+// layer chain is not assembled cannot start a container, and this node used to
+// call every image it could list hot and unpacked, which is a claim about
+// readiness made from a listing that says nothing about it. Each image now
+// states what the daemon established: how much of it is mounted, and whether
+// that is all of it.
+//
 // One image the daemon will not describe is one image reported unknown. It is
 // not the whole report: a host with forty images, one of which was pruned
 // between the listing and the read, holds thirty-nine images that nothing has
@@ -260,49 +267,91 @@ func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLoca
 			}
 			locality = append(locality, capability.ImageLocality{
 				ManifestDigest: image.Digest,
-				State:          capability.LocalityUnknown,
+				State:          domain.LocalityUnknown,
 				LastVerifiedAt: docker.now().UTC(),
 			})
 			continue
 		}
-		locality = append(locality, capability.ImageLocality{
-			ManifestDigest: image.Digest,
-			Platform:       described.platform(),
-			LayerDiffIDs:   described.DiffIDs,
-			Unpacked:       true,
-			State:          capability.LocalityHot,
-			LastVerifiedAt: docker.now().UTC(),
-		})
+		locality = append(locality, described.locality(image.Digest, docker.now().UTC()))
 	}
 	return locality, nil
 }
 
 // describedImage is what the daemon can say about one image it holds: which
-// build it is, and the uncompressed layer identities it unpacked. The build
-// matters because a multi-platform image is listed under one index digest
-// whichever platform was pulled, so a host that fetched the arm64 build and a
-// host that fetched the amd64 build report the same name for different content.
+// build it is, the uncompressed layer identities its config declares, and the
+// storage chain it has actually assembled for them. The build matters because a
+// multi-platform image is listed under one index digest whichever platform was
+// pulled, so a host that fetched the arm64 build and a host that fetched the
+// amd64 build report the same name for different content.
 type describedImage struct {
 	OS           string   `json:"os"`
 	Architecture string   `json:"architecture"`
 	DiffIDs      []string `json:"diff_ids"`
+	// MountChain is the storage driver's own account of what it can mount for
+	// this image, which is the only evidence a daemon offers that content was
+	// unpacked rather than merely fetched. A graph driver names one directory
+	// per layer; a content-store daemon holding an image it has not unpacked
+	// names none at all.
+	MountChain map[string]string `json:"mount_chain"`
 }
 
 func (described describedImage) platform() domain.Platform {
 	return domain.Platform{OS: described.OS, Architecture: described.Architecture}
 }
 
-// describe reads what one image is and what it is made of. An image reported
-// hot with no layers is indistinguishable downstream from a host holding no
-// part of it, and an image reported without its platform is one nothing can
-// tell from another platform's build under the same digest, so a daemon that
-// will not answer yields an unknown image rather than a confident wrong one.
+// unpackedLayers is how many of this image's layers the daemon has assembled.
+// The chain is ordered from the base up, exactly as the config orders diff IDs,
+// so a chain of n directories is the image's first n layers and no others.
+func (described describedImage) unpackedLayers() int {
+	depth := 0
+	for _, key := range []string{"LowerDir", "UpperDir"} {
+		for directory := range strings.SplitSeq(described.MountChain[key], ":") {
+			if strings.TrimSpace(directory) != "" {
+				depth++
+			}
+		}
+	}
+	return min(depth, len(described.DiffIDs))
+}
+
+// locality is what this daemon established about one image, and nothing beyond
+// it. Only the layers it can mount are reported held: a layer whose bytes are
+// somewhere in the daemon's store and whose chain is not assembled is content a
+// container cannot be started on, and reporting it would tell Placement this
+// machine is ready when it is minutes of local work away.
+func (described describedImage) locality(manifestDigest string, at time.Time) capability.ImageLocality {
+	unpacked := described.unpackedLayers()
+	reported := capability.ImageLocality{
+		ManifestDigest: manifestDigest,
+		Platform:       described.platform(),
+		LayerDiffIDs:   described.DiffIDs[:unpacked],
+		LastVerifiedAt: at,
+	}
+	switch {
+	case len(described.DiffIDs) == 0:
+		reported.State = domain.LocalityUnknown
+	case unpacked == len(described.DiffIDs):
+		reported.Unpacked, reported.State = true, domain.LocalityHot
+	case unpacked == 0:
+		reported.State = domain.LocalityCold
+	default:
+		reported.State = domain.LocalityPartial
+	}
+	return reported
+}
+
+// describe reads what one image is, what it is made of, and how much of it this
+// daemon can mount. An image reported hot with no layers is indistinguishable
+// downstream from a host holding no part of it, and an image reported without
+// its platform is one nothing can tell from another platform's build under the
+// same digest, so a daemon that will not answer yields an unknown image rather
+// than a confident wrong one.
 func (docker *DockerRuntime) describe(ctx context.Context, imageID string) (describedImage, error) {
 	if imageID == "" {
 		return describedImage{}, fmt.Errorf("the daemon listed an image with no ID, so nothing can read it")
 	}
 	out, err := docker.run(ctx, "image", "inspect", imageID, "--format",
-		`{"os":"{{.Os}}","architecture":"{{.Architecture}}","diff_ids":{{json .RootFS.Layers}}}`)
+		`{"os":"{{.Os}}","architecture":"{{.Architecture}}","diff_ids":{{json .RootFS.Layers}},"mount_chain":{{json .GraphDriver.Data}}}`)
 	if err != nil {
 		return describedImage{}, fmt.Errorf("read image %s: %w", imageID, err)
 	}
