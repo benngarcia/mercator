@@ -162,19 +162,44 @@ func awaitRegistry(t *testing.T, host string) {
 
 // privateRepoDigest is the digest the push produced, read back from the local
 // image's repository digests for that host.
+// privateRepoDigest asks the registry which digest it stored, because that is
+// the only digest it can be asked to serve. The daemon's RepoDigests reports the
+// digest of the multi-platform index the local image was tagged from, and a push
+// sends only the one platform the daemon holds, which the registry stores as a
+// single-platform OCI manifest under a different digest. Docker says so on the
+// push itself: "only the available single-platform image was pushed", followed
+// by the index digest, an arrow, and the digest it actually wrote. Trusting
+// RepoDigests asks the registry for content it never received.
 func privateRepoDigest(t *testing.T, reference, host string) string {
 	t.Helper()
-	var digests []string
-	if err := json.Unmarshal([]byte(docker(t, "image", "inspect", reference, "--format", "{{json .RepoDigests}}")), &digests); err != nil {
-		t.Fatalf("decode repo digests: %v", err)
+	repository, tag, ok := strings.Cut(strings.TrimPrefix(reference, host+"/"), ":")
+	if !ok {
+		t.Fatalf("the conformance reference %q names no tag", reference)
 	}
-	for _, digest := range digests {
-		if strings.HasPrefix(digest, host+"/") {
-			return digest
-		}
+	request, err := http.NewRequest(http.MethodGet, "http://"+host+"/v2/"+repository+"/manifests/"+tag, nil)
+	if err != nil {
+		t.Fatalf("build the manifest request for %s: %v", reference, err)
 	}
-	t.Fatalf("the push left no repository digest for %s: %v", host, digests)
-	return ""
+	request.SetBasicAuth(conformanceUser, conformancePassword)
+	request.Header.Set("Accept", strings.Join([]string{
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+	}, ", "))
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("read the stored manifest for %s: %v", reference, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("the registry answered %s for %s, so the push left nothing to resolve", response.Status, reference)
+	}
+	digest := response.Header.Get("Docker-Content-Digest")
+	if digest == "" {
+		t.Fatalf("the registry served %s without naming the digest it stored", reference)
+	}
+	return host + "/" + repository + "@" + digest
 }
 
 func assertMatchesDockerManifest(t *testing.T, manifest domain.ImageManifest, reference string) {
