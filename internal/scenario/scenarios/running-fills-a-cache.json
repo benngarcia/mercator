@@ -1,0 +1,92 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Two identical cold Rentals and one workload that declares a build cache. The first Run takes the cheaper machine and finds nothing under the cache's name, because no workload has ever opened it here. Fifteen minutes later, which is long enough for the image to have landed and the workload to have started, a second Run declaring the same generation finds that cache on the machine that ran it and finds none of it on the machine beside it. Running is what fills a cache, exactly as running is what warms a host, and a fixture that seeded the cache at construction could not tell the two apart. The second Run still goes to the untouched Rental, because a cache is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e": {
+        "layers": [
+          {
+            "digest": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+            "size": "2GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "builder-a",
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "builder-b",
+        "rate_per_hour_usd": 2.05
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "first",
+      "request": {
+        "image": "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e",
+        "expected_runtime": "1h",
+        "max_runtime": "2h",
+        "cache_mounts": [
+          {
+            "name": "build-cache",
+            "compatibility_key": "toolchain-1.7",
+            "size": "8GB"
+          }
+        ]
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "builder-a",
+        "disposition": "release",
+        "candidates": {
+          "builder-a": {
+            "feasible": true,
+            "cache_evidence": {"build-cache": "miss"}
+          },
+          "builder-b": {
+            "feasible": true,
+            "cache_evidence": {"build-cache": "miss"}
+          }
+        }
+      }
+    },
+    {
+      "advance": "15m"
+    },
+    {
+      "submit": "second",
+      "request": {
+        "image": "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e",
+        "expected_runtime": "20m",
+        "max_runtime": "1h",
+        "cache_mounts": [
+          {
+            "name": "build-cache",
+            "compatibility_key": "toolchain-1.7",
+            "size": "8GB"
+          }
+        ]
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "builder-b",
+        "disposition": "release",
+        "candidates": {
+          "builder-a": {
+            "feasible": true,
+            "cache_evidence": {"build-cache": "hit"}
+          },
+          "builder-b": {
+            "feasible": true,
+            "cache_evidence": {"build-cache": "miss"}
+          }
+        }
+      }
+    }
+  ]
+}

@@ -790,6 +790,71 @@ complete because it works against a live provider.
     declared, because nothing in this tree needs a workload-chosen path yet. And
     the previous generation's volume is left behind: reclaiming it is garbage
     collection, which this runtime still declares unsupported.
+- [x] 2026-07-25: Answer the review of the Cache Mount commit. Two reviewers
+  falsified five things, and four of them were the same shape: a claim made
+  wider than the act that established it.
+  - Creating the container is what creates the cache. The agent opened the
+    volume itself before dispatching the run, so every launch that died before
+    the container existed, an image this machine cannot resolve, a full disk, a
+    refused command, left a labelled volume behind that nothing reclaims, and
+    the node's next heartbeat reported that empty directory as a cache it holds.
+    The next Run declaring the same generation was then recorded `hot` on a
+    machine that had never run the work, which is exactly the distinction
+    `domain.CacheEvidence` exists to make. `docker run --mount type=volume,...,
+    volume-label=...` makes the daemon create the volume with the same labels
+    when the container asks for it and not before, which deletes `openCache` and
+    one command per cache per launch with it. Verified against the daemon on this
+    machine, both halves: a run pinned to a digest no registry can serve leaves
+    no volume, and a second run of an existing cache is accepted with the labels
+    already stamped.
+  - The compatibility key is constrained where it enters. It is stamped into an
+    option list the daemon parses on commas, so a key carrying one would be read
+    as further options rather than as a generation. The name has been checked at
+    the door since it existed and for the same reason, and this is the other half
+    of that rule rather than an escape at the place that builds the flag.
+  - A cache read never fails the node's report. One volume pruned between
+    `docker volume ls` and `docker volume inspect` failed the whole enumeration,
+    which ends the agent's session and, on an agent with no session yet, blocks
+    its enrollment: an operator tidying volumes on a working machine would take
+    it out of the fleet. That is the defect the image seam already recorded above
+    and fixed thirty lines away, reintroduced for state that is best-effort by
+    construction, and this commit made a prune the expected maintenance action by
+    leaving a volume behind per generation. The daemon prints the volumes it could
+    describe and exits non-zero for the rest, so `run` returns both and the read
+    keeps what came back; a read that answered nothing at all leaves the node
+    saying nothing rather than claiming it enumerated and found none.
+  - `safety.cache_mount_workspace_isolation` reads the storage a read reached.
+    Both identities in a read request are derived from the reading execution's
+    own workspace, so the collision rule could only ever catch a derivation that
+    drops the workspace: a resolution that wandered into the neighbour's slot
+    agreed with itself and passed. The read's consequence now carries the
+    identity the disk answered from, and the rule claims that slot for the tenant
+    that read it.
+  - The seam that carries a declared cache to a real runtime has a test.
+    `broker.launchOnNode` is the only path from a Run to a container runtime for
+    the reusable lane, the Lab never drives that lane, and deleting the line that
+    carries the mounts left the whole tree green. This is the third defect at this
+    same seam, after `node.Registry.offer` dropping `Artifacts` and
+    `NodeFacts.Artifacts` manufacturing `Known`, so the case is the end-to-end one:
+    a Run submitted over the public API with a cache in its workload spec, and the
+    node's own runtime asked what it was told to attach and under whose workspace.
+  - Running fills a cache in both simulated worlds. `fake.World` seeded caches at
+    construction and never wrote one, so the L0 corpus could only prove that a
+    seeded cache is found and never that running is what fills it, which is the
+    same defect the image half was fixed for in "Make running a workload what
+    warms a host". A launch now opens the caches it declared on the machine that
+    keeps what it runs, and `CandidateExpectation.cache_evidence` is what lets a
+    fixture state the answer at all: the corpus had no vocabulary for cache
+    warmth, so the two worlds could disagree with nothing able to say so.
+  - Judgment calls. The cache the node reports is storage a workload of that
+    tenant and generation was actually attached to, and not a statement about
+    what is inside it. A container that was created and then failed to start
+    still leaves the volume, and a workload that ran and wrote nothing leaves an
+    empty one: what an application put in its own cache is not something any
+    runtime can report, which is why `CacheMount` carries no digest and no size.
+    The L0 world opens a cache when the execution starts rather than when it
+    finishes, because nothing in that world models a workload finishing; the Lab
+    writes it on exit, and what both now agree on is the claim that matters.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -975,13 +1040,23 @@ Phase 3 added:
   hot Run in the middle is what makes the three cold answers mean anything, and
   dropping the workspace from the cache identity fails the execution through
   `safety.cache_mount_workspace_isolation` rather than through an assertion.
+- `running-fills-a-cache` (green): two identical cold Rentals and one workload
+  that declares a build cache. The first Run finds nothing under the name, and
+  fifteen minutes later a second Run declaring the same generation finds that
+  cache on the machine that ran the first and none of it on the machine beside
+  it. Running is what fills a cache, exactly as running is what warms a host, and
+  every other cache fixture seeds one at construction. The second Run still lands
+  on the untouched Rental, because a cache is recorded and never priced.
 - `safety.cache_mount_workspace_isolation` (Lab invariant): no cache identity is
   ever observed under two workspaces, read over the ledger of what each launch
-  read and wrote and over what each host is holding. Stating it as a collision
-  rather than as an identity derivation is what keeps it independent of the code
-  it polices: the world derives identities with the same function, so a rule
-  asking whether an identity equals what its parts derive would agree with a
-  derivation that dropped the workspace.
+  read and wrote, over the storage each read actually reached, and over what each
+  host is holding. Stating it as a collision rather than as an identity
+  derivation is what keeps it independent of the code it polices: the world
+  derives identities with the same function, so a rule asking whether an identity
+  equals what its parts derive would agree with a derivation that dropped the
+  workspace. Reading the slot a read reached is the other half of that, because
+  the identity a read asks for is derived from the reader's own workspace and can
+  never disagree with it.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, every Artifact copy a host holds is either seeded or
@@ -991,7 +1066,7 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 22 regression Blueprints: 14 green and 8 target, beside one demo,
+The corpus is 23 regression Blueprints: 15 green and 8 target, beside one demo,
 one minimized case, and six conformance Blueprints.
 
 ## What phase 2 does not yet do
@@ -1263,6 +1338,72 @@ previous volume on the disk, and `NodeSupport.GarbageCollection` is still false,
 so the machine accumulates one volume per generation until an operator prunes it.
 That is the slice that earns garbage collection, and it is tracked rather than
 papered over by mounting incompatible content.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/adapter/fake ./internal/orchestrator \
+  ./internal/node ./internal/nodeagent ./internal/broker ./internal/httpapi \
+  ./internal/daemon ./cmd/mercator -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+### Phase 3 the review of the cache commit
+
+On 2026-07-25, the review of the commit above was answered. Each claim is held
+by a deliberate break that fails it:
+
+- opening the cache volume before dispatching the run, which is what the reviewed
+  commit did, fails `TestALaunchThatNeverRunsLeavesNoCacheBehind` against the
+  daemon on this machine with `the failed launch left volume
+  "mercator-cache-ws_alpha-never-run-cache-ecdfda61" on this machine`. That is
+  the state the tree shipped in: a launch that died at image resolution left a
+  cache the node then advertised holding;
+- failing the whole facts report over one un-inspectable volume, which is what the
+  tree shipped, fails `TestOneUnreadableCacheVolumeDoesNotCostTheNodeItsReport`
+  with `one pruned volume cost this node its whole facts report: ... no such
+  volume`. The daemon had already printed the other cache on stdout;
+- reporting a cache read this node could not make as an empty enumeration fails
+  `TestANodeThatCannotReadItsCachesSaysNothing` with `a node that could not read
+  its caches claims it enumerated them: {Known:true ... Mounts:[]}`;
+- dropping `CacheMounts` from `broker.launchOnNode`, which nothing in the tree
+  could catch before, fails `TestANodeIsAskedToAttachTheCachesTheWorkloadDeclared`
+  with `the node was asked to attach [], and the workload declared
+  {Name:compiler-cache CompatibilityKey:cuda-12.4 SizeBytes:8589934592}`;
+- resolving a cache read to any storage of the same name on the host, which is a
+  literal cross-workspace read of mutable state, fails
+  `cache-mounts-never-cross-a-workspace` through the invariant:
+  `safety.cache_mount_workspace_isolation failed: cache
+  "ws_lab_alpha/compiler-cache/cuda-12.4" on "shared-builder" is used by
+  workspaces "ws_lab_alpha" and "ws_lab_beta"`. Under the rule as the reviewed
+  commit wrote it, reading only what each execution asked for, that same break
+  left every Lab execution green, which is the whole reason the consequence now
+  carries the slot;
+- deleting the reached-slot clause fails
+  `TestCacheIsolationReadsTheStorageAReadReached`, which states the forbidden
+  ledger directly, because a world whose reads resolve correctly cannot produce
+  it;
+- opening no cache when a workload runs at L0, which is the state the reviewed
+  commit shipped, fails `running-fills-a-cache` with `run "second": candidate
+  "builder-a": cache "build-cache": expected "hot", recorded "cold"`.
+
+The demo Blueprint's normalized bundle hash does not move: `mercator lab run
+--blueprint internal/scenario/scenarios/demos/artifact-warmth-restart.json`
+answers `sha256:02af6ff3438a3e7a4cabd9c24ad88b3192bc653cccc714e6c004fecc63e1aa3f`
+both before and after this change, because a cache read mutates nothing and the
+normalized bundle carries only the effects that do. That command answers
+`sha256:ead5057209fb7930d0d76568ebdd57575169b6001553b5364f28063c74c0321a` on the
+commit before the cache slice, so the pair recorded above is not what this tool
+produces and should be read as a claim that the hash moved rather than as either
+value.
+
+One limit is worth stating rather than hiding. What a node reports is storage a
+workload of that tenant and generation was attached to on this machine, not
+content. A container created that then fails to start leaves the volume behind,
+and so does a workload that ran and wrote nothing, and both are reported as a
+cache this host holds. No container runtime can say what an application put
+inside its own cache, which is why `CacheMount` carries no digest and no size,
+and why a cache is recorded on the decision and never priced.
 
 ```text
 go build ./... && go vet ./... && go test ./...

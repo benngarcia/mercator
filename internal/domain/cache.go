@@ -33,6 +33,19 @@ var cacheNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 // ValidCacheName reports whether this is a name a Cache Mount may carry.
 func ValidCacheName(name string) bool { return cacheNamePattern.MatchString(name) }
 
+// cacheKeyPattern is what a compatibility key may be. Mercator never interprets
+// the key, and it still has to be written down: a container runtime records it
+// beside the storage it names, and that record is the only way a host can say
+// which generation it is holding. So it is constrained where it enters, for the
+// same reason the name is, rather than escaped at every place that stamps one.
+var cacheKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$`)
+
+// ValidCacheCompatibilityKey reports whether this is a generation a holder can
+// record. An empty key is a cache with one generation, which is why it passes.
+func ValidCacheCompatibilityKey(key string) bool {
+	return key == "" || cacheKeyPattern.MatchString(key)
+}
+
 // CacheMountRequirement is what a workload declares it wants mounted: a name,
 // the generation of content it expects to find under it, and how much room it
 // expects to use. The workspace is never stated here, because a workload cannot

@@ -125,6 +125,14 @@ func validateCacheRequirements(required []CacheMountRequirement) []Violation {
 			})
 		}
 		named[requirement.Name] = true
+		if !ValidCacheCompatibilityKey(requirement.CompatibilityKey) {
+			violations = append(violations, Violation{
+				Code:     "CACHE_KEY_INVALID",
+				Path:     fmt.Sprintf("spec.caches[%d].compatibility_key", index),
+				Required: cacheKeyPattern.String(), Offered: requirement.CompatibilityKey,
+				Message: "A compatibility key is recorded beside the storage it names, so it must be a printable label.",
+			})
+		}
 		if requirement.SizeBytes < 0 {
 			violations = append(violations, Violation{
 				Code: "CACHE_SIZE_INVALID", Path: fmt.Sprintf("spec.caches[%d].size_bytes", index), Required: ">= 0",

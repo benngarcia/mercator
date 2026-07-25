@@ -3443,7 +3443,7 @@
           },
           "compatibility_key": {
             "type": "string",
-            "description": "The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own."
+            "description": "The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. It is recorded beside the storage it names on whatever host holds the cache, so it must be a printable label."
           },
           "size_bytes": {
             "type": "integer",

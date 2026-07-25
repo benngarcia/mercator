@@ -321,6 +321,106 @@ func TestTwoWorkspacesGetTwoVolumesForOneCacheName(t *testing.T) {
 	}
 }
 
+// TestALaunchThatNeverRunsLeavesNoCacheBehind is what makes a reported cache
+// mean something. Creating the container is what creates its storage, so a
+// launch the daemon refuses before it gets there leaves nothing on the disk and
+// nothing in the node's report. The agent used to open the volume itself before
+// dispatching the run, which made every failed launch a machine advertising a
+// cache no workload of that tenant and generation was ever attached to, and the
+// next Run's decision recorded that empty directory as warmth.
+func TestALaunchThatNeverRunsLeavesNoCacheBehind(t *testing.T) {
+	requireDocker(t)
+	runtime := NewDockerRuntime("")
+	cache := domain.CacheMountRequirement{Name: "never-run-cache", CompatibilityKey: "cuda-12.4"}
+	volume := domain.CacheVolumeName("ws_alpha", cache)
+	t.Cleanup(func() { _ = exec.Command("docker", "volume", "rm", "--force", volume).Run() })
+	command := capability.LaunchWorkloadCommand{
+		RunID:       "run-never",
+		AttemptID:   "1",
+		BookingID:   "bkg-run-never",
+		CacheMounts: []domain.CacheMountRequirement{cache},
+		// A digest no registry can serve, which is the ordinary way a launch
+		// dies before the daemon creates anything.
+		Workload: domain.WorkloadSpec{Containers: []domain.ContainerSpec{{
+			Name:  "main",
+			Image: "busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		}}},
+	}
+	command.WorkspaceID = "ws_alpha"
+
+	if err := runtime.LaunchWorkload(context.Background(), command); err == nil {
+		t.Fatal("a launch of an image no registry can serve reported success")
+	}
+
+	if err := exec.Command("docker", "volume", "inspect", volume).Run(); err == nil {
+		t.Fatalf("the failed launch left volume %q on this machine", volume)
+	}
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read node facts: %v", err)
+	}
+	if facts.Caches.Holds("ws_alpha", cache) {
+		t.Fatalf("the node reports holding a cache no workload ever ran against: %+v", facts.Caches.Mounts)
+	}
+}
+
+// TestOneUnreadableCacheVolumeDoesNotCostTheNodeItsReport is the cache half of
+// the lesson the image read already carries. The daemon prints the volumes it
+// could describe and exits non-zero for the one that vanished between the
+// listing and the read, which is what `docker volume prune` on a working machine
+// looks like from here. Failing the whole report would end this agent's session
+// and, on an agent with no session yet, block its enrollment, over mutable state
+// that is best-effort by construction.
+func TestOneUnreadableCacheVolumeDoesNotCostTheNodeItsReport(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "info --format") echo '{"OperatingSystem":"linux","Architecture":"x86_64","ServerVersion":"29.4.0","NCPU":8,"MemTotal":1}' ;;
+  "images --digests") ;;
+  "volume ls") echo 'mercator-cache-ws_alpha-compiler-cache-aaaaaaaa'
+               echo 'mercator-cache-ws_alpha-pruned-cache-bbbbbbbb' ;;
+  "volume inspect") echo '{"name":"mercator-cache-ws_alpha-compiler-cache-aaaaaaaa","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.workspace":"ws_alpha","mercator.cache.name":"compiler-cache","mercator.cache.key":"cuda-12.4"}}'
+                    echo 'Error response from daemon: get mercator-cache-ws_alpha-pruned-cache-bbbbbbbb: no such volume' >&2
+                    exit 1 ;;
+esac
+`)
+
+	facts, err := NewDockerRuntime(daemon).Facts(context.Background())
+
+	if err != nil {
+		t.Fatalf("one pruned volume cost this node its whole facts report: %v", err)
+	}
+	if !facts.Caches.Known {
+		t.Fatal("a node that described a cache reported that it had enumerated nothing")
+	}
+	if !facts.Caches.Holds("ws_alpha", domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4"}) {
+		t.Fatalf("the node dropped the cache the daemon described: %+v", facts.Caches.Mounts)
+	}
+}
+
+// TestANodeThatCannotReadItsCachesSaysNothing is the other end of that rule. A
+// daemon that will not answer at all leaves this node with nothing to claim, and
+// silence is what it reports: an inventory marked enumerated and empty would be
+// this machine asserting it holds no cache anywhere, which is a fact nobody
+// established and which prices every candidate as having never done the work.
+func TestANodeThatCannotReadItsCachesSaysNothing(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "info --format") echo '{"OperatingSystem":"linux","Architecture":"x86_64","ServerVersion":"29.4.0","NCPU":8,"MemTotal":1}' ;;
+  "images --digests") ;;
+  "volume ls") echo 'Cannot connect to the Docker daemon' >&2; exit 1 ;;
+esac
+`)
+
+	facts, err := NewDockerRuntime(daemon).Facts(context.Background())
+
+	if err != nil {
+		t.Fatalf("a cache read this node could not make cost it its whole facts report: %v", err)
+	}
+	if facts.Caches.Known {
+		t.Fatalf("a node that could not read its caches claims it enumerated them: %+v", facts.Caches)
+	}
+}
+
 // launchWithCache runs one throwaway container with one cache attached and
 // answers which volume the daemon says it mounted.
 func launchWithCache(t *testing.T, runtime *DockerRuntime, workspaceID, runID string, cache domain.CacheMountRequirement) string {

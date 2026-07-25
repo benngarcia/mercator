@@ -1409,6 +1409,14 @@ func (world *simulatedWorld) writeCache(execution externalExecution, mount domai
 // this world has no model of what the application does with it; what the read
 // records is which cache was opened and whether anything was in it, which is
 // what makes a cross-workspace read a thing the ledger can be caught doing.
+//
+// The request is what this execution asked for and the consequence is what the
+// disk answered with, including the identity of the storage it reached. Those
+// have to be two facts: a request states the identity the reader derived from
+// its own workspace, so a rule reading only that is asking the derivation to
+// confirm itself and a read that resolved to the neighbour's bytes would satisfy
+// it. What names the leak is the slot, and only the storage can say which one it
+// was.
 func (world *simulatedWorld) readCaches(execution externalExecution) {
 	for _, mount := range execution.CacheMounts {
 		identity := domain.CacheIdentity(execution.WorkspaceID, mount)
@@ -1428,7 +1436,7 @@ func (world *simulatedWorld) readCaches(execution externalExecution) {
 				"compatibility_key": mount.CompatibilityKey,
 				"offer_id":          execution.OfferID,
 			},
-			map[string]any{"found": found, "revision": held.Revision},
+			map[string]any{"found": found, "revision": held.Revision, "reached_identity": held.Identity},
 			"",
 		)
 	}

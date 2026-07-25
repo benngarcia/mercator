@@ -126,6 +126,35 @@ func TestANodeThatCannotEnumerateCopiesOffersNoArtifactClaim(t *testing.T) {
 	}
 }
 
+// TestANodeIsAskedToAttachTheCachesTheWorkloadDeclared is the only path a Cache
+// Mount has from a Run to a real container runtime, driven end to end: the
+// public API, the orchestrator's launch request, the Broker's node lane, the
+// node protocol, and the agent that hands the command to its runtime. Nothing
+// below the control plane can derive a cache, so a launch that arrives without
+// one runs with no storage attached while the fleet keeps advertising
+// cache_mounts and every decision keeps recording cache evidence: a permanently
+// cold cache, and no fault reported anywhere.
+//
+// The workspace is asserted beside the mounts because it is half of a cache's
+// identity. A command carrying the right cache under the wrong tenant is the
+// leak this whole slice exists to make impossible.
+func TestANodeIsAskedToAttachTheCachesTheWorkloadDeclared(t *testing.T) {
+	fleet := startFleet(t)
+	declared := domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4", SizeBytes: 8 << 30}
+
+	runID := fleet.submitRunWithCaches(t, declared)
+	fleet.completeWorkload(t, runID, 0)
+	fleet.awaitOutcome(t, runID, "succeeded")
+
+	attached := fleet.runtime.attachedCaches(runID)
+	if !slices.Equal(attached, []domain.CacheMountRequirement{declared}) {
+		t.Fatalf("the node was asked to attach %+v, and the workload declared %+v", attached, declared)
+	}
+	if workspace := fleet.runtime.launchWorkspace(runID); workspace != daemon.DefaultWorkspaceID {
+		t.Fatalf("the launch reached the node under workspace %q, and the Run belongs to %q", workspace, daemon.DefaultWorkspaceID)
+	}
+}
+
 // TestAWorkloadThatFailsOnANodeClosesTheRunFailed holds the node's authority
 // over the exit: nothing the application says is involved, and the run still
 // reaches a terminal failure.
@@ -275,6 +304,22 @@ func (f *fleet) submitRun(t *testing.T) string {
 
 func (f *fleet) submitRunFor(t *testing.T, image string) string {
 	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any { return workloadRevision(name, image) })
+}
+
+// submitRunWithCaches submits a Run whose workload declares mutable state, which
+// is the only way a Cache Mount enters Mercator at all.
+func (f *fleet) submitRunWithCaches(t *testing.T, caches ...domain.CacheMountRequirement) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		revision["spec"].(map[string]any)["caches"] = caches
+		return revision
+	})
+}
+
+func (f *fleet) submitWorkload(t *testing.T, revision func(name string) map[string]any) string {
+	t.Helper()
 	f.submitted++
 	name := fmt.Sprintf("run-%d", f.submitted)
 	var created struct {
@@ -287,7 +332,7 @@ func (f *fleet) submitRunFor(t *testing.T, image string) string {
 	// this case is about where a Run lands, not about resolution.
 	f.call(t, http.MethodPost, "/v1/runs", map[string]any{
 		"workspace_id": daemon.DefaultWorkspaceID,
-		"workload":     workloadRevision(name, image),
+		"workload":     revision(name),
 	}, &created, http.StatusAccepted)
 	if created.Run.ID == "" {
 		t.Fatal("create run returned no run id")
@@ -502,6 +547,11 @@ type scriptedRuntime struct {
 	// which is what a daemon that will not describe an image leaves behind.
 	undescribed  []string
 	observations map[string]capability.WorkloadObservation
+	// launches is the command each Run arrived with, kept whole so a case can
+	// ask what this machine was actually told to attach and under whose
+	// workspace. Everything a container runtime mounts has to be in there:
+	// nothing below the control plane can derive a cache.
+	launches map[string]capability.LaunchWorkloadCommand
 }
 
 func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
@@ -509,6 +559,7 @@ func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
 		unpacks:      unpacks,
 		platforms:    map[string]domain.Platform{},
 		observations: map[string]capability.WorkloadObservation{},
+		launches:     map[string]capability.LaunchWorkloadCommand{},
 	}
 }
 
@@ -619,6 +670,7 @@ func (runtime *scriptedRuntime) LaunchWorkload(_ context.Context, command capabi
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	runtime.launched = append(runtime.launched, command.RunID)
+	runtime.launches[command.RunID] = command
 	if !slices.Contains(runtime.held, command.ManifestDigest) {
 		runtime.held = append(runtime.held, command.ManifestDigest)
 	}
@@ -654,6 +706,22 @@ func (runtime *scriptedRuntime) exit(runID string, code int) {
 	observation.ExitCode = &code
 	observation.ObservedAt = time.Now().UTC()
 	runtime.observations[runID] = observation
+}
+
+// attachedCaches is the mutable state this machine was asked to mount for one
+// Run, which is what a real runtime would open a volume per.
+func (runtime *scriptedRuntime) attachedCaches(runID string) []domain.CacheMountRequirement {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.launches[runID].CacheMounts
+}
+
+// launchWorkspace is the tenant the command reached this node under, which is
+// the other half of every cache identity it would derive.
+func (runtime *scriptedRuntime) launchWorkspace(runID string) string {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.launches[runID].WorkspaceID
 }
 
 func (runtime *scriptedRuntime) launchedRuns() []string {

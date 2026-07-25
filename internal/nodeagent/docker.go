@@ -125,11 +125,11 @@ func (docker *DockerRuntime) LaunchWorkload(ctx context.Context, command capabil
 		args = append(args, "--env", binding.Name+"="+*binding.Value)
 	}
 	for _, mount := range command.CacheMounts {
-		volume, err := docker.openCache(ctx, command.WorkspaceID, mount)
+		attachment, err := docker.cacheMount(command.WorkspaceID, mount)
 		if err != nil {
 			return err
 		}
-		args = append(args, "--mount", "type=volume,source="+volume+",target="+domain.CacheMountPath(mount.Name))
+		args = append(args, "--mount", attachment)
 	}
 	if command.MaxRuntimeSeconds > 0 {
 		args = append(args, "--stop-timeout", strconv.FormatInt(command.MaxRuntimeSeconds, 10))
@@ -201,64 +201,85 @@ func (docker *DockerRuntime) cacheLabel(part string) string {
 	return docker.labelPrefix + "cache." + part
 }
 
-// openCache is the durable volume one cache lives in, made if this machine has
-// never held that cache before. The name is derived from the workspace, the
-// cache's name, and the compatibility key together, so a second workspace
-// asking for "compiler-cache" gets its own volume by construction rather than by
-// a comparison this function could forget to make, and a new compatibility key
-// gets an empty cache rather than the generation the application has just said
-// it cannot use.
+// cacheMount is the volume flag one Cache Mount contributes to `docker run`.
+// The volume's name is derived from the workspace, the cache's name, and the
+// compatibility key together, so a second workspace asking for "compiler-cache"
+// gets its own storage by construction rather than by a comparison this function
+// could forget to make, and a new compatibility key gets an empty cache rather
+// than the generation the application has just said it cannot use.
 //
-// Creating a volume that already exists is how the daemon answers "it is
-// already here", so this is safe on every launch. What it leaves behind is the
-// previous generation's volume, which nothing reclaims yet: garbage collection
-// is its own capability and this runtime still declares it unsupported.
-func (docker *DockerRuntime) openCache(ctx context.Context, workspaceID string, mount domain.CacheMountRequirement) (string, error) {
+// Creating the container is what creates the cache. The daemon makes a volume
+// the container asks for and does not have, stamped with the labels named here,
+// so a launch that never reaches container creation leaves nothing behind: an
+// image this machine cannot resolve, a full disk, a refused command. The agent
+// used to open the volume itself before dispatching the run, which made every
+// failed launch a machine reporting a cache no workload of that tenant and
+// generation had ever been attached to, and the next Run's decision recorded it
+// as warmth.
+//
+// What is left behind is the previous generation's volume, which nothing
+// reclaims: garbage collection is its own capability and this runtime still
+// declares it unsupported.
+func (docker *DockerRuntime) cacheMount(workspaceID string, mount domain.CacheMountRequirement) (string, error) {
 	if workspaceID == "" {
 		return "", fmt.Errorf("cache mount %q has no workspace, and a cache's identity is workspace-scoped", mount.Name)
 	}
 	if !domain.ValidCacheName(mount.Name) {
 		return "", fmt.Errorf("cache mount %q is not a name a volume can be derived from", mount.Name)
 	}
-	volume := domain.CacheVolumeName(workspaceID, mount)
-	_, err := docker.run(ctx, "volume", "create",
-		"--label", docker.cacheLabel("workspace")+"="+workspaceID,
-		"--label", docker.cacheLabel("name")+"="+mount.Name,
-		"--label", docker.cacheLabel("key")+"="+mount.CompatibilityKey,
-		volume)
-	if err != nil {
-		return "", fmt.Errorf("open cache %q for workspace %s: %w", mount.Name, workspaceID, err)
+	// The key is an application's own string and this stamps it into an option
+	// list the daemon parses on commas. A key that cannot be written down here
+	// is a generation this machine could never report holding, so it is refused
+	// rather than escaped into something else.
+	if !domain.ValidCacheCompatibilityKey(mount.CompatibilityKey) {
+		return "", fmt.Errorf("cache mount %q names generation %q, which no volume label can carry", mount.Name, mount.CompatibilityKey)
 	}
-	return volume, nil
+	return strings.Join([]string{
+		"type=volume",
+		"source=" + domain.CacheVolumeName(workspaceID, mount),
+		"target=" + domain.CacheMountPath(mount.Name),
+		"volume-label=" + docker.cacheLabel("workspace") + "=" + workspaceID,
+		"volume-label=" + docker.cacheLabel("name") + "=" + mount.Name,
+		"volume-label=" + docker.cacheLabel("key") + "=" + mount.CompatibilityKey,
+	}, ","), nil
 }
 
 // caches is the mutable, application-owned state this machine holds, read back
-// out of the labels the agent stamped when it created each volume. Only volumes
-// this agent made are reported: another tool's volume on the same daemon is not
-// a Mercator cache, whatever it is called.
+// out of the labels the daemon stamped when a workload's container first asked
+// for each volume. Only volumes made for a Mercator cache are reported: another
+// tool's volume on the same daemon is not one, whatever it is called.
+//
+// A cache read never fails the node's report. A cache is best-effort by
+// construction and silence about one is already expressible, while failing here
+// would end the agent's session and, on an agent with no session yet, block its
+// enrollment: an operator pruning volumes on a working machine would take it out
+// of the fleet. So a volume that vanished between the listing and the read is
+// one cache left out, and a daemon that will not answer at all leaves this node
+// saying nothing rather than claiming it enumerated and found none.
 //
 // No size is reported. moby prices a volume only through GET /system/df, which
 // walks every volume on the host and took 4.8 seconds for 342 of them on the
 // machine this was written on, so it is not a read a heartbeat may make; and a
 // zero reported here would be this node claiming an empty cache it may be
 // holding gigabytes in. What the daemon can state is when each cache generation
-// began, which it does state, because the agent makes a new volume per
-// compatibility key.
+// began, which it does state, because each generation gets its own volume.
 func (docker *DockerRuntime) caches(ctx context.Context) (domain.CacheInventory, error) {
 	inventory := domain.CacheInventory{Known: true, ObservedAt: docker.now().UTC()}
 	names, err := docker.run(ctx, "volume", "ls",
 		"--filter", "label="+docker.cacheLabel("name"), "--format", "{{.Name}}")
 	if err != nil {
-		return domain.CacheInventory{}, fmt.Errorf("list this machine's caches: %w", err)
+		return docker.unreadableCaches(ctx, err)
 	}
 	volumes := strings.Fields(names)
 	if len(volumes) == 0 {
 		return inventory, nil
 	}
+	// The daemon prints the volumes it could describe and exits non-zero for
+	// the ones it could not, so what came back is read either way.
 	described, err := docker.run(ctx, append(append([]string{"volume", "inspect"}, volumes...),
 		"--format", `{"name":"{{.Name}}","created_at":"{{.CreatedAt}}","labels":{{json .Labels}}}`)...)
-	if err != nil {
-		return domain.CacheInventory{}, fmt.Errorf("read this machine's caches: %w", err)
+	if err != nil && strings.TrimSpace(described) == "" {
+		return docker.unreadableCaches(ctx, err)
 	}
 	for line := range strings.SplitSeq(strings.TrimSpace(described), "\n") {
 		if line == "" {
@@ -266,7 +287,7 @@ func (docker *DockerRuntime) caches(ctx context.Context) (domain.CacheInventory,
 		}
 		var volume describedVolume
 		if err := json.Unmarshal([]byte(line), &volume); err != nil {
-			return domain.CacheInventory{}, fmt.Errorf("decode cache volume: %w", err)
+			return docker.unreadableCaches(ctx, fmt.Errorf("decode cache volume: %w", err))
 		}
 		mount, ok := volume.cache(docker.cacheLabel)
 		if !ok {
@@ -275,6 +296,18 @@ func (docker *DockerRuntime) caches(ctx context.Context) (domain.CacheInventory,
 		inventory.Mounts = append(inventory.Mounts, mount)
 	}
 	return inventory, nil
+}
+
+// unreadableCaches is a node that cannot say what mutable state it holds. It is
+// silence rather than an empty disk, which is the difference between "I looked
+// and there is nothing" and "nobody could ask me". A read that ended because
+// this agent is shutting down says nothing about the machine at all, so that one
+// fails the report.
+func (docker *DockerRuntime) unreadableCaches(ctx context.Context, err error) (domain.CacheInventory, error) {
+	if ctx.Err() != nil {
+		return domain.CacheInventory{}, fmt.Errorf("read this machine's caches: %w", err)
+	}
+	return domain.CacheInventory{}, nil
 }
 
 // describedVolume is one volume as the daemon accounts for it. The labels are
@@ -835,13 +868,18 @@ func dockerArchitecture(reported string) string {
 	}
 }
 
+// run is one CLI call to the daemon. It answers with what the command printed
+// as well as with what went wrong, because the two are not exclusive: a read
+// over several objects prints the ones it could describe and exits non-zero for
+// the rest, and throwing that away is how one missing object becomes a machine
+// that reported nothing.
 func (docker *DockerRuntime) run(ctx context.Context, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, docker.binary, args...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		return "", fmt.Errorf("%s %s: %w: %s", docker.binary, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		return stdout.String(), fmt.Errorf("%s %s: %w: %s", docker.binary, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
 }

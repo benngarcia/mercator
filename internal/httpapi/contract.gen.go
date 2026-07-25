@@ -437,7 +437,7 @@ type CacheMount struct {
 
 // CacheMountRequirement One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running.
 type CacheMountRequirement struct {
-	// CompatibilityKey The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own.
+	// CompatibilityKey The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. It is recorded beside the storage it names on whatever host holds the cache, so it must be a printable label.
 	CompatibilityKey string `json:"compatibility_key,omitempty"`
 
 	// Name This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label.

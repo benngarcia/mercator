@@ -113,16 +113,22 @@ func TestACacheVolumeNameSeparatesEveryPartOfTheIdentity(t *testing.T) {
 	}
 }
 
-// TestAWorkloadDeclaringAnUnusableCacheIsRefused keeps the name a name. It is
-// identity and it names a volume on whatever host holds the cache, so a
-// declaration nothing can address is refused where it enters rather than escaped
-// wherever a volume gets built from it.
+// TestAWorkloadDeclaringAnUnusableCacheIsRefused keeps the name a name and the
+// generation something a holder can write down. Both are identity, and both are
+// stamped into a container runtime's own record of the storage they name, so a
+// declaration nothing can address or record is refused where it enters rather
+// than escaped wherever a volume gets built from it.
 func TestAWorkloadDeclaringAnUnusableCacheIsRefused(t *testing.T) {
 	for name, declared := range map[string][]domain.CacheMountRequirement{
 		"a name no volume can carry": {{Name: "Compiler Cache"}},
 		"no name at all":             {{CompatibilityKey: "cuda-12.4"}},
 		"one cache declared twice":   {{Name: compilerCache}, {Name: compilerCache, CompatibilityKey: "cuda-12.4"}},
 		"room stated as negative":    {{Name: compilerCache, SizeBytes: -1}},
+		// A key carrying the separators a container runtime's own option list is
+		// parsed on. Stamped as it stands it would be read as further options
+		// rather than as a generation, so what a cache under it holds could
+		// never be established.
+		"a generation no holder can record": {{Name: compilerCache, CompatibilityKey: "cuda-12.4,volume-nocopy=true"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			revision := workloadRevisionWithCaches(declared)

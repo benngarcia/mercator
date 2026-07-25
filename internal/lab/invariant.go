@@ -1001,7 +1001,12 @@ func cacheDiskAccounting(observation InvariantObservation) error {
 // cannot answer for itself.
 //
 // Reads are policed beside writes because a cache read under the wrong workspace
-// has already leaked, whatever it went on to write.
+// has already leaked, whatever it went on to write. A read is claimed twice: for
+// the identity it asked for, and for the identity of the storage it actually
+// reached. The request alone cannot catch a resolution that wandered, because a
+// reader derives the identity it asks for from its own workspace, so those two
+// always agree; the slot the disk answered from is the only part of the record
+// that can disagree with the tenant that read it.
 func cacheMountWorkspaceIsolation(observation InvariantObservation) error {
 	owners := map[string]string{}
 	claim := func(offerID, identity, workspaceID, what string) error {
@@ -1031,6 +1036,18 @@ func cacheMountWorkspaceIsolation(observation InvariantObservation) error {
 			return fmt.Errorf("decode Cache Mount access %s: %w", effect.ID, err)
 		}
 		if err := claim(touched.OfferID, touched.Identity, touched.WorkspaceID, effect.Operation); err != nil {
+			return err
+		}
+		var answered struct {
+			ReachedIdentity string `json:"reached_identity"`
+		}
+		if err := json.Unmarshal(effect.Consequence, &answered); err != nil {
+			return fmt.Errorf("decode Cache Mount answer %s: %w", effect.ID, err)
+		}
+		if answered.ReachedIdentity == "" {
+			continue
+		}
+		if err := claim(touched.OfferID, answered.ReachedIdentity, touched.WorkspaceID, effect.Operation+" reached"); err != nil {
 			return err
 		}
 	}

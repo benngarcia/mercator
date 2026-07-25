@@ -759,7 +759,7 @@ export interface components {
         CacheMountRequirement: {
             /** @description This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label. */
             name: string;
-            /** @description The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. */
+            /** @description The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. It is recorded beside the storage it names on whatever host holds the cache, so it must be a printable label. */
             compatibility_key?: string;
             /**
              * Format: int64

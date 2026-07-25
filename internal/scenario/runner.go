@@ -306,7 +306,36 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 			fail("Artifact %q: expected %q, recorded %q", artifactID, want, found.Locality)
 		}
 	}
+	for _, cache := range sortedKeys(expect.Caches) {
+		found, ok := cacheEvidence(candidate, cache)
+		if !ok {
+			fail("records no cache evidence for %q", cache)
+			continue
+		}
+		if want := CacheExpectations[expect.Caches[cache]]; found.Locality != want {
+			fail("cache %q: expected %q, recorded %q", cache, want, found.Locality)
+		}
+	}
 	return failures
+}
+
+// CacheExpectations is what a fixture's word for cache warmth means. A Cache
+// Mount is the application's own state under a name, so there is no partial
+// answer: this host holds the generation the workload asked for, it does not, or
+// nobody could ask it.
+var CacheExpectations = map[string]domain.LocalityState{
+	"hit":     domain.LocalityHot,
+	"miss":    domain.LocalityCold,
+	"unknown": domain.LocalityUnknown,
+}
+
+func cacheEvidence(candidate domain.CandidateDecision, name string) (domain.CacheEvidence, bool) {
+	for _, found := range candidate.CacheEvidence {
+		if found.Name == name {
+			return found, true
+		}
+	}
+	return domain.CacheEvidence{}, false
 }
 
 // ArtifactExpectations is what a fixture's word for Artifact locality means. A

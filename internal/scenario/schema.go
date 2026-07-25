@@ -637,6 +637,13 @@ type CandidateExpectation struct {
 	// Artifact the Run reads: "hit", "miss", or "unknown" for a machine that
 	// could not enumerate its copies at all.
 	Artifacts map[string]string `json:"artifact_evidence,omitempty"`
+	// Caches asserts what this candidate was recorded as holding of each Cache
+	// Mount the Run declares, by name: "hit" for the generation the workload
+	// asked for, "miss" for a machine holding none it can use, and "unknown" for
+	// one that could not say. There are no seconds to assert beside it, because
+	// what a warm cache saves is work inside the application and nothing here
+	// has measured that.
+	Caches map[string]string `json:"cache_evidence,omitempty"`
 }
 
 type ScheduleEvidenceExpectation struct {
@@ -1664,6 +1671,11 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 			}
 			if _, stated := ArtifactExpectations[want]; !stated {
 				return fmt.Errorf("candidate %q Artifact %q expects \"hit\", \"miss\", or \"unknown\", got %q", id, artifactID, want)
+			}
+		}
+		for name, want := range candidate.Caches {
+			if _, stated := CacheExpectations[want]; !stated {
+				return fmt.Errorf("candidate %q cache %q expects \"hit\", \"miss\", or \"unknown\", got %q", id, name, want)
 			}
 		}
 		if candidate.Schedule != nil {

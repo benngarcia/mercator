@@ -141,18 +141,31 @@ type Machine struct {
 	fetching []transfer
 }
 
-// transfer is one image pull in flight: what it will leave on the machine, and
-// when the bytes have finished moving.
+// transfer is one execution's arrival on this machine: the image it had to
+// fetch, the mutable caches the workload declared, and when the bytes have
+// finished moving, which is when the workload starts.
 type transfer struct {
 	image       string
 	layers      []Layer
+	caches      []domain.CacheMount
 	completesAt time.Time
 }
 
-// startPull begins fetching an image onto this machine. Capacity Mercator does
-// not keep is left out of it: there is no host there to be holding the content
-// when the next Run asks.
-func (m *Machine) startPull(image string, layers []Layer, now time.Time) {
+// startExecution begins one launch on this machine: it fetches what the image
+// still needs, and it opens the caches the workload declared. Both are what the
+// machine holds afterwards, and both land when the bytes have arrived, because a
+// workload cannot have opened anything before it started.
+//
+// Capacity Mercator does not keep is left out of both: there is no host there to
+// be holding anything when the next Run asks.
+//
+// A cache is opened at the start of the execution rather than at its end, which
+// is the one place this world is coarser than the Lab's: nothing here models a
+// workload finishing, so the moment a Run stops holding this machine is not a
+// moment this world has. What both worlds now agree on is the claim that
+// matters, that running a workload here is what fills its cache and a machine
+// that never ran one holds nothing.
+func (m *Machine) startExecution(image string, layers []Layer, caches []domain.CacheMount, now time.Time) {
 	if !m.Offer.KeepsWhatItRuns() {
 		return
 	}
@@ -165,13 +178,14 @@ func (m *Machine) startPull(image string, layers []Layer, now time.Time) {
 	m.fetching = append(m.fetching, transfer{
 		image:       image,
 		layers:      layers,
+		caches:      caches,
 		completesAt: now.Add(transferDuration(bytes)),
 	})
 }
 
-// settle applies every pull whose bytes have arrived by now. Until then the
+// settle applies every execution whose bytes have arrived by now. Until then the
 // machine holds what it held before, because an image that is still being
-// fetched is not on the host.
+// fetched is not on the host and a workload waiting on it has opened nothing.
 func (m *Machine) settle(now time.Time) {
 	arrived := m.fetching[:0]
 	for _, pull := range m.fetching {
@@ -180,8 +194,31 @@ func (m *Machine) settle(now time.Time) {
 			continue
 		}
 		m.keep(pull.image, pull.layers)
+		m.openCaches(pull.caches, pull.completesAt)
 	}
 	m.fetching = arrived
+}
+
+// openCaches is the mutable state a workload that started here left behind,
+// filed under the full identity so a second tenant naming one cache gets its
+// own. The generation this machine already had keeps the moment it began: a
+// holder can say when a cache started existing here and nothing about what was
+// written into it since.
+func (m *Machine) openCaches(caches []domain.CacheMount, at time.Time) {
+	if len(caches) == 0 {
+		return
+	}
+	if m.HeldCaches == nil {
+		m.HeldCaches = map[string]domain.CacheMount{}
+	}
+	for _, cache := range caches {
+		if held, existing := m.HeldCaches[cache.Identity()]; existing {
+			cache.CreatedAt = held.CreatedAt
+		} else {
+			cache.CreatedAt = at
+		}
+		m.HeldCaches[cache.Identity()] = cache
+	}
 }
 
 // publishedInventory is what an offer for this machine can carry. Mercator
@@ -467,31 +504,47 @@ func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.Offe
 	return offers, nil
 }
 
-// Launch runs the workload and leaves what it fetched on the machine that ran
-// it. Running an image is how a host becomes warm; capacity Mercator does not
-// keep is cold again on the next Run.
+// Launch runs the workload and leaves what it fetched and what it opened on the
+// machine that ran it. Running is how a host becomes warm, for an image and for
+// a cache alike; capacity Mercator does not keep is cold again on the next Run.
 func (w *World) Launch(ctx context.Context, request adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	receipt, err := w.Adapter.Launch(ctx, request)
 	if err != nil {
 		return receipt, err
 	}
-	w.recordExecution(request.SelectedOfferSnapshotID, request.Image)
+	w.recordExecution(request)
 	return receipt, nil
 }
 
-// recordExecution starts the image pull the launch implies. What the machine
-// keeps afterwards is its own answer: only capacity Mercator keeps is still
-// holding the content when the next Run asks.
-func (w *World) recordExecution(offerID, image string) {
+// recordExecution starts the pull the launch implies and declares the caches it
+// will open. What the machine keeps afterwards is its own answer: only capacity
+// Mercator keeps is still holding any of it when the next Run asks.
+func (w *World) recordExecution(request adapter.LaunchRequest) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	machine, exists := w.machines[offerID]
+	machine, exists := w.machines[request.SelectedOfferSnapshotID]
 	if !exists {
 		return
 	}
 	now := w.clock.Now()
 	machine.settle(now)
-	machine.startPull(image, w.images[image].Layers, now)
+	machine.startExecution(request.Image, w.images[request.Image].Layers, declaredCaches(request), now)
+}
+
+// declaredCaches is the mutable state this launch asks its host to attach, named
+// by the identity that carries the workspace the Run belongs to. A workload
+// cannot choose its own workspace, so the scoping is the request's and never the
+// declaration's.
+func declaredCaches(request adapter.LaunchRequest) []domain.CacheMount {
+	caches := make([]domain.CacheMount, 0, len(request.CacheMounts))
+	for _, mount := range request.CacheMounts {
+		caches = append(caches, domain.CacheMount{
+			WorkspaceID:      request.WorkspaceID,
+			Name:             mount.Name,
+			CompatibilityKey: mount.CompatibilityKey,
+		})
+	}
+	return caches
 }
 
 // ResolveManifest answers what an image contains from this world's catalog. It

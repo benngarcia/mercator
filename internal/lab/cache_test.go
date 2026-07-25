@@ -172,6 +172,59 @@ func TestCacheIsolationReadsWhatIsStoredAndNotOnlyWhatWasTouched(t *testing.T) {
 	}
 }
 
+// TestCacheIsolationReadsTheStorageAReadReached is the clause that makes the
+// rule about the disk rather than about the reader's own arithmetic. Both
+// identities in a read request are derived from the workspace the execution
+// belongs to, so a leak can never show up there: it shows up in which storage
+// the read resolved to. Here beta asks for its own cache and the world hands it
+// alpha's, which is a cross-workspace read of mutable state, and the request
+// half of the record agrees with itself throughout.
+func TestCacheIsolationReadsTheStorageAReadReached(t *testing.T) {
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	alpha := domain.CacheIdentity("ws_lab_alpha", domain.CacheMountRequirement{Name: compilerCache, CompatibilityKey: "cuda-12.4"})
+	beta := domain.CacheIdentity("ws_lab_beta", domain.CacheMountRequirement{Name: compilerCache, CompatibilityKey: "cuda-12.4"})
+
+	err := cacheMountWorkspaceIsolation(InvariantObservation{
+		StartedAt: now,
+		Now:       now,
+		Effects: []EffectRecord{
+			cacheAccessRecord(t, OperationCacheMountWrite, "ws_lab_alpha", alpha, ""),
+			cacheAccessRecord(t, OperationCacheMountRead, "ws_lab_beta", beta, alpha),
+		},
+	})
+
+	if err == nil {
+		t.Fatal("a Run in one workspace read the storage another workspace's cache lives in, and nothing objected")
+	}
+}
+
+// cacheAccessRecord is one ledger entry for a cache access: what the execution
+// asked for, and which storage the world answered from.
+func cacheAccessRecord(t *testing.T, operation, workspaceID, identity, reached string) EffectRecord {
+	t.Helper()
+	request, err := json.Marshal(map[string]any{
+		"identity":     identity,
+		"workspace_id": workspaceID,
+		"offer_id":     "shared-builder",
+	})
+	if err != nil {
+		t.Fatalf("encode cache access request: %v", err)
+	}
+	if reached == "" {
+		reached = identity
+	}
+	consequence, err := json.Marshal(map[string]any{"found": true, "revision": 1, "reached_identity": reached})
+	if err != nil {
+		t.Fatalf("encode cache access consequence: %v", err)
+	}
+	return EffectRecord{
+		ID:          operation + "/" + identity,
+		Operation:   operation,
+		Request:     request,
+		Consequence: consequence,
+	}
+}
+
 // TestLocalityProvenanceRejectsBorrowedCapacityHoldingACache is the third clause
 // of safety.locality_provenance, which no execution can reach either: the world
 // refuses to write a cache onto capacity that keeps nothing. The forbidden state
