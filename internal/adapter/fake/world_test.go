@@ -37,7 +37,7 @@ func worldOffers(t *testing.T, world *World) map[string]domain.OfferSnapshot {
 func TestWorldIdleMachineAdvertisesHonestLayerEvidence(t *testing.T) {
 	world := newLayeredWorld(t)
 	if err := world.AddMachine(&Machine{
-		Offer:      domain.OfferSnapshot{ID: "rental-warm"},
+		Offer:      rentalOffer("rental-warm"),
 		HeldLayers: map[string]int64{"layer-base": 1000},
 	}); err != nil {
 		t.Fatalf("add machine: %v", err)
@@ -66,7 +66,7 @@ func TestWorldIdleMachineAdvertisesHonestLayerEvidence(t *testing.T) {
 func TestWorldBusyMachineAdvertisesRemainingMaxRuntime(t *testing.T) {
 	world := newLayeredWorld(t)
 	if err := world.AddMachine(&Machine{
-		Offer:     domain.OfferSnapshot{ID: "rental-busy"},
+		Offer:     rentalOffer("rental-busy"),
 		BusyUntil: worldStart.Add(10 * time.Minute),
 	}); err != nil {
 		t.Fatalf("add machine: %v", err)
@@ -90,7 +90,7 @@ func TestWorldBusyMachineAdvertisesRemainingMaxRuntime(t *testing.T) {
 func TestWorldFreesAtHoldsAMachineBusyPastMaxRuntime(t *testing.T) {
 	world := newLayeredWorld(t)
 	if err := world.AddMachine(&Machine{
-		Offer:     domain.OfferSnapshot{ID: "rental-lagged"},
+		Offer:     rentalOffer("rental-lagged"),
 		BusyUntil: worldStart.Add(5 * time.Minute),
 		FreesAt:   worldStart.Add(20 * time.Minute),
 	}); err != nil {
@@ -110,7 +110,7 @@ func TestWorldFreesAtHoldsAMachineBusyPastMaxRuntime(t *testing.T) {
 func TestWorldExpiredLeaseRemovesAMachineFromOffers(t *testing.T) {
 	world := newLayeredWorld(t)
 	if err := world.AddMachine(&Machine{
-		Offer:          domain.OfferSnapshot{ID: "rental-leased"},
+		Offer:          rentalOffer("rental-leased"),
 		LeaseExpiresAt: worldStart.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("add machine: %v", err)
@@ -127,7 +127,11 @@ func TestWorldExpiredLeaseRemovesAMachineFromOffers(t *testing.T) {
 
 func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 	world := newLayeredWorld(t)
-	if err := world.AddMarketplaceOffer(domain.OfferSnapshot{ID: "fresh-vm"}); err != nil {
+	if err := world.AddMachine(&Machine{Offer: domain.OfferSnapshot{
+		ID:   "fresh-vm",
+		Kind: domain.OfferKindProvisionable,
+		Lane: domain.LaneReusable,
+	}}); err != nil {
 		t.Fatalf("add marketplace offer: %v", err)
 	}
 
@@ -147,7 +151,7 @@ func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 func TestWorldHoldsARunningImageOnlyOnceItsBytesHaveArrived(t *testing.T) {
 	world := newLayeredWorld(t)
 	world.DefineImage("wide:v1", []Layer{{Digest: "layer-wide", Bytes: 125_000_000}})
-	if err := world.AddMachine(&Machine{Offer: domain.OfferSnapshot{ID: "rental-cold"}}); err != nil {
+	if err := world.AddMachine(&Machine{Offer: rentalOffer("rental-cold")}); err != nil {
 		t.Fatalf("add machine: %v", err)
 	}
 
@@ -164,34 +168,84 @@ func TestWorldHoldsARunningImageOnlyOnceItsBytesHaveArrived(t *testing.T) {
 	}
 }
 
-// TestWorldCapacityItDoesNotKeepHoldsNothingItRan is the lane's line. The same
-// launch on a machine Mercator does not keep leaves nothing behind, because
-// there is no host there to be holding it.
+// TestWorldCapacityItDoesNotKeepHoldsNothingItRan covers both halves of the
+// line, because each half is a different reason. A machine that does not exist
+// yet has nowhere to put the content; a host Mercator borrows a slot on exists
+// and keeps running, but nothing Mercator has enrolled on it can hold anything
+// for the next Run or say what is there.
 func TestWorldCapacityItDoesNotKeepHoldsNothingItRan(t *testing.T) {
-	world := newLayeredWorld(t)
-	if err := world.AddMarketplaceOffer(domain.OfferSnapshot{ID: "oneshot", Lane: domain.LaneEphemeral}); err != nil {
-		t.Fatalf("add marketplace offer: %v", err)
-	}
+	for _, capacity := range []struct {
+		name  string
+		offer domain.OfferSnapshot
+	}{
+		{
+			name:  "a machine that does not exist yet",
+			offer: domain.OfferSnapshot{ID: "oneshot", Kind: domain.OfferKindProvisionable, Lane: domain.LaneEphemeral},
+		},
+		{
+			name:  "a host Mercator has not enrolled",
+			offer: domain.OfferSnapshot{ID: "local-docker", Kind: domain.OfferKindStanding, Lane: domain.LaneEphemeral},
+		},
+	} {
+		t.Run(capacity.name, func(t *testing.T) {
+			world := newLayeredWorld(t)
+			if err := world.AddMachine(&Machine{Offer: capacity.offer}); err != nil {
+				t.Fatalf("add machine: %v", err)
+			}
 
-	if _, err := world.Launch(context.Background(), worldLaunch("oneshot", "trainer:v1")); err != nil {
-		t.Fatalf("launch: %v", err)
-	}
-	world.Clock().Advance(time.Hour)
+			if _, err := world.Launch(context.Background(), worldLaunch(capacity.offer.ID, "trainer:v1")); err != nil {
+				t.Fatalf("launch: %v", err)
+			}
+			world.Clock().Advance(time.Hour)
 
-	held := worldOffers(t, world)["oneshot"].Images
-	if len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
-		t.Fatalf("capacity Mercator does not keep held %+v an hour after its workload", held)
+			held := worldOffers(t, world)[capacity.offer.ID].Images
+			if len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
+				t.Fatalf("%s held %+v an hour after its workload", capacity.name, held)
+			}
+		})
 	}
 }
 
-func TestWorldRefusesARentalOutsideTheReusableLane(t *testing.T) {
+// TestWorldGrantsRentalIdentityOnlyToCapacityItKeeps mirrors the production
+// stamp: an offer that cannot hold a second Run cannot name a Rental either.
+func TestWorldGrantsRentalIdentityOnlyToCapacityItKeeps(t *testing.T) {
+	world := newLayeredWorld(t)
+	if err := world.AddMachine(&Machine{Offer: rentalOffer("rental-kept")}); err != nil {
+		t.Fatalf("add rental: %v", err)
+	}
+	if err := world.AddMachine(&Machine{Offer: domain.OfferSnapshot{
+		ID:       "local-docker",
+		Kind:     domain.OfferKindStanding,
+		Lane:     domain.LaneEphemeral,
+		RentalID: "local-docker",
+	}}); err != nil {
+		t.Fatalf("add host: %v", err)
+	}
+
+	offers := worldOffers(t, world)
+
+	if offers["rental-kept"].RentalID != "rental-kept" {
+		t.Fatalf("a Rental must name itself, got %q", offers["rental-kept"].RentalID)
+	}
+	if offers["local-docker"].RentalID != "" {
+		t.Fatalf("capacity Mercator does not keep claimed Rental %q", offers["local-docker"].RentalID)
+	}
+}
+
+func TestWorldRefusesCapacityThatNamesNoKindOrLane(t *testing.T) {
 	world := newLayeredWorld(t)
 
-	err := world.AddMachine(&Machine{Offer: domain.OfferSnapshot{ID: "rental-oneshot", Lane: domain.LaneEphemeral}})
+	err := world.AddMachine(&Machine{Offer: domain.OfferSnapshot{ID: "nameless"}})
 
 	if err == nil {
-		t.Fatal("a Rental in the ephemeral lane must be refused rather than silently corrected")
+		t.Fatal("capacity that states neither what it is nor what it does was accepted")
 	}
+}
+
+// rentalOffer is capacity Mercator holds: a machine that exists, with an
+// enrolled runtime that can execute successive workloads on it.
+func rentalOffer(id string) domain.OfferSnapshot {
+	return domain.OfferSnapshot{ID: id, Kind: domain.OfferKindStanding, Lane: domain.LaneReusable}
 }
 
 func worldLaunch(offerID, image string) adapter.LaunchRequest {

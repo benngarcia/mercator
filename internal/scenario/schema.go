@@ -151,9 +151,23 @@ type WorldSpec struct {
 	Artifacts       []ArtifactSpec         `json:"artifacts,omitempty"`
 	Rentals         []RentalSpec           `json:"rentals,omitempty"`
 	RentalSchedules []RentalScheduleSpec   `json:"rental_schedules,omitempty"`
+	Hosts           []HostSpec             `json:"hosts,omitempty"`
 	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
 	Paths           []PathSpec             `json:"paths,omitempty"`
 	RuntimeModels   []RuntimeModelSpec     `json:"runtime_models,omitempty"`
+}
+
+// HostSpec is standing capacity Mercator does not control: a machine that
+// already exists and will run a container now, with nothing enrolled on it to
+// execute a second workload or to say what it holds. Mercator borrows a slot and
+// keeps no machine, so it is standing capacity in the ephemeral lane, which is
+// the local Docker daemon in production. It is the only world entry that
+// separates the lane's half of OfferSnapshot.KeepsWhatItRuns from the kind's.
+type HostSpec struct {
+	ID             string         `json:"id"`
+	RatePerHourUSD float64        `json:"rate_per_hour_usd"`
+	Billing        BillingSpec    `json:"billing,omitempty"`
+	Resources      *ResourcesSpec `json:"resources,omitempty"`
 }
 
 // ExecutionLane reports what this offer becomes once allocated, defaulting to
@@ -1023,6 +1037,21 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("rental %q: only an empty RentalSchedule may carry an idle lease", schedule.RentalID)
 		}
 	}
+	for _, host := range w.Hosts {
+		if host.ID == "" {
+			return fmt.Errorf("hosts need an id")
+		}
+		if ids[host.ID] {
+			return fmt.Errorf("duplicate id %q", host.ID)
+		}
+		ids[host.ID] = true
+		if host.RatePerHourUSD <= 0 {
+			return fmt.Errorf("host %q needs a positive rate_per_hour_usd", host.ID)
+		}
+		if err := host.Billing.validate("host " + host.ID); err != nil {
+			return err
+		}
+	}
 	for _, offer := range w.Marketplace {
 		if offer.ID == "" {
 			return fmt.Errorf("marketplace offers need an id")
@@ -1198,6 +1227,9 @@ func (w WorldSpec) candidateIDs() map[string]bool {
 	ids := map[string]bool{}
 	for _, rental := range w.Rentals {
 		ids[rental.ID] = true
+	}
+	for _, host := range w.Hosts {
+		ids[host.ID] = true
 	}
 	for _, offer := range w.Marketplace {
 		ids[offer.ID] = true

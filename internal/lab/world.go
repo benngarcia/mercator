@@ -233,6 +233,16 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			world.cacheMounts[rental.ID][name] = 1
 		}
 	}
+	for _, host := range tape.InitialWorld.Hosts {
+		state := hostState{
+			offer:      labOffer(host.ID, domain.OfferKindStanding, domain.LaneEphemeral, host.RatePerHourUSD, host.Resources),
+			heldLayers: map[string]int64{},
+			heldImages: map[string]bool{},
+		}
+		applyOfferWorldFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
+		world.seededLocality[host.ID] = state.seededDigests()
+		world.truth[host.ID] = cloneHostState(state)
+	}
 	for _, marketplace := range tape.InitialWorld.Marketplace {
 		state := hostState{
 			offer: labOffer(
@@ -1091,14 +1101,13 @@ func (world *simulatedWorld) ResolveManifest(_ context.Context, imageDigest stri
 }
 
 func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, ratePerHourUSD float64, resources *scenario.ResourcesSpec) domain.OfferSnapshot {
-	return domain.OfferSnapshot{
+	offer := domain.OfferSnapshot{
 		ID:           id,
 		ConnectionID: labConnection,
 		AdapterType:  "lab",
 		NativeRef:    id,
 		Kind:         kind,
 		Lane:         lane,
-		RentalID:     standingRentalID(id, kind),
 		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
 		Resources:    labResources(resources),
 		Capabilities: domain.CapabilityProfile{
@@ -1119,6 +1128,12 @@ func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, rateP
 		},
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
+	// Only capacity Mercator keeps names a Rental, which is the same stamp
+	// capability.StampLane applies to every offer in production.
+	if offer.KeepsWhatItRuns() {
+		offer.RentalID = id
+	}
+	return offer
 }
 
 func labResources(resources *scenario.ResourcesSpec) domain.ResourceInventory {
@@ -1164,13 +1179,6 @@ func layerBytes(world scenario.WorldSpec, digest string) scenario.ByteSize {
 		}
 	}
 	return 0
-}
-
-func standingRentalID(id string, kind domain.OfferKind) string {
-	if kind == domain.OfferKindStanding {
-		return id
-	}
-	return ""
 }
 
 func cloneHostState(state hostState) hostState {

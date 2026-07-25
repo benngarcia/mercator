@@ -232,41 +232,26 @@ func (w *World) DefineImage(ref string, layers []Layer) {
 	w.images[ref] = append([]Layer(nil), layers...)
 }
 
-// AddMachine registers a simulated rental: a machine Mercator holds and can run
-// successive workloads on. The machine's offer ID is its identity in placement
-// decisions, and its lane is reusable by construction, because that is what
-// makes it a Rental rather than a one-shot execution product.
+// AddMachine registers one entry in the world's capacity: a Rental Mercator
+// holds, a marketplace template for a machine that does not exist yet, or a host
+// that exists and lends out a slot. The caller states the kind and the lane,
+// because that pair is what the capacity is; the world only refuses a claim it
+// would then have to correct, and grants Rental identity to the capacity that
+// earns it, exactly as capability.StampLane does in production.
 func (w *World) AddMachine(m *Machine) error {
 	if m == nil || m.Offer.ID == "" {
 		return fmt.Errorf("fake: machine requires an offer with an ID")
 	}
-	if m.Offer.Lane != "" && !m.Offer.Lane.Reusable() {
-		return fmt.Errorf("fake: machine %q cannot be in the %q lane; a Rental is reusable capacity", m.Offer.ID, m.Offer.Lane)
+	if m.Offer.Kind == "" || m.Offer.Lane == "" {
+		return fmt.Errorf("fake: machine %q needs an offer kind and an execution lane", m.Offer.ID)
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	m.Offer.Kind = domain.OfferKindStanding
-	m.Offer.Lane = domain.LaneReusable
-	m.Offer.RentalID = m.Offer.ID
+	m.Offer.RentalID = ""
+	if m.Offer.KeepsWhatItRuns() {
+		m.Offer.RentalID = m.Offer.ID
+	}
 	w.machines[m.Offer.ID] = m
-	return nil
-}
-
-// AddMarketplaceOffer registers a provisionable offer visible on the simulated
-// marketplace: a machine that does not exist yet, and so holds nothing until
-// something runs on it.
-func (w *World) AddMarketplaceOffer(offer domain.OfferSnapshot) error {
-	if offer.ID == "" {
-		return fmt.Errorf("fake: marketplace offer requires an ID")
-	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	offer.Kind = domain.OfferKindProvisionable
-	offer.RentalID = ""
-	if offer.Lane == "" {
-		offer.Lane = domain.LaneReusable
-	}
-	w.machines[offer.ID] = &Machine{Offer: offer}
 	return nil
 }
 

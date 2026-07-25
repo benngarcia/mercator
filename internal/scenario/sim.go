@@ -59,8 +59,13 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 			session.note("rental %q holds Cache Mounts, but no offer field can advertise them yet", rental.ID)
 		}
 	}
+	for _, host := range spec.Hosts {
+		if err := world.AddMachine(&fake.Machine{Offer: simHostOffer(host)}); err != nil {
+			return nil, err
+		}
+	}
 	for _, offer := range spec.Marketplace {
-		if err := world.AddMarketplaceOffer(simMarketplaceOffer(offer)); err != nil {
+		if err := world.AddMachine(&fake.Machine{Offer: simMarketplaceOffer(offer)}); err != nil {
 			return nil, err
 		}
 		if len(offer.Facts) > 0 {
@@ -112,16 +117,36 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 	return machine
 }
 
-// simRentalOffer builds the offer for a Rental. A Rental is machine capacity
-// Mercator holds across Runs, so it is reusable by definition.
+// simRentalOffer builds the offer for a Rental: standing capacity Mercator holds
+// across Runs, which is what makes it reusable and the only thing warmth can
+// accumulate on.
 func simRentalOffer(rental RentalSpec) domain.OfferSnapshot {
 	offer := simOffer(rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
+	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneReusable
 	return offer
 }
 
+// simHostOffer builds the offer for a host Mercator has not enrolled. The machine
+// exists, so the offer is standing and owes no provisioning; nothing on it can
+// hold content or run a second workload for Mercator, so it is in the ephemeral
+// lane and reports an inventory it cannot enumerate.
+func simHostOffer(host HostSpec) domain.OfferSnapshot {
+	offer := simOffer(host.ID, "conn_hosts", host.RatePerHourUSD, host.Resources)
+	offer.Kind = domain.OfferKindStanding
+	offer.Lane = domain.LaneEphemeral
+	offer.Pricing.SetupFeeUSD = host.Billing.SetupFeeUSD
+	if host.Billing.MinimumCharge != nil {
+		offer.Pricing.MinimumChargeSeconds = int64(host.Billing.MinimumCharge.Duration().Seconds())
+	}
+	return offer
+}
+
+// simMarketplaceOffer builds the offer for a machine that does not exist yet, so
+// nothing an execution fetches there is anywhere a later Run can see it.
 func simMarketplaceOffer(spec MarketplaceOfferSpec) domain.OfferSnapshot {
 	offer := simOffer(spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Resources)
+	offer.Kind = domain.OfferKindProvisionable
 	provisioning := &domain.Estimate{
 		Expected: spec.Provisioning.Expected.Duration().Seconds(),
 		Source:   "scenario",
