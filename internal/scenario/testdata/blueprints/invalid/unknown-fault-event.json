@@ -33,7 +33,9 @@
     "artifacts": [
       {
         "id": "artifact:model-checkpoint:v1",
-        "size": "40GB"
+        "content_digest": "sha256:c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+        "size": "40GB",
+        "produced_by": "producer"
       }
     ],
     "rentals": [

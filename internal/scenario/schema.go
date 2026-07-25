@@ -184,10 +184,38 @@ func (spec MarketplaceOfferSpec) ExecutionLane() domain.ExecutionLane {
 	return spec.Lane
 }
 
-// ArtifactSpec declares immutable, versioned content available to Runs.
+// ArtifactSpec declares one immutable version of content this world knows
+// about. The version ID is its identity, the content digest is what its bytes
+// hash to, and the object store is where the durable copy lives: a host holding
+// a copy is an optimisation over that and never what makes the content exist.
 type ArtifactSpec struct {
-	ID   string   `json:"id"`
-	Size ByteSize `json:"size"`
+	ID string `json:"id"`
+	// ContentDigest is what these bytes hash to. It is stated rather than
+	// derived from the version ID, because checking a local copy against it is
+	// what makes the copy worth reading, and a digest a name implied could
+	// never disagree with the name.
+	ContentDigest string   `json:"content_digest"`
+	Size          ByteSize `json:"size"`
+	// ProducedBy names the Run in this Blueprint that publishes this version.
+	// An Artifact with a producer is not durable at virtual time zero: it
+	// exists when that Run's publication reaches the object store, and no
+	// machine may be seeded holding a copy of content nothing has produced.
+	ProducedBy string `json:"produced_by,omitempty"`
+}
+
+// Prepublished reports whether the object store already held this version when
+// the world started, which is true of every Artifact no Run in this Blueprint
+// produces.
+func (spec ArtifactSpec) Prepublished() bool { return spec.ProducedBy == "" }
+
+// ArtifactReplicaSpec is a host-local copy one machine was found holding, and
+// what that copy is worth. The state is stated rather than defaulted: a copy
+// nobody checked and a copy that matches the catalog are different facts, and a
+// fixture that could not tell them apart would be asserting the conflation this
+// model exists to prevent.
+type ArtifactReplicaSpec struct {
+	Artifact string                      `json:"artifact"`
+	State    domain.ArtifactReplicaState `json:"state"`
 }
 
 // Start is the scripted clock's origin for this world.
@@ -286,12 +314,12 @@ type RentalSpec struct {
 	// work from running it, and a fixture that could not say so could not tell a
 	// machine that is ready from one that is only close. Omitted means unpacked,
 	// which is what a completed pull leaves behind.
-	Unpacked         *bool          `json:"unpacked,omitempty"`
-	ArtifactReplicas []string       `json:"artifact_replicas,omitempty"`
-	CacheMounts      []string       `json:"cache_mounts,omitempty"`
-	RatePerHourUSD   float64        `json:"rate_per_hour_usd"`
-	Billing          BillingSpec    `json:"billing,omitempty"`
-	Resources        *ResourcesSpec `json:"resources,omitempty"`
+	Unpacked         *bool                 `json:"unpacked,omitempty"`
+	ArtifactReplicas []ArtifactReplicaSpec `json:"artifact_replicas,omitempty"`
+	CacheMounts      []string              `json:"cache_mounts,omitempty"`
+	RatePerHourUSD   float64               `json:"rate_per_hour_usd"`
+	Billing          BillingSpec           `json:"billing,omitempty"`
+	Resources        *ResourcesSpec        `json:"resources,omitempty"`
 }
 
 // IsUnpacked reports whether this host assembled the content it was seeded
@@ -1079,15 +1107,18 @@ func (w WorldSpec) validate() error {
 	if err := w.validateDiffIDReporting(); err != nil {
 		return err
 	}
-	artifactIDs := map[string]bool{}
+	artifacts := map[string]ArtifactSpec{}
 	for _, artifact := range w.Artifacts {
 		if artifact.ID == "" || artifact.Size <= 0 {
 			return fmt.Errorf("Artifacts need an id and a positive size")
 		}
-		if artifactIDs[artifact.ID] {
+		if !ociDigestPattern.MatchString(artifact.ContentDigest) {
+			return fmt.Errorf("Artifact %q needs an exact sha256 content digest", artifact.ID)
+		}
+		if _, exists := artifacts[artifact.ID]; exists {
 			return fmt.Errorf("duplicate Artifact %q", artifact.ID)
 		}
-		artifactIDs[artifact.ID] = true
+		artifacts[artifact.ID] = artifact
 	}
 	layerDigests := w.layerDigests()
 	ids := map[string]bool{}
@@ -1109,9 +1140,26 @@ func (w WorldSpec) validate() error {
 				return fmt.Errorf("rental %q caches undefined layer %q", rental.ID, digest)
 			}
 		}
-		for _, artifactID := range rental.ArtifactReplicas {
-			if !artifactIDs[artifactID] {
-				return fmt.Errorf("rental %q holds undefined Artifact %q", rental.ID, artifactID)
+		for _, replica := range rental.ArtifactReplicas {
+			artifact, defined := artifacts[replica.Artifact]
+			if !defined {
+				return fmt.Errorf("rental %q holds undefined Artifact %q", rental.ID, replica.Artifact)
+			}
+			if !replica.State.Valid() {
+				return fmt.Errorf(
+					"rental %q holds Artifact %q in state %q, which is neither verified nor unverified",
+					rental.ID, replica.Artifact, replica.State,
+				)
+			}
+			// A copy of content nothing has produced is a copy of nothing. The
+			// object store is what makes an Artifact exist, so a machine can only
+			// be found holding a version that was published before this world
+			// started.
+			if !artifact.Prepublished() {
+				return fmt.Errorf(
+					"rental %q holds Artifact %q, which Run %q has not produced yet",
+					rental.ID, replica.Artifact, artifact.ProducedBy,
+				)
 			}
 		}
 		cacheMounts := map[string]bool{}
@@ -1389,10 +1437,18 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 			return fmt.Errorf("request image %q is not defined in the world", req.Image)
 		}
 	}
-	artifactIDs := w.artifactIDs()
+	artifacts := w.artifactsByID()
 	for _, artifactID := range append(slices.Clone(req.ConsumesArtifacts), req.ProducesArtifacts...) {
-		if !artifactIDs[artifactID] {
+		if _, defined := artifacts[artifactID]; !defined {
 			return fmt.Errorf("request references undefined Artifact %q", artifactID)
+		}
+	}
+	for _, artifactID := range req.ProducesArtifacts {
+		// An Artifact states which Run publishes it, so a request that
+		// publishes one the catalog says nobody produces is two documents
+		// disagreeing about where content comes from.
+		if artifacts[artifactID].Prepublished() {
+			return fmt.Errorf("request produces Artifact %q, which the world says was published before it started", artifactID)
 		}
 	}
 	cacheMounts := map[string]bool{}
@@ -1466,7 +1522,7 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 			return fmt.Errorf("candidate %q is not in the world", id)
 		}
 		for artifactID, want := range candidate.Artifacts {
-			if !w.artifactIDs()[artifactID] {
+			if _, defined := w.artifactsByID()[artifactID]; !defined {
 				return fmt.Errorf("candidate %q references undefined Artifact %q", id, artifactID)
 			}
 			if want != "hit" && want != "miss" {
@@ -1485,10 +1541,10 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 	return nil
 }
 
-func (w WorldSpec) artifactIDs() map[string]bool {
-	ids := make(map[string]bool, len(w.Artifacts))
+func (w WorldSpec) artifactsByID() map[string]ArtifactSpec {
+	artifacts := make(map[string]ArtifactSpec, len(w.Artifacts))
 	for _, artifact := range w.Artifacts {
-		ids[artifact.ID] = true
+		artifacts[artifact.ID] = artifact
 	}
-	return ids
+	return artifacts
 }

@@ -33,8 +33,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 18 {
-		t.Fatalf("latest invariant results = %d, want 18", len(latest))
+	if len(latest) != 19 {
+		t.Fatalf("latest invariant results = %d, want 19", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -62,7 +62,7 @@ func TestInvariantRegistryReportsAReplayableDuplicateExecutionViolation(t *testi
 		Now:                         world.nowTime(),
 		World:                       world.truthSnapshot(),
 		RunRequirements:             map[string]RunArrival{"run-producer": arrival},
-		KnownArtifactIDs:            map[string]bool{"artifact:model-checkpoint:v1": true},
+		ArtifactCatalog:             world.invariantFacts().ArtifactCatalog,
 		ProjectionRebuildEquivalent: true,
 	})
 
@@ -165,12 +165,29 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				Command:       EffectCommandAccepted,
 				CorrelationID: "run-1",
 			}}
-			observation.RunRequirements["run-1"] = RunArrival{
-				Name: "run-1",
-				Request: scenario.RequestSpec{
-					ConsumesArtifacts: []string{"artifact-1"},
+			observation.Workloads["run-1"] = domain.WorkloadRevision{
+				ID: "wrev_run-1",
+				Spec: domain.WorkloadSpec{
+					Artifacts: domain.ArtifactRequirements{Consumes: []string{"artifact-1"}},
 				},
 			}
+		},
+		// A copy of content nothing has published: the object store is what makes
+		// an Artifact exist, so bytes on a machine are not an Artifact.
+		"safety.artifact_replica_verified": func(observation *InvariantObservation) {
+			observation.ArtifactCatalog["artifact-1"] = domain.ArtifactVersion{
+				ID:            "artifact-1",
+				ContentDigest: "sha256:aaaa",
+			}
+			observation.World.ArtifactReplicas = []ArtifactReplica{{
+				OfferID: "rental-warm",
+				ArtifactReplica: domain.ArtifactReplica{
+					ArtifactID:    "artifact-1",
+					ContentDigest: "sha256:aaaa",
+					SizeBytes:     1,
+					State:         domain.ArtifactReplicaVerified,
+				},
+			}}
 		},
 		"safety.monotonic_versions": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{
@@ -181,7 +198,9 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 			observation.World.ActiveExecutions = []externalExecution{{RunID: "run-1", LaunchKey: "launch-1"}}
 		},
 		"safety.cache_disk_accounting": func(observation *InvariantObservation) {
-			observation.World.ArtifactReplicas = []ArtifactReplica{{ArtifactID: "unknown", OfferID: "offer-1", SizeBytes: 1}}
+			observation.World.ArtifactReplicas = []ArtifactReplica{
+				{OfferID: "offer-1", ArtifactReplica: domain.ArtifactReplica{ArtifactID: "known", SizeBytes: 0}},
+			}
 		},
 		"safety.projection_rebuild_equivalence": func(observation *InvariantObservation) {
 			observation.ProjectionRebuildEquivalent = false
@@ -241,9 +260,10 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				StartedAt:                   now,
 				Now:                         now,
 				World:                       WorldTruthSnapshot{At: now},
+				Workloads:                   map[string]domain.WorkloadRevision{},
 				RentalSchedules:             map[string]domain.RentalSchedule{},
 				RunRequirements:             map[string]RunArrival{},
-				KnownArtifactIDs:            map[string]bool{},
+				ArtifactCatalog:             map[string]domain.ArtifactVersion{},
 				SeededLocality:              map[string]map[string]bool{},
 				ProjectionRebuildEquivalent: true,
 			}

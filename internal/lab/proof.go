@@ -43,7 +43,7 @@ func VerifyVerticalProof(ctx context.Context, bundle RunBundle) (ProofReport, er
 		facts.result(2, scenario.EvidenceExistingVsFreshCompared, facts.comparesExistingAndFresh("run-producer"), "producer decision compared standing and provisionable capacity"),
 		facts.result(3, scenario.EvidencePartialImageReuse, facts.partialImageReuse("run-producer"), "standing capacity reused only part of the producer image"),
 		facts.result(4, scenario.EvidenceCapacityPrepared, facts.hasAcceptedEffect(OperationProviderLaunch, "run-producer"), "the provider accepted the producer launch"),
-		facts.result(5, scenario.EvidenceArtifactPublished, facts.hasAcceptedEffect(OperationArtifactPut, "run-producer"), "the producer published an immutable Artifact replica"),
+		facts.result(5, scenario.EvidenceArtifactPublished, facts.hasAcceptedEffect(OperationArtifactPublished, "run-producer"), "the producer published an immutable Artifact to the object store"),
 		facts.result(6, scenario.EvidenceConsumerUnblocked, facts.consumerFollowedArtifact(), "the consumer entered Mercator only after Artifact publication"),
 		facts.result(7, scenario.EvidenceWarmthObserved, facts.consumerUsesArtifactReplica(), "the consumer selected the Rental holding its Artifact"),
 		facts.result(8, scenario.EvidenceQueueVsFreshCompared, facts.comparesQueueAndFresh("run-consumer"), "consumer scheduling compared standing queue delay with fresh provisioning"),
@@ -185,7 +185,7 @@ func candidateWithDisposition(decision domain.BookingDecision, disposition domai
 func (facts proofFacts) consumerFollowedArtifact() bool {
 	var publishedAt time.Time
 	for _, effect := range facts.effects {
-		if effect.Operation == OperationArtifactPut &&
+		if effect.Operation == OperationArtifactPublished &&
 			effect.CorrelationID == "run-producer" &&
 			effect.Command == EffectCommandAccepted {
 			publishedAt = effect.At
@@ -205,19 +205,27 @@ func (facts proofFacts) consumerFollowedArtifact() bool {
 	return false
 }
 
+// consumerUsesArtifactReplica is the consumer landing where the producer wrote
+// its output. It reads the producer's own write rather than any local copy,
+// because the consumer's read creates a copy on whichever host it chose: a rule
+// that counted that would be satisfied wherever the consumer went.
 func (facts proofFacts) consumerUsesArtifactReplica() bool {
 	decision, exists := facts.decisions["run-consumer"]
 	if !exists || decision.SelectedOfferSnapshotID == "" {
 		return false
 	}
 	for _, effect := range facts.effects {
-		if effect.Operation != OperationArtifactPut || effect.Command != EffectCommandAccepted {
+		if effect.Operation != OperationArtifactReplicated ||
+			effect.Command != EffectCommandAccepted ||
+			effect.CorrelationID != "run-producer" {
 			continue
 		}
 		var request struct {
 			OfferID string `json:"offer_id"`
+			Source  string `json:"source"`
 		}
 		if json.Unmarshal(effect.Request, &request) == nil &&
+			request.Source == "run_output" &&
 			request.OfferID == decision.SelectedOfferSnapshotID {
 			return true
 		}

@@ -53,6 +53,10 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		return InvariantObservation{}, err
 	}
 	facts := runtime.world.invariantFacts()
+	workloads, err := recordedWorkloads(stored)
+	if err != nil {
+		return InvariantObservation{}, err
+	}
 	return InvariantObservation{
 		StartedAt:                   tape.Start,
 		Now:                         runtime.world.nowTime(),
@@ -62,13 +66,36 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		MercatorEvents:              events,
 		Effects:                     runtime.world.effectRecords(),
 		Runs:                        runs,
+		Workloads:                   workloads,
 		RentalSchedules:             schedules,
 		RunRequirements:             facts.Runs,
-		KnownArtifactIDs:            facts.KnownArtifactIDs,
-		SeededArtifactIDs:           facts.SeededArtifactIDs,
+		ArtifactCatalog:             facts.ArtifactCatalog,
 		SeededLocality:              facts.SeededLocality,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
+}
+
+// recordedWorkloads is the workload the control plane holds for each Run, read
+// back out of the public event log. It is what Mercator itself was told to run,
+// which is the only thing an invariant about Mercator's own admission decisions
+// may read: the world knows what a process actually does, and checking a Run's
+// dependencies against that would check the world against itself.
+func recordedWorkloads(events []eventlog.StoredEvent) (map[string]domain.WorkloadRevision, error) {
+	workloads := map[string]domain.WorkloadRevision{}
+	for _, event := range events {
+		if event.Type != orchestrator.EventRunRequested {
+			continue
+		}
+		var payload struct {
+			RunID    string                  `json:"run_id"`
+			Workload domain.WorkloadRevision `json:"workload_revision"`
+		}
+		if err := json.Unmarshal(event.CloudEvent().Data, &payload); err != nil {
+			return nil, fmt.Errorf("decode recorded workload for %s: %w", event.StreamID, err)
+		}
+		workloads[payload.RunID] = payload.Workload
+	}
+	return workloads, nil
 }
 
 func (runtime *controlPlane) allRuns(ctx context.Context) ([]domain.RunRecord, error) {
@@ -134,11 +161,20 @@ func (runtime *controlPlane) handleRunArrival(ctx context.Context, event WorldEv
 	if err := json.Unmarshal(event.Data, &arrival); err != nil {
 		return fmt.Errorf("decode Run arrival event %q: %w", event.ID, err)
 	}
-	if !runtime.world.artifactDependenciesAvailable(arrival) {
+	if !runtime.admissible(arrival) {
 		runtime.pending = append(runtime.pending, arrival)
 		return nil
 	}
 	return runtime.admitRun(ctx, arrival)
+}
+
+// admissible answers whether this workload's declared inputs are durable. The
+// question is asked of the workload Mercator would record rather than of the
+// arrival, because admission is a control-plane decision about a declaration and
+// not about anything the world happens to know.
+func (runtime *controlPlane) admissible(arrival RunArrival) bool {
+	workload := scenario.WorkloadForRun(labWorkspace, "run-"+arrival.Name, arrival.Request)
+	return runtime.world.artifactsAreDurable(workload.Spec.Artifacts.Consumes)
 }
 
 func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) error {
@@ -188,7 +224,7 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 func (runtime *controlPlane) admitPendingRuns(ctx context.Context) error {
 	pending := runtime.pending[:0]
 	for _, arrival := range runtime.pending {
-		if !runtime.world.artifactDependenciesAvailable(arrival) {
+		if !runtime.admissible(arrival) {
 			pending = append(pending, arrival)
 			continue
 		}

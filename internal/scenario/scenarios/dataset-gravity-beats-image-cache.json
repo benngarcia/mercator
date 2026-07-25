@@ -13,13 +13,17 @@
       }
     },
     "artifacts": [
-      {"id": "artifact:imagenet:v2.41", "size": "40GB"}
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
     ],
     "rentals": [
       {
         "id": "rental-dataset",
         "cached_layers": ["sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de"],
-        "artifact_replicas": ["artifact:imagenet:v2.41"],
+        "artifact_replicas": [{"artifact": "artifact:imagenet:v2.41", "state": "verified"}],
         "rate_per_hour_usd": 2.5
       },
       {

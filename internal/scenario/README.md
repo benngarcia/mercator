@@ -71,12 +71,18 @@ A single-decision Blueprint:
       }
     },
     "artifacts": [
-      {"id": "artifact:imagenet:v2.41", "size": "40GB"}
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
     ],
     "rentals": [
       {
         "id": "rental-warm",
-        "artifact_replicas": ["artifact:imagenet:v2.41"],
+        "artifact_replicas": [
+          {"artifact": "artifact:imagenet:v2.41", "state": "verified"}
+        ],
         "cache_mounts": ["compiler-cache"],
         "rate_per_hour_usd": 2.5
       }
@@ -130,9 +136,14 @@ strictly validated before execution.
 - Sizes use decimal units such as `"40GB"` and `"512MB"`.
 - Image references are digest-pinned OCI identities.
 - Image layers use exact `sha256:` digests. Shared digests mean shared content.
-- Artifacts are immutable and versioned. Runs declare
-  `consumes_artifacts` and `produces_artifacts`; Rentals carry exact
-  `artifact_replicas`.
+- Artifacts are immutable and versioned. An Artifact states its
+  `content_digest`, and `produced_by` when a Run in the same Blueprint publishes
+  it; an Artifact with a producer is not durable at virtual time zero and no
+  machine may be seeded holding a copy of it. Runs declare `consumes_artifacts`
+  and `produces_artifacts`. Rentals carry exact `artifact_replicas`, each
+  stating whether that copy was checked against the catalog (`verified`) or is
+  merely present (`unverified`). The object store is what makes an Artifact
+  consumable; a replica only makes reading it faster.
 - Cache Mounts are mutable application-owned state. Their only identity is the
   workspace-scoped `name`; they never carry content keys or sizes.
 - The world clock starts at `2030-01-01T00:00:00Z` unless `world.clock` says

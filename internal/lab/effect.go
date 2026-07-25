@@ -13,10 +13,19 @@ const (
 	OperationProviderTerminate   = "provider.terminate"
 	OperationProviderListOwned   = "provider.list_owned"
 	OperationControlPlaneRestart = "control_plane.restart"
-	OperationArtifactGet         = "artifact.get"
-	OperationArtifactPut         = "artifact.put"
-	OperationCacheMountWrite     = "cache_mount.write"
-	OperationImagePull           = "image.pull"
+	// The three Artifact operations are three different facts, and collapsing
+	// any two of them is how a local copy starts standing in for durable
+	// content. OperationArtifactRead is a consuming launch resolving one input,
+	// and says whether it read a verified local copy or fetched from the object
+	// store. OperationArtifactReplicated is a verified copy landing on a host,
+	// whether a Run wrote it or the object store served it.
+	// OperationArtifactPublished is the durable copy reaching the object store,
+	// which is the only thing that makes an Artifact consumable.
+	OperationArtifactRead       = "artifact.read"
+	OperationArtifactReplicated = "artifact.replicated"
+	OperationArtifactPublished  = "artifact.published"
+	OperationCacheMountWrite    = "cache_mount.write"
+	OperationImagePull          = "image.pull"
 	// OperationImageRetained is content a host kept, recorded when the bytes
 	// landed. The pull is a command with a duration; retention is the fact that
 	// outlives it, and only one of the two can explain what a host holds.

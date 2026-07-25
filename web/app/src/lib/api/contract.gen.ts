@@ -730,12 +730,46 @@ export interface components {
             max_runtime_seconds: number;
             max_pre_start_attempts: number;
         };
+        /** @description The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine. */
+        ArtifactRequirements: {
+            /** @description Artifact version identities this workload reads. The Run is not admitted until every one of them is durable. */
+            consumes?: string[];
+            /** @description Artifact version identities this workload publishes. A version is immutable, so a workload may not also consume one it produces. */
+            produces?: string[];
+        };
+        /** @description One host's local copy of an Artifact version. It is an optimisation over the object store and never the authority: a copy is worth what its verification against the catalog entry's content digest says it is worth. */
+        ArtifactReplica: {
+            artifact_id: string;
+            /** @description What this copy claims its bytes hash to. */
+            content_digest: string;
+            /** Format: int64 */
+            size_bytes: number;
+            /**
+             * @description Verified means these bytes were hashed and matched the catalog entry. Unverified means a copy is present and nobody checked it, which is not evidence that the right bytes are here.
+             * @enum {string}
+             */
+            state: "verified" | "unverified";
+            /**
+             * Format: date-time
+             * @description When this copy was last checked against the catalog entry's content digest.
+             */
+            verified_at?: string;
+        };
+        /** @description The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence. */
+        ArtifactInventory: {
+            /** @description Whether the holder enumerated its Artifact replicas at all. */
+            known: boolean;
+            /** Format: date-time */
+            observed_at?: string;
+            replicas?: components["schemas"]["ArtifactReplica"][];
+        };
         WorkloadSpec: {
             containers: components["schemas"]["ContainerSpec"][];
             resources: components["schemas"]["ResourceRequirements"];
             network: components["schemas"]["NetworkRequirements"];
             placement: components["schemas"]["PlacementPolicy"];
             execution: components["schemas"]["ExecutionPolicy"];
+            artifacts: components["schemas"]["ArtifactRequirements"];
             metadata?: {
                 [key: string]: string;
             };
@@ -921,6 +955,7 @@ export interface components {
             queue?: components["schemas"]["QueueSnapshot"];
             provisioning?: components["schemas"]["Estimate"];
             images: components["schemas"]["ImageInventory"];
+            artifacts: components["schemas"]["ArtifactInventory"];
             capacity: components["schemas"]["CapacityEvidence"];
             reliability: components["schemas"]["ReliabilityEvidence"];
         };

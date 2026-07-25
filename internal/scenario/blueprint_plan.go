@@ -139,6 +139,21 @@ func (plan ArrivalPlan) validate(world WorldSpec) error {
 			producers[artifactID] = arrival.Name
 		}
 	}
+	// The catalog and the arrival plan each say where an Artifact comes from,
+	// and a consumer waits for its producer's publication. Two documents
+	// disagreeing about which Run that is would park a consumer behind a
+	// publication nothing was ever going to make.
+	for _, artifact := range world.Artifacts {
+		if artifact.Prepublished() {
+			continue
+		}
+		if producer := producers[artifact.ID]; producer != artifact.ProducedBy {
+			return fmt.Errorf(
+				"Artifact %q names producer %q, and Run %q is what publishes it",
+				artifact.ID, artifact.ProducedBy, producer,
+			)
+		}
+	}
 	return nil
 }
 

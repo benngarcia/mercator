@@ -78,6 +78,7 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 			Message: "Expected runtime cannot exceed the enforced maximum runtime.",
 		})
 	}
+	violations = append(violations, validateArtifactRequirements(rev.Spec.Artifacts)...)
 	for i, port := range container.Ports {
 		if port.ContainerPort <= 0 || port.ContainerPort > 65535 {
 			violations = append(violations, Violation{
@@ -99,6 +100,49 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 		}
 	}
 	return violations
+}
+
+// validateArtifactRequirements refuses the two declarations that cannot mean
+// anything. A version named twice on one side says nothing the first mention
+// did not, and a version a workload both reads and publishes claims to be its
+// own input: an Artifact version is immutable, so one Run cannot depend on
+// content it is about to create.
+func validateArtifactRequirements(requirements ArtifactRequirements) []Violation {
+	var violations []Violation
+	consumed := map[string]bool{}
+	for index, id := range requirements.Consumes {
+		violations = append(violations, artifactDeclarationViolations(id, index, "consumes", consumed)...)
+		consumed[id] = true
+	}
+	produced := map[string]bool{}
+	for index, id := range requirements.Produces {
+		violations = append(violations, artifactDeclarationViolations(id, index, "produces", produced)...)
+		produced[id] = true
+		if consumed[id] {
+			violations = append(violations, Violation{
+				Code: "ARTIFACT_CONSUMED_AND_PRODUCED", Path: fmt.Sprintf("spec.artifacts.produces[%d]", index), Offered: id,
+				Message: "An Artifact version is immutable, so one workload cannot both read and publish it.",
+			})
+		}
+	}
+	return violations
+}
+
+func artifactDeclarationViolations(id string, index int, field string, seen map[string]bool) []Violation {
+	path := fmt.Sprintf("spec.artifacts.%s[%d]", field, index)
+	if id == "" {
+		return []Violation{{
+			Code: "ARTIFACT_ID_REQUIRED", Path: path, Required: "Artifact version identity",
+			Message: "Artifact declarations must name a version.",
+		}}
+	}
+	if seen[id] {
+		return []Violation{{
+			Code: "ARTIFACT_DECLARED_TWICE", Path: path, Offered: id,
+			Message: "An Artifact version may appear once in a declaration.",
+		}}
+	}
+	return nil
 }
 
 func supportedLinuxArch(arch string) bool {

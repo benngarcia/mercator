@@ -40,13 +40,17 @@ type WorkloadRevision struct {
 }
 
 type WorkloadSpec struct {
-	Containers []ContainerSpec            `json:"containers"`
-	Resources  ResourceRequirements       `json:"resources"`
-	Network    NetworkRequirements        `json:"network"`
-	Placement  PlacementPolicy            `json:"placement"`
-	Execution  ExecutionPolicy            `json:"execution"`
-	Metadata   map[string]string          `json:"metadata,omitempty"`
-	Raw        map[string]json.RawMessage `json:"raw,omitempty"`
+	Containers []ContainerSpec      `json:"containers"`
+	Resources  ResourceRequirements `json:"resources"`
+	Network    NetworkRequirements  `json:"network"`
+	Placement  PlacementPolicy      `json:"placement"`
+	Execution  ExecutionPolicy      `json:"execution"`
+	// Artifacts is the immutable content this workload reads and publishes. A
+	// declared input is a dependency on a durable Artifact rather than on any
+	// particular host, which is what keeps replicas an optimisation.
+	Artifacts ArtifactRequirements       `json:"artifacts"`
+	Metadata  map[string]string          `json:"metadata,omitempty"`
+	Raw       map[string]json.RawMessage `json:"raw,omitempty"`
 }
 
 type ContainerSpec struct {
@@ -203,20 +207,24 @@ type OfferSnapshot struct {
 	// Lane is the offer's reuse semantics, stamped by the Broker from the
 	// backend's negotiated capability Declaration rather than claimed by the
 	// adapter itself. An adapter cannot advertise reuse it cannot perform.
-	Lane         ExecutionLane       `json:"lane"`
-	NativeRef    string              `json:"native_ref"`
-	ObservedAt   time.Time           `json:"observed_at"`
-	ExpiresAt    time.Time           `json:"expires_at"`
-	Platform     Platform            `json:"platform"`
-	Resources    ResourceInventory   `json:"resources"`
-	Capabilities CapabilityProfile   `json:"capabilities"`
-	Network      NetworkFacts        `json:"network"`
-	Pricing      PriceModel          `json:"pricing"`
-	Queue        *QueueSnapshot      `json:"queue,omitempty"`
-	Provisioning *Estimate           `json:"provisioning,omitempty"`
-	Images       ImageInventory      `json:"images"`
-	Capacity     CapacityEvidence    `json:"capacity"`
-	Reliability  ReliabilityEvidence `json:"reliability,omitempty"`
+	Lane         ExecutionLane     `json:"lane"`
+	NativeRef    string            `json:"native_ref"`
+	ObservedAt   time.Time         `json:"observed_at"`
+	ExpiresAt    time.Time         `json:"expires_at"`
+	Platform     Platform          `json:"platform"`
+	Resources    ResourceInventory `json:"resources"`
+	Capabilities CapabilityProfile `json:"capabilities"`
+	Network      NetworkFacts      `json:"network"`
+	Pricing      PriceModel        `json:"pricing"`
+	Queue        *QueueSnapshot    `json:"queue,omitempty"`
+	Provisioning *Estimate         `json:"provisioning,omitempty"`
+	Images       ImageInventory    `json:"images"`
+	// Artifacts is the immutable content this host says it holds a local copy
+	// of. It is placement evidence and never a dependency's authority: a Run's
+	// inputs are durable in the object store or the Run does not go anywhere.
+	Artifacts   ArtifactInventory   `json:"artifacts"`
+	Capacity    CapacityEvidence    `json:"capacity"`
+	Reliability ReliabilityEvidence `json:"reliability,omitempty"`
 }
 
 // KeepsWhatItRuns answers whether content a workload fetches here is still here

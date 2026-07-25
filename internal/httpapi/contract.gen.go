@@ -29,6 +29,24 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for ArtifactReplicaState.
+const (
+	Unverified ArtifactReplicaState = "unverified"
+	Verified   ArtifactReplicaState = "verified"
+)
+
+// Valid indicates whether the value is a known member of the ArtifactReplicaState enum.
+func (e ArtifactReplicaState) Valid() bool {
+	switch e {
+	case Unverified:
+		return true
+	case Verified:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CandidateDecisionDisposition.
 const (
 	ProvisionFreshRental CandidateDecisionDisposition = "provision_fresh_rental"
@@ -275,6 +293,41 @@ type AdapterListResponse struct {
 
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
 type AdapterManifest = adapter.Manifest
+
+// ArtifactInventory The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.
+type ArtifactInventory struct {
+	// Known Whether the holder enumerated its Artifact replicas at all.
+	Known      bool              `json:"known"`
+	ObservedAt time.Time         `json:"observed_at,omitempty"`
+	Replicas   []ArtifactReplica `json:"replicas,omitempty"`
+}
+
+// ArtifactReplica One host's local copy of an Artifact version. It is an optimisation over the object store and never the authority: a copy is worth what its verification against the catalog entry's content digest says it is worth.
+type ArtifactReplica struct {
+	ArtifactId string `json:"artifact_id"`
+
+	// ContentDigest What this copy claims its bytes hash to.
+	ContentDigest string `json:"content_digest"`
+	SizeBytes     int64  `json:"size_bytes"`
+
+	// State Verified means these bytes were hashed and matched the catalog entry. Unverified means a copy is present and nobody checked it, which is not evidence that the right bytes are here.
+	State ArtifactReplicaState `json:"state"`
+
+	// VerifiedAt When this copy was last checked against the catalog entry's content digest.
+	VerifiedAt time.Time `json:"verified_at,omitempty"`
+}
+
+// ArtifactReplicaState Verified means these bytes were hashed and matched the catalog entry. Unverified means a copy is present and nobody checked it, which is not evidence that the right bytes are here.
+type ArtifactReplicaState string
+
+// ArtifactRequirements The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine.
+type ArtifactRequirements struct {
+	// Consumes Artifact version identities this workload reads. The Run is not admitted until every one of them is durable.
+	Consumes []string `json:"consumes,omitempty"`
+
+	// Produces Artifact version identities this workload publishes. A version is immutable, so a workload may not also consume one it produces.
+	Produces []string `json:"produces,omitempty"`
+}
 
 // Booking defines model for Booking.
 type Booking = domain.Booking
@@ -816,6 +869,8 @@ type WorkloadRevisionResponse struct {
 
 // WorkloadSpec defines model for WorkloadSpec.
 type WorkloadSpec struct {
+	// Artifacts The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine.
+	Artifacts  ArtifactRequirements   `json:"artifacts"`
 	Containers []ContainerSpec        `json:"containers"`
 	Execution  ExecutionPolicy        `json:"execution"`
 	Metadata   map[string]string      `json:"metadata,omitempty"`

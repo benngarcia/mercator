@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,9 +53,6 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		if len(schedule.Queued) > 0 {
 			session.note("rental %q starts with QueuedBookings, but the scenario backend cannot seed Broker RentalSchedule state yet", rental.ID)
 		}
-		if len(rental.ArtifactReplicas) > 0 {
-			session.note("rental %q holds Artifact replicas, but no offer field can advertise them yet", rental.ID)
-		}
 		if len(rental.CacheMounts) > 0 {
 			session.note("rental %q holds Cache Mounts, but no offer field can advertise them yet", rental.ID)
 		}
@@ -90,12 +88,13 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Machine {
 	start := clock.Now()
 	machine := &fake.Machine{
-		Offer:          simRentalOffer(rental),
-		HeldLayers:     map[string]int64{},
-		HeldDiffIDs:    map[string]bool{},
-		ReportsDiffIDs: rental.ReportsDiffIDs,
-		HeldImages:     map[string]bool{},
-		HeldCaches:     map[string]int64{},
+		Offer:            simRentalOffer(rental),
+		HeldLayers:       map[string]int64{},
+		HeldDiffIDs:      map[string]bool{},
+		ReportsDiffIDs:   rental.ReportsDiffIDs,
+		HeldImages:       map[string]bool{},
+		HeldCaches:       map[string]int64{},
+		ArtifactReplicas: simArtifactReplicas(spec, rental, start),
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
@@ -127,6 +126,29 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 		machine.LeaseExpiresAt = start.Add(rental.IdleLeaseExpiresIn.Duration())
 	}
 	return machine
+}
+
+// simArtifactReplicas is the local copy of each Artifact this machine was found
+// holding. The copy carries the catalog's content digest and what the fixture
+// says the copy is worth, because a copy nobody checked is not evidence that
+// the right bytes are here.
+func simArtifactReplicas(spec WorldSpec, rental RentalSpec, at time.Time) map[string]domain.ArtifactReplica {
+	catalog := spec.artifactsByID()
+	replicas := make(map[string]domain.ArtifactReplica, len(rental.ArtifactReplicas))
+	for _, held := range rental.ArtifactReplicas {
+		artifact := catalog[held.Artifact]
+		replica := domain.ArtifactReplica{
+			ArtifactID:    artifact.ID,
+			ContentDigest: artifact.ContentDigest,
+			SizeBytes:     int64(artifact.Size),
+			State:         held.State,
+		}
+		if replica.State.Usable() {
+			replica.VerifiedAt = at
+		}
+		replicas[artifact.ID] = replica
+	}
+	return replicas
 }
 
 // simRentalOffer builds the offer for a Rental: standing capacity Mercator holds
@@ -279,9 +301,6 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	if len(req.CacheMounts) > 0 {
 		s.note("run %q declares cache mounts, but the container spec cannot carry them yet", name)
 	}
-	if len(req.ConsumesArtifacts) > 0 || len(req.ProducesArtifacts) > 0 {
-		s.note("run %q declares Artifact inputs or outputs, but the control plane cannot carry them yet", name)
-	}
 	runID := "run-" + name
 	s.runs[name] = runID
 	_, err := s.orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{
@@ -362,6 +381,10 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	}
 	if req.MaxStartLatency != nil {
 		spec.Placement.MaxP90StartSeconds = req.MaxStartLatency.Duration().Seconds()
+	}
+	spec.Artifacts = domain.ArtifactRequirements{
+		Consumes: slices.Clone(req.ConsumesArtifacts),
+		Produces: slices.Clone(req.ProducesArtifacts),
 	}
 	return domain.WorkloadRevision{
 		ID:          "wrev_" + runID,

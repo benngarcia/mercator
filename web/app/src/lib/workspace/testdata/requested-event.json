@@ -33,7 +33,8 @@
           },
           "network": {"inbound": "none"},
           "placement": {"objective": "balanced", "expected_runtime_seconds": 60},
-          "execution": {"max_runtime_seconds": 120, "max_pre_start_attempts": 1}
+          "execution": {"max_runtime_seconds": 120, "max_pre_start_attempts": 1},
+          "artifacts": {}
         }
       }
     }

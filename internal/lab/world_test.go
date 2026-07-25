@@ -280,7 +280,7 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 
 	truth := world.truthSnapshot()
 	if !hasArtifactReplica(truth.ArtifactReplicas, "artifact:model-checkpoint:v1", "rental-warm") {
-		t.Fatalf("producer output Artifact was not published: %+v", truth.ArtifactReplicas)
+		t.Fatalf("the producer left no copy on the host it ran on: %+v", truth.ArtifactReplicas)
 	}
 	if revision := cacheMountRevision(truth.CacheMounts, "rental-warm", "compiler-cache"); revision != 2 {
 		t.Fatalf("mutable Cache Mount revision = %d, want 2", revision)
@@ -288,7 +288,7 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 	assertEffect(
 		t,
 		world.effectRecords(),
-		OperationArtifactPut,
+		OperationArtifactReplicated,
 		"run-producer",
 		EffectCommandAccepted,
 		EffectResponseDelivered,

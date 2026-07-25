@@ -275,17 +275,21 @@ func driveRecord(command DriveCommand, checkpoint Checkpoint) DriveRecord {
 	return record
 }
 
-// DriveToCompletion advances until the world owes no running execution a
-// completion. The horizon is the world's own deadline for the work in flight
-// rather than the sum of sampled runtimes: a Run occupies its host for as long as
-// its image takes to arrive plus as long as it then runs, and one Run finishing
-// is what admits the next.
+// DriveToCompletion advances until the world owes nothing it has started: a
+// running execution its completion, or a producer's output its durability. The
+// horizon is the world's own deadline for the work in flight rather than the sum
+// of sampled runtimes, and each round settles what was owed at that moment,
+// which is what admits whatever was waiting on it.
+//
+// The bound is one round per arrival plus one per Artifact, because those are
+// the two things a round can settle: a Run finishing, and a publication landing.
 func (execution *Execution) DriveToCompletion(ctx context.Context) (Checkpoint, error) {
 	checkpoint, err := execution.Drive(ctx, Quiesce())
 	if err != nil {
 		return checkpoint, err
 	}
-	for range len(execution.config.Tape.Events) {
+	rounds := len(execution.config.Tape.Events) + len(execution.config.Tape.InitialWorld.Artifacts)
+	for range rounds {
 		horizon := execution.runtime.world.executionHorizon()
 		if horizon.IsZero() {
 			return checkpoint, nil

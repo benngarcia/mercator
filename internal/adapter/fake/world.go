@@ -114,6 +114,11 @@ type Machine struct {
 	// materialized on the machine's local disk. No offer field carries this
 	// today; the world holds it so cache-evidence milestones can surface it.
 	HeldCaches map[string]int64
+	// ArtifactReplicas is the local copy of each immutable Artifact version this
+	// machine holds, by version ID. A copy is placement evidence and never a
+	// dependency's authority: what makes an Artifact consumable is its durable
+	// publication in the object store, which no machine owns.
+	ArtifactReplicas map[string]domain.ArtifactReplica
 	// BusyUntil is when the running work's enforced maximum runtime elapses;
 	// zero means idle. It is the hard ceiling behind latest-start guarantees.
 	BusyUntil time.Time
@@ -189,6 +194,21 @@ func (m *Machine) publishedInventory(now time.Time) domain.ImageInventory {
 		return domain.ImageInventory{}
 	}
 	return m.inventory(now)
+}
+
+// publishedArtifacts is the Artifact content an offer for this machine can
+// carry, in version-ID order so one world state produces one offer. It follows
+// the same rule as the image inventory: a machine nothing of Mercator's runs on
+// enumerates nothing, so its silence is never read as an empty disk.
+func (m *Machine) publishedArtifacts(now time.Time) domain.ArtifactInventory {
+	if !m.Offer.KeepsWhatItRuns() {
+		return domain.ArtifactInventory{}
+	}
+	inventory := domain.ArtifactInventory{Known: true, ObservedAt: now}
+	for _, id := range slices.Sorted(maps.Keys(m.ArtifactReplicas)) {
+		inventory.Replicas = append(inventory.Replicas, m.ArtifactReplicas[id])
+	}
+	return inventory
 }
 
 // Hold puts one layer on this machine under every name that content answers
@@ -467,6 +487,7 @@ func (w *World) machineOffer(machine *Machine, now time.Time) domain.OfferSnapsh
 	offer.ObservedAt = now
 	offer.ExpiresAt = now.Add(5 * time.Minute)
 	offer.Images = machine.publishedInventory(now)
+	offer.Artifacts = machine.publishedArtifacts(now)
 	if machine.busyAt(now) {
 		// Today's offer vocabulary marks a busy Rental unavailable. The target
 		// Broker-owned RentalSchedule will keep it feasible and create a

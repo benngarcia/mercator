@@ -3374,6 +3374,85 @@
           }
         }
       },
+      "ArtifactRequirements": {
+        "type": "object",
+        "description": "The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine.",
+        "properties": {
+          "consumes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Artifact version identities this workload reads. The Run is not admitted until every one of them is durable."
+          },
+          "produces": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Artifact version identities this workload publishes. A version is immutable, so a workload may not also consume one it produces."
+          }
+        }
+      },
+      "ArtifactReplica": {
+        "type": "object",
+        "description": "One host's local copy of an Artifact version. It is an optimisation over the object store and never the authority: a copy is worth what its verification against the catalog entry's content digest says it is worth.",
+        "required": [
+          "artifact_id",
+          "content_digest",
+          "size_bytes",
+          "state"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "content_digest": {
+            "type": "string",
+            "description": "What this copy claims its bytes hash to."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "unverified"
+            ],
+            "description": "Verified means these bytes were hashed and matched the catalog entry. Unverified means a copy is present and nobody checked it, which is not evidence that the right bytes are here."
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this copy was last checked against the catalog entry's content digest."
+          }
+        }
+      },
+      "ArtifactInventory": {
+        "type": "object",
+        "description": "The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.",
+        "required": [
+          "known"
+        ],
+        "properties": {
+          "known": {
+            "type": "boolean",
+            "description": "Whether the holder enumerated its Artifact replicas at all."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "replicas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactReplica"
+            }
+          }
+        }
+      },
       "WorkloadSpec": {
         "type": "object",
         "required": [
@@ -3381,7 +3460,8 @@
           "resources",
           "network",
           "placement",
-          "execution"
+          "execution",
+          "artifacts"
         ],
         "properties": {
           "containers": {
@@ -3401,6 +3481,9 @@
           },
           "execution": {
             "$ref": "#/components/schemas/ExecutionPolicy"
+          },
+          "artifacts": {
+            "$ref": "#/components/schemas/ArtifactRequirements"
           },
           "metadata": {
             "type": "object",
@@ -3912,6 +3995,7 @@
           "network",
           "pricing",
           "images",
+          "artifacts",
           "capacity",
           "reliability"
         ],
@@ -3978,6 +4062,9 @@
           },
           "images": {
             "$ref": "#/components/schemas/ImageInventory"
+          },
+          "artifacts": {
+            "$ref": "#/components/schemas/ArtifactInventory"
           },
           "capacity": {
             "$ref": "#/components/schemas/CapacityEvidence"

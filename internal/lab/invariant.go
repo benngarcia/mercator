@@ -32,18 +32,25 @@ type InvariantResult struct {
 }
 
 type InvariantObservation struct {
-	StartedAt         time.Time
-	Now               time.Time
-	Transition        uint64
-	Blueprint         string
-	World             WorldTruthSnapshot
-	MercatorEvents    []eventlog.CloudEvent
-	Effects           []EffectRecord
-	Runs              []domain.RunRecord
-	RentalSchedules   map[string]domain.RentalSchedule
-	RunRequirements   map[string]RunArrival
-	KnownArtifactIDs  map[string]bool
-	SeededArtifactIDs map[string]bool
+	StartedAt      time.Time
+	Now            time.Time
+	Transition     uint64
+	Blueprint      string
+	World          WorldTruthSnapshot
+	MercatorEvents []eventlog.CloudEvent
+	Effects        []EffectRecord
+	Runs           []domain.RunRecord
+	// Workloads is what Mercator recorded it was asked to run, by Run ID, read
+	// back out of its own public event log. Rules about Mercator's decisions
+	// read this rather than the World Tape's arrivals: the world knows what a
+	// process really does, and a rule that read it would be checking the world
+	// against itself.
+	Workloads       map[string]domain.WorkloadRevision
+	RentalSchedules map[string]domain.RentalSchedule
+	RunRequirements map[string]RunArrival
+	// ArtifactCatalog is what the object store says each Artifact version is
+	// and when it became durable.
+	ArtifactCatalog map[string]domain.ArtifactVersion
 	// SeededLocality is the image content the World Tape put on each host
 	// before any Run executed, keyed by offer. Content outside it has to be
 	// explained by an accepted image pull against that same host.
@@ -84,6 +91,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.idempotent_external_commands", check: idempotentExternalCommands},
 		invariantRule{id: "safety.lease_fencing", check: leaseFencing},
 		invariantRule{id: "safety.artifact_dependencies", check: artifactDependencies},
+		invariantRule{id: "safety.artifact_replica_verified", check: artifactReplicaVerified},
 		invariantRule{id: "safety.monotonic_versions", check: monotonicVersions},
 		invariantRule{id: "safety.owned_external_resources", check: ownedExternalResources},
 		invariantRule{id: "safety.cache_disk_accounting", check: cacheDiskAccounting},
@@ -292,7 +300,9 @@ func effectMutatesWorld(operation string) bool {
 		OperationProviderTerminate,
 		OperationImagePull,
 		OperationImageRetained,
-		OperationArtifactPut,
+		OperationArtifactRead,
+		OperationArtifactReplicated,
+		OperationArtifactPublished,
 		OperationCacheMountWrite,
 		OperationControlPlaneRestart:
 		return true
@@ -316,44 +326,149 @@ func leaseFencing(observation InvariantObservation) error {
 }
 
 // artifactDependencies orders every consuming launch against the publication it
-// depends on. Checking the world's current replicas instead would assert what
-// the launch path itself just wrote, because a launch copies an Artifact onto
-// the Rental it starts on. Reading the effect ledger compares two different
-// writers: the launch path and the producer's completion.
+// depends on. What a Run consumes is read from the workload Mercator recorded,
+// so this checks Mercator's own admission decision against the object store's
+// own history. Reading the World Tape's arrivals instead would let the rule pass
+// on a Run whose declaration the control plane never held, and checking current
+// replicas would assert what the launch path itself just wrote.
 func artifactDependencies(observation InvariantObservation) error {
-	publishedAt := map[string]uint64{}
-	for artifactID := range observation.SeededArtifactIDs {
-		publishedAt[artifactID] = 0
+	publishedAt, err := publicationSequences(observation)
+	if err != nil {
+		return err
 	}
 	for _, effect := range observation.Effects {
-		if effect.Operation != OperationArtifactPut || effect.Command != EffectCommandAccepted {
+		if effect.Operation != OperationProviderLaunch || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		workload := observation.Workloads[effect.CorrelationID]
+		for _, artifactID := range workload.Spec.Artifacts.Consumes {
+			published, exists := publishedAt[artifactID]
+			if !exists || published > effect.Sequence {
+				return fmt.Errorf(
+					"Run %q launched at effect %d before Artifact %q was durable",
+					effect.CorrelationID,
+					effect.Sequence,
+					artifactID,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+// publicationSequences is when each Artifact version became durable, in ledger
+// order. A version the catalog already holds published was durable before the
+// first effect, which is what content produced outside this world looks like.
+func publicationSequences(observation InvariantObservation) (map[string]uint64, error) {
+	published := map[string]uint64{}
+	for id, version := range observation.ArtifactCatalog {
+		if version.Durable() && !version.PublishedAt.After(observation.StartedAt) {
+			published[id] = 0
+		}
+	}
+	for _, effect := range observation.Effects {
+		if effect.Operation != OperationArtifactPublished || effect.Command != EffectCommandAccepted {
 			continue
 		}
 		var request struct {
 			ArtifactID string `json:"artifact_id"`
 		}
 		if err := json.Unmarshal(effect.Request, &request); err != nil {
-			return fmt.Errorf("decode Artifact publication %s: %w", effect.ID, err)
+			return nil, fmt.Errorf("decode Artifact publication %s: %w", effect.ID, err)
 		}
-		if _, published := publishedAt[request.ArtifactID]; !published {
-			publishedAt[request.ArtifactID] = effect.Sequence
+		if _, exists := published[request.ArtifactID]; !exists {
+			published[request.ArtifactID] = effect.Sequence
 		}
 	}
-	for _, effect := range observation.Effects {
-		if effect.Operation != OperationProviderLaunch || effect.Command != EffectCommandAccepted {
+	return published, nil
+}
+
+// artifactReplicaVerified is the standing guard on what a local copy is worth.
+// The object store is the authority and a replica is an optimisation over it, so
+// four things hold at once: no copy exists of content the catalog cannot name,
+// no copy claims a digest that version does not have, every copy traces back to
+// the object store, and no Run reads a copy nothing checked against the catalog.
+//
+// "Traces back to the object store" has exactly two shapes, and the second is
+// why the rule is not simply "the version is durable": a copy was fetched from a
+// publication, or it is the output the producing Run wrote on its way to
+// becoming one. A copy of a version nothing published and no Run produced there
+// is content from nowhere, which is what a replica standing in for an authority
+// looks like.
+func artifactReplicaVerified(observation InvariantObservation) error {
+	produced, err := locallyProducedReplicas(observation.Effects)
+	if err != nil {
+		return err
+	}
+	for _, replica := range observation.World.ArtifactReplicas {
+		version, known := observation.ArtifactCatalog[replica.ArtifactID]
+		if !known {
+			return fmt.Errorf("offer %q holds a copy of Artifact %q, which the catalog does not know", replica.OfferID, replica.ArtifactID)
+		}
+		if replica.ContentDigest != version.ContentDigest {
+			return fmt.Errorf(
+				"offer %q holds Artifact %q claiming digest %s, and the catalog says %s",
+				replica.OfferID, replica.ArtifactID, replica.ContentDigest, version.ContentDigest,
+			)
+		}
+		if !version.Durable() && !produced[replica.ArtifactID+"/"+replica.OfferID] {
+			return fmt.Errorf(
+				"offer %q holds a copy of Artifact %q, which nothing published and no Run produced there",
+				replica.OfferID, replica.ArtifactID,
+			)
+		}
+	}
+	return artifactReadsWereVerified(observation.Effects)
+}
+
+// locallyProducedReplicas is every copy a Run wrote where it ran, keyed by
+// version and host. It is the one legitimate reason a copy can exist before the
+// object store holds anything.
+func locallyProducedReplicas(effects []EffectRecord) (map[string]bool, error) {
+	produced := map[string]bool{}
+	for _, effect := range effects {
+		if effect.Operation != OperationArtifactReplicated || effect.Command != EffectCommandAccepted {
 			continue
 		}
-		arrival := observation.RunRequirements[effect.CorrelationID]
-		for _, artifactID := range arrival.Request.ConsumesArtifacts {
-			published, exists := publishedAt[artifactID]
-			if !exists || published > effect.Sequence {
-				return fmt.Errorf(
-					"Run %q launched at effect %d before Artifact %q existed",
-					effect.CorrelationID,
-					effect.Sequence,
-					artifactID,
-				)
-			}
+		var request struct {
+			ArtifactID string `json:"artifact_id"`
+			OfferID    string `json:"offer_id"`
+			Source     string `json:"source"`
+		}
+		if err := json.Unmarshal(effect.Request, &request); err != nil {
+			return nil, fmt.Errorf("decode Artifact replication %s: %w", effect.ID, err)
+		}
+		if request.Source == "run_output" {
+			produced[request.ArtifactID+"/"+request.OfferID] = true
+		}
+	}
+	return produced, nil
+}
+
+func artifactReadsWereVerified(effects []EffectRecord) error {
+	for _, effect := range effects {
+		if effect.Operation != OperationArtifactRead || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		var request struct {
+			ArtifactID string `json:"artifact_id"`
+			OfferID    string `json:"offer_id"`
+		}
+		var read struct {
+			Source string                      `json:"source"`
+			State  domain.ArtifactReplicaState `json:"state"`
+		}
+		if err := json.Unmarshal(effect.Request, &request); err != nil {
+			return fmt.Errorf("decode Artifact read %s: %w", effect.ID, err)
+		}
+		if err := json.Unmarshal(effect.Consequence, &read); err != nil {
+			return fmt.Errorf("decode Artifact read consequence %s: %w", effect.ID, err)
+		}
+		if read.Source == "replica" && !read.State.Usable() {
+			return fmt.Errorf(
+				"Run %q read Artifact %q from a %q copy on offer %q, which nothing checked against the catalog",
+				effect.CorrelationID, request.ArtifactID, read.State, request.OfferID,
+			)
 		}
 	}
 	return nil
@@ -459,6 +574,18 @@ func onlyKeptCapacityHoldsWhatItRan(offer domain.OfferSnapshot, seeded map[strin
 			)
 		}
 	}
+	// Artifact copies obey the same rule as image content, and for the same
+	// reason: a copy is local, and this machine is not somewhere local content
+	// can outlive the workload that put it there. No World Tape seed is
+	// admitted, because only a Rental can be declared holding one.
+	if len(offer.Artifacts.Replicas) > 0 {
+		return fmt.Errorf(
+			"offer %q %s, and holds a copy of Artifact %q",
+			offer.ID,
+			reason,
+			offer.Artifacts.Replicas[0].ArtifactID,
+		)
+	}
 	return nil
 }
 
@@ -561,7 +688,7 @@ func cacheDiskAccounting(observation InvariantObservation) error {
 	seenReplicas := map[string]bool{}
 	for _, replica := range observation.World.ArtifactReplicas {
 		key := replica.ArtifactID + "/" + replica.OfferID
-		if !observation.KnownArtifactIDs[replica.ArtifactID] || replica.SizeBytes <= 0 || seenReplicas[key] {
+		if replica.SizeBytes <= 0 || seenReplicas[key] {
 			return fmt.Errorf("invalid Artifact replica %q", key)
 		}
 		seenReplicas[key] = true
