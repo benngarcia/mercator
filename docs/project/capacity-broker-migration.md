@@ -920,6 +920,95 @@ complete because it works against a live provider.
     `CacheMount` carries no digest and no size. A container that never started is
     not that claim. `CacheMountState.Revision` counts attachments rather than
     writes, for the same reason.
+- [x] 2026-07-25: Make disk a resource content is accounted and reserved
+  against. Nothing owned disk. `capability.HostFacts.DiskTotalBytes` and
+  `DiskFreeBytes` were declared and nothing wrote them, `internal/node/offers.go`
+  maps `DiskFreeBytes` onto the resource a workload's disk minimum is compared
+  against, and `domain.Normalize` gives a workload stating none a one gibibyte
+  default. So every enrolled node advertised zero bytes and
+  `internal/scheduler` struck it out for every Run in the product, on machines
+  with terabytes free: the only reusable lane there is could not be selected by
+  anything. That is a live bug rather than a gap, and it is the half of this
+  slice an operator can see.
+  - The Docker runtime measures its machine by running `df` inside a container of
+    that daemon's own. It is measured through the daemon because every other host
+    fact in the report is the daemon's answer about the machine it runs on: the
+    CPU count and the memory come out of `docker info`, so reading this process's
+    own filesystem would describe two machines at once and report a laptop's SSD
+    as the room a workload in a VM has. A container's root filesystem is the
+    storage driver's, which is where image layers, volumes, and writable layers
+    all land. Measured on this workstation at 3934171283456 bytes total and
+    3743076331520 free, agreeing with `statvfs` of the daemon's storage
+    directory.
+  - An offer states the room a machine has left rather than the disk it was built
+    with. Both simulated worlds subtract what is resident and what is promised to
+    content still moving, so an offer that could never say no became one that
+    can, and the Lab states the whole account as World Truth: capacity, every
+    resident item named by the content it is, and the bytes reserved for
+    transfers in flight. A rule that could only read the remainder could never
+    catch a world that lost track of the difference.
+  - `domain.DiskDemand.Eviction` is the subtraction, beside
+    `ImageManifest.StartWork` and `ArtifactFetchWork`. A candidate short of room
+    makes it by deleting something, and content it gives up is content it fetches
+    again, so the shortfall is charged back onto the transfer that caused it. The
+    charge is capped at what Mercator credited the candidate for holding, so a
+    host may be priced exactly like one holding none of this Run's content and
+    never worse: anything else on that disk belongs to somebody else, and
+    charging this Run to fetch it back would be inventing an eviction policy
+    Mercator cannot observe. Each kind of content gives up the share its own
+    residency represents, because a disk filling up does not tell an image layer
+    from a dataset. The share is taken in floating point because byte counts at
+    these sizes multiply past int64, which the first draft did, wrapping a warm
+    machine's price into a negative number of bytes.
+  - `pull_source` names the disk when the disk decided part of the answer. A
+    reader who took the layer subtraction at its word could not arrive at fifty
+    seconds for a machine holding 18 of 18.04 gigabytes, and that field is
+    already where this record says whose evidence an answer rests on.
+  - `safety.disk_reservation_respected` replaces `safety.cache_disk_accounting`,
+    which accounted for no disk: it checked that a copy named a version and
+    appeared once and never compared a byte of what a machine held against what
+    it had room for. Deleting the name is the point, because a rule that promises
+    accounting and performs none reads as a world somebody checked. The new rule
+    is that a machine's account adds up: every resident item names content with a
+    positive size, no item is counted twice, resident plus reserved never exceeds
+    the disk, and the copies and caches World Truth says are on a machine are
+    exactly the ones taking up room in its account. That last clause is what stops
+    it being satisfied by a ledger that quietly forgot a kind of content.
+  - Both worlds refuse to build a machine seeded with more content than it has
+    disk, and the Lab refuses a launch it has nowhere to put.
+    `a-machine-with-no-room-refuses-the-work` is the Lab's own failing case:
+    deleting the refusal turns that execution red through the invariant with
+    "machine cramped-rental holds and reserves 50000000000 bytes on a 20000000000
+    byte disk", which is a state no Blueprint could otherwise reach, because a
+    world that refuses to be built over-subscribed leaves a launch as the only
+    way content lands on a disk that cannot hold it.
+  - Judgment calls. A daemon that cannot be asked for its disk fails the node's
+    whole facts report, unlike an image or a cache volume it will not describe,
+    which cost one entry each: the fact is a number, a node advertising zero is
+    refused every workload with a disk minimum, and a node advertising a guess
+    sends work to a machine that may have nowhere to put it. The probe runs on
+    every report rather than behind a cache, because free disk is the fastest
+    moving fact in it. The refusal a full machine makes is retryable capacity
+    unavailability, because the disk it is short of may be free again once
+    something else there finishes. Cache Mounts are counted in the Lab's ledger
+    and not in the L0 world's, because nothing in that world's vocabulary can
+    size one: `domain.CacheMount` carries no size, the Lab states sizes where it
+    states World Truth, and the L0 machine reports what a machine could. And the
+    L0 world refuses only at construction, because it models one placement
+    decision rather than an execution, which is what `CapabilityLabExecution`
+    names.
+  - What is left. The scheduler's demand covers the image and the Artifacts a Run
+    reads and not the room a declared Cache Mount expects to take, while the
+    world counts that room when it decides whether a launch fits, so Mercator can
+    place a Run the machine then refuses. Turning a declared cache size into a
+    reservation is the prewarming slice, which is where a reservation has a
+    holder and a failure mode; charging one here would price content on a rule
+    nothing yet holds anybody to.
+  - A Run that finds no feasible offer records no Booking Decision at all, so
+    there is nothing to read the refusal off at the daemon layer and
+    `TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout` reads it from the
+    daemon's own answer instead. That is its own gap in the explanation record
+    and is not fixed here.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -941,7 +1030,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; a production object-store client, prefetch, and producer affinity remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures, an offer states what is left of, and content is accounted and reserved against; a production object-store client, prefetch, and producer affinity remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -1085,6 +1174,31 @@ Phase 3 added:
   minutes. What it waits for is the minute that is left, so it takes a queued
   Booking; a schedule that summed declared runtimes answered half an hour and
   reverting the projection turns the execution into `no feasible offers`.
+- `a-host-that-cannot-hold-the-data-is-not-warm` (green): two machines hold the
+  same 18GB layer of the same image at the same price, and one of them has
+  nowhere to put the 40GB dataset the Run reads. It stays feasible, because
+  locality is never a hard constraint, and what changes is what it is priced:
+  room it has to make comes out of the content it holds, content it gives up is
+  content it fetches again, and its transfer estimate carries the eviction. It
+  loses on cost rather than on refusal. Deleting the eviction charge makes the
+  two candidates identical and hands the Run to whichever offer ID sorts first.
+  The second Run states a disk floor of its own, which is a requirement rather
+  than a preference, and the machine that cannot meet it is struck out with
+  RESOURCE_INSUFFICIENT: until an offer stated real disk, that rejection was
+  unreachable on capacity Mercator controls.
+- `a-machine-with-no-room-refuses-the-work` (Lab testdata): one Rental with
+  twenty gigabytes and one Run needing a ten gigabyte image and a forty gigabyte
+  dataset. The machine refuses the work rather than taking it and filling up
+  partway through, and deleting the refusal fails the execution through
+  `safety.disk_reservation_respected`. It is testdata rather than corpus for the
+  same reason `a-publication-that-never-lands` is: it is a claim about the Lab's
+  own world.
+- `safety.disk_reservation_respected` (Lab invariant): a machine's own account of
+  its disk adds up. Every resident item names content with a positive size, no
+  item is counted twice, resident plus reserved never exceeds the disk, and the
+  copies and caches World Truth says are on a machine are exactly the ones taking
+  up room in its account. It replaces `safety.cache_disk_accounting`, which
+  accounted for no disk at all.
 - `safety.locality_is_never_infeasibility` (Lab invariant): no candidate in any
   recorded Booking Decision is refused for what it holds, and a candidate refused
   for a late start has to have established that lateness. It is the one rule in
