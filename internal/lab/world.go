@@ -1074,11 +1074,15 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 			SideEffect: adapter.SideEffectNone,
 		}
 	}
+	// A machine with nowhere to put this refuses it rather than filling up
+	// partway through, and says so the way it says anything else it cannot take
+	// right now: the disk it is short of may be free again once something else
+	// here finishes.
 	if !world.launchFitsOnDisk(request, arrival) {
 		world.recordLaunchEffect(request, EffectCommandRejected, EffectResponseDelivered, nil, "")
 		return adapter.LaunchReceipt{}, &adapter.ProviderFailure{
 			Kind:       adapter.ProviderFailureCapacityUnavailable,
-			Retryable:  false,
+			Retryable:  true,
 			SideEffect: adapter.SideEffectNone,
 		}
 	}
