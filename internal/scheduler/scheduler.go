@@ -332,10 +332,11 @@ func startSLOReason(limit float64, selected domain.CandidateDecision) string {
 // provably ready; priced is as far as it may go.
 //
 // What the split buys over waiving the bound whenever anything was unreadable
-// is the other half of the same rule. Queue and provisioning are facts the
-// offer states, so a machine fifteen minutes deep in its own queue is late
-// whatever it could say about its disk, and a Run that refuses to wait three
-// minutes gets to strike it out.
+// is the other half of the same rule. Provisioning is what the provider
+// published, and the queue is what Mercator projects from Bookings it holds and
+// re-projects as they run, so a machine fifteen minutes deep in its own queue is
+// late whatever it could say about its disk, and a Run that refuses to wait
+// three minutes gets to strike it out.
 //
 // A measured start latency for this offer is a measurement whatever the
 // locality was, so it binds: startEstimate returns the sample for both halves.
@@ -356,25 +357,25 @@ type candidateWork struct {
 // contentWork is what one kind of content costs this candidate and how much of
 // that price somebody established. The two differ only where a host could not
 // enumerate: bytes charged because nothing said they were already here are a
-// price, and the established seconds are what is left when they are taken out.
+// price, and the established estimate is what is left when they are taken out.
 type contentWork struct {
 	predicted   domain.Estimate
-	established float64
+	established domain.Estimate
 }
 
 func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candidateWork {
-	queue := queueSeconds(input, offer)
-	provision := provisionSeconds(offer)
+	queue := queueEstimate(input, offer)
+	provision := provisionEstimate(input, offer)
 	image, locality := pullEstimate(input.Image, offer, input.ModelVersion)
 	inputs, evidence := artifactEstimate(input.Artifacts, offer.Artifacts, input.ModelVersion)
 	return candidateWork{
 		estimates: domain.CandidateEstimates{
-			QueueSeconds:            domain.Estimate{Expected: queue, P50: queue, P90: queue, Source: "offer", ModelVersion: input.ModelVersion},
-			ProvisionSeconds:        domain.Estimate{Expected: provision, P50: provision, P90: provision, Source: "offer", ModelVersion: input.ModelVersion},
+			QueueSeconds:            queue,
+			ProvisionSeconds:        provision,
 			PullSeconds:             image.predicted,
 			ArtifactSeconds:         inputs.predicted,
-			StartSeconds:            startEstimate(input, offer, queue+provision+image.predicted.Expected+inputs.predicted.Expected),
-			EstablishedStartSeconds: startEstimate(input, offer, queue+provision+image.established+inputs.established),
+			StartSeconds:            startEstimate(input, offer, queue, provision, image.predicted, inputs.predicted),
+			EstablishedStartSeconds: startEstimate(input, offer, queue, provision, image.established, inputs.established),
 			CostUSD:                 costEstimate(input, offer),
 		},
 		image:     locality,
@@ -382,37 +383,81 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 	}
 }
 
-func queueSeconds(input SchedulingInput, offer domain.OfferSnapshot) float64 {
-	if schedule, ok := input.Schedules[offer.RentalID]; ok {
-		return schedule.ExpectedWaitSeconds()
+// queueEstimate is how long work arriving now waits behind what is already
+// assigned here. A Rental Schedule projects it from where its Bookings actually
+// are, so a machine a minute from finishing an hour-long Booking is a minute of
+// waiting; an offer with no schedule states its own queued work. Either way it
+// is one number rather than a distribution, because neither authority publishes
+// a spread on it, and inventing one would be this model's arithmetic wearing a
+// provider's clothes.
+func queueEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
+	seconds := 0.0
+	switch schedule, scheduled := input.Schedules[offer.RentalID]; {
+	case scheduled:
+		seconds = schedule.ExpectedWaitSeconds(input.EvaluatedAt)
+	case offer.Queue != nil:
+		seconds = offer.Queue.QueuedWorkSeconds
 	}
-	if offer.Queue != nil {
-		return offer.Queue.QueuedWorkSeconds
-	}
-	return 0
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds, Source: "offer", ModelVersion: input.ModelVersion}
 }
 
-func provisionSeconds(offer domain.OfferSnapshot) float64 {
-	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
-		return offer.Provisioning.Expected
+// provisionEstimate is what the provider published about bringing this machine
+// up, carried through as published. A quantile the provider did not state is its
+// expectation restated: an unstated p90 is not a promise of a short tail, and
+// replacing a published one with a spread of this model's own would enforce the
+// Run's start bound against a quantile Mercator made up while the provider's own
+// answer sat unread on the offer.
+func provisionEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
+	estimate := domain.Estimate{Source: "offer", ModelVersion: input.ModelVersion}
+	if offer.Kind != domain.OfferKindProvisionable || offer.Provisioning == nil {
+		return estimate
 	}
-	return 0
+	published := *offer.Provisioning
+	estimate.Expected = published.Expected
+	estimate.P50 = orExpected(published.P50, published.Expected)
+	estimate.P90 = orExpected(published.P90, published.Expected)
+	return estimate
 }
 
-// startEstimate turns seconds of work into when this candidate is ready, adding
-// the second every launch costs whatever it holds. A measured latency estimate
-// for this offer replaces the derived answer outright, and replaces both halves
-// of it: a sample is a measurement about this machine whatever anyone could
-// enumerate, so there is no unestablished part of it to discount.
-func startEstimate(input SchedulingInput, offer domain.OfferSnapshot, work float64) domain.Estimate {
+func orExpected(quantile, expected float64) float64 {
+	if quantile <= 0 {
+		return expected
+	}
+	return quantile
+}
+
+// startEstimate assembles when this candidate is ready out of the parts it is
+// waiting on, plus the second every launch costs whatever it holds. Quantiles
+// add rather than being scaled off the expectation, because each part's tail
+// belongs to whoever published it: a provider that states an eighteen-minute p90
+// provisioning has said what its own tail is. Summing them is deliberately
+// pessimistic about the joint distribution, which nothing here models, and
+// pessimism about a bound the caller set is the safe direction.
+//
+// A measured latency estimate for this offer replaces the derived answer
+// outright, and replaces both halves of it: a sample is a measurement about this
+// machine whatever anyone could enumerate, so there is no unestablished part of
+// it to discount.
+func startEstimate(input SchedulingInput, offer domain.OfferSnapshot, parts ...domain.Estimate) domain.Estimate {
 	if measured, ok := input.LatencyEstimates[offer.ID]; ok && measured.SampleCount > 0 {
 		if measured.ModelVersion == "" {
 			measured.ModelVersion = input.ModelVersion
 		}
 		return measured
 	}
-	seconds := work + 1
-	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion}
+	start := domain.Estimate{
+		Expected:     domain.LaunchSeconds,
+		P50:          domain.LaunchSeconds,
+		P90:          domain.LaunchSeconds * 1.25,
+		Source:       "scheduler",
+		ModelVersion: input.ModelVersion,
+	}
+	for _, part := range parts {
+		start.Expected += part.Expected
+		start.P50 += part.P50
+		start.P90 += part.P90
+	}
+	return start
 }
 
 func costEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
@@ -498,7 +543,7 @@ func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, mod
 		if locality != domain.LocalityUnknown {
 			estimate.Confidence = 1
 		}
-		return contentWork{predicted: estimate}, locality
+		return establishedIfDescribed(estimate, locality), locality
 	}
 	link := offer.RegistryDownload()
 	seconds := float64(work.TransferBytes*8)/1_000_000/link.Mbps +
@@ -508,13 +553,19 @@ func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, mod
 	if work.UnpackBytes > 0 || locality == domain.LocalityUnknown {
 		estimate.Confidence = min(estimate.Confidence, domain.AssumedLinkConfidence)
 	}
-	// A host that could not say what it holds is charged this whole image and
-	// established none of it. Every other answer here counts bytes a manifest
-	// and an inventory both spoke about.
+	return establishedIfDescribed(estimate, locality), locality
+}
+
+// establishedIfDescribed splits one image prediction into the whole price and
+// the part of it somebody established. A host that could not say what it holds
+// is charged this whole image and establishes none of it: nothing said the bytes
+// are here, and nothing said they are not. Every other answer counts bytes a
+// manifest and an inventory both spoke about.
+func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalityState) contentWork {
 	if locality == domain.LocalityUnknown {
-		return contentWork{predicted: estimate}, locality
+		return contentWork{predicted: estimate}
 	}
-	return contentWork{predicted: estimate, established: seconds}, locality
+	return contentWork{predicted: estimate, established: estimate}
 }
 
 // artifactEstimate prices what this candidate would still have to read out of
@@ -533,18 +584,34 @@ func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, mod
 // nothing has measured.
 func artifactEstimate(versions []domain.ArtifactVersion, inventory domain.ArtifactInventory, modelVersion string) (contentWork, []domain.ArtifactEvidence) {
 	fetch, evidence := domain.ArtifactFetchWork(versions, inventory)
-	estimate := domain.Estimate{Source: artifactSource(inventory, evidence), ModelVersion: modelVersion}
+	source := artifactSource(inventory, evidence)
 	if len(evidence) == 0 {
-		return contentWork{predicted: estimate}, nil
+		return contentWork{predicted: domain.Estimate{Source: source, ModelVersion: modelVersion}}, nil
 	}
-	if fetch == 0 {
+	return contentWork{
+		predicted:   objectStoreRead(fetch, source, modelVersion),
+		established: objectStoreRead(establishedFetchBytes(evidence), source, modelVersion),
+	}, evidence
+}
+
+// objectStoreRead is what reading these bytes out of the object store costs.
+// Bytes that do not have to move cost nothing and there is no doubt about it;
+// bytes that do cross a link nothing has measured, which is what caps the
+// answer's confidence however exactly the arithmetic on it reads.
+func objectStoreRead(bytes int64, source, modelVersion string) domain.Estimate {
+	seconds := objectStoreSeconds(bytes)
+	estimate := domain.Estimate{
+		Expected:     seconds,
+		P50:          seconds,
+		P90:          seconds * 1.5,
+		Confidence:   domain.AssumedLinkConfidence,
+		Source:       source,
+		ModelVersion: modelVersion,
+	}
+	if bytes == 0 {
 		estimate.Confidence = 1
-		return contentWork{predicted: estimate}, evidence
 	}
-	seconds := objectStoreSeconds(fetch)
-	estimate.Expected, estimate.P50, estimate.P90 = seconds, seconds, seconds*1.5
-	estimate.Confidence = domain.AssumedLinkConfidence
-	return contentWork{predicted: estimate, established: objectStoreSeconds(establishedFetchBytes(evidence))}, evidence
+	return estimate
 }
 
 // establishedFetchBytes is the content this candidate owes that some inventory

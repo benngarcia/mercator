@@ -117,13 +117,23 @@ type NodeFacts struct {
 	Host       HostFacts `json:"host"`
 	// Images is the exact OCI inventory the node holds.
 	Images []ImageLocality `json:"images,omitempty"`
-	// Artifacts is the immutable Artifact copies the node holds, each worth what
-	// checking it against the catalog said it is worth. It is the same record
-	// the control plane keeps, because a second vocabulary for one answer is how
-	// the two drift: a node reporting a copy "verified" beside a separate
-	// "state" would leave the control plane deciding which of the two it
-	// believes. Object storage remains the authority either way.
-	Artifacts []domain.ArtifactReplica `json:"artifacts,omitempty"`
+	// Artifacts is what this node established about the immutable Artifact
+	// copies on its disk: whether it enumerated them at all, and each copy it
+	// found worth what checking it against the catalog said it is worth. It is
+	// the same record the control plane keeps, because a second vocabulary for
+	// one answer is how the two drift: a node reporting a copy "verified" beside
+	// a separate "state" would leave the control plane deciding which of the two
+	// it believes. Object storage remains the authority either way.
+	//
+	// Whether anything enumerated is this node's own claim, never a derivation
+	// from the fact that it answered about its host. A runtime with no replica
+	// store has not looked for a copy and will never find one, so a control
+	// plane reading "the node reported, therefore it enumerated" would publish
+	// "I hold no copy" as a fact on behalf of every machine in the fleet, and a
+	// hard start bound would then strike those machines out for content nobody
+	// ever looked for. A node that does not enumerate says nothing here, and
+	// silence is priced rather than refused.
+	Artifacts domain.ArtifactInventory `json:"artifacts,omitzero"`
 	// Caches is the mutable, application-owned cache summary. It is
 	// best-effort by construction: contents are the application's business.
 	Caches []CacheLocality `json:"caches,omitempty"`

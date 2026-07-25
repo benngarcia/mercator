@@ -623,6 +623,13 @@ var localityPaths = map[string]bool{
 // fifteen minutes deep in its own stated queue is late whatever it could say
 // about its disk, and a Run that refuses to wait three minutes gets to strike
 // it out.
+//
+// The rule is checked twice over, because asking only whether a refusal agrees
+// with the established estimate recorded beside it is asking the scheduler to
+// confirm its own arithmetic: both sides read one number, so the error where that
+// number is the thing computed wrong is invisible. So the second reading
+// recomputes what was discounted from the per-candidate localities and per-kind
+// seconds the decision records independently of the answer it reached.
 func localityIsNeverInfeasibility(observation InvariantObservation) error {
 	decisions, err := recordedDecisions(observation)
 	if err != nil {
@@ -646,21 +653,89 @@ func candidateWasPricedNotRefused(decision domain.BookingDecision, candidate dom
 				decision.RunID, candidate.OfferSnapshotID, rejection.Code, rejection.Path,
 			)
 		}
-		if rejection.Code != "LATENCY_SLO_EXCEEDED" ||
-			candidate.Estimates.EstablishedStartSeconds.P90 > decision.Policy.MaxP90StartSeconds {
+		if rejection.Code != "LATENCY_SLO_EXCEEDED" {
 			continue
 		}
-		return fmt.Errorf(
-			"Run %q: candidate %q was refused for a p90 start of %.2fs against a bound of %.2fs, and only %.2fs of that was established",
-			decision.RunID,
-			candidate.OfferSnapshotID,
-			candidate.Estimates.StartSeconds.P90,
-			decision.Policy.MaxP90StartSeconds,
-			candidate.Estimates.EstablishedStartSeconds.P90,
-		)
+		if candidate.Estimates.EstablishedStartSeconds.P90 <= decision.Policy.MaxP90StartSeconds {
+			return fmt.Errorf(
+				"Run %q: candidate %q was refused for a p90 start of %.2fs against a bound of %.2fs, and only %.2fs of that was established",
+				decision.RunID,
+				candidate.OfferSnapshotID,
+				candidate.Estimates.StartSeconds.P90,
+				decision.Policy.MaxP90StartSeconds,
+				candidate.Estimates.EstablishedStartSeconds.P90,
+			)
+		}
+		if err := silenceWasTakenBackOut(decision, candidate); err != nil {
+			return err
+		}
 	}
 	return nil
 }
+
+// silenceWasTakenBackOut reads the same refusal off the independent halves of the
+// record: what each kind of content cost this candidate, and what the decision
+// recorded finding of each. The seconds taken out of the prediction to reach the
+// established one must be at least the seconds charged for content nobody could
+// describe. A scheduler that quietly counted a silence as established fails here
+// while agreeing with itself perfectly, which is the whole reason this reading
+// exists beside the other one.
+func silenceWasTakenBackOut(decision domain.BookingDecision, candidate domain.CandidateDecision) error {
+	estimates := candidate.Estimates
+	// A measured start latency is a measurement about this offer whatever anyone
+	// could enumerate, and it stands as both halves of the prediction, so there
+	// is nothing for it to have discounted.
+	if estimates.StartSeconds.SampleCount > 0 {
+		return nil
+	}
+	priced := pricedSilenceSeconds(candidate)
+	discounted := estimates.StartSeconds.Expected - estimates.EstablishedStartSeconds.Expected
+	if discounted+arithmeticTolerance >= priced {
+		return nil
+	}
+	return fmt.Errorf(
+		"Run %q: candidate %q was refused against a %.2fs bound having been charged %.2fs for content nobody could describe, of which only %.2fs was left out of the established start",
+		decision.RunID,
+		candidate.OfferSnapshotID,
+		decision.Policy.MaxP90StartSeconds,
+		priced,
+		discounted,
+	)
+}
+
+// pricedSilenceSeconds is what this candidate was charged for content nothing
+// could describe, recomputed from the localities the decision recorded and the
+// seconds it recorded per kind of content. The Artifact half converts bytes into
+// seconds through the unreadable share of the read itself, so this rule holds no
+// opinion about the rate the scheduler used and cannot be satisfied by agreeing
+// with it.
+func pricedSilenceSeconds(candidate domain.CandidateDecision) float64 {
+	seconds := 0.0
+	if candidate.ImageLocality == domain.LocalityUnknown {
+		seconds += candidate.Estimates.PullSeconds.Expected
+	}
+	return seconds + candidate.Estimates.ArtifactSeconds.Expected*unreadableShare(candidate.ArtifactEvidence)
+}
+
+// unreadableShare is how much of what this candidate owes on its declared inputs
+// is content nobody could describe, by bytes.
+func unreadableShare(evidence []domain.ArtifactEvidence) float64 {
+	owed, unreadable := int64(0), int64(0)
+	for _, found := range evidence {
+		owed += found.FetchBytes
+		if found.Locality == domain.LocalityUnknown {
+			unreadable += found.FetchBytes
+		}
+	}
+	if owed == 0 {
+		return 0
+	}
+	return float64(unreadable) / float64(owed)
+}
+
+// arithmeticTolerance is how far two readings of the same seconds may differ
+// before the difference is a disagreement rather than floating-point noise.
+const arithmeticTolerance = 1e-6
 
 // localityProvenance is the standing guard on how a host becomes warm. Content
 // arrives on a machine exactly two ways: the World Tape seeded it there, or a

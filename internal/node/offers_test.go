@@ -3,6 +3,7 @@ package node_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -294,39 +295,66 @@ func TestANodeOffersTheCopiesItHolds(t *testing.T) {
 		ContentDigest: "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
 		SizeBytes:     40_000_000_000,
 	}
+	looked := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	reported := func(replica domain.ArtifactReplica) domain.ArtifactInventory {
+		return domain.ArtifactInventory{
+			Known:      true,
+			ObservedAt: looked,
+			Replicas:   []domain.ArtifactReplica{replica},
+		}
+	}
 	cases := map[string]struct {
-		held      []domain.ArtifactReplica
-		wantHolds bool
+		held         domain.ArtifactInventory
+		wantKnown    bool
+		wantLocality domain.LocalityState
 	}{
 		"a node holding a checked copy of this version owes nothing for it": {
-			held: []domain.ArtifactReplica{{
+			held: reported(domain.ArtifactReplica{
 				ArtifactID:    version.ID,
 				ContentDigest: version.ContentDigest,
 				SizeBytes:     version.SizeBytes,
 				State:         domain.ArtifactReplicaVerified,
-			}},
-			wantHolds: true,
+			}),
+			wantKnown:    true,
+			wantLocality: domain.LocalityHot,
 		},
 		"a copy nobody checked is worth what no copy is worth": {
-			held: []domain.ArtifactReplica{{
+			held: reported(domain.ArtifactReplica{
 				ArtifactID:    version.ID,
 				ContentDigest: version.ContentDigest,
 				SizeBytes:     version.SizeBytes,
 				State:         domain.ArtifactReplicaUnverified,
-			}},
+			}),
+			wantKnown:    true,
+			wantLocality: domain.LocalityCold,
 		},
 		// The machine an operator restored an older snapshot onto. Its index
 		// still names this version and the bytes under it are another version's,
 		// so reading the name alone promises the Run the wrong dataset quickly.
 		"a checked copy of other content under this name is worth nothing": {
-			held: []domain.ArtifactReplica{{
+			held: reported(domain.ArtifactReplica{
 				ArtifactID:    version.ID,
 				ContentDigest: "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
 				SizeBytes:     version.SizeBytes,
 				State:         domain.ArtifactReplicaVerified,
-			}},
+			}),
+			wantKnown:    true,
+			wantLocality: domain.LocalityCold,
 		},
-		"a node holding no copies says so rather than saying nothing": {held: nil},
+		"a node that enumerated and found nothing says it holds no copy": {
+			held:         domain.ArtifactInventory{Known: true, ObservedAt: looked},
+			wantKnown:    true,
+			wantLocality: domain.LocalityCold,
+		},
+		// The only runtime in the tree. It has no replica store to look in, so
+		// it claims nothing, and the offer must not claim it for it: every
+		// enrolled node would otherwise assert that it holds no copy of content
+		// it never looked for, which a start bound then strikes it out over.
+		"a node whose runtime does not enumerate copies says nothing": {
+			held:         domain.ArtifactInventory{},
+			wantKnown:    false,
+			wantLocality: domain.LocalityUnknown,
+		},
 	}
 	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -338,23 +366,22 @@ func TestANodeOffersTheCopiesItHolds(t *testing.T) {
 			}
 
 			inventory := offers[0].Artifacts
-			if !inventory.Known {
-				t.Fatal("an enrolled node answered, so its Artifact inventory is never a silence")
+			if inventory.Known != testCase.wantKnown {
+				t.Fatalf("the offer says enumerated = %v, want %v", inventory.Known, testCase.wantKnown)
 			}
-			if inventory.Holds(version) != testCase.wantHolds {
-				t.Errorf("holds a readable copy = %v, want %v", inventory.Holds(version), testCase.wantHolds)
+			if inventory.Holds(version) != (testCase.wantLocality == domain.LocalityHot) {
+				t.Errorf("holds a readable copy = %v, want %v", inventory.Holds(version), testCase.wantLocality == domain.LocalityHot)
 			}
 			fetch, evidence := domain.ArtifactFetchWork([]domain.ArtifactVersion{version}, inventory)
 			wantFetch := version.SizeBytes
-			wantLocality := domain.LocalityCold
-			if testCase.wantHolds {
-				wantFetch, wantLocality = 0, domain.LocalityHot
+			if testCase.wantLocality == domain.LocalityHot {
+				wantFetch = 0
 			}
 			if fetch != wantFetch {
 				t.Errorf("owes %d bytes, want %d", fetch, wantFetch)
 			}
-			if len(evidence) != 1 || evidence[0].Locality != wantLocality {
-				t.Errorf("recorded %+v, want locality %q", evidence, wantLocality)
+			if len(evidence) != 1 || evidence[0].Locality != testCase.wantLocality {
+				t.Errorf("recorded %+v, want locality %q", evidence, testCase.wantLocality)
 			}
 		})
 	}
@@ -362,10 +389,10 @@ func TestANodeOffersTheCopiesItHolds(t *testing.T) {
 
 func readyNode(t *testing.T, held []capability.ImageLocality) *node.Registry {
 	t.Helper()
-	return readyNodeHolding(t, held, nil)
+	return readyNodeHolding(t, held, domain.ArtifactInventory{})
 }
 
-func readyNodeHolding(t *testing.T, images []capability.ImageLocality, copies []domain.ArtifactReplica) *node.Registry {
+func readyNodeHolding(t *testing.T, images []capability.ImageLocality, copies domain.ArtifactInventory) *node.Registry {
 	t.Helper()
 	registry, clock := newRegistry(t)
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{

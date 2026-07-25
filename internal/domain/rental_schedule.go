@@ -19,6 +19,36 @@ type ScheduledBooking struct {
 	Booking                Booking `json:"booking"`
 	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds"`
 	MaxRuntimeSeconds      float64 `json:"max_runtime_seconds"`
+	// StartedAt is when this Booking took the Rental, which is what makes the
+	// runtimes above projectable rather than merely declared. Without it the
+	// schedule reports an hour of waiting for a Booking one minute from its own
+	// expected finish, and a Run that refuses to wait three minutes is told
+	// there is no capacity for it. A queued Booking has not started and says so
+	// with the zero time; so does a running one recorded before Mercator kept
+	// this, and both then owe their whole declared runtime, because a schedule
+	// that cannot say how much has elapsed must not assume any of it has.
+	StartedAt time.Time `json:"started_at,omitzero"`
+}
+
+// RemainingExpectedSeconds is how much longer this Booking is expected to hold
+// the Rental. Runtimes are what a caller declared, so this is a projection of
+// somebody's estimate and never a measurement; what it is not is that estimate
+// restated forever while the Booking runs.
+func (scheduled ScheduledBooking) RemainingExpectedSeconds(now time.Time) float64 {
+	return remainingSeconds(scheduled.ExpectedRuntimeSeconds, scheduled.StartedAt, now)
+}
+
+// RemainingMaxSeconds is the same projection against the runtime Mercator
+// enforces, which is what a latest-start guarantee is made of.
+func (scheduled ScheduledBooking) RemainingMaxSeconds(now time.Time) float64 {
+	return remainingSeconds(scheduled.MaxRuntimeSeconds, scheduled.StartedAt, now)
+}
+
+func remainingSeconds(declared float64, startedAt, now time.Time) float64 {
+	if startedAt.IsZero() {
+		return declared
+	}
+	return max(0, declared-now.Sub(startedAt).Seconds())
 }
 
 type RentalSchedule struct {
@@ -31,10 +61,15 @@ func NewRentalSchedule(rentalID string) RentalSchedule {
 	return RentalSchedule{RentalID: rentalID, Bookings: []ScheduledBooking{}}
 }
 
-func (schedule RentalSchedule) ExpectedWaitSeconds() float64 {
+// ExpectedWaitSeconds is how long work arriving at this moment waits for the
+// Rental, projected from where its Bookings actually are. It is asked as of a
+// moment because that is what makes it a projection: a schedule that summed
+// declared runtimes reported the same wait for an hour, so a machine a minute
+// from finishing looked as busy as one that had just started.
+func (schedule RentalSchedule) ExpectedWaitSeconds(now time.Time) float64 {
 	var seconds float64
 	for _, scheduled := range schedule.Bookings {
-		seconds += scheduled.ExpectedRuntimeSeconds
+		seconds += scheduled.RemainingExpectedSeconds(now)
 	}
 	return seconds
 }
@@ -53,8 +88,20 @@ func (schedule RentalSchedule) Reserve(request BookingRequest) (RentalSchedule, 
 		Booking:                booking,
 		ExpectedRuntimeSeconds: request.ExpectedRuntimeSeconds,
 		MaxRuntimeSeconds:      request.MaxRuntimeSeconds,
+		StartedAt:              tookTheRentalAt(booking, request.ReservedAt),
 	})
 	return next, booking, nil
+}
+
+// tookTheRentalAt is when this Booking began occupying the Rental: the moment it
+// was reserved for one that goes straight to running, and nothing at all for one
+// that waits, because a queued Booking starts when the Booking ahead of it
+// finishes and that moment is recorded when it arrives.
+func tookTheRentalAt(booking Booking, reservedAt time.Time) time.Time {
+	if booking.State != BookingStateRunning {
+		return time.Time{}
+	}
+	return reservedAt
 }
 
 func (schedule RentalSchedule) Complete(bookingID string, completedAt time.Time) (RentalSchedule, *Booking, error) {
@@ -99,6 +146,12 @@ func (schedule RentalSchedule) reproject(now time.Time) RentalSchedule {
 			booking.AfterBookingID = ""
 			booking.ProjectedStartAt = nil
 			booking.LatestStartAt = nil
+			if schedule.Bookings[index].StartedAt.IsZero() {
+				// The Booking ahead of this one just finished, so this is the
+				// moment this one took the Rental. Recording it is what lets
+				// every later projection ask how much of its runtime is left.
+				schedule.Bookings[index].StartedAt = now
+			}
 		} else {
 			booking.State = BookingStateQueued
 			booking.AfterBookingID = schedule.Bookings[index-1].Booking.ID
@@ -108,10 +161,14 @@ func (schedule RentalSchedule) reproject(now time.Time) RentalSchedule {
 			booking.LatestStartAt = &latestStart
 		}
 		schedule.Bookings[index].Booking = booking
-		projected = projected.Add(time.Duration(schedule.Bookings[index].ExpectedRuntimeSeconds * float64(time.Second)))
-		latest = latest.Add(time.Duration(schedule.Bookings[index].MaxRuntimeSeconds * float64(time.Second)))
+		projected = projected.Add(seconds(schedule.Bookings[index].RemainingExpectedSeconds(now)))
+		latest = latest.Add(seconds(schedule.Bookings[index].RemainingMaxSeconds(now)))
 	}
 	return schedule
+}
+
+func seconds(count float64) time.Duration {
+	return time.Duration(count * float64(time.Second))
 }
 
 func validBookingRequest(schedule RentalSchedule, request BookingRequest) error {
@@ -154,12 +211,16 @@ func (schedule RentalSchedule) bookingFor(request BookingRequest) Booking {
 	return booking
 }
 
+// startBounds is when a Booking arriving now is projected to start and the
+// latest it may. Both are read from what the Bookings ahead of it have left
+// rather than from what they declared, so a Rental most of the way through its
+// queue promises a start most of the way through it too.
 func (schedule RentalSchedule) startBounds(now time.Time) (time.Time, time.Time) {
 	projected := now
 	latest := now
 	for _, scheduled := range schedule.Bookings {
-		projected = projected.Add(time.Duration(scheduled.ExpectedRuntimeSeconds * float64(time.Second)))
-		latest = latest.Add(time.Duration(scheduled.MaxRuntimeSeconds * float64(time.Second)))
+		projected = projected.Add(seconds(scheduled.RemainingExpectedSeconds(now)))
+		latest = latest.Add(seconds(scheduled.RemainingMaxSeconds(now)))
 	}
 	return projected, latest
 }

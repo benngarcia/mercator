@@ -105,6 +105,27 @@ func TestANodeHoldsTheImageItRan(t *testing.T) {
 	}, "the node never reported holding the image it ran, so a second Run would be priced a pull it does not owe")
 }
 
+// TestANodeThatCannotEnumerateCopiesOffersNoArtifactClaim is the Artifact half
+// of the same authority, through the production daemon. No runtime in this tree
+// replicates an Artifact yet, so an enrolled node has no replica store to look
+// in and reports no Artifact inventory at all. What the offer must then say is
+// nothing: an inventory marked enumerated from the heartbeat's own timestamp
+// would publish "I hold no copy" as a fact for every machine in the fleet, and a
+// Run with a start bound would be told there is no capacity for content this
+// machine never looked for.
+func TestANodeThatCannotEnumerateCopiesOffersNoArtifactClaim(t *testing.T) {
+	fleet := startFleet(t)
+
+	inventory := fleet.nodeOffer(t).Artifacts
+
+	if inventory.Known {
+		t.Fatalf("the offer claims this node enumerated its Artifact copies: %+v", inventory)
+	}
+	if len(inventory.Replicas) > 0 {
+		t.Fatalf("the offer lists copies no runtime here can hold: %+v", inventory.Replicas)
+	}
+}
+
 // TestAWorkloadThatFailsOnANodeClosesTheRunFailed holds the node's authority
 // over the exit: nothing the application says is involved, and the run still
 // reaches a terminal failure.
@@ -380,10 +401,11 @@ func (f *fleet) decision(t *testing.T, runID string) bookingDecision {
 }
 
 type offerSnapshot struct {
-	ID        string                `json:"id"`
-	Lane      string                `json:"lane"`
-	ExpiresAt time.Time             `json:"expires_at"`
-	Images    domain.ImageInventory `json:"images"`
+	ID        string                   `json:"id"`
+	Lane      string                   `json:"lane"`
+	ExpiresAt time.Time                `json:"expires_at"`
+	Images    domain.ImageInventory    `json:"images"`
+	Artifacts domain.ArtifactInventory `json:"artifacts"`
 }
 
 func (f *fleet) offers(t *testing.T) []offerSnapshot {

@@ -306,58 +306,103 @@ func queuedBehindOneShotCapacity() eventlog.CloudEvent {
 
 // TestSilenceIsPricedAndAMeasurementBinds is the second clause of
 // safety.locality_is_never_infeasibility, which the registry's own failing case
-// cannot reach: a candidate struck out on a start bound. All three rows are the
-// rule, and the last one is why it is stated against the established estimate
-// rather than against "was anything unknown". A prediction over a silence is a
-// price, and refusing capacity on it removes machines that may already be
-// holding every byte. A measured start latency for this offer is a measurement
-// whatever anyone could enumerate. And a machine already deep in its own stated
-// queue is late whatever it could say about its disk, so one unreadable input
-// must not buy it an exemption from the bound.
+// cannot reach: a candidate struck out on a start bound. Every row is a refusal,
+// and what separates them is what the rest of the record says about the seconds
+// it rested on.
+//
+// The first two are the two ways silence becomes infeasibility, and the rule has
+// to see both. A refusal against a bound the established prediction meets is a
+// scheduler contradicting its own record. A refusal whose established prediction
+// quietly includes content nobody could describe agrees with its record
+// perfectly, so it is caught by recomputing what was discounted from the
+// localities and the per-kind seconds recorded beside it. That second shape is
+// what a scheduler counting a silence as established produces, and it is what the
+// mutation cases in warming_test.go drive through a real execution.
+//
+// The last two are lawful. A measured start latency for this offer is a
+// measurement whatever anyone could enumerate. And a machine already deep in its
+// own stated queue is late whatever it could say about its disk, so one
+// unreadable input must not buy it an exemption from the bound: the silence was
+// charged and taken back out, and what remains is over the bound on its own.
 func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
+	unreadableDataset := []domain.ArtifactEvidence{{
+		ArtifactID: "artifact:imagenet:v2.41",
+		Locality:   domain.LocalityUnknown,
+		FetchBytes: 40_000_000_000,
+	}}
 	for _, refusal := range []struct {
-		name        string
-		start       domain.Estimate
-		established domain.Estimate
-		lawful      bool
+		name      string
+		candidate domain.CandidateDecision
+		lawful    bool
 	}{
 		{
-			name:        "a start latency predicted over content nobody could describe",
-			start:       domain.Estimate{P90: 900},
-			established: domain.Estimate{P90: 1.25},
+			name: "a bound the established prediction meets",
+			candidate: domain.CandidateDecision{
+				ImageLocality:    domain.LocalityUnknown,
+				ArtifactEvidence: unreadableDataset,
+				Estimates: domain.CandidateEstimates{
+					PullSeconds:             domain.Estimate{Expected: 289},
+					ArtifactSeconds:         domain.Estimate{Expected: 640},
+					StartSeconds:            domain.Estimate{Expected: 930, P90: 1394},
+					EstablishedStartSeconds: domain.Estimate{Expected: 1, P90: 1.25},
+				},
+			},
 		},
 		{
-			name:        "a start latency measured on this offer",
-			start:       domain.Estimate{P90: 900, SampleCount: 4},
-			established: domain.Estimate{P90: 900, SampleCount: 4},
-			lawful:      true,
+			name: "a silence counted as established",
+			candidate: domain.CandidateDecision{
+				ImageLocality:    domain.LocalityUnknown,
+				ArtifactEvidence: unreadableDataset,
+				Estimates: domain.CandidateEstimates{
+					PullSeconds:             domain.Estimate{Expected: 289},
+					ArtifactSeconds:         domain.Estimate{Expected: 640},
+					StartSeconds:            domain.Estimate{Expected: 930, P90: 1394},
+					EstablishedStartSeconds: domain.Estimate{Expected: 930, P90: 1394},
+				},
+			},
 		},
 		{
-			name:        "a queue the offer stated, beside an input nothing could enumerate",
-			start:       domain.Estimate{P90: 1926},
-			established: domain.Estimate{P90: 1126},
-			lawful:      true,
+			name: "a start latency measured on this offer",
+			candidate: domain.CandidateDecision{
+				ImageLocality:    domain.LocalityUnknown,
+				ArtifactEvidence: unreadableDataset,
+				Estimates: domain.CandidateEstimates{
+					PullSeconds:             domain.Estimate{Expected: 289},
+					ArtifactSeconds:         domain.Estimate{Expected: 640},
+					StartSeconds:            domain.Estimate{Expected: 900, P90: 900, SampleCount: 4},
+					EstablishedStartSeconds: domain.Estimate{Expected: 900, P90: 900, SampleCount: 4},
+				},
+			},
+			lawful: true,
+		},
+		{
+			name: "a queue the offer stated, beside an input nothing could enumerate",
+			candidate: domain.CandidateDecision{
+				ImageLocality:    domain.LocalityHot,
+				ArtifactEvidence: unreadableDataset,
+				Estimates: domain.CandidateEstimates{
+					QueueSeconds:            domain.Estimate{Expected: 900, P90: 900},
+					ArtifactSeconds:         domain.Estimate{Expected: 640},
+					StartSeconds:            domain.Estimate{Expected: 1541, P90: 1861.25},
+					EstablishedStartSeconds: domain.Estimate{Expected: 901, P90: 901.25},
+				},
+			},
+			lawful: true,
 		},
 	} {
 		t.Run(refusal.name, func(t *testing.T) {
+			candidate := refusal.candidate
+			candidate.OfferSnapshotID = "borrowed-host"
+			candidate.Rejections = []domain.Violation{{
+				Code: "LATENCY_SLO_EXCEEDED",
+				Path: "placement.max_p90_start_seconds",
+			}}
 			observation := InvariantObservation{
 				MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_slo_refusal", domain.BookingDecision{
-					ID:     "dec_slo_refusal",
-					RunID:  "run-impatient",
-					Policy: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, MaxP90StartSeconds: 180},
-					Candidates: []domain.CandidateDecision{{
-						OfferSnapshotID:  "borrowed-host",
-						ImageLocality:    domain.LocalityUnknown,
-						ArtifactEvidence: []domain.ArtifactEvidence{{ArtifactID: "artifact-1", Locality: domain.LocalityUnknown, FetchBytes: 1}},
-						Estimates: domain.CandidateEstimates{
-							StartSeconds:            refusal.start,
-							EstablishedStartSeconds: refusal.established,
-						},
-						Rejections: []domain.Violation{{
-							Code: "LATENCY_SLO_EXCEEDED",
-							Path: "placement.max_p90_start_seconds",
-						}},
-					}},
+					ID:                   "dec_slo_refusal",
+					RunID:                "run-impatient",
+					Policy:               domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, MaxP90StartSeconds: 180},
+					Candidates:           []domain.CandidateDecision{candidate},
 					SelectionReasonCodes: []string{"NO_FEASIBLE_OFFERS"},
 				})},
 			}

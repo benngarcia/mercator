@@ -254,6 +254,12 @@ const DefaultRegistryDownloadMbps = 500.0
 // takes are the guess.
 const AssumedLinkConfidence = 0.5
 
+// LaunchSeconds is what starting a container costs on a machine already holding
+// everything it needs. It is an assumption like the rates beside it, stated once
+// for the same reason: a predictor and a reference model that disagreed about it
+// would disagree about every warm candidate.
+const LaunchSeconds = 1.0
+
 // AssumedUnpackMBps is how fast a host is assumed to decompress content it
 // already holds into a runnable layer chain, when nothing has measured its
 // storage. It stands beside DefaultRegistryDownloadMbps for the same reason and
@@ -731,10 +737,18 @@ type CandidateEstimates struct {
 	ArtifactSeconds Estimate `json:"artifact_seconds"`
 	StartSeconds    Estimate `json:"start_seconds"`
 	// EstablishedStartSeconds is the part of that prediction somebody
-	// established: queue and provisioning, which the offer states as facts,
-	// plus the content an inventory actually answered about. What it leaves out
-	// is what content nobody could describe would cost from nowhere, which is a
-	// price and never a measurement.
+	// established: provisioning as the provider published it, the wait Mercator
+	// projects from Bookings it holds, and the content an inventory actually
+	// answered about. What it leaves out is what content nobody could describe
+	// would cost from nowhere, which is a price and never a measurement.
+	//
+	// Established is a claim about the bytes and the queue rather than about the
+	// rates. A host that enumerated and holds no copy has established that the
+	// content is not here; how long moving it takes is still Mercator's stated
+	// assumption about a link nothing has measured, applied identically to every
+	// candidate and carried on the estimate as its confidence. A caller that set
+	// a start bound asked to be refused rather than kept waiting, so a
+	// prediction over that assumption is what the bound is enforced against.
 	//
 	// It exists because those are the only seconds a hard start bound may
 	// strike a candidate out on. Refusing a machine over content it merely

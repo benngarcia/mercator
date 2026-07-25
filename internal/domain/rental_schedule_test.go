@@ -72,6 +72,59 @@ func TestRentalScheduleDispatchesAndReprojectsAfterActiveBookingCompletes(t *tes
 	assertQueuedBooking(t, second, "run-second", "booking-first", now.Add(11*time.Minute), now.Add(14*time.Minute), 4)
 }
 
+// TestRentalScheduleProjectsItsWaitFromWhereItsBookingsAre is why the wait is
+// asked as of a moment. Summing what every caller declared reported the same
+// half hour of waiting for the whole half hour, so a Rental a minute from free
+// looked exactly as busy as one that had just started, and a Run that refused to
+// wait three minutes was told there was no capacity for it.
+func TestRentalScheduleProjectsItsWaitFromWhereItsBookingsAre(t *testing.T) {
+	reserved := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	schedule, _, err := NewRentalSchedule("rental-warm").Reserve(BookingRequest{
+		BookingID:              "booking-long",
+		RunID:                  "run-long",
+		ExpectedRuntimeSeconds: 1800,
+		MaxRuntimeSeconds:      3600,
+		ReservedAt:             reserved,
+	})
+	if err != nil {
+		t.Fatalf("reserve the running Booking: %v", err)
+	}
+
+	for _, moment := range []struct {
+		elapsed time.Duration
+		wait    float64
+	}{
+		{elapsed: 0, wait: 1800},
+		{elapsed: 29 * time.Minute, wait: 60},
+		{elapsed: 45 * time.Minute, wait: 0},
+	} {
+		if wait := schedule.ExpectedWaitSeconds(reserved.Add(moment.elapsed)); wait != moment.wait {
+			t.Errorf("%v into a half-hour Booking the wait is %v seconds, want %v", moment.elapsed, wait, moment.wait)
+		}
+	}
+}
+
+// TestABookingWithNoRecordedStartOwesItsWholeRuntime is the schedule Mercator
+// persisted before it kept the moment a Booking took its Rental. A zero start is
+// a schedule saying it cannot tell how much has elapsed, and the only safe
+// reading of that is that none of it has: assuming otherwise would report a
+// Rental free while the Booking on it is still going.
+func TestABookingWithNoRecordedStartOwesItsWholeRuntime(t *testing.T) {
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	scheduled := ScheduledBooking{
+		Booking:                Booking{ID: "booking-legacy", State: BookingStateRunning},
+		ExpectedRuntimeSeconds: 1800,
+		MaxRuntimeSeconds:      3600,
+	}
+
+	if remaining := scheduled.RemainingExpectedSeconds(now); remaining != 1800 {
+		t.Errorf("a Booking with no recorded start has %v expected seconds left, want its whole runtime", remaining)
+	}
+	if remaining := scheduled.RemainingMaxSeconds(now); remaining != 3600 {
+		t.Errorf("a Booking with no recorded start has %v enforced seconds left, want its whole bound", remaining)
+	}
+}
+
 func reservedSchedule(t *testing.T, now time.Time) RentalSchedule {
 	t.Helper()
 	schedule := NewRentalSchedule("rental-warm")

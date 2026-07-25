@@ -112,11 +112,16 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 			Pricing:       domain.PricingCapabilities{Known: record.ShadowPriceUSDPerHour > 0},
 			Observability: domain.ObservabilityCapabilities{Logs: "container"},
 		},
-		Network:   domain.NetworkFacts{Download: host.Network},
-		Pricing:   shadowPrice(record),
-		Queue:     &domain.QueueSnapshot{},
-		Images:    imageInventory(record.Facts, platform),
-		Artifacts: artifactInventory(record.Facts),
+		Network: domain.NetworkFacts{Download: host.Network},
+		Pricing: shadowPrice(record),
+		Queue:   &domain.QueueSnapshot{},
+		Images:  imageInventory(record.Facts, platform),
+		// What copies this node holds is the node's own answer, carried through
+		// unchanged. The control plane has no second source for it and must not
+		// manufacture one: an inventory this projection marked enumerated from
+		// the heartbeat's timestamp would state "I hold no copy" as a fact for
+		// every runtime that has no replica store to look in.
+		Artifacts: record.Facts.Artifacts,
 		Capacity:  domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
@@ -170,27 +175,6 @@ func imageInventory(facts capability.NodeFacts, host domain.Platform) domain.Ima
 		inventory.LayerDiffIDs = addNew(inventory.LayerDiffIDs, image.LayerDiffIDs)
 	}
 	return inventory
-}
-
-// artifactInventory projects the immutable copies the node reported holding.
-// The node is the only thing that can say which copies are on its disk and what
-// checking them was worth, and without this projection that answer stopped one
-// function short of the offer: every enrolled node, on the only reusable lane
-// that exists, was recorded holding nothing anybody could describe and charged
-// the whole read for content already sitting on it.
-//
-// Known is the same claim the image inventory makes, and it is a claim about
-// enumeration rather than about capability. An enrolled node answered, so an
-// empty list from one is the truthful statement that it holds no copies, which
-// is what a runtime with no replica store holds. Both are charged the whole
-// read; what differs is that the decision then names a machine that answered
-// instead of one nobody could ask.
-func artifactInventory(facts capability.NodeFacts) domain.ArtifactInventory {
-	return domain.ArtifactInventory{
-		Known:      !facts.ObservedAt.IsZero(),
-		ObservedAt: facts.ObservedAt,
-		Replicas:   slices.Clone(facts.Artifacts),
-	}
 }
 
 // recordImage files one image under what the node established about it: ready

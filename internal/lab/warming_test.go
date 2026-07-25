@@ -178,6 +178,17 @@ func TestAStartBoundStrikesOutStatedLatenessAndNotSilence(t *testing.T) {
 	if provisionable.Feasible || !refusedForLatency(provisionable) {
 		t.Fatalf("ten minutes of stated provisioning did not bust a three-minute bound: %+v", provisionable.Rejections)
 	}
+	// The tail the provider published, rather than one Mercator scaled off its
+	// own expectation. This offer says ten minutes on average and eighteen in its
+	// p90, and a p90 bound is a question about the eighteen.
+	if provisionable.Estimates.ProvisionSeconds.P90 != 18*time.Minute.Seconds() {
+		t.Fatalf("the decision recorded a provisioning p90 of %.2fs, and this offer published 1080",
+			provisionable.Estimates.ProvisionSeconds.P90)
+	}
+	if provisionable.Estimates.EstablishedStartSeconds.P90 < 18*time.Minute.Seconds() {
+		t.Fatalf("the bound was enforced against %.2fs while the provider published an eighteen-minute p90",
+			provisionable.Estimates.EstablishedStartSeconds.P90)
+	}
 	silent := candidateFor(t, decision, "silent-host")
 	if !silent.Feasible {
 		t.Fatalf("a machine nothing could enumerate was refused: %+v", silent.Rejections)
@@ -190,6 +201,47 @@ func TestAStartBoundStrikesOutStatedLatenessAndNotSilence(t *testing.T) {
 	}
 	if !slices.Contains(decision.SelectionReasonCodes, "WITHIN_START_SLO") {
 		t.Fatalf("the decision recorded %v for a candidate predicted inside its own bound", decision.SelectionReasonCodes)
+	}
+}
+
+// TestAQueueDrainsAsItRunsAndTheBoundFollowsIt is the queue half of the same
+// bound at L1. The only Rental in this world is twenty-nine minutes into a
+// Booking whose Run declared half an hour, so what an arriving Run waits for is
+// the minute that is left. A schedule that summed declared runtimes answered
+// half an hour for the whole half hour, which struck this Run out against its
+// own three-minute bound and left the decision saying there was no capacity at
+// all.
+func TestAQueueDrainsAsItRunsAndTheBoundFollowsIt(t *testing.T) {
+	execution := openConformanceExecution(t, "a-queue-drains-as-it-runs")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 30 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	decision := bookingDecisions(t, execution)["run-impatient"]
+	candidate := candidateFor(t, decision, "rental-solo")
+	if candidate.Estimates.QueueSeconds.Expected > 90 {
+		t.Fatalf("the decision projected %.2fs of waiting for a Booking a minute from its own expected finish",
+			candidate.Estimates.QueueSeconds.Expected)
+	}
+	if !candidate.Feasible {
+		t.Fatalf("the Run was refused the only machine in the fleet, a minute from free: %+v", candidate.Rejections)
+	}
+	if candidate.Disposition != domain.CandidateDispositionQueue {
+		t.Fatalf("the candidate was recorded as %q, and there is a Booking to wait behind", candidate.Disposition)
+	}
+	if decision.SelectedOfferSnapshotID != "rental-solo" {
+		t.Fatalf("the Run landed on %q", decision.SelectedOfferSnapshotID)
+	}
+	if decision.Booking == nil || decision.Booking.State != domain.BookingStateQueued {
+		t.Fatalf("the Run took %+v, want a queued Booking behind the Run that is still going", decision.Booking)
 	}
 }
 

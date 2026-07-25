@@ -147,30 +147,23 @@ func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot)
 // which is what makes disagreeing about it a disagreement about the models
 // rather than about which silences each one happened to notice.
 func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
-	queue := 0.0
-	if schedule, exists := input.Schedules[offer.RentalID]; exists {
-		queue = schedule.ExpectedWaitSeconds()
-	} else if offer.Queue != nil {
-		queue = offer.Queue.QueuedWorkSeconds
-	}
-	provision := 0.0
-	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
-		provision = offer.Provisioning.Expected
-	}
+	queue := referenceQueue(input, offer)
+	provision := referenceProvision(offer)
 	work, locality := input.Image.StartWork(offer.Images)
-	pull := referenceStartWorkSeconds(work, offer.RegistryDownloadMbps())
+	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	fetch := referenceObjectStoreSeconds(fetchBytes)
-	start := queue + provision + pull + fetch + 1
-	established := queue + provision + 1
+	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes))
+	establishedPull := domain.Estimate{}
 	if locality != domain.LocalityUnknown {
-		established += pull
+		establishedPull = pull
 	}
+	establishedBytes := int64(0)
 	for _, found := range evidence {
 		if found.Locality != domain.LocalityUnknown {
-			established += referenceObjectStoreSeconds(found.FetchBytes)
+			establishedBytes += found.FetchBytes
 		}
 	}
+	establishedFetch := referenceContent(referenceObjectStoreSeconds(establishedBytes))
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
 		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
@@ -180,14 +173,70 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	}
 	billed := math.Max(runtime, float64(offer.Pricing.MinimumChargeSeconds))
 	return domain.CandidateEstimates{
-		QueueSeconds:            domain.Estimate{Expected: queue},
-		ProvisionSeconds:        domain.Estimate{Expected: provision},
-		PullSeconds:             domain.Estimate{Expected: pull},
-		ArtifactSeconds:         domain.Estimate{Expected: fetch},
-		StartSeconds:            domain.Estimate{Expected: start, P90: start * 1.25},
-		EstablishedStartSeconds: domain.Estimate{Expected: established, P90: established * 1.25},
+		QueueSeconds:            queue,
+		ProvisionSeconds:        provision,
+		PullSeconds:             pull,
+		ArtifactSeconds:         fetch,
+		StartSeconds:            referenceStart(queue, provision, pull, fetch),
+		EstablishedStartSeconds: referenceStart(queue, provision, establishedPull, establishedFetch),
 		CostUSD:                 domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
 	}
+}
+
+// referenceQueue is how long this reference model says work arriving now waits.
+// A Rental Schedule is asked as of the evaluation moment, because the wait is a
+// projection from where its Bookings are and not a restatement of what their
+// callers declared.
+func referenceQueue(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
+	seconds := 0.0
+	if schedule, exists := input.Schedules[offer.RentalID]; exists {
+		seconds = schedule.ExpectedWaitSeconds(input.EvaluatedAt)
+	} else if offer.Queue != nil {
+		seconds = offer.Queue.QueuedWorkSeconds
+	}
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds}
+}
+
+// referenceProvision is what the provider published about bringing this machine
+// up, including its own tail. A quantile the provider left unstated is its
+// expectation restated rather than a spread of this model's invention.
+func referenceProvision(offer domain.OfferSnapshot) domain.Estimate {
+	if offer.Kind != domain.OfferKindProvisionable || offer.Provisioning == nil {
+		return domain.Estimate{}
+	}
+	published := *offer.Provisioning
+	estimate := domain.Estimate{Expected: published.Expected, P50: published.Expected, P90: published.Expected}
+	if published.P50 > 0 {
+		estimate.P50 = published.P50
+	}
+	if published.P90 > 0 {
+		estimate.P90 = published.P90
+	}
+	return estimate
+}
+
+// referenceContent is what content that has to move costs, tail included. Half
+// again as long is this model's own pessimism about a transfer, and it is stated
+// here rather than applied to the finished sum because a start's tail is made of
+// each part's tail.
+func referenceContent(seconds float64) domain.Estimate {
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds * 1.5}
+}
+
+// referenceStart assembles a start out of the parts a candidate waits on, plus
+// the second a launch costs whatever it holds.
+func referenceStart(parts ...domain.Estimate) domain.Estimate {
+	start := domain.Estimate{
+		Expected: domain.LaunchSeconds,
+		P50:      domain.LaunchSeconds,
+		P90:      domain.LaunchSeconds * 1.25,
+	}
+	for _, part := range parts {
+		start.Expected += part.Expected
+		start.P50 += part.P50
+		start.P90 += part.P90
+	}
+	return start
 }
 
 // referenceObjectStoreSeconds is the reference model's own account of reading a

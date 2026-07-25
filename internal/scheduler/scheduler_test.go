@@ -110,6 +110,96 @@ func TestSchedulerMintsRentalForProvisionableOffer(t *testing.T) {
 	}
 }
 
+// TestAStartBoundIsAskedOfThePublishedProvisioningTail is the one term of the
+// start prediction somebody else publishes a quantile for. A provider that says
+// this machine takes a minute on average and ten in its tail has answered the
+// question a p90 bound asks, and the answer Mercator used to enforce was its own
+// expectation scaled by a factor of its own: the Run was promised a p90 start of
+// 76 seconds and recorded as compliant while the provider's published p90 was
+// ten minutes.
+func TestAStartBoundIsAskedOfThePublishedProvisioningTail(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	offer := schedulerOffer("off_slow_tail", now, 0.00012, 0)
+	offer.Kind = domain.OfferKindProvisionable
+	offer.RentalID = ""
+	offer.Provisioning = &domain.Estimate{Expected: 60, P90: 600}
+	workload := schedulerRevision()
+	workload.Spec.Placement.MaxP90StartSeconds = 300
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID: "run_impatient", Workload: workload, Offers: []domain.OfferSnapshot{offer},
+		ModelVersion: "latency-v1", EvaluatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	candidate := schedulerCandidate(t, decision, "off_slow_tail")
+	if candidate.Estimates.ProvisionSeconds.P90 != 600 {
+		t.Fatalf("the decision recorded a provisioning p90 of %v, and the provider published 600",
+			candidate.Estimates.ProvisionSeconds.P90)
+	}
+	if candidate.Feasible {
+		t.Fatalf("a machine whose own publisher says it takes ten minutes in the tail met a five-minute bound: %+v", candidate.Estimates)
+	}
+	if !slices.ContainsFunc(candidate.Rejections, func(rejection domain.Violation) bool {
+		return rejection.Code == "LATENCY_SLO_EXCEEDED"
+	}) {
+		t.Fatalf("the candidate was refused for %+v", candidate.Rejections)
+	}
+	if !slices.Contains(decision.SelectionReasonCodes, "NO_FEASIBLE_OFFERS") {
+		t.Fatalf("the decision recorded %v", decision.SelectionReasonCodes)
+	}
+}
+
+// TestAQueueThatIsNearlyDoneIsAShortWait is the queue half of the same bound. The
+// only Rental in the fleet is a minute from finishing an hour-long Booking, and
+// the wait Mercator projects has to be the minute that is left rather than the
+// hour its caller declared. Summing declared runtimes reported the same wait for
+// the whole hour, so this Run was refused capacity it could have had in a minute
+// and the decision said there was none.
+func TestAQueueThatIsNearlyDoneIsAShortWait(t *testing.T) {
+	reserved := time.Date(2026, 6, 20, 18, 0, 0, 0, time.UTC)
+	now := reserved.Add(59 * time.Minute)
+	schedule, _, err := domain.NewRentalSchedule("off_busy").Reserve(domain.BookingRequest{
+		BookingID:              "booking-long",
+		RunID:                  "run-long",
+		ExpectedRuntimeSeconds: 3600,
+		MaxRuntimeSeconds:      7200,
+		ReservedAt:             reserved,
+	})
+	if err != nil {
+		t.Fatalf("reserve the running Booking: %v", err)
+	}
+	offer := schedulerOffer("off_busy", now, 0.0001, 0)
+	workload := schedulerRevision()
+	workload.Spec.Placement.MaxP90StartSeconds = 180
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_impatient",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{offer},
+		Schedules:    map[string]domain.RentalSchedule{"off_busy": schedule},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	candidate := schedulerCandidate(t, decision, "off_busy")
+	if candidate.Estimates.QueueSeconds.Expected != 60 {
+		t.Fatalf("the decision projected %v seconds of waiting for a Booking a minute from its own expected finish",
+			candidate.Estimates.QueueSeconds.Expected)
+	}
+	if !candidate.Feasible {
+		t.Fatalf("the Run was refused a machine a minute from free: %+v", candidate.Rejections)
+	}
+	if candidate.Disposition != domain.CandidateDispositionQueue {
+		t.Fatalf("the candidate was recorded as %q, and there is a Booking to wait behind", candidate.Disposition)
+	}
+}
+
 func TestSchedulerRejectsStandingOfferWithoutRentalIdentity(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	offer := schedulerOffer("off_orphaned", now, 0.00012, 5)

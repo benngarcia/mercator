@@ -1,0 +1,62 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One warm Rental, one Booking on it, and a second Run that refuses to wait more than three minutes. The first Run declared half an hour and has been running for twenty-nine minutes, so what the second Run is waiting for is the minute that is left. A Rental Schedule that reported the sum of what its callers declared reported half an hour of waiting for the whole half hour, and this Run was told there is no capacity for a machine a minute from free. The wait is a projection from where the Bookings actually are, so the second Run takes a queued Booking behind the first. It is the queue half of a-late-start-must-be-a-fact: a start bound may strike out lateness, and half an hour of it that has already elapsed is not lateness anybody still faces.",
+  "seed": "mercator-lab-queue-drains-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-solo",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 3.0
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "long",
+        "candidate": "rental-solo",
+        "minimum": "40m",
+        "maximum": "45m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "long",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "expected_runtime": "30m",
+          "max_runtime": "1h"
+        }
+      },
+      {
+        "name": "impatient",
+        "at": "29m",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "max_start_latency": "3m",
+          "expected_runtime": "5m",
+          "max_runtime": "10m"
+        }
+      }
+    ]
+  }
+}

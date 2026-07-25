@@ -529,6 +529,68 @@ func TestLocalityProvenanceRejectsOneShotCapacityThatKeptItsImage(t *testing.T) 
 	}
 }
 
+// TestLocalityProvenanceRejectsBorrowedCapacityThatKeptACopy is the Artifact
+// half of that guard, and it exists because no Lab world can build the state the
+// rule forbids: keepReplica refuses to write a copy onto capacity that keeps
+// nothing, so the clause was a law about a world no fixture could reach and
+// deleting it changed nothing anywhere. The forbidden state is stated here
+// directly, exactly as the image half is, so removing the rule fails a test
+// rather than passing silently.
+func TestLocalityProvenanceRejectsBorrowedCapacityThatKeptACopy(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "borrowed-slot",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneEphemeral,
+			Artifacts: domain.ArtifactInventory{Known: true, Replicas: []domain.ArtifactReplica{{
+				ArtifactID: "artifact:imagenet:v2.41",
+				State:      domain.ArtifactReplicaVerified,
+			}}},
+		}}},
+		Effects: []EffectRecord{{
+			Operation:   OperationArtifactReplicated,
+			Command:     EffectCommandAccepted,
+			Request:     []byte(`{"artifact_id":"artifact:imagenet:v2.41","offer_id":"borrowed-slot"}`),
+			Consequence: []byte(`{"state":"verified"}`),
+		}},
+		SeededReplicas: map[string]map[string]bool{},
+	}
+
+	err := localityProvenance(observation)
+
+	if err == nil {
+		t.Fatal("capacity that holds nothing after its workload was allowed to keep a copy it accumulated")
+	}
+}
+
+// TestLocalityProvenanceAdmitsASeededCopyOnBorrowedCapacity is the other side of
+// that line, and the reason the rule cannot simply forbid copies on borrowed
+// capacity outright: a machine Mercator rents a slot on may well already be
+// sitting on the dataset, which is a fact about the world rather than warmth
+// Mercator produced.
+func TestLocalityProvenanceAdmitsASeededCopyOnBorrowedCapacity(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "borrowed-slot",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneEphemeral,
+			Artifacts: domain.ArtifactInventory{Known: true, Replicas: []domain.ArtifactReplica{{
+				ArtifactID: "artifact:imagenet:v2.41",
+				State:      domain.ArtifactReplicaVerified,
+			}}},
+		}}},
+		SeededReplicas: map[string]map[string]bool{
+			"borrowed-slot": {"artifact:imagenet:v2.41": true},
+		},
+	}
+
+	err := localityProvenance(observation)
+
+	if err != nil {
+		t.Fatalf("a copy the World Tape put on a borrowed machine was called a control-plane failure: %v", err)
+	}
+}
+
 // TestIdempotentExternalCommandsCoversImagePulls keeps the pull inside the
 // idempotency guard. Leaving an image on a host is a change to the world, so
 // one launch's pull, however many times it is reported, has one consequence.

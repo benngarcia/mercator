@@ -603,16 +603,18 @@ complete because it works against a live provider.
     `capability.NodeFacts.Artifacts` has carried them since Artifacts existed and
     the offer projection dropped them, so on the only reusable lane there is,
     every candidate was recorded holding nothing anybody could describe and
-    charged the whole read for content already on its disk. `Known` follows the
-    same rule the image inventory follows: an enrolled node answered, so an empty
-    list from one is the truthful claim that it holds no copies.
+    charged the whole read for content already on its disk. This commit derived
+    `Known` from the heartbeat's timestamp the way the image inventory does, which
+    the next entry reverses: nothing in this tree enumerates Artifact copies, so
+    the derivation made every enrolled node assert a fact it never established.
   - A fixture can put a copy on capacity Mercator does not control.
     `HostSpec.artifact_replicas` is the Artifact half of `cached_images`, and
     without it the rule that borrowed capacity publishes no Artifact inventory was
     a rule about a world no fixture could build: silence and absence were the same
     state every time, and deleting the guard in either simulator changed nothing.
-    `onlyKeptCapacityHoldsWhatItRan` now admits a seeded copy on such a machine
+    `onlyKeptCapacityHoldsWhatItRan` admits a seeded copy on such a machine
     exactly as it admits seeded image content, and forbids one it accumulated.
+    The forbidding half stayed unfalsifiable, which the next entry fixes.
   - A fixture can state a copy that claims the wrong content.
     `ArtifactReplicaSpec.content_digest` is the machine an operator restored an
     older snapshot onto: a checked copy filed under this version's name whose
@@ -628,6 +630,103 @@ complete because it works against a live provider.
     than as the shortcut it currently equals. `established_start_seconds` is a
     required field on the public estimate set, following `artifact_seconds` from
     the commit before it rather than inventing a second convention.
+- [x] 2026-07-25: Answer the review of the start-bound commit. Two reviewers
+  falsified six things and two of them were the same one twice. Four are fixed
+  here and two are rejected, with the evidence for rejecting them.
+  - A node states whether it enumerated its Artifact copies.
+    `capability.NodeFacts.Artifacts` is a `domain.ArtifactInventory` now, so the
+    claim travels from the only authority that can make it. Deriving `Known` from
+    the fact that a node answered about its host was the same manufactured fact
+    the image inventory earns honestly and this one could not: `DockerRuntime`
+    has no replica store to look in and `PrepareArtifact` returns
+    `ErrCapabilityUnsupported`, so every enrolled node in production published "I
+    hold no copy of anything" as an observation. Combined with the start bound in
+    the commit before it, the only reusable lane there is refused a Run reading a
+    40GB Artifact with `LATENCY_SLO_EXCEEDED` and `NO_FEASIBLE_OFFERS`, for
+    content the machine never looked for and may well have been sitting on. Now
+    that runtime says nothing, silence is priced, and
+    `TestANodeThatCannotEnumerateCopiesOffersNoArtifactClaim` holds it at the
+    daemon.
+  - A start bound is asked of the quantile the provider published.
+    `provisionSeconds` read `Provisioning.Expected` and threw away
+    `Provisioning.P90`, and `startEstimate` invented a p90 by scaling the whole
+    sum by 1.25. So an offer publishing ten minutes expected and eighteen in its
+    tail was enforced against 76 seconds, and the Run was recorded
+    `WITHIN_START_SLO` against a bound the provider had already said it would
+    miss. Start quantiles now add rather than being scaled off the expectation:
+    each part's tail belongs to whoever published it, and summing them is
+    deliberately pessimistic about a joint distribution nothing here models.
+    `a-late-start-must-be-a-fact` already carried `"p90": "18m"` as a fixture
+    value nothing read, and now the refusal cites it.
+  - A Rental Schedule projects its wait from where its Bookings are.
+    `ExpectedWaitSeconds` summed what every caller declared, undecayed, so a
+    machine one minute from finishing a Booking whose Run declared an hour
+    reported an hour of waiting for the whole hour. Bound to the start bound that
+    refused Runs outright: the only Rental in a fleet was struck out for 3600
+    seconds of lateness when the honest projection was 60.
+    `ScheduledBooking.StartedAt` is when a Booking took the Rental, and
+    `RemainingExpectedSeconds` is the projection over it, which `startBounds` and
+    `reproject` now read too. The Blueprint contract already modelled exactly
+    this: `RentalScheduleSpec.runningExpectedRemaining` subtracts elapsed time,
+    so the spec and the implementation disagreed. A running Booking recorded
+    before Mercator kept this owes its whole declared runtime, because a schedule
+    that cannot say how much has elapsed must not assume any of it has.
+    `a-queue-drains-as-it-runs` is the conformance Blueprint, and reverting the
+    projection turns it into `no feasible offers`.
+  - `safety.locality_is_never_infeasibility` reads the refusal twice, from
+    independent halves of the record. Asking only whether a
+    `LATENCY_SLO_EXCEEDED` rejection agrees with the `EstablishedStartSeconds`
+    recorded beside it is asking the scheduler to confirm its own arithmetic:
+    `feasibilityViolations` derives the rejection from that same field, so the
+    error where that field is the thing computed wrong is invisible. Deleting the
+    unknown-locality guard in `pullEstimate` left every Lab execution green with
+    the rule reporting nothing. `silenceWasTakenBackOut` recomputes what was
+    discounted from the localities and the per-kind seconds the decision records:
+    the seconds taken out to reach the established prediction must be at least the
+    seconds charged for content nobody could describe. The Artifact half converts
+    bytes to seconds through the unreadable share of the read itself, so the rule
+    holds no opinion about the rate the scheduler used and cannot be satisfied by
+    agreeing with it. Both mutations the reviewers described now fail
+    `a-late-start-must-be-a-fact` through the invariant.
+  - The Artifact clause of `onlyKeptCapacityHoldsWhatItRan` is falsifiable.
+    `simulatedWorld.keepReplica` refuses to write a copy onto capacity that keeps
+    nothing, so the only state a borrowed machine could reach was the World Tape
+    seed the clause exempts, and deleting the whole loop left the tree green. The
+    image half is falsifiable only because a hand-built observation states the
+    forbidden world directly, so the Artifact half now has one too:
+    `TestLocalityProvenanceRejectsBorrowedCapacityThatKeptACopy`, beside the
+    admitted seed it must not catch.
+  - Rejected: that seconds derived from `DefaultRegistryDownloadMbps` and
+    `DefaultObjectStoreDownloadMbps` may not be established, so a start bound must
+    never strike out a host that enumerated and holds nothing. The split
+    `EstablishedStartSeconds` draws is bytes-known against bytes-unknown, and that
+    is the right split. A host that enumerated and holds no copy is not a host
+    with unknown locality: the manifest and the inventory both spoke, and what is
+    left is Mercator's stated assumption about a link, applied identically to
+    every candidate and carrying `AssumedLinkConfidence` on the record. Refusing
+    it is what a bound is for. A caller that sets `max_p90_start_seconds` has
+    asked to be refused rather than kept waiting, and placing a Run predicted to
+    wait thirteen minutes under a three-minute bound because Mercator is only half
+    confident in its own prediction breaks the API contract instead of honouring
+    it. `TestNeitherModelTurnsSilenceIntoInfeasibility` has held both rows since
+    the image-store commit: a Rental that enumerated and holds none of the image
+    is infeasible, and a machine nothing could ask is not. The real defect the
+    finding points at is that nothing populates `HostFacts.Network`, so no node
+    can escape the assumption by measuring. That is phase 4 and 6 work, tracked
+    rather than papered over by disabling the bound.
+  - Rejected: that a queue projected from caller-declared runtimes is not a fact
+    a bound may bind on. It is Mercator's own arithmetic over data Mercator holds,
+    and after the reprojection above it is the honest answer to "how long until
+    this machine is free". Waiving the bound for it would place a Run behind
+    fifteen minutes of stated queue when it said three, which is the failure the
+    established estimate exists to prevent read from the other end.
+  - Judgment calls. `domain.LaunchSeconds` names the one second every launch costs,
+    stated once rather than as a literal in the scheduler and the reference model.
+    `provisionEstimate` restates the expectation for a quantile a provider left
+    unstated, because an unstated p90 is not a promise of a short tail.
+    `QueueSeconds` carries one number across all three quantiles: neither a Rental
+    Schedule nor a provider publishes a spread on a queue, and inventing one would
+    be this model's arithmetic wearing a provider's clothes.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -787,15 +886,25 @@ Phase 3 added:
   the only Blueprint that combines a start bound with an Artifact the Run reads,
   which is what gives `safety.locality_is_never_infeasibility` a recorded decision
   to be a law about.
+- `a-queue-drains-as-it-runs` (conformance): the queue half of the same bound. The
+  only Rental in the world is twenty-nine minutes into a Booking whose Run
+  declared half an hour, and the arriving Run refuses to wait more than three
+  minutes. What it waits for is the minute that is left, so it takes a queued
+  Booking; a schedule that summed declared runtimes answered half an hour and
+  reverting the projection turns the execution into `no feasible offers`.
 - `safety.locality_is_never_infeasibility` (Lab invariant): no candidate in any
   recorded Booking Decision is refused for what it holds, and a candidate refused
-  for a late start has to have established that lateness against the bound the
-  decision recorded. It is the one rule in this registry stated entirely against
-  Mercator's own decisions, because a candidate Mercator struck out leaves a trace
-  nowhere else. Stating it against the established estimate rather than against
-  "was anything unknown" is what keeps it from buying silence an exemption from a
-  bound: a machine deep in its own stated queue is late whatever it could say
-  about its disk.
+  for a late start has to have established that lateness. It is the one rule in
+  this registry stated entirely against Mercator's own decisions, because a
+  candidate Mercator struck out leaves a trace nowhere else. Stating it against
+  the established estimate rather than against "was anything unknown" is what
+  keeps it from buying silence an exemption from a bound: a machine deep in its
+  own stated queue is late whatever it could say about its disk. It reads the
+  refusal twice over, because the recorded established estimate is what the
+  scheduler derived the refusal from: the second reading recomputes what was
+  discounted out of the localities and per-kind seconds recorded beside it, so a
+  scheduler that counted a silence as established fails while agreeing with itself
+  perfectly.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, every Artifact copy a host holds is either seeded or
@@ -927,7 +1036,10 @@ is the two new decision fields entering the record, and checkpoint 14 still
 reconstructs the bundle to the same hash byte for byte. Answering the review of
 that commit moved it again, to
 `sha256:bf75c96873f2bd51363f83357c270f5d4d6b8724eaeb174be3631bc62ddc6598`, which
-is `established_start_seconds` entering the record.
+is `established_start_seconds` entering the record. Answering the review of the
+start-bound commit moved it to
+`sha256:193d9726fcca9d51071cb6028fad5006dd06395096aafacef6765ce69015f15b`, which
+is start quantiles adding rather than being scaled off the expectation.
 
 Three limits are worth stating rather than hiding.
 
@@ -984,10 +1096,10 @@ a deliberate break that fails it:
 - waiving the bound whenever any locality was unknown, which is what the reviewed
   commit did, fails the same Blueprint from the other side with `ten minutes of
   stated provisioning did not bust a three-minute bound: []`;
-- dropping `Artifacts` from `node.Registry.offer` fails every case of
-  `TestANodeOffersTheCopiesItHolds` with `an enrolled node answered, so its
-  Artifact inventory is never a silence`. That is the state the tree shipped in:
-  the node reported its copies and the offer discarded them;
+- dropping `Artifacts` from `node.Registry.offer` fails every enumerating case of
+  `TestANodeOffersTheCopiesItHolds` with `the offer says enumerated = false, want
+  true`. That is the state the tree shipped in: the node reported its copies and
+  the offer discarded them;
 - deleting the digest clause from `ArtifactInventory.Holds` fails
   `dataset-gravity-beats-image-cache` with `expected "rental-dataset" to win, but
   the decision placed on "rental-restored-snapshot"` and `Artifact
@@ -1019,6 +1131,53 @@ with the catalog is a fact about that machine's own bookkeeping, and it has to b
 expressible for the subtraction that catches it to be reachable. What a Lab
 Blueprint therefore cannot yet state is a copy whose claim went stale after the
 world began.
+
+### Phase 3 what the start bound may strike out
+
+On 2026-07-25, the review of the start-bound commit was answered. Each claim is
+held by a deliberate break that fails it:
+
+- deriving an Artifact inventory's `Known` from the node's heartbeat, which is
+  what the reviewed commit shipped, fails
+  `TestANodeThatCannotEnumerateCopiesOffersNoArtifactClaim` with `the offer claims
+  this node enumerated its Artifact copies` against the production daemon, and
+  fails `TestANodeOffersTheCopiesItHolds/a_node_whose_runtime_does_not_enumerate
+  _copies_says_nothing`. No runtime in this tree enumerates a copy, so that claim
+  refused the only reusable lane there is for content it never looked for;
+- reading `Provisioning.Expected` for the p90, which is what the tree shipped,
+  fails `TestAStartBoundIsAskedOfThePublishedProvisioningTail` with `the decision
+  recorded a provisioning p90 of 60, and the provider published 600`, and fails
+  `a-late-start-must-be-a-fact` with `the decision recorded a provisioning p90 of
+  600.00s, and this offer published 1080`;
+- summing declared runtimes for a Rental Schedule's wait, which is what the tree
+  shipped, fails `TestAQueueThatIsNearlyDoneIsAShortWait` with `the decision
+  projected 3600 seconds of waiting for a Booking a minute from its own expected
+  finish`, and fails `a-queue-drains-as-it-runs` at L1 with `advance Lab Run
+  "impatient": orchestrator: no feasible offers`. The only Rental in that fleet is
+  a minute from free;
+- counting an image silence as established, by deleting the unknown-locality guard
+  in `pullEstimate`, fails `a-late-start-must-be-a-fact` through the invariant:
+  `safety.locality_is_never_infeasibility failed: Run "run-impatient": candidate
+  "silent-host" was refused against a 180.00s bound having been charged 929.14s
+  for content nobody could describe, of which only 640.00s was left out of the
+  established start`. Under the rule as the reviewed commit wrote it, that same
+  break left every Lab execution green;
+- counting an Artifact silence as established, by deleting the locality filter in
+  `establishedFetchBytes`, fails the same Blueprint through the same rule with
+  `only 289.14s was left out of the established start`;
+- deleting the Artifact clause of `onlyKeptCapacityHoldsWhatItRan` fails
+  `TestLocalityProvenanceRejectsBorrowedCapacityThatKeptACopy`. Before that
+  observation existed the whole loop could be replaced with `_ = seededCopies` and
+  `go test ./...` stayed green, because `keepReplica` will not write a copy onto
+  capacity that keeps nothing and the seed is exempt.
+
+One limit is worth stating rather than hiding. `HostFacts.Network` is populated by
+nothing in `internal/nodeagent`, so every node offer prices its transfers over
+`DefaultRegistryDownloadMbps` and every Artifact read over
+`DefaultObjectStoreDownloadMbps`. A host that enumerated and holds no copy is
+therefore struck out of a tight start bound on an assumed rate, which is correct
+as a contract with the caller and wrong as a prediction about a fast link. What
+fixes it is a measurement, which is phase 4 and phase 6, and not waiving the bound.
 
 ### Phase 3 Artifact durability
 
