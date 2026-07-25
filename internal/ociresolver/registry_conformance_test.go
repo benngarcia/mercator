@@ -227,13 +227,23 @@ func dockerPlatform(t *testing.T, reference string) domain.Platform {
 	return platform
 }
 
+// docker returns the command's stdout alone. Merging stderr in would corrupt
+// every caller that parses this: `docker run --detach` writes pull progress to
+// stderr on a cache miss, so a merged read returns the whole pull transcript
+// with the container ID buried at the end, and only a host that already holds
+// the image passes. The production CLI client separates the two streams for the
+// same reason, in runSplit. Failures still report stderr, which is where docker
+// puts the explanation.
 func docker(t *testing.T, args ...string) string {
 	t.Helper()
-	output, err := exec.Command("docker", args...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, output)
+	var stdout, stderr strings.Builder
+	command := exec.Command("docker", args...)
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(stdout.String())
 }
 
 func mustAbs(t *testing.T, path string) string {
