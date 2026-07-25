@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/capability"
@@ -45,8 +46,12 @@ func (b *Broker) launchOnNode(ctx context.Context, req adapter.LaunchRequest) (a
 		// onto the repository to pin what it runs, and reports it back as what
 		// it holds, so a whole reference here would both build an unrunnable
 		// image name and name the image something no host could match.
-		ManifestDigest:    domain.ReferenceDigest(req.Image),
-		Environment:       nodeEnvironment(req.Environment),
+		ManifestDigest: domain.ReferenceDigest(req.Image),
+		Environment:    nodeEnvironment(req.Environment),
+		// The caches the workload declared, carried through as declared. The
+		// workspace scoping them is on the node ref below, which is what the
+		// runtime derives each cache's own volume from.
+		CacheMounts:       slices.Clone(req.CacheMounts),
 		MaxRuntimeSeconds: req.MaxRuntimeSeconds,
 		Workload: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{

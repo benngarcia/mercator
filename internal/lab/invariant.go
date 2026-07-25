@@ -99,6 +99,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.monotonic_versions", check: monotonicVersions},
 		invariantRule{id: "safety.owned_external_resources", check: ownedExternalResources},
 		invariantRule{id: "safety.cache_disk_accounting", check: cacheDiskAccounting},
+		invariantRule{id: "safety.cache_mount_workspace_isolation", check: cacheMountWorkspaceIsolation},
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
@@ -797,6 +798,19 @@ func onlyKeptCapacityHoldsWhatItRan(offer domain.OfferSnapshot, seeded, seededCo
 	// admitted exactly as it is for images, because a machine Mercator borrows a
 	// slot on may well already be sitting on the dataset; what it may not do is
 	// accumulate a copy from something Mercator ran there.
+	// A mutable cache obeys the rule for a third time, and with no seed to
+	// exempt: no fixture can put one on capacity that keeps nothing, because a
+	// cache exists only where a workload wrote it. An offer advertising one here
+	// would have Placement counting warmth that cannot survive its own host.
+	if len(offer.Caches.Mounts) > 0 {
+		return fmt.Errorf(
+			"offer %q %s, and holds cache %q for workspace %q",
+			offer.ID,
+			reason,
+			offer.Caches.Mounts[0].Name,
+			offer.Caches.Mounts[0].WorkspaceID,
+		)
+	}
 	for _, replica := range offer.Artifacts.Replicas {
 		if seededCopies[replica.ArtifactID] {
 			continue
@@ -962,11 +976,68 @@ func cacheDiskAccounting(observation InvariantObservation) error {
 	}
 	seenMounts := map[string]bool{}
 	for _, mount := range observation.World.CacheMounts {
-		key := mount.OfferID + "/" + mount.Name
+		key := mount.OfferID + "/" + mount.Identity
 		if mount.Name == "" || mount.Revision == 0 || seenMounts[key] {
 			return fmt.Errorf("invalid Cache Mount %q", key)
 		}
 		seenMounts[key] = true
+	}
+	return nil
+}
+
+// cacheMountWorkspaceIsolation is the hard rule on mutable state. A Cache
+// Mount's only identity is its workspace-scoped name, so isolation is not a
+// preference the scheduler weighs: two tenants that both call a cache
+// compiler-cache have two caches, and nothing may ever hand one of them the
+// other's bytes.
+//
+// The rule is that no cache identity is ever observed under two workspaces, read
+// over the ledger of what was touched and over what each host is holding. It is
+// deliberately not stated as "the identity equals what this workspace, name, and
+// generation derive": the world derives identities with the same function such a
+// rule would check them against, so the one error that matters, a derivation
+// that drops the workspace, would agree with itself and pass. Asking instead
+// whether two tenants ever met on one identity is a question the derivation
+// cannot answer for itself.
+//
+// Reads are policed beside writes because a cache read under the wrong workspace
+// has already leaked, whatever it went on to write.
+func cacheMountWorkspaceIsolation(observation InvariantObservation) error {
+	owners := map[string]string{}
+	claim := func(offerID, identity, workspaceID, what string) error {
+		if identity == "" || workspaceID == "" {
+			return fmt.Errorf("%s on %q names cache identity %q for workspace %q", what, offerID, identity, workspaceID)
+		}
+		key := offerID + "/" + identity
+		if owner, claimed := owners[key]; claimed && owner != workspaceID {
+			return fmt.Errorf(
+				"cache %q on %q is used by workspaces %q and %q, and a cache belongs to one workspace",
+				identity, offerID, owner, workspaceID,
+			)
+		}
+		owners[key] = workspaceID
+		return nil
+	}
+	for _, effect := range observation.Effects {
+		if effect.Operation != OperationCacheMountRead && effect.Operation != OperationCacheMountWrite {
+			continue
+		}
+		var touched struct {
+			Identity    string `json:"identity"`
+			WorkspaceID string `json:"workspace_id"`
+			OfferID     string `json:"offer_id"`
+		}
+		if err := json.Unmarshal(effect.Request, &touched); err != nil {
+			return fmt.Errorf("decode Cache Mount access %s: %w", effect.ID, err)
+		}
+		if err := claim(touched.OfferID, touched.Identity, touched.WorkspaceID, effect.Operation); err != nil {
+			return err
+		}
+	}
+	for _, mount := range observation.World.CacheMounts {
+		if err := claim(mount.OfferID, mount.Identity, mount.WorkspaceID, "holding"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -21,7 +21,7 @@
       {
         "id": "rental-a",
         "artifact_replicas": [{"artifact": "artifact:dataset:v1", "state": "verified"}],
-        "cache_mounts": ["compiler-cache"],
+        "cache_mounts": [{"name": "compiler-cache", "compatibility_key": "cuda-12.4", "size": "8GB"}],
         "rate_per_hour_usd": 1.0
       }
     ]
@@ -32,7 +32,9 @@
     "produces_artifacts": ["artifact:result:v1"],
     "cache_mounts": [
       {
-        "name": "compiler-cache"
+        "name": "compiler-cache",
+        "compatibility_key": "cuda-12.4",
+        "size": "8GB"
       }
     ]
   },

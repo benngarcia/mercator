@@ -1,7 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
   "classification": "green",
-  "summary": "Cache Mounts have names, not immutable content keys.",
+  "summary": "A Cache Mount is named and never content-keyed: a key that identifies content is what an Artifact version is for.",
   "world": {
     "rentals": [
       {
@@ -15,8 +15,7 @@
     "cache_mounts": [
       {
         "name": "dataset",
-        "key": "dataset-key",
-        "size": "40GB"
+        "key": "dataset-key"
       }
     ]
   },

@@ -122,7 +122,11 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		// the heartbeat's timestamp would state "I hold no copy" as a fact for
 		// every runtime that has no replica store to look in.
 		Artifacts: record.Facts.Artifacts,
-		Capacity:  domain.CapacityEvidence{Available: true, Confidence: 1},
+		// The caches this node holds travel the same way, and for the same
+		// reason: each entry names the workspace that owns it, and only the node
+		// can say what is on its disk.
+		Caches:   record.Facts.Caches,
+		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }
 

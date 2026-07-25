@@ -79,6 +79,7 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 		})
 	}
 	violations = append(violations, validateArtifactRequirements(rev.Spec.Artifacts)...)
+	violations = append(violations, validateCacheRequirements(rev.Spec.Caches)...)
 	for i, port := range container.Ports {
 		if port.ContainerPort <= 0 || port.ContainerPort > 65535 {
 			violations = append(violations, Violation{
@@ -96,6 +97,38 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 			violations = append(violations, Violation{
 				Code: "CAPABILITY_MISMATCH", Path: "spec.network.inbound", Required: InboundNetworkPublicPort, Offered: rev.Spec.Network.Inbound,
 				Message: "Public port exposure requires public inbound network capability.",
+			})
+		}
+	}
+	return violations
+}
+
+// validateCacheRequirements refuses a cache declaration that cannot name one
+// cache. The name is the whole identity, so it is checked where it enters rather
+// than escaped wherever a volume gets built from it, and one name twice is two
+// mounts of one cache into one container.
+func validateCacheRequirements(required []CacheMountRequirement) []Violation {
+	var violations []Violation
+	named := map[string]bool{}
+	for index, requirement := range required {
+		path := fmt.Sprintf("spec.caches[%d].name", index)
+		switch {
+		case !ValidCacheName(requirement.Name):
+			violations = append(violations, Violation{
+				Code: "CACHE_NAME_INVALID", Path: path, Required: cacheNamePattern.String(), Offered: requirement.Name,
+				Message: "A Cache Mount name is its identity and names a volume on the host, so it must be a lowercase label.",
+			})
+		case named[requirement.Name]:
+			violations = append(violations, Violation{
+				Code: "CACHE_NAME_REPEATED", Path: path, Offered: requirement.Name,
+				Message: "A Cache Mount name identifies one cache, so it can be declared once.",
+			})
+		}
+		named[requirement.Name] = true
+		if requirement.SizeBytes < 0 {
+			violations = append(violations, Violation{
+				Code: "CACHE_SIZE_INVALID", Path: fmt.Sprintf("spec.caches[%d].size_bytes", index), Required: ">= 0",
+				Offered: requirement.SizeBytes, Message: "A Cache Mount cannot expect negative room.",
 			})
 		}
 	}

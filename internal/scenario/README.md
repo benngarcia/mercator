@@ -82,7 +82,9 @@ A single-decision Blueprint:
         "artifact_replicas": [
           {"artifact": "artifact:imagenet:v2.41", "state": "verified"}
         ],
-        "cache_mounts": ["compiler-cache"],
+        "cache_mounts": [
+          {"name": "compiler-cache", "compatibility_key": "cuda-12.4", "size": "8GB"}
+        ],
         "rate_per_hour_usd": 2.5
       }
     ]
@@ -90,7 +92,9 @@ A single-decision Blueprint:
   "request": {
     "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
     "consumes_artifacts": ["artifact:imagenet:v2.41"],
-    "cache_mounts": [{"name": "compiler-cache"}]
+    "cache_mounts": [
+      {"name": "compiler-cache", "compatibility_key": "cuda-12.4", "size": "8GB"}
+    ]
   },
   "expect": {
     "outcome": "place",
@@ -125,7 +129,7 @@ An arrival-driven Lab Blueprint uses:
     "type": "fixed",
     "runs": [
       {"name": "producer", "at": "0s", "request": {}},
-      {"name": "consumer", "at": "0s", "request": {}}
+      {"name": "consumer", "at": "0s", "workspace": "other-tenant", "request": {}}
     ]
   },
   "faults": [],
@@ -152,7 +156,18 @@ strictly validated before execution.
   merely present (`unverified`). The object store is what makes an Artifact
   consumable; a replica only makes reading it faster.
 - Cache Mounts are mutable application-owned state. Their only identity is the
-  workspace-scoped `name`; they never carry content keys or sizes.
+  workspace-scoped `name`, and they never carry a content key: a key that
+  identifies content is what an Artifact version is for. A Run declares
+  `cache_mounts` with a `name`, the `compatibility_key` naming which generation
+  of content it can use, and the `size` it expects to take; a Rental holds
+  `cache_mounts` with the same fields plus the `workspace` that owns each one.
+  Mercator compares the compatibility key and never interprets it.
+- A Run arrival states the `workspace` it belongs to. It is a label rather than
+  an identity, because each backend mints its own workspace IDs, and an omitted
+  label is the Blueprint's default workspace. Two labelled tenants on one machine
+  is what makes cross-workspace isolation something a fixture can state, and an
+  Artifact belongs to the workspace that declared it, so a Run outside the
+  default workspace may not name one.
 - The world clock starts at `2030-01-01T00:00:00Z` unless `world.clock` says
   otherwise. Placement deadlines are offsets such as `"+6m"`.
 

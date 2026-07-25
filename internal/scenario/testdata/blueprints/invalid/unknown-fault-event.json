@@ -45,7 +45,9 @@
           "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         ],
         "cache_mounts": [
-          "compiler-cache"
+          {
+            "name": "compiler-cache"
+          }
         ],
         "rate_per_hour_usd": 2.5
       }

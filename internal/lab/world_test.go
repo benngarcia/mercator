@@ -291,7 +291,7 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 	if !hasArtifactReplica(truth.ArtifactReplicas, "artifact:model-checkpoint:v1", "rental-warm") {
 		t.Fatalf("the producer left no copy on the host it ran on: %+v", truth.ArtifactReplicas)
 	}
-	if revision := cacheMountRevision(truth.CacheMounts, "rental-warm", "compiler-cache"); revision != 2 {
+	if revision := cacheMountRevision(truth.CacheMounts, "rental-warm", labWorkspace, "compiler-cache"); revision != 2 {
 		t.Fatalf("mutable Cache Mount revision = %d, want 2", revision)
 	}
 	assertEffect(
@@ -315,6 +315,11 @@ func worldLaunchRequestOn(arrival RunArrival, offerID string) adapter.LaunchRequ
 func worldLaunchAttempt(arrival RunArrival, offerID string, attempt int) adapter.LaunchRequest {
 	ordinal := fmt.Sprint(attempt)
 	return adapter.LaunchRequest{
+		// The caches this launch asks the host to attach travel on the launch, as
+		// they do in production. The world reads and writes what the control plane
+		// declared rather than what the fixture's arrival says, so a launch that
+		// dropped them would leave the cache untouched.
+		CacheMounts:               arrival.Request.CacheRequirements(),
 		OperationKey:              "launch:producer:" + ordinal,
 		RequestHash:               "sha256:producer-launch-" + ordinal,
 		WorkspaceID:               labWorkspace,
@@ -342,9 +347,13 @@ func hasArtifactReplica(replicas []ArtifactReplica, artifactID, offerID string) 
 	return false
 }
 
-func cacheMountRevision(mounts []CacheMountState, offerID, name string) uint64 {
+// cacheMountRevision is how many times this workspace's cache of that name has
+// been written on that machine. The workspace is part of the lookup because it is
+// part of the identity: a cache of the same name in another workspace is another
+// cache.
+func cacheMountRevision(mounts []CacheMountState, offerID, workspaceID, name string) uint64 {
 	for _, mount := range mounts {
-		if mount.OfferID == offerID && mount.Name == name {
+		if mount.OfferID == offerID && mount.WorkspaceID == workspaceID && mount.Name == name {
 			return mount.Revision
 		}
 	}

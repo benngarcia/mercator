@@ -33,8 +33,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 20 {
-		t.Fatalf("latest invariant results = %d, want 20", len(latest))
+	if len(latest) != 21 {
+		t.Fatalf("latest invariant results = %d, want 21", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -202,6 +202,16 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				{OfferID: "offer-1", ArtifactReplica: domain.ArtifactReplica{ArtifactID: "known", SizeBytes: 0}},
 			}
 		},
+		// Two tenants reaching into one cache. Each read and write names the
+		// identity it landed in, and that identity has to be the one its own
+		// workspace, name, and key produce, so a world that keyed this cache by
+		// the name alone is caught handing both tenants the same bytes.
+		"safety.cache_mount_workspace_isolation": func(observation *InvariantObservation) {
+			observation.Effects = []EffectRecord{
+				cacheMountAccessedUnderSharedIdentity(1, OperationCacheMountWrite, "ws_lab_alpha"),
+				cacheMountAccessedUnderSharedIdentity(2, OperationCacheMountRead, "ws_lab_beta"),
+			}
+		},
 		"safety.projection_rebuild_equivalence": func(observation *InvariantObservation) {
 			observation.ProjectionRebuildEquivalent = false
 		},
@@ -280,6 +290,31 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 
 	if len(cases) != len(DefaultInvariantRegistry().invariants) {
 		t.Fatalf("deliberate cases = %d, default invariants = %d", len(cases), len(DefaultInvariantRegistry().invariants))
+	}
+}
+
+// cacheMountAccessedUnderSharedIdentity is one workload touching a cache filed
+// under an identity that carries no workspace, which is what a world keyed by
+// name alone produces. It is the shape a cross-workspace leak actually has: each
+// access names the tenant it happened under, and the identity they landed in is
+// the same one.
+func cacheMountAccessedUnderSharedIdentity(sequence uint64, operation, workspaceID string) EffectRecord {
+	request, err := json.Marshal(map[string]any{
+		"identity":          "compiler-cache",
+		"workspace_id":      workspaceID,
+		"name":              "compiler-cache",
+		"compatibility_key": "cuda-12.4",
+		"offer_id":          "shared-builder",
+	})
+	if err != nil {
+		panic(err)
+	}
+	return EffectRecord{
+		Sequence:  sequence,
+		Operation: operation,
+		Command:   EffectCommandAccepted,
+		Response:  EffectResponseDelivered,
+		Request:   request,
 	}
 }
 

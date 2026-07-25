@@ -68,6 +68,11 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 		return capability.NodeFacts{}, err
 	}
 	facts.Images = images
+	caches, err := docker.caches(ctx)
+	if err != nil {
+		return capability.NodeFacts{}, err
+	}
+	facts.Caches = caches
 	return facts, nil
 }
 
@@ -118,6 +123,13 @@ func (docker *DockerRuntime) LaunchWorkload(ctx context.Context, command capabil
 			continue
 		}
 		args = append(args, "--env", binding.Name+"="+*binding.Value)
+	}
+	for _, mount := range command.CacheMounts {
+		volume, err := docker.openCache(ctx, command.WorkspaceID, mount)
+		if err != nil {
+			return err
+		}
+		args = append(args, "--mount", "type=volume,source="+volume+",target="+domain.CacheMountPath(mount.Name))
 	}
 	if command.MaxRuntimeSeconds > 0 {
 		args = append(args, "--stop-timeout", strconv.FormatInt(command.MaxRuntimeSeconds, 10))
@@ -179,6 +191,118 @@ func (docker *DockerRuntime) Observe(ctx context.Context) ([]capability.Workload
 		observations = append(observations, observation)
 	}
 	return observations, nil
+}
+
+// cacheLabel names one part of a cache's identity in the daemon's own label
+// space. Each part is stamped separately rather than packed into the volume
+// name, because the volume name has to survive a compatibility key that is an
+// application's arbitrary string and these have to be readable back out.
+func (docker *DockerRuntime) cacheLabel(part string) string {
+	return docker.labelPrefix + "cache." + part
+}
+
+// openCache is the durable volume one cache lives in, made if this machine has
+// never held that cache before. The name is derived from the workspace, the
+// cache's name, and the compatibility key together, so a second workspace
+// asking for "compiler-cache" gets its own volume by construction rather than by
+// a comparison this function could forget to make, and a new compatibility key
+// gets an empty cache rather than the generation the application has just said
+// it cannot use.
+//
+// Creating a volume that already exists is how the daemon answers "it is
+// already here", so this is safe on every launch. What it leaves behind is the
+// previous generation's volume, which nothing reclaims yet: garbage collection
+// is its own capability and this runtime still declares it unsupported.
+func (docker *DockerRuntime) openCache(ctx context.Context, workspaceID string, mount domain.CacheMountRequirement) (string, error) {
+	if workspaceID == "" {
+		return "", fmt.Errorf("cache mount %q has no workspace, and a cache's identity is workspace-scoped", mount.Name)
+	}
+	if !domain.ValidCacheName(mount.Name) {
+		return "", fmt.Errorf("cache mount %q is not a name a volume can be derived from", mount.Name)
+	}
+	volume := domain.CacheVolumeName(workspaceID, mount)
+	_, err := docker.run(ctx, "volume", "create",
+		"--label", docker.cacheLabel("workspace")+"="+workspaceID,
+		"--label", docker.cacheLabel("name")+"="+mount.Name,
+		"--label", docker.cacheLabel("key")+"="+mount.CompatibilityKey,
+		volume)
+	if err != nil {
+		return "", fmt.Errorf("open cache %q for workspace %s: %w", mount.Name, workspaceID, err)
+	}
+	return volume, nil
+}
+
+// caches is the mutable, application-owned state this machine holds, read back
+// out of the labels the agent stamped when it created each volume. Only volumes
+// this agent made are reported: another tool's volume on the same daemon is not
+// a Mercator cache, whatever it is called.
+//
+// No size is reported. moby prices a volume only through GET /system/df, which
+// walks every volume on the host and took 4.8 seconds for 342 of them on the
+// machine this was written on, so it is not a read a heartbeat may make; and a
+// zero reported here would be this node claiming an empty cache it may be
+// holding gigabytes in. What the daemon can state is when each cache generation
+// began, which it does state, because the agent makes a new volume per
+// compatibility key.
+func (docker *DockerRuntime) caches(ctx context.Context) (domain.CacheInventory, error) {
+	inventory := domain.CacheInventory{Known: true, ObservedAt: docker.now().UTC()}
+	names, err := docker.run(ctx, "volume", "ls",
+		"--filter", "label="+docker.cacheLabel("name"), "--format", "{{.Name}}")
+	if err != nil {
+		return domain.CacheInventory{}, fmt.Errorf("list this machine's caches: %w", err)
+	}
+	volumes := strings.Fields(names)
+	if len(volumes) == 0 {
+		return inventory, nil
+	}
+	described, err := docker.run(ctx, append(append([]string{"volume", "inspect"}, volumes...),
+		"--format", `{"name":"{{.Name}}","created_at":"{{.CreatedAt}}","labels":{{json .Labels}}}`)...)
+	if err != nil {
+		return domain.CacheInventory{}, fmt.Errorf("read this machine's caches: %w", err)
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(described), "\n") {
+		if line == "" {
+			continue
+		}
+		var volume describedVolume
+		if err := json.Unmarshal([]byte(line), &volume); err != nil {
+			return domain.CacheInventory{}, fmt.Errorf("decode cache volume: %w", err)
+		}
+		mount, ok := volume.cache(docker.cacheLabel)
+		if !ok {
+			continue
+		}
+		inventory.Mounts = append(inventory.Mounts, mount)
+	}
+	return inventory, nil
+}
+
+// describedVolume is one volume as the daemon accounts for it. The labels are
+// the identity: a cache is a workspace, a name, and the generation of content
+// the application declared, and none of that can be read off a volume's bytes.
+type describedVolume struct {
+	Name      string            `json:"name"`
+	CreatedAt string            `json:"created_at"`
+	Labels    map[string]string `json:"labels"`
+}
+
+// cache is the Cache Mount this volume holds, or nothing when its labels do not
+// name one. A volume missing a workspace or a name is not a cache this control
+// plane can address, and reporting it under a guessed identity is how one
+// workspace ends up reading another's bytes.
+func (volume describedVolume) cache(label func(string) string) (domain.CacheMount, bool) {
+	mount := domain.CacheMount{
+		WorkspaceID:      volume.Labels[label("workspace")],
+		Name:             volume.Labels[label("name")],
+		CompatibilityKey: volume.Labels[label("key")],
+	}
+	if mount.WorkspaceID == "" || mount.Name == "" {
+		return domain.CacheMount{}, false
+	}
+	if created, err := time.Parse(time.RFC3339, volume.CreatedAt); err == nil {
+		mount.CreatedAt = created.UTC()
+	}
+	return mount, true
 }
 
 func (docker *DockerRuntime) containerName(runID, attemptID string) string {

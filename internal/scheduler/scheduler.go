@@ -211,8 +211,15 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 		Rejections:       rejections,
 		ImageLocality:    work.image,
 		ArtifactEvidence: work.artifacts,
-		Estimates:        estimates,
-		ScoreUSD:         round(score, 6),
+		// What each candidate holds of the Run's mutable caches is recorded and
+		// never scored. A warm cache saves work inside the application, which
+		// nothing here has measured, so pricing it would be an exchange rate this
+		// model invented. The workspace comparison is why it is worth recording:
+		// a cache of the same name in another workspace is a different cache, and
+		// it must never read as warmth on this Run's record.
+		CacheEvidence: domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
+		Estimates:     estimates,
+		ScoreUSD:      round(score, 6),
 	}
 }
 

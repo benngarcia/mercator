@@ -54,6 +54,7 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 		data, err := json.Marshal(RunArrival{
 			Name:                 arrival.Name,
 			Group:                arrival.Group,
+			Workspace:            arrival.Workspace,
 			Request:              arrival.Request,
 			ActualRuntime:        scenario.Duration(actualRuntime),
 			ActualRuntimeByOffer: actualByOffer,

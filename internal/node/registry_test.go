@@ -476,7 +476,8 @@ func exitCode(code int) *int { return &code }
 // a declaration the runtime cannot honour is capacity Mercator believes in and
 // does not have. This node declared Artifact replicas, Cache Mounts, prewarming,
 // and garbage collection while the Docker runtime implemented none of them; each
-// becomes true again in the slice that earns it.
+// becomes true again in the slice that earns it, and Cache Mounts is the second
+// one earned.
 func TestANodeDeclaresOnlyWhatItsRuntimePerforms(t *testing.T) {
 	registry, _ := newRegistry(t)
 
@@ -485,9 +486,11 @@ func TestANodeDeclaresOnlyWhatItsRuntimePerforms(t *testing.T) {
 	if !support.ExactImageInventory {
 		t.Error("the agent enumerates the images and layers it unpacked, so this one is earned")
 	}
+	if !support.CacheMounts {
+		t.Error("the agent attaches and enumerates workspace-scoped cache volumes, so this one is earned")
+	}
 	unearned := map[string]bool{
 		"artifact_replicas":  support.ArtifactReplicas,
-		"cache_mounts":       support.CacheMounts,
 		"prewarm":            support.Prewarm,
 		"garbage_collection": support.GarbageCollection,
 	}

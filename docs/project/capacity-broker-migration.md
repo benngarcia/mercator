@@ -727,6 +727,69 @@ complete because it works against a live provider.
     `QueueSeconds` carries one number across all three quantiles: neither a Rental
     Schedule nor a provider publishes a spread on a queue, and inventing one would
     be this model's arithmetic wearing a provider's clothes.
+- [x] 2026-07-25: Make a Cache Mount workspace-scoped, generation-aware, and
+  actually attached. A Cache Mount is mutable application-owned state whose only
+  identity is its workspace-scoped name, and nothing in the tree carried the
+  workspace: `capability.CacheLocality` had no workspace field, its
+  `CompatibilityKey` was declared and never set or compared by anything,
+  `world.cacheMounts` was keyed offer to name with no workspace anywhere, and the
+  Lab ran one workspace, so the hard-isolation claim was not merely unimplemented
+  but unfalsifiable. `internal/nodeagent/docker.go` built `docker run` arguments
+  with no volume flag and ignored `command.CacheMounts` entirely, so no cache was
+  ever attached to anything.
+  - `domain.CacheMountRequirement` is what a workload declares: a name, the
+    generation of content it can use, and the room it expects to take. The
+    workspace is never stated there, because a workload cannot choose which
+    workspace it runs in. `domain.CacheIdentity` derives one string from all three
+    parts, which is what makes cross-workspace sharing impossible by construction
+    rather than by a comparison somebody has to remember to make, and
+    `domain.CacheVolumeName` is that identity as a container runtime's own name
+    for durable storage.
+  - `capability.CacheLocality` is deleted. A node reports
+    `domain.CacheInventory`, the record the control plane already keeps, exactly
+    as it does for Artifact replicas and for the same reason: two vocabularies for
+    one answer is how they drift.
+  - The Docker runtime attaches and enumerates. `LaunchWorkload` opens a volume
+    per cache identity and mounts it, `Facts` reads the caches back out of the
+    labels the agent stamped, and `NodeSupport.CacheMounts` is true again, having
+    been withdrawn in the image-store commit. A new compatibility key gets its own
+    volume: Mercator compares the key the application stated, and mounting the
+    previous generation across it anyway would be a comparison with no
+    consequence.
+  - The Lab runs more than one workspace, which is what makes a cross-workspace
+    leak expressible at all. A Blueprint's arrival states the tenant it belongs
+    to as a label, each backend maps labels to its own workspace identities, and
+    the control plane creates, advances, projects, and reads the event log for
+    every one of them. An Artifact belongs to the workspace that declared it, so
+    a Run outside the default workspace naming one is refused when the arrival
+    plan is validated rather than held forever by a gate that could never be
+    satisfied.
+  - `safety.cache_mount_workspace_isolation` is the new Lab invariant: no cache
+    identity is ever observed under two workspaces, read over the ledger of what
+    each launch touched and over what each host is holding. It is deliberately
+    not stated as "the identity equals what its parts derive", because the world
+    derives identities with the same function such a rule would check them
+    against, so the one error that matters would agree with itself and pass.
+  - `safety.locality_provenance` gained its cache clause, and
+    `safety.cache_disk_accounting` counts caches by identity rather than by name.
+    Capacity that keeps nothing keeps no cache either, for the same two reasons it
+    keeps no image and no Artifact copy.
+  - Judgment calls. A cache is recorded on the decision and never priced: what a
+    warm cache saves is work inside the application, and nothing here has measured
+    it, so seconds would be an exchange rate this model invented. `CacheMount`
+    carries no size, because moby prices a volume only by walking every volume on
+    the host (`GET /system/df?type=volume`, measured at 4.8 seconds for 342
+    volumes on the development machine and unbounded on a real one), which is not
+    a read a heartbeat may make, and a fabricated zero would be a machine claiming
+    an empty cache it may be holding gigabytes in; the size a Run declares is a
+    statement about what it expects to use, and prewarming's disk reservation is
+    the slice that earns a measured one. `CacheMount.CreatedAt` is the freshness a
+    container runtime can state, because a holder that makes new storage per
+    generation can say when this one began and cannot say when anything last read
+    it. The mount path inside the container is derived from the name rather than
+    declared, because nothing in this tree needs a workload-chosen path yet. And
+    the previous generation's volume is left behind: reclaiming it is garbage
+    collection, which this runtime still declares unsupported.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -748,7 +811,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; a production object-store client, mutable caches, prefetch, and producer affinity remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; a production object-store client, prefetch, and producer affinity remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -905,6 +968,20 @@ Phase 3 added:
   discounted out of the localities and per-kind seconds recorded beside it, so a
   scheduler that counted a silence as established fails while agreeing with itself
   perfectly.
+- `cache-mounts-never-cross-a-workspace` (conformance): four Runs, two tenants,
+  and one shared machine. Both tenants declare a cache called compiler-cache, so
+  the machine holds two, and the recorded decisions say so: the neighbour's cache
+  is never warmth, and neither is the generation the application replaced. The
+  hot Run in the middle is what makes the three cold answers mean anything, and
+  dropping the workspace from the cache identity fails the execution through
+  `safety.cache_mount_workspace_isolation` rather than through an assertion.
+- `safety.cache_mount_workspace_isolation` (Lab invariant): no cache identity is
+  ever observed under two workspaces, read over the ledger of what each launch
+  read and wrote and over what each host is holding. Stating it as a collision
+  rather than as an identity derivation is what keeps it independent of the code
+  it polices: the world derives identities with the same function, so a rule
+  asking whether an identity equals what its parts derive would agree with a
+  derivation that dropped the workspace.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, every Artifact copy a host holds is either seeded or
@@ -915,7 +992,7 @@ Phase 3 added:
   is a fact the World Tape must be able to state.
 
 The corpus is 22 regression Blueprints: 14 green and 8 target, beside one demo,
-one minimized case, and five conformance Blueprints.
+one minimized case, and six conformance Blueprints.
 
 ## What phase 2 does not yet do
 
@@ -1131,6 +1208,70 @@ with the catalog is a fact about that machine's own bookkeeping, and it has to b
 expressible for the subtraction that catches it to be reachable. What a Lab
 Blueprint therefore cannot yet state is a copy whose claim went stale after the
 world began.
+
+### Phase 3 mutable caches
+
+On 2026-07-25, `cache-mounts-never-cross-a-workspace` was written against the
+world, driven as a target Blueprint, and promoted in the same change once green.
+Each claim is held by a deliberate break that fails it:
+
+- dropping the workspace from `domain.CacheIdentity`, which is the identity the
+  world keys caches by, fails the execution through the invariant:
+  `safety.cache_mount_workspace_isolation failed: cache
+  "compiler-cache/cuda-12.4" on "shared-builder" is used by workspaces
+  "ws_lab_alpha" and "ws_lab_beta", and a cache belongs to one workspace`. Under
+  the rule stated as an identity derivation rather than as a collision, that same
+  break left every Lab execution green, because the rule and the world derived
+  identities with one function;
+- dropping the workspace from `domain.CacheVolumeName` fails
+  `TestTwoWorkspacesGetTwoVolumesForOneCacheName` against the local Docker daemon
+  with `two workspaces naming one cache were attached to the same volume
+  "mercator-cache-compiler-cache-ab651da8"`, read back with `docker inspect` on
+  the running containers rather than off the arguments this code built;
+- ignoring the compatibility key in `CacheInventory.Holds` fails the Blueprint
+  with `the decision recorded "hot" for compiler-cache: the application declared a
+  new generation, so what is under the name is not usable`, and fails
+  `TestCacheWarmthAnswersPerWorkspaceAndGeneration`;
+- dropping `CacheMounts` from the launch request the orchestrator builds, which is
+  the state the tree shipped in, fails the Blueprint with `the decision recorded
+  "cold" for compiler-cache: the tenant that filled its own cache finds it on the
+  machine that holds it` and `the ledger records 0 cache accesses`. Nothing
+  carried a declared cache to a host, so nothing was ever attached or written;
+- dropping `Caches` from `node.Registry.offer` fails
+  `TestANodeOffersTheCachesItHoldsUnderTheWorkspaceThatOwnsThem` with `the offer
+  carries {Known:false ...}, and this node reported two tenants' caches`;
+- deleting the cache clause of `onlyKeptCapacityHoldsWhatItRan` fails
+  `TestLocalityProvenanceRejectsBorrowedCapacityHoldingACache`. No execution can
+  reach that state, because the world refuses to write a cache onto capacity that
+  keeps nothing, so the forbidden world is stated directly.
+
+The demo Blueprint's normalized bundle hash moved from
+`sha256:193d9726fcca9d51071cb6028fad5006dd06395096aafacef6765ce69015f15b` to
+`sha256:4ba5346629a82ae964897806814673a6f005106fe22c0e7d20e2184c8fd29203`, which
+is cache evidence entering the decision record and the demo's own Cache Mount
+gaining a generation and a declared size.
+
+Two limits are worth stating rather than hiding.
+
+No production Mercator can declare a cache without going through the workload
+spec: `caches` is on the public `WorkloadSpec`, so the API carries it, and there
+is no CLI or quickstart step that writes one. What a real operator gets today is
+a node that will attach whatever the control plane asks for.
+
+Nothing reclaims a superseded generation. A new compatibility key leaves the
+previous volume on the disk, and `NodeSupport.GarbageCollection` is still false,
+so the machine accumulates one volume per generation until an operator prunes it.
+That is the slice that earns garbage collection, and it is tracked rather than
+papered over by mounting incompatible content.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/adapter/fake ./internal/orchestrator \
+  ./internal/node ./internal/nodeagent ./internal/broker ./internal/httpapi \
+  ./internal/daemon ./cmd/mercator -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
 
 ### Phase 3 what the start bound may strike out
 

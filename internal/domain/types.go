@@ -48,9 +48,15 @@ type WorkloadSpec struct {
 	// Artifacts is the immutable content this workload reads and publishes. A
 	// declared input is a dependency on a durable Artifact rather than on any
 	// particular host, which is what keeps replicas an optimisation.
-	Artifacts ArtifactRequirements       `json:"artifacts"`
-	Metadata  map[string]string          `json:"metadata,omitempty"`
-	Raw       map[string]json.RawMessage `json:"raw,omitempty"`
+	Artifacts ArtifactRequirements `json:"artifacts"`
+	// Caches is the mutable state this workload wants mounted across Runs. It is
+	// best-effort by construction: a cache that is not here costs the
+	// application the work of rebuilding what was in it and never keeps the Run
+	// from running. Every name is scoped to the Run's own workspace, which is
+	// what makes two tenants naming one cache two caches.
+	Caches   []CacheMountRequirement    `json:"caches,omitempty"`
+	Metadata map[string]string          `json:"metadata,omitempty"`
+	Raw      map[string]json.RawMessage `json:"raw,omitempty"`
 }
 
 type ContainerSpec struct {
@@ -222,7 +228,11 @@ type OfferSnapshot struct {
 	// Artifacts is the immutable content this host says it holds a local copy
 	// of. It is placement evidence and never a dependency's authority: a Run's
 	// inputs are durable in the object store or the Run does not go anywhere.
-	Artifacts   ArtifactInventory   `json:"artifacts"`
+	Artifacts ArtifactInventory `json:"artifacts"`
+	// Caches is the mutable, application-owned state this host says it holds.
+	// Every entry names the workspace that owns it, because a cache's identity
+	// is workspace-scoped and an offer is read by every workspace's Runs.
+	Caches      CacheInventory      `json:"caches,omitzero"`
 	Capacity    CapacityEvidence    `json:"capacity"`
 	Reliability ReliabilityEvidence `json:"reliability,omitempty"`
 }
@@ -707,8 +717,15 @@ type CandidateDecision struct {
 	// container, an Artifact is what the workload reads once it is running, and
 	// one host is routinely warm for one and cold for the other.
 	ArtifactEvidence []ArtifactEvidence `json:"artifact_evidence,omitempty"`
-	Estimates        CandidateEstimates `json:"estimates"`
-	ScoreUSD         float64            `json:"score_usd,omitempty"`
+	// CacheEvidence is what this candidate was found holding of the mutable
+	// caches the Run declared, one entry per name. It is recorded and never
+	// priced: what a warm cache saves is work inside the application, and no
+	// term of this model has measured that. It is here so the record says what
+	// each candidate held, and so a reader can tell a machine that never did
+	// this work from one holding the generation before the one now asked for.
+	CacheEvidence []CacheEvidence    `json:"cache_evidence,omitempty"`
+	Estimates     CandidateEstimates `json:"estimates"`
+	ScoreUSD      float64            `json:"score_usd,omitempty"`
 }
 
 type CandidateDisposition string

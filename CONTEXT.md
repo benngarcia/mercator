@@ -91,11 +91,16 @@ _Avoid_: Cache (for Artifacts), local dataset, mirror
 **Cache Mount**:
 A workload-declared named mount whose content persists on a Rental across
 Runs. Its identity is the workspace-scoped cache name; two Runs share data
-exactly when they declare the same name. It is mutable and application-owned:
-Mercator manages its presence on a Rental and knows nothing about its contents,
-so it can never carry immutable identity the way an Artifact does. Its contents
-and any sync-from-remote logic belong to the application, and declaring a shared
-name is never an exclusivity or single-writer guarantee.
+exactly when they declare the same name in the same workspace, and two
+workspaces that declare one name have two caches that never meet. It is mutable
+and application-owned: Mercator manages its presence on a Rental and knows
+nothing about its contents, so it can never carry immutable identity the way an
+Artifact does. Beside the name, a Run states a compatibility key naming which
+generation of content it can use; Mercator compares that key and never
+interprets it, so content declared under another generation is worth what no
+content is worth and gets storage of its own. Its contents and any
+sync-from-remote logic belong to the application, and declaring a shared name is
+never an exclusivity or single-writer guarantee.
 _Avoid_: Volume (alone), dataset, shared storage
 
 **Warmth**:

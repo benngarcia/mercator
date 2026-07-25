@@ -272,6 +272,91 @@ esac
 	}
 }
 
+// TestTwoWorkspacesGetTwoVolumesForOneCacheName is the hard isolation claim
+// against a real daemon. Two tenants declare a cache called compiler-cache and
+// both containers run on this machine; what each is attached to is read back with
+// `docker inspect` rather than asserted about the arguments this code built,
+// because the promise is about the running container and not about a string.
+//
+// The third launch is the same tenant and name under a new compatibility key. The
+// application has said that content belongs to another generation, so it gets its
+// own volume too: a comparison Mercator makes and then mounts across anyway would
+// be a comparison with no consequence.
+func TestTwoWorkspacesGetTwoVolumesForOneCacheName(t *testing.T) {
+	requireDocker(t)
+	pull(t, "busybox:latest")
+	runtime := NewDockerRuntime("")
+	cache := domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4"}
+	nextGeneration := domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-13.0"}
+
+	alpha := launchWithCache(t, runtime, "ws_alpha", "run-alpha", cache)
+	beta := launchWithCache(t, runtime, "ws_beta", "run-beta", cache)
+	rebuilt := launchWithCache(t, runtime, "ws_alpha", "run-rebuilt", nextGeneration)
+
+	if alpha == beta {
+		t.Fatalf("two workspaces naming one cache were attached to the same volume %q", alpha)
+	}
+	if alpha == rebuilt {
+		t.Fatalf("a new compatibility key was attached to the previous generation's volume %q", alpha)
+	}
+	if want := domain.CacheVolumeName("ws_alpha", cache); alpha != want {
+		t.Fatalf("the running container is attached to %q, and this cache's volume is %q", alpha, want)
+	}
+	if !strings.Contains(alpha, "ws_alpha") || !strings.Contains(beta, "ws_beta") {
+		t.Fatalf("volumes %q and %q do not name the workspace that owns them", alpha, beta)
+	}
+
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read node facts: %v", err)
+	}
+	if !facts.Caches.Known {
+		t.Fatal("a node that enumerated its caches reported that it had not")
+	}
+	if !facts.Caches.Holds("ws_alpha", cache) || !facts.Caches.Holds("ws_beta", cache) {
+		t.Fatalf("the node reports %+v, and both tenants' caches are on this disk", facts.Caches.Mounts)
+	}
+	if facts.Caches.Holds("ws_beta", nextGeneration) {
+		t.Fatal("the node reports a generation for a tenant that never asked for one")
+	}
+}
+
+// launchWithCache runs one throwaway container with one cache attached and
+// answers which volume the daemon says it mounted.
+func launchWithCache(t *testing.T, runtime *DockerRuntime, workspaceID, runID string, cache domain.CacheMountRequirement) string {
+	t.Helper()
+	command := capability.LaunchWorkloadCommand{
+		RunID:       runID,
+		AttemptID:   "1",
+		BookingID:   "bkg-" + runID,
+		CacheMounts: []domain.CacheMountRequirement{cache},
+		Workload: domain.WorkloadSpec{Containers: []domain.ContainerSpec{{
+			Name:  "main",
+			Image: "busybox:latest",
+			Args:  []string{"sleep", "30"},
+		}}},
+	}
+	command.WorkspaceID = workspaceID
+	container := "mercator-" + runID + "-1"
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "rm", "--force", container).Run()
+		_ = exec.Command("docker", "volume", "rm", "--force", domain.CacheVolumeName(workspaceID, cache)).Run()
+	})
+	if err := runtime.LaunchWorkload(context.Background(), command); err != nil {
+		t.Fatalf("launch %s: %v", runID, err)
+	}
+	output, err := exec.Command("docker", "inspect", container, "--format",
+		`{{range .Mounts}}{{if eq .Destination "`+domain.CacheMountPath(cache.Name)+`"}}{{.Name}}{{end}}{{end}}`).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker inspect %s: %v\n%s", container, err, output)
+	}
+	mounted := strings.TrimSpace(string(output))
+	if mounted == "" {
+		t.Fatalf("the container for %s has nothing mounted at %s", runID, domain.CacheMountPath(cache.Name))
+	}
+	return mounted
+}
+
 // standInContentStore is a scripted daemon keeping its images in the containerd
 // content store. It answers the CLI the way moby does for that store: no storage
 // chain for any image whatsoever, and an ID and Digest column naming the

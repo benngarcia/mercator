@@ -930,6 +930,7 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		Environment:               env,
 		Ports:                     slices.Clone(container.Ports),
 		Resources:                 requested.Workload.Spec.Resources,
+		CacheMounts:               slices.Clone(requested.Workload.Spec.Caches),
 		MaxRuntimeSeconds:         requested.Workload.Spec.Execution.MaxRuntimeSeconds,
 		SelectedOfferSnapshotID:   selectedOffer.ID,
 		SelectedOfferConnectionID: selectedOffer.ConnectionID,

@@ -29,6 +29,27 @@ const (
 	BearerAuthScopes = "bearerAuth.Scopes"
 )
 
+// Defines values for ArtifactEvidenceLocality.
+const (
+	ArtifactEvidenceLocalityCold    ArtifactEvidenceLocality = "cold"
+	ArtifactEvidenceLocalityHot     ArtifactEvidenceLocality = "hot"
+	ArtifactEvidenceLocalityUnknown ArtifactEvidenceLocality = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the ArtifactEvidenceLocality enum.
+func (e ArtifactEvidenceLocality) Valid() bool {
+	switch e {
+	case ArtifactEvidenceLocalityCold:
+		return true
+	case ArtifactEvidenceLocalityHot:
+		return true
+	case ArtifactEvidenceLocalityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ArtifactReplicaState.
 const (
 	Unverified ArtifactReplicaState = "unverified"
@@ -41,6 +62,27 @@ func (e ArtifactReplicaState) Valid() bool {
 	case Unverified:
 		return true
 	case Verified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CacheEvidenceLocality.
+const (
+	CacheEvidenceLocalityCold    CacheEvidenceLocality = "cold"
+	CacheEvidenceLocalityHot     CacheEvidenceLocality = "hot"
+	CacheEvidenceLocalityUnknown CacheEvidenceLocality = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the CacheEvidenceLocality enum.
+func (e CacheEvidenceLocality) Valid() bool {
+	switch e {
+	case CacheEvidenceLocalityCold:
+		return true
+	case CacheEvidenceLocalityHot:
+		return true
+	case CacheEvidenceLocalityUnknown:
 		return true
 	default:
 		return false
@@ -294,6 +336,20 @@ type AdapterListResponse struct {
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
 type AdapterManifest = adapter.Manifest
 
+// ArtifactEvidence What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object.
+type ArtifactEvidence struct {
+	ArtifactId string `json:"artifact_id"`
+
+	// FetchBytes What this host still has to read out of the object store for this version.
+	FetchBytes int64 `json:"fetch_bytes,omitempty"`
+
+	// Locality Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility.
+	Locality ArtifactEvidenceLocality `json:"locality"`
+}
+
+// ArtifactEvidenceLocality Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility.
+type ArtifactEvidenceLocality string
+
 // ArtifactInventory The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.
 type ArtifactInventory struct {
 	// Known Whether the holder enumerated its Artifact replicas at all.
@@ -345,13 +401,65 @@ type CPURequirement struct {
 	MinMillis int64 `json:"min_millis"`
 }
 
+// CacheEvidence What one candidate was found holding of one cache the Run declared. It is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured, so turning it into seconds would be an exchange rate nobody established.
+type CacheEvidence struct {
+	// HeldCompatibilityKey The generation this host actually holds under the name, when it holds one. It separates the two ways a cache is cold: a machine that has never done this work, and one holding the generation before the one now asked for.
+	HeldCompatibilityKey string `json:"held_compatibility_key,omitempty"`
+
+	// Locality Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all.
+	Locality CacheEvidenceLocality `json:"locality"`
+	Name     string                `json:"name"`
+}
+
+// CacheEvidenceLocality Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all.
+type CacheEvidenceLocality string
+
+// CacheInventory The mutable caches this host says it holds. Like the image and Artifact inventories it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.
+type CacheInventory struct {
+	// Known Whether the holder enumerated its caches at all.
+	Known      bool         `json:"known"`
+	Mounts     []CacheMount `json:"mounts,omitempty"`
+	ObservedAt time.Time    `json:"observed_at,omitempty"`
+}
+
+// CacheMount One mutable cache on one host, as the holder reports it. It carries no digest and no verification state, because there is nothing to check it against: the contents are whatever the application last wrote. It carries no size either, because nothing on a real node measures one without walking every volume on the machine.
+type CacheMount struct {
+	// CompatibilityKey The generation of content under this name, as the application stated it when the cache was written.
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+
+	// CreatedAt When this generation of the cache started existing here. It is the freshness a container runtime can state: a holder that makes new storage per compatibility key can say when this one began, and cannot say when anything last read it.
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	Name      string    `json:"name"`
+
+	// WorkspaceId The workspace that owns this cache. It is part of the identity rather than a label on it.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// CacheMountRequirement One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running.
+type CacheMountRequirement struct {
+	// CompatibilityKey The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own.
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+
+	// Name This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label.
+	Name string `json:"name"`
+
+	// SizeBytes How much room the application expects this cache to take. It is a declaration rather than a measurement.
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+}
+
 // CandidateDecision defines model for CandidateDecision.
 type CandidateDecision struct {
-	AdapterType  string                       `json:"adapter_type,omitempty"`
-	ConnectionId string                       `json:"connection_id,omitempty"`
-	Disposition  CandidateDecisionDisposition `json:"disposition"`
-	Estimates    CandidateEstimates           `json:"estimates"`
-	Feasible     bool                         `json:"feasible"`
+	AdapterType string `json:"adapter_type,omitempty"`
+
+	// ArtifactEvidence What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other.
+	ArtifactEvidence []ArtifactEvidence `json:"artifact_evidence,omitempty"`
+
+	// CacheEvidence What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name.
+	CacheEvidence []CacheEvidence              `json:"cache_evidence,omitempty"`
+	ConnectionId  string                       `json:"connection_id,omitempty"`
+	Disposition   CandidateDecisionDisposition `json:"disposition"`
+	Estimates     CandidateEstimates           `json:"estimates"`
+	Feasible      bool                         `json:"feasible"`
 
 	// ImageLocality How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility.
 	ImageLocality   CandidateDecisionImageLocality `json:"image_locality,omitempty"`
@@ -369,11 +477,13 @@ type CandidateDecisionImageLocality string
 
 // CandidateEstimates defines model for CandidateEstimates.
 type CandidateEstimates struct {
-	CostUsd          Estimate `json:"cost_usd"`
-	ProvisionSeconds Estimate `json:"provision_seconds"`
-	PullSeconds      Estimate `json:"pull_seconds"`
-	QueueSeconds     Estimate `json:"queue_seconds"`
-	StartSeconds     Estimate `json:"start_seconds"`
+	ArtifactSeconds         Estimate `json:"artifact_seconds"`
+	CostUsd                 Estimate `json:"cost_usd"`
+	EstablishedStartSeconds Estimate `json:"established_start_seconds"`
+	ProvisionSeconds        Estimate `json:"provision_seconds"`
+	PullSeconds             Estimate `json:"pull_seconds"`
+	QueueSeconds            Estimate `json:"queue_seconds"`
+	StartSeconds            Estimate `json:"start_seconds"`
 }
 
 // CapabilityProfile defines model for CapabilityProfile.
@@ -870,14 +980,17 @@ type WorkloadRevisionResponse struct {
 // WorkloadSpec defines model for WorkloadSpec.
 type WorkloadSpec struct {
 	// Artifacts The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine.
-	Artifacts  ArtifactRequirements   `json:"artifacts"`
-	Containers []ContainerSpec        `json:"containers"`
-	Execution  ExecutionPolicy        `json:"execution"`
-	Metadata   map[string]string      `json:"metadata,omitempty"`
-	Network    NetworkRequirements    `json:"network"`
-	Placement  PlacementPolicy        `json:"placement"`
-	Raw        map[string]interface{} `json:"raw,omitempty"`
-	Resources  ResourceRequirements   `json:"resources"`
+	Artifacts ArtifactRequirements `json:"artifacts"`
+
+	// Caches The mutable, application-owned state this workload wants mounted across Runs. Every name is scoped to the Run's own workspace, which is what makes two tenants naming one cache two caches.
+	Caches     []CacheMountRequirement `json:"caches,omitempty"`
+	Containers []ContainerSpec         `json:"containers"`
+	Execution  ExecutionPolicy         `json:"execution"`
+	Metadata   map[string]string       `json:"metadata,omitempty"`
+	Network    NetworkRequirements     `json:"network"`
+	Placement  PlacementPolicy         `json:"placement"`
+	Raw        map[string]interface{}  `json:"raw,omitempty"`
+	Resources  ResourceRequirements    `json:"resources"`
 }
 
 // Workspace defines model for Workspace.

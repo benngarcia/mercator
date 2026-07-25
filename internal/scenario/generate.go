@@ -181,7 +181,7 @@ func (generator *blueprintGenerator) rentals(count int, imageRefs []string, imag
 				MinimumCharge: &minimum,
 			},
 			Resources:   generatedResources(index),
-			CacheMounts: []string{"build-cache"},
+			CacheMounts: []HeldCacheSpec{{Name: "build-cache", CompatibilityKey: "generated-v1", Size: ByteSize(2e9)}},
 		}
 		if index == 0 {
 			rental.CachedLayers = []string{images[imageRefs[0]].Layers[0].Digest}
@@ -298,7 +298,7 @@ func (generator *blueprintGenerator) request(image string) RequestSpec {
 		ExpectedRuntime: &expected,
 		MaxRuntime:      &maximum,
 		Objective:       "balanced",
-		CacheMounts:     []CacheMountSpec{{Name: "build-cache"}},
+		CacheMounts:     []CacheMountSpec{{Name: "build-cache", CompatibilityKey: "generated-v1", Size: ByteSize(2e9)}},
 		Phases: []WorkloadPhaseSpec{
 			{Name: "prepare", Duration: Duration(2 * time.Minute)},
 			{Name: "execute", Duration: Duration(3 * time.Minute)},

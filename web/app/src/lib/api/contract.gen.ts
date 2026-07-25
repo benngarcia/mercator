@@ -755,6 +755,50 @@ export interface components {
              */
             verified_at?: string;
         };
+        /** @description One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running. */
+        CacheMountRequirement: {
+            /** @description This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label. */
+            name: string;
+            /** @description The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own. */
+            compatibility_key?: string;
+            /**
+             * Format: int64
+             * @description How much room the application expects this cache to take. It is a declaration rather than a measurement.
+             */
+            size_bytes?: number;
+        };
+        /** @description One mutable cache on one host, as the holder reports it. It carries no digest and no verification state, because there is nothing to check it against: the contents are whatever the application last wrote. It carries no size either, because nothing on a real node measures one without walking every volume on the machine. */
+        CacheMount: {
+            /** @description The workspace that owns this cache. It is part of the identity rather than a label on it. */
+            workspace_id: string;
+            name: string;
+            /** @description The generation of content under this name, as the application stated it when the cache was written. */
+            compatibility_key?: string;
+            /**
+             * Format: date-time
+             * @description When this generation of the cache started existing here. It is the freshness a container runtime can state: a holder that makes new storage per compatibility key can say when this one began, and cannot say when anything last read it.
+             */
+            created_at?: string;
+        };
+        /** @description The mutable caches this host says it holds. Like the image and Artifact inventories it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence. */
+        CacheInventory: {
+            /** @description Whether the holder enumerated its caches at all. */
+            known: boolean;
+            /** Format: date-time */
+            observed_at?: string;
+            mounts?: components["schemas"]["CacheMount"][];
+        };
+        /** @description What one candidate was found holding of one cache the Run declared. It is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured, so turning it into seconds would be an exchange rate nobody established. */
+        CacheEvidence: {
+            name: string;
+            /**
+             * @description Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all.
+             * @enum {string}
+             */
+            locality: "hot" | "cold" | "unknown";
+            /** @description The generation this host actually holds under the name, when it holds one. It separates the two ways a cache is cold: a machine that has never done this work, and one holding the generation before the one now asked for. */
+            held_compatibility_key?: string;
+        };
         /** @description What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object. */
         ArtifactEvidence: {
             artifact_id: string;
@@ -784,6 +828,8 @@ export interface components {
             placement: components["schemas"]["PlacementPolicy"];
             execution: components["schemas"]["ExecutionPolicy"];
             artifacts: components["schemas"]["ArtifactRequirements"];
+            /** @description The mutable, application-owned state this workload wants mounted across Runs. Every name is scoped to the Run's own workspace, which is what makes two tenants naming one cache two caches. */
+            caches?: components["schemas"]["CacheMountRequirement"][];
             metadata?: {
                 [key: string]: string;
             };
@@ -970,6 +1016,7 @@ export interface components {
             provisioning?: components["schemas"]["Estimate"];
             images: components["schemas"]["ImageInventory"];
             artifacts: components["schemas"]["ArtifactInventory"];
+            caches?: components["schemas"]["CacheInventory"];
             capacity: components["schemas"]["CapacityEvidence"];
             reliability: components["schemas"]["ReliabilityEvidence"];
         };
@@ -1005,6 +1052,8 @@ export interface components {
             image_locality?: "hot" | "partial" | "cold" | "unknown";
             /** @description What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other. */
             artifact_evidence?: components["schemas"]["ArtifactEvidence"][];
+            /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name. */
+            cache_evidence?: components["schemas"]["CacheEvidence"][];
             estimates: components["schemas"]["CandidateEstimates"];
             /** Format: double */
             score_usd?: number;

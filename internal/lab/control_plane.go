@@ -21,8 +21,12 @@ import (
 )
 
 type controlPlane struct {
-	storage       *sqlitestore.Storage
-	world         *simulatedWorld
+	storage *sqlitestore.Storage
+	world   *simulatedWorld
+	// workspaces is every tenant this Blueprint runs work for. One Mercator
+	// serves all of them, which is the point: the machines are shared and the
+	// caches, Artifacts, and Runs on them are not.
+	workspaces    []string
 	orchestrator  *orchestrator.Orchestrator
 	restarts      uint64
 	faultPosition eventlog.GlobalPosition
@@ -41,14 +45,16 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 	if err != nil {
 		return InvariantObservation{}, err
 	}
-	if err := runtime.orchestrator.RebuildRunProjection(ctx, labWorkspace); err != nil {
-		return InvariantObservation{}, err
+	for _, workspace := range runtime.workspaces {
+		if err := runtime.orchestrator.RebuildRunProjection(ctx, workspace); err != nil {
+			return InvariantObservation{}, err
+		}
 	}
 	rebuiltRuns, err := runtime.allRuns(ctx)
 	if err != nil {
 		return InvariantObservation{}, err
 	}
-	schedules, err := runtime.storage.RentalSchedules().List(ctx, labWorkspace)
+	schedules, err := runtime.allSchedules(ctx)
 	if err != nil {
 		return InvariantObservation{}, err
 	}
@@ -110,20 +116,45 @@ func (runtime *controlPlane) holdsOpenRun(ctx context.Context) (bool, error) {
 	return slices.ContainsFunc(runs, func(run domain.RunRecord) bool { return !run.Closed }), nil
 }
 
+// allRuns is every Run Mercator holds, across every tenant this Blueprint runs
+// work for. A rule stated over one workspace would be blind to the other's Runs,
+// which is exactly the blindness a cross-workspace claim has to be checked
+// against.
 func (runtime *controlPlane) allRuns(ctx context.Context) ([]domain.RunRecord, error) {
 	var records []domain.RunRecord
-	request := runprojection.PageRequest{Limit: runprojection.MaxPageSize}
-	for {
-		page, err := runtime.orchestrator.ListRuns(ctx, labWorkspace, request)
+	for _, workspace := range runtime.workspaces {
+		request := runprojection.PageRequest{Limit: runprojection.MaxPageSize}
+		for {
+			page, err := runtime.orchestrator.ListRuns(ctx, workspace, request)
+			if err != nil {
+				return nil, err
+			}
+			records = append(records, page.Records...)
+			if page.NextCursor == "" {
+				break
+			}
+			request.After = page.NextCursor
+		}
+	}
+	return records, nil
+}
+
+// allSchedules is every Rental Schedule Mercator owns. A Rental is one machine
+// whichever tenant booked it, so the schedules of every workspace are read
+// together: a rule about one machine carrying one running Booking is a rule about
+// the machine and not about a tenant's view of it.
+func (runtime *controlPlane) allSchedules(ctx context.Context) (map[string]domain.RentalSchedule, error) {
+	schedules := map[string]domain.RentalSchedule{}
+	for _, workspace := range runtime.workspaces {
+		owned, err := runtime.storage.RentalSchedules().List(ctx, workspace)
 		if err != nil {
 			return nil, err
 		}
-		records = append(records, page.Records...)
-		if page.NextCursor == "" {
-			return records, nil
+		for rentalID, schedule := range owned {
+			schedules[rentalID] = schedule
 		}
-		request.After = page.NextCursor
 	}
+	return schedules, nil
 }
 
 func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error) {
@@ -135,13 +166,16 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 		_ = storage.Close()
 		return nil, err
 	}
-	if _, err := storage.Workspaces().Create(ctx, workspace.Create{
-		ID:          labWorkspace,
-		DisplayName: "Mercator Lab",
-		CreatedAt:   tape.Start,
-		CreatedBy:   "system:lab",
-	}); err != nil {
-		return closeWith(fmt.Errorf("create Lab workspace: %w", err))
+	workspaces := tape.Workspaces()
+	for _, id := range workspaces {
+		if _, err := storage.Workspaces().Create(ctx, workspace.Create{
+			ID:          id,
+			DisplayName: "Mercator Lab " + id,
+			CreatedAt:   tape.Start,
+			CreatedBy:   "system:lab",
+		}); err != nil {
+			return closeWith(fmt.Errorf("create Lab workspace %s: %w", id, err))
+		}
 	}
 	if err := storage.Runs().MarkRebuilt(ctx); err != nil {
 		return closeWith(fmt.Errorf("initialize Lab Run projection: %w", err))
@@ -150,7 +184,7 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 	if err != nil {
 		return closeWith(err)
 	}
-	runtime := &controlPlane{storage: storage, world: world}
+	runtime := &controlPlane{storage: storage, world: world, workspaces: workspaces}
 	runtime.restartOrchestrator()
 	return runtime, nil
 }
@@ -187,19 +221,20 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 	if err := runtime.world.prepareRun(runID, arrival); err != nil {
 		return err
 	}
+	workspace := workspaceID(arrival.Workspace)
 	if _, err := runtime.orchestrator.CreateRun(ctx, orchestrator.CreateRunRequest{
-		WorkspaceID:    labWorkspace,
+		WorkspaceID:    workspace,
 		RunID:          runID,
 		IdempotencyKey: "create:" + runID,
-		Workload:       scenario.WorkloadForRun(labWorkspace, runID, arrival.Request),
+		Workload:       scenario.WorkloadForRun(workspace, runID, arrival.Request),
 	}); err != nil {
 		return fmt.Errorf("create Lab Run %q: %w", arrival.Name, err)
 	}
-	if err := runtime.orchestrator.AdvanceRun(ctx, labWorkspace, runID); err != nil {
+	if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil {
 		if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 			return fmt.Errorf("advance Lab Run %q: %w", arrival.Name, err)
 		}
-		if err := runtime.orchestrator.AdvanceRun(ctx, labWorkspace, runID); err != nil {
+		if err := runtime.orchestrator.AdvanceRun(ctx, workspace, runID); err != nil {
 			return fmt.Errorf("reconcile ambiguous Lab Run %q: %w", arrival.Name, err)
 		}
 	}
@@ -208,17 +243,24 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 
 func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	runtime.world.setNow(now)
-	_, err := runtime.orchestrator.AdvanceOpenRuns(ctx, labWorkspace)
-	if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
-		if err != nil {
+	for _, workspace := range runtime.workspaces {
+		if err := runtime.advanceWorkspace(ctx, workspace); err != nil {
 			return err
 		}
-		return runtime.applyEventFaults(ctx)
-	}
-	if _, err := runtime.orchestrator.AdvanceOpenRuns(ctx, labWorkspace); err != nil {
-		return err
 	}
 	return runtime.applyEventFaults(ctx)
+}
+
+// advanceWorkspace drives one tenant's open Runs. An ambiguous launch is
+// reconciled by advancing again, which is what a control plane does with a
+// response it never got.
+func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace string) error {
+	_, err := runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
+	if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		return err
+	}
+	_, err = runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
+	return err
 }
 
 func (runtime *controlPlane) restart(ctx context.Context) error {
@@ -244,19 +286,29 @@ func (runtime *controlPlane) restartOrchestrator() {
 	)
 }
 
+// mercatorEvents is Mercator's whole public record for this execution, read one
+// tenant at a time and merged on the log's own global order. Reading with no
+// workspace filter would be one query and would also pick up whatever else ever
+// lands in this log, so the workspaces this execution created are named
+// explicitly.
 func (runtime *controlPlane) mercatorEvents(ctx context.Context) ([]eventlog.StoredEvent, error) {
-	filter := eventlog.EventFilter{WorkspaceID: labWorkspace}
-	head, err := runtime.storage.EventLog().LatestPosition(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
 	var events []eventlog.StoredEvent
-	for event, err := range eventlog.ScanAll(ctx, runtime.storage.EventLog(), head, filter) {
+	for _, workspace := range runtime.workspaces {
+		filter := eventlog.EventFilter{WorkspaceID: workspace}
+		head, err := runtime.storage.EventLog().LatestPosition(ctx, filter)
 		if err != nil {
 			return nil, err
 		}
-		events = append(events, event)
+		for event, err := range eventlog.ScanAll(ctx, runtime.storage.EventLog(), head, filter) {
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, event)
+		}
 	}
+	slices.SortStableFunc(events, func(left, right eventlog.StoredEvent) int {
+		return int(left.GlobalPosition) - int(right.GlobalPosition)
+	})
 	return events, nil
 }
 

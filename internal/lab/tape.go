@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/scenario"
@@ -35,8 +36,12 @@ type WorldEvent struct {
 }
 
 type RunArrival struct {
-	Name                 string                       `json:"name"`
-	Group                string                       `json:"group,omitempty"`
+	Name  string `json:"name"`
+	Group string `json:"group,omitempty"`
+	// Workspace is the Blueprint's label for the tenant this Run belongs to.
+	// Empty is the default workspace, which is where a single-tenant fixture
+	// puts everything.
+	Workspace            string                       `json:"workspace,omitempty"`
 	Request              scenario.RequestSpec         `json:"request"`
 	ActualRuntime        scenario.Duration            `json:"actual_runtime"`
 	ActualRuntimeByOffer map[string]scenario.Duration `json:"actual_runtime_by_offer,omitempty"`
@@ -86,6 +91,27 @@ func (tape WorldTape) Validate() error {
 		previous = event
 	}
 	return nil
+}
+
+// Workspaces is every workspace this tape's Runs arrive into, as this Lab's own
+// identities. A tape with no labelled arrival is one workspace, which is what
+// every Blueprint written before two tenants could be expressed is.
+func (tape WorldTape) Workspaces() []string {
+	workspaces := []string{labWorkspace}
+	for _, event := range tape.Events {
+		if event.Kind != EventRunArrived {
+			continue
+		}
+		var arrival RunArrival
+		if err := json.Unmarshal(event.Data, &arrival); err != nil {
+			continue
+		}
+		if id := workspaceID(arrival.Workspace); !slices.Contains(workspaces, id) {
+			workspaces = append(workspaces, id)
+		}
+	}
+	slices.Sort(workspaces)
+	return workspaces
 }
 
 func (tape WorldTape) SHA256() string {

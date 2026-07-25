@@ -34,8 +34,13 @@ type externalExecution struct {
 	OwnershipToken string                `json:"ownership_token"`
 	RequestHash    string                `json:"request_hash"`
 	OfferID        string                `json:"offer_id"`
+	WorkspaceID    string                `json:"workspace_id"`
 	Disposition    domain.Disposition    `json:"disposition"`
 	Phase          adapter.ExternalPhase `json:"phase"`
+	// CacheMounts is the mutable state Mercator asked this launch to attach. It
+	// is taken from the launch command rather than from the arrival, so what the
+	// world reads and writes is what the control plane actually declared.
+	CacheMounts []domain.CacheMountRequirement `json:"cache_mounts,omitempty"`
 	// AcceptedAt is when the provider took the launch. StartedAt is when the
 	// container actually began, which cannot precede the arrival of the image it
 	// runs: a process cannot execute bytes that have not landed. The gap between
@@ -55,10 +60,38 @@ type ArtifactReplica struct {
 	domain.ArtifactReplica
 }
 
+// CacheMountState is one mutable, application-owned cache in World Truth: which
+// machine holds it, whose it is, which generation of content is under the name,
+// and how many times a workload has written it. The identity is stated beside
+// the three parts it is derived from rather than left for every reader to
+// recompute, because a rule about workspace isolation has to be able to catch a
+// world that keyed a cache by something narrower than its own identity.
 type CacheMountState struct {
 	OfferID  string `json:"offer_id"`
-	Name     string `json:"name"`
-	Revision uint64 `json:"revision"`
+	Identity string `json:"identity"`
+	// WorkspaceID is who owns this cache. Two workspaces naming one cache on
+	// one host hold two caches, and this is the field that makes them two.
+	WorkspaceID      string `json:"workspace_id"`
+	Name             string `json:"name"`
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+	Revision         uint64 `json:"revision"`
+	// CreatedAt is when this generation started existing here. A host can hold
+	// several generations under one name, so which of them is the one under the
+	// name now is a question only the moments can answer.
+	CreatedAt time.Time `json:"created_at"`
+	// SizeBytes is how much room this cache takes here. It is world truth a
+	// fixture states, because nothing on a real node measures it.
+	SizeBytes int64 `json:"size_bytes"`
+}
+
+// mount is this cache as the machine holding it would report it.
+func (state CacheMountState) mount() domain.CacheMount {
+	return domain.CacheMount{
+		WorkspaceID:      state.WorkspaceID,
+		Name:             state.Name,
+		CompatibilityKey: state.CompatibilityKey,
+		CreatedAt:        state.CreatedAt,
+	}
 }
 
 type WorldTruthSnapshot struct {
@@ -271,7 +304,11 @@ type simulatedWorld struct {
 	// same question: a copy outside it has to be explained by content the ledger
 	// says landed on that host.
 	seededReplicas map[string]map[string]bool
-	cacheMounts    map[string]map[string]uint64
+	// cacheMounts is the mutable state each host holds, keyed by offer and then
+	// by cache identity. The identity carries the workspace, which is what makes
+	// a cross-workspace leak a thing this world can be caught doing rather than
+	// a thing it cannot express.
+	cacheMounts map[string]map[string]CacheMountState
 
 	executions  map[string]externalExecution
 	operations  map[string]worldOperation
@@ -295,7 +332,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		replicas:       map[string]map[string]domain.ArtifactReplica{},
 		seededLocality: map[string]map[string]bool{},
 		seededReplicas: map[string]map[string]bool{},
-		cacheMounts:    map[string]map[string]uint64{},
+		cacheMounts:    map[string]map[string]CacheMountState{},
 		executions:     map[string]externalExecution{},
 		operations:     map[string]worldOperation{},
 		launchCount:    map[string]int{},
@@ -335,10 +372,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		world.seededLocality[rental.ID] = state.seededDigests()
 		world.truth[rental.ID] = cloneHostState(state)
 		world.seedReplicas(rental.ID, rental.ArtifactReplicas, tape.InitialWorld, tape.Start)
-		world.cacheMounts[rental.ID] = map[string]uint64{}
-		for _, name := range rental.CacheMounts {
-			world.cacheMounts[rental.ID][name] = 1
-		}
+		world.seedCaches(rental.ID, rental.CacheMounts, tape.Start)
 	}
 	for _, host := range tape.InitialWorld.Hosts {
 		state := hostState{
@@ -407,6 +441,38 @@ func (world *simulatedWorld) seedReplicas(offerID string, held []scenario.Artifa
 	}
 }
 
+// workspaceID is the Lab's own identity for one Blueprint workspace label. A
+// Blueprint names tenants and this world names workspaces: keeping the two apart
+// is what lets a fixture say "another tenant" without writing the Lab's naming
+// into the public contract.
+func workspaceID(label string) string {
+	if label == "" {
+		return labWorkspace
+	}
+	return labWorkspace + "_" + label
+}
+
+// seedCaches is the mutable state one machine was already holding when this
+// world began, each entry under the workspace that owns it. A seeded cache
+// starts at revision one: a fixture stating a cache is stating that some
+// workload wrote it, whatever happened before this world's clock started.
+func (world *simulatedWorld) seedCaches(offerID string, held []scenario.HeldCacheSpec, at time.Time) {
+	world.cacheMounts[offerID] = make(map[string]CacheMountState, len(held))
+	for _, declared := range held {
+		state := CacheMountState{
+			OfferID:          offerID,
+			WorkspaceID:      workspaceID(declared.Workspace),
+			Name:             declared.Name,
+			CompatibilityKey: declared.CompatibilityKey,
+			Revision:         1,
+			CreatedAt:        at,
+			SizeBytes:        int64(declared.Size),
+		}
+		state.Identity = domain.CacheIdentity(state.WorkspaceID, declared.Requirement())
+		world.cacheMounts[offerID][state.Identity] = state
+	}
+}
+
 func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec, offerID string, available *bool, billing scenario.BillingSpec) {
 	if available != nil {
 		offer.Capacity.Available = *available
@@ -451,6 +517,11 @@ func (world *simulatedWorld) prepareRun(runID string, arrival RunArrival) error 
 // would make a Run admissible because some host happens to have bytes, and
 // inadmissible the moment that host goes away, which is the
 // distributed-filesystem model this architecture refuses.
+//
+// The catalog belongs to the workspace that declared it, which is the Blueprint's
+// default one. Another tenant asking about one of those versions gets nothing,
+// because an Artifact never crosses a workspace; a Blueprint that tried to state
+// otherwise is refused when its arrival plan is validated.
 func (world *simulatedWorld) ArtifactVersion(_ context.Context, workspaceID, artifactID string) (domain.ArtifactVersion, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
@@ -906,6 +977,8 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		OwnershipToken: request.OwnershipToken,
 		RequestHash:    request.RequestHash,
 		OfferID:        request.SelectedOfferSnapshotID,
+		WorkspaceID:    request.WorkspaceID,
+		CacheMounts:    slices.Clone(request.CacheMounts),
 		Disposition:    request.Disposition,
 		Phase:          adapter.ExternalPhaseRunning,
 		AcceptedAt:     world.now,
@@ -920,6 +993,9 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		world.pullRunImage(execution, request.Image),
 		world.readRunArtifacts(execution, arrival.Request.ConsumesArtifacts),
 	)
+	// The caches this launch asked for are opened whatever is in them. A mutable
+	// cache is best-effort, so nothing here waits on one.
+	world.readCaches(execution)
 	execution.CompletesAt = execution.StartedAt.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID))
 	world.executions[request.LaunchKey] = execution
 	world.publishObservations()
@@ -1034,12 +1110,15 @@ func (world *simulatedWorld) ListOwned(_ context.Context, request adapter.Owners
 	defer world.mu.Unlock()
 	objects := make([]adapter.OwnedExternalObject, 0, len(world.executions))
 	for _, execution := range world.executions {
-		if request.WorkspaceID != "" && request.WorkspaceID != labWorkspace {
+		// An owned-execution query is one tenant asking what of its own is still
+		// out there. Answering with another workspace's executions would make one
+		// tenant's work look like the asker's orphans.
+		if request.WorkspaceID != "" && request.WorkspaceID != execution.WorkspaceID {
 			continue
 		}
 		objects = append(objects, adapter.OwnedExternalObject{
 			ExternalID:     execution.ExternalID,
-			WorkspaceID:    labWorkspace,
+			WorkspaceID:    execution.WorkspaceID,
 			ConnectionID:   labConnection,
 			RunID:          execution.RunID,
 			AttemptID:      execution.AttemptID,
@@ -1115,6 +1194,7 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time
 		offer.ExpiresAt = at.Add(5 * time.Minute)
 		offer.Images = state.inventory(at)
 		offer.Artifacts = world.artifactInventory(offer.ID, at)
+		offer.Caches = world.cacheInventory(offer.ID, at)
 		offers = append(offers, offer)
 	}
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
@@ -1135,6 +1215,7 @@ func (world *simulatedWorld) publishedOffers() []domain.OfferSnapshot {
 		if !offer.KeepsWhatItRuns() {
 			offers[index].Images = domain.ImageInventory{}
 			offers[index].Artifacts = domain.ArtifactInventory{}
+			offers[index].Caches = domain.CacheInventory{}
 		}
 	}
 	return offers
@@ -1265,21 +1346,89 @@ func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at tim
 			completesAt: at.Add(world.store.transferDuration(artifactID)),
 		})
 	}
-	for _, mount := range arrival.Request.CacheMounts {
-		if world.cacheMounts[execution.OfferID] == nil {
-			world.cacheMounts[execution.OfferID] = map[string]uint64{}
-		}
-		world.cacheMounts[execution.OfferID][mount.Name]++
+	for _, mount := range execution.CacheMounts {
+		world.writeCache(execution, mount)
+	}
+}
+
+// writeCache is what a finished workload left in its mutable caches. The cache
+// is addressed by its full identity, which carries the workspace this execution
+// belongs to, so a write can only ever land in the cache the Run's own tenant
+// owns.
+//
+// Capacity that keeps nothing keeps no cache either, for the same two reasons it
+// keeps no image: a provisionable offer is a machine that does not exist yet,
+// and a one-shot product is gone once its workload exits. A cache written there
+// would be mutable state outliving its own host.
+func (world *simulatedWorld) writeCache(execution externalExecution, mount domain.CacheMountRequirement) {
+	if !world.truth[execution.OfferID].offer.KeepsWhatItRuns() {
+		return
+	}
+	if world.cacheMounts[execution.OfferID] == nil {
+		world.cacheMounts[execution.OfferID] = map[string]CacheMountState{}
+	}
+	identity := domain.CacheIdentity(execution.WorkspaceID, mount)
+	previous := world.cacheMounts[execution.OfferID][identity]
+	createdAt := previous.CreatedAt
+	if previous.Revision == 0 {
+		createdAt = world.now
+	}
+	state := CacheMountState{
+		OfferID:          execution.OfferID,
+		Identity:         identity,
+		WorkspaceID:      execution.WorkspaceID,
+		Name:             mount.Name,
+		CompatibilityKey: mount.CompatibilityKey,
+		Revision:         previous.Revision + 1,
+		CreatedAt:        createdAt,
+		SizeBytes:        max(previous.SizeBytes, mount.SizeBytes),
+	}
+	world.cacheMounts[execution.OfferID][identity] = state
+	world.recordEffect(
+		OperationCacheMountWrite,
+		"cache-mount-write/"+execution.RunID+"/"+identity,
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+		execution.RunID,
+		execution.LaunchKey,
+		"",
+		map[string]any{
+			"identity":          identity,
+			"workspace_id":      execution.WorkspaceID,
+			"name":              mount.Name,
+			"compatibility_key": mount.CompatibilityKey,
+			"offer_id":          execution.OfferID,
+		},
+		map[string]any{"revision": state.Revision, "size_bytes": state.SizeBytes},
+		"",
+	)
+}
+
+// readCaches is what a starting workload found in the caches it asked for. A
+// cache costs no time either way, because it is the application's own state and
+// this world has no model of what the application does with it; what the read
+// records is which cache was opened and whether anything was in it, which is
+// what makes a cross-workspace read a thing the ledger can be caught doing.
+func (world *simulatedWorld) readCaches(execution externalExecution) {
+	for _, mount := range execution.CacheMounts {
+		identity := domain.CacheIdentity(execution.WorkspaceID, mount)
+		held, found := world.cacheMounts[execution.OfferID][identity]
 		world.recordEffect(
-			OperationCacheMountWrite,
-			"cache-mount-write/"+execution.RunID+"/"+mount.Name,
+			OperationCacheMountRead,
+			"cache-mount-read/"+execution.LaunchKey+"/"+identity,
 			EffectCommandAccepted,
 			EffectResponseDelivered,
 			execution.RunID,
 			execution.LaunchKey,
 			"",
-			map[string]any{"name": mount.Name, "offer_id": execution.OfferID},
-			map[string]any{"revision": world.cacheMounts[execution.OfferID][mount.Name]},
+			map[string]any{
+				"identity":          identity,
+				"workspace_id":      execution.WorkspaceID,
+				"name":              mount.Name,
+				"compatibility_key": mount.CompatibilityKey,
+				"offer_id":          execution.OfferID,
+			},
+			map[string]any{"found": found, "revision": held.Revision},
 			"",
 		)
 	}
@@ -1323,22 +1472,30 @@ func later(first, second time.Time) time.Time {
 
 func (world *simulatedWorld) cacheMountStates() []CacheMountState {
 	var mounts []CacheMountState
-	for offerID, revisions := range world.cacheMounts {
-		for name, revision := range revisions {
-			mounts = append(mounts, CacheMountState{
-				OfferID:  offerID,
-				Name:     name,
-				Revision: revision,
-			})
+	for _, held := range world.cacheMounts {
+		for _, state := range held {
+			mounts = append(mounts, state)
 		}
 	}
 	sort.Slice(mounts, func(i, j int) bool {
 		if mounts[i].OfferID == mounts[j].OfferID {
-			return mounts[i].Name < mounts[j].Name
+			return mounts[i].Identity < mounts[j].Identity
 		}
 		return mounts[i].OfferID < mounts[j].OfferID
 	})
 	return mounts
+}
+
+// cacheInventory is the mutable state one host holds, in identity order so one
+// world state produces one offer. Every entry names the workspace that owns it,
+// because an offer is read by every workspace's Runs and only the identity keeps
+// them apart.
+func (world *simulatedWorld) cacheInventory(offerID string, at time.Time) domain.CacheInventory {
+	inventory := domain.CacheInventory{Known: true, ObservedAt: at}
+	for _, identity := range slices.Sorted(maps.Keys(world.cacheMounts[offerID])) {
+		inventory.Mounts = append(inventory.Mounts, world.cacheMounts[offerID][identity].mount())
+	}
+	return inventory
 }
 
 func (world *simulatedWorld) matchOperationFault(operation, runID string, attempt int) *scenario.FaultSpec {

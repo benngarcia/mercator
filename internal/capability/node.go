@@ -134,9 +134,14 @@ type NodeFacts struct {
 	// ever looked for. A node that does not enumerate says nothing here, and
 	// silence is priced rather than refused.
 	Artifacts domain.ArtifactInventory `json:"artifacts,omitzero"`
-	// Caches is the mutable, application-owned cache summary. It is
-	// best-effort by construction: contents are the application's business.
-	Caches []CacheLocality `json:"caches,omitempty"`
+	// Caches is the mutable, application-owned state on this node's disk:
+	// whether it enumerated at all, and each cache it found under the workspace
+	// that owns it. It is best-effort by construction, because the contents are
+	// the application's business and nothing here can be checked against
+	// anything. It is the record the control plane already keeps, for the same
+	// reason the Artifact inventory is: a second vocabulary for one answer is
+	// how the two drift.
+	Caches domain.CacheInventory `json:"caches,omitzero"`
 }
 
 // HostFacts is the substrate the node runs on, which is separate from what a
@@ -206,18 +211,6 @@ type ImageLocality struct {
 	LastVerifiedAt time.Time            `json:"last_verified_at"`
 }
 
-// CacheLocality is one mutable, application-owned cache on one node. Its
-// identity is its workspace-scoped name; its contents provide no identity.
-type CacheLocality struct {
-	Name string `json:"name"`
-	// CompatibilityKey is the application's own statement of which cache
-	// generation this content belongs to. Mercator compares it and never
-	// interprets it.
-	CompatibilityKey string    `json:"compatibility_key,omitempty"`
-	SizeBytes        int64     `json:"size_bytes"`
-	LastUsedAt       time.Time `json:"last_used_at"`
-}
-
 // OperationReceipt acknowledges one node command. Duplicate is how a node says
 // it already applied this operation identity, which is what makes retry after
 // a lost response safe.
@@ -272,8 +265,11 @@ type LaunchWorkloadCommand struct {
 	// workload spec.
 	ManifestDigest string
 	Environment    []EnvironmentBinding
-	// CacheMounts names the mutable caches to attach.
-	CacheMounts []string
+	// CacheMounts is the mutable caches to attach, as the workload declared
+	// them. The workspace they belong to is the one on this command's NodeRef:
+	// a cache's identity is workspace-scoped, so a runtime that took a name
+	// alone would be free to hand one workspace another's bytes.
+	CacheMounts []domain.CacheMountRequirement
 	// ArtifactMounts names the immutable replicas to attach read-only.
 	ArtifactMounts    []string
 	MaxRuntimeSeconds int64

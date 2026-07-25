@@ -3430,6 +3430,103 @@
           }
         }
       },
+      "CacheMountRequirement": {
+        "type": "object",
+        "description": "One mutable, application-owned cache a workload wants mounted across Runs. Its identity is the name, scoped to the workspace the Run belongs to: two tenants that both declare compiler-cache declare two caches, and neither is ever handed the other's bytes. It is best-effort, so a cache that is not on the chosen host costs the application the work of rebuilding what was in it and never keeps the Run from running.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "This cache's identity within its workspace. It also names durable storage on whatever host holds the cache, so it must be a lowercase label."
+          },
+          "compatibility_key": {
+            "type": "string",
+            "description": "The application's own statement of which generation of content it can use. Mercator compares it and never interprets it: content declared under another generation is worth what no content is worth, and gets storage of its own."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How much room the application expects this cache to take. It is a declaration rather than a measurement."
+          }
+        }
+      },
+      "CacheMount": {
+        "type": "object",
+        "description": "One mutable cache on one host, as the holder reports it. It carries no digest and no verification state, because there is nothing to check it against: the contents are whatever the application last wrote. It carries no size either, because nothing on a real node measures one without walking every volume on the machine.",
+        "required": [
+          "workspace_id",
+          "name"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "description": "The workspace that owns this cache. It is part of the identity rather than a label on it."
+          },
+          "name": {
+            "type": "string"
+          },
+          "compatibility_key": {
+            "type": "string",
+            "description": "The generation of content under this name, as the application stated it when the cache was written."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this generation of the cache started existing here. It is the freshness a container runtime can state: a holder that makes new storage per compatibility key can say when this one began, and cannot say when anything last read it."
+          }
+        }
+      },
+      "CacheInventory": {
+        "type": "object",
+        "description": "The mutable caches this host says it holds. Like the image and Artifact inventories it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.",
+        "required": [
+          "known"
+        ],
+        "properties": {
+          "known": {
+            "type": "boolean",
+            "description": "Whether the holder enumerated its caches at all."
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CacheMount"
+            }
+          }
+        }
+      },
+      "CacheEvidence": {
+        "type": "object",
+        "description": "What one candidate was found holding of one cache the Run declared. It is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured, so turning it into seconds would be an exchange rate nobody established.",
+        "required": [
+          "name",
+          "locality"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "locality": {
+            "type": "string",
+            "enum": [
+              "hot",
+              "cold",
+              "unknown"
+            ],
+            "description": "Hot is this workspace's cache of this name holding the generation the Run asked for. Cold is anything else, including a neighbour's cache of the same name and the generation the application has since replaced. Unknown is a host that could not enumerate its caches at all."
+          },
+          "held_compatibility_key": {
+            "type": "string",
+            "description": "The generation this host actually holds under the name, when it holds one. It separates the two ways a cache is cold: a machine that has never done this work, and one holding the generation before the one now asked for."
+          }
+        }
+      },
       "ArtifactEvidence": {
         "type": "object",
         "description": "What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object.",
@@ -3511,6 +3608,13 @@
           },
           "artifacts": {
             "$ref": "#/components/schemas/ArtifactRequirements"
+          },
+          "caches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CacheMountRequirement"
+            },
+            "description": "The mutable, application-owned state this workload wants mounted across Runs. Every name is scoped to the Run's own workspace, which is what makes two tenants naming one cache two caches."
           },
           "metadata": {
             "type": "object",
@@ -4093,6 +4197,9 @@
           "artifacts": {
             "$ref": "#/components/schemas/ArtifactInventory"
           },
+          "caches": {
+            "$ref": "#/components/schemas/CacheInventory"
+          },
           "capacity": {
             "$ref": "#/components/schemas/CapacityEvidence"
           },
@@ -4220,6 +4327,13 @@
               "$ref": "#/components/schemas/ArtifactEvidence"
             },
             "description": "What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other."
+          },
+          "cache_evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CacheEvidence"
+            },
+            "description": "What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name."
           },
           "estimates": {
             "$ref": "#/components/schemas/CandidateEstimates"

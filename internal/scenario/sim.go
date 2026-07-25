@@ -62,9 +62,6 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		if len(schedule.Queued) > 0 {
 			session.note("rental %q starts with QueuedBookings, but the scenario backend cannot seed Broker RentalSchedule state yet", rental.ID)
 		}
-		if len(rental.CacheMounts) > 0 {
-			session.note("rental %q holds Cache Mounts, but no offer field can advertise them yet", rental.ID)
-		}
 	}
 	for _, host := range spec.Hosts {
 		if err := world.AddMachine(simHost(spec, host, clock.Now())); err != nil {
@@ -104,6 +101,7 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 		ReportsDiffIDs:   rental.ReportsDiffIDs,
 		HeldImages:       map[string]bool{},
 		ArtifactReplicas: simArtifactReplicas(spec, rental.ArtifactReplicas, start),
+		HeldCaches:       simHeldCaches(rental.CacheMounts, start),
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
@@ -159,6 +157,28 @@ func simArtifactReplicas(spec WorldSpec, declared []ArtifactReplicaSpec, at time
 		replicas[artifact.ID] = replica
 	}
 	return replicas
+}
+
+// simHeldCaches is the mutable state one machine was already holding, keyed by
+// the identity that carries its workspace. A placement world has one workspace,
+// so a fixture that labels a cache with another one is stating a neighbour's
+// cache: content on this host that this backend's Runs must never be told about.
+func simHeldCaches(held []HeldCacheSpec, at time.Time) map[string]domain.CacheMount {
+	caches := make(map[string]domain.CacheMount, len(held))
+	for _, declared := range held {
+		workspaceID := simWorkspace
+		if declared.Workspace != "" {
+			workspaceID = simWorkspace + "_" + declared.Workspace
+		}
+		mount := domain.CacheMount{
+			WorkspaceID:      workspaceID,
+			Name:             declared.Name,
+			CompatibilityKey: declared.CompatibilityKey,
+			CreatedAt:        at,
+		}
+		caches[mount.Identity()] = mount
+	}
+	return caches
 }
 
 // simRentalOffer builds the offer for a Rental: standing capacity Mercator holds
@@ -309,9 +329,6 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	if req.Image == "" {
 		return fmt.Errorf("requests need an image")
 	}
-	if len(req.CacheMounts) > 0 {
-		s.note("run %q declares cache mounts, but the container spec cannot carry them yet", name)
-	}
 	runID := "run-" + name
 	s.runs[name] = runID
 	_, err := s.orch.CreateRun(context.Background(), orchestrator.CreateRunRequest{
@@ -397,6 +414,7 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 		Consumes: slices.Clone(req.ConsumesArtifacts),
 		Produces: slices.Clone(req.ProducesArtifacts),
 	}
+	spec.Caches = req.CacheRequirements()
 	return domain.WorkloadRevision{
 		ID:          "wrev_" + runID,
 		WorkspaceID: workspaceID,

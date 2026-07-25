@@ -86,6 +86,10 @@ const (
 	CapabilityArtifacts Capability = "artifacts"
 	// CapabilityArtifactEvidence is per-candidate Artifact locality evidence.
 	CapabilityArtifactEvidence Capability = "artifact_evidence"
+	// CapabilityCacheMounts is mutable, application-owned caches carried across
+	// Runs: attached by identity, compared against the generation the
+	// application declared, and never shared between workspaces.
+	CapabilityCacheMounts Capability = "cache_mounts"
 	// CapabilityLabExecution is deterministic execution beyond one Placement
 	// decision.
 	CapabilityLabExecution Capability = "lab_execution"
@@ -113,6 +117,7 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityHostFacts:              true,
 	CapabilityArtifacts:              true,
 	CapabilityArtifactEvidence:       true,
+	CapabilityCacheMounts:            true,
 	CapabilityLabExecution:           true,
 	CapabilityEffectLedger:           true,
 	CapabilityControlPlaneRestart:    true,
@@ -356,10 +361,41 @@ type RentalSpec struct {
 	// which is what a completed pull leaves behind.
 	Unpacked         *bool                 `json:"unpacked,omitempty"`
 	ArtifactReplicas []ArtifactReplicaSpec `json:"artifact_replicas,omitempty"`
-	CacheMounts      []string              `json:"cache_mounts,omitempty"`
-	RatePerHourUSD   float64               `json:"rate_per_hour_usd"`
-	Billing          BillingSpec           `json:"billing,omitempty"`
-	Resources        *ResourcesSpec        `json:"resources,omitempty"`
+	// CacheMounts is the mutable, application-owned state this machine was
+	// already holding when the world began, each entry under the workspace that
+	// owns it.
+	CacheMounts    []HeldCacheSpec `json:"cache_mounts,omitempty"`
+	RatePerHourUSD float64         `json:"rate_per_hour_usd"`
+	Billing        BillingSpec     `json:"billing,omitempty"`
+	Resources      *ResourcesSpec  `json:"resources,omitempty"`
+}
+
+// HeldCacheSpec is one mutable cache a machine was found holding. The workspace
+// is part of it because a cache's identity is workspace-scoped: a fixture that
+// could only say "this machine holds compiler-cache" could not state the world
+// this whole model exists for, two tenants with one cache name on one host.
+type HeldCacheSpec struct {
+	// Workspace is the label of the workspace that owns this cache. Empty means
+	// the Blueprint's default workspace, which is where a fixture with one tenant
+	// puts everything.
+	Workspace string `json:"workspace,omitempty"`
+	Name      string `json:"name"`
+	// CompatibilityKey is the generation of content the application last wrote
+	// under this name.
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+	// Size is how much room this cache takes on the machine. It is world truth a
+	// fixture states, because nothing on a real node measures it.
+	Size ByteSize `json:"size,omitempty"`
+}
+
+// Requirement is the cache identity this declaration names, in the vocabulary
+// the control plane compares.
+func (spec HeldCacheSpec) Requirement() domain.CacheMountRequirement {
+	return domain.CacheMountRequirement{
+		Name:             spec.Name,
+		CompatibilityKey: spec.CompatibilityKey,
+		SizeBytes:        int64(spec.Size),
+	}
 }
 
 // IsUnpacked reports whether this host assembled the content it was seeded
@@ -501,8 +537,40 @@ type RequestSpec struct {
 	Phases            []WorkloadPhaseSpec `json:"phases,omitempty"`
 }
 
+// CacheMountSpec is one mutable cache a Run declares. Its identity is the name,
+// scoped to the workspace the Run belongs to; the compatibility key is the
+// application's own statement of which generation of content it can use, which
+// Mercator compares and never interprets.
 type CacheMountSpec struct {
 	Name string `json:"name"`
+	// CompatibilityKey separates generations of content under one name. A Run
+	// declaring a new key is a Run that has said the previous content is no
+	// longer usable, so a host holding it is not warm for this Run.
+	CompatibilityKey string `json:"compatibility_key,omitempty"`
+	// Size is how much room the application expects this cache to take. It is a
+	// declaration rather than a measurement, which is what disk reservation will
+	// read when prewarming exists.
+	Size ByteSize `json:"size,omitempty"`
+}
+
+// Requirement is what the control plane compares this declaration against a
+// host's caches with.
+func (spec CacheMountSpec) Requirement() domain.CacheMountRequirement {
+	return domain.CacheMountRequirement{
+		Name:             spec.Name,
+		CompatibilityKey: spec.CompatibilityKey,
+		SizeBytes:        int64(spec.Size),
+	}
+}
+
+// CacheRequirements is what a request declares, in the control plane's
+// vocabulary.
+func (req RequestSpec) CacheRequirements() []domain.CacheMountRequirement {
+	required := make([]domain.CacheMountRequirement, 0, len(req.CacheMounts))
+	for _, mount := range req.CacheMounts {
+		required = append(required, mount.Requirement())
+	}
+	return required
 }
 
 type WorkloadPhaseSpec struct {
@@ -1191,14 +1259,19 @@ func (w WorldSpec) validate() error {
 			return err
 		}
 		cacheMounts := map[string]bool{}
-		for _, name := range rental.CacheMounts {
-			if name == "" {
-				return fmt.Errorf("rental %q has a Cache Mount without a name", rental.ID)
+		for _, held := range rental.CacheMounts {
+			if !domain.ValidCacheName(held.Name) {
+				return fmt.Errorf("rental %q holds a Cache Mount named %q, which is not a cache name", rental.ID, held.Name)
 			}
-			if cacheMounts[name] {
-				return fmt.Errorf("rental %q has duplicate Cache Mount %q", rental.ID, name)
+			// One machine holds one cache per identity, and the identity carries
+			// the workspace. Two workspaces holding "compiler-cache" here is the
+			// world this whole model exists to keep apart, so it is not a
+			// duplicate.
+			identity := domain.CacheIdentity(held.Workspace, held.Requirement())
+			if cacheMounts[identity] {
+				return fmt.Errorf("rental %q holds Cache Mount %q twice", rental.ID, identity)
 			}
-			cacheMounts[name] = true
+			cacheMounts[identity] = true
 		}
 		if rental.RatePerHourUSD <= 0 {
 			return fmt.Errorf("rental %q needs a positive rate_per_hour_usd", rental.ID)
@@ -1517,8 +1590,8 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 	}
 	cacheMounts := map[string]bool{}
 	for _, mount := range req.CacheMounts {
-		if mount.Name == "" {
-			return fmt.Errorf("Cache Mounts need a name")
+		if !domain.ValidCacheName(mount.Name) {
+			return fmt.Errorf("Cache Mount %q is not a cache name", mount.Name)
 		}
 		if cacheMounts[mount.Name] {
 			return fmt.Errorf("request has duplicate Cache Mount %q", mount.Name)

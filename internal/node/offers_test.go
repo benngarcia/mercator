@@ -387,12 +387,85 @@ func TestANodeOffersTheCopiesItHolds(t *testing.T) {
 	}
 }
 
+// TestANodeOffersTheCachesItHoldsUnderTheWorkspaceThatOwnsThem is the mutable
+// half of the same projection. One machine is offered to every workspace, so an
+// inventory that dropped the workspace off each cache would let one tenant read
+// another's warmth off a shared disk, which is the one thing a Cache Mount's
+// identity exists to prevent.
+func TestANodeOffersTheCachesItHoldsUnderTheWorkspaceThatOwnsThem(t *testing.T) {
+	looked := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	wanted := domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4"}
+	registry := readyNodeHoldingCaches(t, domain.CacheInventory{
+		Known:      true,
+		ObservedAt: looked,
+		Mounts: []domain.CacheMount{
+			{WorkspaceID: nodeWorkspace, Name: wanted.Name, CompatibilityKey: wanted.CompatibilityKey, CreatedAt: looked},
+			{WorkspaceID: "ws_neighbour", Name: wanted.Name, CompatibilityKey: wanted.CompatibilityKey, CreatedAt: looked},
+		},
+	})
+
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("list node offers: %v", err)
+	}
+
+	caches := offers[0].Caches
+	if !caches.Known || len(caches.Mounts) != 2 {
+		t.Fatalf("the offer carries %+v, and this node reported two tenants' caches", caches)
+	}
+	if !caches.Holds(nodeWorkspace, wanted) {
+		t.Errorf("the workspace that owns a cache was not offered it: %+v", caches.Mounts)
+	}
+	if caches.Holds("ws_stranger", wanted) {
+		t.Errorf("a workspace holding nothing here was offered someone else's cache: %+v", caches.Mounts)
+	}
+	if found := domain.CacheWarmth("ws_stranger", []domain.CacheMountRequirement{wanted}, caches); found[0].Locality != domain.LocalityCold {
+		t.Errorf("a stranger's evidence for this cache is %q, want cold", found[0].Locality)
+	}
+}
+
+// TestANodeThatCannotEnumerateCachesOffersNoCacheClaim keeps a node's silence its
+// own. An inventory marked enumerated because the node answered about its host
+// would publish "I hold no cache" for every machine that never looked.
+func TestANodeThatCannotEnumerateCachesOffersNoCacheClaim(t *testing.T) {
+	registry := readyNodeHoldingCaches(t, domain.CacheInventory{})
+
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("list node offers: %v", err)
+	}
+
+	if offers[0].Caches.Known {
+		t.Fatalf("the offer claims this node enumerated its caches: %+v", offers[0].Caches)
+	}
+	wanted := domain.CacheMountRequirement{Name: "compiler-cache"}
+	found := domain.CacheWarmth(nodeWorkspace, []domain.CacheMountRequirement{wanted}, offers[0].Caches)
+	if found[0].Locality != domain.LocalityUnknown {
+		t.Fatalf("a cache nothing enumerated was recorded %q, want unknown", found[0].Locality)
+	}
+}
+
 func readyNode(t *testing.T, held []capability.ImageLocality) *node.Registry {
 	t.Helper()
 	return readyNodeHolding(t, held, domain.ArtifactInventory{})
 }
 
+func readyNodeHoldingCaches(t *testing.T, caches domain.CacheInventory) *node.Registry {
+	t.Helper()
+	return readyNodeReporting(t, nil, domain.ArtifactInventory{}, caches)
+}
+
 func readyNodeHolding(t *testing.T, images []capability.ImageLocality, copies domain.ArtifactInventory) *node.Registry {
+	t.Helper()
+	return readyNodeReporting(t, images, copies, domain.CacheInventory{})
+}
+
+func readyNodeReporting(
+	t *testing.T,
+	images []capability.ImageLocality,
+	copies domain.ArtifactInventory,
+	caches domain.CacheInventory,
+) *node.Registry {
 	t.Helper()
 	registry, clock := newRegistry(t)
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
@@ -413,6 +486,7 @@ func readyNodeHolding(t *testing.T, images []capability.ImageLocality, copies do
 			Host:       capability.HostFacts{OS: "linux", Architecture: "amd64", ContainerRuntime: "docker"},
 			Images:     images,
 			Artifacts:  copies,
+			Caches:     caches,
 		},
 	}
 	if _, err := registry.Enroll(context.Background(), request); err != nil {

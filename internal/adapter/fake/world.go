@@ -115,6 +115,10 @@ type Machine struct {
 	// dependency's authority: what makes an Artifact consumable is its durable
 	// publication in the object store, which no machine owns.
 	ArtifactReplicas map[string]domain.ArtifactReplica
+	// HeldCaches is the mutable, application-owned state this machine holds,
+	// keyed by cache identity. The identity carries the workspace, because that
+	// is what makes two tenants naming one cache two caches on one host.
+	HeldCaches map[string]domain.CacheMount
 	// BusyUntil is when the running work's enforced maximum runtime elapses;
 	// zero means idle. It is the hard ceiling behind latest-start guarantees.
 	BusyUntil time.Time
@@ -203,6 +207,21 @@ func (m *Machine) publishedArtifacts(now time.Time) domain.ArtifactInventory {
 	inventory := domain.ArtifactInventory{Known: true, ObservedAt: now}
 	for _, id := range slices.Sorted(maps.Keys(m.ArtifactReplicas)) {
 		inventory.Replicas = append(inventory.Replicas, m.ArtifactReplicas[id])
+	}
+	return inventory
+}
+
+// publishedCaches is the mutable state an offer for this machine can carry, in
+// identity order so one world state produces one offer. It follows the same rule
+// as the other two inventories: capacity nothing of Mercator's runs on
+// enumerates nothing, and its silence is never read as an empty disk.
+func (m *Machine) publishedCaches(now time.Time) domain.CacheInventory {
+	if !m.Offer.KeepsWhatItRuns() {
+		return domain.CacheInventory{}
+	}
+	inventory := domain.CacheInventory{Known: true, ObservedAt: now}
+	for _, identity := range slices.Sorted(maps.Keys(m.HeldCaches)) {
+		inventory.Mounts = append(inventory.Mounts, m.HeldCaches[identity])
 	}
 	return inventory
 }
@@ -514,6 +533,7 @@ func (w *World) machineOffer(machine *Machine, now time.Time) domain.OfferSnapsh
 	offer.ExpiresAt = now.Add(5 * time.Minute)
 	offer.Images = machine.publishedInventory(now)
 	offer.Artifacts = machine.publishedArtifacts(now)
+	offer.Caches = machine.publishedCaches(now)
 	if machine.busyAt(now) {
 		// Today's offer vocabulary marks a busy Rental unavailable. The target
 		// Broker-owned RentalSchedule will keep it feasible and create a

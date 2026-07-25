@@ -45,7 +45,13 @@
         "cached_layers": [
           "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         ],
-        "cache_mounts": ["compiler-cache"],
+        "cache_mounts": [
+          {
+            "name": "compiler-cache",
+            "compatibility_key": "cuda-12.4",
+            "size": "8GB"
+          }
+        ],
         "rate_per_hour_usd": 2.5
       }
     ],
@@ -72,7 +78,13 @@
           "expected_runtime": "8m",
           "max_runtime": "20m",
           "produces_artifacts": ["artifact:model-checkpoint:v1"],
-          "cache_mounts": [{"name": "compiler-cache"}]
+          "cache_mounts": [
+            {
+              "name": "compiler-cache",
+              "compatibility_key": "cuda-12.4",
+              "size": "8GB"
+            }
+          ]
         }
       },
       {
