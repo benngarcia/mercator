@@ -275,20 +275,22 @@ func driveRecord(command DriveCommand, checkpoint Checkpoint) DriveRecord {
 	return record
 }
 
+// DriveToCompletion advances until the world owes no running execution a
+// completion. The horizon is the world's own deadline for the work in flight
+// rather than the sum of sampled runtimes: a Run occupies its host for as long as
+// its image takes to arrive plus as long as it then runs, and one Run finishing
+// is what admits the next.
 func (execution *Execution) DriveToCompletion(ctx context.Context) (Checkpoint, error) {
 	checkpoint, err := execution.Drive(ctx, Quiesce())
 	if err != nil {
 		return checkpoint, err
 	}
-	for _, event := range execution.config.Tape.Events {
-		if event.Kind != EventRunArrived {
-			continue
+	for range len(execution.config.Tape.Events) {
+		horizon := execution.runtime.world.executionHorizon()
+		if horizon.IsZero() {
+			return checkpoint, nil
 		}
-		var arrival RunArrival
-		if err := json.Unmarshal(event.Data, &arrival); err != nil {
-			return execution.checkpoint(), fmt.Errorf("decode Run completion horizon: %w", err)
-		}
-		checkpoint, err = execution.Drive(ctx, Advance(arrival.ActualRuntime.Duration()+time.Nanosecond))
+		checkpoint, err = execution.Drive(ctx, Advance(horizon.Sub(execution.runtime.world.nowTime())+time.Nanosecond))
 		if err != nil {
 			return checkpoint, err
 		}

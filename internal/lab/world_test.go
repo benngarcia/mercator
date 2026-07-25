@@ -38,21 +38,37 @@ func TestPlacementReadsTheHostAWorkloadWarmed(t *testing.T) {
 	}
 }
 
-// TestCapacityTheWorldReclaimedStopsBeingOffered keeps locality decay outside
-// the safety rules. A host losing what it held is a fact to model, not a
-// control-plane violation, so the world is allowed to say so.
-func TestCapacityTheWorldReclaimedStopsBeingOffered(t *testing.T) {
+// TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed is the separation ADR
+// 0004 requires: Mercator reads published observations, never world state, so a
+// world that moved on since the last publication is a stale answer a fixture can
+// write down and a launch the provider then refuses.
+func TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
 	world.prepareRun("run-producer", arrival)
 
 	world.setOfferAvailable("rental-warm", false)
 
-	offers, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
+	stale, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	if offerByID(t, offers, "rental-warm").Capacity.Available {
-		t.Fatal("capacity the world reclaimed is still advertised as available")
+	if !offerByID(t, stale, "rental-warm").Capacity.Available {
+		t.Fatal("world state reached Placement without being observed, so no observation can ever be stale")
+	}
+	var failure *adapter.ProviderFailure
+	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.As(err, &failure) ||
+		failure.Kind != adapter.ProviderFailureCapacityUnavailable {
+		t.Fatalf("launching onto capacity the world reclaimed returned %v, want capacity unavailable", err)
+	}
+
+	world.setNow(world.nowTime().Add(time.Minute))
+
+	fresh, err := world.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: labWorkspace})
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	if offerByID(t, fresh, "rental-warm").Capacity.Available {
+		t.Fatal("the published observation never caught up with the world")
 	}
 }
 
@@ -224,7 +240,24 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 		t.Fatalf("initial phase = %q, want running", observation.Phase)
 	}
 
+	// The tape's runtime is measured from the moment the container started, and it
+	// cannot have started before the image it runs finished arriving.
 	world.setNow(world.nowTime().Add(arrival.ActualRuntime.Duration()))
+	observation, err = world.Observe(context.Background(), adapter.ObserveRequest{
+		WorkspaceID:    labWorkspace,
+		ConnectionID:   "connection:lab",
+		LaunchKey:      request.LaunchKey,
+		OwnershipToken: request.OwnershipToken,
+		RequestHash:    request.RequestHash,
+	})
+	if err != nil {
+		t.Fatalf("observe execution still waiting on its image: %v", err)
+	}
+	if observation.Phase != adapter.ExternalPhaseRunning {
+		t.Fatalf("phase after the runtime alone = %q, want a Run still owed its pull", observation.Phase)
+	}
+
+	world.setNow(world.executionHorizon())
 	observation, err = world.Observe(context.Background(), adapter.ObserveRequest{
 		WorkspaceID:    labWorkspace,
 		ConnectionID:   "connection:lab",
@@ -339,6 +372,11 @@ func TestARentalHoldsWhatItRanOnlyOnceThePullCompletes(t *testing.T) {
 		EffectCommandAccepted,
 		EffectResponseDelivered,
 	)
+	// The retention is recorded where the content appeared, which is the only
+	// record that can explain what the host holds.
+	if retained := retentionEffects(world, "rental-warm"); len(retained) != 1 {
+		t.Fatalf("the host holds the image with %d retentions recorded, want exactly one", len(retained))
+	}
 }
 
 // TestAWarmStartRecordsAPullThatMovedNothing keeps the ledger able to tell a
@@ -358,7 +396,7 @@ func TestAWarmStartRecordsAPullThatMovedNothing(t *testing.T) {
 		t.Fatalf("second launch: %v", err)
 	}
 
-	pull := lastImagePullEffect(t, world)
+	pull := lastEffectConsequence(t, world, OperationImagePull)
 	if fetched := pull["fetched_digests"]; len(fetched.([]any)) != 0 {
 		t.Fatalf("a launch on a host that already held the image fetched %v", fetched)
 	}
@@ -380,28 +418,74 @@ func TestOneShotCapacityKeepsNothingItPulled(t *testing.T) {
 	if len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
 		t.Fatalf("capacity Mercator does not keep held %+v", held)
 	}
-	pull := lastImagePullEffect(t, world)
-	if retained := pull["retained_digests"]; len(retained.([]any)) != 0 {
-		t.Fatalf("capacity Mercator does not keep recorded retaining %v", retained)
+	if retained := retentionEffects(world, "fresh-4090"); len(retained) > 0 {
+		t.Fatalf("capacity Mercator does not keep recorded keeping content: %v", retained)
 	}
+	pull := lastEffectConsequence(t, world, OperationImagePull)
 	if fetched := pull["fetched_digests"]; len(fetched.([]any)) == 0 {
 		t.Fatal("the one-shot execution fetched nothing, so it never paid for the image at all")
 	}
 }
 
-func lastImagePullEffect(t *testing.T, world *simulatedWorld) map[string]any {
+// TestAnAbandonedPullLeavesNothingBehind is what stops the ledger from recording
+// content a host never received. An execution released while its image is still
+// moving cancels the transfer, so no retention is ever recorded for it and a Run
+// Bundle exported mid-pull cannot claim 18GB landed somewhere.
+func TestAnAbandonedPullLeavesNothingBehind(t *testing.T) {
+	world, arrival := openWorldFixture(t, "producer")
+	world.prepareRun("run-producer", arrival)
+	request := worldLaunchRequest(arrival)
+	if _, err := world.Launch(context.Background(), request); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch: %v", err)
+	}
+
+	if _, err := world.Terminate(context.Background(), adapter.TerminateRequest{
+		OperationKey:      "terminate:producer:1",
+		RequestHash:       "sha256:producer-terminate",
+		LaunchKey:         request.LaunchKey,
+		OwnershipToken:    request.OwnershipToken,
+		LaunchRequestHash: request.RequestHash,
+	}); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	world.setNow(world.nowTime().Add(time.Hour))
+
+	held := offerByID(t, world.truthSnapshot().Offers, "rental-warm").Images
+	if held.Holds(arrival.Request.Image) {
+		t.Fatalf("a pull nothing was waiting on still warmed the host: %+v", held)
+	}
+	if retained := retentionEffects(world, "rental-warm"); len(retained) > 0 {
+		t.Fatalf("the ledger records content a cancelled transfer never delivered: %v", retained)
+	}
+}
+
+func retentionEffects(world *simulatedWorld, offerID string) []EffectRecord {
+	var retained []EffectRecord
+	for _, effect := range world.effectRecords() {
+		var host struct {
+			OfferID string `json:"offer_id"`
+		}
+		if effect.Operation != OperationImageRetained || json.Unmarshal(effect.Request, &host) != nil || host.OfferID != offerID {
+			continue
+		}
+		retained = append(retained, effect)
+	}
+	return retained
+}
+
+func lastEffectConsequence(t *testing.T, world *simulatedWorld, operation string) map[string]any {
 	t.Helper()
 	var consequence map[string]any
 	for _, effect := range world.effectRecords() {
-		if effect.Operation != OperationImagePull {
+		if effect.Operation != operation {
 			continue
 		}
 		if err := json.Unmarshal(effect.Consequence, &consequence); err != nil {
-			t.Fatalf("decode image pull consequence: %v", err)
+			t.Fatalf("decode %s consequence: %v", operation, err)
 		}
 	}
 	if consequence == nil {
-		t.Fatal("the ledger records no image pull")
+		t.Fatalf("the ledger records no %s", operation)
 	}
 	return consequence
 }
@@ -418,7 +502,7 @@ func TestLocalityProvenanceRejectsOneShotCapacityThatKeptItsImage(t *testing.T) 
 			Images: domain.ImageInventory{Known: true, LayerDigests: []string{"sha256:pulled"}},
 		}}},
 		Effects: []EffectRecord{{
-			Operation:   OperationImagePull,
+			Operation:   OperationImageRetained,
 			Command:     EffectCommandAccepted,
 			Request:     []byte(`{"offer_id":"oneshot-container"}`),
 			Consequence: []byte(`{"retained_digests":["sha256:pulled"]}`),
@@ -459,19 +543,31 @@ func TestIdempotentExternalCommandsCoversImagePulls(t *testing.T) {
 }
 
 // TestLocalityProvenanceAllowsAHostToLoseWhatItHeld keeps locality decay out of
-// the safety rules. Content is reclaimed under disk pressure, machines are
-// replaced, and a host reporting less than it reported before is a fact the
-// World Tape must be able to state rather than a control-plane failure.
+// the safety rules. Content is reclaimed under disk pressure and machines are
+// replaced, so a host holding less than the World Tape put there is a fact to
+// state rather than a control-plane failure. The host still holds one seeded
+// digest and one it retained, so the rule inspects everything it has to inspect
+// while a third digest goes missing.
 func TestLocalityProvenanceAllowsAHostToLoseWhatItHeld(t *testing.T) {
 	observation := InvariantObservation{
 		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
-			ID:     "rental-warm",
-			Kind:   domain.OfferKindStanding,
-			Lane:   domain.LaneReusable,
-			Images: domain.ImageInventory{Known: true},
+			ID:   "rental-warm",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneReusable,
+			Images: domain.ImageInventory{
+				Known:        true,
+				ImageDigests: []string{"trainer@sha256:ran-here"},
+				LayerDigests: []string{"sha256:seeded"},
+			},
 		}}},
+		Effects: []EffectRecord{{
+			Operation:   OperationImageRetained,
+			Command:     EffectCommandAccepted,
+			Request:     []byte(`{"offer_id":"rental-warm"}`),
+			Consequence: []byte(`{"retained_digests":["trainer@sha256:ran-here"]}`),
+		}},
 		SeededLocality: map[string]map[string]bool{
-			"rental-warm": {"sha256:reclaimed": true},
+			"rental-warm": {"sha256:seeded": true, "sha256:reclaimed": true},
 		},
 	}
 

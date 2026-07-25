@@ -291,6 +291,7 @@ func effectMutatesWorld(operation string) bool {
 		OperationProviderRelease,
 		OperationProviderTerminate,
 		OperationImagePull,
+		OperationImageRetained,
 		OperationArtifactPut,
 		OperationCacheMountWrite,
 		OperationControlPlaneRestart:
@@ -412,9 +413,9 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 }
 
 // localityProvenance is the standing guard on how a host becomes warm. Content
-// arrives on a machine exactly two ways: the World Tape seeded it there, or an
-// accepted image pull retained it there. And only capacity Mercator keeps holds
-// anything beyond its seed at all.
+// arrives on a machine exactly two ways: the World Tape seeded it there, or a
+// pull's bytes landed there and were recorded as retained. And only capacity
+// Mercator keeps holds anything beyond its seed at all.
 //
 // It deliberately says nothing about a host holding less than it held before.
 // Locality decays, which is why ImageInventory carries the age of the answer:
@@ -467,7 +468,7 @@ func heldContentIsExplained(offer domain.OfferSnapshot, seeded, retained map[str
 			continue
 		}
 		return fmt.Errorf(
-			"offer %q holds %s with no World Tape seed and no accepted image pull against that host",
+			"offer %q holds %s with no World Tape seed and no content retained against that host",
 			offer.ID,
 			digest,
 		)
@@ -475,32 +476,34 @@ func heldContentIsExplained(offer domain.OfferSnapshot, seeded, retained map[str
 	return nil
 }
 
-// retainedByOffer reads back what the effect ledger says each host kept. A pull
-// that retained nothing explains nothing, which is exactly the record a one-shot
-// execution leaves, and so is a pull onto a host that already held the image.
+// retainedByOffer reads back what the effect ledger says each host kept. It
+// reads retention rather than dispatch, because a pull states what a host will
+// have once its bytes land, and a host that holds content before then holds
+// content nothing has delivered. A one-shot execution leaves no retention at
+// all, and neither does a launch onto a host that already held the image.
 func retainedByOffer(effects []EffectRecord) (map[string]map[string]bool, error) {
 	retained := map[string]map[string]bool{}
 	for _, effect := range effects {
-		if effect.Operation != OperationImagePull || effect.Command != EffectCommandAccepted {
+		if effect.Operation != OperationImageRetained || effect.Command != EffectCommandAccepted {
 			continue
 		}
-		var pull struct {
+		var host struct {
 			OfferID string `json:"offer_id"`
 		}
 		var kept struct {
 			RetainedDigests []string `json:"retained_digests"`
 		}
-		if err := json.Unmarshal(effect.Request, &pull); err != nil {
-			return nil, fmt.Errorf("decode image pull %s: %w", effect.ID, err)
+		if err := json.Unmarshal(effect.Request, &host); err != nil {
+			return nil, fmt.Errorf("decode retained content %s: %w", effect.ID, err)
 		}
 		if err := json.Unmarshal(effect.Consequence, &kept); err != nil {
-			return nil, fmt.Errorf("decode image pull consequence %s: %w", effect.ID, err)
+			return nil, fmt.Errorf("decode retained content consequence %s: %w", effect.ID, err)
 		}
-		if retained[pull.OfferID] == nil {
-			retained[pull.OfferID] = map[string]bool{}
+		if retained[host.OfferID] == nil {
+			retained[host.OfferID] = map[string]bool{}
 		}
 		for _, digest := range kept.RetainedDigests {
-			retained[pull.OfferID][digest] = true
+			retained[host.OfferID][digest] = true
 		}
 	}
 	return retained, nil

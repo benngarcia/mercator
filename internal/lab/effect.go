@@ -17,6 +17,10 @@ const (
 	OperationArtifactPut         = "artifact.put"
 	OperationCacheMountWrite     = "cache_mount.write"
 	OperationImagePull           = "image.pull"
+	// OperationImageRetained is content a host kept, recorded when the bytes
+	// landed. The pull is a command with a duration; retention is the fact that
+	// outlives it, and only one of the two can explain what a host holds.
+	OperationImageRetained = "image.retained"
 )
 
 type EffectCommand string

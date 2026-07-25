@@ -35,9 +35,14 @@ type externalExecution struct {
 	OfferID        string                `json:"offer_id"`
 	Disposition    domain.Disposition    `json:"disposition"`
 	Phase          adapter.ExternalPhase `json:"phase"`
-	StartedAt      time.Time             `json:"started_at"`
-	CompletesAt    time.Time             `json:"completes_at"`
-	OutputsStored  bool                  `json:"outputs_stored"`
+	// AcceptedAt is when the provider took the launch. StartedAt is when the
+	// container actually began, which cannot precede the arrival of the image it
+	// runs: a process cannot execute bytes that have not landed. The gap between
+	// them is the start latency Mercator predicted and now has an actual for.
+	AcceptedAt    time.Time `json:"accepted_at"`
+	StartedAt     time.Time `json:"started_at"`
+	CompletesAt   time.Time `json:"completes_at"`
+	OutputsStored bool      `json:"outputs_stored"`
 }
 
 type ArtifactReplica struct {
@@ -119,10 +124,15 @@ type worldOperation struct {
 // about bytes that have arrived, so a host holds nothing of an image until the
 // pull that fetches it completes: the alternative is telling the next Run that
 // a candidate starts instantly while the content is provably still in flight.
+// The pull is named by the launch that asked for it, because an execution that
+// is released or terminated mid-transfer leaves nothing behind.
 type pendingPull struct {
 	offerID     string
+	runID       string
+	launchKey   string
 	image       string
 	layers      []scenario.LayerSpec
+	fetched     []string
 	completesAt time.Time
 }
 
@@ -133,9 +143,16 @@ type simulatedWorld struct {
 	now    time.Time
 	images map[string][]scenario.LayerSpec
 	// truth is world state, keyed by offer. Mercator never reads it: everything
-	// it learns about capacity arrives through offerSnapshots, which carries
-	// only what an offer can say.
+	// it learns about capacity arrives through the observed catalog below.
 	truth map[string]hostState
+	// observed is what the provider has published about its own capacity, and
+	// the only thing the offer seam can answer with. An offer therefore states
+	// the age of the answer rather than the instant of the read, and a world that
+	// changed since the last publication is a stale observation a fixture can
+	// write down. Feeding World Truth straight into adapter reads is the
+	// alternative ADR 0004 rejects.
+	observed   map[string]hostState
+	observedAt time.Time
 	// pulls is image content still moving onto a host.
 	pulls     []pendingPull
 	activeRun string
@@ -169,6 +186,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		now:             tape.Start,
 		images:          make(map[string][]scenario.LayerSpec, len(tape.InitialWorld.Images)),
 		truth:           map[string]hostState{},
+		observed:        map[string]hostState{},
 		runs:            map[string]RunArrival{},
 		artifacts:       map[string]int64{},
 		replicas:        map[string]map[string]bool{},
@@ -238,6 +256,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		}
 		world.truth[marketplace.ID] = cloneHostState(state)
 	}
+	world.publishObservations()
 	return world, nil
 }
 
@@ -284,18 +303,35 @@ func (world *simulatedWorld) artifactDependenciesAvailable(arrival RunArrival) b
 	return true
 }
 
-// setNow moves virtual time and lets everything the world scheduled for that
-// instant happen: image content that finished arriving is on its host from then
-// on, whether or not anyone has looked.
+// setNow moves virtual time, lets everything the world scheduled for that
+// instant happen, and publishes what the provider can now see. Image content
+// that finished arriving is on its host from then on, whether or not anyone has
+// looked.
 func (world *simulatedWorld) setNow(now time.Time) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	world.now = now.UTC()
 	world.settlePulls()
+	world.publishObservations()
+}
+
+// publishObservations is the provider taking a fresh look at its own capacity.
+// Everything Mercator reads about an offer comes from the last publication. The
+// provider publishes when virtual time advances and after every command it
+// carries out itself, because it knows what it did to its own machines; what a
+// scenario can leave unpublished is what the world did behind its back.
+func (world *simulatedWorld) publishObservations() {
+	observed := make(map[string]hostState, len(world.truth))
+	for id, state := range world.truth {
+		observed[id] = cloneHostState(state)
+	}
+	world.observed = observed
+	world.observedAt = world.now
 }
 
 // settlePulls puts the content of every completed pull on the host that fetched
-// it. A pull still in flight leaves the host exactly as warm as it was.
+// it and records the retention that explains it. A pull still in flight leaves
+// the host exactly as warm as it was, and records nothing.
 func (world *simulatedWorld) settlePulls() {
 	remaining := world.pulls[:0]
 	for _, pull := range world.pulls {
@@ -306,8 +342,43 @@ func (world *simulatedWorld) settlePulls() {
 		state := world.truth[pull.offerID]
 		state.keep(pull.image, pull.layers)
 		world.truth[pull.offerID] = state
+		world.recordEffect(
+			OperationImageRetained,
+			"image-retained/"+pull.launchKey+"/"+pull.image,
+			EffectCommandAccepted,
+			EffectResponseDelivered,
+			pull.runID,
+			pull.launchKey,
+			"",
+			map[string]any{"image": pull.image, "offer_id": pull.offerID},
+			map[string]any{"retained_digests": pull.fetched},
+			"",
+		)
 	}
 	world.pulls = remaining
+}
+
+// cancelPull drops content that was still moving onto a host when the execution
+// that asked for it was released or terminated. This world moves an image whole
+// or not at all, so a transfer nothing is waiting on leaves nothing behind.
+func (world *simulatedWorld) cancelPull(launchKey string) {
+	world.pulls = slices.DeleteFunc(world.pulls, func(pull pendingPull) bool {
+		return pull.launchKey == launchKey
+	})
+}
+
+// executionHorizon is the latest moment the world still owes a running
+// execution its completion, and zero when nothing is running.
+func (world *simulatedWorld) executionHorizon() time.Time {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	var horizon time.Time
+	for _, execution := range world.executions {
+		if execution.CompletesAt.After(horizon) {
+			horizon = execution.CompletesAt
+		}
+	}
+	return horizon
 }
 
 func (world *simulatedWorld) nowTime() time.Time {
@@ -338,7 +409,7 @@ func (world *simulatedWorld) truthSnapshot() WorldTruthSnapshot {
 	})
 	return WorldTruthSnapshot{
 		At:               world.now,
-		Offers:           world.offerSnapshots(world.truth),
+		Offers:           world.offerSnapshots(world.truth, world.now),
 		ActiveExecutions: executions,
 		ArtifactReplicas: world.artifactReplicas(),
 		CacheMounts:      world.cacheMountStates(),
@@ -401,7 +472,7 @@ func (world *simulatedWorld) recordControlPlaneRestart(ordinal uint64) {
 func (world *simulatedWorld) observeOffers() []domain.OfferSnapshot {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	return world.offerSnapshots(world.truth)
+	return world.offerSnapshots(world.observed, world.observedAt)
 }
 
 func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
@@ -414,7 +485,7 @@ func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.Offer
 	if _, exists := world.images[arrival.Request.Image]; !exists {
 		return nil, fmt.Errorf("Lab world image %q is not defined", arrival.Request.Image)
 	}
-	offers := world.offerSnapshots(world.truth)
+	offers := world.offerSnapshots(world.observed, world.observedAt)
 	world.recordEffect(
 		OperationProviderListOffers,
 		"list-offers/"+world.activeRun,
@@ -487,16 +558,17 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		OfferID:        request.SelectedOfferSnapshotID,
 		Disposition:    request.Disposition,
 		Phase:          adapter.ExternalPhaseRunning,
-		StartedAt:      world.now,
-		CompletesAt:    world.now.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID)),
+		AcceptedAt:     world.now,
 	}
 	if offer.offer.Kind == domain.OfferKindStanding {
 		offer.offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
 		world.truth[request.SelectedOfferSnapshotID] = offer
 	}
-	world.pullRunImage(execution, request.Image)
+	execution.StartedAt = world.pullRunImage(execution, request.Image)
+	execution.CompletesAt = execution.StartedAt.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID))
 	world.fetchRunArtifacts(execution, arrival)
 	world.executions[request.LaunchKey] = execution
+	world.publishObservations()
 	receipt := adapter.LaunchReceipt{
 		ExternalID:     execution.ExternalID,
 		LaunchKey:      execution.LaunchKey,
@@ -663,10 +735,12 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 	}
 	if exists {
 		delete(world.executions, launchKey)
+		world.cancelPull(launchKey)
 		if offer := world.truth[execution.OfferID]; offer.offer.Kind == domain.OfferKindStanding {
 			offer.offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: 1}
 			world.truth[execution.OfferID] = offer
 		}
+		world.publishObservations()
 	}
 	receipt := adapter.ReleaseReceipt{Released: true}
 	world.operations[operationKey] = worldOperation{
@@ -678,20 +752,20 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 	return receipt, false, nil
 }
 
-// offerSnapshots is the provider seam: it projects world state into the only
-// vocabulary Mercator gets to read. Each host states everything it holds,
-// whatever Run is being placed, because what a Run would still have to fetch is
-// the scheduler's subtraction against the manifest and not an answer this world
-// asserts about an image the offer does not name.
-func (world *simulatedWorld) offerSnapshots(source map[string]hostState) []domain.OfferSnapshot {
+// offerSnapshots projects host state into the only vocabulary Mercator gets to
+// read, as of the moment that state was observed. Each host states everything it
+// holds, whatever Run is being placed, because what a Run would still have to
+// fetch is the scheduler's subtraction against the manifest and not an answer
+// this world asserts about an image the offer does not name.
+func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time.Time) []domain.OfferSnapshot {
 	offers := make([]domain.OfferSnapshot, 0, len(source))
 	for _, state := range source {
 		offer := state.offer
-		offer.ObservedAt = world.now
-		offer.ExpiresAt = world.now.Add(5 * time.Minute)
+		offer.ObservedAt = at
+		offer.ExpiresAt = at.Add(5 * time.Minute)
 		offer.Images = domain.ImageInventory{
 			Known:        true,
-			ObservedAt:   world.now,
+			ObservedAt:   at,
 			ImageDigests: slices.Sorted(maps.Keys(state.heldImages)),
 			LayerDigests: slices.Sorted(maps.Keys(state.heldLayers)),
 		}
@@ -701,25 +775,16 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState) []domai
 	return offers
 }
 
-// pullRunImage moves the image this launch needs onto the host that will run
-// it. The ledger records what the pull actually fetched, which is nothing at
-// all on a host that already holds the image, and what the host keeps, which is
-// nothing at all for capacity Mercator does not keep.
-func (world *simulatedWorld) pullRunImage(execution externalExecution, image string) {
+// pullRunImage moves the image this launch needs onto the host that will run it
+// and answers when the container can start, which is when the last of those
+// bytes has landed. The ledger records what the pull fetched, which is nothing at
+// all on a host that already holds the image; what the host keeps is recorded
+// separately, when it keeps it.
+func (world *simulatedWorld) pullRunImage(execution externalExecution, image string) time.Time {
 	state := world.truth[execution.OfferID]
 	layers := world.images[image]
 	fetched, bytes := state.missing(image, layers)
 	completesAt := world.now.Add(transferDuration(bytes, registryBandwidth(state.offer)))
-	retained := []string{}
-	if state.offer.KeepsWhatItRuns() {
-		retained = fetched
-		world.pulls = append(world.pulls, pendingPull{
-			offerID:     execution.OfferID,
-			image:       image,
-			layers:      layers,
-			completesAt: completesAt,
-		})
-	}
 	world.recordEffect(
 		OperationImagePull,
 		"image-pull/"+execution.LaunchKey+"/"+image,
@@ -730,14 +795,25 @@ func (world *simulatedWorld) pullRunImage(execution externalExecution, image str
 		"",
 		map[string]any{"image": image, "offer_id": execution.OfferID},
 		map[string]any{
-			"fetched_digests":  fetched,
-			"fetched_bytes":    bytes,
-			"retained_digests": retained,
-			"completes_at":     completesAt,
+			"fetched_digests": fetched,
+			"fetched_bytes":   bytes,
+			"completes_at":    completesAt,
 		},
 		"",
 	)
-	world.settlePulls()
+	if len(fetched) > 0 && state.offer.KeepsWhatItRuns() {
+		world.pulls = append(world.pulls, pendingPull{
+			offerID:     execution.OfferID,
+			runID:       execution.RunID,
+			launchKey:   execution.LaunchKey,
+			image:       image,
+			layers:      layers,
+			fetched:     fetched,
+			completesAt: completesAt,
+		})
+		world.settlePulls()
+	}
+	return completesAt
 }
 
 // transferDuration is how long this world takes to move content, which is its
@@ -904,11 +980,14 @@ func (world *simulatedWorld) recordLaunchEffect(request adapter.LaunchRequest, c
 	if receipt, ok := consequence.(adapter.LaunchReceipt); ok {
 		execution := world.executions[receipt.LaunchKey]
 		consequence = map[string]any{
-			"external_id":            receipt.ExternalID,
-			"launch_key":             receipt.LaunchKey,
-			"phase":                  receipt.Phase,
-			"accepted_at":            receipt.AcceptedAt,
-			"duplicate":              receipt.Duplicate,
+			"external_id": receipt.ExternalID,
+			"launch_key":  receipt.LaunchKey,
+			"phase":       receipt.Phase,
+			"accepted_at": receipt.AcceptedAt,
+			"duplicate":   receipt.Duplicate,
+			// The two actuals a prediction is calibrated against: how long the
+			// container waited for its image, and how long it then ran.
+			"start_latency_seconds":  execution.StartedAt.Sub(execution.AcceptedAt).Seconds(),
 			"actual_runtime_seconds": execution.CompletesAt.Sub(execution.StartedAt).Seconds(),
 		}
 	}
