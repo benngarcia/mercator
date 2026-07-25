@@ -132,6 +132,11 @@ func TestWorldExpiredLeaseRemovesAMachineFromOffers(t *testing.T) {
 	}
 }
 
+// TestWorldMarketplaceOfferOwesFullImagePull is the offer for a machine that
+// does not exist yet. Nothing is running on it to be asked what it holds, so it
+// enumerates nothing: "I looked and found nothing" is a confident claim, and a
+// world that made it about a VM nobody has created would be lending Placement a
+// certainty no deployment has.
 func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 	world := newLayeredWorld(t)
 	if err := world.AddMachine(&Machine{Offer: domain.OfferSnapshot{
@@ -146,8 +151,8 @@ func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 	if offer.Kind != domain.OfferKindProvisionable {
 		t.Fatalf("marketplace offer kind = %q, want provisionable", offer.Kind)
 	}
-	if got := offer.Images; !got.Known || len(got.LayerDigests) != 0 {
-		t.Fatalf("inventory = %+v, want a machine that does not exist yet holding nothing", got)
+	if got := offer.Images; got.Known || len(got.LayerDigests) != 0 {
+		t.Fatalf("inventory = %+v, want no enumeration at all of a machine that does not exist yet", got)
 	}
 }
 
@@ -179,7 +184,13 @@ func TestWorldHoldsARunningImageOnlyOnceItsBytesHaveArrived(t *testing.T) {
 // line, because each half is a different reason. A machine that does not exist
 // yet has nowhere to put the content; a host Mercator borrows a slot on exists
 // and keeps running, but nothing Mercator has enrolled on it can hold anything
-// for the next Run or say what is there.
+// for the next Run.
+//
+// It reads the machine rather than its offer. No offer for capacity like this
+// carries an inventory at all, because nothing of Mercator's is there to
+// enumerate it, so an offer would look the same whether the machine kept
+// everything or nothing. The Rental beside them runs the same image and keeps
+// it, which is what makes this an answer about the lane and not about the pull.
 func TestWorldCapacityItDoesNotKeepHoldsNothingItRan(t *testing.T) {
 	for _, capacity := range []struct {
 		name  string
@@ -196,17 +207,27 @@ func TestWorldCapacityItDoesNotKeepHoldsNothingItRan(t *testing.T) {
 	} {
 		t.Run(capacity.name, func(t *testing.T) {
 			world := newLayeredWorld(t)
-			if err := world.AddMachine(&Machine{Offer: capacity.offer}); err != nil {
-				t.Fatalf("add machine: %v", err)
+			borrowed := &Machine{Offer: capacity.offer}
+			kept := &Machine{Offer: rentalOffer("rental-kept")}
+			for _, machine := range []*Machine{borrowed, kept} {
+				if err := world.AddMachine(machine); err != nil {
+					t.Fatalf("add machine: %v", err)
+				}
+				if _, err := world.Launch(context.Background(), worldLaunch(machine.Offer.ID, "trainer:v1")); err != nil {
+					t.Fatalf("launch on %s: %v", machine.Offer.ID, err)
+				}
 			}
 
-			if _, err := world.Launch(context.Background(), worldLaunch(capacity.offer.ID, "trainer:v1")); err != nil {
-				t.Fatalf("launch: %v", err)
-			}
 			world.Clock().Advance(time.Hour)
+			// Listing offers is what makes this world apply the pulls that have
+			// landed, and what each machine kept is readable only afterwards.
+			worldOffers(t, world)
 
-			held := worldOffers(t, world)[capacity.offer.ID].Images
-			if len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
+			now := world.Clock().Now()
+			if held := kept.inventory(now); !held.HoldsLayer(domain.ImageLayer{Digest: "layer-base"}) {
+				t.Fatalf("the Rental that ran the image holds %+v, and capacity Mercator keeps keeps what it ran", held)
+			}
+			if held := borrowed.inventory(now); len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
 				t.Fatalf("%s held %+v an hour after its workload", capacity.name, held)
 			}
 		})

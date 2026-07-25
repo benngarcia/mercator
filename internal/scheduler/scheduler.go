@@ -86,8 +86,8 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		decision.SelectedOfferSnapshotID = decision.Candidates[bestIndex].OfferSnapshotID
 		decision.SelectionReasonCodes = []string{"FEASIBLE", "LOWEST_SCORE"}
 		decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, selectionReason(decision.Candidates[bestIndex].Disposition))
-		if input.Workload.Spec.Placement.MaxP90StartSeconds > 0 {
-			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, "WITHIN_START_SLO")
+		if code := startSLOReason(input.Workload.Spec.Placement.MaxP90StartSeconds, decision.Candidates[bestIndex]); code != "" {
+			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, code)
 		}
 	} else {
 		decision.SelectionReasonCodes = []string{"NO_FEASIBLE_OFFERS"}
@@ -280,14 +280,49 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	if !offer.Pricing.Known && !workload.Spec.Placement.AllowUnknownPricing {
 		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "pricing", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown pricing."})
 	}
-	estimates, _ := estimateCandidate(input, offer)
-	if workload.Spec.Placement.MaxP90StartSeconds > 0 && estimates.StartSeconds.P90 > workload.Spec.Placement.MaxP90StartSeconds {
+	estimates, locality := estimateCandidate(input, offer)
+	if exceedsStartSLO(workload.Spec.Placement.MaxP90StartSeconds, estimates.StartSeconds, locality) {
 		violations = append(violations, domain.Violation{Code: "LATENCY_SLO_EXCEEDED", Path: "placement.max_p90_start_seconds", Required: workload.Spec.Placement.MaxP90StartSeconds, Offered: estimates.StartSeconds.P90, Message: "Offer exceeds the requested p90 start latency."})
 	}
 	if workload.Spec.Placement.MaxExpectedCostUSD != nil && estimates.CostUSD.Expected > *workload.Spec.Placement.MaxExpectedCostUSD {
 		violations = append(violations, domain.Violation{Code: "COST_LIMIT_EXCEEDED", Path: "placement.max_expected_cost_usd", Required: *workload.Spec.Placement.MaxExpectedCostUSD, Offered: estimates.CostUSD.Expected, Message: "Offer exceeds the requested maximum expected cost."})
 	}
 	return violations
+}
+
+// startSLOReason is what the decision says about the bound the Run set on its
+// own start. A candidate predicted inside it is inside it. A candidate admitted
+// because nobody could say what it holds is not: its prediction is over the
+// bound and rests on an image locality nothing established, and recording that
+// as compliance would state a promise out of a silence.
+func startSLOReason(limit float64, selected domain.CandidateDecision) string {
+	switch {
+	case limit <= 0:
+		return ""
+	case selected.Estimates.StartSeconds.P90 <= limit:
+		return "WITHIN_START_SLO"
+	default:
+		return "START_SLO_UNVERIFIED"
+	}
+}
+
+// exceedsStartSLO reports whether this candidate is KNOWN to start later than
+// the Run asked for. A start latency built on an image locality nobody could
+// state is a guess, and refusing a candidate on a guess is what turns silence
+// into infeasibility. Unknown locality is priced the whole image so a host
+// nobody can describe never outranks one provably ready, and priced is as far
+// as it may go: the goal is explicit that it must never become a hard
+// constraint, and a machine that may already hold the image would otherwise be
+// struck out for holding it quietly.
+//
+// A measured start latency for this offer is a measurement whatever the
+// locality was, so it binds. Nothing but a sample sets SampleCount, which is
+// what tells the two apart.
+func exceedsStartSLO(limit float64, start domain.Estimate, locality domain.LocalityState) bool {
+	if limit <= 0 || start.P90 <= limit {
+		return false
+	}
+	return locality != domain.LocalityUnknown || start.SampleCount > 0
 }
 
 func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) (domain.CandidateEstimates, domain.LocalityState) {
@@ -424,6 +459,11 @@ func localitySource(locality domain.LocalityState, manifest domain.ImageManifest
 		return "manifest_unresolved"
 	case !inventory.Known:
 		return "inventory_unknown"
+	case inventory.Undescribed(manifest.Digest):
+		// The host enumerated itself and failed on this one image. An operator
+		// reading "inventory_unknown" would go looking for a machine that
+		// cannot be asked, and this one answered about everything else.
+		return "image_undescribed"
 	default:
 		return "manifest_without_layers"
 	}

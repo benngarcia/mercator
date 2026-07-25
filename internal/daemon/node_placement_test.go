@@ -475,7 +475,10 @@ type scriptedRuntime struct {
 	platforms map[string]domain.Platform
 	// unassembled is every image whose content is here and whose layer chain
 	// this runtime never built, which it reports as held and not runnable.
-	unassembled  []string
+	unassembled []string
+	// undescribed is every image this runtime listed and could not account for,
+	// which is what a daemon that will not describe an image leaves behind.
+	undescribed  []string
 	observations map[string]capability.WorkloadObservation
 }
 
@@ -511,6 +514,18 @@ func (runtime *scriptedRuntime) holdUnassembled(digest string, platform domain.P
 	runtime.unassembled = append(runtime.unassembled, digest)
 }
 
+// holdUndescribed puts an image on this machine that its runtime cannot account
+// for: the daemon lists it and will not say what it is, or reports part of its
+// content present and can name none of it. The node says so rather than leaving
+// the image out of a report that enumerated everything else, because leaving it
+// out is a confident claim that none of it is here.
+func (runtime *scriptedRuntime) holdUndescribed(digest string) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.held = append(runtime.held, digest)
+	runtime.undescribed = append(runtime.undescribed, digest)
+}
+
 // platformOf is the build this machine holds one image as: what it was told
 // when the image was placed there by hand, and the host's own build for
 // anything it ran itself.
@@ -530,6 +545,13 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 	defer runtime.mu.Unlock()
 	images := make([]capability.ImageLocality, 0, len(runtime.held))
 	for _, digest := range runtime.held {
+		if slices.Contains(runtime.undescribed, digest) {
+			images = append(images, capability.ImageLocality{
+				ManifestDigest: digest,
+				State:          domain.LocalityUnknown,
+			})
+			continue
+		}
 		if slices.Contains(runtime.unassembled, digest) {
 			images = append(images, capability.ImageLocality{
 				ManifestDigest: digest,
@@ -777,6 +799,38 @@ func TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked(t *testing.T) {
 	}
 	if pull.Confidence != domain.AssumedLinkConfidence {
 		t.Fatalf("pull confidence = %v, want %v: nothing has measured how fast this machine unpacks",
+			pull.Confidence, domain.AssumedLinkConfidence)
+	}
+}
+
+// TestPlacementRecordsWhatANodeCouldNotSayAsSilence is the last place a node's
+// own uncertainty could be laundered into a fact. An enrolled node enumerates,
+// so an image missing from every list in its inventory reads as "none of it is
+// here" and the decision states it as an inventory measurement at the full
+// confidence of a machine whose link is known. This node held an image it could
+// not describe: the decision records the silence, with the source that names
+// whose silence it was, and prices it as the fetch it may well be.
+func TestPlacementRecordsWhatANodeCouldNotSayAsSilence(t *testing.T) {
+	fleet := startFleet(t)
+	fleet.runtime.holdUndescribed(trainerIndexDigest)
+	waitFor(t, func() bool {
+		return fleet.nodeOffer(t).Images.Undescribed(trainerIndexDigest)
+	}, "the node never reported the image it could not account for")
+
+	runID := fleet.submitRun(t)
+	fleet.completeWorkload(t, runID, 0)
+	fleet.awaitOutcome(t, runID, "succeeded")
+
+	decision := fleet.decision(t, runID)
+	if decision.imageLocality() != domain.LocalityUnknown {
+		t.Fatalf("image locality = %q, want unknown: this machine looked and could not answer", decision.imageLocality())
+	}
+	pull := decision.pullEstimate()
+	if pull.Source != "image_undescribed" {
+		t.Fatalf("pull source = %q, want the silence to name itself: the node answered about every other image", pull.Source)
+	}
+	if pull.Confidence > domain.AssumedLinkConfidence {
+		t.Fatalf("pull confidence = %v, want no more than %v for an answer nobody established",
 			pull.Confidence, domain.AssumedLinkConfidence)
 	}
 }

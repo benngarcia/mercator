@@ -131,19 +131,18 @@ func (state hostState) seededDigests() map[string]bool {
 	return digests
 }
 
-// inventory is what this host says it holds, in the digest space its runtime
-// can enumerate, and separating what it can start on from what it has only
-// fetched. A Docker host names its layers by uncompressed diff ID and has no way
-// to name the compressed blob a registry served it, so answering in both spaces
-// would be the world lending a machine knowledge it does not have.
+// inventory is what this host HOLDS, in the digest space its runtime can
+// enumerate, and separating what it can start on from what it has only fetched.
+// A Docker host names its layers by uncompressed diff ID and has no way to name
+// the compressed blob a registry served it, so answering in both spaces would be
+// the world lending a machine knowledge it does not have.
+//
+// This is World Truth and every machine answers it, including the ones nothing
+// of Mercator's runs on. Whether Placement gets to read the answer is a separate
+// question, decided once at publication: a world that suppressed it here would
+// leave the laws that check what borrowed capacity accumulated with nothing to
+// read, and they are the reason the distinction is worth drawing.
 func (state hostState) inventory(at time.Time) domain.ImageInventory {
-	if !state.offer.Lane.Reusable() {
-		// Nothing of Mercator's runs on capacity it borrows a slot on, so
-		// nothing enumerates it. Every provider adapter in the tree says
-		// exactly this about the machines it sells, and a world that answered
-		// for them would be lending Placement knowledge no deployment has.
-		return domain.ImageInventory{}
-	}
 	inventory := domain.ImageInventory{Known: true, ObservedAt: at}
 	for _, image := range slices.Sorted(maps.Keys(state.heldImages)) {
 		if state.packed[image] {
@@ -562,7 +561,7 @@ func (world *simulatedWorld) recordControlPlaneRestart(ordinal uint64) {
 func (world *simulatedWorld) observeOffers() []domain.OfferSnapshot {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	return world.offerSnapshots(world.observed, world.observedAt)
+	return world.publishedOffers()
 }
 
 func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
@@ -575,7 +574,7 @@ func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.Offer
 	if _, exists := world.images[arrival.Request.Image]; !exists {
 		return nil, fmt.Errorf("Lab world image %q is not defined", arrival.Request.Image)
 	}
-	offers := world.offerSnapshots(world.observed, world.observedAt)
+	offers := world.publishedOffers()
 	world.recordEffect(
 		OperationProviderListOffers,
 		"list-offers/"+world.activeRun,
@@ -857,6 +856,24 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time
 		offers = append(offers, offer)
 	}
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
+	return offers
+}
+
+// publishedOffers is what the provider can say about the machines it sells, as
+// of its last look. Mercator enumerates a machine only where it runs something
+// of its own, so a slot it borrows and a machine that does not exist yet carry
+// no inventory at all, which is what every provider adapter in the tree
+// publishes. What those machines hold is still World Truth, stated there and
+// read by the laws about what capacity accumulates; erasing it at the source
+// would leave those laws reading an inventory that is empty whatever the world
+// did.
+func (world *simulatedWorld) publishedOffers() []domain.OfferSnapshot {
+	offers := world.offerSnapshots(world.observed, world.observedAt)
+	for index, offer := range offers {
+		if !offer.KeepsWhatItRuns() {
+			offers[index].Images = domain.ImageInventory{}
+		}
+	}
 	return offers
 }
 

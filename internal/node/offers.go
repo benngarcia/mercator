@@ -164,9 +164,7 @@ func imageInventory(facts capability.NodeFacts, host domain.Platform) domain.Ima
 		ObservedAt: facts.ObservedAt,
 	}
 	for _, image := range facts.Images {
-		if image.ManifestDigest != "" && image.Platform == host {
-			inventory = recordImage(inventory, image)
-		}
+		inventory = recordImage(inventory, image, host)
 		inventory.LayerDigests = addNew(inventory.LayerDigests, image.LayerDigests)
 		inventory.LayerDiffIDs = addNew(inventory.LayerDiffIDs, image.LayerDiffIDs)
 	}
@@ -174,15 +172,30 @@ func imageInventory(facts capability.NodeFacts, host domain.Platform) domain.Ima
 }
 
 // recordImage files one image under what the node established about it: ready
-// to run, here and not assembled, or neither. Only a node that says the bytes
-// are here files an image as pulled, because that list is what makes the
-// scheduler charge local assembly instead of a transfer, and a machine that
-// cannot account for content it does not hold would be billed for work it
-// cannot do. An image the runtime could not describe says nothing about this
-// machine's identity for it, so it is filed nowhere and priced as the pull it
-// may well be.
-func recordImage(inventory domain.ImageInventory, image capability.ImageLocality) domain.ImageInventory {
+// to run, here and not assembled, looked at and not accounted for, or absent.
+// Only a node that says the bytes are here files an image as pulled, because
+// that list is what makes the scheduler charge local assembly instead of a
+// transfer, and a machine that cannot account for content it does not hold
+// would be billed for work it cannot do.
+//
+// An image the runtime could not describe is filed as the silence it was.
+// Filing it nowhere read as absence, because everything around it in this
+// inventory is Known: the decision then stated at full confidence that a host
+// holds none of an image that may well be assembled on it, which is the guess
+// the unknown state exists to keep a node from making. That answer is filed
+// before the platform test, because an image whose build nothing could read is
+// not an image known to be another platform's.
+func recordImage(inventory domain.ImageInventory, image capability.ImageLocality, host domain.Platform) domain.ImageInventory {
+	if image.ManifestDigest == "" {
+		return inventory
+	}
 	switch {
+	case image.State == domain.LocalityUnknown:
+		inventory.UnknownImageDigests = append(inventory.UnknownImageDigests, image.ManifestDigest)
+	case image.Platform != host:
+		// Another platform's build under the same name. This host holds none of
+		// the content a Run pinned here would start, and its layers are
+		// content-addressed, so nothing about it is worth recording.
 	case image.State == domain.LocalityHot:
 		inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
 	case image.ContentPresent:

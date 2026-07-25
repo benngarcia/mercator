@@ -424,6 +424,15 @@ type ImageInventory struct {
 	// an operator told "cold" about a machine sitting on the image would go
 	// looking for a network problem that is not there.
 	PulledImageDigests []string `json:"pulled_image_digests,omitempty"`
+	// UnknownImageDigests is every image this host looked at and could not
+	// account for. A host that enumerates itself can still fail on one image: a
+	// runtime that will not describe it, or a store reporting some of its
+	// content present and unable to name which. Listing it here is the host
+	// saying "I looked at this one and cannot answer", which is priced as the
+	// silence it is. Without it an image absent from the other lists reads as
+	// the confident claim that none of it is here, which is exactly the guess
+	// this contract exists to keep a node from making.
+	UnknownImageDigests []string `json:"unknown_image_digests,omitempty"`
 	// LayerDigests is every compressed layer blob the host holds, named the way
 	// a registry manifest names it. A host can hold layers of an image it has
 	// never held whole, which is the entire reason a second version of the same
@@ -446,6 +455,14 @@ func (inventory ImageInventory) Holds(imageDigest string) bool {
 // assembling it.
 func (inventory ImageInventory) Pulled(imageDigest string) bool {
 	return imageDigest != "" && slices.Contains(inventory.PulledImageDigests, imageDigest)
+}
+
+// Undescribed reports whether this host looked at one image and could not say
+// what it holds of it. It is silence about one image on a host that answered
+// about the rest, which is a weaker claim than the whole enumeration failing
+// and a much weaker one than "none of it is here".
+func (inventory ImageInventory) Undescribed(imageDigest string) bool {
+	return imageDigest != "" && slices.Contains(inventory.UnknownImageDigests, imageDigest)
 }
 
 // LocalityState is how much of some content a host has, as an answer rather
@@ -555,6 +572,12 @@ func (manifest ImageManifest) StartWork(inventory ImageInventory) (ImageWork, Lo
 		}
 	}
 	switch {
+	case inventory.Undescribed(manifest.Digest):
+		// Layers this host enumerated are here whatever it could not say about
+		// the image as a whole, so the bytes still come from its evidence. The
+		// answer is unknown all the same: what it could not describe is exactly
+		// the part that decides whether those bytes are enough to start on.
+		return work, LocalityUnknown
 	case work.None():
 		return work, LocalityHot
 	case here == 0:

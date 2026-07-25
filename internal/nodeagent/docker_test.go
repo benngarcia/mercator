@@ -98,16 +98,27 @@ func TestEveryImageThisDaemonHoldsIsAssembled(t *testing.T) {
 // it can hold every byte with nothing to start from. Only that store says which,
 // and only over the API: `docker image inspect` reports no storage chain at all
 // for it.
+//
+// The fourth machine state is the one an interrupted pull leaves. moby's
+// Available is all-or-nothing over every blob a manifest references, so a host
+// that fetched all but the last layer reports it false while holding almost
+// every byte, and the bytes it holds have no names attached. Calling that cold
+// would send the retry at a machine holding none of the image.
 func TestDockerRuntimeSeparatesWhatItUnpackedFromWhatItPulled(t *testing.T) {
 	daemon := standInContentStore(t, `[
-	  {"Id":"sha256:whole","Manifests":[
+	  {"Id":"sha256:whole","Descriptor":{"digest":"sha256:index-whole"},"Manifests":[
 	    {"Kind":"attestation","Available":true},
-	    {"Kind":"image","Available":true,
+	    {"Kind":"image","Available":true,"Size":{"Content":41000000},
 	     "ImageData":{"Platform":{"os":"linux","architecture":"amd64"},"Size":{"Unpacked":41000000}}}]},
-	  {"Id":"sha256:fetched","Manifests":[{"Kind":"image","Available":true,
-	    "ImageData":{"Platform":{"os":"linux","architecture":"amd64"},"Size":{"Unpacked":0}}}]},
-	  {"Id":"sha256:absent","Manifests":[{"Kind":"image","Available":false,
-	    "ImageData":{"Platform":{"os":"linux","architecture":"amd64"},"Size":{"Unpacked":0}}}]}
+	  {"Id":"sha256:fetched","Descriptor":{"digest":"sha256:index-fetched"},"Manifests":[
+	    {"Kind":"image","Available":true,"Size":{"Content":41000000},
+	     "ImageData":{"Platform":{"os":"linux","architecture":"amd64"},"Size":{"Unpacked":0}}}]},
+	  {"Id":"sha256:torn","Descriptor":{"digest":"sha256:index-torn"},"Manifests":[
+	    {"Kind":"image","Available":false,"Size":{"Content":17000000000},
+	     "ImageData":{"Platform":{"os":"linux","architecture":"amd64"},"Size":{"Unpacked":0}}}]},
+	  {"Id":"sha256:absent","Descriptor":{"digest":"sha256:index-absent"},"Manifests":[
+	    {"Kind":"image","Available":false,"Size":{"Content":0},
+	     "ImageData":{"Platform":{"os":"linux","architecture":"amd64"},"Size":{"Unpacked":0}}}]}
 	]`)
 
 	facts, err := NewDockerRuntime(daemon).Facts(context.Background())
@@ -116,20 +127,56 @@ func TestDockerRuntimeSeparatesWhatItUnpackedFromWhatItPulled(t *testing.T) {
 		t.Fatalf("read node facts: %v", err)
 	}
 	if len(facts.Images) != 4 {
-		t.Fatalf("reported %d images, want the unpacked, fetched, absent, and unaccounted ones: %+v", len(facts.Images), facts.Images)
+		t.Fatalf("reported %d images, want the unpacked, fetched, torn, and absent ones: %+v", len(facts.Images), facts.Images)
 	}
-	whole, fetched, absent, vanished := facts.Images[0], facts.Images[1], facts.Images[2], facts.Images[3]
+	whole, fetched, torn, absent := facts.Images[0], facts.Images[1], facts.Images[2], facts.Images[3]
 	if whole.State != domain.LocalityHot || !whole.ContentPresent || len(whole.LayerDiffIDs) != 2 {
 		t.Errorf("an image the daemon has unpacked was reported %+v, want hot with the layers it can mount", whole)
 	}
 	if fetched.State != domain.LocalityPartial || !fetched.ContentPresent || len(fetched.LayerDiffIDs) != 0 {
 		t.Errorf("an image whose bytes are here and whose chain is not built was reported %+v, want partial with no mountable layer", fetched)
 	}
-	if absent.State != domain.LocalityCold || absent.ContentPresent {
-		t.Errorf("an image the daemon lists and does not hold was reported %+v, want cold", absent)
+	if torn.State != domain.LocalityUnknown || torn.ContentPresent {
+		t.Errorf("an image this store holds 17GB of and cannot name a layer of was reported %+v, want unknown", torn)
 	}
-	if vanished.State != domain.LocalityUnknown || vanished.ContentPresent {
-		t.Errorf("an image the store did not account for was reported %+v, want unknown", vanished)
+	if absent.State != domain.LocalityCold || absent.ContentPresent {
+		t.Errorf("an image the daemon lists and holds no byte of was reported %+v, want cold", absent)
+	}
+}
+
+// TestAContentStoreImageIsNamedByTheDigestARunIsPinnedTo is the name half of the
+// same report, and the one a locality answer is worthless without. This store
+// records a multi-platform image under the platform manifest it selected and
+// builds RepoDigests from that same value, so `docker images --digests` prints,
+// in both its ID and its Digest column, a manifest no Run is ever pinned to
+// (moby, daemon/containerd/image_list.go singlePlatformImage over an
+// ImageManifest whose Target NewImageManifest replaced with the platform
+// descriptor). The control plane pins to the index above it, which is what the
+// daemon's own image record targets and what it reports as the image's
+// Descriptor. Filed under either printed name, a correct hot answer is filed
+// where the scheduler's subtraction can never find it, and the host holding
+// every byte is priced a full fetch.
+//
+// An image the store does not account for at all is not reported: this daemon
+// has no name for it that the control plane could match, and inventing one
+// would be filing an answer nothing can read.
+func TestAContentStoreImageIsNamedByTheDigestARunIsPinnedTo(t *testing.T) {
+	daemon := standInContentStore(t, `[
+	  {"Id":"sha256:whole","Descriptor":{"digest":"sha256:index-whole"},"Manifests":[
+	    {"Kind":"image","Available":true,"Size":{"Content":41000000},
+	     "ImageData":{"Platform":{"os":"linux","architecture":"amd64"},"Size":{"Unpacked":41000000}}}]}
+	]`)
+
+	facts, err := NewDockerRuntime(daemon).Facts(context.Background())
+
+	if err != nil {
+		t.Fatalf("read node facts: %v", err)
+	}
+	if len(facts.Images) != 1 {
+		t.Fatalf("reported %d images, want only the one this store accounts for: %+v", len(facts.Images), facts.Images)
+	}
+	if got := facts.Images[0].ManifestDigest; got != "sha256:index-whole" {
+		t.Fatalf("the node named its image %q, and a Run on it is pinned to sha256:index-whole", got)
 	}
 }
 
@@ -226,11 +273,12 @@ esac
 }
 
 // standInContentStore is a scripted daemon keeping its images in the containerd
-// content store. It answers the CLI the way moby does for that store, which is
-// with no storage chain for any image whatsoever, and answers the API with the
-// account of its content that only the API carries. It lists one image more
-// than the store accounts for, which is what a prune between the two reads
-// leaves behind.
+// content store. It answers the CLI the way moby does for that store: no storage
+// chain for any image whatsoever, and an ID and Digest column naming the
+// platform manifest rather than the index a Run is pinned to. The API carries
+// the account of its content, and the index digest, that only the API carries.
+// The CLI lists one image more than the store accounts for, which is what a pull
+// landing between the two reads leaves behind.
 func standInContentStore(t *testing.T, listed string) string {
 	t.Helper()
 	t.Setenv("DOCKER_HOST", "")
@@ -249,8 +297,9 @@ case "$1 $2 $3" in
   "context inspect --format") echo '`+strings.Replace(store.URL, "http://", "tcp://", 1)+`' ;;
   "images "*) echo '{"ID":"sha256:whole","Digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}'
               echo '{"ID":"sha256:fetched","Digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222"}'
-              echo '{"ID":"sha256:absent","Digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}'
-              echo '{"ID":"sha256:vanished","Digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444"}' ;;
+              echo '{"ID":"sha256:torn","Digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}'
+              echo '{"ID":"sha256:absent","Digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444"}'
+              echo '{"ID":"sha256:vanished","Digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555"}' ;;
   "image inspect "*) echo '{"os":"linux","architecture":"amd64","diff_ids":["sha256:aaaa","sha256:bbbb"]}' ;;
 esac
 `)

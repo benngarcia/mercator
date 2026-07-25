@@ -360,6 +360,9 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	if req.MaxRuntime != nil {
 		spec.Execution.MaxRuntimeSeconds = int64(req.MaxRuntime.Duration().Seconds())
 	}
+	if req.MaxStartLatency != nil {
+		spec.Placement.MaxP90StartSeconds = req.MaxStartLatency.Duration().Seconds()
+	}
 	return domain.WorkloadRevision{
 		ID:          "wrev_" + runID,
 		WorkspaceID: workspaceID,

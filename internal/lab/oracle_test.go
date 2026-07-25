@@ -63,7 +63,7 @@ func TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes(t *testing.T) {
 		t.Fatalf("evaluate production scheduler: %v", err)
 	}
 	warm := candidateFor(t, production, "rental-warm")
-	reference := referenceEstimates(input, offerFor(t, input, "rental-warm"))
+	reference, _ := referenceEstimates(input, offerFor(t, input, "rental-warm"))
 
 	if warm.ImageLocality != domain.LocalityPartial {
 		t.Fatalf("image locality = %q, want partial: the bytes are here and the chain is not", warm.ImageLocality)
@@ -74,6 +74,56 @@ func TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes(t *testing.T) {
 	}
 	if warm.Estimates.PullSeconds.Expected == 0 {
 		t.Fatal("assembling 18GB was priced at nothing by both models, so neither is accounting for it")
+	}
+}
+
+// TestNeitherModelTurnsSilenceIntoInfeasibility is the rule at the one place an
+// image locality answer can strike a candidate out. A Run that refuses to wait
+// gets to refuse a machine that was found to be slow; a machine nobody could
+// ask has not been found to be anything. Pricing its silence as the whole image
+// is what stops it outranking a host that is provably ready, and pricing is as
+// far as it may go: the goal is explicit that unknown locality is uncertainty
+// and never a hard constraint. Both models have to say so, because a reference
+// model that struck out the silent candidate would make the production
+// scheduler's refusal to look like a bug.
+func TestNeitherModelTurnsSilenceIntoInfeasibility(t *testing.T) {
+	for _, machine := range []struct {
+		name      string
+		inventory domain.ImageInventory
+		feasible  bool
+	}{
+		{"a Rental that enumerated itself and holds none of the image", domain.ImageInventory{Known: true}, false},
+		{"a machine nothing of Mercator's runs on", domain.ImageInventory{}, true},
+	} {
+		t.Run(machine.name, func(t *testing.T) {
+			input := smallSchedulingInput(t)
+			input.Workload.Spec.Placement.MaxP90StartSeconds = 180
+			silent := offerFor(t, input, "rental-warm")
+			silent.Images = machine.inventory
+			silent.Images.ObservedAt = input.EvaluatedAt
+			input.Offers = []domain.OfferSnapshot{silent}
+
+			production, err := scheduler.New().Evaluate(context.Background(), input)
+			if err != nil {
+				t.Fatalf("evaluate production scheduler: %v", err)
+			}
+			reference, err := SolveSmallWorld(input)
+			if err != nil {
+				t.Fatalf("solve reference world: %v", err)
+			}
+
+			candidate := candidateFor(t, production, "rental-warm")
+			if candidate.Estimates.StartSeconds.P90 <= input.Workload.Spec.Placement.MaxP90StartSeconds {
+				t.Fatalf("this machine was predicted to start in %.2fs, which is inside the bound, so the case proves nothing",
+					candidate.Estimates.StartSeconds.P90)
+			}
+			if candidate.Feasible != machine.feasible {
+				t.Errorf("production called %s feasible=%v, want %v", machine.name, candidate.Feasible, machine.feasible)
+			}
+			if got := slices.Contains(reference.FeasibleOfferIDs, "rental-warm"); got != machine.feasible {
+				t.Errorf("the reference model called %s feasible=%v, want %v", machine.name, got, machine.feasible)
+			}
+		})
 	}
 }
 
@@ -213,8 +263,9 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 	fresh := labOffer("fresh-4090", domain.OfferKindProvisionable, domain.LaneReusable, 4, request.Resources)
 	fresh.ObservedAt = now
 	fresh.ExpiresAt = now.Add(time.Minute)
-	// A machine that does not exist yet holds nothing, and says so.
-	fresh.Images = domain.ImageInventory{Known: true, ObservedAt: now}
+	// A machine that does not exist yet has nothing on it to enumerate, so it
+	// says nothing rather than claiming it looked and found nothing.
+	fresh.Images = domain.ImageInventory{}
 	fresh.Provisioning = &domain.Estimate{Expected: 240}
 	return scheduler.SchedulingInput{
 		RunID:    "run-reference",

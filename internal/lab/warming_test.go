@@ -86,6 +86,47 @@ func TestABorrowedSlotIsPricedTheWholePullEveryTime(t *testing.T) {
 	}
 }
 
+// TestWhatABorrowedMachineHoldsIsNotSomethingMercatorKnows is the other half of
+// the lane's locality claim, and the one the retention half cannot make. This
+// machine holds every byte of the image before the Run arrives. Nothing of
+// Mercator's runs on it, so nothing enumerates it: the offer carries no
+// inventory and the Run is priced the whole fetch, which is what every provider
+// adapter in the tree produces for the machines it sells. The world still knows
+// what the machine holds, and says so where World Truth is stated, because a
+// world that erased it at the source would leave the laws about what capacity
+// accumulates reading an inventory that is empty whatever happened.
+func TestWhatABorrowedMachineHoldsIsNotSomethingMercatorKnows(t *testing.T) {
+	execution := openConformanceExecution(t, "borrowed-warmth-is-invisible")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 6 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	truth := offerByID(t, execution.runtime.world.truthSnapshot().Offers, "local-docker")
+	if !truth.Images.Holds(domain.ReferenceDigest(borrowedWarmthImage)) {
+		t.Fatalf("World Truth says the borrowed machine holds %+v, and the Blueprint seeded it the whole image", truth.Images)
+	}
+	decision := bookingDecisions(t, execution)["run-borrowed"]
+	if decision.SelectedOfferSnapshotID != "local-docker" {
+		t.Fatalf("the Run landed on %q, want the cheap borrowed slot", decision.SelectedOfferSnapshotID)
+	}
+	if source := candidatePullSource(t, decision, "local-docker"); source != "inventory_unknown" {
+		t.Fatalf("the decision recorded pull source %q for a machine nothing of Mercator's runs on, want its silence named", source)
+	}
+	if pull := candidatePullSeconds(t, decision, "local-docker"); pull < 200 {
+		t.Fatalf("the Run was priced %.2fs of pull from content no offer could carry", pull)
+	}
+}
+
+const borrowedWarmthImage = "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"
+
 func openConformanceExecution(t *testing.T, name string) *Execution {
 	t.Helper()
 	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/conformance/" + name + ".json")
@@ -134,6 +175,17 @@ func bookingDecisions(t *testing.T, execution *Execution) map[string]domain.Book
 		t.Fatalf("no Booking Decision was recorded: %d events", len(stored))
 	}
 	return decisions
+}
+
+func candidatePullSource(t *testing.T, decision domain.BookingDecision, offerID string) string {
+	t.Helper()
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == offerID {
+			return candidate.Estimates.PullSeconds.Source
+		}
+	}
+	t.Fatalf("Run %q has no candidate for offer %q", decision.RunID, offerID)
+	return ""
 }
 
 func candidatePullSeconds(t *testing.T, decision domain.BookingDecision, offerID string) float64 {

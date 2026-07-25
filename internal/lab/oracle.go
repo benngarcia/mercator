@@ -87,11 +87,17 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 		offer.Resources.EphemeralDiskBytes < required.EphemeralDisk.MinBytes {
 		return false
 	}
-	estimates := referenceEstimates(input, offer)
+	estimates, locality := referenceEstimates(input, offer)
 	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil && estimates.CostUSD.Expected > *maximum {
 		return false
 	}
-	if maximum := input.Workload.Spec.Placement.MaxP90StartSeconds; maximum > 0 && estimates.StartSeconds.P90 > maximum {
+	// Only a candidate KNOWN to start late fails the latency SLO. A start
+	// latency over an image locality nobody could state is a guess, and the
+	// goal is explicit that silence is uncertainty to price and never a hard
+	// constraint. The oracle refuses measured latency overrides, so an
+	// unknown locality here is the only estimate there could be.
+	if maximum := input.Workload.Spec.Placement.MaxP90StartSeconds; maximum > 0 &&
+		locality != domain.LocalityUnknown && estimates.StartSeconds.P90 > maximum {
 		return false
 	}
 	return true
@@ -114,7 +120,7 @@ func referenceCapacityAvailable(input scheduler.SchedulingInput, offer domain.Of
 }
 
 func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot) float64 {
-	estimates := referenceEstimates(input, offer)
+	estimates, _ := referenceEstimates(input, offer)
 	weights := input.Weights
 	if weights.StartLatencyUSDPerSecond == 0 && input.Workload.Spec.Placement.Objective == domain.ObjectiveBalanced {
 		weights.StartLatencyUSDPerSecond = 0.0005
@@ -128,7 +134,7 @@ func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot)
 	return math.Round(score*1_000_000) / 1_000_000
 }
 
-func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
+func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) (domain.CandidateEstimates, domain.LocalityState) {
 	queue := 0.0
 	if schedule, exists := input.Schedules[offer.RentalID]; exists {
 		queue = schedule.ExpectedWaitSeconds()
@@ -139,7 +145,7 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	if offer.Kind == domain.OfferKindProvisionable && offer.Provisioning != nil {
 		provision = offer.Provisioning.Expected
 	}
-	work, _ := input.Image.StartWork(offer.Images)
+	work, locality := input.Image.StartWork(offer.Images)
 	pull := referenceStartWorkSeconds(work, offer.RegistryDownloadMbps())
 	start := queue + provision + pull + 1
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
@@ -156,7 +162,7 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		PullSeconds:      domain.Estimate{Expected: pull},
 		StartSeconds:     domain.Estimate{Expected: start, P90: start * 1.25},
 		CostUSD:          domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
-	}
+	}, locality
 }
 
 // referenceStartWorkSeconds is the reference model's own account of how long a

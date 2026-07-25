@@ -312,6 +312,59 @@ complete because it works against a live provider.
     them, which is the failure ADR 0005 exists to prevent one layer down: a
     negotiated capability set is a promise Placement routes work against. Each
     becomes true again in the slice that earns it.
+- [x] 2026-07-25: Answer the review of the image-store commit. Two reviews
+  falsified six things, and each was a name nothing could match or a silence
+  resolved into a fact.
+  - The content store names an image by the platform manifest it selected, in
+    both the `ID` and the `Digest` column: `singlePlatformImage` builds
+    `RepoDigests` from `rawImg.Target.Digest` over an `ImageManifest` whose
+    `Target` `NewImageManifest` replaced with the platform descriptor (moby,
+    `daemon/containerd/image_list.go`, `image_manifest.go`). A Run is pinned to
+    the index above it. Every locality answer that arm produced was therefore
+    filed where `ImageInventory.Holds` can never find it, and a host holding
+    18GB whole was priced a full fetch. `imageStore` now answers what an image is
+    called as well as what can be started on it: the content store reads the
+    descriptor its own image record targets, the graph driver keeps reading the
+    reference digest it records.
+  - Pricing unknown locality as the whole image turned silence into
+    infeasibility through `MaxP90StartSeconds`. Every provider offer in the tree
+    publishes an unknown inventory, so a Run with a start SLO and a large image
+    got `no feasible offers` from capacity that may well be holding it, and the
+    Lab oracle applied the same gate so nothing could catch it. The bound now
+    strikes out only a candidate known to start late. A measured start latency
+    still binds, because that is a measurement rather than a guess.
+  - `Available: false` was reported cold, which claims none of the image is
+    here. moby's `Available` is all-or-nothing over every blob a manifest
+    references, so an interrupted pull reports it false while holding 17 of 18
+    layers. `Size.Content` separates the two: no bytes here is cold, some of them
+    here with no way to name which is unknown.
+  - A node's per-image unknown was erased at the offer boundary. Everything else
+    in an enrolled node's inventory is enumerated, so an image filed in none of
+    the lists read as absence and the decision stated at full confidence that a
+    machine holds none of an image that may be assembled on it.
+    `ImageInventory.UnknownImageDigests` carries it, `StartWork` prices it from
+    the layers the host did prove and answers `unknown` all the same, and the
+    estimate's source names whose silence it was. The platform test now runs
+    after it: an image whose build nothing could read is not an image known to be
+    another platform's.
+  - Both simulated worlds suppressed the inventory of capacity Mercator does not
+    control inside the function that also builds World Truth, so World Truth said
+    a borrowed machine holds nothing, which is not true and is not what ADR 0004
+    gives it to say, and `safety.locality_provenance` had an empty inventory to
+    read whatever the world did. The suppression moved to publication, which is
+    where the fact it models lives. That also fixes the half the previous change
+    missed: a provisionable machine that does not exist yet claimed it had
+    enumerated itself and found nothing.
+  - Judgment calls. An image the content store does not account for at all is not
+    reported, because this daemon has no name for it the control plane could
+    match. Partial content is reported as uncertainty rather than as a byte
+    count: `ImageInventory` names content, moby reports how many bytes of an
+    interrupted pull are present and never which layers they belong to, and
+    carrying the count is a capability with its own Blueprint rather than a line
+    in a review response, tracked as
+    [#166](https://github.com/benngarcia/mercator/issues/166). `RequestSpec`
+    gained `max_start_latency`, because the corpus could not express a latency
+    SLO at all, which is why nothing caught silence becoming infeasibility.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -402,6 +455,23 @@ Phase 3 added:
   winner proves nothing about locality. No new Lab invariant: what a node says
   it holds is an observation, and the rule that matters is
   `safety.locality_provenance`, which now reads unassembled content too.
+- `silence-is-not-infeasibility` (green): one Run that refuses to wait more than
+  three minutes, and two machines at one price that would both take nearly five.
+  The Rental that enumerated itself and holds none of the image is struck out,
+  because that is a measured fact about a machine and a hard bound is what a Run
+  gets to do with one. The borrowed host beside it is not, because nothing has
+  established that it is slow. Making the bound locality-blind fails it with
+  `no feasible offers`, which is the Run finding no capacity at all on machines
+  that may already hold every byte. The decision records
+  `START_SLO_UNVERIFIED` for that placement rather than `WITHIN_START_SLO`,
+  which the scheduler used to append whenever a bound existed at all: admitting
+  a candidate because nobody could describe it is not the same as promising it
+  will start in time, and the fixture fails if the two are conflated.
+- `borrowed-warmth-is-invisible` (conformance): a machine Mercator has not
+  enrolled holding the whole image before the Run arrives. World Truth says it
+  holds it, the offer carries no inventory, and the Run is priced the whole
+  fetch. Publishing what such a machine holds fails it with `pull source
+  "image_inventory" for a machine nothing of Mercator's runs on`.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, and only capacity Mercator keeps holds anything beyond
@@ -410,8 +480,8 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 20 regression Blueprints: 11 green and 9 target, beside one demo,
-one minimized case, and one conformance Blueprint.
+The corpus is 21 regression Blueprints: 12 green and 9 target, beside one demo,
+one minimized case, and three conformance Blueprints.
 
 ## What phase 2 does not yet do
 
@@ -555,6 +625,9 @@ reports the graph driver's own status here and reports `driver-type` as
 `io.containerd.snapshotter.v1` under the content store, and `docker image
 inspect --format '{{json .Manifests}}'` returns `null` on this daemon because
 the CLI never requests manifests, which is why the agent asks the API instead.
+The naming defect that arm shipped with is the cost of that limit: no test and
+no live daemon covered it, and it took a reading of `singlePlatformImage` to
+find that this store prints a name no Run is ever pinned to.
 
 The agent does not stat the daemon's storage root. A node agent may run beside a
 daemon whose filesystem it cannot see, which is true of every Docker Desktop and
@@ -761,14 +834,21 @@ that holds it.
   `pull_seconds: want exactly 0, got 289.14`. The host holds the image when its
   bytes have arrived, not when the container was dispatched;
 - deleting the `KeepsWhatItRuns` guard from the fake world's pull fails
-  `ephemeral-execution-is-never-a-rental` with
-  `one-shot-second: pull_seconds: want at least 200, got 0`. Deleting only its
-  lane term fails `unenrolled-host-holds-nothing` with
-  `borrowed-second: pull_seconds: want at least 200, got 0`, and deleting only
-  its kind term fails `TestOneShotCapacityKeepsNothingItPulled`, so both halves
-  of the predicate are load-bearing. The lane break also fails
-  `TestABorrowedSlotIsPricedTheWholePullEveryTime` at L1 with `run-borrowed-second
-  was priced 0.00s of pull on capacity Mercator keeps nothing on`;
+  `TestWorldCapacityItDoesNotKeepHoldsNothingItRan` with `a host Mercator has not
+  enrolled held ... LayerDigests:[layer-base layer-top] an hour after its
+  workload`, and the same guard in the Lab world fails
+  `safety.locality_provenance` in `TestABorrowedSlotIsPricedTheWholePullEveryTime`
+  with `offer "local-docker" holds nothing once its workload exits, and holds
+  sha256:5d7e... beyond what the World Tape seeded`. Neither break is visible in
+  an offer: capacity Mercator runs nothing on publishes no inventory at all, so
+  retention is asserted where it happens, on the machine and on World Truth.
+  Deleting only the predicate's lane term fails `unenrolled-host-holds-nothing`
+  with `borrowed-second: pull_seconds: want at least 200, got 0`,
+  `TestABorrowedSlotIsPricedTheWholePullEveryTime` with `run-borrowed-second was
+  priced 0.00s of pull on capacity Mercator keeps nothing on`, and
+  `TestWorldGrantsRentalIdentityOnlyToCapacityItKeeps`; deleting only its kind
+  term fails `TestOneShotCapacityKeepsNothingItPulled`. Both halves are
+  load-bearing;
 - keeping content at dispatch rather than when it lands fails
   `safety.locality_provenance` in ten Lab tests with `offer "rental-warm" holds
   producer@sha256:aaaa... with no World Tape seed and no content retained against
@@ -789,6 +869,53 @@ that holds it.
   `the Rental that ran the image is still priced 289.14s of pull`, asserted on
   the Booking Decisions the real control plane recorded;
 - each clause of `safety.locality_provenance` fails its own test.
+
+### Phase 3 image stores and silence
+
+On 2026-07-25, each fix answering the second round of review was measured by
+breaking it and reading what failed.
+
+- making `exceedsStartSLO` locality-blind fails `silence-is-not-infeasibility`
+  with `step 1: submit "impatient": orchestrator: no feasible offers` and
+  `TestNeitherModelTurnsSilenceIntoInfeasibility` with `production called a
+  machine nothing of Mercator's runs on feasible=false, want true`. Applying the
+  same gate in `internal/lab/oracle.go` alone fails the reference half of that
+  test, so the two models are held to one rule;
+- returning the CLI's digest from `contentStore.pinnedDigest` fails
+  `TestAContentStoreImageIsNamedByTheDigestARunIsPinnedTo`: the report names
+  every image `sha256:1111...` rather than the index a Run is pinned to, and
+  three images the store never accounted for come back as confident answers;
+- deleting the `Size.Content > 0` arm fails
+  `TestDockerRuntimeSeparatesWhatItUnpackedFromWhatItPulled` with `an image this
+  store holds 17GB of and cannot name a layer of was reported ... State:cold,
+  want unknown`;
+- filing a per-image unknown nowhere in `node.recordImage` fails
+  `TestANodeOffersTheContentItActuallyHolds` and
+  `TestPlacementRecordsWhatANodeCouldNotSayAsSilence` with `the node never
+  reported the image it could not account for`; dropping the `Undescribed` case
+  from `StartWork` fails the same conformance case with `image locality =
+  "cold", want unknown`;
+- deleting the publication guard in the Lab world fails
+  `TestWhatABorrowedMachineHoldsIsNotSomethingMercatorKnows`; deleting it in the
+  fake world fails `TestWorldMarketplaceOfferOwesFullImagePull`,
+  `silence-is-not-infeasibility`, and `unpacked-is-not-the-same-as-pulled` with
+  `silent-host: pull_seconds: want at least 285, got 0`. That last failure is
+  what `hosts[].cached_images` buys: without the seed the same break is caught
+  only as `pull_source: want "inventory_unknown", got "image_inventory"`, and the
+  fixture's claim that this machine holds every byte and cannot say so would be
+  decoration.
+
+What the corpus still cannot state: no Blueprint drives
+`nodeagent.DockerRuntime` or `node.imageInventory`. Both simulated worlds write
+`domain.ImageInventory` directly, so a fixture states what a machine reports and
+never how a container runtime came to report it. The node's own reporting is
+held one level up instead, in `internal/daemon`, which drives a real agent over
+the real node protocol against a scripted runtime, and in `internal/nodeagent`,
+which drives scripted daemons whose shapes come from moby's types and a live
+daemon where one is reachable. Closing that gap means a Blueprint that can
+declare a container runtime and its image store, which is a world-model
+capability rather than a fixture, tracked as
+[#167](https://github.com/benngarcia/mercator/issues/167).
 
 Removed rather than fixed: the invariant no longer requires a host's inventory
 to be monotone between world snapshots. That law is true of one warming

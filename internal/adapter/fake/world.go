@@ -179,6 +179,18 @@ func (m *Machine) settle(now time.Time) {
 	m.fetching = arrived
 }
 
+// publishedInventory is what an offer for this machine can carry. Mercator
+// enumerates a machine only where it runs something of its own, so a slot it
+// borrows and a machine that does not exist yet report nothing, which is what
+// every provider adapter in the tree publishes. What such a machine holds stays
+// true and stays readable as world state; no offer says it.
+func (m *Machine) publishedInventory(now time.Time) domain.ImageInventory {
+	if !m.Offer.KeepsWhatItRuns() {
+		return domain.ImageInventory{}
+	}
+	return m.inventory(now)
+}
+
 // Hold puts one layer on this machine under every name that content answers
 // to, so a fixture that seeds a machine and a pull that lands on one leave the
 // same machine behind.
@@ -230,18 +242,15 @@ func (m *Machine) keep(image string, layers []Layer) {
 	delete(m.Packed, domain.ReferenceDigest(image))
 }
 
-// inventory is what this machine says it holds, whatever Run is being placed,
-// in the digest space its runtime can enumerate. What a Run would still have to
-// fetch is the scheduler's subtraction against the manifest, so the world
-// asserts no answer about an image the offer does not name.
+// inventory is what this machine HOLDS, whatever Run is being placed, in the
+// digest space its runtime can enumerate. What a Run would still have to fetch
+// is the scheduler's subtraction against the manifest, so the world asserts no
+// answer about an image the offer does not name.
+//
+// Every machine answers, including the ones nothing of Mercator's runs on.
+// Whether that answer reaches Placement is decided once, where the offer is
+// published.
 func (m *Machine) inventory(now time.Time) domain.ImageInventory {
-	if !m.Offer.Lane.Reusable() {
-		// Nothing of Mercator's runs on capacity it borrows a slot on, so
-		// nothing enumerates it. Every provider adapter in the tree says
-		// exactly this about the machines it sells, and a world that answered
-		// for them would be lending Placement knowledge no deployment has.
-		return domain.ImageInventory{}
-	}
 	inventory := domain.ImageInventory{Known: true, ObservedAt: now}
 	for _, image := range slices.Sorted(maps.Keys(m.HeldImages)) {
 		if m.Packed[image] {
@@ -457,7 +466,7 @@ func (w *World) machineOffer(machine *Machine, now time.Time) domain.OfferSnapsh
 	offer := machine.Offer
 	offer.ObservedAt = now
 	offer.ExpiresAt = now.Add(5 * time.Minute)
-	offer.Images = machine.inventory(now)
+	offer.Images = machine.publishedInventory(now)
 	if machine.busyAt(now) {
 		// Today's offer vocabulary marks a busy Rental unavailable. The target
 		// Broker-owned RentalSchedule will keep it feasible and create a

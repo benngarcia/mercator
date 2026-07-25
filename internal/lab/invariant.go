@@ -511,6 +511,11 @@ func retainedByOffer(effects []EffectRecord) (map[string]map[string]bool, error)
 
 func heldDigests(inventory domain.ImageInventory) []string {
 	held := append(slices.Clone(inventory.ImageDigests), inventory.LayerDigests...)
+	// A host that answers in diff IDs holds the same bytes as one that answers
+	// in blob digests, and the ledger records content under every name it has.
+	// Reading one space would let content arrive unexplained on any machine
+	// whose runtime speaks the other.
+	held = append(held, inventory.LayerDiffIDs...)
 	// Content a host fetched and never assembled is content it holds. Whether
 	// it can start on those bytes is the offer projection's business; where
 	// they came from is this rule's, and they came from somewhere.

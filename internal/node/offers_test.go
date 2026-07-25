@@ -28,10 +28,11 @@ var hostPlatform = domain.Platform{OS: "linux", Architecture: "amd64"}
 // warm and was priced as an instant start.
 func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 	cases := map[string]struct {
-		held       []capability.ImageLocality
-		wantWhole  bool
-		wantPulled bool
-		wantLayer  bool
+		held        []capability.ImageLocality
+		wantWhole   bool
+		wantPulled  bool
+		wantUnknown bool
+		wantLayer   bool
 	}{
 		"a node holding the exact image ready to run reports it whole": {
 			held: []capability.ImageLocality{{
@@ -101,10 +102,15 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 		},
 		// An image the daemon listed and would not describe. It is here and
 		// nothing can say what it is, which is uncertainty rather than warmth.
-		"a node holding an image it could not describe does not report holding it": {
-			held:      []capability.ImageLocality{{ManifestDigest: trainerV2, State: domain.LocalityUnknown}},
-			wantWhole: false,
-			wantLayer: false,
+		// Reported nowhere it would be absence: everything else in this
+		// inventory was enumerated, so an image missing from all of it reads as
+		// the confident claim that the machine holds none of it, at the full
+		// confidence of a node that measured its own link.
+		"a node holding an image it could not describe reports that it could not": {
+			held:        []capability.ImageLocality{{ManifestDigest: trainerV2, State: domain.LocalityUnknown}},
+			wantWhole:   false,
+			wantUnknown: true,
+			wantLayer:   false,
 		},
 		"a node holding nothing reports nothing rather than looking warm": {
 			held:      nil,
@@ -133,6 +139,9 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 			}
 			if inventory.Pulled(trainerV2) != testCase.wantPulled {
 				t.Errorf("pulled and not assembled = %v, want %v", inventory.Pulled(trainerV2), testCase.wantPulled)
+			}
+			if inventory.Undescribed(trainerV2) != testCase.wantUnknown {
+				t.Errorf("looked at and not accounted for = %v, want %v", inventory.Undescribed(trainerV2), testCase.wantUnknown)
 			}
 			if got := inventory.HoldsLayer(domain.ImageLayer{Digest: baseLayer}); got != testCase.wantLayer {
 				t.Errorf("holds the base layer = %v, want %v", got, testCase.wantLayer)

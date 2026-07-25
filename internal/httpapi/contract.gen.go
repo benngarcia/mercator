@@ -513,6 +513,9 @@ type ImageInventory struct {
 
 	// PulledImageDigests Image manifests whose content arrived here and which are not assembled into a runnable layer chain. Fetching and unpacking are separate acts, and a host that has done the first and not the second is neither warm nor cold: what is left is local work rather than a pull.
 	PulledImageDigests []string `json:"pulled_image_digests,omitempty"`
+
+	// UnknownImageDigests Image manifests this host looked at and could not account for: a runtime that would not describe one, or a store reporting part of its content present and unable to name which part. A host that enumerates itself can still fail on one image, and an image absent from every other list would otherwise read as the confident claim that none of it is here.
+	UnknownImageDigests []string `json:"unknown_image_digests,omitempty"`
 }
 
 // InviteNodeRequest defines model for InviteNodeRequest.

@@ -418,6 +418,11 @@ type RequestSpec struct {
 	MaxRuntime      *Duration      `json:"max_runtime,omitempty"`
 	ExpectedRuntime *Duration      `json:"expected_runtime,omitempty"`
 	Objective       string         `json:"objective,omitempty"`
+	// MaxStartLatency is the p90 start latency this Run refuses to exceed. It
+	// is the only hard bound in the request that image locality feeds, which is
+	// what makes it the one place a candidate can be struck out for what it was
+	// found to hold.
+	MaxStartLatency *Duration `json:"max_start_latency,omitempty"`
 	// CacheMounts declare mutable, application-owned caches by their
 	// workspace-scoped names.
 	CacheMounts []CacheMountSpec `json:"cache_mounts,omitempty"`

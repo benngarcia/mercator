@@ -267,23 +267,14 @@ func (docker *DockerRuntime) info(ctx context.Context) (dockerInfo, error) {
 // session, and a node with no session yet its enrollment, over a fact about one
 // image.
 func (docker *DockerRuntime) images(ctx context.Context, store imageStore) ([]capability.ImageLocality, error) {
-	out, err := docker.run(ctx, "images", "--digests", "--no-trunc", "--format", "{{json .}}")
+	listed, err := docker.listImages(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("docker images: %w", err)
+		return nil, err
 	}
 	var locality []capability.ImageLocality
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		if line == "" {
-			continue
-		}
-		var image struct {
-			ID     string `json:"ID"`
-			Digest string `json:"Digest"`
-		}
-		if err := json.Unmarshal([]byte(line), &image); err != nil {
-			return nil, fmt.Errorf("decode docker image: %w", err)
-		}
-		if image.Digest == "" || image.Digest == "<none>" {
+	for _, image := range listed {
+		pinned := store.pinnedDigest(image)
+		if pinned == "" {
 			continue
 		}
 		described, err := docker.describe(ctx, image.ID)
@@ -294,15 +285,47 @@ func (docker *DockerRuntime) images(ctx context.Context, store imageStore) ([]ca
 				return nil, err
 			}
 			locality = append(locality, capability.ImageLocality{
-				ManifestDigest: image.Digest,
+				ManifestDigest: pinned,
 				State:          domain.LocalityUnknown,
 				LastVerifiedAt: docker.now().UTC(),
 			})
 			continue
 		}
-		locality = append(locality, described.locality(image.Digest, store.assembly(image.ID, described), docker.now().UTC()))
+		locality = append(locality, described.locality(pinned, store.assembly(image, described), docker.now().UTC()))
 	}
 	return locality, nil
+}
+
+// listedImage is one line of the daemon's own image list. ID is what every
+// other read of this image is addressed by. Digest is the reference digest the
+// CLI prints, which is the name a Run is pinned by on a graph-driver daemon and
+// is not on a content-store one, so which of them means anything is the image
+// store's answer rather than this function's.
+type listedImage struct {
+	ID     string `json:"ID"`
+	Digest string `json:"Digest"`
+}
+
+func (docker *DockerRuntime) listImages(ctx context.Context) ([]listedImage, error) {
+	out, err := docker.run(ctx, "images", "--digests", "--no-trunc", "--format", "{{json .}}")
+	if err != nil {
+		return nil, fmt.Errorf("docker images: %w", err)
+	}
+	var listed []listedImage
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		var image listedImage
+		if err := json.Unmarshal([]byte(line), &image); err != nil {
+			return nil, fmt.Errorf("decode docker image: %w", err)
+		}
+		if image.Digest == "<none>" {
+			image.Digest = ""
+		}
+		listed = append(listed, image)
+	}
+	return listed, nil
 }
 
 // describedImage is what the daemon can say about one image it holds: which
@@ -373,12 +396,15 @@ type imageAssembly struct {
 	ContentPresent bool
 }
 
-// imageStore is the daemon's own account of what it can start a container on.
-// Docker has two of them and they establish that differently, so which one is
+// imageStore is the daemon's own account of its images: the name a Run pinned
+// to one of them carries, and what a container can be started on. Docker has
+// two image stores and they establish both differently, so which one is
 // answering decides what counts as evidence. Reading one store's evidence on
-// the other is how a node ends up stating a measurement it never made.
+// the other is how a node ends up stating a measurement it never made, or
+// filing a true measurement under a name nothing can match.
 type imageStore interface {
-	assembly(imageID string, described describedImage) imageAssembly
+	pinnedDigest(listed listedImage) string
+	assembly(listed listedImage, described describedImage) imageAssembly
 }
 
 // openImageStore picks the evidence this daemon actually offers.
@@ -401,7 +427,13 @@ func (docker *DockerRuntime) openImageStore(ctx context.Context, info dockerInfo
 // held nothing.
 type graphDriverStore struct{}
 
-func (graphDriverStore) assembly(string, describedImage) imageAssembly {
+// pinnedDigest is the reference digest the daemon prints. This store records an
+// image under the digest it was pulled by, which for a multi-platform image is
+// the index above the platform manifest, and that is the name the control plane
+// pins a Run to.
+func (graphDriverStore) pinnedDigest(listed listedImage) string { return listed.Digest }
+
+func (graphDriverStore) assembly(listedImage, describedImage) imageAssembly {
 	return imageAssembly{State: domain.LocalityHot, ContentPresent: true}
 }
 
@@ -413,35 +445,58 @@ func (graphDriverStore) assembly(string, describedImage) imageAssembly {
 // daemon/containerd/image_inspect.go), so the agent asks the daemon's API for
 // the only account of it that exists.
 type contentStore struct {
-	manifests map[string][]manifestSummary
+	images map[string]storedImage
 }
 
-func (store contentStore) assembly(imageID string, described describedImage) imageAssembly {
-	for _, summary := range store.manifests[imageID] {
+// storedImage is one image as this store accounts for it: the descriptor the
+// daemon resolved the pull to, and one summary per build underneath it.
+type storedImage struct {
+	Descriptor struct {
+		Digest string `json:"digest"`
+	} `json:"Descriptor"`
+	Manifests []manifestSummary `json:"Manifests"`
+}
+
+// pinnedDigest is the digest the daemon's own image record targets, which for a
+// multi-platform image is the index and is the name the control plane pins a
+// Run to.
+//
+// Neither name the CLI prints for such an image is that one. This store lists
+// an image under the platform manifest it selected and builds RepoDigests from
+// the same value (moby, singlePlatformImage: `target := rawImg.Target.Digest`
+// over an ImageManifest whose Target NewImageManifest replaced with the
+// platform descriptor), so both `.ID` and `.Digest` name a manifest no Run is
+// ever pinned to. Reading either would file every locality answer this store
+// produces under a name the scheduler's subtraction can never match, and a host
+// holding the image whole would be priced a full fetch.
+func (store contentStore) pinnedDigest(listed listedImage) string {
+	return store.images[listed.ID].Descriptor.Digest
+}
+
+func (store contentStore) assembly(listed listedImage, described describedImage) imageAssembly {
+	for _, summary := range store.images[listed.ID].Manifests {
 		if !summary.describes(described.platform()) {
 			continue
 		}
-		switch {
-		case summary.ImageData.Size.Unpacked > 0:
-			return imageAssembly{State: domain.LocalityHot, ContentPresent: summary.Available}
-		case summary.Available:
-			return imageAssembly{State: domain.LocalityPartial, ContentPresent: true}
-		default:
-			return imageAssembly{State: domain.LocalityCold}
-		}
+		return summary.assembly()
 	}
 	return imageAssembly{State: domain.LocalityUnknown}
 }
 
 // manifestSummary is one platform's build inside one listed image, as the
 // daemon accounts for it. Available is whether every blob it references is
-// here. Unpacked is the usage of the snapshot named by the image's full chain
-// ID, which the daemon reports as zero when that snapshot does not exist
-// (moby, ImageManifest.SnapshotUsage), so anything above zero is the whole
-// chain and exactly the question "can a container start on this".
+// here. Content is how many of those bytes are, which is the only thing that
+// separates a machine holding none of an image from one holding all but the
+// last layer of it. Unpacked is the usage of the snapshot named by the image's
+// full chain ID, which the daemon reports as zero when that snapshot does not
+// exist (moby, ImageManifest.SnapshotUsage), so anything above zero is the
+// whole chain and exactly the question "can a container start on this".
 type manifestSummary struct {
 	Available bool   `json:"Available"`
 	Kind      string `json:"Kind"`
+	Size      struct {
+		Content int64 `json:"Content"`
+	} `json:"Size"`
 	ImageData *struct {
 		Platform struct {
 			OS           string `json:"os"`
@@ -451,6 +506,30 @@ type manifestSummary struct {
 			Unpacked int64 `json:"Unpacked"`
 		} `json:"Size"`
 	} `json:"ImageData"`
+}
+
+// assembly is what this summary establishes about starting a container here.
+//
+// An interrupted pull is the case the fourth answer exists for. moby's
+// Available is all-or-nothing over every blob the manifest references, so a
+// machine that fetched seventeen of eighteen layers reports it false while
+// holding almost every byte. Calling that cold would be this node asserting
+// "none of it is here" about a disk that is nearly full of it, and steering the
+// retry at a machine holding none. What it holds cannot be named either: the
+// daemon reports the bytes and never which layers they belong to. So the node
+// says it looked and cannot account for this one, which is the only claim the
+// evidence supports.
+func (summary manifestSummary) assembly() imageAssembly {
+	switch {
+	case summary.ImageData.Size.Unpacked > 0:
+		return imageAssembly{State: domain.LocalityHot, ContentPresent: summary.Available}
+	case summary.Available:
+		return imageAssembly{State: domain.LocalityPartial, ContentPresent: true}
+	case summary.Size.Content > 0:
+		return imageAssembly{State: domain.LocalityUnknown}
+	default:
+		return imageAssembly{State: domain.LocalityCold}
+	}
 }
 
 // describes reports whether this entry is the build the daemon would run here.
@@ -496,15 +575,15 @@ func (docker *DockerRuntime) readContentStore(ctx context.Context) (contentStore
 			endpoint, response.Status)
 	}
 	var listed []struct {
-		ID        string            `json:"Id"`
-		Manifests []manifestSummary `json:"Manifests"`
+		ID string `json:"Id"`
+		storedImage
 	}
 	if err := json.NewDecoder(response.Body).Decode(&listed); err != nil {
 		return contentStore{}, fmt.Errorf("decode the daemon's image store: %w", err)
 	}
-	store := contentStore{manifests: make(map[string][]manifestSummary, len(listed))}
+	store := contentStore{images: make(map[string]storedImage, len(listed))}
 	for _, image := range listed {
-		store.manifests[image.ID] = image.Manifests
+		store.images[image.ID] = image.storedImage
 	}
 	return store, nil
 }
