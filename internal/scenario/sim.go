@@ -45,6 +45,15 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		}
 		world.DefineImage(ref, fake.Image{Layers: layers, Registry: fake.RegistryAnswer(image.Registry)})
 	}
+	for _, artifact := range spec.Artifacts {
+		version := artifact.Version(simWorkspace)
+		if artifact.Prepublished() {
+			version.PublishedAt = spec.Start()
+		} else {
+			session.note("Artifact %q waits on Run %q to publish it, and a placement world has no publication moment", artifact.ID, artifact.ProducedBy)
+		}
+		world.DefineArtifact(version)
+	}
 	for _, rental := range spec.Rentals {
 		schedule := spec.rentalSchedule(rental.ID)
 		if err := world.AddMachine(simMachine(spec, rental, schedule, clock)); err != nil {
@@ -81,6 +90,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		world,
 		orchestrator.WithClock(clock.Now),
 		orchestrator.WithImageManifests(world),
+		orchestrator.WithArtifactCatalog(world),
 	)
 	return session, nil
 }
@@ -93,7 +103,6 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 		HeldDiffIDs:      map[string]bool{},
 		ReportsDiffIDs:   rental.ReportsDiffIDs,
 		HeldImages:       map[string]bool{},
-		HeldCaches:       map[string]int64{},
 		ArtifactReplicas: simArtifactReplicas(spec, rental, start),
 	}
 	for _, ref := range rental.CachedImages {

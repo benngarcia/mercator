@@ -755,6 +755,20 @@ export interface components {
              */
             verified_at?: string;
         };
+        /** @description What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object. */
+        ArtifactEvidence: {
+            artifact_id: string;
+            /**
+             * @description Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility.
+             * @enum {string}
+             */
+            locality: "hot" | "cold" | "unknown";
+            /**
+             * Format: int64
+             * @description What this host still has to read out of the object store for this version.
+             */
+            fetch_bytes?: number;
+        };
         /** @description The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence. */
         ArtifactInventory: {
             /** @description Whether the holder enumerated its Artifact replicas at all. */
@@ -968,6 +982,8 @@ export interface components {
             queue_seconds: components["schemas"]["Estimate"];
             provision_seconds: components["schemas"]["Estimate"];
             pull_seconds: components["schemas"]["Estimate"];
+            /** @description What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from pull_seconds because it is a different transfer over different content from a different authority. */
+            artifact_seconds: components["schemas"]["Estimate"];
             start_seconds: components["schemas"]["Estimate"];
             cost_usd: components["schemas"]["Estimate"];
         };
@@ -985,6 +1001,8 @@ export interface components {
              * @enum {string}
              */
             image_locality?: "hot" | "partial" | "cold" | "unknown";
+            /** @description What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other. */
+            artifact_evidence?: components["schemas"]["ArtifactEvidence"][];
             estimates: components["schemas"]["CandidateEstimates"];
             /** Format: double */
             score_usd?: number;

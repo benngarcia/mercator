@@ -110,10 +110,15 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)
 	}
+	artifacts, err := o.consumedArtifacts(ctx, workload.WorkspaceID, workload)
+	if err != nil {
+		return domain.BookingDecision{}, nil, nil, err
+	}
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
 		RunID:                    runID,
 		Workload:                 workload,
 		Image:                    o.imageManifest(ctx, workload),
+		Artifacts:                artifacts,
 		Offers:                   offers,
 		Schedules:                schedules,
 		ExcludedOfferSnapshotIDs: excludedOfferSnapshotIDs,

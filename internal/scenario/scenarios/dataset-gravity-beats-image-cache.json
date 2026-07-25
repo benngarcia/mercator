@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "The run declares the 40GB dataset it trains on as a cache mount. The rental holding that dataset wins over a rental with a better image-layer cache, because avoiding a 40GB transfer dwarfs a 40MB layer pull.",
-  "classification": "target",
-  "missing_capabilities": ["artifacts", "artifact_evidence"],
+  "summary": "One Run reads a 40GB dataset and three machines are offered at one price, so nothing but what each of them holds can decide the placement. The Rental holding a checked copy of the dataset owes 40MB of image and beats the Rental holding the whole image and no copy, because reading 40GB out of the object store dwarfs pulling a 40MB layer. The third is a machine Mercator has not enrolled: it may be sitting on both and nothing there can be asked, so it is recorded unknown and priced the whole read rather than the zero its silence used to buy. Every rate is equal on purpose: a fixture whose price gap decides the winner proves nothing about locality.",
+  "classification": "green",
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -31,6 +30,13 @@
         "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
         "rate_per_hour_usd": 2.5
       }
+    ],
+    "hosts": [
+      {
+        "id": "borrowed-host",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      }
     ]
   },
   "request": {
@@ -42,15 +48,28 @@
   "expect": {
     "outcome": "place",
     "offer": "rental-dataset",
+    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
     "candidates": {
       "rental-dataset": {
         "feasible": true,
+        "image_locality": "partial",
+        "pull_seconds": {"at_least": 1, "at_most": 2},
+        "artifact_seconds": 0,
         "artifact_evidence": {"artifact:imagenet:v2.41": "hit"}
       },
       "rental-imagecache": {
         "feasible": true,
+        "image_locality": "hot",
         "pull_seconds": 0,
+        "artifact_seconds": {"at_least": 639, "at_most": 641},
         "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+      },
+      "borrowed-host": {
+        "feasible": true,
+        "image_locality": "unknown",
+        "pull_seconds": {"at_least": 285, "at_most": 292},
+        "artifact_seconds": {"at_least": 639, "at_most": 641},
+        "artifact_evidence": {"artifact:imagenet:v2.41": "unknown"}
       }
     }
   }

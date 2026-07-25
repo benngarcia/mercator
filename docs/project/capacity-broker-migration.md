@@ -497,6 +497,66 @@ complete because it works against a live provider.
     correct outcome is a red execution, which no catalog classification can
     state. The bound the driver drives to is read from the invariant registry
     rather than written twice.
+- [x] 2026-07-25: Make Artifact locality a placement fact. The catalog existed
+  and nothing scored it: `OfferSnapshot.Artifacts` reached Placement and
+  `scheduler.pullEstimate` never read it, so a Rental holding a checked copy of a
+  40GB dataset and one holding none of it were priced identically and the winner
+  came down to a 40MB image layer. `internal/scenario/runner.go` had been reading
+  `artifact_evidence` out of raw decision JSON since before the field existed.
+  - `domain.ArtifactFetchWork` is the subtraction, beside `ImageManifest.
+    StartWork` and following the same three rules. A host holds a version when it
+    has a copy that was checked and checked against THIS version's digest, which
+    is what makes an unverified copy cost exactly what no copy costs. A host that
+    cannot enumerate its copies is charged the whole read, because silence costs
+    what absence costs. And there is no partial: an Artifact version is one
+    immutable object, so a host has bytes that were checked against it or owes all
+    of them.
+  - The answer reaches the score through `CandidateEstimates.ArtifactSeconds` and
+    the start estimate it feeds, and through no weighted term. `SchedulingInput.
+    Weights` is never populated in production beyond the balanced objective's
+    0.0005 start-latency default, so a locality term routed through `ScoreWeights`
+    would be multiplied by zero. Fixing that at the source is phase 4 and is
+    deliberately not smuggled in here.
+  - `CandidateDecision.ArtifactEvidence` is what each candidate was found holding,
+    one entry per declared input, stated beside `ImageLocality` rather than folded
+    into it. They are answers about different content: an image is what the
+    runtime fetches to start a container, an Artifact is what the workload reads
+    once it is running, and one host is routinely warm for one and cold for the
+    other.
+  - `SchedulingInput.Artifacts` carries what the catalog says each consumed
+    version is, resolved once by `orchestrator.consumedArtifacts` and used for
+    both questions Placement has: whether the version exists, which decides
+    admission, and how big it is, which decides what a host holding no copy owes.
+    Size is a property of the content, so it comes from the store: a host that
+    does not have something cannot be asked how large it is.
+  - `fake.World` gained the object store the placement corpus needed. Its catalog
+    holds what a Blueprint declares, durable from the start for content no Run in
+    the fixture produces, and `scenario.ArtifactSpec.Version` is now the one place
+    a declaration becomes a catalog entry, shared with the Lab's own store.
+    `fake.Machine.HeldCaches` is deleted: it was written empty by scenario setup
+    and read by nothing, and the mutable cache it stood for is its own slice.
+  - `safety.locality_is_never_infeasibility` is the new Lab invariant, and it
+    encodes the architectural rule that unknown locality is uncertainty, which
+    `feasibilityViolations` honoured only by omission. No candidate in any
+    recorded Booking Decision is struck out for what it holds, and a host that
+    could not say what it holds is never refused on a start latency nothing
+    measured. A measured latency still binds, because that is a measurement about
+    this offer whatever anyone could enumerate.
+  - The demo's proof checkpoint 7 is tightened. `consumerUsesArtifactReplica`
+    asked only whether the producer's output landed on the offer the consumer was
+    selected on, which is green on a Blueprint with one standing Rental whatever
+    Placement weighed, and was green through every execution before Artifact
+    locality was scored anywhere. It now requires the consumer's own decision to
+    cite a checked copy of every input on the candidate it selected.
+  - Judgment calls. `DefaultObjectStoreDownloadMbps` is a second stated
+    assumption rather than a reuse of the registry constant: an object store and a
+    registry are different services over different links, and a measured registry
+    throughput must never silently price an Artifact read. Neither is measured
+    today, so both durations carry `AssumedLinkConfidence`. A Blueprint's
+    `artifact_evidence` gained a third word, `unknown`, because the corpus could
+    not otherwise state the case the goal is most explicit about. And the runner's
+    raw-JSON reader is deleted: the domain type carries the field now, so reading
+    around it would be the second vocabulary this plan keeps deleting.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -518,7 +578,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority and admission gates on it; an object-store client, mutable caches, prefetch, and producer affinity remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it; a production object-store client, mutable caches, prefetch, and producer affinity remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -624,6 +684,22 @@ Phase 3 added:
   why the rule is not simply "the version is durable": a copy was fetched from a
   publication, or it is the output the producing Run wrote on its way to
   becoming one.
+- `dataset-gravity-beats-image-cache` (green): three machines at one price for
+  one Run that reads a 40GB dataset, so nothing but what each holds can decide
+  the placement. The Rental holding a checked copy owes 40MB of image and beats
+  the Rental holding the whole image and no copy, because 640 seconds of object
+  store dwarfs 0.64 seconds of registry. The third is a machine Mercator has not
+  enrolled: it may be sitting on both and nothing there can be asked, so it
+  records `unknown` and is priced the whole read rather than the zero its silence
+  used to buy. Every rate is equal on purpose.
+- `dataset-gravity-worth-waiting` (target, missing `rental_schedule`): the same
+  gravity behind a running Booking. It now states one missing capability rather
+  than three, because Artifacts and their per-candidate evidence exist.
+- `safety.locality_is_never_infeasibility` (Lab invariant): no candidate in any
+  recorded Booking Decision is refused for what it holds, and a host that could
+  not say what it holds is never refused on a start latency nothing measured. It
+  is the one rule in this registry stated entirely against Mercator's own
+  decisions, because a candidate Mercator struck out leaves a trace nowhere else.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, every Artifact copy a host holds is either seeded or
@@ -633,7 +709,7 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 21 regression Blueprints: 12 green and 9 target, beside one demo,
+The corpus is 21 regression Blueprints: 13 green and 8 target, beside one demo,
 one minimized case, and four conformance Blueprints.
 
 ## What phase 2 does not yet do
@@ -701,6 +777,87 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 3 Artifact locality at placement
+
+On 2026-07-25, `dataset-gravity-beats-image-cache` was rewritten against the
+world, run as a target Blueprint, and promoted in the same change once green.
+Each claim is held by a deliberate break that fails it:
+
+- deleting the Artifact term from the start estimate fails the Blueprint with
+  `expected "rental-dataset" to win, but the decision placed on
+  "rental-imagecache"`. That is the state the tree shipped in: the offer carried
+  the copies and nothing read them, so a 40MB image layer decided a placement a
+  40GB dataset should have;
+- pricing a host that cannot enumerate its copies at zero fails it on two
+  assertions, `candidate "borrowed-host": artifact_seconds: want at least 639,
+  got 0` and `Artifact "artifact:imagenet:v2.41": expected "unknown", recorded
+  "hot"`, and fails
+  `TestAHostThatCannotEnumerateItsCopiesRecordsUnknownAndNotZero` and
+  `TestNeitherModelTurnsArtifactSilenceIntoInfeasibility`. Silence costs what
+  absence costs, and the decision records which of the two it was;
+- reading a copy's presence rather than its verification fails
+  `TestNeitherModelPricesAnUncheckedCopyAsWarmth/a_copy_nobody_checked` with
+  `production priced a copy nobody checked at 0 seconds`, and fails the
+  conformance case with `Artifact "artifact:stale-set:v1" was recorded
+  {... Locality:hot FetchBytes:0} on the host holding only an unchecked copy of
+  it` and `the decision priced 80 seconds of Artifact fetch, and 7GB crosses a
+  500 Mbps link in 112s`. That is the distributed-filesystem answer arriving
+  through the back door of an estimate;
+- dropping the Artifact term from the Lab's reference model fails
+  `TestTheReferenceModelPricesArtifactLocalityTheSameWayProductionDoes` with
+  `reference priced 0 seconds of Artifact fetch, production priced 640`, and
+  takes the unchecked-copy case with it. The oracle has to learn the term or it
+  disagrees with the scheduler about every dataset-bearing host for a reason
+  belonging to neither model;
+- deleting the refusal clause of `safety.locality_is_never_infeasibility` fails
+  `TestEveryDefaultInvariantHasADeliberatelyFailingCase/safety.locality_is_never
+  _infeasibility`, whose synthetic decision refuses a machine with
+  `IMAGE_NOT_CACHED` at `images`. Deleting the silence clause fails
+  `TestSilenceIsPricedAndAMeasurementBinds` with `a candidate refused on a start
+  latency predicted over content nobody could describe raised nothing`, while its
+  second row holds the other direction: a measured latency for this offer still
+  binds;
+- recording no Artifact evidence on a candidate fails the demo Blueprint with
+  `vertical proof checkpoint 7 (warmth_observed) failed`. The rule that replaced
+  asked only whether the producer's output landed on the offer the consumer was
+  selected on, which was green on every execution of this Blueprint before
+  Artifact locality was scored anywhere.
+
+The demo Blueprint's normalized bundle hash moved from
+`sha256:d8766ff9fe41cb65c27f2ec502256dc70dd6ba2b663504e936491b6985d99ee4` to
+`sha256:0b3e8a2e6388ed362e473ab3610f6fbedc12b4a44ab7ba590fcea51b320078f4`, which
+is the two new decision fields entering the record, and checkpoint 14 still
+reconstructs the bundle to the same hash byte for byte.
+
+Three limits are worth stating rather than hiding.
+
+Nothing in production implements `orchestrator.ArtifactCatalog`, so a production
+Mercator still refuses a Run that reads an Artifact at the door. What changed is
+that the two simulated worlds now both answer as object stores, so the scoring
+this slice adds is exercised at L0, in the placement corpus, and at L1 through
+the real control plane, and none of it is exercised against a real store.
+
+Nothing yet fetches an Artifact onto a host before a Run needs it. The estimate
+prices what a candidate would have to read; controlled prewarming and
+producer-consumer soft affinity are later slices, and the affinity one is what
+turns this evidence into a stated preference rather than a consequence of
+arithmetic.
+
+The transfer rate is `DefaultObjectStoreDownloadMbps`, a stated assumption that
+nothing measures and no offer can override. `OfferSnapshot.RegistryDownload`
+reads a published p10 fact for the registry link and there is no object-store
+equivalent, because no adapter, node, or provider publishes one. Every Artifact
+duration therefore carries `AssumedLinkConfidence`, and phase 4 is where a
+measured link replaces the constant.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/adapter/fake ./internal/orchestrator \
+  ./internal/httpapi ./cmd/mercator -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
 
 ### Phase 3 Artifact durability
 
@@ -777,18 +934,14 @@ The refusal is answered where the Run is submitted, as `400
 ARTIFACT_CATALOG_UNAVAILABLE` naming the version nothing can establish, because
 there is no later moment at which this deployment could answer differently.
 That refusal is the honest state: no production path publishes a version either,
-so no production Run has an Artifact it could legitimately read. Placement also
-scores nothing from `OfferSnapshot.Artifacts`, because producer-consumer
-affinity is a later slice and it is only sound once the authority question is
-settled.
+so no production Run has an Artifact it could legitimately read.
 
-The fake world used by the placement corpus holds replicas and advertises them
-on offers, and has no object store. The two `dataset-gravity` Blueprints are
-target scenarios that consume an Artifact, and they now report why they are
-pending in the words of the thing that is missing, at the step that submits the
-Run: `step 1: submit "run": ARTIFACT_CATALOG_UNAVAILABLE: Run reads Artifact
-"artifact:imagenet:v2.41" and this Mercator has no artifact catalog to establish
-that it exists`. The Lab is where publication has a moment.
+That paragraph also said Placement scores nothing from `OfferSnapshot.Artifacts`,
+and that the two `dataset-gravity` Blueprints report
+`ARTIFACT_CATALOG_UNAVAILABLE` at the step that submits the Run. Both were true
+when it was written and are superseded by the placement slice above: the fake
+world is an object store now, and the evidence reaches the score through the
+transfer estimate.
 
 Blueprints still cannot express two workspaces, so `ArtifactSpec` states no
 workspace and the corpus cannot state that one workspace's Artifact is

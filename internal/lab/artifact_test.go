@@ -221,6 +221,51 @@ func TestAnUncheckedCopySavesNothing(t *testing.T) {
 	}
 }
 
+// TestTheDecisionRecordsWhatEachCandidateHoldsOfTheRunsInputs is Artifact
+// locality reaching the record a placement is explained from, under the real
+// control plane. The reference consumer reads two Artifacts and lands on a host
+// holding an unchecked copy of one of them, so the decision has to say that the
+// host holds neither as far as Placement is concerned and price it both reads.
+// This is the same claim TestAnUncheckedCopySavesNothing makes about the world,
+// asserted where an operator would read it.
+func TestTheDecisionRecordsWhatEachCandidateHoldsOfTheRunsInputs(t *testing.T) {
+	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	driveInMinuteSteps(t, execution, 80)
+
+	decisions := bookingDecisions(t, execution)
+	consumer := decisions["run-reference-consumer"]
+	candidate := candidateFor(t, consumer, "producer-rental")
+	if len(candidate.ArtifactEvidence) != 2 {
+		t.Fatalf("the candidate records %+v, and this Run reads two Artifacts", candidate.ArtifactEvidence)
+	}
+	for _, found := range candidate.ArtifactEvidence {
+		if found.Locality != domain.LocalityCold || found.FetchBytes == 0 {
+			t.Errorf("Artifact %q was recorded %+v on the host holding only an unchecked copy of it", found.ArtifactID, found)
+		}
+	}
+	// 5GB and 2GB at 500 Mbps is 80 + 32 seconds, which is what this candidate
+	// still owes on content none of which was ever checked here.
+	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 112 {
+		t.Errorf("the decision priced %v seconds of Artifact fetch, and 7GB crosses a 500 Mbps link in 112s", seconds)
+	}
+
+	// The checkpoint consumer is the other half: it landed where its input was
+	// produced, and that copy was checked on the way to the object store.
+	warm := candidateFor(t, decisions["run-checkpoint-consumer"], "producer-rental")
+	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityHot {
+		t.Fatalf("the host that produced the checkpoint records %+v of it", warm.ArtifactEvidence)
+	}
+	if seconds := warm.Estimates.ArtifactSeconds.Expected; seconds != 0 {
+		t.Errorf("the host already holding a checked copy was priced %v seconds to read it", seconds)
+	}
+}
+
 // TestARunsRecordedWorkloadCarriesItsArtifacts is the control plane's own
 // record. What a Run consumes and produces reaches the public event log through
 // the workload revision, which is what makes admission a decision about a

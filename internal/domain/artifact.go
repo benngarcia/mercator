@@ -19,6 +19,21 @@ import "time"
 // machine happens to be holding bytes, and unsatisfiable the moment that
 // machine goes away.
 
+// DefaultObjectStoreDownloadMbps is what a host is assumed to read Artifact
+// content out of the object store at when nothing has measured that link. It
+// stands beside DefaultRegistryDownloadMbps for the same reason and with the
+// same standing: a stated assumption rather than a measurement, said once so a
+// predictor and a simulated world cannot disagree about what neither measured.
+const DefaultObjectStoreDownloadMbps = 500.0
+
+// ArtifactLocation is where the durable copy of one version lives. Identity
+// determines the address: a version is immutable, so there is exactly one place
+// its bytes can be, and deriving it is what keeps two records from naming
+// different homes for the same content.
+func ArtifactLocation(workspaceID, artifactID string) string {
+	return "mercator://" + workspaceID + "/artifacts/" + artifactID
+}
+
 // ArtifactVersion is the catalog entry for one immutable version of an
 // Artifact. The version is the identity: content never changes under a version
 // ID, so a consumer that names one names exactly the bytes it will read.
@@ -102,6 +117,55 @@ func (inventory ArtifactInventory) Replica(artifactID string) (ArtifactReplica, 
 		}
 	}
 	return ArtifactReplica{}, false
+}
+
+// Holds reports whether this host has a copy a Run may read in place of the
+// object store: present, checked, and checked against THIS version's digest. A
+// copy nobody verified is not evidence that the right bytes are here, and a copy
+// of other content under the same name is worse than no copy at all, so both
+// still owe the whole read.
+func (inventory ArtifactInventory) Holds(version ArtifactVersion) bool {
+	replica, held := inventory.Replica(version.ID)
+	return held && replica.State.Usable() && replica.ContentDigest == version.ContentDigest
+}
+
+// ArtifactEvidence is what one candidate was found holding of one Artifact the
+// Run reads, and what it would still have to read out of the object store. Only
+// the control plane can state it: the host says which copy it has and what that
+// copy was checked against, the catalog says what the version is, and the answer
+// is whether those two agree.
+//
+// There is no partial. An Artifact version is one immutable object, so a host
+// either has bytes that were checked against it or owes all of them.
+type ArtifactEvidence struct {
+	ArtifactID string        `json:"artifact_id"`
+	Locality   LocalityState `json:"locality"`
+	FetchBytes int64         `json:"fetch_bytes,omitempty"`
+}
+
+// ArtifactFetchWork is what this host still owes on the content a Run declared
+// reading, and what was found of each version. Silence costs what absence costs,
+// exactly as it does for images: a host that cannot enumerate its copies is not
+// a host with nothing to fetch, and pricing it at zero would score a machine
+// nobody can describe like one provably holding every byte.
+func ArtifactFetchWork(versions []ArtifactVersion, inventory ArtifactInventory) (int64, []ArtifactEvidence) {
+	if len(versions) == 0 {
+		return 0, nil
+	}
+	fetch := int64(0)
+	evidence := make([]ArtifactEvidence, 0, len(versions))
+	for _, version := range versions {
+		found := ArtifactEvidence{ArtifactID: version.ID, Locality: LocalityCold, FetchBytes: version.SizeBytes}
+		switch {
+		case !inventory.Known:
+			found.Locality = LocalityUnknown
+		case inventory.Holds(version):
+			found.Locality, found.FetchBytes = LocalityHot, 0
+		}
+		fetch += found.FetchBytes
+		evidence = append(evidence, found)
+	}
+	return fetch, evidence
 }
 
 // ArtifactRequirements is what a workload reads and what it publishes, by

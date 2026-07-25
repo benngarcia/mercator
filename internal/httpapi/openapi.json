@@ -3430,6 +3430,33 @@
           }
         }
       },
+      "ArtifactEvidence": {
+        "type": "object",
+        "description": "What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object.",
+        "required": [
+          "artifact_id",
+          "locality"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "locality": {
+            "type": "string",
+            "enum": [
+              "hot",
+              "cold",
+              "unknown"
+            ],
+            "description": "Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility."
+          },
+          "fetch_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What this host still has to read out of the object store for this version."
+          }
+        }
+      },
       "ArtifactInventory": {
         "type": "object",
         "description": "The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence.",
@@ -4108,6 +4135,7 @@
           "queue_seconds",
           "provision_seconds",
           "pull_seconds",
+          "artifact_seconds",
           "start_seconds",
           "cost_usd"
         ],
@@ -4120,6 +4148,10 @@
           },
           "pull_seconds": {
             "$ref": "#/components/schemas/Estimate"
+          },
+          "artifact_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from pull_seconds because it is a different transfer over different content from a different authority."
           },
           "start_seconds": {
             "$ref": "#/components/schemas/Estimate"
@@ -4176,6 +4208,13 @@
               "unknown"
             ],
             "description": "How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility."
+          },
+          "artifact_evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactEvidence"
+            },
+            "description": "What this candidate was found holding of the immutable content the Run reads, one entry per declared input. It stands beside image_locality rather than folded into it: an image is what the runtime fetches to start a container, an Artifact is what the workload reads once it is running, and one host is routinely warm for one and cold for the other."
           },
           "estimates": {
             "$ref": "#/components/schemas/CandidateEstimates"

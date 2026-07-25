@@ -693,9 +693,16 @@ type CandidateDecision struct {
 	// the decision needs it to tell a machine that has to pull from one that
 	// only has to finish unpacking, which are the same seconds and different
 	// problems.
-	ImageLocality LocalityState      `json:"image_locality,omitempty"`
-	Estimates     CandidateEstimates `json:"estimates"`
-	ScoreUSD      float64            `json:"score_usd,omitempty"`
+	ImageLocality LocalityState `json:"image_locality,omitempty"`
+	// ArtifactEvidence is what this candidate was found holding of the
+	// immutable content the Run reads, one entry per declared input. It stands
+	// beside ImageLocality rather than folded into it, because they are answers
+	// about different content: an image is what the runtime fetches to start a
+	// container, an Artifact is what the workload reads once it is running, and
+	// one host is routinely warm for one and cold for the other.
+	ArtifactEvidence []ArtifactEvidence `json:"artifact_evidence,omitempty"`
+	Estimates        CandidateEstimates `json:"estimates"`
+	ScoreUSD         float64            `json:"score_usd,omitempty"`
 }
 
 type CandidateDisposition string
@@ -715,8 +722,15 @@ type CandidateEstimates struct {
 	QueueSeconds     Estimate `json:"queue_seconds"`
 	ProvisionSeconds Estimate `json:"provision_seconds"`
 	PullSeconds      Estimate `json:"pull_seconds"`
-	StartSeconds     Estimate `json:"start_seconds"`
-	CostUSD          Estimate `json:"cost_usd"`
+	// ArtifactSeconds is what this candidate would still spend reading the
+	// Run's declared inputs out of the object store. It is separate from
+	// PullSeconds because it is a different transfer over different content
+	// from a different authority, and folding the two together would leave a
+	// reader unable to tell a machine that has to fetch an image from one that
+	// has to fetch a dataset forty times its size.
+	ArtifactSeconds Estimate `json:"artifact_seconds"`
+	StartSeconds    Estimate `json:"start_seconds"`
+	CostUSD         Estimate `json:"cost_usd"`
 }
 
 type RunOutcome string

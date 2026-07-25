@@ -56,9 +56,8 @@ A single-decision Blueprint:
 ```json
 {
   "schema": "mercator.lab/blueprint.v1",
-  "classification": "target",
+  "classification": "green",
   "summary": "The Rental holding the immutable input beats a colder Rental.",
-  "missing_capabilities": ["artifacts", "artifact_evidence"],
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
@@ -98,12 +97,20 @@ A single-decision Blueprint:
     "offer": "rental-warm",
     "candidates": {
       "rental-warm": {
+        "artifact_seconds": 0,
         "artifact_evidence": {"artifact:imagenet:v2.41": "hit"}
       }
     }
   }
 }
 ```
+
+`artifact_evidence` says what each candidate was found holding of each Artifact
+the Run reads: `"hit"` for a checked copy of exactly that version, `"miss"` for
+none, and `"unknown"` for a machine that could not enumerate its copies at all.
+A copy nobody checked is a miss, because it is not evidence the right bytes are
+here. `artifact_seconds` is what that candidate would still spend reading its
+inputs out of the object store.
 
 `request` and `expect` are the single-decision shorthand. A Placement fixture
 that advances virtual time or submits several Runs uses `timeline`; each step
@@ -167,8 +174,6 @@ Targets pin event contracts that production types may not carry yet:
 - a busy Rental candidate records ordered Rental Schedule evidence;
 - a full schedule rejects with `SCHEDULE_FULL` at
   `rental_schedule.queued`;
-- Artifact locality is
-  `"artifact_evidence": [{"artifact_id", "present"}]` on each candidate;
 - a false host fact is `CAPABILITY_MISMATCH` and an absent fact is
   `UNKNOWN_FACT`.
 
@@ -180,7 +185,7 @@ real orchestrator, Placement implementation, and SQLite event log. Tests assert
 recorded events, never private Placement state.
 
 The current backend can execute offer, image-layer, and basic Rental behavior.
-It records explicit notes when an Artifact, Cache Mount, seeded Rental
-Schedule, or host fact cannot yet cross the production seam. Later Lab slices
+It records explicit notes when a Cache Mount, seeded Rental Schedule, or host
+fact cannot yet cross the production seam. Later Lab slices
 replace this mutable scripted boundary with World Truth, Observed State, and a
 deterministic dispatcher while keeping the real control plane in the loop.

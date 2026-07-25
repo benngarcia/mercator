@@ -110,10 +110,6 @@ type Machine struct {
 	// learns a layer's identity by unpacking it. Everything else it holds is
 	// assembled, because a pull that lands unpacks as it goes.
 	Packed map[string]bool
-	// HeldCaches maps named data cache key (e.g. a dataset GID) to bytes
-	// materialized on the machine's local disk. No offer field carries this
-	// today; the world holds it so cache-evidence milestones can surface it.
-	HeldCaches map[string]int64
 	// ArtifactReplicas is the local copy of each immutable Artifact version this
 	// machine holds, by version ID. A copy is placement evidence and never a
 	// dependency's authority: what makes an Artifact consumable is its durable
@@ -343,6 +339,11 @@ type World struct {
 	clock  *Clock
 	mu     sync.Mutex
 	images map[string]Image
+	// artifacts is this world's object store: what each immutable version is,
+	// and whether its bytes are there. It is the durable authority a consumer's
+	// admission is answered from, and it is deliberately not assembled from what
+	// machines report holding.
+	artifacts map[string]domain.ArtifactVersion
 	// machines is every offer this world can list, keyed by offer ID. A Rental
 	// and a marketplace offer are the same kind of entry: what separates them
 	// is whether the offer names capacity Mercator keeps.
@@ -352,10 +353,11 @@ type World struct {
 func NewWorld(clock *Clock, options ...Option) *World {
 	options = append([]Option{WithNow(clock.Now)}, options...)
 	return &World{
-		Adapter:  New(options...),
-		clock:    clock,
-		images:   map[string]Image{},
-		machines: map[string]*Machine{},
+		Adapter:   New(options...),
+		clock:     clock,
+		images:    map[string]Image{},
+		artifacts: map[string]domain.ArtifactVersion{},
+		machines:  map[string]*Machine{},
 	}
 }
 
@@ -369,6 +371,30 @@ func (w *World) DefineImage(ref string, image Image) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.images[ref] = Image{Layers: slices.Clone(image.Layers), Registry: image.Registry}
+}
+
+// DefineArtifact records one immutable version in this world's object store.
+// Whether its bytes are there is the version's own PublishedAt: a name the store
+// holds and has not received is content nothing can yet read, however many
+// machines are sitting on a copy.
+func (w *World) DefineArtifact(version domain.ArtifactVersion) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.artifacts[version.ID] = version
+}
+
+// ArtifactVersion is the object store answering what one version is. A name it
+// never heard of, and a name belonging to another workspace, both come back
+// zero, which is not durable: Artifacts are never shared across workspaces, and
+// from a consumer's side an unknown version and an unpublished one are one fact.
+func (w *World) ArtifactVersion(_ context.Context, workspaceID, artifactID string) (domain.ArtifactVersion, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	version, known := w.artifacts[artifactID]
+	if !known || version.WorkspaceID != workspaceID {
+		return domain.ArtifactVersion{}, nil
+	}
+	return version, nil
 }
 
 // AddMachine registers one entry in the world's capacity: a Rental Mercator

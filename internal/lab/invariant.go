@@ -103,6 +103,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
+		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},
@@ -506,18 +507,12 @@ func artifactReadsWereVerified(effects []EffectRecord) error {
 // nothing may inherit its capacity. Placement records the disposition it chose;
 // this reads the audit trail back and checks the Rental Schedules agree.
 func ephemeralCapacityNotReused(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
 	ephemeralRentals := map[string]string{}
-	for _, event := range observation.MercatorEvents {
-		if event.Type != orchestrator.EventBookingDecided {
-			continue
-		}
-		var payload struct {
-			Decision domain.BookingDecision `json:"decision"`
-		}
-		if err := json.Unmarshal(event.Data, &payload); err != nil {
-			return fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
-		}
-		decision := payload.Decision
+	for _, decision := range decisions {
 		for _, candidate := range decision.Candidates {
 			if candidate.Disposition != domain.CandidateDispositionEphemeral {
 				continue
@@ -552,6 +547,108 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// recordedDecisions is every Booking Decision Mercator recorded, in event
+// order. Rules about what Placement decided read this rather than world state:
+// the decision is the thing under judgment, and it is the only place a candidate
+// Mercator refused leaves any trace at all.
+func recordedDecisions(observation InvariantObservation) ([]domain.BookingDecision, error) {
+	var decisions []domain.BookingDecision
+	for _, event := range observation.MercatorEvents {
+		if event.Type != orchestrator.EventBookingDecided {
+			continue
+		}
+		var payload struct {
+			Decision domain.BookingDecision `json:"decision"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			return nil, fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
+		}
+		decisions = append(decisions, payload.Decision)
+	}
+	return decisions, nil
+}
+
+// localityRefusals are the codes a refusal-for-content would carry. None of them
+// is written anywhere in this tree, which is exactly what a standing rule is
+// for: a law about states the system must never reach, rather than a test of one
+// it currently reaches.
+var localityRefusals = map[string]bool{
+	"IMAGE_NOT_CACHED":   true,
+	"ARTIFACT_NOT_LOCAL": true,
+	"LOCALITY_UNKNOWN":   true,
+}
+
+// localityPaths are the offer fields that answer what a machine holds. A
+// rejection pointing at one of them is a rejection for content whatever code it
+// carries, because those fields say nothing else.
+var localityPaths = map[string]bool{
+	"images":            true,
+	"artifacts":         true,
+	"image_locality":    true,
+	"artifact_evidence": true,
+}
+
+// localityIsNeverInfeasibility is the standing guard on the architectural rule
+// that unknown locality is uncertainty. Two things hold in every Booking
+// Decision Mercator recorded.
+//
+// No candidate is struck out for what it holds. Locality answers how long a
+// machine takes to become ready and never whether it may be used at all, so a
+// rejection citing content is a preference that grew into a constraint, and the
+// capacity it removes is capacity the Run cannot then have at any price.
+//
+// And a host that could not say what it holds is priced rather than refused.
+// Silence is charged the whole content, which is what stops it outranking a
+// machine provably ready; letting that price reach a hard bound would strike out
+// the machine that may already be holding every byte, which is the exact failure
+// this rule exists to prevent. A measured start latency still binds, because
+// that is a measurement about this offer whatever anyone could enumerate.
+func localityIsNeverInfeasibility(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			if err := candidateWasPricedNotRefused(decision.RunID, candidate); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func candidateWasPricedNotRefused(runID string, candidate domain.CandidateDecision) error {
+	for _, rejection := range candidate.Rejections {
+		if localityRefusals[rejection.Code] || localityPaths[rejection.Path] {
+			return fmt.Errorf(
+				"Run %q: candidate %q was refused with %s at %q, and what a machine holds is a price rather than a permission",
+				runID, candidate.OfferSnapshotID, rejection.Code, rejection.Path,
+			)
+		}
+		if rejection.Code != "LATENCY_SLO_EXCEEDED" ||
+			!candidateLocalityUnknown(candidate) ||
+			candidate.Estimates.StartSeconds.SampleCount > 0 {
+			continue
+		}
+		return fmt.Errorf(
+			"Run %q: candidate %q could not say what it holds and was refused for a start latency nothing measured",
+			runID, candidate.OfferSnapshotID,
+		)
+	}
+	return nil
+}
+
+// candidateLocalityUnknown reports whether any part of what this candidate was
+// found holding is a silence. One unanswerable input is enough: the seconds
+// under it are what the content would cost from nowhere.
+func candidateLocalityUnknown(candidate domain.CandidateDecision) bool {
+	return candidate.ImageLocality == domain.LocalityUnknown ||
+		slices.ContainsFunc(candidate.ArtifactEvidence, func(found domain.ArtifactEvidence) bool {
+			return found.Locality == domain.LocalityUnknown
+		})
 }
 
 // localityProvenance is the standing guard on how a host becomes warm. Content

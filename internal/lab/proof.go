@@ -210,32 +210,31 @@ func (facts proofFacts) consumerFollowedArtifact() bool {
 	return false
 }
 
-// consumerUsesArtifactReplica is the consumer landing where the producer wrote
-// its output. It reads the producer's own write rather than any local copy,
-// because the consumer's read creates a copy on whichever host it chose: a rule
-// that counted that would be satisfied wherever the consumer went.
+// consumerUsesArtifactReplica is Placement having chosen the host holding the
+// content the Run reads, on the strength of holding it. It reads the decision
+// Mercator recorded: the selected candidate cites a checked copy of every
+// Artifact this Run consumes, and the evidence exists at all.
+//
+// The rule this replaced asked only whether the producer's output landed on the
+// offer the consumer was selected on. That passed on a Blueprint with one
+// standing Rental whatever Placement weighed, which was every execution of this
+// demo before Artifact locality was scored anywhere: two facts about the same
+// machine agreeing is not evidence that either caused the other.
 func (facts proofFacts) consumerUsesArtifactReplica() bool {
 	decision, exists := facts.decisions["run-consumer"]
-	if !exists || decision.SelectedOfferSnapshotID == "" {
+	if !exists {
 		return false
 	}
-	for _, effect := range facts.effects {
-		if effect.Operation != OperationArtifactReplicated ||
-			effect.Command != EffectCommandAccepted ||
-			effect.CorrelationID != "run-producer" {
-			continue
-		}
-		var request struct {
-			OfferID string `json:"offer_id"`
-			Source  string `json:"source"`
-		}
-		if json.Unmarshal(effect.Request, &request) == nil &&
-			request.Source == "run_output" &&
-			request.OfferID == decision.SelectedOfferSnapshotID {
-			return true
+	selected := selectedCandidate(decision)
+	if selected == nil || len(selected.ArtifactEvidence) == 0 {
+		return false
+	}
+	for _, found := range selected.ArtifactEvidence {
+		if found.Locality != domain.LocalityHot {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func (facts proofFacts) hasLostAcceptedLaunch() bool {

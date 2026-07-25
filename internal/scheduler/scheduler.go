@@ -27,7 +27,12 @@ type SchedulingInput struct {
 	// Image is the content every candidate is being asked to run. It travels
 	// with the request because it is a property of the image: an offer that
 	// restated it could disagree with the others about the same image.
-	Image            domain.ImageManifest
+	Image domain.ImageManifest
+	// Artifacts is what the catalog says each version this Run reads is. It
+	// travels with the request for the same reason the manifest does: size and
+	// content digest are properties of the content, and a host that does not
+	// hold something cannot be asked how big it is.
+	Artifacts        []domain.ArtifactVersion
 	Weights          ScoreWeights
 	LatencyEstimates map[string]domain.Estimate
 }
@@ -179,7 +184,8 @@ func runtimeBounds(workload domain.WorkloadRevision) (float64, float64) {
 
 func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
 	rejections := feasibilityViolations(input, offer)
-	estimates, locality := estimateCandidate(input, offer)
+	work := estimateCandidate(input, offer)
+	estimates := work.estimates
 	score := estimates.CostUSD.Expected +
 		input.Weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
 		input.Weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
@@ -190,16 +196,17 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 		score = 0
 	}
 	return domain.CandidateDecision{
-		OfferSnapshotID: offer.ID,
-		ConnectionID:    offer.ConnectionID,
-		AdapterType:     offer.AdapterType,
-		NativeRef:       offer.NativeRef,
-		Disposition:     candidateDisposition(input, offer),
-		Feasible:        len(rejections) == 0,
-		Rejections:      rejections,
-		ImageLocality:   locality,
-		Estimates:       estimates,
-		ScoreUSD:        round(score, 6),
+		OfferSnapshotID:  offer.ID,
+		ConnectionID:     offer.ConnectionID,
+		AdapterType:      offer.AdapterType,
+		NativeRef:        offer.NativeRef,
+		Disposition:      candidateDisposition(input, offer),
+		Feasible:         len(rejections) == 0,
+		Rejections:       rejections,
+		ImageLocality:    work.image,
+		ArtifactEvidence: work.artifacts,
+		Estimates:        estimates,
+		ScoreUSD:         round(score, 6),
 	}
 }
 
@@ -280,8 +287,9 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot) []
 	if !offer.Pricing.Known && !workload.Spec.Placement.AllowUnknownPricing {
 		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "pricing", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown pricing."})
 	}
-	estimates, locality := estimateCandidate(input, offer)
-	if exceedsStartSLO(workload.Spec.Placement.MaxP90StartSeconds, estimates.StartSeconds, locality) {
+	work := estimateCandidate(input, offer)
+	estimates := work.estimates
+	if exceedsStartSLO(workload.Spec.Placement.MaxP90StartSeconds, estimates.StartSeconds, work.localityUnknown()) {
 		violations = append(violations, domain.Violation{Code: "LATENCY_SLO_EXCEEDED", Path: "placement.max_p90_start_seconds", Required: workload.Spec.Placement.MaxP90StartSeconds, Offered: estimates.StartSeconds.P90, Message: "Offer exceeds the requested p90 start latency."})
 	}
 	if workload.Spec.Placement.MaxExpectedCostUSD != nil && estimates.CostUSD.Expected > *workload.Spec.Placement.MaxExpectedCostUSD {
@@ -307,25 +315,46 @@ func startSLOReason(limit float64, selected domain.CandidateDecision) string {
 }
 
 // exceedsStartSLO reports whether this candidate is KNOWN to start later than
-// the Run asked for. A start latency built on an image locality nobody could
-// state is a guess, and refusing a candidate on a guess is what turns silence
-// into infeasibility. Unknown locality is priced the whole image so a host
-// nobody can describe never outranks one provably ready, and priced is as far
-// as it may go: the goal is explicit that it must never become a hard
-// constraint, and a machine that may already hold the image would otherwise be
-// struck out for holding it quietly.
+// the Run asked for. A start latency built on a locality nobody could state is
+// a guess, and refusing a candidate on a guess is what turns silence into
+// infeasibility. Unknown locality is priced the whole content so a host nobody
+// can describe never outranks one provably ready, and priced is as far as it
+// may go: the goal is explicit that it must never become a hard constraint, and
+// a machine that may already hold everything would otherwise be struck out for
+// holding it quietly.
 //
 // A measured start latency for this offer is a measurement whatever the
 // locality was, so it binds. Nothing but a sample sets SampleCount, which is
 // what tells the two apart.
-func exceedsStartSLO(limit float64, start domain.Estimate, locality domain.LocalityState) bool {
+func exceedsStartSLO(limit float64, start domain.Estimate, localityUnknown bool) bool {
 	if limit <= 0 || start.P90 <= limit {
 		return false
 	}
-	return locality != domain.LocalityUnknown || start.SampleCount > 0
+	return !localityUnknown || start.SampleCount > 0
 }
 
-func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) (domain.CandidateEstimates, domain.LocalityState) {
+// candidateWork is what one candidate was found holding, image and Artifact,
+// and what that leaves it to do. The two localities travel with the estimates
+// because they are the same answer read two ways: the seconds are what it costs,
+// the states are what it was.
+type candidateWork struct {
+	estimates domain.CandidateEstimates
+	image     domain.LocalityState
+	artifacts []domain.ArtifactEvidence
+}
+
+// localityUnknown reports whether any part of this candidate's start prediction
+// rests on a silence. One unanswerable input is enough: the seconds below it are
+// what the content would cost from nowhere, which is a price and never a
+// measurement.
+func (work candidateWork) localityUnknown() bool {
+	return work.image == domain.LocalityUnknown ||
+		slices.ContainsFunc(work.artifacts, func(evidence domain.ArtifactEvidence) bool {
+			return evidence.Locality == domain.LocalityUnknown
+		})
+}
+
+func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candidateWork {
 	queue := 0.0
 	if schedule, ok := input.Schedules[offer.RentalID]; ok {
 		queue = schedule.ExpectedWaitSeconds()
@@ -337,7 +366,8 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) (domai
 		provision = offer.Provisioning.Expected
 	}
 	pull, locality := pullEstimate(input.Image, offer, input.ModelVersion)
-	expected := queue + provision + pull.Expected + 1
+	fetch, evidence := artifactEstimate(input.Artifacts, offer.Artifacts, input.ModelVersion)
+	expected := queue + provision + pull.Expected + fetch.Expected + 1
 	start := domain.Estimate{Expected: expected, P50: expected, P90: expected * 1.25, Source: "scheduler", ModelVersion: input.ModelVersion}
 	// A measured latency estimate for this offer overrides the derived one.
 	if estimate, ok := input.LatencyEstimates[offer.ID]; ok && estimate.SampleCount > 0 {
@@ -356,13 +386,18 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) (domai
 	minSeconds := float64(offer.Pricing.MinimumChargeSeconds)
 	billedSeconds := math.Max(costSeconds, minSeconds)
 	cost := offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billedSeconds
-	return domain.CandidateEstimates{
-		QueueSeconds:     domain.Estimate{Expected: queue, P50: queue, P90: queue, Source: "offer", ModelVersion: input.ModelVersion},
-		ProvisionSeconds: domain.Estimate{Expected: provision, P50: provision, P90: provision, Source: "offer", ModelVersion: input.ModelVersion},
-		PullSeconds:      pull,
-		StartSeconds:     start,
-		CostUSD:          domain.Estimate{Expected: cost, Source: "price_model", ModelVersion: input.ModelVersion},
-	}, locality
+	return candidateWork{
+		estimates: domain.CandidateEstimates{
+			QueueSeconds:     domain.Estimate{Expected: queue, P50: queue, P90: queue, Source: "offer", ModelVersion: input.ModelVersion},
+			ProvisionSeconds: domain.Estimate{Expected: provision, P50: provision, P90: provision, Source: "offer", ModelVersion: input.ModelVersion},
+			PullSeconds:      pull,
+			ArtifactSeconds:  fetch,
+			StartSeconds:     start,
+			CostUSD:          domain.Estimate{Expected: cost, Source: "price_model", ModelVersion: input.ModelVersion},
+		},
+		image:     locality,
+		artifacts: evidence,
+	}
 }
 
 // queueable reports whether a Run may wait behind work already assigned here.
@@ -443,6 +478,52 @@ func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, mod
 		estimate.Confidence = min(estimate.Confidence, domain.AssumedLinkConfidence)
 	}
 	return estimate, locality
+}
+
+// artifactEstimate prices what this candidate would still have to read out of
+// the object store before the Run can touch its declared inputs, and records
+// what was found of each one. It is the placement half of Artifact locality: the
+// durable copy is what makes the content consumable at all, and a host-local
+// copy only ever changes how long getting to it takes.
+//
+// The answer reaches the score through this estimate and the start estimate it
+// feeds, and through no weighted term of its own. SchedulingInput.Weights is
+// never populated in production beyond the balanced objective's start-latency
+// default, so a locality term routed through ScoreWeights would be multiplied
+// by zero.
+//
+// Confidence follows the same rule transfers already follow: a host that owes
+// nothing is certainly zero seconds away, and every other answer crosses a link
+// nothing has measured.
+func artifactEstimate(versions []domain.ArtifactVersion, inventory domain.ArtifactInventory, modelVersion string) (domain.Estimate, []domain.ArtifactEvidence) {
+	fetch, evidence := domain.ArtifactFetchWork(versions, inventory)
+	estimate := domain.Estimate{Source: artifactSource(inventory, evidence), ModelVersion: modelVersion}
+	if len(evidence) == 0 {
+		return estimate, nil
+	}
+	if fetch == 0 {
+		estimate.Confidence = 1
+		return estimate, evidence
+	}
+	seconds := float64(fetch*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
+	estimate.Expected, estimate.P50, estimate.P90 = seconds, seconds, seconds*1.5
+	estimate.Confidence = domain.AssumedLinkConfidence
+	return estimate, evidence
+}
+
+// artifactSource names whose evidence this answer rests on, and when it rests on
+// none, whose silence it was. A host that cannot enumerate its copies and a host
+// that enumerated and holds nothing are priced the same seconds and are
+// different problems for an operator.
+func artifactSource(inventory domain.ArtifactInventory, evidence []domain.ArtifactEvidence) string {
+	switch {
+	case len(evidence) == 0:
+		return ""
+	case inventory.Known:
+		return "artifact_inventory"
+	default:
+		return "inventory_unknown"
+	}
 }
 
 // localitySource names where this answer came from, and when there is no

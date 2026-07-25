@@ -77,6 +77,151 @@ func TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes(t *testing.T) {
 	}
 }
 
+// TestTheReferenceModelPricesArtifactLocalityTheSameWayProductionDoes keeps the
+// two models together on the second kind of content a candidate can be warm for.
+// Reading a Run's inputs out of the object store is transfer this candidate owes
+// before it can work, exactly as an image pull is, so a reference model blind to
+// it would call every host equal on a 40GB dataset and disagree with the
+// scheduler about which machine to use for a reason belonging to neither model.
+func TestTheReferenceModelPricesArtifactLocalityTheSameWayProductionDoes(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Artifacts = []domain.ArtifactVersion{labArtifactVersion(input.EvaluatedAt)}
+	for index := range input.Offers {
+		if input.Offers[index].ID != "rental-warm" {
+			continue
+		}
+		// This host enumerated its copies and holds none of the dataset.
+		input.Offers[index].Artifacts = domain.ArtifactInventory{Known: true, ObservedAt: input.EvaluatedAt}
+	}
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	warm := candidateFor(t, production, "rental-warm")
+	reference, _ := referenceEstimates(input, offerFor(t, input, "rental-warm"))
+
+	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityCold {
+		t.Fatalf("the decision recorded %+v, and this host holds no copy of the dataset", warm.ArtifactEvidence)
+	}
+	if reference.ArtifactSeconds.Expected != warm.Estimates.ArtifactSeconds.Expected {
+		t.Fatalf("reference priced %v seconds of Artifact fetch, production priced %v",
+			reference.ArtifactSeconds.Expected, warm.Estimates.ArtifactSeconds.Expected)
+	}
+	if warm.Estimates.ArtifactSeconds.Expected == 0 {
+		t.Fatal("reading 40GB out of the object store was priced at nothing by both models, so neither is accounting for it")
+	}
+}
+
+// TestNeitherModelPricesAnUncheckedCopyAsWarmth is what verification buys at
+// placement time. A host sitting on bytes nobody hashed is not a host that saves
+// this Run a read: the copy may be anything, so the Run still owes the whole
+// fetch and both models have to say so. Scoring presence instead is the
+// distributed-filesystem answer arriving through the back door of an estimate.
+func TestNeitherModelPricesAnUncheckedCopyAsWarmth(t *testing.T) {
+	for _, copyOnDisk := range []struct {
+		name  string
+		state domain.ArtifactReplicaState
+		owes  bool
+	}{
+		{"a copy checked against the catalog", domain.ArtifactReplicaVerified, false},
+		{"a copy nobody checked", domain.ArtifactReplicaUnverified, true},
+	} {
+		t.Run(copyOnDisk.name, func(t *testing.T) {
+			input := smallSchedulingInput(t)
+			version := labArtifactVersion(input.EvaluatedAt)
+			input.Artifacts = []domain.ArtifactVersion{version}
+			holder := offerFor(t, input, "rental-warm")
+			holder.Artifacts = domain.ArtifactInventory{
+				Known:      true,
+				ObservedAt: input.EvaluatedAt,
+				Replicas: []domain.ArtifactReplica{{
+					ArtifactID:    version.ID,
+					ContentDigest: version.ContentDigest,
+					SizeBytes:     version.SizeBytes,
+					State:         copyOnDisk.state,
+				}},
+			}
+			input.Offers = []domain.OfferSnapshot{holder}
+
+			production, err := scheduler.New().Evaluate(context.Background(), input)
+			if err != nil {
+				t.Fatalf("evaluate production scheduler: %v", err)
+			}
+			candidate := candidateFor(t, production, "rental-warm")
+			reference, _ := referenceEstimates(input, holder)
+
+			if owes := candidate.Estimates.ArtifactSeconds.Expected > 0; owes != copyOnDisk.owes {
+				t.Errorf("production priced %s at %v seconds, and owing a fetch should be %v",
+					copyOnDisk.name, candidate.Estimates.ArtifactSeconds.Expected, copyOnDisk.owes)
+			}
+			if reference.ArtifactSeconds.Expected != candidate.Estimates.ArtifactSeconds.Expected {
+				t.Errorf("reference priced %v seconds, production priced %v",
+					reference.ArtifactSeconds.Expected, candidate.Estimates.ArtifactSeconds.Expected)
+			}
+		})
+	}
+}
+
+// TestNeitherModelTurnsArtifactSilenceIntoInfeasibility is the Artifact half of
+// the rule below, at the one place a locality answer can strike a candidate out.
+// A machine that cannot enumerate its copies is charged the whole read, which is
+// what stops it outranking a host provably holding one, and charged is as far as
+// it may go: it may well be sitting on every byte. Both models have to agree,
+// because a reference model that struck the silent candidate out would make the
+// production scheduler's refusal to do so look like a bug.
+func TestNeitherModelTurnsArtifactSilenceIntoInfeasibility(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Workload.Spec.Placement.MaxP90StartSeconds = 180
+	input.Artifacts = []domain.ArtifactVersion{labArtifactVersion(input.EvaluatedAt)}
+	// This host says exactly what image content it holds and nothing at all
+	// about its copies, so the only silence under test is the Artifact's.
+	silent := offerFor(t, input, "rental-warm")
+	silent.Images = domain.ImageInventory{Known: true, ObservedAt: input.EvaluatedAt, ImageDigests: []string{input.Image.Digest}}
+	silent.Artifacts = domain.ArtifactInventory{}
+	input.Offers = []domain.OfferSnapshot{silent}
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	reference, err := SolveSmallWorld(input)
+	if err != nil {
+		t.Fatalf("solve reference world: %v", err)
+	}
+
+	candidate := candidateFor(t, production, "rental-warm")
+	if candidate.Estimates.StartSeconds.P90 <= input.Workload.Spec.Placement.MaxP90StartSeconds {
+		t.Fatalf("this machine was predicted to start in %.2fs, which is inside the bound, so the case proves nothing",
+			candidate.Estimates.StartSeconds.P90)
+	}
+	if candidate.Estimates.ArtifactSeconds.Expected == 0 {
+		t.Fatal("a machine that cannot say which copies it holds was priced nothing to read them")
+	}
+	if !candidate.Feasible {
+		t.Errorf("production refused a machine that cannot enumerate its copies: %+v", candidate.Rejections)
+	}
+	if !slices.Contains(reference.FeasibleOfferIDs, "rental-warm") {
+		t.Error("the reference model refused a machine that cannot enumerate its copies")
+	}
+}
+
+// labArtifactVersion is one 40GB input, durable before the Run is placed. The
+// size is what makes these cases about locality rather than about arithmetic: it
+// dwarfs every image in the small world, so a model that ignores it picks a
+// different machine.
+func labArtifactVersion(publishedAt time.Time) domain.ArtifactVersion {
+	const id = "artifact:dataset:v1"
+	return domain.ArtifactVersion{
+		ID:            id,
+		WorkspaceID:   labWorkspace,
+		ContentDigest: "sha256:da7a5e7da7a5e7da7a5e7da7a5e7da7a5e7da7a5e7da7a5e7da7a5e7da7a5e700",
+		SizeBytes:     40_000_000_000,
+		Location:      domain.ArtifactLocation(labWorkspace, id),
+		PublishedAt:   publishedAt,
+	}
+}
+
 // TestNeitherModelTurnsSilenceIntoInfeasibility is the rule at the one place an
 // image locality answer can strike a candidate out. A Run that refuses to wait
 // gets to refuse a machine that was found to be slow; a machine nobody could

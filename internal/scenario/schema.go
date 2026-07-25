@@ -208,6 +208,21 @@ type ArtifactSpec struct {
 // produces.
 func (spec ArtifactSpec) Prepublished() bool { return spec.ProducedBy == "" }
 
+// Version is the catalog entry this declaration names, scoped to one workspace.
+// It states what the version is and never whether its bytes are here: a
+// publication is a moment, and only a world that has one may stamp it. The
+// object-store address is derived rather than authored, because a version is
+// immutable and there is exactly one place its bytes can be.
+func (spec ArtifactSpec) Version(workspaceID string) domain.ArtifactVersion {
+	return domain.ArtifactVersion{
+		ID:            spec.ID,
+		WorkspaceID:   workspaceID,
+		ContentDigest: spec.ContentDigest,
+		SizeBytes:     int64(spec.Size),
+		Location:      domain.ArtifactLocation(workspaceID, spec.ID),
+	}
+}
+
 // ArtifactReplicaSpec is a host-local copy one machine was found holding, and
 // what that copy is worth. The state is stated rather than defaulted: a copy
 // nobody checked and a copy that matches the catalog are different facts, and a
@@ -517,10 +532,17 @@ type CandidateExpectation struct {
 	// of the pull answer, and the only one that separates a machine that has to
 	// fetch from one that only has to finish unpacking.
 	ImageLocality domain.LocalityState `json:"image_locality,omitempty"`
+	// ArtifactSeconds asserts what this candidate would still spend reading the
+	// Run's declared inputs out of the object store. It is the quantitative half
+	// of Artifact locality, and the only field that separates a host holding a
+	// checked copy from one that has to read the whole thing.
+	ArtifactSeconds *Bound `json:"artifact_seconds,omitempty"`
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`
-	// Artifacts asserts recorded immutable-Artifact locality evidence.
+	// Artifacts asserts what this candidate was recorded as holding of each
+	// Artifact the Run reads: "hit", "miss", or "unknown" for a machine that
+	// could not enumerate its copies at all.
 	Artifacts map[string]string `json:"artifact_evidence,omitempty"`
 }
 
@@ -1525,8 +1547,8 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 			if _, defined := w.artifactsByID()[artifactID]; !defined {
 				return fmt.Errorf("candidate %q references undefined Artifact %q", id, artifactID)
 			}
-			if want != "hit" && want != "miss" {
-				return fmt.Errorf("candidate %q Artifact %q expects \"hit\" or \"miss\", got %q", id, artifactID, want)
+			if _, stated := ArtifactExpectations[want]; !stated {
+				return fmt.Errorf("candidate %q Artifact %q expects \"hit\", \"miss\", or \"unknown\", got %q", id, artifactID, want)
 			}
 		}
 		if candidate.Schedule != nil {

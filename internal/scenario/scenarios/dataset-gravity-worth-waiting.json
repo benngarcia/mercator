@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "summary": "The Rental holding the declared 40GB dataset has a running Booking with 8 minutes remaining while a Rental with a perfect image cache sits idle. Dataset gravity wins, so Mercator creates an ordered queued Booking on the dataset Rental.",
   "classification": "target",
-  "missing_capabilities": ["rental_schedule", "artifacts", "artifact_evidence"],
+  "missing_capabilities": ["rental_schedule"],
   "world": {
     "images": {
       "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {

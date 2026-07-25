@@ -574,3 +574,132 @@ func containsString(values []string, expected string) bool {
 	}
 	return false
 }
+
+// TestArtifactLocalityDecidesBetweenOtherwiseIdenticalHosts is the whole point
+// of Artifact evidence at placement time. Two machines are identical down to the
+// image they hold and the price they charge, and one of them is already holding
+// a checked copy of the 40GB dataset this Run reads. Nothing else can separate
+// them, so the decision has to reach the right answer through the transfer it
+// prices rather than through a tie-break on offer ID.
+func TestArtifactLocalityDecidesBetweenOtherwiseIdenticalHosts(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	dataset := schedulerArtifact()
+	// "off_cold" sorts before "off_holder", so an untouched tie-break picks the
+	// machine holding nothing and this case would pass for the wrong reason.
+	cold := schedulerOffer("off_cold", now, 0.0001, 0)
+	cold.Artifacts = domain.ArtifactInventory{Known: true, ObservedAt: now}
+	holder := schedulerOffer("off_holder", now, 0.0001, 0)
+	holder.Artifacts = schedulerHolds(dataset, domain.ArtifactReplicaVerified, now)
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_dataset",
+		Workload:     schedulerConsumingRevision(dataset.ID),
+		Artifacts:    []domain.ArtifactVersion{dataset},
+		Offers:       []domain.OfferSnapshot{cold, holder},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if decision.SelectedOfferSnapshotID != "off_holder" {
+		t.Fatalf("expected the machine holding the dataset to win, got %q", decision.SelectedOfferSnapshotID)
+	}
+	warm := schedulerCandidate(t, decision, "off_holder")
+	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityHot {
+		t.Fatalf("the holder recorded %+v", warm.ArtifactEvidence)
+	}
+	if warm.Estimates.ArtifactSeconds.Expected != 0 || warm.Estimates.ArtifactSeconds.Confidence != 1 {
+		t.Fatalf("a host holding a checked copy was priced %+v, and it owes nothing", warm.Estimates.ArtifactSeconds)
+	}
+	// 40GB at the assumed 500 Mbps is 640 seconds, over a link nothing measured.
+	empty := schedulerCandidate(t, decision, "off_cold")
+	if empty.Estimates.ArtifactSeconds.Expected != 640 || empty.Estimates.ArtifactSeconds.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("a host holding no copy was priced %+v", empty.Estimates.ArtifactSeconds)
+	}
+	if empty.ArtifactEvidence[0].FetchBytes != dataset.SizeBytes {
+		t.Fatalf("a host holding no copy owes %d bytes, and the version is %d", empty.ArtifactEvidence[0].FetchBytes, dataset.SizeBytes)
+	}
+}
+
+// TestAHostThatCannotEnumerateItsCopiesRecordsUnknownAndNotZero is where silence
+// costs what absence costs. A machine nothing of Mercator's runs on holds
+// whatever it holds and can report none of it, and the one answer that would be
+// wrong is zero: that scores a machine nobody can describe exactly like one
+// provably holding the content.
+func TestAHostThatCannotEnumerateItsCopiesRecordsUnknownAndNotZero(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	dataset := schedulerArtifact()
+	silent := schedulerOffer("off_silent", now, 0.0001, 0)
+	silent.Artifacts = domain.ArtifactInventory{}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_dataset",
+		Workload:     schedulerConsumingRevision(dataset.ID),
+		Artifacts:    []domain.ArtifactVersion{dataset},
+		Offers:       []domain.OfferSnapshot{silent},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	candidate := schedulerCandidate(t, decision, "off_silent")
+	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityUnknown {
+		t.Fatalf("a machine that cannot enumerate its copies recorded %+v", candidate.ArtifactEvidence)
+	}
+	if candidate.Estimates.ArtifactSeconds.Expected != 640 {
+		t.Fatalf("silence was priced %v seconds, and absence costs 640", candidate.Estimates.ArtifactSeconds.Expected)
+	}
+	if candidate.Estimates.ArtifactSeconds.Source != "inventory_unknown" {
+		t.Fatalf("the estimate names its source %q, and this one rests on a machine nobody could ask", candidate.Estimates.ArtifactSeconds.Source)
+	}
+	if !candidate.Feasible {
+		t.Fatalf("a machine that cannot say what it holds was refused: %+v", candidate.Rejections)
+	}
+}
+
+func schedulerArtifact() domain.ArtifactVersion {
+	const id = "artifact:imagenet:v2.41"
+	return domain.ArtifactVersion{
+		ID:            id,
+		WorkspaceID:   "ws_scheduler",
+		ContentDigest: "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+		SizeBytes:     40_000_000_000,
+		Location:      domain.ArtifactLocation("ws_scheduler", id),
+		PublishedAt:   time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+func schedulerHolds(version domain.ArtifactVersion, state domain.ArtifactReplicaState, now time.Time) domain.ArtifactInventory {
+	return domain.ArtifactInventory{
+		Known:      true,
+		ObservedAt: now,
+		Replicas: []domain.ArtifactReplica{{
+			ArtifactID:    version.ID,
+			ContentDigest: version.ContentDigest,
+			SizeBytes:     version.SizeBytes,
+			State:         state,
+			VerifiedAt:    now,
+		}},
+	}
+}
+
+func schedulerConsumingRevision(artifactID string) domain.WorkloadRevision {
+	revision := schedulerRevision()
+	revision.Spec.Artifacts = domain.ArtifactRequirements{Consumes: []string{artifactID}}
+	return revision
+}
+
+func schedulerCandidate(t *testing.T, decision domain.BookingDecision, offerID string) domain.CandidateDecision {
+	t.Helper()
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == offerID {
+			return candidate
+		}
+	}
+	t.Fatalf("the decision records no candidate for %q", offerID)
+	return domain.CandidateDecision{}
+}

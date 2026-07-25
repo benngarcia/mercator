@@ -33,8 +33,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 19 {
-		t.Fatalf("latest invariant results = %d, want 19", len(latest))
+	if len(latest) != 20 {
+		t.Fatalf("latest invariant results = %d, want 20", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -222,6 +222,9 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				},
 			}}
 		},
+		"safety.locality_is_never_infeasibility": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{refusedForHoldingNothing()}
+		},
 		"liveness.lost_response_reconciliation": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{{CorrelationID: "run-missing", Response: EffectResponseLost}}
 		},
@@ -283,7 +286,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 // queuedBehindOneShotCapacity is the decision the lane split forbids: a Run
 // parked in a queue behind capacity that will not exist once its workload exits.
 func queuedBehindOneShotCapacity() eventlog.CloudEvent {
-	decision := domain.BookingDecision{
+	return bookingDecidedEvent("evt_ephemeral_queue", domain.BookingDecision{
 		ID:                      "dec_ephemeral_queue",
 		RunID:                   "run-queued",
 		SelectedOfferSnapshotID: "off_oneshot",
@@ -298,14 +301,87 @@ func queuedBehindOneShotCapacity() eventlog.CloudEvent {
 			RentalID: "rnt_oneshot",
 			State:    domain.BookingStateQueued,
 		},
+	})
+}
+
+// TestSilenceIsPricedAndAMeasurementBinds is the second clause of
+// safety.locality_is_never_infeasibility, which the registry's own failing case
+// cannot reach: a candidate struck out on a bound it was only predicted to miss
+// because nobody could say what it holds. The two rows are the whole rule. A
+// prediction over a silence is a price, and refusing capacity on it removes
+// machines that may already be holding every byte; a measured start latency for
+// this offer is a measurement whatever anyone could enumerate, so it binds.
+func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
+	for _, refusal := range []struct {
+		name        string
+		sampleCount int
+		lawful      bool
+	}{
+		{"a start latency predicted over content nobody could describe", 0, false},
+		{"a start latency measured on this offer", 4, true},
+	} {
+		t.Run(refusal.name, func(t *testing.T) {
+			observation := InvariantObservation{
+				MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_slo_refusal", domain.BookingDecision{
+					ID:    "dec_slo_refusal",
+					RunID: "run-impatient",
+					Candidates: []domain.CandidateDecision{{
+						OfferSnapshotID:  "borrowed-host",
+						ImageLocality:    domain.LocalityUnknown,
+						ArtifactEvidence: []domain.ArtifactEvidence{{ArtifactID: "artifact-1", Locality: domain.LocalityUnknown, FetchBytes: 1}},
+						Estimates: domain.CandidateEstimates{
+							StartSeconds: domain.Estimate{P90: 900, SampleCount: refusal.sampleCount},
+						},
+						Rejections: []domain.Violation{{
+							Code: "LATENCY_SLO_EXCEEDED",
+							Path: "placement.max_p90_start_seconds",
+						}},
+					}},
+					SelectionReasonCodes: []string{"NO_FEASIBLE_OFFERS"},
+				})},
+			}
+
+			err := localityIsNeverInfeasibility(observation)
+
+			if refusal.lawful && err != nil {
+				t.Fatalf("refusing a candidate on %s was called a violation: %v", refusal.name, err)
+			}
+			if !refusal.lawful && err == nil {
+				t.Fatalf("a candidate refused on %s raised nothing", refusal.name)
+			}
+		})
 	}
+}
+
+// refusedForHoldingNothing is the decision the locality rule forbids: a machine
+// struck out for what it holds. It is deliberately not a code the tree writes,
+// because the rule is a law about states Placement must never reach rather than
+// a test of one it currently reaches.
+func refusedForHoldingNothing() eventlog.CloudEvent {
+	return bookingDecidedEvent("evt_locality_refusal", domain.BookingDecision{
+		ID:    "dec_locality_refusal",
+		RunID: "run-cold",
+		Candidates: []domain.CandidateDecision{{
+			OfferSnapshotID: "rental-cold",
+			ImageLocality:   domain.LocalityCold,
+			Rejections: []domain.Violation{{
+				Code:    "IMAGE_NOT_CACHED",
+				Path:    "images",
+				Message: "Offer does not hold the Run's image.",
+			}},
+		}},
+		SelectionReasonCodes: []string{"NO_FEASIBLE_OFFERS"},
+	})
+}
+
+func bookingDecidedEvent(id string, decision domain.BookingDecision) eventlog.CloudEvent {
 	data, err := json.Marshal(struct {
 		Decision domain.BookingDecision `json:"decision"`
 	}{decision})
 	if err != nil {
 		panic(err)
 	}
-	return eventlog.CloudEvent{ID: "evt_ephemeral_queue", Type: orchestrator.EventBookingDecided, Data: data}
+	return eventlog.CloudEvent{ID: id, Type: orchestrator.EventBookingDecided, Data: data}
 }
 
 func invariantResultByID(t *testing.T, results []InvariantResult, id string) InvariantResult {

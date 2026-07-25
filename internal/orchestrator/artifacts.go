@@ -50,23 +50,42 @@ func (o *Orchestrator) refuseUnknowableInputs(workload domain.WorkloadRevision) 
 	)
 }
 
+// consumedArtifacts is what the catalog says each version this Run reads is.
+// One read answers both questions Placement has about an input: whether it
+// exists, which decides admission, and how big it is, which decides what a host
+// holding no copy of it would still have to fetch. Size is a property of the
+// content, so it comes from the store rather than from any machine: a host that
+// does not have something cannot be asked how large it is.
+func (o *Orchestrator) consumedArtifacts(ctx context.Context, workspaceID string, workload domain.WorkloadRevision) ([]domain.ArtifactVersion, error) {
+	// A catalog that went away after the Run was recorded leaves a Mercator
+	// that can no longer answer a question it accepted, which is a failure to
+	// propagate rather than a Run to place.
+	if err := o.refuseUnknowableInputs(workload); err != nil {
+		return nil, err
+	}
+	consumes := workload.Spec.Artifacts.Consumes
+	versions := make([]domain.ArtifactVersion, 0, len(consumes))
+	for _, artifactID := range consumes {
+		version, err := o.artifacts.ArtifactVersion(ctx, workspaceID, artifactID)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator: read Artifact %q: %w", artifactID, err)
+		}
+		versions = append(versions, version)
+	}
+	return versions, nil
+}
+
 // inputsAreDurable answers whether every Artifact this Run declared reading is
 // in the object store. A Run whose inputs are not all durable is not admitted:
 // it waits for a publication, never for a machine. That is what makes a local
 // copy an optimisation, so losing every copy costs a fetch and never costs
 // availability.
 func (o *Orchestrator) inputsAreDurable(ctx context.Context, workspaceID string, workload domain.WorkloadRevision) (bool, error) {
-	// A catalog that went away after the Run was recorded leaves a Mercator
-	// that can no longer answer a question it accepted, which is a failure to
-	// propagate rather than a Run to place.
-	if err := o.refuseUnknowableInputs(workload); err != nil {
+	versions, err := o.consumedArtifacts(ctx, workspaceID, workload)
+	if err != nil {
 		return false, err
 	}
-	for _, artifactID := range workload.Spec.Artifacts.Consumes {
-		version, err := o.artifacts.ArtifactVersion(ctx, workspaceID, artifactID)
-		if err != nil {
-			return false, fmt.Errorf("orchestrator: read Artifact %q: %w", artifactID, err)
-		}
+	for _, version := range versions {
 		if !version.Durable() {
 			return false, nil
 		}

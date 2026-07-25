@@ -87,17 +87,17 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 		offer.Resources.EphemeralDiskBytes < required.EphemeralDisk.MinBytes {
 		return false
 	}
-	estimates, locality := referenceEstimates(input, offer)
+	estimates, localityUnknown := referenceEstimates(input, offer)
 	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil && estimates.CostUSD.Expected > *maximum {
 		return false
 	}
 	// Only a candidate KNOWN to start late fails the latency SLO. A start
-	// latency over an image locality nobody could state is a guess, and the
-	// goal is explicit that silence is uncertainty to price and never a hard
+	// latency over a locality nobody could state is a guess, and the goal is
+	// explicit that silence is uncertainty to price and never a hard
 	// constraint. The oracle refuses measured latency overrides, so an
 	// unknown locality here is the only estimate there could be.
 	if maximum := input.Workload.Spec.Placement.MaxP90StartSeconds; maximum > 0 &&
-		locality != domain.LocalityUnknown && estimates.StartSeconds.P90 > maximum {
+		!localityUnknown && estimates.StartSeconds.P90 > maximum {
 		return false
 	}
 	return true
@@ -134,7 +134,12 @@ func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot)
 	return math.Round(score*1_000_000) / 1_000_000
 }
 
-func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) (domain.CandidateEstimates, domain.LocalityState) {
+// referenceEstimates is the reference model's own account of a candidate, and
+// whether any part of it rests on a silence. It answers the second question as
+// one boolean rather than as a state per kind of content, because that is all
+// any caller here asks: an estimate over content nobody could describe is a
+// price and never a measurement, whichever content it was.
+func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) (domain.CandidateEstimates, bool) {
 	queue := 0.0
 	if schedule, exists := input.Schedules[offer.RentalID]; exists {
 		queue = schedule.ExpectedWaitSeconds()
@@ -147,7 +152,9 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	}
 	work, locality := input.Image.StartWork(offer.Images)
 	pull := referenceStartWorkSeconds(work, offer.RegistryDownloadMbps())
-	start := queue + provision + pull + 1
+	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	fetch := referenceObjectStoreSeconds(fetchBytes)
+	start := queue + provision + pull + fetch + 1
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
 		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
@@ -160,9 +167,20 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		QueueSeconds:     domain.Estimate{Expected: queue},
 		ProvisionSeconds: domain.Estimate{Expected: provision},
 		PullSeconds:      domain.Estimate{Expected: pull},
+		ArtifactSeconds:  domain.Estimate{Expected: fetch},
 		StartSeconds:     domain.Estimate{Expected: start, P90: start * 1.25},
 		CostUSD:          domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
-	}, locality
+	}, locality == domain.LocalityUnknown || slices.ContainsFunc(evidence, func(found domain.ArtifactEvidence) bool {
+		return found.Locality == domain.LocalityUnknown
+	})
+}
+
+// referenceObjectStoreSeconds is the reference model's own account of reading a
+// Run's declared inputs out of the object store. It carries no fixed overhead
+// because nothing has measured one: the only honest terms are the bytes and the
+// assumed rate they cross.
+func referenceObjectStoreSeconds(bytes int64) float64 {
+	return float64(bytes*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
 }
 
 // referenceStartWorkSeconds is the reference model's own account of how long a

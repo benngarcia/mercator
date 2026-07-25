@@ -1,7 +1,6 @@
 package lab
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
@@ -14,7 +13,7 @@ import (
 // moment rather than an instant: a producer's local copy exists before the
 // durable one does, and a consumer that could not tell those apart would be
 // admitted on the strength of bytes sitting on one machine.
-const labObjectStoreMbps = domain.DefaultRegistryDownloadMbps
+const labObjectStoreMbps = domain.DefaultObjectStoreDownloadMbps
 
 // objectStore is the durable authority for Artifacts in this world. It holds
 // two facts that are constantly confused and are not the same: what an Artifact
@@ -36,13 +35,7 @@ func newObjectStore(workspaceID string, artifacts []scenario.ArtifactSpec, start
 		publishedAt: map[string]time.Time{},
 	}
 	for _, artifact := range artifacts {
-		store.catalog[artifact.ID] = domain.ArtifactVersion{
-			ID:            artifact.ID,
-			WorkspaceID:   workspaceID,
-			ContentDigest: artifact.ContentDigest,
-			SizeBytes:     int64(artifact.Size),
-			Location:      objectStoreLocation(workspaceID, artifact.ID),
-		}
+		store.catalog[artifact.ID] = artifact.Version(workspaceID)
 		// An Artifact no Run in this Blueprint produces is content that existed
 		// before the world started, which is what makes it consumable at once.
 		if artifact.Prepublished() {
@@ -50,13 +43,6 @@ func newObjectStore(workspaceID string, artifacts []scenario.ArtifactSpec, start
 		}
 	}
 	return store
-}
-
-// objectStoreLocation is where the durable copy of one version lives. Identity
-// determines the address: a version is immutable, so there is exactly one place
-// its bytes can be and no reason for a fixture to invent one.
-func objectStoreLocation(workspaceID, artifactID string) string {
-	return fmt.Sprintf("mercator://%s/artifacts/%s", workspaceID, artifactID)
 }
 
 // entry is what the catalog says this version is, whether or not it is durable.
