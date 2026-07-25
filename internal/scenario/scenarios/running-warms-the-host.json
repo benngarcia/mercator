@@ -1,0 +1,82 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Two identical cold Rentals. The first Run takes the cheaper one and pays the whole 18GB pull. Fifteen minutes later a second Run of the same image sees that Rental at zero pull seconds and the untouched one still at a full pull, because executing the workload is what left the image on the host. Every other fixture seeds warmth at construction; this one earns it. The second Run still goes to the cold Rental, since 45 minutes of queue costs more than the pull it saves.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "held-4090",
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "spare-4090",
+        "rate_per_hour_usd": 2.05
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "first",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "expected_runtime": "1h",
+        "max_runtime": "2h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "held-4090",
+        "disposition": "release",
+        "candidates": {
+          "held-4090": {
+            "feasible": true,
+            "pull_seconds": {"at_least": 200}
+          },
+          "spare-4090": {
+            "feasible": true,
+            "pull_seconds": {"at_least": 200}
+          }
+        }
+      }
+    },
+    {
+      "advance": "15m"
+    },
+    {
+      "submit": "second",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "spare-4090",
+        "disposition": "release",
+        "candidates": {
+          "held-4090": {
+            "feasible": true,
+            "pull_seconds": 0
+          },
+          "spare-4090": {
+            "feasible": true,
+            "pull_seconds": {"at_least": 200}
+          }
+        }
+      }
+    }
+  ]
+}

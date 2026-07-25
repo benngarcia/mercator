@@ -32,18 +32,23 @@ type InvariantResult struct {
 }
 
 type InvariantObservation struct {
-	StartedAt                   time.Time
-	Now                         time.Time
-	Transition                  uint64
-	Blueprint                   string
-	World                       WorldTruthSnapshot
-	MercatorEvents              []eventlog.CloudEvent
-	Effects                     []EffectRecord
-	Runs                        []domain.RunRecord
-	RentalSchedules             map[string]domain.RentalSchedule
-	RunRequirements             map[string]RunArrival
-	KnownArtifactIDs            map[string]bool
-	SeededArtifactIDs           map[string]bool
+	StartedAt         time.Time
+	Now               time.Time
+	Transition        uint64
+	Blueprint         string
+	World             WorldTruthSnapshot
+	PreviousWorld     WorldTruthSnapshot
+	MercatorEvents    []eventlog.CloudEvent
+	Effects           []EffectRecord
+	Runs              []domain.RunRecord
+	RentalSchedules   map[string]domain.RentalSchedule
+	RunRequirements   map[string]RunArrival
+	KnownArtifactIDs  map[string]bool
+	SeededArtifactIDs map[string]bool
+	// SeededLocality is the image content the World Tape put on each host
+	// before any Run executed, keyed by offer. Content outside it has to be
+	// explained by an accepted image pull against that same host.
+	SeededLocality              map[string]map[string]bool
 	ProjectionRebuildEquivalent bool
 }
 
@@ -86,6 +91,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
+		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},
@@ -285,6 +291,7 @@ func effectMutatesWorld(operation string) bool {
 	case OperationProviderLaunch,
 		OperationProviderRelease,
 		OperationProviderTerminate,
+		OperationImagePull,
 		OperationArtifactPut,
 		OperationCacheMountWrite,
 		OperationControlPlaneRestart:
@@ -403,6 +410,107 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// localityProvenance is the standing guard on how a host becomes warm. Content
+// arrives on a machine exactly two ways: the World Tape seeded it there, or an
+// accepted image pull left it there. Warming is monotone, so no host ever
+// reports less than it reported before. And capacity that does not survive its
+// workload holds nothing beyond its seed, because there is no machine left to
+// hold it once the one-shot execution exits.
+func localityProvenance(observation InvariantObservation) error {
+	previous := offersByID(observation.PreviousWorld.Offers)
+	pulled, err := retainedByOffer(observation.Effects)
+	if err != nil {
+		return err
+	}
+	for _, offer := range observation.World.Offers {
+		if before, known := previous[offer.ID]; known {
+			if err := CheckWarmingDoesNotShrinkInventory(before, offer); err != nil {
+				return fmt.Errorf("offer %q: %w", offer.ID, err)
+			}
+		}
+		if err := oneShotHoldsOnlyItsSeed(offer, observation.SeededLocality[offer.ID]); err != nil {
+			return err
+		}
+		if err := heldContentIsExplained(offer, observation.SeededLocality[offer.ID], pulled[offer.ID]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func oneShotHoldsOnlyItsSeed(offer domain.OfferSnapshot, seeded map[string]bool) error {
+	if offer.Kind == domain.OfferKindStanding && offer.Lane.Reusable() {
+		return nil
+	}
+	for _, digest := range heldDigests(offer.Images) {
+		if !seeded[digest] {
+			return fmt.Errorf(
+				"offer %q does not outlive its workload and holds %s beyond what the World Tape seeded",
+				offer.ID,
+				digest,
+			)
+		}
+	}
+	return nil
+}
+
+func heldContentIsExplained(offer domain.OfferSnapshot, seeded, pulled map[string]bool) error {
+	for _, digest := range heldDigests(offer.Images) {
+		if seeded[digest] || pulled[digest] {
+			continue
+		}
+		return fmt.Errorf(
+			"offer %q holds %s with no World Tape seed and no accepted image pull against that host",
+			offer.ID,
+			digest,
+		)
+	}
+	return nil
+}
+
+// retainedByOffer reads back what the effect ledger says each host kept. A pull
+// that retained nothing explains nothing, which is exactly the record a one-shot
+// execution leaves.
+func retainedByOffer(effects []EffectRecord) (map[string]map[string]bool, error) {
+	retained := map[string]map[string]bool{}
+	for _, effect := range effects {
+		if effect.Operation != OperationImagePull || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		var pull struct {
+			OfferID string `json:"offer_id"`
+		}
+		var kept struct {
+			RetainedDigests []string `json:"retained_digests"`
+		}
+		if err := json.Unmarshal(effect.Request, &pull); err != nil {
+			return nil, fmt.Errorf("decode image pull %s: %w", effect.ID, err)
+		}
+		if err := json.Unmarshal(effect.Consequence, &kept); err != nil {
+			return nil, fmt.Errorf("decode image pull consequence %s: %w", effect.ID, err)
+		}
+		if retained[pull.OfferID] == nil {
+			retained[pull.OfferID] = map[string]bool{}
+		}
+		for _, digest := range kept.RetainedDigests {
+			retained[pull.OfferID][digest] = true
+		}
+	}
+	return retained, nil
+}
+
+func heldDigests(inventory domain.ImageInventory) []string {
+	return append(slices.Clone(inventory.ImageDigests), inventory.LayerDigests...)
+}
+
+func offersByID(offers []domain.OfferSnapshot) map[string]domain.OfferSnapshot {
+	indexed := make(map[string]domain.OfferSnapshot, len(offers))
+	for _, offer := range offers {
+		indexed[offer.ID] = offer
+	}
+	return indexed
 }
 
 func selectedCandidate(decision domain.BookingDecision) *domain.CandidateDecision {

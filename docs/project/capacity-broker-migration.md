@@ -89,6 +89,16 @@ complete because it works against a live provider.
   local durable memory of applied operations, an event spool, a heartbeat, and
   a Docker runtime behind a narrow interface. `nodetest.RunStoreSuite` runs the
   same promises against the in-memory and SQLite stores.
+- [x] 2026-07-24: Make running a workload what warms a host. Both simulated
+  worlds wrote held layers only at construction and read them only when
+  snapshotting offers, so the corpus proved a warm Rental wins and never proved
+  that running makes a Rental warm. Launching now leaves the image's layers and
+  the image itself on the host that ran it, and the Lab records it as an
+  `image.pull` effect the ledger can be read back against. The same change draws
+  the lane's line: a provisionable or ephemeral-lane offer retains nothing,
+  because the machine does not survive its workload. This is also the first
+  writer of `ImageInventory.ImageDigests`, which makes the whole-image fast path
+  in `TransferBytes` live rather than dead.
 - [x] 2026-07-24: Complete phase 1. `internal/capability` declares
   CapacityProvider, NodeRuntime, and EphemeralExecutor with negotiated support
   sets. `Declare` derives a backend's lane from the contracts it satisfies and
@@ -104,7 +114,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory done; manifest resolution, artifacts, caches, and prefetch remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory and execution-driven warming done; manifest resolution, artifacts, caches, and prefetch remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -123,7 +133,21 @@ Phase 1 added:
   behind one-shot capacity, and capacity held for a one-shot execution never
   accumulates a second Booking.
 
-The corpus is 14 regression Blueprints: 5 green and 9 target.
+Phase 3 added:
+
+- `running-warms-the-host` (green): two identical cold Rentals, and the one that
+  ran the image is the only one at zero pull seconds afterwards.
+- `ephemeral-execution-holds-nothing` (green): a one-shot product runs the same
+  image twice and pays the whole pull both times, beside a Rental that ran it
+  once and is warm. Holding nothing is only a claim worth making beside capacity
+  that holds something, which is why the fixture carries both.
+- `safety.locality_provenance` (Lab invariant): an offer's image inventory never
+  shrinks between world snapshots, every digest it holds is either seeded by the
+  World Tape or explained by an accepted `image.pull` against that same host, and
+  an offer that is provisionable or in the ephemeral lane holds nothing beyond
+  its seed.
+
+The corpus is 16 regression Blueprints: 7 green and 9 target.
 
 ## What phase 2 does not yet do
 
@@ -149,7 +173,45 @@ identity. The lane makes that binding unqueueable and the audit trail names it
 honestly, but the record type is shared with reusable placements. Phase 2
 introduces the Node and separates the two bindings.
 
+## What phase 3 warming does not yet do
+
+Warming stops at capacity Mercator already holds. A provisionable offer that
+becomes a Rental cannot be modelled, because provisioned capacity does not
+bootstrap a node agent yet, which is phase 5. The guard keeps such an offer cold
+rather than pretending otherwise, and
+`enrolled-node-survives-its-first-run` now declares `execution_warms_capacity`
+alongside `node_bootstrap` and `rental_schedule`, which is the corpus stating
+what its second step was always waiting on.
+
+In the Lab, warming updates world truth and not the observed offer catalog.
+Observations are delivered on their own path there, so a Lab placement still
+sees construction-time locality. The placement corpus, which is where the two
+new Blueprints live, reads the warmed host directly.
+
 ## Verification evidence
+
+### Phase 3 warming
+
+On 2026-07-24, both new Blueprints were red before the world changed, each on
+exactly one assertion (`pull_seconds: want exactly 0, got 289.14`), and green
+after, at which point `TestPlacementScenarios` failed them for passing and they
+were promoted in the same commit. Every clause of `safety.locality_provenance`
+was broken deliberately and restored:
+
+- removing the reusable-lane guard made a provisionable offer keep what it
+  pulled, which failed the invariant in the demo, in
+  `TestGeneratedBlueprintCompilesCandidateSpecificActualsAndRunsRealControlPlane`,
+  and in the generation fuzz corpus;
+- restoring the per-image filter on offer snapshots produced
+  `warming lost layer sha256:2222... the host already held`, which is why the
+  world now reports a host's whole inventory rather than the layers of the Run
+  in flight;
+- disabling each of the two remaining clauses failed its own test.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/lab ./internal/scenario ./internal/adapter/fake -count=1
+```
 
 ### Phase 2 placement
 

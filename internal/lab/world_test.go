@@ -59,7 +59,7 @@ func TestWorldEffectLedgerRecordsAmbiguousAndDuplicateLaunches(t *testing.T) {
 	if got := len(world.truthSnapshot().ActiveExecutions); got != 1 {
 		t.Fatalf("active executions = %d, want 1", got)
 	}
-	first := world.effectRecords()[0]
+	first := launchEffects(world)[0]
 	if first.Operation != OperationProviderLaunch ||
 		first.Command != EffectCommandAccepted ||
 		first.Response != EffectResponseLost {
@@ -79,7 +79,7 @@ func TestWorldEffectLedgerRecordsAmbiguousAndDuplicateLaunches(t *testing.T) {
 	if got := len(world.truthSnapshot().ActiveExecutions); got != 1 {
 		t.Fatalf("repeat launch created %d active executions", got)
 	}
-	repeated := world.effectRecords()[1]
+	repeated := launchEffects(world)[1]
 	if repeated.Command != EffectCommandDuplicate || repeated.Response != EffectResponseDelivered {
 		t.Fatalf("duplicate launch effect = %+v", repeated)
 	}
@@ -89,7 +89,7 @@ func TestWorldEffectLedgerRecordsAmbiguousAndDuplicateLaunches(t *testing.T) {
 	if _, err := world.Launch(context.Background(), conflict); !errors.Is(err, adapter.ErrIdempotencyConflict) {
 		t.Fatalf("conflicting launch error = %v, want idempotency conflict", err)
 	}
-	rejected := world.effectRecords()[2]
+	rejected := launchEffects(world)[2]
 	if rejected.Command != EffectCommandRejected {
 		t.Fatalf("rejected launch effect = %+v", rejected)
 	}
@@ -153,6 +153,19 @@ func TestWorldEffectLedgerDistinguishesDelayedAndDuplicateResponses(t *testing.T
 			}
 		})
 	}
+}
+
+// launchEffects is the ledger read back for one operation. Launching also
+// records what the workload left on the host, so the launch commands are a
+// subsequence of the ledger rather than its first entries.
+func launchEffects(world *simulatedWorld) []EffectRecord {
+	var launches []EffectRecord
+	for _, effect := range world.effectRecords() {
+		if effect.Operation == OperationProviderLaunch {
+			launches = append(launches, effect)
+		}
+	}
+	return launches
 }
 
 func openWorldFixture(t *testing.T, runName string) (*simulatedWorld, RunArrival) {
@@ -239,6 +252,10 @@ func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 }
 
 func worldLaunchRequest(arrival RunArrival) adapter.LaunchRequest {
+	return worldLaunchRequestOn(arrival, "rental-warm")
+}
+
+func worldLaunchRequestOn(arrival RunArrival, offerID string) adapter.LaunchRequest {
 	return adapter.LaunchRequest{
 		OperationKey:              "launch:producer:1",
 		RequestHash:               "sha256:producer-launch",
@@ -250,10 +267,10 @@ func worldLaunchRequest(arrival RunArrival) adapter.LaunchRequest {
 		CleanupLocator:            "cleanup-producer-1",
 		Image:                     arrival.Request.Image,
 		Platform:                  domain.Platform{OS: "linux", Architecture: "amd64"},
-		SelectedOfferSnapshotID:   "rental-warm",
+		SelectedOfferSnapshotID:   offerID,
 		SelectedOfferConnectionID: "connection:lab",
 		SelectedOfferAdapterType:  "lab",
-		SelectedOfferNativeRef:    "rental-warm",
+		SelectedOfferNativeRef:    offerID,
 		Disposition:               domain.DispositionRelease,
 	}
 }
@@ -274,4 +291,102 @@ func cacheMountRevision(mounts []CacheMountState, offerID, name string) uint64 {
 		}
 	}
 	return 0
+}
+
+func TestRunningLeavesTheImageOnTheRentalThatRanIt(t *testing.T) {
+	world, arrival := openWorldFixture(t, "producer")
+	world.prepareRun("run-producer", arrival)
+
+	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch: %v", err)
+	}
+
+	held := offerByID(t, world.truthSnapshot().Offers, "rental-warm").Images
+	if !held.Holds(arrival.Request.Image) {
+		t.Fatalf("Rental that ran %q does not hold it whole: %+v", arrival.Request.Image, held)
+	}
+	for _, layer := range world.images[arrival.Request.Image] {
+		if !held.HoldsLayer(layer.Digest) {
+			t.Fatalf("Rental that ran the image does not hold layer %s: %+v", layer.Digest, held)
+		}
+	}
+	assertEffect(
+		t,
+		world.effectRecords(),
+		OperationImagePull,
+		"run-producer",
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+	)
+}
+
+func TestOneShotCapacityKeepsNothingItPulled(t *testing.T) {
+	world, arrival := openWorldFixture(t, "producer")
+	world.prepareRun("run-producer", arrival)
+
+	if _, err := world.Launch(context.Background(), worldLaunchRequestOn(arrival, "fresh-4090")); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		t.Fatalf("launch: %v", err)
+	}
+
+	held := offerByID(t, world.truthSnapshot().Offers, "fresh-4090").Images
+	if len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
+		t.Fatalf("capacity that does not outlive its workload kept %+v", held)
+	}
+	assertEffect(
+		t,
+		world.effectRecords(),
+		OperationImagePull,
+		"run-producer",
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+	)
+}
+
+// TestLocalityProvenanceRejectsOneShotCapacityThatKeptItsImage proves the
+// second half of the guard independently: an explained pull is still not a
+// licence for a machine that does not survive its workload to hold anything.
+func TestLocalityProvenanceRejectsOneShotCapacityThatKeptItsImage(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:     "oneshot-container",
+			Kind:   domain.OfferKindProvisionable,
+			Lane:   domain.LaneEphemeral,
+			Images: domain.ImageInventory{Known: true, LayerDigests: []string{"sha256:pulled"}},
+		}}},
+		Effects: []EffectRecord{{
+			Operation:   OperationImagePull,
+			Command:     EffectCommandAccepted,
+			Request:     []byte(`{"offer_id":"oneshot-container"}`),
+			Consequence: []byte(`{"retained_digests":["sha256:pulled"]}`),
+		}},
+		SeededLocality: map[string]map[string]bool{},
+	}
+
+	err := localityProvenance(observation)
+
+	if err == nil {
+		t.Fatal("one-shot capacity was allowed to keep what it pulled")
+	}
+}
+
+// TestIdempotentExternalCommandsCoversImagePulls keeps the pull inside the
+// idempotency guard. Leaving an image on a host is a change to the world, so
+// the same pull reported twice must report the same consequence twice.
+func TestIdempotentExternalCommandsCoversImagePulls(t *testing.T) {
+	pull := func(retained string) EffectRecord {
+		return EffectRecord{
+			Operation:   OperationImagePull,
+			OperationID: "image-pull/rental-warm/trainer",
+			Command:     EffectCommandAccepted,
+			Consequence: []byte(`{"retained_digests":[` + retained + `]}`),
+		}
+	}
+
+	err := idempotentExternalCommands(InvariantObservation{
+		Effects: []EffectRecord{pull(`"sha256:a"`), pull("")},
+	})
+
+	if err == nil {
+		t.Fatal("one pull that kept the image and one that kept nothing were accepted as the same command")
+	}
 }

@@ -33,8 +33,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 17 {
-		t.Fatalf("latest invariant results = %d, want 17", len(latest))
+	if len(latest) != 18 {
+		t.Fatalf("latest invariant results = %d, want 18", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -192,6 +192,17 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		"safety.ephemeral_capacity_not_reused": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{queuedBehindOneShotCapacity()}
 		},
+		"safety.locality_provenance": func(observation *InvariantObservation) {
+			observation.World.Offers = []domain.OfferSnapshot{{
+				ID:   "rental-warm",
+				Kind: domain.OfferKindStanding,
+				Lane: domain.LaneReusable,
+				Images: domain.ImageInventory{
+					Known:        true,
+					LayerDigests: []string{"sha256:never-pulled"},
+				},
+			}}
+		},
 		"liveness.lost_response_reconciliation": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{{CorrelationID: "run-missing", Response: EffectResponseLost}}
 		},
@@ -233,6 +244,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				RentalSchedules:             map[string]domain.RentalSchedule{},
 				RunRequirements:             map[string]RunArrival{},
 				KnownArtifactIDs:            map[string]bool{},
+				SeededLocality:              map[string]map[string]bool{},
 				ProjectionRebuildEquivalent: true,
 			}
 			makeFailure(&observation)

@@ -16,6 +16,7 @@ const (
 	OperationArtifactGet         = "artifact.get"
 	OperationArtifactPut         = "artifact.put"
 	OperationCacheMountWrite     = "cache_mount.write"
+	OperationImagePull           = "image.pull"
 )
 
 type EffectCommand string

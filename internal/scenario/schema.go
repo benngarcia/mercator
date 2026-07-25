@@ -74,6 +74,10 @@ const (
 	// nothing can execute on, so only a node an operator enrolled by hand is
 	// reusable.
 	CapabilityNodeBootstrap Capability = "node_bootstrap"
+	// CapabilityExecutionWarmsCapacity is a host keeping what its workload
+	// fetched. Running an image is how a machine becomes warm, so capacity that
+	// cannot retain content past one execution is cold on every Run.
+	CapabilityExecutionWarmsCapacity Capability = "execution_warms_capacity"
 	// CapabilityHostFacts is providers advertising SSH and NVIDIA-driver
 	// facts on offers, rejected loudly when absent or false.
 	CapabilityHostFacts Capability = "host_facts"
@@ -101,19 +105,20 @@ const (
 )
 
 var knownCapabilities = map[Capability]bool{
-	CapabilityNodeRuntime:         true,
-	CapabilityNodeBootstrap:       true,
-	CapabilityRentalSchedule:      true,
-	CapabilityScheduleAdvancement: true,
-	CapabilityHostFacts:           true,
-	CapabilityArtifacts:           true,
-	CapabilityArtifactEvidence:    true,
-	CapabilityLabExecution:        true,
-	CapabilityEffectLedger:        true,
-	CapabilityControlPlaneRestart: true,
-	CapabilityRunBundle:           true,
-	CapabilityInvariants:          true,
-	CapabilityLabUI:               true,
+	CapabilityNodeRuntime:            true,
+	CapabilityNodeBootstrap:          true,
+	CapabilityRentalSchedule:         true,
+	CapabilityScheduleAdvancement:    true,
+	CapabilityExecutionWarmsCapacity: true,
+	CapabilityHostFacts:              true,
+	CapabilityArtifacts:              true,
+	CapabilityArtifactEvidence:       true,
+	CapabilityLabExecution:           true,
+	CapabilityEffectLedger:           true,
+	CapabilityControlPlaneRestart:    true,
+	CapabilityRunBundle:              true,
+	CapabilityInvariants:             true,
+	CapabilityLabUI:                  true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -62,6 +63,38 @@ type WorldTruthSnapshot struct {
 type observedOffer struct {
 	offer      domain.OfferSnapshot
 	heldLayers map[string]int64
+	heldImages map[string]bool
+}
+
+// warm records that this host executed an image: the layers the workload
+// fetched, and the image itself, stay on the machine. It reports what it
+// retained, which is nothing at all for capacity that does not survive the
+// workload that created it.
+func (state *observedOffer) warm(image string, layers []scenario.LayerSpec) []string {
+	if state.offer.Kind != domain.OfferKindStanding || !state.offer.Lane.Reusable() {
+		return nil
+	}
+	retained := make([]string, 0, len(layers)+1)
+	for _, layer := range layers {
+		state.heldLayers[layer.Digest] = int64(layer.Size)
+		retained = append(retained, layer.Digest)
+	}
+	state.heldImages[image] = true
+	return append(retained, image)
+}
+
+// seededDigests is everything the World Tape put on this host before any Run
+// executed. The provenance invariant reads it to tell content a scenario
+// declared from content an execution left behind.
+func (state observedOffer) seededDigests() map[string]bool {
+	digests := make(map[string]bool, len(state.heldLayers)+len(state.heldImages))
+	for digest := range state.heldLayers {
+		digests[digest] = true
+	}
+	for image := range state.heldImages {
+		digests[image] = true
+	}
+	return digests
 }
 
 type worldOperation struct {
@@ -87,7 +120,11 @@ type simulatedWorld struct {
 	// published them, so invariants that order launches against publication
 	// treat them as present from virtual time zero.
 	seededArtifacts map[string]bool
-	cacheMounts     map[string]map[string]uint64
+	// seededLocality is the image content each host held when the world was
+	// built, keyed by offer. Everything outside it has to be explained by an
+	// accepted image pull recorded against that same host.
+	seededLocality map[string]map[string]bool
+	cacheMounts    map[string]map[string]uint64
 
 	executions  map[string]externalExecution
 	operations  map[string]worldOperation
@@ -110,6 +147,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		artifacts:       map[string]int64{},
 		replicas:        map[string]map[string]bool{},
 		seededArtifacts: map[string]bool{},
+		seededLocality:  map[string]map[string]bool{},
 		cacheMounts:     map[string]map[string]uint64{},
 		executions:      map[string]externalExecution{},
 		operations:      map[string]worldOperation{},
@@ -128,16 +166,19 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		state := observedOffer{
 			offer:      labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
 			heldLayers: map[string]int64{},
+			heldImages: map[string]bool{},
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = int64(layer.Size)
 			}
+			state.heldImages[reference] = true
 		}
 		for _, digest := range rental.CachedLayers {
 			state.heldLayers[digest] = int64(layerBytes(tape.InitialWorld, digest))
 		}
+		world.seededLocality[rental.ID] = state.seededDigests()
 		world.truth[rental.ID] = cloneObservedOffer(state)
 		world.observed[rental.ID] = cloneObservedOffer(state)
 		for _, artifactID := range rental.ArtifactReplicas {
@@ -159,8 +200,10 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 				marketplace.Resources,
 			),
 			heldLayers: map[string]int64{},
+			heldImages: map[string]bool{},
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, marketplace.Billing)
+		world.seededLocality[marketplace.ID] = state.seededDigests()
 		state.offer.Provisioning = &domain.Estimate{
 			Expected: marketplace.Provisioning.Expected.Duration().Seconds(),
 			Source:   "lab-world",
@@ -268,22 +311,31 @@ func (world *simulatedWorld) effectRecords() []EffectRecord {
 	return cloneEffects(world.effects)
 }
 
-func (world *simulatedWorld) invariantFacts() (map[string]RunArrival, map[string]bool, map[string]bool) {
+// worldFacts is what the world knows that the event log cannot say: the Runs it
+// was asked to execute, and what it was seeded with before any of them ran.
+type worldFacts struct {
+	Runs              map[string]RunArrival
+	KnownArtifactIDs  map[string]bool
+	SeededArtifactIDs map[string]bool
+	SeededLocality    map[string]map[string]bool
+}
+
+func (world *simulatedWorld) invariantFacts() worldFacts {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	runs := make(map[string]RunArrival, len(world.runs))
-	for runID, arrival := range world.runs {
-		runs[runID] = arrival
+	facts := worldFacts{
+		Runs:              cloneMap(world.runs),
+		KnownArtifactIDs:  make(map[string]bool, len(world.artifacts)),
+		SeededArtifactIDs: cloneMap(world.seededArtifacts),
+		SeededLocality:    make(map[string]map[string]bool, len(world.seededLocality)),
 	}
-	artifacts := make(map[string]bool, len(world.artifacts))
 	for artifactID := range world.artifacts {
-		artifacts[artifactID] = true
+		facts.KnownArtifactIDs[artifactID] = true
 	}
-	seeded := make(map[string]bool, len(world.seededArtifacts))
-	for artifactID := range world.seededArtifacts {
-		seeded[artifactID] = true
+	for offerID, digests := range world.seededLocality {
+		facts.SeededLocality[offerID] = cloneMap(digests)
 	}
-	return runs, artifacts, seeded
+	return facts
 }
 
 func (world *simulatedWorld) recordControlPlaneRestart(ordinal uint64) {
@@ -398,12 +450,13 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		StartedAt:      world.now,
 		CompletesAt:    world.now.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID)),
 	}
-	world.fetchRunArtifacts(execution, arrival)
-	world.executions[request.LaunchKey] = execution
 	if offer.offer.Kind == domain.OfferKindStanding {
 		offer.offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
 		world.truth[request.SelectedOfferSnapshotID] = offer
 	}
+	world.pullRunImage(execution, request.Image)
+	world.fetchRunArtifacts(execution, arrival)
+	world.executions[request.LaunchKey] = execution
 	receipt := adapter.LaunchReceipt{
 		ExternalID:     execution.ExternalID,
 		LaunchKey:      execution.LaunchKey,
@@ -586,27 +639,49 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 }
 
 func (world *simulatedWorld) offerSnapshots(source map[string]observedOffer) []domain.OfferSnapshot {
-	arrival := world.runs[world.activeRun]
-	layers := world.images[arrival.Request.Image]
 	offers := make([]domain.OfferSnapshot, 0, len(source))
 	for _, state := range source {
 		offer := state.offer
 		offer.ObservedAt = world.now
 		offer.ExpiresAt = world.now.Add(5 * time.Minute)
-		// The world states what each host holds. What a Run would still have
-		// to fetch is the scheduler's subtraction against the manifest, so
-		// this world no longer asserts an answer about an image the offer
-		// does not name.
-		offer.Images = domain.ImageInventory{Known: true, ObservedAt: world.now}
-		for _, layer := range layers {
-			if _, held := state.heldLayers[layer.Digest]; held {
-				offer.Images.LayerDigests = append(offer.Images.LayerDigests, layer.Digest)
-			}
+		// The world states everything each host holds, whatever Run is being
+		// placed. What a Run would still have to fetch is the scheduler's
+		// subtraction against the manifest, so this world asserts no answer
+		// about an image the offer does not name. Reporting the whole
+		// inventory is also what makes it comparable between snapshots:
+		// filtering by the Run in flight would make a host look like it lost
+		// content when only the question changed.
+		offer.Images = domain.ImageInventory{
+			Known:        true,
+			ObservedAt:   world.now,
+			ImageDigests: slices.Sorted(maps.Keys(state.heldImages)),
+			LayerDigests: slices.Sorted(maps.Keys(state.heldLayers)),
 		}
 		offers = append(offers, offer)
 	}
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
 	return offers
+}
+
+// pullRunImage records what launching a workload did to the host that ran it.
+// Every launch pulls; what separates a Rental from one-shot capacity is whether
+// the content is still there afterwards, which is what the consequence states.
+func (world *simulatedWorld) pullRunImage(execution externalExecution, image string) {
+	state := world.truth[execution.OfferID]
+	retained := state.warm(image, world.images[image])
+	world.truth[execution.OfferID] = state
+	world.recordEffect(
+		OperationImagePull,
+		"image-pull/"+execution.OfferID+"/"+image,
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+		execution.RunID,
+		execution.LaunchKey,
+		"",
+		map[string]any{"image": image, "offer_id": execution.OfferID},
+		map[string]any{"retained_digests": retained},
+		"",
+	)
 }
 
 func (world *simulatedWorld) fetchRunArtifacts(execution externalExecution, arrival RunArrival) {
@@ -953,7 +1028,11 @@ func standingRentalID(id string, kind domain.OfferKind) string {
 }
 
 func cloneObservedOffer(state observedOffer) observedOffer {
-	return observedOffer{offer: state.offer, heldLayers: cloneMap(state.heldLayers)}
+	return observedOffer{
+		offer:      state.offer,
+		heldLayers: cloneMap(state.heldLayers),
+		heldImages: cloneMap(state.heldImages),
+	}
 }
 
 func cloneMap[K comparable, V any](source map[K]V) map[K]V {

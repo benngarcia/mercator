@@ -3,6 +3,8 @@ package fake
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -51,6 +53,9 @@ type Daemon struct {
 	Offer domain.OfferSnapshot
 	// HeldLayers maps layer digest to bytes already present on the daemon.
 	HeldLayers map[string]int64
+	// HeldImages is every image reference the daemon holds whole, which is what
+	// lets a repeat of the same image skip layer arithmetic entirely.
+	HeldImages map[string]bool
 	// HeldCaches maps named data cache key (e.g. a dataset GID) to bytes
 	// materialized on the daemon's local disk. No offer field carries this
 	// today; the world holds it so cache-evidence milestones can surface it.
@@ -71,6 +76,34 @@ type Daemon struct {
 	// lease bound. An expired daemon stops being offered, standing in for
 	// janitor termination until the rental lifecycle exists.
 	LeaseExpiresAt time.Time
+}
+
+// lane is what this daemon becomes once allocated. A daemon stands in for
+// capacity the broker holds, so an unstated lane is reusable.
+func (d *Daemon) lane() domain.ExecutionLane {
+	if d.Offer.Lane == "" {
+		return domain.LaneReusable
+	}
+	return d.Offer.Lane
+}
+
+// ran records that this host executed an image: the layers the workload
+// fetched, and the image itself, stay on the machine. Capacity outside the
+// reusable lane keeps nothing, because there is no machine left to keep it.
+func (d *Daemon) ran(image string, layers []Layer) {
+	if !d.lane().Reusable() {
+		return
+	}
+	if d.HeldLayers == nil {
+		d.HeldLayers = map[string]int64{}
+	}
+	if d.HeldImages == nil {
+		d.HeldImages = map[string]bool{}
+	}
+	for _, layer := range layers {
+		d.HeldLayers[layer.Digest] = layer.Bytes
+	}
+	d.HeldImages[image] = true
 }
 
 func (d *Daemon) busyAt(now time.Time) bool {
@@ -211,6 +244,31 @@ func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.Offe
 	return offers, nil
 }
 
+// Launch runs the workload and leaves what it fetched on the host that ran it.
+// Running an image is how a machine becomes warm; capacity that does not
+// survive its workload is cold again on the next Run.
+func (w *World) Launch(ctx context.Context, request adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
+	receipt, err := w.Adapter.Launch(ctx, request)
+	if err != nil {
+		return receipt, err
+	}
+	w.recordExecution(request.SelectedOfferSnapshotID, request.Image)
+	return receipt, nil
+}
+
+// recordExecution warms the host an execution landed on. Only a daemon is a
+// host at all: a marketplace offer is a machine that does not exist yet and
+// will not exist once its workload exits.
+func (w *World) recordExecution(offerID, image string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	daemon, standing := w.daemons[offerID]
+	if !standing {
+		return
+	}
+	daemon.ran(image, w.images[image])
+}
+
 // ResolveManifest answers what an image contains from this world's catalog. It
 // is the simulated stand-in for a registry: the scheduler subtracts what a host
 // holds from what this returns.
@@ -233,9 +291,7 @@ func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domai
 	offer.Kind = domain.OfferKindStanding
 	// A daemon in the simulated world stands in for capacity Mercator holds,
 	// so it keeps the Rental identity its lane entitles it to.
-	if offer.Lane == "" {
-		offer.Lane = domain.LaneReusable
-	}
+	offer.Lane = daemon.lane()
 	if offer.Lane.Reusable() {
 		offer.RentalID = offer.ID
 	} else {
@@ -245,7 +301,11 @@ func (w *World) daemonOffer(daemon *Daemon, now time.Time, layers []Layer) domai
 	offer.ExpiresAt = now.Add(5 * time.Minute)
 	// The daemon states which layers it holds. What is missing is the
 	// scheduler's subtraction, not a number this world asserts.
-	offer.Images = domain.ImageInventory{Known: true, ObservedAt: now}
+	offer.Images = domain.ImageInventory{
+		Known:        true,
+		ObservedAt:   now,
+		ImageDigests: slices.Sorted(maps.Keys(daemon.HeldImages)),
+	}
 	for _, layer := range layers {
 		if _, held := daemon.HeldLayers[layer.Digest]; held {
 			offer.Images.LayerDigests = append(offer.Images.LayerDigests, layer.Digest)

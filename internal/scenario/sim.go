@@ -89,12 +89,14 @@ func simDaemon(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, c
 	daemon := &fake.Daemon{
 		Offer:      simRentalOffer(rental),
 		HeldLayers: map[string]int64{},
+		HeldImages: map[string]bool{},
 		HeldCaches: map[string]int64{},
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
 			daemon.HeldLayers[layer.Digest] = int64(layer.Size)
 		}
+		daemon.HeldImages[ref] = true
 	}
 	for _, name := range rental.CachedLayers {
 		daemon.HeldLayers[name] = int64(layerSize(spec, name))
