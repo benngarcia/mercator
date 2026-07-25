@@ -40,9 +40,9 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	for ref, image := range spec.Images {
 		layers := make([]fake.Layer, 0, len(image.Layers))
 		for _, layer := range image.Layers {
-			layers = append(layers, fake.Layer{Digest: layer.Digest, Bytes: int64(layer.Size)})
+			layers = append(layers, fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)})
 		}
-		world.DefineImage(ref, layers)
+		world.DefineImage(ref, fake.Image{Layers: layers, Registry: fake.RegistryAnswer(image.Registry)})
 	}
 	for _, rental := range spec.Rentals {
 		schedule := spec.rentalSchedule(rental.ID)
@@ -90,19 +90,21 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Machine {
 	start := clock.Now()
 	machine := &fake.Machine{
-		Offer:      simRentalOffer(rental),
-		HeldLayers: map[string]int64{},
-		HeldImages: map[string]bool{},
-		HeldCaches: map[string]int64{},
+		Offer:          simRentalOffer(rental),
+		HeldLayers:     map[string]int64{},
+		HeldDiffIDs:    map[string]bool{},
+		ReportsDiffIDs: rental.ReportsDiffIDs,
+		HeldImages:     map[string]bool{},
+		HeldCaches:     map[string]int64{},
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
-			machine.HeldLayers[layer.Digest] = int64(layer.Size)
+			machine.Hold(fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)})
 		}
 		machine.HeldImages[ref] = true
 	}
-	for _, name := range rental.CachedLayers {
-		machine.HeldLayers[name] = int64(layerSize(spec, name))
+	for _, digest := range rental.CachedLayers {
+		machine.Hold(findLayer(spec, digest))
 	}
 	if running := schedule.Running; running != nil {
 		machine.BusyUntil = start.Add(running.RemainingMaxRuntime.Duration())
@@ -215,15 +217,18 @@ func simOffer(id, connectionID string, ratePerHourUSD float64, resources *Resour
 	}
 }
 
-func layerSize(spec WorldSpec, name string) ByteSize {
+// findLayer resolves a digest a fixture seeds directly onto a Rental back to
+// the layer the image catalog defines, so the machine holds it under every name
+// that content answers to.
+func findLayer(spec WorldSpec, digest string) fake.Layer {
 	for _, image := range spec.Images {
 		for _, layer := range image.Layers {
-			if layer.Digest == name {
-				return layer.Size
+			if layer.Digest == digest {
+				return fake.Layer{Digest: layer.Digest, DiffID: layer.DiffID, Bytes: int64(layer.Size)}
 			}
 		}
 	}
-	return 0
+	return fake.Layer{Digest: digest}
 }
 
 type simSession struct {

@@ -2,11 +2,13 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/ociresolver"
 )
 
 var worldStart = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -14,10 +16,10 @@ var worldStart = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 func newLayeredWorld(t *testing.T) *World {
 	t.Helper()
 	world := NewWorld(NewClock(worldStart))
-	world.DefineImage("trainer:v1", []Layer{
+	world.DefineImage("trainer:v1", Image{Layers: []Layer{
 		{Digest: "layer-base", Bytes: 1000},
 		{Digest: "layer-top", Bytes: 10},
-	})
+	}})
 	return world
 }
 
@@ -55,7 +57,7 @@ func TestWorldIdleMachineAdvertisesHonestLayerEvidence(t *testing.T) {
 	}
 	// The machine holds the shared base layer and not the top one, which is what
 	// makes the next version of the same image cheap to start here.
-	if got := offer.Images; !got.Known || !got.HoldsLayer("layer-base") || got.HoldsLayer("layer-top") {
+	if got := offer.Images; !got.Known || !got.HoldsLayer(domain.ImageLayer{Digest: "layer-base"}) || got.HoldsLayer(domain.ImageLayer{Digest: "layer-top"}) {
 		t.Fatalf("inventory = %+v, want the base layer held and the top layer missing", got)
 	}
 	if !offer.ExpiresAt.After(worldStart) {
@@ -150,7 +152,7 @@ func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 // absent at the instant the container was dispatched.
 func TestWorldHoldsARunningImageOnlyOnceItsBytesHaveArrived(t *testing.T) {
 	world := newLayeredWorld(t)
-	world.DefineImage("wide:v1", []Layer{{Digest: "layer-wide", Bytes: 125_000_000}})
+	world.DefineImage("wide:v1", Image{Layers: []Layer{{Digest: "layer-wide", Bytes: 125_000_000}}})
 	if err := world.AddMachine(&Machine{Offer: rentalOffer("rental-cold")}); err != nil {
 		t.Fatalf("add machine: %v", err)
 	}
@@ -163,7 +165,7 @@ func TestWorldHoldsARunningImageOnlyOnceItsBytesHaveArrived(t *testing.T) {
 		t.Fatalf("the host holds the image at dispatch, before any byte moved: %+v", held)
 	}
 	world.Clock().Advance(2 * time.Second)
-	if held := worldOffers(t, world)["rental-cold"].Images; !held.Holds("wide:v1") || !held.HoldsLayer("layer-wide") {
+	if held := worldOffers(t, world)["rental-cold"].Images; !held.Holds("wide:v1") || !held.HoldsLayer(domain.ImageLayer{Digest: "layer-wide"}) {
 		t.Fatalf("the host does not hold what it finished pulling: %+v", held)
 	}
 }
@@ -258,5 +260,67 @@ func worldLaunch(offerID, image string) adapter.LaunchRequest {
 		OwnershipToken:          "owner-" + offerID,
 		Image:                   image,
 		SelectedOfferSnapshotID: offerID,
+	}
+}
+
+// TestSimulatedRegistryRefusesTheSameThreeWaysARealOneDoes keeps this world
+// honest about what it stands in for. Collapsing "nobody pushed this", "there
+// is no build for this platform", and "your credentials were refused" into one
+// empty manifest hides the failure an operator most often has to fix.
+func TestSimulatedRegistryRefusesTheSameThreeWaysARealOneDoes(t *testing.T) {
+	world := NewWorld(NewClock(worldStart))
+	world.DefineImage("mystery:v1", Image{Registry: RegistryUnresolvable})
+	world.DefineImage("private:v1", Image{Registry: RegistryUnauthorized})
+
+	testCases := []struct {
+		name  string
+		image string
+		want  error
+	}{
+		{"an image nobody pushed", "absent:v1", ociresolver.ErrImageUnknown},
+		{"an image with no resolvable manifest", "mystery:v1", ociresolver.ErrManifestUnresolvable},
+		{"an image the credentials cannot read", "private:v1", ociresolver.ErrUnauthorized},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := world.ResolveManifest(context.Background(), testCase.image, domain.Platform{OS: "linux", Architecture: "amd64"})
+
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("resolve error = %v, want %v", err, testCase.want)
+			}
+		})
+	}
+}
+
+// TestADockerHostIsWarmAgainstAManifestItCannotPronounce is the digest-space
+// bridge at the world seam. The machine reports only diff IDs, which is all a
+// container daemon has once it has unpacked an image, and the manifest lists
+// only compressed blob digests. Nothing transfers because the manifest carries
+// both names for the same bytes.
+func TestADockerHostIsWarmAgainstAManifestItCannotPronounce(t *testing.T) {
+	world := NewWorld(NewClock(worldStart))
+	world.DefineImage("trainer:v1", Image{Layers: []Layer{
+		{Digest: "sha256:blob-base", DiffID: "sha256:diff-base", Bytes: 1000},
+		{Digest: "sha256:blob-top", DiffID: "sha256:diff-top", Bytes: 10},
+	}})
+	machine := &Machine{Offer: rentalOffer("rental-docker"), ReportsDiffIDs: true}
+	machine.Hold(Layer{Digest: "sha256:blob-base", DiffID: "sha256:diff-base", Bytes: 1000})
+	machine.Hold(Layer{Digest: "sha256:blob-top", DiffID: "sha256:diff-top", Bytes: 10})
+	if err := world.AddMachine(machine); err != nil {
+		t.Fatalf("add machine: %v", err)
+	}
+
+	inventory := worldOffers(t, world)["rental-docker"].Images
+	manifest, err := world.ResolveManifest(context.Background(), "trainer:v1", domain.Platform{OS: "linux", Architecture: "amd64"})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	bytes, known := manifest.TransferBytes(inventory)
+
+	if len(inventory.LayerDigests) != 0 {
+		t.Fatalf("a Docker host reported compressed blob digests it cannot see: %+v", inventory.LayerDigests)
+	}
+	if !known || bytes != 0 {
+		t.Fatalf("the host transfers %d bytes (known=%v), want nothing: it holds every layer", bytes, known)
 	}
 }

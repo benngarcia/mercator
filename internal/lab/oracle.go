@@ -140,7 +140,7 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		provision = offer.Provisioning.Expected
 	}
 	missing, _ := input.Image.TransferBytes(offer.Images)
-	pull := referenceTransferSeconds(missing, registryBandwidth(offer))
+	pull := referenceTransferSeconds(missing, offer.RegistryDownloadMbps())
 	start := queue + provision + pull + 1
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
@@ -157,15 +157,6 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		StartSeconds:     domain.Estimate{Expected: start, P90: start * 1.25},
 		CostUSD:          domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
 	}
-}
-
-func registryBandwidth(offer domain.OfferSnapshot) float64 {
-	for _, fact := range offer.Network.Download {
-		if fact.Scope == domain.NetworkScopeRegistry && fact.Statistic == "p10" && fact.ValueMbps > 0 {
-			return fact.ValueMbps
-		}
-	}
-	return 500
 }
 
 func referenceTransferSeconds(bytes int64, bandwidthMbps float64) float64 {
@@ -236,8 +227,13 @@ func CheckWarmingDoesNotShrinkInventory(before, after domain.OfferSnapshot) erro
 		return fmt.Errorf("warming made a host that could enumerate its content stop being able to")
 	}
 	for _, layer := range before.Images.LayerDigests {
-		if !after.Images.HoldsLayer(layer) {
+		if !after.Images.HoldsLayer(domain.ImageLayer{Digest: layer}) {
 			return fmt.Errorf("warming lost layer %s the host already held", layer)
+		}
+	}
+	for _, diffID := range before.Images.LayerDiffIDs {
+		if !after.Images.HoldsLayer(domain.ImageLayer{DiffID: diffID}) {
+			return fmt.Errorf("warming lost layer %s the host already held", diffID)
 		}
 	}
 	for _, image := range before.Images.ImageDigests {

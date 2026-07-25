@@ -283,6 +283,12 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 	checkBound("queue_seconds", expect.QueueSeconds, candidate.Estimates.QueueSeconds.Expected)
 	checkBound("provision_seconds", expect.ProvisionSeconds, candidate.Estimates.ProvisionSeconds.Expected)
 	checkBound("pull_seconds", expect.PullSeconds, candidate.Estimates.PullSeconds.Expected)
+	if expect.PullSource != "" && candidate.Estimates.PullSeconds.Source != expect.PullSource {
+		fail("pull_source: want %q, got %q", expect.PullSource, candidate.Estimates.PullSeconds.Source)
+	}
+	if expect.PullConfidence != nil && candidate.Estimates.PullSeconds.Confidence != *expect.PullConfidence {
+		fail("pull_confidence: want %v, got %v", *expect.PullConfidence, candidate.Estimates.PullSeconds.Confidence)
+	}
 	if expect.Schedule != nil {
 		failures = append(failures, assertScheduleEvidence(rec, name, id, *expect.Schedule)...)
 	}

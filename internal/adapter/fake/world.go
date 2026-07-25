@@ -11,13 +11,16 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/ociresolver"
 )
 
-// registryMbps is how fast this world moves image content onto a machine. It is
-// the world's own transfer model, deliberately independent of the scheduler's
-// prediction: a fixture is only meaningful when the actual pull and the
-// predicted pull are produced by different code.
-const registryMbps = 500.0
+// registryMbps is how fast this world moves image content onto a machine. The
+// arithmetic below it is the world's own transfer model, deliberately
+// independent of the scheduler's prediction: a fixture is only meaningful when
+// the actual pull and the predicted pull are produced by different code. The
+// speed itself is the standing assumption about an unmeasured link, which is
+// stated once so the two models cannot disagree about what they never measured.
+const registryMbps = domain.DefaultRegistryDownloadMbps
 
 // Clock is a scripted wall clock shared by a World, its machines, and the
 // orchestrator under test. Time only moves when a scenario advances it, so
@@ -43,12 +46,37 @@ func (c *Clock) Advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
-// Layer is one content-addressed slice of an image: shared layers across
-// images are what make warm-rental affinity worth modeling.
+// Layer is one content-addressed slice of an image, named in both digest
+// spaces: Digest is the compressed blob a registry serves, DiffID the
+// uncompressed content a container daemon enumerates. Shared layers across
+// images are what make warm-rental affinity worth modeling, and carrying both
+// names is what lets a host that speaks one space be matched against a manifest
+// written in the other.
 type Layer struct {
 	Digest string
+	DiffID string
 	Bytes  int64
 }
+
+// Image is what this world's registry knows about one image: its layers, and
+// whether it will say so. An image can exist in the world and be unreadable
+// from the registry, which is the difference between what is running and what
+// can be looked up about it.
+type Image struct {
+	Layers   []Layer
+	Registry RegistryAnswer
+}
+
+// RegistryAnswer is how the simulated registry responds to a resolution. A real
+// registry says no three distinguishable ways and an operator acts on each
+// differently, so collapsing them into one empty manifest is a fidelity bug.
+type RegistryAnswer string
+
+const (
+	RegistryResolves     RegistryAnswer = ""
+	RegistryUnresolvable RegistryAnswer = "unresolvable"
+	RegistryUnauthorized RegistryAnswer = "unauthorized"
+)
 
 // Machine is one host in the simulated world: a Rental Mercator holds, or a
 // marketplace offer naming capacity that does not exist yet. It holds image
@@ -61,8 +89,16 @@ type Machine struct {
 	// registered, because they are what it is; ObservedAt, ExpiresAt, Queue,
 	// Capacity, and Images are what the world answers with at listing time.
 	Offer domain.OfferSnapshot
-	// HeldLayers maps layer digest to bytes already present on the machine.
+	// HeldLayers maps compressed layer blob digest to bytes already present on
+	// the machine.
 	HeldLayers map[string]int64
+	// HeldDiffIDs is the same content named the way a container daemon names it.
+	// A machine that reports diff IDs holds no less than one that reports blob
+	// digests; it just has a different word for the same bytes.
+	HeldDiffIDs map[string]bool
+	// ReportsDiffIDs makes this machine enumerate its layers the way a Docker
+	// daemon does, which is the only vocabulary a real one has.
+	ReportsDiffIDs bool
 	// HeldImages is every image reference the machine holds whole, which is what
 	// lets a repeat of the same image skip layer arithmetic entirely.
 	HeldImages map[string]bool
@@ -135,30 +171,54 @@ func (m *Machine) settle(now time.Time) {
 	m.fetching = arrived
 }
 
+// Hold puts one layer on this machine under every name that content answers
+// to, so a fixture that seeds a machine and a pull that lands on one leave the
+// same machine behind.
+func (m *Machine) Hold(layer Layer) {
+	if m.HeldLayers == nil {
+		m.HeldLayers = map[string]int64{}
+	}
+	if m.HeldDiffIDs == nil {
+		m.HeldDiffIDs = map[string]bool{}
+	}
+	m.HeldLayers[layer.Digest] = layer.Bytes
+	if layer.DiffID != "" {
+		m.HeldDiffIDs[layer.DiffID] = true
+	}
+}
+
 func (m *Machine) keep(image string, layers []Layer) {
 	if m.HeldLayers == nil {
 		m.HeldLayers = map[string]int64{}
+	}
+	if m.HeldDiffIDs == nil {
+		m.HeldDiffIDs = map[string]bool{}
 	}
 	if m.HeldImages == nil {
 		m.HeldImages = map[string]bool{}
 	}
 	for _, layer := range layers {
-		m.HeldLayers[layer.Digest] = layer.Bytes
+		m.Hold(layer)
 	}
 	m.HeldImages[image] = true
 }
 
-// inventory is what this machine says it holds, whatever Run is being placed.
-// What a Run would still have to fetch is the scheduler's subtraction against
-// the manifest, so the world asserts no answer about an image the offer does
-// not name.
+// inventory is what this machine says it holds, whatever Run is being placed,
+// in the digest space its runtime can enumerate. What a Run would still have to
+// fetch is the scheduler's subtraction against the manifest, so the world
+// asserts no answer about an image the offer does not name.
 func (m *Machine) inventory(now time.Time) domain.ImageInventory {
-	return domain.ImageInventory{
+	inventory := domain.ImageInventory{
 		Known:        true,
 		ObservedAt:   now,
 		ImageDigests: slices.Sorted(maps.Keys(m.HeldImages)),
-		LayerDigests: slices.Sorted(maps.Keys(m.HeldLayers)),
 	}
+	if m.ReportsDiffIDs {
+		inventory.LayerDiffIDs = slices.Sorted(maps.Keys(m.HeldDiffIDs))
+		return inventory
+	}
+	inventory.LayerDigests = slices.Sorted(maps.Keys(m.HeldLayers))
+	return inventory
 }
 
 func transferDuration(bytes int64) time.Duration {
@@ -204,7 +264,7 @@ type World struct {
 	*Adapter
 	clock  *Clock
 	mu     sync.Mutex
-	images map[string][]Layer
+	images map[string]Image
 	// machines is every offer this world can list, keyed by offer ID. A Rental
 	// and a marketplace offer are the same kind of entry: what separates them
 	// is whether the offer names capacity Mercator keeps.
@@ -216,20 +276,21 @@ func NewWorld(clock *Clock, options ...Option) *World {
 	return &World{
 		Adapter:  New(options...),
 		clock:    clock,
-		images:   map[string][]Layer{},
+		images:   map[string]Image{},
 		machines: map[string]*Machine{},
 	}
 }
 
 func (w *World) Clock() *Clock { return w.clock }
 
-// DefineImage registers an image as its ordered layers. Layer digests are
-// shared identity across images: two images listing the same digest share
-// that layer, which is what layer-affinity scenarios exercise.
-func (w *World) DefineImage(ref string, layers []Layer) {
+// DefineImage registers an image as its ordered layers and what the registry
+// will say about it. Layer digests are shared identity across images: two
+// images listing the same digest share that layer, which is what layer-affinity
+// scenarios exercise.
+func (w *World) DefineImage(ref string, image Image) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.images[ref] = append([]Layer(nil), layers...)
+	w.images[ref] = Image{Layers: slices.Clone(image.Layers), Registry: image.Registry}
 }
 
 // AddMachine registers one entry in the world's capacity: a Rental Mercator
@@ -307,22 +368,33 @@ func (w *World) recordExecution(offerID, image string) {
 	}
 	now := w.clock.Now()
 	machine.settle(now)
-	machine.startPull(image, w.images[image], now)
+	machine.startPull(image, w.images[image].Layers, now)
 }
 
 // ResolveManifest answers what an image contains from this world's catalog. It
 // is the simulated stand-in for a registry: the scheduler subtracts what a host
-// holds from what this returns.
+// holds from what this returns, and it says no the same three ways a real
+// registry does.
 func (w *World) ResolveManifest(_ context.Context, imageDigest string, _ domain.Platform) (domain.ImageManifest, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	layers, known := w.images[imageDigest]
+	image, known := w.images[imageDigest]
 	if !known {
-		return domain.ImageManifest{}, nil
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrImageUnknown, imageDigest)
+	}
+	switch image.Registry {
+	case RegistryUnresolvable:
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrManifestUnresolvable, imageDigest)
+	case RegistryUnauthorized:
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrUnauthorized, imageDigest)
 	}
 	manifest := domain.ImageManifest{Known: true, Digest: imageDigest}
-	for _, layer := range layers {
-		manifest.Layers = append(manifest.Layers, domain.ImageLayer{Digest: layer.Digest, CompressedBytes: layer.Bytes})
+	for _, layer := range image.Layers {
+		manifest.Layers = append(manifest.Layers, domain.ImageLayer{
+			Digest:          layer.Digest,
+			DiffID:          layer.DiffID,
+			CompressedBytes: layer.Bytes,
+		})
 	}
 	return manifest, nil
 }

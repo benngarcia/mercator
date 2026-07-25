@@ -125,6 +125,19 @@ complete because it works against a live provider.
   transfer it was waiting on, and `safety.locality_provenance` reads retention so
   a host holding content nothing delivered is a violation. The observed offer
   catalog is restored beside World Truth, per ADR 0004.
+- [x] 2026-07-24: Resolve an image's exact manifest from a registry, in both
+  digest spaces. `internal/ociresolver.RegistryResolver` reads the platform
+  manifest for a digest-pinned reference over registry v2 token auth and returns
+  layer blob digests with their compressed sizes beside the config's
+  uncompressed diff IDs. That bridge is what image locality needed to be usable
+  at all: a Docker daemon can only name what it unpacked, a registry manifest
+  only names what it served, and `domain.ImageInventory.LayerDigests` was a flat
+  list that said which of the two it meant. `ImageLayer` now carries both names
+  for the same bytes and an inventory states the space its runtime can
+  enumerate. `internal/daemon/runtime.go` builds the orchestrator with the
+  resolver, which is what stops image locality from being dead outside the Lab:
+  it had no manifest source, so every manifest was unknown and every candidate
+  in the real product scored identically on locality.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -146,7 +159,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory and execution-driven warming done at L1 and against a real node; artifacts, caches, and prefetch remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, and registry manifest resolution done at L1 and against real registries; artifacts, caches, and prefetch remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -185,6 +198,16 @@ Phase 3 added:
   from `KeepsWhatItRuns` fails it.
 - `borrowed-slot-holds-nothing` (conformance): the same claim at L1, through the
   real orchestrator, event log, and Run projection.
+- `registry-manifest-bridges-digest-spaces` (green): the warm candidate is a
+  Docker host, so it enumerates its layers as uncompressed diff IDs and can
+  never pronounce the compressed blob digests the registry served. It is
+  recognised as holding the image whole and beats a cheaper host that holds
+  neither and pays the full 24.3GB transfer. The second step asks for an image
+  the registry cannot resolve a manifest for, and every candidate records zero
+  pull seconds with source `unknown` and no confidence, so silence stays
+  uncertainty rather than becoming warmth. No Lab invariant: manifest resolution
+  is a read that mints no external consequence, and the fact it produces is
+  already policed by `safety.locality_provenance`.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, and only capacity Mercator keeps holds anything beyond
@@ -193,7 +216,7 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 17 regression Blueprints: 8 green and 9 target, beside one demo,
+The corpus is 18 regression Blueprints: 9 green and 9 target, beside one demo,
 one minimized case, and one conformance Blueprint.
 
 ## What phase 2 does not yet do
@@ -249,6 +272,66 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 3 registry manifest resolution
+
+On 2026-07-24, `registry-manifest-bridges-digest-spaces` was written against the
+world, run as a target Blueprint, and promoted in the same change once green.
+Each claim it makes is held by a deliberate break that fails it:
+
+- deleting the diff-ID clause from `domain.ImageInventory.HoldsLayer` fails it
+  with `run "resolved": candidate "docker-host": pull_seconds: want exactly 0,
+  got 389.3` and the Docker host losing to the cheaper cold one. This is the
+  bridge itself: nothing else in the tree can tell that a compressed blob digest
+  and an uncompressed diff ID name the same bytes;
+- making `pullEstimate` claim confidence in an unknown answer fails its second
+  step on all four assertions, `pull_source: want "unknown", got
+  "image_inventory"` and `pull_confidence: want 0, got 1` for both candidates, so
+  the fixture really is what keeps silence from becoming warmth;
+- removing `orchestrator.WithImageManifests` from `internal/daemon/runtime.go`
+  fails `TestPlacementPricesAWarmNodeFromTheResolvedManifest` with
+  `pull estimate = {... Confidence:0 Source:unknown ...}`. That is exactly the
+  state the production daemon shipped in: no manifest source, so every candidate
+  looked alike on locality however warm it was;
+- dropping the diff-ID projection from `internal/node/offers.go` fails the same
+  test with `the node never reported the layers it unpacked`;
+- returning no diff IDs from the resolver fails the network-gated conformance
+  case with `layer 0 diff ID = , the daemon reports sha256:66cb17ea...`.
+
+Two conformance cases run against registries that are real rather than
+simulated, and skip rather than fail when the machine has no network or no
+Docker daemon:
+
+- `TestRegistryResolverAgreesWithDockerAboutAPublicImage` resolves
+  `docker.io/library/busybox` through anonymous registry token auth and asserts
+  the layer blob digests and compressed sizes match `docker manifest inspect`
+  and the diff IDs match `docker image inspect --format '{{json
+  .RootFS.Layers}}'` for the same digest;
+- `TestRegistryResolverAuthenticatesAgainstAPrivateRegistry` starts `registry:2`
+  behind the committed htpasswd fixture through the local Docker daemon, pushes
+  an image into it, and resolves it with credentials. The same read without
+  credentials must fail `ErrUnauthorized`, because otherwise the credentials
+  could have been doing nothing;
+- `TestDockerRuntimeReportsTheLayersItUnpacked` reads node facts from the real
+  Docker daemon and asserts the agent reports exactly the diff IDs the daemon
+  holds.
+
+Two limits are worth stating rather than hiding. The three registry refusals are
+distinguishable at both simulated registries and at the real one, and every
+consumer today prices all three as uncertainty, so only the world unit tests and
+the resolver tests separate them; the corpus cannot, because an empty manifest
+and an unresolvable one both leave the transfer unknown. And `selectPlatform`
+matches an index entry on OS and architecture alone, because `domain.Platform`
+has no variant, so an image published for `arm/v5` and `arm/v7` resolves to
+whichever the index lists first.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/ociresolver ./internal/domain ./internal/scheduler \
+  ./internal/lab ./internal/scenario ./internal/adapter/fake ./internal/node \
+  ./internal/nodeagent ./internal/daemon -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
 
 ### Phase 3 warming
 

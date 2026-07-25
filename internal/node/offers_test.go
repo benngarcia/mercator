@@ -61,8 +61,8 @@ func TestANodeOffersTheContentItActuallyHolds(t *testing.T) {
 			if inventory.Holds(trainerV2) != testCase.wantWhole {
 				t.Errorf("holds the whole image = %v, want %v", inventory.Holds(trainerV2), testCase.wantWhole)
 			}
-			if inventory.HoldsLayer(baseLayer) != testCase.wantLayer {
-				t.Errorf("holds the base layer = %v, want %v", inventory.HoldsLayer(baseLayer), testCase.wantLayer)
+			if got := inventory.HoldsLayer(domain.ImageLayer{Digest: baseLayer}); got != testCase.wantLayer {
+				t.Errorf("holds the base layer = %v, want %v", got, testCase.wantLayer)
 			}
 			_ = clock
 		})

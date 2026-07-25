@@ -871,8 +871,10 @@ export interface components {
             observed_at?: string;
             /** @description Image manifests this host holds whole. */
             image_digests?: string[];
-            /** @description Layer blobs this host holds. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first. */
+            /** @description Compressed layer blobs this host holds, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first. */
             layer_digests?: string[];
+            /** @description The same content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in. */
+            layer_diff_ids?: string[];
         };
         CapacityEvidence: {
             available: boolean;

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -149,13 +150,22 @@ func imageInventory(facts capability.NodeFacts) domain.ImageInventory {
 		if image.State == capability.LocalityHot && image.ManifestDigest != "" {
 			inventory.ImageDigests = append(inventory.ImageDigests, image.ManifestDigest)
 		}
-		for _, layer := range image.LayerDigests {
-			if !inventory.HoldsLayer(layer) {
-				inventory.LayerDigests = append(inventory.LayerDigests, layer)
-			}
-		}
+		inventory.LayerDigests = addNew(inventory.LayerDigests, image.LayerDigests)
+		inventory.LayerDiffIDs = addNew(inventory.LayerDiffIDs, image.LayerDiffIDs)
 	}
 	return inventory
+}
+
+// addNew appends the digests this node reported that are not already listed.
+// Layers are shared between images, so the same one arrives once per image
+// holding it.
+func addNew(known, reported []string) []string {
+	for _, digest := range reported {
+		if digest != "" && !slices.Contains(known, digest) {
+			known = append(known, digest)
+		}
+	}
+	return known
 }
 
 // hostOS normalizes what a container runtime reports about its host ("Docker

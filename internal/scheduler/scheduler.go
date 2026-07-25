@@ -402,14 +402,7 @@ func estimatePullSeconds(manifest domain.ImageManifest, offer domain.OfferSnapsh
 		return 0, true
 	}
 	mbits := float64(missing*8) / 1_000_000
-	speed := 500.0
-	for _, fact := range offer.Network.Download {
-		if fact.Scope == domain.NetworkScopeRegistry && fact.Statistic == "p10" && fact.ValueMbps > 0 {
-			speed = fact.ValueMbps
-			break
-		}
-	}
-	return mbits/speed + 0.5, true
+	return mbits/offer.RegistryDownloadMbps() + 0.5, true
 }
 
 func downloadRequirementSatisfied(now time.Time, req domain.NetworkDownloadRequirement, facts []domain.NetworkFact) bool {

@@ -472,7 +472,10 @@ type ImageInventory struct {
 	// Known Whether the holder enumerated its content at all. False is an honest answer rather than a failure: a provider that cannot say what a fresh machine holds says so, and the uncertainty is priced rather than mistaken for warmth.
 	Known bool `json:"known"`
 
-	// LayerDigests Layer blobs this host holds. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first.
+	// LayerDiffIds The same content named the way a container daemon names it: the digest of the uncompressed layer. A Docker host can enumerate only these, so a resolved manifest carries both spaces and matches whichever one the host answers in.
+	LayerDiffIds []string `json:"layer_diff_ids,omitempty"`
+
+	// LayerDigests Compressed layer blobs this host holds, named the way a registry manifest names them. A host can hold layers of an image it never held whole, which is why a second version of the same image starts faster than a first.
 	LayerDigests []string `json:"layer_digests,omitempty"`
 
 	// ObservedAt When the holder last looked. Locality decays, so the age of this answer is material.

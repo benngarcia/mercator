@@ -230,6 +230,25 @@ func (offer OfferSnapshot) KeepsWhatItRuns() bool {
 	return offer.Kind == OfferKindStanding && offer.Lane.Reusable()
 }
 
+// DefaultRegistryDownloadMbps is what a host is assumed to pull image content
+// at when nothing has measured its link to a registry. It is an assumption, so
+// it is stated once: a predictor and a reference model that disagree about the
+// unmeasured case would disagree about every cold candidate for a reason that
+// has nothing to do with either model.
+const DefaultRegistryDownloadMbps = 500.0
+
+// RegistryDownloadMbps is how fast this host pulls image content: its own
+// measured pessimistic (p10) registry throughput when something measured it,
+// and the standing assumption otherwise.
+func (offer OfferSnapshot) RegistryDownloadMbps() float64 {
+	for _, fact := range offer.Network.Download {
+		if fact.Scope == NetworkScopeRegistry && fact.Statistic == "p10" && fact.ValueMbps > 0 {
+			return fact.ValueMbps
+		}
+	}
+	return DefaultRegistryDownloadMbps
+}
+
 type ResourceInventory struct {
 	CPUMillis          int64                  `json:"cpu_millis"`
 	MemoryBytes        int64                  `json:"memory_bytes"`
@@ -355,10 +374,17 @@ type ImageInventory struct {
 	ObservedAt time.Time `json:"observed_at,omitzero"`
 	// ImageDigests is every image manifest the host holds whole.
 	ImageDigests []string `json:"image_digests,omitempty"`
-	// LayerDigests is every layer blob the host holds. A host can hold layers
-	// of an image it has never held whole, which is the entire reason a second
-	// version of the same image starts faster than a first.
+	// LayerDigests is every compressed layer blob the host holds, named the way
+	// a registry manifest names it. A host can hold layers of an image it has
+	// never held whole, which is the entire reason a second version of the same
+	// image starts faster than a first.
 	LayerDigests []string `json:"layer_digests,omitempty"`
+	// LayerDiffIDs is the same content named the way a container daemon names
+	// it: the digest of the uncompressed layer. A Docker daemon can enumerate
+	// only these, so a host that reports them and a manifest that lists blob
+	// digests are talking about the same bytes in two vocabularies that never
+	// meet. The manifest carries both, which is what lets them be compared.
+	LayerDiffIDs []string `json:"layer_diff_ids,omitempty"`
 }
 
 // Holds reports whether this host holds one image whole.
@@ -366,9 +392,13 @@ func (inventory ImageInventory) Holds(imageDigest string) bool {
 	return imageDigest != "" && slices.Contains(inventory.ImageDigests, imageDigest)
 }
 
-// HoldsLayer reports whether this host holds one layer blob.
-func (inventory ImageInventory) HoldsLayer(layerDigest string) bool {
-	return layerDigest != "" && slices.Contains(inventory.LayerDigests, layerDigest)
+// HoldsLayer reports whether this host holds one layer, in either digest space.
+// Which space a host answers in is a property of its runtime and not of the
+// content, so a layer it reports as a diff ID is as present as one it reports
+// as a blob digest.
+func (inventory ImageInventory) HoldsLayer(layer ImageLayer) bool {
+	return layer.Digest != "" && slices.Contains(inventory.LayerDigests, layer.Digest) ||
+		layer.DiffID != "" && slices.Contains(inventory.LayerDiffIDs, layer.DiffID)
 }
 
 // ImageManifest is one image's exact content. It is a property of the image, so
@@ -403,17 +433,23 @@ func (manifest ImageManifest) TransferBytes(inventory ImageInventory) (bytes int
 		return 0, false
 	}
 	for _, layer := range manifest.Layers {
-		if !inventory.HoldsLayer(layer.Digest) {
+		if !inventory.HoldsLayer(layer) {
 			bytes += layer.CompressedBytes
 		}
 	}
 	return bytes, true
 }
 
-// ImageLayer is one layer blob. CompressedBytes is the only size that predicts
-// transfer; what it costs on disk once unpacked answers a different question.
+// ImageLayer is one layer named in both digest spaces at once. Digest is the
+// compressed blob a registry serves and the only identity a pull can be issued
+// against; DiffID is the uncompressed content a container daemon enumerates.
+// Carrying both is what makes a host that answers in either vocabulary
+// comparable against the same manifest. CompressedBytes is the only size that
+// predicts transfer; what it costs on disk once unpacked answers a different
+// question.
 type ImageLayer struct {
 	Digest          string `json:"digest"`
+	DiffID          string `json:"diff_id,omitempty"`
 	CompressedBytes int64  `json:"compressed_bytes"`
 }
 

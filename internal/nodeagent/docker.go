@@ -214,8 +214,15 @@ func (docker *DockerRuntime) info(ctx context.Context) (dockerInfo, error) {
 	return info, nil
 }
 
-// images reports the exact manifest digests this machine holds, which is what
-// image locality has to be measured in. A tag would say nothing about content.
+// images reports the exact content this machine holds, which is what image
+// locality has to be measured in. A tag would say nothing about it.
+//
+// The daemon answers in two vocabularies at once and only one of them is the
+// registry's: the manifest digest an image was pulled by, and the diff IDs of
+// its unpacked layers. It has no way to name the compressed blobs the registry
+// served, because it discarded them, so the layers are reported as what the
+// daemon can actually see and matched against a resolved manifest that carries
+// both names.
 func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLocality, error) {
 	out, err := docker.run(ctx, "images", "--digests", "--no-trunc", "--format", "{{json .}}")
 	if err != nil {
@@ -227,8 +234,8 @@ func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLoca
 			continue
 		}
 		var image struct {
+			ID     string `json:"ID"`
 			Digest string `json:"Digest"`
-			Size   string `json:"Size"`
 		}
 		if err := json.Unmarshal([]byte(line), &image); err != nil {
 			return nil, fmt.Errorf("decode docker image: %w", err)
@@ -236,14 +243,37 @@ func (docker *DockerRuntime) images(ctx context.Context) ([]capability.ImageLoca
 		if image.Digest == "" || image.Digest == "<none>" {
 			continue
 		}
+		diffIDs, err := docker.layerDiffIDs(ctx, image.ID)
+		if err != nil {
+			return nil, err
+		}
 		locality = append(locality, capability.ImageLocality{
 			ManifestDigest: image.Digest,
+			LayerDiffIDs:   diffIDs,
 			Unpacked:       true,
 			State:          capability.LocalityHot,
 			LastVerifiedAt: docker.now().UTC(),
 		})
 	}
 	return locality, nil
+}
+
+// layerDiffIDs reads the uncompressed layer identities one image is made of.
+// An image the daemon cannot inspect between the listing and the read has gone,
+// which is a machine losing content rather than an error to fail a heartbeat on.
+func (docker *DockerRuntime) layerDiffIDs(ctx context.Context, imageID string) ([]string, error) {
+	if imageID == "" {
+		return nil, nil
+	}
+	out, err := docker.run(ctx, "image", "inspect", imageID, "--format", "{{json .RootFS.Layers}}")
+	if err != nil {
+		return nil, nil
+	}
+	var diffIDs []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &diffIDs); err != nil {
+		return nil, fmt.Errorf("decode the layers of image %s: %w", imageID, err)
+	}
+	return diffIDs, nil
 }
 
 type dockerContainer struct {

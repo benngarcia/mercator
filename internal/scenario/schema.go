@@ -194,12 +194,42 @@ func (w WorldSpec) Start() time.Time {
 }
 
 type ImageSpec struct {
-	Layers []LayerSpec `json:"layers"`
+	Layers []LayerSpec `json:"layers,omitempty"`
+	// Registry is what the simulated registry answers when asked to resolve
+	// this image. The default is a manifest. The alternatives are the other
+	// ways a real registry says no, which a scenario needs to be able to tell
+	// apart because an operator acts on them differently.
+	Registry RegistryAnswer `json:"registry,omitempty"`
 }
 
-// LayerSpec identifies one image layer by its exact OCI content digest.
+// RegistryAnswer is how the simulated registry responds to a resolution. An
+// image can exist in the world and still be unresolvable: the world is what is
+// running, the registry is what can be read about it.
+type RegistryAnswer string
+
+const (
+	RegistryResolves     RegistryAnswer = ""
+	RegistryUnresolvable RegistryAnswer = "unresolvable"
+	RegistryUnauthorized RegistryAnswer = "unauthorized"
+)
+
+func (answer RegistryAnswer) valid() bool {
+	switch answer {
+	case RegistryResolves, RegistryUnresolvable, RegistryUnauthorized:
+		return true
+	default:
+		return false
+	}
+}
+
+// LayerSpec identifies one image layer in both digest spaces at once: Digest is
+// the compressed blob a registry serves, DiffID the uncompressed content a
+// container daemon enumerates. A host reports whichever its runtime can see, so
+// a fixture that states only one of them cannot express a Docker host being
+// recognised as warm against a registry manifest.
 type LayerSpec struct {
 	Digest string   `json:"digest"`
+	DiffID string   `json:"diff_id,omitempty"`
 	Size   ByteSize `json:"size"`
 }
 
@@ -215,8 +245,13 @@ type RentalSpec struct {
 	IdleLeaseExpiresIn *Duration `json:"idle_lease_expires_in,omitempty"`
 	// CachedImages holds every layer of the named images; CachedLayers adds
 	// individual layers (for a rental warm from a previous image version).
-	CachedImages     []string       `json:"cached_images,omitempty"`
-	CachedLayers     []string       `json:"cached_layers,omitempty"`
+	CachedImages []string `json:"cached_images,omitempty"`
+	CachedLayers []string `json:"cached_layers,omitempty"`
+	// ReportsDiffIDs makes this host enumerate its layers the way a Docker
+	// daemon does, in uncompressed diff IDs and never in the compressed blob
+	// digests a registry manifest lists. It changes nothing about what the host
+	// holds, only which name it has for it.
+	ReportsDiffIDs   bool           `json:"reports_diff_ids,omitempty"`
 	ArtifactReplicas []string       `json:"artifact_replicas,omitempty"`
 	CacheMounts      []string       `json:"cache_mounts,omitempty"`
 	RatePerHourUSD   float64        `json:"rate_per_hour_usd"`
@@ -398,6 +433,12 @@ type CandidateExpectation struct {
 	QueueSeconds     *Bound                      `json:"queue_seconds,omitempty"`
 	ProvisionSeconds *Bound                      `json:"provision_seconds,omitempty"`
 	PullSeconds      *Bound                      `json:"pull_seconds,omitempty"`
+	// PullSource and PullConfidence assert how much the transfer answer is
+	// worth. Zero seconds means "nothing to fetch" when the source is
+	// image_inventory and "nobody could say" when it is unknown, and only
+	// these two fields tell them apart.
+	PullSource     string   `json:"pull_source,omitempty"`
+	PullConfidence *float64 `json:"pull_confidence,omitempty"`
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`
@@ -955,12 +996,26 @@ func (w WorldSpec) validate() error {
 		if !ociImageRefPattern.MatchString(ref) {
 			return fmt.Errorf("image %q must be digest-pinned", ref)
 		}
+		if !image.Registry.valid() {
+			return fmt.Errorf("image %q: unknown registry answer %q", ref, image.Registry)
+		}
+		// An image the registry cannot resolve names no layers, because naming
+		// them would be the fixture asserting content nothing could have read.
+		if image.Registry != RegistryResolves {
+			if len(image.Layers) > 0 {
+				return fmt.Errorf("image %q answers %q and cannot also state layers", ref, image.Registry)
+			}
+			continue
+		}
 		if len(image.Layers) == 0 {
 			return fmt.Errorf("image %q needs at least one layer", ref)
 		}
 		for _, layer := range image.Layers {
 			if !ociDigestPattern.MatchString(layer.Digest) || layer.Size <= 0 {
 				return fmt.Errorf("image %q: layers need an exact sha256 digest and a positive size", ref)
+			}
+			if layer.DiffID != "" && !ociDigestPattern.MatchString(layer.DiffID) {
+				return fmt.Errorf("image %q: layer %s states an inexact diff ID %q", ref, layer.Digest, layer.DiffID)
 			}
 		}
 	}

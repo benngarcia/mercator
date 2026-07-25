@@ -164,8 +164,16 @@ type ImageLocality struct {
 	// identity.
 	ManifestDigest string          `json:"manifest_digest"`
 	Platform       domain.Platform `json:"platform"`
-	// LayerDigests is every layer the manifest names, in manifest order.
+	// LayerDigests is every compressed layer blob the manifest names, in
+	// manifest order. A container daemon cannot enumerate these: it discards the
+	// compressed form when it unpacks an image, which is why LayerDiffIDs sits
+	// beside this rather than instead of it.
 	LayerDigests []string `json:"layer_digests,omitempty"`
+	// LayerDiffIDs is the same layers named by their uncompressed content, in
+	// manifest order. This is what a Docker daemon can actually report, and
+	// comparing it against a registry manifest is what a resolved manifest
+	// carrying both spaces makes possible.
+	LayerDiffIDs []string `json:"layer_diff_ids,omitempty"`
 	// MissingLayerDigests is the subset the node does not hold.
 	MissingLayerDigests []string `json:"missing_layer_digests,omitempty"`
 	// MissingCompressedBytes is what still has to cross the network, which is

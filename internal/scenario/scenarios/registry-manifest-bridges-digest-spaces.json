@@ -1,0 +1,102 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "A registry manifest is the only thing that can state a layer in both digest spaces at once, and this fixture is what needs it. The warm candidate is a Docker host: it enumerates its layers as uncompressed diff IDs, because that is the only name a container daemon has for content it has already unpacked, and it can never pronounce the compressed blob digest the registry served. The manifest carries both names for the same bytes, so the host is recognised as holding the image whole and pays nothing, while an identical but cheaper host holding neither pays the full 24.3GB transfer and loses on it. The second Run asks for an image the registry cannot resolve a manifest for. Every candidate then records zero pull seconds with source \"unknown\" and no confidence, which is silence staying uncertainty instead of turning into warmth: the cheapest machine wins because nothing could be told apart on locality, not because anything was found to be warm.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:6ce45a60733c41462d62e62fb98fd1622ac468a661f54bff450574cb255cca0b": {
+        "layers": [
+          {
+            "digest": "sha256:2b01142b377fb230f3037d47e677eaa81bf949d0589005864feebc168368a5bc",
+            "diff_id": "sha256:9b4deb06aa23f27e47cecb92f5e40fc47f8fd9ef4ac1b936dbe7283dccc2bb37",
+            "size": "24GB"
+          },
+          {
+            "digest": "sha256:8b8cf486265caa9e57a12c2ccda2539201ae451b4b308aeba75efba5dc9962ac",
+            "diff_id": "sha256:f1a6b41835fd9386f9ecb3b5ffd36cfeea62c0d8d69ae071112fdc726e549591",
+            "size": "300MB"
+          }
+        ]
+      },
+      "mystery@sha256:4a90ab7a93e3324470f02fba88cf9f7b528798a067f860391e0a1aba595abb0f": {
+        "registry": "unresolvable"
+      }
+    },
+    "rentals": [
+      {
+        "id": "docker-host",
+        "rate_per_hour_usd": 2.0,
+        "reports_diff_ids": true,
+        "cached_layers": [
+          "sha256:2b01142b377fb230f3037d47e677eaa81bf949d0589005864feebc168368a5bc",
+          "sha256:8b8cf486265caa9e57a12c2ccda2539201ae451b4b308aeba75efba5dc9962ac"
+        ]
+      },
+      {
+        "id": "bare-host",
+        "rate_per_hour_usd": 1.85
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "resolved",
+      "request": {
+        "image": "trainer@sha256:6ce45a60733c41462d62e62fb98fd1622ac468a661f54bff450574cb255cca0b",
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "docker-host",
+        "disposition": "release",
+        "candidates": {
+          "docker-host": {
+            "feasible": true,
+            "pull_seconds": 0,
+            "pull_source": "image_inventory",
+            "pull_confidence": 1
+          },
+          "bare-host": {
+            "feasible": true,
+            "pull_seconds": {
+              "at_least": 380
+            },
+            "pull_source": "image_inventory",
+            "pull_confidence": 1
+          }
+        }
+      }
+    },
+    {
+      "advance": "30m"
+    },
+    {
+      "submit": "unresolvable",
+      "request": {
+        "image": "mystery@sha256:4a90ab7a93e3324470f02fba88cf9f7b528798a067f860391e0a1aba595abb0f",
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "bare-host",
+        "disposition": "release",
+        "candidates": {
+          "docker-host": {
+            "feasible": true,
+            "pull_seconds": 0,
+            "pull_source": "unknown",
+            "pull_confidence": 0
+          },
+          "bare-host": {
+            "feasible": true,
+            "pull_seconds": 0,
+            "pull_source": "unknown",
+            "pull_confidence": 0
+          }
+        }
+      }
+    }
+  ]
+}

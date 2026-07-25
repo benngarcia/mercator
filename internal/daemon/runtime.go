@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -148,10 +149,19 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		broker.WithNodes(nodes),
 	)
 
+	manifests, err := registryManifests(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	signer := reporting.NewSigner(reporting.DeriveKey(cfg.MasterKey))
 	sched := scheduler.New()
 	orchestratorOptions := []orchestrator.Option{
 		orchestrator.WithRunProjection(storage.Runs()),
+		// Without a manifest source no candidate can be told apart on image
+		// locality, so every placement in the real product scores identically
+		// on warmth however warm a host actually is.
+		orchestrator.WithImageManifests(manifests),
 	}
 	orchestratorOptions = append(orchestratorOptions, orchestrator.WithRentalSchedules(providerBroker))
 	if signer.Enabled() && cfg.PublicURL != "" {
@@ -340,6 +350,27 @@ func inspectLocalImage(ctx context.Context, ref string) (ociresolver.InspectedIm
 		OS:           info.OS,
 		Architecture: info.Architecture,
 	}, nil
+}
+
+// registryManifests builds the manifest source Placement subtracts a host's
+// inventory from. It reads the registry credentials the operator already has,
+// because the alternative is a second place to configure the same thing; a
+// machine that never ran `docker login` resolves anonymously, which is the
+// right answer for every public image.
+func registryManifests(cfg Config) (*ociresolver.RegistryResolver, error) {
+	getenv := cfg.Getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	path := ociresolver.DefaultDockerConfigPath(getenv)
+	if path == "" {
+		return ociresolver.NewRegistryResolver(), nil
+	}
+	credentials, err := ociresolver.DockerConfigCredentials(path)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: read registry credentials: %w", err)
+	}
+	return ociresolver.NewRegistryResolver(ociresolver.WithCredentials(credentials)), nil
 }
 
 // Serve runs the production HTTP server on a listener allocated by the caller.

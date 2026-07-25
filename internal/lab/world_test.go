@@ -10,6 +10,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -359,8 +360,8 @@ func TestARentalHoldsWhatItRanOnlyOnceThePullCompletes(t *testing.T) {
 	if !held.Holds(arrival.Request.Image) {
 		t.Fatalf("Rental that ran %q does not hold it whole: %+v", arrival.Request.Image, held)
 	}
-	for _, layer := range world.images[arrival.Request.Image] {
-		if !held.HoldsLayer(layer.Digest) {
+	for _, layer := range world.images[arrival.Request.Image].Layers {
+		if !held.HoldsLayer(domain.ImageLayer{Digest: layer.Digest}) {
 			t.Fatalf("Rental that ran the image does not hold layer %s: %+v", layer.Digest, held)
 		}
 	}
@@ -575,5 +576,59 @@ func TestLocalityProvenanceAllowsAHostToLoseWhatItHeld(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("a host that lost content it held was reported as a violation: %v", err)
+	}
+}
+
+// TestSimulatedRegistryRefusesTheSameThreeWaysARealOneDoes keeps the Lab honest
+// about what it is standing in for. A registry that collapses "nobody pushed
+// this", "there is no build for this platform", and "your credentials were
+// refused" into one empty manifest is a world that cannot express the failure an
+// operator most often has to fix.
+func TestSimulatedRegistryRefusesTheSameThreeWaysARealOneDoes(t *testing.T) {
+	resolvable := "trainer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	unresolvable := "mystery@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	forbidden := "private@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	world, err := newSimulatedWorld(WorldTape{
+		Seed:  "registry-answers",
+		Start: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		InitialWorld: scenario.WorldSpec{Images: map[string]scenario.ImageSpec{
+			resolvable: {Layers: []scenario.LayerSpec{{
+				Digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				DiffID: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+				Size:   scenario.ByteSize(1000),
+			}}},
+			unresolvable: {Registry: scenario.RegistryUnresolvable},
+			forbidden:    {Registry: scenario.RegistryUnauthorized},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("open simulated world: %v", err)
+	}
+
+	testCases := []struct {
+		name  string
+		image string
+		want  error
+	}{
+		{"an image nobody pushed", "absent@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", ociresolver.ErrImageUnknown},
+		{"an image with no resolvable manifest", unresolvable, ociresolver.ErrManifestUnresolvable},
+		{"an image the credentials cannot read", forbidden, ociresolver.ErrUnauthorized},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := world.ResolveManifest(context.Background(), testCase.image, domain.Platform{OS: "linux", Architecture: "amd64"})
+
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("resolve error = %v, want %v", err, testCase.want)
+			}
+		})
+	}
+
+	manifest, err := world.ResolveManifest(context.Background(), resolvable, domain.Platform{OS: "linux", Architecture: "amd64"})
+	if err != nil {
+		t.Fatalf("resolve a readable image: %v", err)
+	}
+	if len(manifest.Layers) != 1 || manifest.Layers[0].DiffID == "" {
+		t.Fatalf("a readable manifest states both digest spaces, got %+v", manifest.Layers)
 	}
 }

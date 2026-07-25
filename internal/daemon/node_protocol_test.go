@@ -79,6 +79,10 @@ func startRuntimeWithLease(t *testing.T, lease time.Duration) string {
 		OperatorToken: "operator-token",
 		MasterKey:     []byte("0123456789abcdef0123456789abcdef"),
 		NodeLease:     lease,
+		// An empty environment keeps the daemon off this machine's Docker
+		// credentials: a test registry is anonymous, and reading the developer's
+		// config.json would make the result depend on who ran the suite.
+		Getenv: func(string) string { return "" },
 	})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)

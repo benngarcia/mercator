@@ -14,6 +14,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/gpunorm"
+	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -66,27 +67,31 @@ type WorldTruthSnapshot struct {
 }
 
 type hostState struct {
-	offer      domain.OfferSnapshot
-	heldLayers map[string]int64
+	offer domain.OfferSnapshot
+	// heldLayers is content on this machine, keyed by the compressed blob
+	// digest a registry serves it under and carrying every other name the same
+	// bytes have. What a host holds is the bytes; which name it can pronounce
+	// is a property of its runtime.
+	heldLayers map[string]scenario.LayerSpec
 	heldImages map[string]bool
+	// reportsDiffIDs makes this host enumerate its layers the way a Docker
+	// daemon does: uncompressed diff IDs, never compressed blob digests.
+	reportsDiffIDs bool
 }
 
 // missing is what launching this image here would still have to fetch, and how
 // many bytes have to move to fetch it. A host that already holds the image
 // whole moves nothing, which is the difference between a warm start and a cold
 // one that the effect ledger has to be able to show.
-func (state hostState) missing(image string, layers []scenario.LayerSpec) ([]string, int64) {
-	fetched := make([]string, 0, len(layers)+1)
+func (state hostState) missing(image string, layers []scenario.LayerSpec) ([]scenario.LayerSpec, int64) {
+	fetched := make([]scenario.LayerSpec, 0, len(layers))
 	var bytes int64
 	for _, layer := range layers {
 		if _, held := state.heldLayers[layer.Digest]; held {
 			continue
 		}
-		fetched = append(fetched, layer.Digest)
+		fetched = append(fetched, layer)
 		bytes += int64(layer.Size)
-	}
-	if !state.heldImages[image] {
-		fetched = append(fetched, image)
 	}
 	return fetched, bytes
 }
@@ -95,23 +100,60 @@ func (state hostState) missing(image string, layers []scenario.LayerSpec) ([]str
 // moved, and the image itself.
 func (state *hostState) keep(image string, layers []scenario.LayerSpec) {
 	for _, layer := range layers {
-		state.heldLayers[layer.Digest] = int64(layer.Size)
+		state.heldLayers[layer.Digest] = layer
 	}
 	state.heldImages[image] = true
 }
 
 // seededDigests is everything the World Tape put on this host before any Run
 // executed. The provenance invariant reads it to tell content a scenario
-// declared from content an execution left behind.
+// declared from content an execution left behind. A layer is seeded under every
+// name it has, because a host that reports diff IDs would otherwise look like a
+// host holding content nothing delivered.
 func (state hostState) seededDigests() map[string]bool {
-	digests := make(map[string]bool, len(state.heldLayers)+len(state.heldImages))
-	for digest := range state.heldLayers {
-		digests[digest] = true
+	digests := make(map[string]bool, 2*len(state.heldLayers)+len(state.heldImages))
+	for _, layer := range state.heldLayers {
+		for _, name := range layerNames(layer) {
+			digests[name] = true
+		}
 	}
 	for image := range state.heldImages {
 		digests[image] = true
 	}
 	return digests
+}
+
+// inventory is what this host says it holds, in the digest space its runtime
+// can enumerate. A Docker host names its layers by uncompressed diff ID and has
+// no way to name the compressed blob a registry served it, so answering in both
+// spaces would be the world lending a machine knowledge it does not have.
+func (state hostState) inventory(at time.Time) domain.ImageInventory {
+	inventory := domain.ImageInventory{
+		Known:        true,
+		ObservedAt:   at,
+		ImageDigests: slices.Sorted(maps.Keys(state.heldImages)),
+	}
+	for _, digest := range slices.Sorted(maps.Keys(state.heldLayers)) {
+		layer := state.heldLayers[digest]
+		if state.reportsDiffIDs {
+			if layer.DiffID != "" {
+				inventory.LayerDiffIDs = append(inventory.LayerDiffIDs, layer.DiffID)
+			}
+			continue
+		}
+		inventory.LayerDigests = append(inventory.LayerDigests, layer.Digest)
+	}
+	return inventory
+}
+
+// layerNames is every identity one layer answers to. The ledger records all of
+// them, because a host that only speaks one digest space is still holding the
+// bytes the other space names.
+func layerNames(layer scenario.LayerSpec) []string {
+	if layer.DiffID == "" {
+		return []string{layer.Digest}
+	}
+	return []string{layer.Digest, layer.DiffID}
 }
 
 type worldOperation struct {
@@ -139,9 +181,13 @@ type pendingPull struct {
 type simulatedWorld struct {
 	mu sync.Mutex
 
-	seed   string
-	now    time.Time
-	images map[string][]scenario.LayerSpec
+	seed string
+	now  time.Time
+	// images is this world's registry: what each image contains, and what the
+	// registry answers when asked. An image can exist here and still be
+	// unreadable, which is the difference between what is running and what can
+	// be looked up about it.
+	images map[string]scenario.ImageSpec
 	// truth is world state, keyed by offer. Mercator never reads it: everything
 	// it learns about capacity arrives through the observed catalog below.
 	truth map[string]hostState
@@ -184,7 +230,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	world := &simulatedWorld{
 		seed:            tape.Seed,
 		now:             tape.Start,
-		images:          make(map[string][]scenario.LayerSpec, len(tape.InitialWorld.Images)),
+		images:          make(map[string]scenario.ImageSpec, len(tape.InitialWorld.Images)),
 		truth:           map[string]hostState{},
 		observed:        map[string]hostState{},
 		runs:            map[string]RunArrival{},
@@ -200,7 +246,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		usedFaults:      map[string]bool{},
 	}
 	for reference, image := range tape.InitialWorld.Images {
-		world.images[reference] = slices.Clone(image.Layers)
+		world.images[reference] = scenario.ImageSpec{Layers: slices.Clone(image.Layers), Registry: image.Registry}
 	}
 	for _, artifact := range tape.InitialWorld.Artifacts {
 		world.artifacts[artifact.ID] = int64(artifact.Size)
@@ -208,19 +254,20 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	}
 	for _, rental := range tape.InitialWorld.Rentals {
 		state := hostState{
-			offer:      labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
-			heldLayers: map[string]int64{},
-			heldImages: map[string]bool{},
+			offer:          labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
+			heldLayers:     map[string]scenario.LayerSpec{},
+			heldImages:     map[string]bool{},
+			reportsDiffIDs: rental.ReportsDiffIDs,
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
-				state.heldLayers[layer.Digest] = int64(layer.Size)
+				state.heldLayers[layer.Digest] = layer
 			}
 			state.heldImages[reference] = true
 		}
 		for _, digest := range rental.CachedLayers {
-			state.heldLayers[digest] = int64(layerBytes(tape.InitialWorld, digest))
+			state.heldLayers[digest] = findLayer(tape.InitialWorld, digest)
 		}
 		world.seededLocality[rental.ID] = state.seededDigests()
 		world.truth[rental.ID] = cloneHostState(state)
@@ -236,7 +283,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	for _, host := range tape.InitialWorld.Hosts {
 		state := hostState{
 			offer:      labOffer(host.ID, domain.OfferKindStanding, domain.LaneEphemeral, host.RatePerHourUSD, host.Resources),
-			heldLayers: map[string]int64{},
+			heldLayers: map[string]scenario.LayerSpec{},
 			heldImages: map[string]bool{},
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
@@ -252,7 +299,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 				marketplace.RatePerHourUSD,
 				marketplace.Resources,
 			),
-			heldLayers: map[string]int64{},
+			heldLayers: map[string]scenario.LayerSpec{},
 			heldImages: map[string]bool{},
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, marketplace.Billing)
@@ -773,12 +820,7 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time
 		offer := state.offer
 		offer.ObservedAt = at
 		offer.ExpiresAt = at.Add(5 * time.Minute)
-		offer.Images = domain.ImageInventory{
-			Known:        true,
-			ObservedAt:   at,
-			ImageDigests: slices.Sorted(maps.Keys(state.heldImages)),
-			LayerDigests: slices.Sorted(maps.Keys(state.heldLayers)),
-		}
+		offer.Images = state.inventory(at)
 		offers = append(offers, offer)
 	}
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
@@ -792,9 +834,10 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time
 // separately, when it keeps it.
 func (world *simulatedWorld) pullRunImage(execution externalExecution, image string) time.Time {
 	state := world.truth[execution.OfferID]
-	layers := world.images[image]
-	fetched, bytes := state.missing(image, layers)
-	completesAt := world.now.Add(transferDuration(bytes, registryBandwidth(state.offer)))
+	layers := world.images[image].Layers
+	fetchedLayers, bytes := state.missing(image, layers)
+	fetched := fetchedNames(image, state.heldImages[image], fetchedLayers)
+	completesAt := world.now.Add(transferDuration(bytes, state.offer.RegistryDownloadMbps()))
 	world.recordEffect(
 		OperationImagePull,
 		"image-pull/"+execution.LaunchKey+"/"+image,
@@ -824,6 +867,20 @@ func (world *simulatedWorld) pullRunImage(execution externalExecution, image str
 		world.settlePulls()
 	}
 	return completesAt
+}
+
+// fetchedNames is everything this pull puts on the host, under every name that
+// content answers to. The image reference joins the list when the host did not
+// already hold it whole, because holding the whole image is its own fact.
+func fetchedNames(image string, alreadyHeld bool, layers []scenario.LayerSpec) []string {
+	names := make([]string, 0, 2*len(layers)+1)
+	for _, layer := range layers {
+		names = append(names, layerNames(layer)...)
+	}
+	if !alreadyHeld {
+		names = append(names, image)
+	}
+	return names
 }
 
 // transferDuration is how long this world takes to move content, which is its
@@ -1085,17 +1142,28 @@ func (world *simulatedWorld) recordEffect(
 
 // ResolveManifest answers what an image contains from the World Tape's catalog.
 // It is the simulated registry: Placement subtracts what a host holds from what
-// this returns, exactly as it would against a real one.
+// this returns, exactly as it would against a real one, and it says no the same
+// three ways a real one does.
 func (world *simulatedWorld) ResolveManifest(_ context.Context, imageDigest string, _ domain.Platform) (domain.ImageManifest, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	layers, known := world.images[imageDigest]
+	image, known := world.images[imageDigest]
 	if !known {
-		return domain.ImageManifest{}, nil
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrImageUnknown, imageDigest)
+	}
+	switch image.Registry {
+	case scenario.RegistryUnresolvable:
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrManifestUnresolvable, imageDigest)
+	case scenario.RegistryUnauthorized:
+		return domain.ImageManifest{}, fmt.Errorf("%w: %s", ociresolver.ErrUnauthorized, imageDigest)
 	}
 	manifest := domain.ImageManifest{Known: true, Digest: imageDigest}
-	for _, layer := range layers {
-		manifest.Layers = append(manifest.Layers, domain.ImageLayer{Digest: layer.Digest, CompressedBytes: int64(layer.Size)})
+	for _, layer := range image.Layers {
+		manifest.Layers = append(manifest.Layers, domain.ImageLayer{
+			Digest:          layer.Digest,
+			DiffID:          layer.DiffID,
+			CompressedBytes: int64(layer.Size),
+		})
 	}
 	return manifest, nil
 }
@@ -1170,22 +1238,26 @@ func labResources(resources *scenario.ResourcesSpec) domain.ResourceInventory {
 	return inventory
 }
 
-func layerBytes(world scenario.WorldSpec, digest string) scenario.ByteSize {
+// findLayer resolves a digest a fixture seeds directly onto a host back to the
+// layer the image catalog defines, so the host holds the same content under
+// every name that layer answers to.
+func findLayer(world scenario.WorldSpec, digest string) scenario.LayerSpec {
 	for _, image := range world.Images {
 		for _, layer := range image.Layers {
 			if layer.Digest == digest {
-				return layer.Size
+				return layer
 			}
 		}
 	}
-	return 0
+	return scenario.LayerSpec{Digest: digest}
 }
 
 func cloneHostState(state hostState) hostState {
 	return hostState{
-		offer:      state.offer,
-		heldLayers: cloneMap(state.heldLayers),
-		heldImages: cloneMap(state.heldImages),
+		offer:          state.offer,
+		heldLayers:     cloneMap(state.heldLayers),
+		heldImages:     cloneMap(state.heldImages),
+		reportsDiffIDs: state.reportsDiffIDs,
 	}
 }
 
