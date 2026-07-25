@@ -118,6 +118,23 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToFetch(t *testing.T) {
 	}
 }
 
+// TestAManifestWithoutLayersCanConfirmAHitAndCannotPriceAMiss holds the line
+// against the same lie reappearing one level up: an empty layer set would
+// charge a host holding nothing the same zero as one holding everything.
+func TestAManifestWithoutLayersCanConfirmAHitAndCannotPriceAMiss(t *testing.T) {
+	layerless := domain.ImageManifest{Known: true, Digest: trainerV2}
+
+	hitBytes, hitKnown := layerless.TransferBytes(domain.ImageInventory{Known: true, ImageDigests: []string{trainerV2}})
+	missBytes, missKnown := layerless.TransferBytes(domain.ImageInventory{Known: true})
+
+	if hitBytes != 0 || !hitKnown {
+		t.Fatalf("a host holding the image transfers %d bytes (known %v), want 0 known", hitBytes, hitKnown)
+	}
+	if missKnown {
+		t.Fatalf("a host holding nothing was priced at %d bytes from a manifest that lists none", missBytes)
+	}
+}
+
 // TestAnUnresolvedManifestLeavesEveryCandidateIndistinguishable states why an
 // unknown manifest is safe: nobody can be told apart on locality, so the term
 // is absent for everyone rather than favouring whoever happens to report most.

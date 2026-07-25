@@ -384,6 +384,13 @@ func (manifest ImageManifest) TransferBytes(inventory ImageInventory) (bytes int
 	if inventory.Holds(manifest.Digest) {
 		return 0, true
 	}
+	// A manifest that names no layers can confirm a hit and cannot price a
+	// miss. Subtracting an empty layer set would charge a host that holds
+	// nothing the same zero as one holding the whole image, which is the error
+	// this type replaced.
+	if len(manifest.Layers) == 0 {
+		return 0, false
+	}
 	for _, layer := range manifest.Layers {
 		if !inventory.HoldsLayer(layer.Digest) {
 			bytes += layer.CompressedBytes
