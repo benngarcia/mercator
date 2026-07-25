@@ -24,15 +24,17 @@ const (
 	OperationArtifactRead       = "artifact.read"
 	OperationArtifactReplicated = "artifact.replicated"
 	OperationArtifactPublished  = "artifact.published"
-	// The two Cache Mount operations are the two ways mutable state is touched,
-	// and both name the cache by its full workspace-scoped identity. A read is a
-	// launch opening a cache and saying whether anything was in it; a write is
-	// what a finished workload left there. Both are recorded, because isolation
-	// is about observation as much as storage: a cache read under the wrong
-	// workspace has already leaked, whatever it went on to write.
-	OperationCacheMountRead  = "cache_mount.read"
-	OperationCacheMountWrite = "cache_mount.write"
-	OperationImagePull       = "image.pull"
+	// OperationCacheMountAttach is a container being created with a cache
+	// mounted, named by its full workspace-scoped identity. Opening the storage
+	// and reading what is in it are one act rather than two, because that is what
+	// a container runtime does and the whole of what it can report: it makes the
+	// volume the mount point names if this tenant and generation had none, hands
+	// the workload whatever is inside, and can say nothing about what the
+	// application does with it afterwards. Recording the attachment is what makes
+	// a cross-workspace touch of mutable state something the ledger can be caught
+	// doing, whether or not the workload went on to write anything.
+	OperationCacheMountAttach = "cache_mount.attach"
+	OperationImagePull        = "image.pull"
 	// OperationImageRetained is content a host kept, recorded when the bytes
 	// landed. The pull is a command with a duration; retention is the fact that
 	// outlives it, and only one of the two can explain what a host holds.

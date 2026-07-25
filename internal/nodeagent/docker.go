@@ -249,6 +249,23 @@ func (docker *DockerRuntime) cacheMount(workspaceID string, mount domain.CacheMo
 // for each volume. Only volumes made for a Mercator cache are reported: another
 // tool's volume on the same daemon is not one, whatever it is called.
 //
+// A volume is a cache once a workload of this node's has run against it, and the
+// daemon makes the volume one step earlier than that. `docker run` resolves the
+// image, creates the container and the mount points it names, and only then asks
+// the runtime for a process. An entrypoint this image does not carry, a device
+// this host lacks, or a memory limit the kernel refuses therefore exits non-zero
+// with the labelled volume already on the disk and nothing ever run against it.
+// Reporting that empty directory is the machine claiming warmth it has not
+// earned, which is the distinction CacheEvidence exists to make.
+//
+// So the report is the intersection of two facts the daemon holds: the volumes
+// stamped as caches, and the volumes some container of this node's was attached
+// to while running. Nothing is reclaimed here. Removing a volume because a
+// launch failed would delete a tenant's warm cache whenever the failing launch
+// was the second one, and reclaiming storage is garbage collection, which this
+// runtime still declares unsupported. A cache nothing can be shown to have run
+// against is left on the disk and left out of the report.
+//
 // A cache read never fails the node's report. A cache is best-effort by
 // construction and silence about one is already expressible, while failing here
 // would end the agent's session and, on an agent with no session yet, block its
@@ -274,6 +291,14 @@ func (docker *DockerRuntime) caches(ctx context.Context) (domain.CacheInventory,
 	if len(volumes) == 0 {
 		return inventory, nil
 	}
+	attached, err := docker.attachedVolumes(ctx)
+	if err != nil {
+		return docker.unreadableCaches(ctx, err)
+	}
+	volumes = slices.DeleteFunc(volumes, func(volume string) bool { return !attached[volume] })
+	if len(volumes) == 0 {
+		return inventory, nil
+	}
 	// The daemon prints the volumes it could describe and exits non-zero for
 	// the ones it could not, so what came back is read either way.
 	described, err := docker.run(ctx, append(append([]string{"volume", "inspect"}, volumes...),
@@ -296,6 +321,33 @@ func (docker *DockerRuntime) caches(ctx context.Context) (domain.CacheInventory,
 		inventory.Mounts = append(inventory.Mounts, mount)
 	}
 	return inventory, nil
+}
+
+// attachedVolumes is the storage a workload of this node's was actually run
+// against, taken from the containers the daemon still accounts for. A container
+// the daemon created and could not start is exactly the case this answers: it
+// holds the mount and never held a process, so its volumes are not caches.
+//
+// The evidence is as durable as the container record, so a machine whose
+// containers an operator removed reports fewer caches than it holds. That is the
+// safe direction of the same trade the whole slice is about: a cache left out is
+// work an application repeats, and a cache claimed without evidence is a Run
+// placed on a machine that never did the work.
+func (docker *DockerRuntime) attachedVolumes(ctx context.Context) (map[string]bool, error) {
+	containers, err := docker.containers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	attached := map[string]bool{}
+	for _, container := range containers {
+		if !container.ran() {
+			continue
+		}
+		for volume := range strings.SplitSeq(container.Mounts, ",") {
+			attached[volume] = true
+		}
+	}
+	return attached, nil
 }
 
 // unreadableCaches is a node that cannot say what mutable state it holds. It is
@@ -789,6 +841,18 @@ type dockerContainer struct {
 	State  string `json:"State"`
 	Status string `json:"Status"`
 	Labels string `json:"Labels"`
+	// Mounts names the volumes this container is attached to, which is the only
+	// place the daemon says which storage a workload was actually run against.
+	Mounts string `json:"Mounts"`
+}
+
+// ran reports whether a process ever started in this container. The daemon
+// creates a container, its mount points, and the volumes those mount points
+// name before it asks the runtime for a process, so a container that never left
+// "created" is one whose storage nothing has written to.
+func (container dockerContainer) ran() bool {
+	phase := dockerPhase(container.State)
+	return phase == capability.WorkloadPhaseRunning || phase.Exited()
 }
 
 func (container dockerContainer) label(name string) string {

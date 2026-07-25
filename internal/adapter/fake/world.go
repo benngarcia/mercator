@@ -159,12 +159,12 @@ type transfer struct {
 // Capacity Mercator does not keep is left out of both: there is no host there to
 // be holding anything when the next Run asks.
 //
-// A cache is opened at the start of the execution rather than at its end, which
-// is the one place this world is coarser than the Lab's: nothing here models a
-// workload finishing, so the moment a Run stops holding this machine is not a
-// moment this world has. What both worlds now agree on is the claim that
-// matters, that running a workload here is what fills its cache and a machine
-// that never ran one holds nothing.
+// A cache is opened at the start of the execution rather than at its end,
+// because creating the container is what creates the storage. The Lab attaches
+// one at that same moment and a container runtime reports one on the same
+// evidence, so all three say a machine holds a cache from when a workload of
+// that tenant and generation started here: one cancelled halfway leaves the
+// cache it was attached to, and one that never started leaves nothing.
 func (m *Machine) startExecution(image string, layers []Layer, caches []domain.CacheMount, now time.Time) {
 	if !m.Offer.KeepsWhatItRuns() {
 		return

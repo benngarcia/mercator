@@ -45,10 +45,16 @@ type externalExecution struct {
 	// container actually began, which cannot precede the arrival of the image it
 	// runs: a process cannot execute bytes that have not landed. The gap between
 	// them is the start latency Mercator predicted and now has an actual for.
-	AcceptedAt    time.Time `json:"accepted_at"`
-	StartedAt     time.Time `json:"started_at"`
-	CompletesAt   time.Time `json:"completes_at"`
-	OutputsStored bool      `json:"outputs_stored"`
+	AcceptedAt time.Time `json:"accepted_at"`
+	StartedAt  time.Time `json:"started_at"`
+	// CachesAttached is whether the container was created and its caches opened
+	// with it. It happens at StartedAt rather than at the end, because creating
+	// the container is what creates the storage: a workload cancelled halfway
+	// leaves the cache it was attached to, and one that never started leaves
+	// nothing.
+	CachesAttached bool      `json:"caches_attached"`
+	CompletesAt    time.Time `json:"completes_at"`
+	OutputsStored  bool      `json:"outputs_stored"`
 }
 
 // ArtifactReplica is one host-local copy in World Truth: which machine holds
@@ -569,6 +575,9 @@ func (world *simulatedWorld) nextDeadline(target time.Time) (time.Time, bool) {
 		earliest = at
 	}
 	for _, execution := range world.executions {
+		if !execution.CachesAttached {
+			consider(execution.StartedAt)
+		}
 		if !execution.OutputsStored {
 			consider(execution.CompletesAt)
 		}
@@ -589,10 +598,11 @@ func (world *simulatedWorld) nextDeadline(target time.Time) (time.Time, bool) {
 }
 
 // settleDeadlines lets everything due at the current instant happen, in the
-// order one thing can cause another: a container exits and writes its output,
-// content lands, an upload becomes durable, and capacity nobody is using
-// expires.
+// order one thing can cause another: a container is created and opens its
+// caches, it exits and writes its output, content lands, an upload becomes
+// durable, and capacity nobody is using expires.
 func (world *simulatedWorld) settleDeadlines() {
+	world.settleCacheAttachments()
 	world.settleExecutions()
 	world.settlePulls()
 	world.settleReplicas()
@@ -993,11 +1003,11 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		world.pullRunImage(execution, request.Image),
 		world.readRunArtifacts(execution, arrival.Request.ConsumesArtifacts),
 	)
-	// The caches this launch asked for are opened whatever is in them. A mutable
-	// cache is best-effort, so nothing here waits on one.
-	world.readCaches(execution)
 	execution.CompletesAt = execution.StartedAt.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID))
 	world.executions[request.LaunchKey] = execution
+	// The caches this launch declared are opened with the container, which is at
+	// StartedAt and may be now.
+	world.settleCacheAttachments()
 	world.publishObservations()
 	receipt := adapter.LaunchReceipt{
 		ExternalID:     execution.ExternalID,
@@ -1346,21 +1356,42 @@ func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at tim
 			completesAt: at.Add(world.store.transferDuration(artifactID)),
 		})
 	}
-	for _, mount := range execution.CacheMounts {
-		world.writeCache(execution, mount)
+}
+
+// settleCacheAttachments creates the container for every execution whose image
+// has landed, which is the act that opens the caches it declared. Attaching and
+// filling a cache are one moment here for the same reason they are on a real
+// node: a container runtime makes the storage the mount point names and can say
+// nothing whatsoever about what the application then puts in it.
+func (world *simulatedWorld) settleCacheAttachments() {
+	for _, launchKey := range slices.Sorted(maps.Keys(world.executions)) {
+		execution := world.executions[launchKey]
+		if execution.CachesAttached || world.now.Before(execution.StartedAt) {
+			continue
+		}
+		for _, mount := range execution.CacheMounts {
+			world.attachCache(execution, mount)
+		}
+		execution.CachesAttached = true
+		world.executions[launchKey] = execution
 	}
 }
 
-// writeCache is what a finished workload left in its mutable caches. The cache
-// is addressed by its full identity, which carries the workspace this execution
-// belongs to, so a write can only ever land in the cache the Run's own tenant
-// owns.
+// attachCache is one cache opened for one execution: the storage the container
+// mounts, made here if this tenant and generation had none, and whatever the
+// workload found in it. A cache costs no time either way, because it is the
+// application's own state and this world has no model of what the application
+// does with it.
+//
+// It is addressed by its full identity, which carries the workspace this
+// execution belongs to, so an attachment can only ever land in the cache the
+// Run's own tenant owns.
 //
 // Capacity that keeps nothing keeps no cache either, for the same two reasons it
 // keeps no image: a provisionable offer is a machine that does not exist yet,
-// and a one-shot product is gone once its workload exits. A cache written there
+// and a one-shot product is gone once its workload exits. A cache opened there
 // would be mutable state outliving its own host.
-func (world *simulatedWorld) writeCache(execution externalExecution, mount domain.CacheMountRequirement) {
+func (world *simulatedWorld) attachCache(execution externalExecution, mount domain.CacheMountRequirement) {
 	if !world.truth[execution.OfferID].offer.KeepsWhatItRuns() {
 		return
 	}
@@ -1368,10 +1399,10 @@ func (world *simulatedWorld) writeCache(execution externalExecution, mount domai
 		world.cacheMounts[execution.OfferID] = map[string]CacheMountState{}
 	}
 	identity := domain.CacheIdentity(execution.WorkspaceID, mount)
-	previous := world.cacheMounts[execution.OfferID][identity]
+	previous, found := world.cacheMounts[execution.OfferID][identity]
 	createdAt := previous.CreatedAt
-	if previous.Revision == 0 {
-		createdAt = world.now
+	if !found {
+		createdAt = execution.StartedAt
 	}
 	state := CacheMountState{
 		OfferID:          execution.OfferID,
@@ -1385,8 +1416,8 @@ func (world *simulatedWorld) writeCache(execution externalExecution, mount domai
 	}
 	world.cacheMounts[execution.OfferID][identity] = state
 	world.recordEffect(
-		OperationCacheMountWrite,
-		"cache-mount-write/"+execution.RunID+"/"+identity,
+		OperationCacheMountAttach,
+		"cache-mount-attach/"+execution.LaunchKey+"/"+identity,
 		EffectCommandAccepted,
 		EffectResponseDelivered,
 		execution.RunID,
@@ -1399,47 +1430,9 @@ func (world *simulatedWorld) writeCache(execution externalExecution, mount domai
 			"compatibility_key": mount.CompatibilityKey,
 			"offer_id":          execution.OfferID,
 		},
-		map[string]any{"revision": state.Revision, "size_bytes": state.SizeBytes},
+		map[string]any{"found": found, "revision": state.Revision, "size_bytes": state.SizeBytes},
 		"",
 	)
-}
-
-// readCaches is what a starting workload found in the caches it asked for. A
-// cache costs no time either way, because it is the application's own state and
-// this world has no model of what the application does with it; what the read
-// records is which cache was opened and whether anything was in it, which is
-// what makes a cross-workspace read a thing the ledger can be caught doing.
-//
-// The request is what this execution asked for and the consequence is what the
-// disk answered with, including the identity of the storage it reached. Those
-// have to be two facts: a request states the identity the reader derived from
-// its own workspace, so a rule reading only that is asking the derivation to
-// confirm itself and a read that resolved to the neighbour's bytes would satisfy
-// it. What names the leak is the slot, and only the storage can say which one it
-// was.
-func (world *simulatedWorld) readCaches(execution externalExecution) {
-	for _, mount := range execution.CacheMounts {
-		identity := domain.CacheIdentity(execution.WorkspaceID, mount)
-		held, found := world.cacheMounts[execution.OfferID][identity]
-		world.recordEffect(
-			OperationCacheMountRead,
-			"cache-mount-read/"+execution.LaunchKey+"/"+identity,
-			EffectCommandAccepted,
-			EffectResponseDelivered,
-			execution.RunID,
-			execution.LaunchKey,
-			"",
-			map[string]any{
-				"identity":          identity,
-				"workspace_id":      execution.WorkspaceID,
-				"name":              mount.Name,
-				"compatibility_key": mount.CompatibilityKey,
-				"offer_id":          execution.OfferID,
-			},
-			map[string]any{"found": found, "revision": held.Revision, "reached_identity": held.Identity},
-			"",
-		)
-	}
 }
 
 func (world *simulatedWorld) artifactReplicas() []ArtifactReplica {

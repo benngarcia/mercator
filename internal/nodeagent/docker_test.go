@@ -364,6 +364,58 @@ func TestALaunchThatNeverRunsLeavesNoCacheBehind(t *testing.T) {
 	}
 }
 
+// TestAContainerThatNeverStartsIsNotACacheThisNodeHolds is the other half of
+// that promise, and the one creating the container cannot make. The daemon
+// resolves the image, creates the container, and creates the labelled volume its
+// mount point names before it asks the runtime for a process, so an entrypoint
+// this image does not carry exits 127 with the volume already on the disk and no
+// workload ever run against it. Left to the labels alone, the next heartbeat
+// reports that empty directory as a cache and the next Run declaring the same
+// generation is recorded hot on a machine that has never done the work.
+//
+// So the volume stays, because reclaiming storage is garbage collection, and the
+// report leaves it out, because no container of this node's has run against it.
+func TestAContainerThatNeverStartsIsNotACacheThisNodeHolds(t *testing.T) {
+	requireDocker(t)
+	pull(t, "busybox:latest")
+	runtime := NewDockerRuntime("")
+	cache := domain.CacheMountRequirement{Name: "never-started-cache", CompatibilityKey: "cuda-12.4"}
+	volume := domain.CacheVolumeName("ws_alpha", cache)
+	t.Cleanup(func() {
+		_ = exec.Command("docker", "rm", "--force", "mercator-run-never-started-1").Run()
+		_ = exec.Command("docker", "volume", "rm", "--force", volume).Run()
+	})
+	command := capability.LaunchWorkloadCommand{
+		RunID:       "run-never-started",
+		AttemptID:   "1",
+		BookingID:   "bkg-run-never-started",
+		CacheMounts: []domain.CacheMountRequirement{cache},
+		Workload: domain.WorkloadSpec{Containers: []domain.ContainerSpec{{
+			Name:  "main",
+			Image: "busybox:latest",
+			// A program this image does not contain, which is the ordinary way
+			// a container is created and then never runs.
+			Entrypoint: &[]string{"/definitely-not-in-this-image"},
+		}}},
+	}
+	command.WorkspaceID = "ws_alpha"
+
+	if err := runtime.LaunchWorkload(context.Background(), command); err == nil {
+		t.Fatal("a launch whose container could not start reported success")
+	}
+
+	if err := exec.Command("docker", "volume", "inspect", volume).Run(); err != nil {
+		t.Skipf("this daemon did not create %q for a container it could not start, so the case under test did not happen", volume)
+	}
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read node facts: %v", err)
+	}
+	if facts.Caches.Holds("ws_alpha", cache) {
+		t.Fatalf("the node reports a cache whose container never started: %+v", facts.Caches.Mounts)
+	}
+}
+
 // TestOneUnreadableCacheVolumeDoesNotCostTheNodeItsReport is the cache half of
 // the lesson the image read already carries. The daemon prints the volumes it
 // could describe and exits non-zero for the one that vanished between the
@@ -376,6 +428,7 @@ func TestOneUnreadableCacheVolumeDoesNotCostTheNodeItsReport(t *testing.T) {
 case "$1 $2" in
   "info --format") echo '{"OperatingSystem":"linux","Architecture":"x86_64","ServerVersion":"29.4.0","NCPU":8,"MemTotal":1}' ;;
   "images --digests") ;;
+  "ps --all") echo '{"Names":"mercator-run-alpha-1","State":"exited","Status":"Exited (0) 2m ago","Labels":"mercator.run=run-alpha","Mounts":"mercator-cache-ws_alpha-compiler-cache-aaaaaaaa,mercator-cache-ws_alpha-pruned-cache-bbbbbbbb"}' ;;
   "volume ls") echo 'mercator-cache-ws_alpha-compiler-cache-aaaaaaaa'
                echo 'mercator-cache-ws_alpha-pruned-cache-bbbbbbbb' ;;
   "volume inspect") echo '{"name":"mercator-cache-ws_alpha-compiler-cache-aaaaaaaa","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.workspace":"ws_alpha","mercator.cache.name":"compiler-cache","mercator.cache.key":"cuda-12.4"}}'
@@ -394,6 +447,45 @@ esac
 	}
 	if !facts.Caches.Holds("ws_alpha", domain.CacheMountRequirement{Name: "compiler-cache", CompatibilityKey: "cuda-12.4"}) {
 		t.Fatalf("the node dropped the cache the daemon described: %+v", facts.Caches.Mounts)
+	}
+}
+
+// TestANodeReportsOnlyTheCachesAWorkloadRanAgainst is the rule itself, on a
+// machine holding one of each. Both volumes carry the labels that name a cache,
+// because the daemon stamps them when it creates the mount point; only one of
+// them belongs to a container that ever held a process. The other is what a
+// launch that got as far as container creation and no further leaves behind, and
+// the whole point of reporting a cache is to say a workload of this tenant and
+// generation ran here.
+func TestANodeReportsOnlyTheCachesAWorkloadRanAgainst(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "info --format") echo '{"OperatingSystem":"linux","Architecture":"x86_64","ServerVersion":"29.4.0","NCPU":8,"MemTotal":1}' ;;
+  "images --digests") ;;
+  "ps --all") echo '{"Names":"mercator-run-ran-1","State":"exited","Status":"Exited (0) 2m ago","Labels":"mercator.run=run-ran","Mounts":"mercator-cache-ws_alpha-ran-cache-aaaaaaaa"}'
+              echo '{"Names":"mercator-run-stillborn-1","State":"created","Status":"Created","Labels":"mercator.run=run-stillborn","Mounts":"mercator-cache-ws_alpha-stillborn-cache-bbbbbbbb"}' ;;
+  "volume ls") echo 'mercator-cache-ws_alpha-ran-cache-aaaaaaaa'
+               echo 'mercator-cache-ws_alpha-stillborn-cache-bbbbbbbb' ;;
+  "volume inspect")
+    for volume in "$@"; do
+      case "$volume" in
+        *ran-cache*) echo '{"name":"mercator-cache-ws_alpha-ran-cache-aaaaaaaa","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.workspace":"ws_alpha","mercator.cache.name":"ran-cache","mercator.cache.key":"cuda-12.4"}}' ;;
+        *stillborn-cache*) echo '{"name":"mercator-cache-ws_alpha-stillborn-cache-bbbbbbbb","created_at":"2030-01-01T00:00:00Z","labels":{"mercator.cache.workspace":"ws_alpha","mercator.cache.name":"stillborn-cache","mercator.cache.key":"cuda-12.4"}}' ;;
+      esac
+    done ;;
+esac
+`)
+
+	facts, err := NewDockerRuntime(daemon).Facts(context.Background())
+
+	if err != nil {
+		t.Fatalf("read node facts: %v", err)
+	}
+	if !facts.Caches.Holds("ws_alpha", domain.CacheMountRequirement{Name: "ran-cache", CompatibilityKey: "cuda-12.4"}) {
+		t.Fatalf("the node dropped a cache a workload ran against: %+v", facts.Caches.Mounts)
+	}
+	if facts.Caches.Holds("ws_alpha", domain.CacheMountRequirement{Name: "stillborn-cache", CompatibilityKey: "cuda-12.4"}) {
+		t.Fatalf("the node reports a cache whose container never started: %+v", facts.Caches.Mounts)
 	}
 }
 

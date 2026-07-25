@@ -321,7 +321,7 @@ func effectMutatesWorld(operation string) bool {
 		OperationArtifactRead,
 		OperationArtifactReplicated,
 		OperationArtifactPublished,
-		OperationCacheMountWrite,
+		OperationCacheMountAttach,
 		OperationControlPlaneRestart:
 		return true
 	default:
@@ -1000,13 +1000,18 @@ func cacheDiskAccounting(observation InvariantObservation) error {
 // whether two tenants ever met on one identity is a question the derivation
 // cannot answer for itself.
 //
-// Reads are policed beside writes because a cache read under the wrong workspace
-// has already leaked, whatever it went on to write. A read is claimed twice: for
-// the identity it asked for, and for the identity of the storage it actually
-// reached. The request alone cannot catch a resolution that wandered, because a
-// reader derives the identity it asks for from its own workspace, so those two
-// always agree; the slot the disk answered from is the only part of the record
-// that can disagree with the tenant that read it.
+// Every attachment is claimed, not only the ones that wrote something: a cache
+// opened under the wrong workspace has already leaked, whatever the workload
+// went on to do with it.
+//
+// The rule reads what each execution asked for and what each host ended up
+// holding, and deliberately nothing about which storage an attachment resolved
+// to. Storage is reached by the identity itself, here and on a container runtime
+// alike: a volume is named by the workspace, the cache, and the generation
+// together, so the slot a read lands in is that string by construction and a
+// consequence restating it could never disagree with the request beside it. What
+// a wandering resolution would actually be is a derivation that stopped carrying
+// the workspace, and that shows up here as two tenants claiming one identity.
 func cacheMountWorkspaceIsolation(observation InvariantObservation) error {
 	owners := map[string]string{}
 	claim := func(offerID, identity, workspaceID, what string) error {
@@ -1024,7 +1029,7 @@ func cacheMountWorkspaceIsolation(observation InvariantObservation) error {
 		return nil
 	}
 	for _, effect := range observation.Effects {
-		if effect.Operation != OperationCacheMountRead && effect.Operation != OperationCacheMountWrite {
+		if effect.Operation != OperationCacheMountAttach {
 			continue
 		}
 		var touched struct {
@@ -1036,18 +1041,6 @@ func cacheMountWorkspaceIsolation(observation InvariantObservation) error {
 			return fmt.Errorf("decode Cache Mount access %s: %w", effect.ID, err)
 		}
 		if err := claim(touched.OfferID, touched.Identity, touched.WorkspaceID, effect.Operation); err != nil {
-			return err
-		}
-		var answered struct {
-			ReachedIdentity string `json:"reached_identity"`
-		}
-		if err := json.Unmarshal(effect.Consequence, &answered); err != nil {
-			return fmt.Errorf("decode Cache Mount answer %s: %w", effect.ID, err)
-		}
-		if answered.ReachedIdentity == "" {
-			continue
-		}
-		if err := claim(touched.OfferID, answered.ReachedIdentity, touched.WorkspaceID, effect.Operation+" reached"); err != nil {
 			return err
 		}
 	}

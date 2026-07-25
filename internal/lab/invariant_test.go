@@ -202,14 +202,14 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				{OfferID: "offer-1", ArtifactReplica: domain.ArtifactReplica{ArtifactID: "known", SizeBytes: 0}},
 			}
 		},
-		// Two tenants reaching into one cache. Each read and write names the
-		// identity it landed in, and that identity has to be the one its own
-		// workspace, name, and key produce, so a world that keyed this cache by
-		// the name alone is caught handing both tenants the same bytes.
+		// Two tenants attached to one cache. Each attachment names the identity it
+		// landed in, and that identity has to be the one its own workspace, name,
+		// and key produce, so a world that keyed this cache by the name alone is
+		// caught handing both tenants the same bytes.
 		"safety.cache_mount_workspace_isolation": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{
-				cacheMountAccessedUnderSharedIdentity(1, OperationCacheMountWrite, "ws_lab_alpha"),
-				cacheMountAccessedUnderSharedIdentity(2, OperationCacheMountRead, "ws_lab_beta"),
+				cacheMountAccessedUnderSharedIdentity(1, "ws_lab_alpha"),
+				cacheMountAccessedUnderSharedIdentity(2, "ws_lab_beta"),
 			}
 		},
 		"safety.projection_rebuild_equivalence": func(observation *InvariantObservation) {
@@ -293,12 +293,12 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 	}
 }
 
-// cacheMountAccessedUnderSharedIdentity is one workload touching a cache filed
-// under an identity that carries no workspace, which is what a world keyed by
-// name alone produces. It is the shape a cross-workspace leak actually has: each
-// access names the tenant it happened under, and the identity they landed in is
-// the same one.
-func cacheMountAccessedUnderSharedIdentity(sequence uint64, operation, workspaceID string) EffectRecord {
+// cacheMountAccessedUnderSharedIdentity is one workload attached to a cache
+// filed under an identity that carries no workspace, which is what a world keyed
+// by name alone produces. It is the shape a cross-workspace leak actually has:
+// each attachment names the tenant it happened under, and the identity they
+// landed in is the same one.
+func cacheMountAccessedUnderSharedIdentity(sequence uint64, workspaceID string) EffectRecord {
 	request, err := json.Marshal(map[string]any{
 		"identity":          "compiler-cache",
 		"workspace_id":      workspaceID,
@@ -311,7 +311,7 @@ func cacheMountAccessedUnderSharedIdentity(sequence uint64, operation, workspace
 	}
 	return EffectRecord{
 		Sequence:  sequence,
-		Operation: operation,
+		Operation: OperationCacheMountAttach,
 		Command:   EffectCommandAccepted,
 		Response:  EffectResponseDelivered,
 		Request:   request,

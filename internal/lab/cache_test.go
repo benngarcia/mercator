@@ -39,37 +39,54 @@ func TestACacheIsWarmOnlyForTheWorkspaceAndGenerationThatOwnsIt(t *testing.T) {
 	decisions := bookingDecisions(t, execution)
 	for _, expected := range []struct {
 		run      string
+		selected string
 		locality domain.LocalityState
 		held     string
 		why      string
 	}{
 		{
 			run:      "run-alpha-first",
+			selected: "shared-builder",
 			locality: domain.LocalityCold,
 			why:      "the first Run in this world found a cache nobody had written",
 		},
 		{
 			run:      "run-beta-first",
+			selected: "shared-builder",
 			locality: domain.LocalityCold,
 			why:      "a second tenant naming compiler-cache must not inherit the first tenant's cache",
 		},
 		{
 			run:      "run-alpha-second",
+			selected: "shared-builder",
 			locality: domain.LocalityHot,
 			held:     "cuda-12.4",
 			why:      "the tenant that filled its own cache finds it on the machine that holds it",
 		},
 		{
 			run:      "run-alpha-next-generation",
+			selected: "shared-builder",
 			locality: domain.LocalityCold,
 			held:     "cuda-12.4",
 			why:      "the application declared a new generation, so what is under the name is not usable",
 		},
+		{
+			// The generation this Run needs was attached to a container a minute
+			// ago and that container is still running. Creating the container is
+			// what creates its storage, so the machine holds this cache from the
+			// moment the workload started rather than from the moment one
+			// finished, which is exactly what a container runtime reports.
+			run:      "run-alpha-while-it-runs",
+			selected: "spare-builder",
+			locality: domain.LocalityHot,
+			held:     "cuda-13.0",
+			why:      "a workload of this tenant and generation is attached to that cache right now",
+		},
 	} {
 		t.Run(expected.run, func(t *testing.T) {
 			decision := decisions[expected.run]
-			if decision.SelectedOfferSnapshotID != "shared-builder" {
-				t.Fatalf("the Run landed on %q, and there is one machine in this world", decision.SelectedOfferSnapshotID)
+			if decision.SelectedOfferSnapshotID != expected.selected {
+				t.Fatalf("the Run landed on %q, want %q", decision.SelectedOfferSnapshotID, expected.selected)
 			}
 			found := cacheEvidence(t, decision, "shared-builder", compilerCache)
 			if found.Locality != expected.locality {
@@ -84,30 +101,40 @@ func TestACacheIsWarmOnlyForTheWorkspaceAndGenerationThatOwnsIt(t *testing.T) {
 		})
 	}
 
-	// World Truth carries both caches on the one machine, under identities that
-	// differ only by workspace, plus the generation the last Run started. Three
-	// caches on one disk is what "two tenants, one name" actually looks like.
+	// World Truth carries both tenants' caches on the shared machine, under
+	// identities that differ only by workspace, plus the generation the fourth Run
+	// started. Three caches on one disk is what "two tenants, one name" actually
+	// looks like. The fifth Run put a fourth cache on the spare machine it was sent
+	// to, which is the same identity on another host and not the same cache.
 	truth := execution.runtime.world.truthSnapshot()
-	if len(truth.CacheMounts) != 3 {
-		t.Fatalf("World Truth holds %d caches, want alpha's two generations and beta's one: %+v", len(truth.CacheMounts), truth.CacheMounts)
+	if len(truth.CacheMounts) != 4 {
+		t.Fatalf("World Truth holds %d caches, want three on the shared machine and one on the spare: %+v", len(truth.CacheMounts), truth.CacheMounts)
 	}
 	owners := map[string]string{}
+	shared := 0
 	for _, mount := range truth.CacheMounts {
 		if mount.Name != compilerCache {
 			t.Fatalf("World Truth holds a cache named %q that no Run declared", mount.Name)
 		}
-		if owner, seen := owners[mount.Identity]; seen {
-			t.Fatalf("cache identity %q is held twice, by %q and %q", mount.Identity, owner, mount.WorkspaceID)
+		if mount.OfferID == "shared-builder" {
+			shared++
 		}
-		owners[mount.Identity] = mount.WorkspaceID
+		key := mount.OfferID + "/" + mount.Identity
+		if owner, seen := owners[key]; seen {
+			t.Fatalf("cache identity %q on %q is held twice, by %q and %q", mount.Identity, mount.OfferID, owner, mount.WorkspaceID)
+		}
+		owners[key] = mount.WorkspaceID
+	}
+	if shared != 3 {
+		t.Fatalf("the shared machine holds %d caches, want alpha's two generations and beta's one: %+v", shared, truth.CacheMounts)
 	}
 }
 
-// TestACacheIsWrittenUnderTheWorkspaceThatRanTheWorkload is the ledger half. The
+// TestACacheIsAttachedUnderTheWorkspaceThatRanTheWorkload is the ledger half. The
 // decision says what Placement found; this says what the world was actually asked
-// to touch, which is where a leak would happen. Every access this execution
+// to touch, which is where a leak would happen. Every attachment this execution
 // recorded names the tenant it ran for, and no identity is touched by two.
-func TestACacheIsWrittenUnderTheWorkspaceThatRanTheWorkload(t *testing.T) {
+func TestACacheIsAttachedUnderTheWorkspaceThatRanTheWorkload(t *testing.T) {
 	execution := openConformanceExecution(t, "cache-mounts-never-cross-a-workspace")
 	defer func() {
 		if err := execution.Close(); err != nil {
@@ -122,8 +149,8 @@ func TestACacheIsWrittenUnderTheWorkspaceThatRanTheWorkload(t *testing.T) {
 	}
 
 	accesses := cacheAccesses(t, execution.runtime.world.effectRecords())
-	if len(accesses) != 8 {
-		t.Fatalf("the ledger records %d cache accesses, want one read and one write per Run: %+v", len(accesses), accesses)
+	if len(accesses) != 5 {
+		t.Fatalf("the ledger records %d cache attachments, want one per Run: %+v", len(accesses), accesses)
 	}
 	tenants := map[string]string{}
 	for _, access := range accesses {
@@ -172,59 +199,6 @@ func TestCacheIsolationReadsWhatIsStoredAndNotOnlyWhatWasTouched(t *testing.T) {
 	}
 }
 
-// TestCacheIsolationReadsTheStorageAReadReached is the clause that makes the
-// rule about the disk rather than about the reader's own arithmetic. Both
-// identities in a read request are derived from the workspace the execution
-// belongs to, so a leak can never show up there: it shows up in which storage
-// the read resolved to. Here beta asks for its own cache and the world hands it
-// alpha's, which is a cross-workspace read of mutable state, and the request
-// half of the record agrees with itself throughout.
-func TestCacheIsolationReadsTheStorageAReadReached(t *testing.T) {
-	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	alpha := domain.CacheIdentity("ws_lab_alpha", domain.CacheMountRequirement{Name: compilerCache, CompatibilityKey: "cuda-12.4"})
-	beta := domain.CacheIdentity("ws_lab_beta", domain.CacheMountRequirement{Name: compilerCache, CompatibilityKey: "cuda-12.4"})
-
-	err := cacheMountWorkspaceIsolation(InvariantObservation{
-		StartedAt: now,
-		Now:       now,
-		Effects: []EffectRecord{
-			cacheAccessRecord(t, OperationCacheMountWrite, "ws_lab_alpha", alpha, ""),
-			cacheAccessRecord(t, OperationCacheMountRead, "ws_lab_beta", beta, alpha),
-		},
-	})
-
-	if err == nil {
-		t.Fatal("a Run in one workspace read the storage another workspace's cache lives in, and nothing objected")
-	}
-}
-
-// cacheAccessRecord is one ledger entry for a cache access: what the execution
-// asked for, and which storage the world answered from.
-func cacheAccessRecord(t *testing.T, operation, workspaceID, identity, reached string) EffectRecord {
-	t.Helper()
-	request, err := json.Marshal(map[string]any{
-		"identity":     identity,
-		"workspace_id": workspaceID,
-		"offer_id":     "shared-builder",
-	})
-	if err != nil {
-		t.Fatalf("encode cache access request: %v", err)
-	}
-	if reached == "" {
-		reached = identity
-	}
-	consequence, err := json.Marshal(map[string]any{"found": true, "revision": 1, "reached_identity": reached})
-	if err != nil {
-		t.Fatalf("encode cache access consequence: %v", err)
-	}
-	return EffectRecord{
-		ID:          operation + "/" + identity,
-		Operation:   operation,
-		Request:     request,
-		Consequence: consequence,
-	}
-}
-
 // TestLocalityProvenanceRejectsBorrowedCapacityHoldingACache is the third clause
 // of safety.locality_provenance, which no execution can reach either: the world
 // refuses to write a cache onto capacity that keeps nothing. The forbidden state
@@ -270,7 +244,7 @@ func cacheEvidence(t *testing.T, decision domain.BookingDecision, offerID, name 
 	return domain.CacheEvidence{}
 }
 
-// cacheAccess is one recorded read or write, as the ledger states it.
+// cacheAccess is one recorded attachment, as the ledger states it.
 type cacheAccess struct {
 	Identity         string `json:"identity"`
 	WorkspaceID      string `json:"workspace_id"`
@@ -283,7 +257,7 @@ func cacheAccesses(t *testing.T, effects []EffectRecord) []cacheAccess {
 	t.Helper()
 	var accesses []cacheAccess
 	for _, effect := range effects {
-		if effect.Operation != OperationCacheMountRead && effect.Operation != OperationCacheMountWrite {
+		if effect.Operation != OperationCacheMountAttach {
 			continue
 		}
 		var access cacheAccess

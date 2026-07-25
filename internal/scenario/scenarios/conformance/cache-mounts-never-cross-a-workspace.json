@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "Four Runs, two tenants, and one shared machine, under the real control plane. A Cache Mount's only identity is its workspace-scoped name, so two workspaces that both call a cache compiler-cache have two caches on one disk. The first tenant's work fills its own; a Run in the second finds a cold cache and its decision records no warmth from the neighbour sitting beside it. The first tenant's next Run finds its cache hot, which is what makes the two cold answers mean anything. Its last Run declares a different compatibility key for the same name and is cold again, because the application has said that content belongs to another generation.",
+  "summary": "Five Runs, two tenants, and one shared machine under the real control plane, beside a spare nothing uses until the shared one is busy. A Cache Mount's only identity is its workspace-scoped name, so two workspaces that both call a cache compiler-cache have two caches on one disk. The first tenant's work fills its own; a Run in the second finds a cold cache and its decision records no warmth from the neighbour sitting beside it. The first tenant's third Run finds its cache hot, which is what makes the two cold answers mean anything. Its fourth declares a different compatibility key for the same name and is cold again, because the application has said that content belongs to another generation. Its fifth arrives a minute later, while that generation's workload is still running, and records it hot: attaching a cache is what creates it, so a machine holds one from the moment a workload of that tenant and generation started here rather than from the moment one finished.",
   "seed": "mercator-lab-cache-isolation-v1",
   "world": {
     "images": {
@@ -19,6 +19,10 @@
       {
         "id": "shared-builder",
         "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "spare-builder",
+        "rate_per_hour_usd": 2.05
       }
     ]
   },
@@ -80,6 +84,23 @@
         "name": "alpha-next-generation",
         "workspace": "alpha",
         "at": "60m",
+        "request": {
+          "image": "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e",
+          "expected_runtime": "3m",
+          "max_runtime": "5m",
+          "cache_mounts": [
+            {
+              "name": "compiler-cache",
+              "compatibility_key": "cuda-13.0",
+              "size": "8GB"
+            }
+          ]
+        }
+      },
+      {
+        "name": "alpha-while-it-runs",
+        "workspace": "alpha",
+        "at": "61m",
         "request": {
           "image": "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e",
           "expected_runtime": "3m",

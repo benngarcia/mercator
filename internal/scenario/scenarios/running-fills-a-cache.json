@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Two identical cold Rentals and one workload that declares a build cache. The first Run takes the cheaper machine and finds nothing under the cache's name, because no workload has ever opened it here. Fifteen minutes later, which is long enough for the image to have landed and the workload to have started, a second Run declaring the same generation finds that cache on the machine that ran it and finds none of it on the machine beside it. Running is what fills a cache, exactly as running is what warms a host, and a fixture that seeded the cache at construction could not tell the two apart. The second Run still goes to the untouched Rental, because a cache is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured.",
+  "summary": "Two Rentals holding the same image, one of them a nickel an hour dearer and free, the other cheaper and busy for another five minutes. The first Run takes the free one and finds nothing under its cache's name, because no workload has ever opened it here. Fifteen minutes later the busy machine is idle again and a second Run declaring the same generation finds that cache on the machine that ran the first and finds none of it on the machine beside it. Running is what fills a cache, exactly as running is what warms a host, and a fixture that seeded the cache at construction could not tell the two apart. The second Run goes to the cheaper machine all the same, because a cache is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured. The two machines differ by less than half a cent over this Run, and they are equally warm on its image, so a scheduler that turned this cache into either dollars or seconds would send the Run to the machine holding it and this fixture would say so.",
   "classification": "green",
   "world": {
     "images": {
@@ -16,11 +16,24 @@
     "rentals": [
       {
         "id": "builder-a",
-        "rate_per_hour_usd": 2.0
+        "cached_images": ["builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e"],
+        "rate_per_hour_usd": 2.05
       },
       {
         "id": "builder-b",
-        "rate_per_hour_usd": 2.05
+        "cached_images": ["builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e"],
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "builder-b",
+        "version": 1,
+        "running": {
+          "booking": "booking-occupied",
+          "run": "run-occupied",
+          "remaining_max_runtime": "5m"
+        }
       }
     ]
   },
@@ -29,8 +42,8 @@
       "submit": "first",
       "request": {
         "image": "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e",
-        "expected_runtime": "1h",
-        "max_runtime": "2h",
+        "expected_runtime": "10m",
+        "max_runtime": "20m",
         "cache_mounts": [
           {
             "name": "build-cache",
@@ -49,7 +62,7 @@
             "cache_evidence": {"build-cache": "miss"}
           },
           "builder-b": {
-            "feasible": true,
+            "feasible": false,
             "cache_evidence": {"build-cache": "miss"}
           }
         }
@@ -62,8 +75,8 @@
       "submit": "second",
       "request": {
         "image": "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e",
-        "expected_runtime": "20m",
-        "max_runtime": "1h",
+        "expected_runtime": "5m",
+        "max_runtime": "20m",
         "cache_mounts": [
           {
             "name": "build-cache",
@@ -79,10 +92,14 @@
         "candidates": {
           "builder-a": {
             "feasible": true,
+            "pull_seconds": 0,
+            "queue_seconds": 0,
             "cache_evidence": {"build-cache": "hit"}
           },
           "builder-b": {
             "feasible": true,
+            "pull_seconds": 0,
+            "queue_seconds": 0,
             "cache_evidence": {"build-cache": "miss"}
           }
         }

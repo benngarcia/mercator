@@ -855,6 +855,71 @@ complete because it works against a live provider.
     The L0 world opens a cache when the execution starts rather than when it
     finishes, because nothing in that world models a workload finishing; the Lab
     writes it on exit, and what both now agree on is the claim that matters.
+- [x] 2026-07-25: Answer the second review of the Cache Mount commit. Two
+  reviewers falsified five things. Four were the same shape again, a claim wider
+  than the act that established it, and one was a rule that could not fail. The
+  last two entries above are corrected by this one.
+  - A cache is storage a workload of this node's has run against, and the node
+    now establishes that rather than assuming it. Moving the volume's creation
+    into `docker run` narrowed the defect and did not remove it: the daemon
+    resolves the image, creates the container and its mount points, and only then
+    asks the runtime for a process, so an entrypoint the image does not carry, a
+    device this host lacks, or a memory limit the kernel refuses exits non-zero
+    with the labelled volume already on the disk and no workload ever attached.
+    Verified against the daemon on this machine, and the report is now the
+    intersection of two facts it already holds: the volumes stamped as caches,
+    and the volumes a container of this node's was mounted on while it held a
+    process. Nothing is reclaimed, because removing a volume on a failed launch
+    would delete a tenant's warm cache whenever the failing launch was the second
+    one, and reclaiming storage is garbage collection, which this runtime still
+    declares unsupported. The evidence is as durable as the container record, so
+    an operator who prunes containers gets a machine reporting fewer caches than
+    it holds, which is the safe direction of the same trade: a cache left out is
+    work an application repeats, and a cache claimed without evidence is a Run
+    placed on a machine that never did the work.
+  - Attaching a cache is what creates it, in the Lab as well. `storeRunOutputs`
+    was the only writer, so World Truth held a cache from the moment a workload
+    exited: a Run cancelled or terminated mid-flight left none, and a decision
+    made while the first workload was still running was recorded cold on a
+    machine whose volume a real node has had since container creation. The Lab
+    now attaches at `StartedAt`, which is where L0 already opened one and where
+    the daemon creates one, so all three worlds say a machine holds a cache from
+    when a workload of that tenant and generation started here.
+    `OperationCacheMountRead` and `OperationCacheMountWrite` are one
+    `OperationCacheMountAttach`, because opening the storage and reading what is
+    in it are one act and the whole of what a container runtime can report.
+  - The corpus states cache warmth in both worlds at a moment they agree on.
+    `running-fills-a-cache` asserted a hit fifteen minutes into a one-hour Run,
+    which was true at L0 and false at L1, and nothing could say so because the
+    fixture is only ever driven through `SimBackend`.
+    `cache-mounts-never-cross-a-workspace` is the L1 twin: a fifth Run arrives one
+    minute after the generation it needs was first attached, while that workload
+    is still running, and records it hot. Reverting the Lab to attach on exit
+    turns that row cold.
+  - `running-fills-a-cache` constrains the rule it is about. Its second placement
+    was decided by the warm machine being busy, so a scheduler that priced cache
+    warmth left the whole corpus green and the entry above claiming a cache is
+    "recorded and never priced" was protected by nothing. Both machines now hold
+    the image whole and both are idle when the second Run arrives, the warm one is
+    a nickel an hour dearer, and the Run is short enough that the two differ by
+    less than half a cent: pricing the cache in dollars or in seconds sends the
+    Run to the machine holding it, and the fixture says so.
+  - `safety.cache_mount_workspace_isolation` drops the reached-slot clause. Both
+    writers file a cache under a key equal to its own identity, so the storage a
+    read reaches is the string it asked for by construction and the clause could
+    not disagree with the line above it; deleting the world's `reached_identity`
+    left the whole tree green. That is not a Lab accident, it is what storage is:
+    a volume is named by the workspace, the cache, and the generation together,
+    here and on a container runtime alike, so a resolution cannot wander without
+    the derivation wandering first. What a wandering derivation looks like is two
+    tenants claiming one identity, which the rule already reads, and which a real
+    Lab execution now fails on rather than a hand-built observation.
+  - Judgment calls. A workload that ran and wrote nothing still leaves a cache
+    this host holds, because being attached is the claim and no container runtime
+    can say what an application put inside its own storage, which is why
+    `CacheMount` carries no digest and no size. A container that never started is
+    not that claim. `CacheMountState.Revision` counts attachments rather than
+    writes, for the same reason.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1033,30 +1098,35 @@ Phase 3 added:
   discounted out of the localities and per-kind seconds recorded beside it, so a
   scheduler that counted a silence as established fails while agreeing with itself
   perfectly.
-- `cache-mounts-never-cross-a-workspace` (conformance): four Runs, two tenants,
-  and one shared machine. Both tenants declare a cache called compiler-cache, so
-  the machine holds two, and the recorded decisions say so: the neighbour's cache
-  is never warmth, and neither is the generation the application replaced. The
-  hot Run in the middle is what makes the three cold answers mean anything, and
-  dropping the workspace from the cache identity fails the execution through
+- `cache-mounts-never-cross-a-workspace` (conformance): five Runs, two tenants,
+  and one shared machine beside a spare. Both tenants declare a cache called
+  compiler-cache, so the machine holds two, and the recorded decisions say so: the
+  neighbour's cache is never warmth, and neither is the generation the application
+  replaced. The hot Run in the middle is what makes the cold answers mean
+  anything, the fifth Run finds a generation whose workload is still running,
+  and dropping the workspace from the cache identity fails the execution through
   `safety.cache_mount_workspace_isolation` rather than through an assertion.
-- `running-fills-a-cache` (green): two identical cold Rentals and one workload
-  that declares a build cache. The first Run finds nothing under the name, and
-  fifteen minutes later a second Run declaring the same generation finds that
-  cache on the machine that ran the first and none of it on the machine beside
-  it. Running is what fills a cache, exactly as running is what warms a host, and
-  every other cache fixture seeds one at construction. The second Run still lands
-  on the untouched Rental, because a cache is recorded and never priced.
+- `running-fills-a-cache` (green): two Rentals holding the same image, one of them
+  dearer and free, the other cheaper and busy for five more minutes. The first Run
+  takes the free one and finds nothing under its cache's name; fifteen minutes
+  later both are idle and a second Run declaring the same generation finds that
+  cache on the machine that ran the first and none of it on the machine beside it.
+  Running is what fills a cache, exactly as running is what warms a host, and
+  every other cache fixture seeds one at construction. The second Run lands on the
+  cheaper machine, because a cache is recorded and never priced: the two differ by
+  less than half a cent over that Run and are equally warm on its image, so
+  pricing the cache in dollars or in seconds flips the placement and fails the
+  fixture.
 - `safety.cache_mount_workspace_isolation` (Lab invariant): no cache identity is
   ever observed under two workspaces, read over the ledger of what each launch
-  read and wrote, over the storage each read actually reached, and over what each
-  host is holding. Stating it as a collision rather than as an identity
-  derivation is what keeps it independent of the code it polices: the world
-  derives identities with the same function, so a rule asking whether an identity
-  equals what its parts derive would agree with a derivation that dropped the
-  workspace. Reading the slot a read reached is the other half of that, because
-  the identity a read asks for is derived from the reader's own workspace and can
-  never disagree with it.
+  attached and over what each host is holding. Stating it as a collision rather
+  than as an identity derivation is what keeps it independent of the code it
+  polices: the world derives identities with the same function, so a rule asking
+  whether an identity equals what its parts derive would agree with a derivation
+  that dropped the workspace. It says nothing about which slot a read resolved to,
+  because storage is reached by the identity itself, here and on a container
+  runtime alike: a volume is named by the workspace, the cache, and the generation
+  together, so a resolution cannot wander without the derivation wandering first.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, every Artifact copy a host holds is either seeded or
@@ -1379,10 +1449,6 @@ by a deliberate break that fails it:
   commit wrote it, reading only what each execution asked for, that same break
   left every Lab execution green, which is the whole reason the consequence now
   carries the slot;
-- deleting the reached-slot clause fails
-  `TestCacheIsolationReadsTheStorageAReadReached`, which states the forbidden
-  ledger directly, because a world whose reads resolve correctly cannot produce
-  it;
 - opening no cache when a workload runs at L0, which is the state the reviewed
   commit shipped, fails `running-fills-a-cache` with `run "second": candidate
   "builder-a": cache "build-cache": expected "hot", recorded "cold"`.
@@ -1397,13 +1463,63 @@ commit before the cache slice, so the pair recorded above is not what this tool
 produces and should be read as a claim that the hash moved rather than as either
 value.
 
-One limit is worth stating rather than hiding. What a node reports is storage a
-workload of that tenant and generation was attached to on this machine, not
-content. A container created that then fails to start leaves the volume behind,
-and so does a workload that ran and wrote nothing, and both are reported as a
-cache this host holds. No container runtime can say what an application put
-inside its own cache, which is why `CacheMount` carries no digest and no size,
-and why a cache is recorded on the decision and never priced.
+Two claims in this section were falsified by the review answered below, and the
+entry there is what stands: the reached-slot clause could not fail and is gone,
+and a container that was created and then failed to start is no longer reported
+as a cache this machine holds.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/adapter/fake ./internal/orchestrator \
+  ./internal/node ./internal/nodeagent ./internal/broker ./internal/httpapi \
+  ./internal/daemon ./cmd/mercator -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+### Phase 3 what a reported cache establishes
+
+On 2026-07-25, the second review of the cache commit was answered. Each claim is
+held by a deliberate break that fails it:
+
+- reporting every labelled volume, which is what the reviewed commit shipped,
+  fails `TestAContainerThatNeverStartsIsNotACacheThisNodeHolds` against the daemon
+  on this machine with `the node reports a cache whose container never started:
+  [{WorkspaceID:ws_alpha Name:never-started-cache ...}]`, and fails
+  `TestANodeReportsOnlyTheCachesAWorkloadRanAgainst` on a scripted daemon holding
+  one volume of each kind. The case is real on Docker 29.4.0: `docker run
+  --detach --entrypoint /definitely-not-here --mount type=volume,...,
+  volume-label=mercator.cache.name=build-cache busybox` exits 127, leaves the
+  container in state `created`, and leaves the volume with all three labels;
+- attaching a cache when the workload exits rather than when its container is
+  created, which is what the Lab did, fails
+  `cache-mounts-never-cross-a-workspace` through
+  `TestACacheIsWarmOnlyForTheWorkspaceAndGenerationThatOwnsIt` with `the decision
+  recorded "cold" for compiler-cache: a workload of this tenant and generation is
+  attached to that cache right now`;
+- pricing a hot cache at half a cent, or at thirty seconds off the start estimate,
+  fails `running-fills-a-cache` with `run "second": expected "builder-b" to win,
+  but the decision placed on "builder-a"`. Under the fixture as the reviewed
+  commit wrote it, the second placement was decided by the warm machine being busy
+  and both mutations left the whole corpus green;
+- opening no cache when a workload runs at L0 still fails `running-fills-a-cache`
+  with `run "second": candidate "builder-a": cache "build-cache": expected "hot",
+  recorded "cold"`;
+- dropping the workspace from `domain.CacheIdentity`, which is the derivation
+  error the deleted reached-slot clause claimed to catch, fails
+  `cache-mounts-never-cross-a-workspace` through the invariant:
+  `safety.cache_mount_workspace_isolation failed: cache "compiler-cache/cuda-12.4"
+  on "shared-builder" is used by workspaces "ws_lab_alpha" and "ws_lab_beta"`.
+  Deleting `reached_identity` from the world, by contrast, left the entire tree
+  green, which is why that clause is gone rather than restated.
+
+The demo Blueprint's normalized bundle hash moved from
+`sha256:02af6ff3438a3e7a4cabd9c24ad88b3192bc653cccc714e6c004fecc63e1aa3f` to
+`sha256:8e266fa97355678213d3e29105f76a77444aee285b7beb6883b7282a3027cdf3`, both
+read from `mercator lab run --blueprint
+internal/scenario/scenarios/demos/artifact-warmth-restart.json --bundle <path>`.
+Attaching a cache mutates the world and happens at a different moment than
+writing one did, and the normalized bundle carries the effects that mutate.
 
 ```text
 go build ./... && go vet ./... && go test ./...
