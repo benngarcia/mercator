@@ -98,7 +98,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.artifact_replica_verified", check: artifactReplicaVerified},
 		invariantRule{id: "safety.monotonic_versions", check: monotonicVersions},
 		invariantRule{id: "safety.owned_external_resources", check: ownedExternalResources},
-		invariantRule{id: "safety.cache_disk_accounting", check: cacheDiskAccounting},
+		invariantRule{id: "safety.disk_reservation_respected", check: diskReservationRespected},
 		invariantRule{id: "safety.cache_mount_workspace_isolation", check: cacheMountWorkspaceIsolation},
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
@@ -965,22 +965,98 @@ func ownedExternalResources(observation InvariantObservation) error {
 	return nil
 }
 
-func cacheDiskAccounting(observation InvariantObservation) error {
-	seenReplicas := map[string]bool{}
-	for _, replica := range observation.World.ArtifactReplicas {
-		key := replica.ArtifactID + "/" + replica.OfferID
-		if replica.SizeBytes <= 0 || seenReplicas[key] {
-			return fmt.Errorf("invalid Artifact replica %q", key)
+// diskReservationRespected is the rule that makes disk a resource rather than a
+// figure on an offer. Content Mercator puts on a machine has to fit there, and
+// the name this replaced, cache_disk_accounting, accounted for no disk at all:
+// it checked that a copy named a known Artifact and appeared once, and never
+// compared a byte of what a machine held against what it had room for. Deleting
+// the name is the point of the change, because a rule that promises accounting
+// and performs none is worse than no rule, and every world it passed was a world
+// nobody had checked.
+//
+// What it says is that a machine's own account of its disk adds up. Every item
+// resident on it names content with a size, no item is counted twice, what is
+// resident plus what is promised to content still arriving never exceeds the
+// disk, and the copies and caches World Truth says are on a machine are exactly
+// the ones taking up room in its account. That last clause is what stops the
+// rule from being satisfied by a ledger that simply forgot a kind of content.
+func diskReservationRespected(observation InvariantObservation) error {
+	ledgers := map[string]DiskLedger{}
+	for _, ledger := range observation.World.Disk {
+		if _, twice := ledgers[ledger.OfferID]; twice {
+			return fmt.Errorf("machine %q accounts for its disk twice", ledger.OfferID)
 		}
-		seenReplicas[key] = true
+		ledgers[ledger.OfferID] = ledger
+		if err := residentContentIsAccountable(ledger); err != nil {
+			return err
+		}
+		if used := ledger.ResidentBytes() + ledger.ReservedBytes; used > ledger.CapacityBytes {
+			return fmt.Errorf(
+				"machine %q holds and reserves %d bytes on a %d byte disk",
+				ledger.OfferID, used, ledger.CapacityBytes,
+			)
+		}
 	}
-	seenMounts := map[string]bool{}
-	for _, mount := range observation.World.CacheMounts {
-		key := mount.OfferID + "/" + mount.Identity
-		if mount.Name == "" || mount.Revision == 0 || seenMounts[key] {
-			return fmt.Errorf("invalid Cache Mount %q", key)
+	return everythingHeldTakesUpRoom(observation, ledgers)
+}
+
+// residentContentIsAccountable is one machine's items read on their own terms.
+// A machine with no disk cannot be holding anything, an item nothing names is an
+// item nothing can be checked against, an item of no size is content this world
+// cannot account for, and the same content listed twice is a disk that looks
+// fuller than it is.
+func residentContentIsAccountable(ledger DiskLedger) error {
+	if ledger.CapacityBytes <= 0 {
+		return fmt.Errorf("machine %q has no disk and is holding %d items", ledger.OfferID, len(ledger.Resident))
+	}
+	seen := map[string]bool{}
+	for _, item := range ledger.Resident {
+		key := string(item.Kind) + "/" + item.Name
+		if item.Name == "" || item.SizeBytes <= 0 {
+			return fmt.Errorf("machine %q holds %s content this world cannot size: %+v", ledger.OfferID, item.Kind, item)
 		}
-		seenMounts[key] = true
+		if seen[key] {
+			return fmt.Errorf("machine %q counts %s twice", ledger.OfferID, key)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+// everythingHeldTakesUpRoom reads the two halves of World Truth against each
+// other. A copy of an Artifact and a Cache Mount are bytes on a disk, so a
+// machine that reports holding one and accounts for no room for it has lost
+// track of its own disk, and an account naming content no machine holds is
+// reserving room for nothing.
+func everythingHeldTakesUpRoom(observation InvariantObservation, ledgers map[string]DiskLedger) error {
+	held := map[string]bool{}
+	for _, replica := range observation.World.ArtifactReplicas {
+		held[replica.OfferID+"/artifact/"+replica.ArtifactID] = true
+		if !ledgers[replica.OfferID].holds(ResidentArtifact, replica.ArtifactID) {
+			return fmt.Errorf(
+				"machine %q holds a copy of %q and accounts for no room for it",
+				replica.OfferID, replica.ArtifactID,
+			)
+		}
+	}
+	for _, mount := range observation.World.CacheMounts {
+		held[mount.OfferID+"/cache/"+mount.Identity] = true
+		if !ledgers[mount.OfferID].holds(ResidentCache, mount.Identity) {
+			return fmt.Errorf(
+				"machine %q holds cache %q and accounts for no room for it",
+				mount.OfferID, mount.Identity,
+			)
+		}
+	}
+	for _, ledger := range ledgers {
+		for _, item := range ledger.Resident {
+			if item.Kind != ResidentLayer && !held[ledger.OfferID+"/"+string(item.Kind)+"/"+item.Name] {
+				return fmt.Errorf(
+					"machine %q reserves room for %s %q and holds no such content",
+					ledger.OfferID, item.Kind, item.Name,
+				)
+			}
+		}
 	}
 	return nil
 }

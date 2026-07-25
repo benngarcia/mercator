@@ -148,6 +148,17 @@ func (ledger DiskLedger) FreeBytes() int64 {
 	return max(ledger.CapacityBytes-ledger.ResidentBytes()-ledger.ReservedBytes, 0)
 }
 
+// holds reports whether this machine's account has room set aside for one item
+// of content.
+func (ledger DiskLedger) holds(kind ResidentKind, name string) bool {
+	for _, item := range ledger.Resident {
+		if item.Kind == kind && item.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // ResidentContent is one item taking room on one machine, named by whatever
 // makes it that content: a layer's blob digest, an Artifact version's ID, or a
 // Cache Mount's identity.

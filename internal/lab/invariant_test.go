@@ -197,10 +197,19 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		"safety.owned_external_resources": func(observation *InvariantObservation) {
 			observation.World.ActiveExecutions = []externalExecution{{RunID: "run-1", LaunchKey: "launch-1"}}
 		},
-		"safety.cache_disk_accounting": func(observation *InvariantObservation) {
-			observation.World.ArtifactReplicas = []ArtifactReplica{
-				{OfferID: "offer-1", ArtifactReplica: domain.ArtifactReplica{ArtifactID: "known", SizeBytes: 0}},
-			}
+		// A machine that has promised room it does not have. What is already on
+		// this disk and what is still landing on it come to more than the disk
+		// holds, which is exactly the state a reservation exists to prevent and
+		// exactly what the rule this replaced could not see: it read Artifact
+		// copies and Cache Mounts for well-formedness and never compared a byte
+		// against a machine's capacity.
+		"safety.disk_reservation_respected": func(observation *InvariantObservation) {
+			observation.World.Disk = []DiskLedger{{
+				OfferID:       "rental-cramped",
+				CapacityBytes: 60 << 30,
+				Resident:      []ResidentContent{{Kind: ResidentLayer, Name: "sha256:base", SizeBytes: 40 << 30}},
+				ReservedBytes: 40 << 30,
+			}}
 		},
 		// Two tenants attached to one cache. Each attachment names the identity it
 		// landed in, and that identity has to be the one its own workspace, name,
