@@ -19,7 +19,7 @@ import (
 // it on the host, and the offer catalog says so on the next placement.
 func TestPlacementReadsTheHostAWorkloadWarmed(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("launch: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestPlacementReadsTheHostAWorkloadWarmed(t *testing.T) {
 // write down and a launch the provider then refuses.
 func TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 
 	world.setOfferAvailable("rental-warm", false)
 
@@ -77,7 +77,7 @@ func TestPlacementCanReadAnOfferTheWorldHasAlreadyReclaimed(t *testing.T) {
 
 func TestWorldEffectLedgerRecordsAmbiguousAndDuplicateLaunches(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 	request := worldLaunchRequest(arrival)
 
 	if _, err := world.Launch(context.Background(), request); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
@@ -161,7 +161,7 @@ func TestWorldEffectLedgerDistinguishesDelayedAndDuplicateResponses(t *testing.T
 				t.Fatalf("open simulated world: %v", err)
 			}
 			arrival := findRunArrival(t, tape, "producer")
-			world.prepareRun("run-producer", arrival)
+			prepareRun(t, world, "run-producer", arrival)
 
 			_, err = world.Launch(context.Background(), worldLaunchRequest(arrival))
 			if !errors.Is(err, test.wantError) {
@@ -195,6 +195,15 @@ func launchEffects(world *simulatedWorld) []EffectRecord {
 	return launches
 }
 
+// prepareRun tells the world about a Run it is about to be asked to execute,
+// and fails the test if the fixture named an image this world does not define.
+func prepareRun(t *testing.T, world *simulatedWorld, runID string, arrival RunArrival) {
+	t.Helper()
+	if err := world.prepareRun(runID, arrival); err != nil {
+		t.Fatalf("prepare Run %q: %v", runID, err)
+	}
+}
+
 func openWorldFixture(t *testing.T, runName string) (*simulatedWorld, RunArrival) {
 	t.Helper()
 	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/demos/artifact-warmth-restart.json")
@@ -225,7 +234,7 @@ func offerByID(t *testing.T, offers []domain.OfferSnapshot, id string) domain.Of
 
 func TestWorldActualRuntimeComesFromTheTape(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 	request := worldLaunchRequest(arrival)
 	_, _ = world.Launch(context.Background(), request)
 
@@ -347,7 +356,7 @@ func cacheMountRevision(mounts []CacheMountState, offerID, name string) uint64 {
 // arrived, and not at the instant the container was dispatched.
 func TestARentalHoldsWhatItRanOnlyOnceThePullCompletes(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 
 	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("launch: %v", err)
@@ -387,7 +396,7 @@ func TestARentalHoldsWhatItRanOnlyOnceThePullCompletes(t *testing.T) {
 // a launch where zero bytes moved is what would make phase 6's waterfall lie.
 func TestAWarmStartRecordsAPullThatMovedNothing(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 	if _, err := world.Launch(context.Background(), worldLaunchRequest(arrival)); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("first launch: %v", err)
 	}
@@ -410,7 +419,7 @@ func TestAWarmStartRecordsAPullThatMovedNothing(t *testing.T) {
 
 func TestOneShotCapacityKeepsNothingItPulled(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 
 	if _, err := world.Launch(context.Background(), worldLaunchRequestOn(arrival, "fresh-4090")); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("launch: %v", err)
@@ -436,7 +445,7 @@ func TestOneShotCapacityKeepsNothingItPulled(t *testing.T) {
 // Bundle exported mid-pull cannot claim 18GB landed somewhere.
 func TestAnAbandonedPullLeavesNothingBehind(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 	request := worldLaunchRequest(arrival)
 	if _, err := world.Launch(context.Background(), request); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("launch: %v", err)
@@ -605,6 +614,61 @@ func TestLocalityProvenanceCoversContentAHostFetchedAndNeverAssembled(t *testing
 
 	if err == nil {
 		t.Fatal("a host reported holding unassembled content nothing delivered and nothing objected")
+	}
+}
+
+// TestLocalityProvenanceCoversArtifactCopiesToo is the Artifact half of the
+// same rule. Durability says the content exists; it never says the content is
+// on this machine, so a copy no seed declared and nothing delivered is bytes
+// from nowhere on a host Placement would price warm. Images have been protected
+// against exactly this since retention was introduced.
+func TestLocalityProvenanceCoversArtifactCopiesToo(t *testing.T) {
+	observation := InvariantObservation{
+		World: WorldTruthSnapshot{Offers: []domain.OfferSnapshot{{
+			ID:   "rental-warm",
+			Kind: domain.OfferKindStanding,
+			Lane: domain.LaneReusable,
+			Artifacts: domain.ArtifactInventory{
+				Known: true,
+				Replicas: []domain.ArtifactReplica{{
+					ArtifactID:    "artifact:reference-set:v1",
+					ContentDigest: "sha256:abcd",
+					SizeBytes:     1,
+					State:         domain.ArtifactReplicaVerified,
+				}},
+			},
+		}}},
+		SeededLocality: map[string]map[string]bool{"rental-warm": {}},
+		SeededReplicas: map[string]map[string]bool{"rental-warm": {}},
+	}
+
+	err := localityProvenance(observation)
+
+	if err == nil {
+		t.Fatal("a host reported holding a copy of an Artifact nothing delivered to it and nothing objected")
+	}
+}
+
+// TestArtifactDependenciesRefusesALaunchWithNoRecordedWorkload keeps a missing
+// fact from reading as no constraint. The rule checks Mercator's own admission
+// decision, so a launch the control plane holds no workload for is the one thing
+// it may never treat as a Run that consumes nothing.
+func TestArtifactDependenciesRefusesALaunchWithNoRecordedWorkload(t *testing.T) {
+	observation := InvariantObservation{
+		Workloads: map[string]domain.WorkloadRevision{},
+		Effects: []EffectRecord{{
+			Operation:     OperationProviderLaunch,
+			Command:       EffectCommandAccepted,
+			CorrelationID: "run-consumer",
+			Sequence:      1,
+		}},
+		ArtifactCatalog: map[string]domain.ArtifactVersion{},
+	}
+
+	err := artifactDependencies(observation)
+
+	if err == nil {
+		t.Fatal("a launch Mercator recorded no workload for was read as a Run that consumes nothing")
 	}
 }
 

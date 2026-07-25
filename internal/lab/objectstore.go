@@ -60,6 +60,11 @@ func objectStoreLocation(workspaceID, artifactID string) string {
 }
 
 // entry is what the catalog says this version is, whether or not it is durable.
+// It is what the store answers Mercator's admission question with: a version
+// nothing published comes back with no publication time, which is the same
+// answer as a name the store never heard of, because from a consumer's side
+// those are one fact. Presence on some machine is not part of the answer, which
+// is why nothing here can be asked about a host.
 func (store *objectStore) entry(artifactID string) (domain.ArtifactVersion, bool) {
 	version, known := store.catalog[artifactID]
 	if !known {
@@ -67,14 +72,6 @@ func (store *objectStore) entry(artifactID string) (domain.ArtifactVersion, bool
 	}
 	version.PublishedAt = store.publishedAt[artifactID]
 	return version, true
-}
-
-// durable answers the only admissible form of "may a consumer of this run": the
-// object store holds the bytes. Presence on some machine is not an answer to
-// this question, which is why nothing here can be asked about a host.
-func (store *objectStore) durable(artifactID string) bool {
-	version, known := store.entry(artifactID)
-	return known && version.Durable()
 }
 
 // publish records that a version's bytes reached the object store. A version is

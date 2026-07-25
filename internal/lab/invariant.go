@@ -54,7 +54,11 @@ type InvariantObservation struct {
 	// SeededLocality is the image content the World Tape put on each host
 	// before any Run executed, keyed by offer. Content outside it has to be
 	// explained by an accepted image pull against that same host.
-	SeededLocality              map[string]map[string]bool
+	SeededLocality map[string]map[string]bool
+	// SeededReplicas is the Artifact copies the World Tape put on each host
+	// before any Run executed, keyed by offer. A copy outside it has to be
+	// explained by content the ledger says landed there.
+	SeededReplicas              map[string]map[string]bool
 	ProjectionRebuildEquivalent bool
 }
 
@@ -340,7 +344,18 @@ func artifactDependencies(observation InvariantObservation) error {
 		if effect.Operation != OperationProviderLaunch || effect.Command != EffectCommandAccepted {
 			continue
 		}
-		workload := observation.Workloads[effect.CorrelationID]
+		// A launch Mercator holds no workload for is a violation rather than a
+		// launch that reads nothing. The rule is about what the control plane
+		// decided, so a missing decision is the one thing it may never read as
+		// permission.
+		workload, recorded := observation.Workloads[effect.CorrelationID]
+		if !recorded {
+			return fmt.Errorf(
+				"Run %q launched at effect %d and Mercator recorded no workload for it",
+				effect.CorrelationID,
+				effect.Sequence,
+			)
+		}
 		for _, artifactID := range workload.Spec.Artifacts.Consumes {
 			published, exists := publishedAt[artifactID]
 			if !exists || published > effect.Sequence {
@@ -541,11 +556,18 @@ func localityProvenance(observation InvariantObservation) error {
 	if err != nil {
 		return err
 	}
+	replicated, err := replicatedByOffer(observation.Effects)
+	if err != nil {
+		return err
+	}
 	for _, offer := range observation.World.Offers {
 		if err := onlyKeptCapacityHoldsWhatItRan(offer, observation.SeededLocality[offer.ID]); err != nil {
 			return err
 		}
 		if err := heldContentIsExplained(offer, observation.SeededLocality[offer.ID], retained[offer.ID]); err != nil {
+			return err
+		}
+		if err := heldCopiesAreExplained(offer, observation.SeededReplicas[offer.ID], replicated[offer.ID]); err != nil {
 			return err
 		}
 	}
@@ -601,6 +623,51 @@ func heldContentIsExplained(offer domain.OfferSnapshot, seeded, retained map[str
 		)
 	}
 	return nil
+}
+
+// heldCopiesAreExplained is the Artifact half of the same question images
+// answer through retention. A copy is on a machine because the World Tape
+// declared it there or because the ledger says content landed there, and a copy
+// with neither is bytes from nowhere. Durability of the version answers a
+// different question: it says the content exists, never that it exists HERE, and
+// pricing a host warm for content nothing delivered to it is exactly the mistake
+// a per-host rule exists to catch.
+func heldCopiesAreExplained(offer domain.OfferSnapshot, seeded, replicated map[string]bool) error {
+	for _, replica := range offer.Artifacts.Replicas {
+		if seeded[replica.ArtifactID] || replicated[replica.ArtifactID] {
+			continue
+		}
+		return fmt.Errorf(
+			"offer %q holds a copy of Artifact %q with no World Tape seed and nothing recorded landing there",
+			offer.ID,
+			replica.ArtifactID,
+		)
+	}
+	return nil
+}
+
+// replicatedByOffer reads back which Artifact copies the ledger says landed on
+// each host, whether a fetch delivered them or the Run that produced them wrote
+// them there.
+func replicatedByOffer(effects []EffectRecord) (map[string]map[string]bool, error) {
+	replicated := map[string]map[string]bool{}
+	for _, effect := range effects {
+		if effect.Operation != OperationArtifactReplicated || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		var landed struct {
+			ArtifactID string `json:"artifact_id"`
+			OfferID    string `json:"offer_id"`
+		}
+		if err := json.Unmarshal(effect.Request, &landed); err != nil {
+			return nil, fmt.Errorf("decode Artifact replication %s: %w", effect.ID, err)
+		}
+		if replicated[landed.OfferID] == nil {
+			replicated[landed.OfferID] = map[string]bool{}
+		}
+		replicated[landed.OfferID][landed.ArtifactID] = true
+	}
+	return replicated, nil
 }
 
 // retainedByOffer reads back what the effect ledger says each host kept. It

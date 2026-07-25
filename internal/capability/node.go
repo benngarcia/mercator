@@ -117,8 +117,13 @@ type NodeFacts struct {
 	Host       HostFacts `json:"host"`
 	// Images is the exact OCI inventory the node holds.
 	Images []ImageLocality `json:"images,omitempty"`
-	// Artifacts is the immutable replicas the node holds and has verified.
-	Artifacts []ArtifactLocality `json:"artifacts,omitempty"`
+	// Artifacts is the immutable Artifact copies the node holds, each worth what
+	// checking it against the catalog said it is worth. It is the same record
+	// the control plane keeps, because a second vocabulary for one answer is how
+	// the two drift: a node reporting a copy "verified" beside a separate
+	// "state" would leave the control plane deciding which of the two it
+	// believes. Object storage remains the authority either way.
+	Artifacts []domain.ArtifactReplica `json:"artifacts,omitempty"`
 	// Caches is the mutable, application-owned cache summary. It is
 	// best-effort by construction: contents are the application's business.
 	Caches []CacheLocality `json:"caches,omitempty"`
@@ -187,19 +192,6 @@ type ImageLocality struct {
 	// whole chain is assembled and a container can start on it now, partial
 	// when some of it is here, cold when none of it is, and unknown when the
 	// runtime could not establish which.
-	State          domain.LocalityState `json:"state"`
-	LastVerifiedAt time.Time            `json:"last_verified_at"`
-}
-
-// ArtifactLocality is one immutable artifact replica on one node. Object
-// storage remains the durable authority; this replica is acceleration.
-type ArtifactLocality struct {
-	ArtifactID string `json:"artifact_id"`
-	// ContentDigest is the manifest or content digest the replica was verified
-	// against.
-	ContentDigest  string               `json:"content_digest"`
-	SizeBytes      int64                `json:"size_bytes"`
-	Verified       bool                 `json:"verified"`
 	State          domain.LocalityState `json:"state"`
 	LastVerifiedAt time.Time            `json:"last_verified_at"`
 }

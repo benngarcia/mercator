@@ -93,6 +93,7 @@ type Orchestrator struct {
 	schedules          rentalschedule.Store
 	now                func() time.Time
 	manifests          ImageManifests
+	artifacts          ArtifactCatalog
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
 	runLocks           keyedMutex
@@ -401,9 +402,14 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 		return true, o.recordTerminalTransition(ctx, workspaceID, runID, version, state)
 	case state.bookingQueued():
 		return o.dispatchQueuedBooking(ctx, workspaceID, runID, version, state)
-	case state.launchIntent == nil:
-		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
-	case state.replacementEligible():
+	case state.launchIntent == nil, state.replacementEligible():
+		// Placement is where admission binds: a Run whose declared Artifacts are
+		// not all durable is not placed, and stays exactly where it is until one
+		// of them is published.
+		durable, err := o.inputsAreDurable(ctx, workspaceID, state.requested.Workload)
+		if err != nil || !durable {
+			return false, err
+		}
 		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
 	case !state.launchAccepted && state.launchFailure == nil:
 		return o.stepLaunch(ctx, workspaceID, runID, version, state)

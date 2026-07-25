@@ -411,6 +411,62 @@ complete because it works against a live provider.
     its bytes can be. Only the two Artifact notes in `SimBackend` are gone; the
     Cache Mount note stays, because advertising a mutable cache on an offer is
     the next slice and not this one.
+- [x] 2026-07-25: Answer the review of the Artifact commit. Two reviews
+  falsified four things, and three of them were one defect: the rule the slice
+  claimed to add was in the test harness.
+  - The durability gate is Mercator's. `Orchestrator.step` asks
+    `inputsAreDurable` before every placement and answers from
+    `orchestrator.ArtifactCatalog`, which is the object store's own contract: a
+    workspace and a version ID in, what that version is and whether the bytes
+    are there out. `internal/lab`'s `objectStore` implements it, as the object
+    store in that world rather than as a stand-in for one, and the Lab's own
+    `admissible` and its list of withheld arrivals are gone. Before this,
+    deleting `controlPlane.admissible` was the only edit in the tree that broke
+    the new conformance cases, while ADR 0006, this plan, and the generated
+    public contract all stated the rule as Mercator's behaviour. A Mercator with
+    no catalog configured now refuses a Run that reads an Artifact rather than
+    launching it against content nothing confirmed exists.
+  - A Run held by that rule is a Run Mercator has accepted. It is in the
+    projection with no Booking Decision, and `liveness.admitted_run_progress`
+    fails it past the bound. The harness gate withheld `CreateRun` instead, so a
+    parked Run appeared in neither `observation.Runs` nor
+    `observation.RunRequirements`: a publication that never landed produced a
+    green execution in which a declared arrival silently never ran.
+  - Publication settles on the world's clock. `storeRunOutputs` ran from
+    `Observe` and stamped `world.now`, so `ArtifactVersion.PublishedAt` and
+    `ArtifactReplica.VerifiedAt`, which are World Truth, moved with Mercator's
+    polling cadence, and every consumer's admission moved with them. `setNow`
+    now walks the deadlines between here and there in the order they happen and
+    settles each at its own instant. That also fixes the case where a producer
+    released or terminated before an `Observe` saw it succeed published nothing
+    at all.
+  - `safety.locality_provenance` gained the per-host Artifact clause it was
+    missing. Its Artifact rule lived entirely inside
+    `onlyKeptCapacityHoldsWhatItRan`, which returns early for every Rental, so
+    once a version was durable any host could hold a copy of it with nothing
+    explaining how the bytes got there, which is what Placement would price as
+    warm. Images have required an `image.retained` effect since retention was
+    introduced; copies now require a World Tape seed or an `artifact.replicated`
+    effect against that same host.
+  - `safety.artifact_dependencies` treats a launch with no recorded workload as
+    a violation rather than as a Run that consumes nothing. The rule was just
+    re-pointed at Mercator's own event log, and a missing fact reading as no
+    constraint would have made every clause of it vacuous.
+  - `scenario.adaptLegacyRentals` migrates a legacy named cache as an unchecked
+    copy. A fixture that said only "this machine has the content this key names"
+    was being translated into an assertion that those bytes were hashed and
+    matched a catalog the old model had no concept of, which prices a copy at
+    zero where the honest reading costs a fetch.
+  - `capability.ArtifactLocality` is deleted. It carried `Verified bool` beside
+    `State domain.LocalityState`, which is two vocabularies for one answer and
+    the drift `capability.LocalityState` was deleted for a commit earlier. A node
+    reports `domain.ArtifactReplica`, the record the control plane already keeps.
+  - Judgment calls. The Lab world no longer tracks an "active Run" for offer
+    reads: a provider has no Run identity to answer a capacity query with, and
+    the field only existed to attribute an effect and to check that a fixture's
+    image is defined, which is now refused when the arrival is prepared. Two
+    findings were rejected and are recorded under the verification evidence
+    below.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -432,7 +488,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority; mutable caches, prefetch, and producer affinity remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority and admission gates on it; an object-store client, mutable caches, prefetch, and producer affinity remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -518,15 +574,19 @@ Phase 3 added:
   holds it, the offer carries no inventory, and the Run is priced the whole
   fetch. Publishing what such a machine holds fails it with `pull source
   "image_inventory" for a machine nothing of Mercator's runs on`.
-- `artifact-must-be-durable-before-a-consumer-runs` (conformance): three claims
+- `artifact-must-be-durable-before-a-consumer-runs` (conformance): four claims
   about what makes an Artifact consumable, driven through the real orchestrator,
   event log, and Run projection. A producer writes its 10GB checkpoint onto the
-  host it ran on and the object store takes it 160 seconds later, and its
-  consumer stays out of Mercator across that whole gap. A later Run consumes an
-  Artifact whose only copy sat on a Rental whose idle lease has since elapsed,
-  and runs anyway from the object store. That same Run reads a second Artifact
-  whose copy is sitting on the host it landed on and fetches it anyway, because
-  nobody ever checked those bytes against the catalog.
+  host it ran on and the object store takes it 160 seconds later, and Mercator
+  holds its consumer unplaced across that whole gap while carrying it in the
+  projection the entire time. A later Run consumes an Artifact whose only copy
+  sat on a Rental whose idle lease has since elapsed, and runs anyway from the
+  object store. That same Run reads a second Artifact whose copy is sitting on
+  the host it landed on and fetches it anyway, because nobody ever checked those
+  bytes against the catalog. Driven twice at cadences ten minutes apart, the two
+  executions agree on when the checkpoint was written and when it became
+  durable, because those are facts about the world rather than about the
+  observer.
 - `safety.artifact_replica_verified` (Lab invariant): no copy exists of content
   the catalog cannot name, no copy claims a digest that version does not have,
   every copy traces back to the object store, and no Run reads a copy nothing
@@ -536,8 +596,9 @@ Phase 3 added:
   becoming one.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
-  `image.retained` effect, and only capacity Mercator keeps holds anything beyond
-  its seed. Retention is written when the bytes land, so a host that holds
+  `image.retained` effect, every Artifact copy a host holds is either seeded or
+  recorded landing there by an `artifact.replicated` effect, and only capacity
+  Mercator keeps holds anything beyond its seed. Retention is written when the bytes land, so a host that holds
   content nothing has delivered fails the rule. It says nothing about a host
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
@@ -617,19 +678,41 @@ On 2026-07-25, `artifact-must-be-durable-before-a-consumer-runs` was written
 against the world and driven at L1 by four cases in `internal/lab`. Each claim
 is held by a deliberate break that fails it:
 
+- deleting the durability gate from `Orchestrator.step` fails ten Lab cases at
+  once, starting with `safety.artifact_dependencies: Run
+  "run-checkpoint-consumer" launched at effect 26 before Artifact
+  "artifact:checkpoint:v1" was durable`, and taking the demo Blueprint's bundle,
+  restart, and lost-response cases with it. That is the whole rule: the gate
+  lives in Mercator, and removing it is visible from the Lab;
 - gating admission on presence on some machine instead of on the object store
-  fails all three consumer cases through the Lab itself, with
-  `safety.artifact_dependencies: Run "run-checkpoint-consumer" launched at
-  effect 14 before Artifact "artifact:checkpoint:v1" was durable`. That is the
-  predicate the Lab shipped with, and the invariant now catches it before any
-  assertion in the test runs;
+  fails the same cases the same way. That is the predicate the Lab shipped with,
+  and the invariant catches it before any assertion in a test runs;
+- storing a producer's output from `Observe` at `world.now`, which is the state
+  the reviewed commit shipped in, fails
+  `TestWhenAnArtifactBecameDurableDoesNotDependOnPolling` with `the checkpoint
+  became durable at 2030-01-01 00:17:40 when Mercator looked every minute and at
+  0001-01-01 00:00:00 when it looked every ten`. Two executions of one Blueprint
+  are driven at cadences ten minutes apart and both World Truth stamps agree;
 - publishing a producer's output the instant it is written fails
   `TestAConsumerWaitsForDurabilityAndNotForACopy` with `the checkpoint was
-  written locally at 2030-01-01 00:15:00 and durable 1m0s later, and 10GB does
-  not reach an object store that fast`. That case drives at a one-minute cadence
-  on purpose: at a five-minute cadence the polling interval would be what
-  separates the local write from the publication, and the world's own transfer
-  model would decide nothing;
+  written locally at 2030-01-01 00:15:00 and durable 0s later, and 10GB crosses
+  a 500 Mbps link in 160s`. The gap is asserted exactly rather than as a lower
+  bound, because settling on the world's clock makes it exact;
+- withholding the Run instead of holding it, which is what the harness gate did,
+  fails `TestARunHeldByAdmissionIsVisibleAndBounded` with `Run
+  "run-checkpoint-consumer" is in none of Mercator's records`. That case also
+  reads the same observation a day later and requires
+  `liveness.admitted_run_progress` to fail it, so a publication that never lands
+  can no longer produce a green execution;
+- deleting the per-host Artifact clause from `safety.locality_provenance` fails
+  `TestLocalityProvenanceCoversArtifactCopiesToo` with `a host reported holding
+  a copy of an Artifact nothing delivered to it and nothing objected`;
+- letting `safety.artifact_dependencies` read an unrecorded workload as a Run
+  that consumes nothing fails
+  `TestArtifactDependenciesRefusesALaunchWithNoRecordedWorkload`;
+- migrating a legacy named cache as a verified copy fails
+  `TestLegacyPresenceMigratesAsAnUncheckedCopy` with `the migrated copy is
+  "verified", and the fixture only ever said the machine has it`;
 - letting a retired Rental keep its Artifact copies fails
   `TestAConsumerRunsWhenTheOnlyCopyIsGone` with `the Rental holding the only
   copy is still here`. Losing every copy is what the second claim is about, and
@@ -651,23 +734,59 @@ is held by a deliberate break that fails it:
   "market-generated-001" is a machine that does not exist yet, and holds a copy
   of Artifact "artifact:generated:001:v1"`.
 
-Three limits are worth stating rather than hiding.
+Five limits are worth stating rather than hiding.
 
-Nothing in production writes a `domain.ArtifactVersion` yet. There is no
-artifact controller, no object-store client, and no node-side fetch: this slice
-gives Mercator the domain model, the public contract, and the admission rule,
-and the only writers today are the simulated worlds. Placement also scores
-nothing from `OfferSnapshot.Artifacts`, because producer-consumer affinity is a
-later slice and it is only sound once the authority question is settled.
+Nothing in production implements `orchestrator.ArtifactCatalog`. There is no
+object-store client, no artifact controller, and no node-side fetch, so a
+production Mercator refuses a Run that reads an Artifact rather than guessing.
+That refusal is the honest state: no production path publishes a version either,
+so no production Run has an Artifact it could legitimately read. Placement also
+scores nothing from `OfferSnapshot.Artifacts`, because producer-consumer
+affinity is a later slice and it is only sound once the authority question is
+settled.
 
 The fake world used by the placement corpus holds replicas and advertises them
-on offers, and has no object store. Nothing there consumes an Artifact through
-a lifecycle, so there is no durability question for it to answer; the Lab is
-where publication has a moment.
+on offers, and has no object store. The two `dataset-gravity` Blueprints are
+target scenarios that consume an Artifact, and they now report why they are
+pending in the words of the thing that is missing: `Run reads Artifact
+"artifact:imagenet:v2.41" and this Mercator has no artifact catalog to establish
+that it exists`. The Lab is where publication has a moment.
 
 Blueprints still cannot express two workspaces, so `ArtifactSpec` states no
 workspace and the corpus cannot state that one workspace's Artifact is
-invisible to another. The catalog entry carries the scope.
+invisible to another. The catalog entry carries the scope, and
+`ArtifactVersion` answers nothing for a workspace that is not the Lab's, which
+is a unit-level fact rather than a corpus one.
+
+Two review findings were rejected rather than fixed, and both are recorded as
+issues rather than as silence.
+
+A reviewer held that two clauses of `safety.artifact_replica_verified` are
+unreachable, because the simulated world cannot produce a copy of content the
+catalog cannot name or a copy claiming a divergent digest: `keepReplica` refuses
+an unknown Artifact and `replicaOf` stamps the catalog's own digest. That is
+true and it is how every safety rule in this registry works. A standing rule is
+a law about states the system must never reach, and the tree's mechanism for
+proving one can fail is
+`TestEveryDefaultInvariantHasADeliberatelyFailingCase`, which drives a
+synthetic observation; `safety.lease_fencing`'s "active launch has no ownership
+token" clause is unreachable by fixture for the same reason. Making the world
+able to produce a corrupt or truncated copy is a fault vocabulary, tracked as
+[#168](https://github.com/benngarcia/mercator/issues/168) along with the related
+gap that no Blueprint can state an object-store read that fails, is partial, or
+is slow.
+
+A reviewer held that `domain.ArtifactReplicaState` should carry `unknown`,
+because `capability.ArtifactLocality` did. The answer went the other way: a
+replica record asserts that these bytes are on this machine, and a node that
+could not establish what it holds has nothing to assert, which is what
+`ArtifactInventory.Known` is for. What was wrong was the node contract carrying
+`Verified bool` beside `State domain.LocalityState`, and that type is deleted.
+`ArtifactInventory.Known` is still written `true` unconditionally by both
+simulated worlds, exactly as `ImageInventory.Known` is, and no Blueprint field
+can yet state a machine that holds copies and cannot enumerate them. That is a
+world-model capability rather than a fixture, tracked with the image half in
+[#167](https://github.com/benngarcia/mercator/issues/167).
 
 ```text
 go build ./... && go vet ./... && go test ./...

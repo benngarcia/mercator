@@ -69,8 +69,9 @@ _Avoid_: Scheduling (for the choosing), the Scheduler
 Immutable, versioned content one Run publishes and other Runs read. The
 version ID is its identity and never changes what it names; the catalog entry
 carries the content digest, the object-store location, the size, the producing
-Run, and the workspace it is scoped to. A Run that declares an Artifact input
-waits for that version to be durable, never for a machine.
+Run, and the workspace it is scoped to. A Run that declares an Artifact input is
+accepted at once and held unplaced until that version is durable, so it waits
+for a publication and never for a machine.
 _Avoid_: Dataset, output, blob, file
 
 **Object Store**:

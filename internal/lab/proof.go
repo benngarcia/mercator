@@ -44,7 +44,7 @@ func VerifyVerticalProof(ctx context.Context, bundle RunBundle) (ProofReport, er
 		facts.result(3, scenario.EvidencePartialImageReuse, facts.partialImageReuse("run-producer"), "standing capacity reused only part of the producer image"),
 		facts.result(4, scenario.EvidenceCapacityPrepared, facts.hasAcceptedEffect(OperationProviderLaunch, "run-producer"), "the provider accepted the producer launch"),
 		facts.result(5, scenario.EvidenceArtifactPublished, facts.hasAcceptedEffect(OperationArtifactPublished, "run-producer"), "the producer published an immutable Artifact to the object store"),
-		facts.result(6, scenario.EvidenceConsumerUnblocked, facts.consumerFollowedArtifact(), "the consumer entered Mercator only after Artifact publication"),
+		facts.result(6, scenario.EvidenceConsumerUnblocked, facts.consumerFollowedArtifact(), "Mercator placed the consumer only after Artifact publication"),
 		facts.result(7, scenario.EvidenceWarmthObserved, facts.consumerUsesArtifactReplica(), "the consumer selected the Rental holding its Artifact"),
 		facts.result(8, scenario.EvidenceQueueVsFreshCompared, facts.comparesQueueAndFresh("run-consumer"), "consumer scheduling compared standing queue delay with fresh provisioning"),
 		facts.result(9, scenario.EvidenceAmbiguousDelivery, facts.hasLostAcceptedLaunch(), "the provider accepted a launch whose response was lost"),
@@ -182,6 +182,11 @@ func candidateWithDisposition(decision domain.BookingDecision, disposition domai
 	return nil
 }
 
+// consumerFollowedArtifact is the durability gate read out of Mercator's own
+// record. A Run enters the control plane when it arrives, whatever its inputs
+// are worth; what waits for a publication is the placement, which is the
+// decision admission governs. Reading the request time instead would pass on any
+// Blueprint whose consumer simply arrives late.
 func (facts proofFacts) consumerFollowedArtifact() bool {
 	var publishedAt time.Time
 	for _, effect := range facts.effects {
@@ -196,11 +201,11 @@ func (facts proofFacts) consumerFollowedArtifact() bool {
 		return false
 	}
 	for _, event := range facts.events {
-		if event.Type != "compute.run.requested.v1" || event.Subject != "runs/run-consumer" {
+		if event.Type != "compute.run.booking_decided.v1" || event.Subject != "runs/run-consumer" {
 			continue
 		}
-		requestedAt, err := time.Parse(time.RFC3339Nano, event.Time)
-		return err == nil && !requestedAt.Before(publishedAt)
+		decidedAt, err := time.Parse(time.RFC3339Nano, event.Time)
+		return err == nil && !decidedAt.Before(publishedAt)
 	}
 	return false
 }

@@ -197,14 +197,16 @@ func adaptLegacyRentals(
 				return err
 			}
 		}
-		// A legacy fixture stated presence and nothing else. It is translated as
-		// a checked copy, because the only thing the old model could express is
-		// that this machine has the content the key names.
+		// A legacy fixture stated presence and nothing else, so the copy becomes
+		// one nobody checked. Translating it as verified would make the migration
+		// assert that those bytes were hashed against a catalog the old model had
+		// no concept of, and price at zero a copy the honest reading makes a
+		// consumer fetch. A fixture that means the stronger thing says so in v1.
 		replicas := make([]any, 0, len(ids))
 		for _, id := range ids {
 			replicas = append(replicas, map[string]any{
 				"artifact": id,
-				"state":    string(domain.ArtifactReplicaVerified),
+				"state":    string(domain.ArtifactReplicaUnverified),
 			})
 		}
 		rental["artifact_replicas"] = replicas

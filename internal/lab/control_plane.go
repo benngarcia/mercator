@@ -23,7 +23,6 @@ type controlPlane struct {
 	storage       *sqlitestore.Storage
 	world         *simulatedWorld
 	orchestrator  *orchestrator.Orchestrator
-	pending       []RunArrival
 	restarts      uint64
 	faultPosition eventlog.GlobalPosition
 }
@@ -71,6 +70,7 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		RunRequirements:             facts.Runs,
 		ArtifactCatalog:             facts.ArtifactCatalog,
 		SeededLocality:              facts.SeededLocality,
+		SeededReplicas:              facts.SeededReplicas,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
 }
@@ -161,25 +161,20 @@ func (runtime *controlPlane) handleRunArrival(ctx context.Context, event WorldEv
 	if err := json.Unmarshal(event.Data, &arrival); err != nil {
 		return fmt.Errorf("decode Run arrival event %q: %w", event.ID, err)
 	}
-	if !runtime.admissible(arrival) {
-		runtime.pending = append(runtime.pending, arrival)
-		return nil
-	}
 	return runtime.admitRun(ctx, arrival)
 }
 
-// admissible answers whether this workload's declared inputs are durable. The
-// question is asked of the workload Mercator would record rather than of the
-// arrival, because admission is a control-plane decision about a declaration and
-// not about anything the world happens to know.
-func (runtime *controlPlane) admissible(arrival RunArrival) bool {
-	workload := scenario.WorkloadForRun(labWorkspace, "run-"+arrival.Name, arrival.Request)
-	return runtime.world.artifactsAreDurable(workload.Spec.Artifacts.Consumes)
-}
-
+// admitRun submits the arrival to Mercator. Every Run a Blueprint declares
+// enters the control plane when it arrives, whatever its inputs are worth:
+// whether it may be placed is Mercator's own decision, made against the object
+// store, and a harness that withheld the Run would be answering that question on
+// Mercator's behalf and hiding the Run from every rule that watches admitted
+// work make progress.
 func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) error {
 	runID := "run-" + arrival.Name
-	runtime.world.prepareRun(runID, arrival)
+	if err := runtime.world.prepareRun(runID, arrival); err != nil {
+		return err
+	}
 	if _, err := runtime.orchestrator.CreateRun(ctx, orchestrator.CreateRunRequest{
 		WorkspaceID:    labWorkspace,
 		RunID:          runID,
@@ -206,34 +201,12 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return err
 		}
-		if err := runtime.admitPendingRuns(ctx); err != nil {
-			return err
-		}
 		return runtime.applyEventFaults(ctx)
 	}
-	_, reconciliationErr := runtime.orchestrator.AdvanceOpenRuns(ctx, labWorkspace)
-	if reconciliationErr != nil {
-		return reconciliationErr
-	}
-	if err := runtime.admitPendingRuns(ctx); err != nil {
+	if _, err := runtime.orchestrator.AdvanceOpenRuns(ctx, labWorkspace); err != nil {
 		return err
 	}
 	return runtime.applyEventFaults(ctx)
-}
-
-func (runtime *controlPlane) admitPendingRuns(ctx context.Context) error {
-	pending := runtime.pending[:0]
-	for _, arrival := range runtime.pending {
-		if !runtime.admissible(arrival) {
-			pending = append(pending, arrival)
-			continue
-		}
-		if err := runtime.admitRun(ctx, arrival); err != nil {
-			return err
-		}
-	}
-	runtime.pending = pending
-	return nil
 }
 
 func (runtime *controlPlane) restart(ctx context.Context) error {
@@ -253,6 +226,7 @@ func (runtime *controlPlane) restartOrchestrator() {
 		runtime.world,
 		orchestrator.WithClock(runtime.world.nowTime),
 		orchestrator.WithImageManifests(runtime.world),
+		orchestrator.WithArtifactCatalog(runtime.world),
 		orchestrator.WithRentalSchedules(runtime.storage.RentalSchedules()),
 		orchestrator.WithRunProjection(runtime.storage.Runs()),
 	)

@@ -322,7 +322,7 @@ type ArtifactReplicaState string
 
 // ArtifactRequirements The immutable Artifact versions this workload reads and publishes. A declared input is a dependency on durable content in the object store rather than on any host holding a copy, so a Run waits for a publication and never for a particular machine.
 type ArtifactRequirements struct {
-	// Consumes Artifact version identities this workload reads. The Run is not admitted until every one of them is durable.
+	// Consumes Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine.
 	Consumes []string `json:"consumes,omitempty"`
 
 	// Produces Artifact version identities this workload publishes. A version is immutable, so a workload may not also consume one it produces.

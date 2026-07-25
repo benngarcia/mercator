@@ -249,9 +249,8 @@ type simulatedWorld struct {
 	observed   map[string]hostState
 	observedAt time.Time
 	// pulls is image content still moving onto a host.
-	pulls     []pendingPull
-	activeRun string
-	runs      map[string]RunArrival
+	pulls []pendingPull
+	runs  map[string]RunArrival
 	// store is the durable authority for Artifacts. Nothing else answers
 	// whether a consumer may run.
 	store *objectStore
@@ -267,6 +266,11 @@ type simulatedWorld struct {
 	// built, keyed by offer. Everything outside it has to be explained by an
 	// accepted image pull recorded against that same host.
 	seededLocality map[string]map[string]bool
+	// seededReplicas is the Artifact copies each host was declared holding
+	// before any Run executed, keyed by offer. It is the Artifact half of the
+	// same question: a copy outside it has to be explained by content the ledger
+	// says landed on that host.
+	seededReplicas map[string]map[string]bool
 	cacheMounts    map[string]map[string]uint64
 
 	executions  map[string]externalExecution
@@ -290,6 +294,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		store:          newObjectStore(labWorkspace, tape.InitialWorld.Artifacts, tape.Start),
 		replicas:       map[string]map[string]domain.ArtifactReplica{},
 		seededLocality: map[string]map[string]bool{},
+		seededReplicas: map[string]map[string]bool{},
 		cacheMounts:    map[string]map[string]uint64{},
 		executions:     map[string]externalExecution{},
 		operations:     map[string]worldOperation{},
@@ -329,6 +334,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		}
 		world.seededLocality[rental.ID] = state.seededDigests()
 		world.truth[rental.ID] = cloneHostState(state)
+		world.seededReplicas[rental.ID] = make(map[string]bool, len(rental.ArtifactReplicas))
 		for _, held := range rental.ArtifactReplicas {
 			replica := world.store.replicaOf(held.Artifact, tape.Start)
 			replica.State = held.State
@@ -336,6 +342,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 				replica.VerifiedAt = time.Time{}
 			}
 			world.replicas[held.Artifact][rental.ID] = replica
+			world.seededReplicas[rental.ID][held.Artifact] = true
 		}
 		world.cacheMounts[rental.ID] = map[string]uint64{}
 		for _, name := range rental.CacheMounts {
@@ -411,42 +418,118 @@ func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec,
 	}
 }
 
-func (world *simulatedWorld) prepareRun(runID string, arrival RunArrival) {
+// prepareRun is the world learning about a Run it will be asked to execute. An
+// arrival naming an image this world does not define is a broken fixture, and it
+// is refused here rather than at the first read that happens to need it.
+func (world *simulatedWorld) prepareRun(runID string, arrival RunArrival) error {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	world.activeRun = runID
-	world.runs[runID] = arrival
-}
-
-// artifactsAreDurable answers whether every Artifact this workload reads is in
-// the object store. It is deliberately blind to what any machine holds: gating
-// on a replica would make a Run admissible because some host happens to have
-// bytes, and inadmissible the moment that host goes away, which is the
-// distributed-filesystem model this architecture refuses.
-func (world *simulatedWorld) artifactsAreDurable(consumes []string) bool {
-	world.mu.Lock()
-	defer world.mu.Unlock()
-	for _, artifactID := range consumes {
-		if !world.store.durable(artifactID) {
-			return false
-		}
+	if _, defined := world.images[arrival.Request.Image]; !defined {
+		return fmt.Errorf("Lab world image %q is not defined", arrival.Request.Image)
 	}
-	return true
+	world.runs[runID] = arrival
+	return nil
 }
 
-// setNow moves virtual time, lets everything the world scheduled for that
-// instant happen, and publishes what the provider can now see. Image content
-// that finished arriving is on its host from then on, whether or not anyone has
-// looked.
+// ArtifactVersion is the object store answering what one version is and whether
+// its bytes are here. It is the only durability answer Mercator gets, and it is
+// deliberately blind to what any machine holds: an answer that counted replicas
+// would make a Run admissible because some host happens to have bytes, and
+// inadmissible the moment that host goes away, which is the
+// distributed-filesystem model this architecture refuses.
+func (world *simulatedWorld) ArtifactVersion(_ context.Context, workspaceID, artifactID string) (domain.ArtifactVersion, error) {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	if workspaceID != labWorkspace {
+		return domain.ArtifactVersion{}, nil
+	}
+	version, _ := world.store.entry(artifactID)
+	return version, nil
+}
+
+// setNow moves virtual time through everything this world scheduled between
+// here and there, settling each deadline at its own instant, and publishes what
+// the provider can see once it arrives. Content lands, containers exit, uploads
+// complete and leases elapse when the world's own model says they do, so how
+// often Mercator looks changes what it has seen and never changes what happened.
 func (world *simulatedWorld) setNow(now time.Time) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	world.now = now.UTC()
+	target := now.UTC()
+	world.settleDeadlines()
+	for {
+		deadline, scheduled := world.nextDeadline(target)
+		if !scheduled {
+			break
+		}
+		world.now = deadline
+		world.settleDeadlines()
+	}
+	world.now = target
+	world.settleDeadlines()
+	world.publishObservations()
+}
+
+// nextDeadline is the earliest moment after now and at or before target at
+// which this world still owes something it started: a container exiting,
+// content landing, an upload reaching the object store, or an idle lease
+// elapsing. Every answer is strictly later than the one before it, which is
+// what makes settling them a walk forward rather than a loop.
+func (world *simulatedWorld) nextDeadline(target time.Time) (time.Time, bool) {
+	var earliest time.Time
+	consider := func(at time.Time) {
+		if !at.After(world.now) || at.After(target) || !earliest.IsZero() && !at.Before(earliest) {
+			return
+		}
+		earliest = at
+	}
+	for _, execution := range world.executions {
+		if !execution.OutputsStored {
+			consider(execution.CompletesAt)
+		}
+	}
+	for _, pull := range world.pulls {
+		consider(pull.completesAt)
+	}
+	for _, fetch := range world.replicating {
+		consider(fetch.completesAt)
+	}
+	for _, upload := range world.publishing {
+		consider(upload.completesAt)
+	}
+	for _, state := range world.truth {
+		consider(state.leaseExpiresAt)
+	}
+	return earliest, !earliest.IsZero()
+}
+
+// settleDeadlines lets everything due at the current instant happen, in the
+// order one thing can cause another: a container exits and writes its output,
+// content lands, an upload becomes durable, and capacity nobody is using
+// expires.
+func (world *simulatedWorld) settleDeadlines() {
+	world.settleExecutions()
 	world.settlePulls()
 	world.settleReplicas()
 	world.settlePublications()
 	world.retireExpiredCapacity()
-	world.publishObservations()
+}
+
+// settleExecutions is every container that has exited leaving behind what it
+// computed. It runs on the world's clock rather than on an observation, because
+// when a process wrote its output is a fact about the process: a control plane
+// that polled less often would otherwise move the moment an Artifact was
+// written, and with it the moment every consumer of that Artifact could start.
+func (world *simulatedWorld) settleExecutions() {
+	for _, launchKey := range slices.Sorted(maps.Keys(world.executions)) {
+		execution := world.executions[launchKey]
+		if execution.OutputsStored || world.now.Before(execution.CompletesAt) {
+			continue
+		}
+		world.storeRunOutputs(execution, execution.CompletesAt)
+		execution.OutputsStored = true
+		world.executions[launchKey] = execution
+	}
 }
 
 // publishObservations is the provider taking a fresh look at its own capacity.
@@ -503,7 +586,7 @@ func (world *simulatedWorld) settleReplicas() {
 			remaining = append(remaining, fetch)
 			continue
 		}
-		world.keepReplica(fetch.artifactID, fetch.offerID, fetch.runID, fetch.launchKey, "object_store")
+		world.keepReplica(fetch.artifactID, fetch.offerID, fetch.runID, fetch.launchKey, "object_store", fetch.completesAt)
 	}
 	world.replicating = remaining
 }
@@ -518,7 +601,7 @@ func (world *simulatedWorld) settlePublications() {
 			remaining = append(remaining, upload)
 			continue
 		}
-		version := world.store.publish(upload.artifactID, upload.runID, world.now)
+		version := world.store.publish(upload.artifactID, upload.runID, upload.completesAt)
 		world.recordEffect(
 			OperationArtifactPublished,
 			"artifact-published/"+upload.artifactID,
@@ -539,10 +622,10 @@ func (world *simulatedWorld) settlePublications() {
 	world.publishing = remaining
 }
 
-// keepReplica records a verified local copy landing on one host, and where it
-// came from. Both origins produce the same fact about the machine, which is why
-// they produce one effect: the ledger says which it was.
-func (world *simulatedWorld) keepReplica(artifactID, offerID, runID, launchKey, source string) {
+// keepReplica records a verified local copy landing on one host, when it landed
+// and where it came from. Both origins produce the same fact about the machine,
+// which is why they produce one effect: the ledger says which it was.
+func (world *simulatedWorld) keepReplica(artifactID, offerID, runID, launchKey, source string, at time.Time) {
 	// Capacity that keeps nothing keeps no Artifact copy either, for the same
 	// two reasons it keeps no image: a provisionable offer is a machine that
 	// does not exist yet, and a one-shot product is gone once its workload
@@ -550,7 +633,7 @@ func (world *simulatedWorld) keepReplica(artifactID, offerID, runID, launchKey, 
 	if world.replicas[artifactID] == nil || !world.truth[offerID].offer.KeepsWhatItRuns() {
 		return
 	}
-	replica := world.store.replicaOf(artifactID, world.now)
+	replica := world.store.replicaOf(artifactID, at)
 	world.replicas[artifactID][offerID] = replica
 	world.recordEffect(
 		OperationArtifactReplicated,
@@ -581,6 +664,7 @@ func (world *simulatedWorld) retireExpiredCapacity() {
 		}
 		delete(world.truth, id)
 		delete(world.seededLocality, id)
+		delete(world.seededReplicas, id)
 		delete(world.cacheMounts, id)
 		for _, hosts := range world.replicas {
 			delete(hosts, id)
@@ -683,6 +767,7 @@ type worldFacts struct {
 	// tells a copy of known content from a copy of a name nobody defined.
 	ArtifactCatalog map[string]domain.ArtifactVersion
 	SeededLocality  map[string]map[string]bool
+	SeededReplicas  map[string]map[string]bool
 }
 
 func (world *simulatedWorld) invariantFacts() worldFacts {
@@ -692,9 +777,13 @@ func (world *simulatedWorld) invariantFacts() worldFacts {
 		Runs:            cloneMap(world.runs),
 		ArtifactCatalog: world.store.versions(),
 		SeededLocality:  make(map[string]map[string]bool, len(world.seededLocality)),
+		SeededReplicas:  make(map[string]map[string]bool, len(world.seededReplicas)),
 	}
 	for offerID, digests := range world.seededLocality {
 		facts.SeededLocality[offerID] = cloneMap(digests)
+	}
+	for offerID, artifacts := range world.seededReplicas {
+		facts.SeededReplicas[offerID] = cloneMap(artifacts)
 	}
 	return facts
 }
@@ -725,23 +814,20 @@ func (world *simulatedWorld) observeOffers() []domain.OfferSnapshot {
 	return world.publishedOffers()
 }
 
+// ListOffers is the provider quoting its own capacity. It is told a workspace
+// and a shape, and never which Run is being placed: a provider has no Run
+// identity to answer with, and a world that resolved one would be reading
+// Mercator's mind about a decision it has not made yet.
 func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
-	if world.activeRun == "" {
-		return nil, fmt.Errorf("Lab world has no active Run for offer observation")
-	}
-	arrival := world.runs[world.activeRun]
-	if _, exists := world.images[arrival.Request.Image]; !exists {
-		return nil, fmt.Errorf("Lab world image %q is not defined", arrival.Request.Image)
-	}
 	offers := world.publishedOffers()
 	world.recordEffect(
 		OperationProviderListOffers,
-		"list-offers/"+world.activeRun,
+		"list-offers/"+request.WorkspaceID,
 		EffectCommandAccepted,
 		EffectResponseDelivered,
-		world.activeRun,
+		request.WorkspaceID,
 		"placement",
 		"",
 		map[string]any{"workspace_id": request.WorkspaceID},
@@ -878,10 +964,6 @@ func (world *simulatedWorld) Observe(_ context.Context, request adapter.ObserveR
 	}
 	if !world.now.Before(execution.CompletesAt) {
 		execution.Phase = adapter.ExternalPhaseSucceeded
-		if !execution.OutputsStored {
-			world.storeRunOutputs(execution)
-			execution.OutputsStored = true
-		}
 		world.executions[request.LaunchKey] = execution
 	}
 	observation := adapter.ExternalObservation{
@@ -1157,15 +1239,16 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 // a local copy like any other, and then uploaded to the object store, where it
 // becomes an Artifact anyone can depend on. The gap between the two is the whole
 // point: a consumer admitted on the first has been admitted on bytes that live
-// on one machine.
-func (world *simulatedWorld) storeRunOutputs(execution externalExecution) {
+// on one machine. Both moments are measured from when the process exited, which
+// is the only clock a workload's output has.
+func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at time.Time) {
 	arrival := world.runs[execution.RunID]
 	for _, artifactID := range arrival.Request.ProducesArtifacts {
-		world.keepReplica(artifactID, execution.OfferID, execution.RunID, execution.LaunchKey, "run_output")
+		world.keepReplica(artifactID, execution.OfferID, execution.RunID, execution.LaunchKey, "run_output", at)
 		world.publishing = append(world.publishing, pendingPublication{
 			artifactID:  artifactID,
 			runID:       execution.RunID,
-			completesAt: world.now.Add(world.store.transferDuration(artifactID)),
+			completesAt: at.Add(world.store.transferDuration(artifactID)),
 		})
 	}
 	for _, mount := range arrival.Request.CacheMounts {

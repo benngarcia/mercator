@@ -45,7 +45,7 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 
 func TestInvariantRegistryReportsAReplayableDuplicateExecutionViolation(t *testing.T) {
 	world, arrival := openWorldFixture(t, "producer")
-	world.prepareRun("run-producer", arrival)
+	prepareRun(t, world, "run-producer", arrival)
 	request := worldLaunchRequest(arrival)
 	if _, err := world.Launch(context.Background(), request); !errors.Is(err, adapter.ErrLaunchIndeterminate) {
 		t.Fatalf("launch: %v", err)

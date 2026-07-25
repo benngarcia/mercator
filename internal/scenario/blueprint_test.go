@@ -4,8 +4,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
+
+// TestLegacyPresenceMigratesAsAnUncheckedCopy pins what the old vocabulary
+// could and could not say. A legacy named cache stated that a machine has the
+// content a key names and nothing more, so the migrated copy is one nobody
+// checked: translating it as verified would assert a hash comparison against a
+// catalog that model had no concept of, and would price at zero a copy a
+// consumer still owes a fetch for.
+func TestLegacyPresenceMigratesAsAnUncheckedCopy(t *testing.T) {
+	blueprint, err := LoadBlueprint("testdata/blueprints/legacy/named-cache.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+
+	replicas := blueprint.World.Rentals[0].ArtifactReplicas
+	if len(replicas) != 1 {
+		t.Fatalf("migrated Artifact copies = %+v, want one", replicas)
+	}
+	if replicas[0].State != domain.ArtifactReplicaUnverified {
+		t.Fatalf("the migrated copy is %q, and the fixture only ever said the machine has it", replicas[0].State)
+	}
+}
 
 func TestLoadBlueprintAdaptsLegacyPlacementFixture(t *testing.T) {
 	blueprint, err := LoadBlueprint("testdata/blueprints/legacy/idle-rental.json")

@@ -65,10 +65,31 @@ immutable and cannot be its own input.
 
 ### Admission blocks on durability
 
-A Run whose declared inputs are not all durable is not admitted. It waits for a
+A Run whose declared inputs are not all durable is not placed. It waits for a
 publication, never for a machine. This is what makes a replica an optimisation:
 losing every copy of an Artifact costs a fetch and never costs availability, and
 gaining a copy on one host makes nothing possible that was not possible before.
+
+The rule is `internal/orchestrator`'s, not a harness's. `Orchestrator.step`
+asks `inputsAreDurable` before every placement, including a replacement
+placement after a failed launch, and answers from `ArtifactCatalog`, the object
+store's own contract: given a workspace and a version ID it says what that
+version is and whether the bytes are there. Nothing in that path may ask a
+machine, which is what keeps the predicate from drifting back into presence.
+
+A Run held by this rule is a Run Mercator has accepted. It is in the projection,
+it has no Booking Decision, and it is subject to every liveness rule that
+watches accepted work make progress, so a publication that never lands is a
+visible failure rather than a Run that quietly never existed. Refusing the
+submission instead would make a declared dependency unexpressible until its
+producer had finished.
+
+A Mercator with no artifact catalog configured refuses a Run that reads an
+Artifact, loudly, at the first advance. It cannot establish that the content
+exists, and placing the workload anyway would hand it a path to bytes nobody
+confirmed are there. Nothing in production configures one yet, because there is
+no object-store client: the Lab's `objectStore` is the only implementation, and
+it is the object store in that world rather than a stand-in for one.
 
 ### The simulated worlds gained an object store
 
@@ -79,6 +100,16 @@ Between them a copy of the content exists on a machine and the Artifact does
 not, and that gap is where a consumer gated on presence and a consumer gated on
 durability behave differently. The Blueprint
 `artifact-must-be-durable-before-a-consumer-runs` is that gap.
+
+Everything the world schedules settles on the world's own clock. `setNow` walks
+forward through the deadlines between here and there, in the order they happen,
+so a container exits, its output is written, the upload lands and an idle lease
+elapses at the instants this world's transfer model says, whatever Mercator was
+doing at the time. Storing a producer's output from an observation instead made
+`ArtifactVersion.PublishedAt` and `ArtifactReplica.VerifiedAt`, which are World
+Truth, move with the polling cadence, and with them every consumer's start.
+How often Mercator looks decides what it has seen and never decides what
+happened.
 
 A copy is written by exactly two things: a Run publishing its output onto the
 host it ran on, and a fetch from a durable publication. Both are recorded in the
@@ -102,8 +133,12 @@ a Run whose declaration the control plane never received. It now reads the
 workload Mercator recorded in its own public event log, and orders each
 consuming launch against the publication effect it depended on.
 
-`safety.locality_provenance` gained the Artifact half of its own rule: capacity
-that keeps nothing holds no Artifact copy either.
+`safety.locality_provenance` gained the Artifact half of its own rule twice
+over: capacity that keeps nothing holds no Artifact copy at all, and every copy
+on every host is either one the World Tape declared there or one the ledger
+records landing there. Durability is not an answer to that second question: it
+says the content exists, never that it exists on this machine, and a host
+holding a copy nothing delivered is exactly what Placement would price warm.
 
 ## Consequences
 
@@ -146,6 +181,18 @@ workspace isolation waits for a Blueprint that can express two workspaces.
 Implementing an artifact controller, a real object-store client, replication
 policy, or prewarming is out of scope here. This ADR establishes the domain
 model, the contract, and the admission rule those land behind.
+
+Keeping the durability gate in the Lab's control-plane harness, which is where
+it was first written, was rejected on review. A rule the harness holds is a rule
+production does not have, and it made the corpus green on a predicate no
+deployment could evaluate. It also hid the Run: an arrival the harness withheld
+was in no projection and no invariant, so a publication that never landed
+produced a fully green execution in which a declared Run silently never ran.
+`capability.ArtifactLocality` was deleted rather than given a third state.
+It carried `Verified bool` beside `State domain.LocalityState`, which is two
+vocabularies for one answer and the exact drift `capability.LocalityState` was
+deleted for one commit earlier. A node reports `domain.ArtifactReplica`, the
+same record the control plane keeps.
 
 ## Non-goals
 

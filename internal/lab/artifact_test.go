@@ -19,8 +19,11 @@ const (
 // TestAConsumerWaitsForDurabilityAndNotForACopy is the durability claim at L1.
 // The producer writes its checkpoint onto the host it ran on, and the object
 // store takes it a transfer later. Between those two moments a copy of the
-// content exists on a machine and the Artifact does not exist, and the consumer
-// is the test of which of the two Mercator was waiting for.
+// content exists on a machine and the Artifact does not exist, and where
+// Mercator placed the consumer is the test of which of the two it was waiting
+// for. The consumer entered the control plane at virtual zero, which is the
+// point: admission is a decision Mercator holds a Run through, not a door the
+// Run was kept outside of.
 func TestAConsumerWaitsForDurabilityAndNotForACopy(t *testing.T) {
 	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
 	defer func() {
@@ -35,29 +38,86 @@ func TestAConsumerWaitsForDurabilityAndNotForACopy(t *testing.T) {
 	writtenAt := effectTime(t, effects, OperationArtifactReplicated, checkpointArtifact)
 	publishedAt := effectTime(t, effects, OperationArtifactPublished, checkpointArtifact)
 	requestedAt := runRequestedAt(t, execution, "run-checkpoint-consumer")
+	placedAt := runPlacedAt(t, execution, "run-checkpoint-consumer")
 
 	// The checkpoint is 10GB and this world moves Artifact content at 500 Mbps,
-	// so the upload takes 160 seconds. Asserting the gap is what keeps the
-	// fixture able to tell a copy from a publication at all: if the two happened
-	// at once there would be no moment at which the two admission rules disagree.
-	if gap := publishedAt.Sub(writtenAt); gap < 160*time.Second {
+	// so the upload takes exactly 160 seconds. Asserting the gap is what keeps
+	// the fixture able to tell a copy from a publication at all: if the two
+	// happened at once there would be no moment at which the two admission rules
+	// disagree.
+	if gap := publishedAt.Sub(writtenAt); gap != 160*time.Second {
 		t.Fatalf(
-			"the checkpoint was written locally at %s and durable %s later, and 10GB does not reach an object store that fast",
+			"the checkpoint was written locally at %s and durable %s later, and 10GB crosses a 500 Mbps link in 160s",
 			writtenAt, gap,
 		)
 	}
-	if requestedAt.Before(publishedAt) {
+	if !requestedAt.Before(writtenAt) {
 		t.Fatalf(
-			"the consumer entered Mercator at %s, and its input became durable at %s",
-			requestedAt, publishedAt,
-		)
-	}
-	if !requestedAt.After(writtenAt) {
-		t.Fatalf(
-			"the consumer entered Mercator at %s, which is when the producer's local copy appeared rather than when the Artifact existed",
+			"the consumer entered Mercator at %s, and this case is about a Run Mercator was holding while its input was produced",
 			requestedAt,
 		)
 	}
+	if placedAt.Before(publishedAt) {
+		t.Fatalf(
+			"Mercator placed the consumer at %s, and its input became durable at %s",
+			placedAt, publishedAt,
+		)
+	}
+}
+
+// TestARunHeldByAdmissionIsVisibleAndBounded is what makes the gate safe to
+// have. A Run waiting on a publication is a Run Mercator has accepted and not
+// placed: it is in the projection, it has no Booking Decision, and if the
+// publication never lands the liveness rule says so. A gate that kept the Run
+// out of Mercator instead would produce a green execution in which a declared
+// arrival silently never ran.
+func TestARunHeldByAdmissionIsVisibleAndBounded(t *testing.T) {
+	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	driveInMinuteSteps(t, execution, 1)
+
+	observation, err := execution.runtime.invariantObservation(
+		context.Background(),
+		execution.config.Tape,
+		execution.transitions,
+	)
+	if err != nil {
+		t.Fatalf("observe the control plane: %v", err)
+	}
+	held := runRecord(t, observation, "run-checkpoint-consumer")
+	if held.Phase != "requested" {
+		t.Fatalf("the Run waiting on a publication is %q, and Mercator has accepted it and not placed it", held.Phase)
+	}
+	if _, err := execution.runtime.orchestrator.GetBookingDecision(
+		context.Background(),
+		labWorkspace,
+		"run-checkpoint-consumer",
+	); err == nil {
+		t.Fatal("Mercator placed a Run whose input is not durable")
+	}
+
+	// The same Run a day later, with the publication still missing, is the
+	// failure a withheld arrival could never produce.
+	observation.Now = observation.StartedAt.Add(25 * time.Hour)
+	if err := admittedRunProgress(observation); err == nil {
+		t.Fatal("a Run held by admission for a day past its bound was reported as progressing")
+	}
+}
+
+func runRecord(t *testing.T, observation InvariantObservation, runID string) domain.RunRecord {
+	t.Helper()
+	for _, run := range observation.Runs {
+		if run.ID == runID {
+			return run
+		}
+	}
+	t.Fatalf("Run %q is in none of Mercator's records: %+v", runID, observation.Runs)
+	return domain.RunRecord{}
 }
 
 // TestAConsumerRunsWhenTheOnlyCopyIsGone is the other half. The Rental holding
@@ -162,17 +222,64 @@ func TestARunsRecordedWorkloadCarriesItsArtifacts(t *testing.T) {
 	}
 }
 
-// driveInMinuteSteps polls at the cadence a control plane would. The step has to
-// be shorter than the transfers this fixture is about, or the interval between
-// observations would be what separates a local write from a publication and the
-// world's own transfer model would decide nothing.
+// driveInMinuteSteps polls at the cadence a control plane would.
 func driveInMinuteSteps(t *testing.T, execution *Execution, steps int) {
 	t.Helper()
+	driveInSteps(t, execution, time.Minute, steps)
+}
+
+func driveInSteps(t *testing.T, execution *Execution, step time.Duration, steps int) {
+	t.Helper()
 	for range steps {
-		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+		if _, err := execution.Drive(context.Background(), Advance(step)); err != nil {
 			t.Fatalf("drive the execution: %v", err)
 		}
 	}
+}
+
+// TestWhenAnArtifactBecameDurableDoesNotDependOnPolling is the world clock
+// claim. Two executions of one Blueprint are driven at cadences ten minutes
+// apart, and the two facts an Artifact's identity rests on, when the producer
+// wrote it and when the object store had it, are the same instants in both.
+// Mercator learns those facts later in the slow execution, which is what
+// polling less often is allowed to change; what a machine did and when is not.
+func TestWhenAnArtifactBecameDurableDoesNotDependOnPolling(t *testing.T) {
+	fast := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
+	defer func() {
+		if err := fast.Close(); err != nil {
+			t.Fatalf("close the fast execution: %v", err)
+		}
+	}()
+	slow := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
+	defer func() {
+		if err := slow.Close(); err != nil {
+			t.Fatalf("close the slow execution: %v", err)
+		}
+	}()
+
+	driveInSteps(t, fast, time.Minute, 20)
+	driveInSteps(t, slow, 10*time.Minute, 2)
+
+	fastPublished := worldFactsOf(fast).ArtifactCatalog[checkpointArtifact].PublishedAt
+	slowPublished := worldFactsOf(slow).ArtifactCatalog[checkpointArtifact].PublishedAt
+	if fastPublished.IsZero() || !fastPublished.Equal(slowPublished) {
+		t.Fatalf(
+			"the checkpoint became durable at %s when Mercator looked every minute and at %s when it looked every ten",
+			fastPublished, slowPublished,
+		)
+	}
+	fastWritten := replicaOf(t, fast, checkpointArtifact, "producer-rental").VerifiedAt
+	slowWritten := replicaOf(t, slow, checkpointArtifact, "producer-rental").VerifiedAt
+	if fastWritten.IsZero() || !fastWritten.Equal(slowWritten) {
+		t.Fatalf(
+			"the producer's own copy landed at %s under one cadence and %s under the other",
+			fastWritten, slowWritten,
+		)
+	}
+}
+
+func worldFactsOf(execution *Execution) worldFacts {
+	return execution.runtime.world.invariantFacts()
 }
 
 func replicaOf(t *testing.T, execution *Execution, artifactID, offerID string) domain.ArtifactReplica {
@@ -201,22 +308,34 @@ func recordedWorkloadsOf(t *testing.T, execution *Execution) map[string]domain.W
 
 func runRequestedAt(t *testing.T, execution *Execution, runID string) time.Time {
 	t.Helper()
+	return runEventTime(t, execution, orchestrator.EventRunRequested, runID)
+}
+
+// runPlacedAt is when Mercator decided where this Run would go, which is the
+// moment admission let it through.
+func runPlacedAt(t *testing.T, execution *Execution, runID string) time.Time {
+	t.Helper()
+	return runEventTime(t, execution, orchestrator.EventBookingDecided, runID)
+}
+
+func runEventTime(t *testing.T, execution *Execution, eventType, runID string) time.Time {
+	t.Helper()
 	stored, err := execution.runtime.mercatorEvents(context.Background())
 	if err != nil {
 		t.Fatalf("read Mercator events: %v", err)
 	}
 	for _, event := range stored {
 		cloud := event.CloudEvent()
-		if cloud.Type != orchestrator.EventRunRequested || cloud.Subject != "runs/"+runID {
+		if cloud.Type != eventType || cloud.Subject != "runs/"+runID {
 			continue
 		}
 		at, err := time.Parse(time.RFC3339Nano, cloud.Time)
 		if err != nil {
-			t.Fatalf("parse %s request time: %v", runID, err)
+			t.Fatalf("parse %s %s time: %v", runID, eventType, err)
 		}
 		return at
 	}
-	t.Fatalf("Run %q never entered Mercator", runID)
+	t.Fatalf("Run %q never recorded %s", runID, eventType)
 	return time.Time{}
 }
 

@@ -3383,7 +3383,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Artifact version identities this workload reads. The Run is not admitted until every one of them is durable."
+            "description": "Artifact version identities this workload reads. The Run is accepted at once and is not placed until every one of them is durable in the object store, so it waits for a publication and never for a particular machine."
           },
           "produces": {
             "type": "array",
