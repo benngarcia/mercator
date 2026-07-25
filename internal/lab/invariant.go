@@ -433,7 +433,16 @@ func artifactReplicaVerified(observation InvariantObservation) error {
 		if !known {
 			return fmt.Errorf("offer %q holds a copy of Artifact %q, which the catalog does not know", replica.OfferID, replica.ArtifactID)
 		}
-		if replica.ContentDigest != version.ContentDigest {
+		// A copy this world delivered carries the catalog's digest, because that
+		// is what it copied. A copy the World Tape seeded carries whatever the
+		// machine claims, which is a fact about that machine's own bookkeeping:
+		// an operator who restored an older snapshot leaves a host reporting a
+		// checked copy of content this version does not have. Forbidding that
+		// state outright would make the digest half of ArtifactInventory.Holds
+		// unreachable, which is to say it would make the mistake it exists to
+		// catch impossible to write down.
+		if !observation.SeededReplicas[replica.OfferID][replica.ArtifactID] &&
+			replica.ContentDigest != version.ContentDigest {
 			return fmt.Errorf(
 				"offer %q holds Artifact %q claiming digest %s, and the catalog says %s",
 				replica.OfferID, replica.ArtifactID, replica.ContentDigest, version.ContentDigest,
@@ -599,12 +608,21 @@ var localityPaths = map[string]bool{
 // rejection citing content is a preference that grew into a constraint, and the
 // capacity it removes is capacity the Run cannot then have at any price.
 //
-// And a host that could not say what it holds is priced rather than refused.
-// Silence is charged the whole content, which is what stops it outranking a
-// machine provably ready; letting that price reach a hard bound would strike out
-// the machine that may already be holding every byte, which is the exact failure
-// this rule exists to prevent. A measured start latency still binds, because
-// that is a measurement about this offer whatever anyone could enumerate.
+// And a start bound strikes out only lateness somebody established. Silence is
+// charged the whole content, which is what stops it outranking a machine
+// provably ready; letting that price reach a hard bound would strike out the
+// machine that may already be holding every byte, which is the exact failure
+// this rule exists to prevent. So a LATENCY_SLO_EXCEEDED rejection must be
+// justified by the candidate's own established start prediction: queue and
+// provisioning, which the offer stated, plus content some inventory answered
+// about. A measured start latency is established too, because that is a
+// measurement about this offer whatever anyone could enumerate.
+//
+// Stating it against the established estimate rather than against "was anything
+// unknown" is what keeps the rule from buying silence an exemption. A machine
+// fifteen minutes deep in its own stated queue is late whatever it could say
+// about its disk, and a Run that refuses to wait three minutes gets to strike
+// it out.
 func localityIsNeverInfeasibility(observation InvariantObservation) error {
 	decisions, err := recordedDecisions(observation)
 	if err != nil {
@@ -612,7 +630,7 @@ func localityIsNeverInfeasibility(observation InvariantObservation) error {
 	}
 	for _, decision := range decisions {
 		for _, candidate := range decision.Candidates {
-			if err := candidateWasPricedNotRefused(decision.RunID, candidate); err != nil {
+			if err := candidateWasPricedNotRefused(decision, candidate); err != nil {
 				return err
 			}
 		}
@@ -620,35 +638,28 @@ func localityIsNeverInfeasibility(observation InvariantObservation) error {
 	return nil
 }
 
-func candidateWasPricedNotRefused(runID string, candidate domain.CandidateDecision) error {
+func candidateWasPricedNotRefused(decision domain.BookingDecision, candidate domain.CandidateDecision) error {
 	for _, rejection := range candidate.Rejections {
 		if localityRefusals[rejection.Code] || localityPaths[rejection.Path] {
 			return fmt.Errorf(
 				"Run %q: candidate %q was refused with %s at %q, and what a machine holds is a price rather than a permission",
-				runID, candidate.OfferSnapshotID, rejection.Code, rejection.Path,
+				decision.RunID, candidate.OfferSnapshotID, rejection.Code, rejection.Path,
 			)
 		}
 		if rejection.Code != "LATENCY_SLO_EXCEEDED" ||
-			!candidateLocalityUnknown(candidate) ||
-			candidate.Estimates.StartSeconds.SampleCount > 0 {
+			candidate.Estimates.EstablishedStartSeconds.P90 > decision.Policy.MaxP90StartSeconds {
 			continue
 		}
 		return fmt.Errorf(
-			"Run %q: candidate %q could not say what it holds and was refused for a start latency nothing measured",
-			runID, candidate.OfferSnapshotID,
+			"Run %q: candidate %q was refused for a p90 start of %.2fs against a bound of %.2fs, and only %.2fs of that was established",
+			decision.RunID,
+			candidate.OfferSnapshotID,
+			candidate.Estimates.StartSeconds.P90,
+			decision.Policy.MaxP90StartSeconds,
+			candidate.Estimates.EstablishedStartSeconds.P90,
 		)
 	}
 	return nil
-}
-
-// candidateLocalityUnknown reports whether any part of what this candidate was
-// found holding is a silence. One unanswerable input is enough: the seconds
-// under it are what the content would cost from nowhere.
-func candidateLocalityUnknown(candidate domain.CandidateDecision) bool {
-	return candidate.ImageLocality == domain.LocalityUnknown ||
-		slices.ContainsFunc(candidate.ArtifactEvidence, func(found domain.ArtifactEvidence) bool {
-			return found.Locality == domain.LocalityUnknown
-		})
 }
 
 // localityProvenance is the standing guard on how a host becomes warm. Content
@@ -670,7 +681,7 @@ func localityProvenance(observation InvariantObservation) error {
 		return err
 	}
 	for _, offer := range observation.World.Offers {
-		if err := onlyKeptCapacityHoldsWhatItRan(offer, observation.SeededLocality[offer.ID]); err != nil {
+		if err := onlyKeptCapacityHoldsWhatItRan(offer, observation.SeededLocality[offer.ID], observation.SeededReplicas[offer.ID]); err != nil {
 			return err
 		}
 		if err := heldContentIsExplained(offer, observation.SeededLocality[offer.ID], retained[offer.ID]); err != nil {
@@ -687,7 +698,7 @@ func localityProvenance(observation InvariantObservation) error {
 // the reason the offer cannot have accumulated content, because a provisionable
 // offer and a one-shot product fail this for different reasons: one is a
 // machine that does not exist yet, the other exists only for its workload.
-func onlyKeptCapacityHoldsWhatItRan(offer domain.OfferSnapshot, seeded map[string]bool) error {
+func onlyKeptCapacityHoldsWhatItRan(offer domain.OfferSnapshot, seeded, seededCopies map[string]bool) error {
 	if offer.KeepsWhatItRuns() {
 		return nil
 	}
@@ -707,14 +718,19 @@ func onlyKeptCapacityHoldsWhatItRan(offer domain.OfferSnapshot, seeded map[strin
 	}
 	// Artifact copies obey the same rule as image content, and for the same
 	// reason: a copy is local, and this machine is not somewhere local content
-	// can outlive the workload that put it there. No World Tape seed is
-	// admitted, because only a Rental can be declared holding one.
-	if len(offer.Artifacts.Replicas) > 0 {
+	// can outlive the workload that put it there. What the World Tape seeded is
+	// admitted exactly as it is for images, because a machine Mercator borrows a
+	// slot on may well already be sitting on the dataset; what it may not do is
+	// accumulate a copy from something Mercator ran there.
+	for _, replica := range offer.Artifacts.Replicas {
+		if seededCopies[replica.ArtifactID] {
+			continue
+		}
 		return fmt.Errorf(
-			"offer %q %s, and holds a copy of Artifact %q",
+			"offer %q %s, and holds a copy of Artifact %q beyond what the World Tape seeded",
 			offer.ID,
 			reason,
-			offer.Artifacts.Replicas[0].ArtifactID,
+			replica.ArtifactID,
 		)
 	}
 	return nil

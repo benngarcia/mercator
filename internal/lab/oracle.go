@@ -26,30 +26,25 @@ func SolveSmallWorld(input scheduler.SchedulingInput) (ReferenceDecision, error)
 	if err := validateSmallWorld(input); err != nil {
 		return ReferenceDecision{}, err
 	}
-	type scoredOffer struct {
-		id    string
-		score float64
-	}
-	var feasible []scoredOffer
+	var feasible []domain.CandidateDecision
 	for _, offer := range input.Offers {
 		if !referenceFeasible(input, offer) {
 			continue
 		}
-		feasible = append(feasible, scoredOffer{id: offer.ID, score: referenceScore(input, offer)})
+		feasible = append(feasible, referenceCandidate(input, offer))
 	}
-	sort.Slice(feasible, func(i, j int) bool {
-		if feasible[i].score == feasible[j].score {
-			return feasible[i].id < feasible[j].id
-		}
-		return feasible[i].score < feasible[j].score
-	})
+	// The Run's objective orders the candidates here exactly as it does in
+	// production, because which quantity a Run asked for the least of is a
+	// statement about the placement and not about either model's arithmetic.
+	policy := input.Workload.Spec.Placement
+	sort.Slice(feasible, func(i, j int) bool { return policy.Prefers(feasible[i], feasible[j]) })
 	decision := ReferenceDecision{FeasibleOfferIDs: make([]string, len(feasible))}
 	for index, candidate := range feasible {
-		decision.FeasibleOfferIDs[index] = candidate.id
+		decision.FeasibleOfferIDs[index] = candidate.OfferSnapshotID
 	}
 	sort.Strings(decision.FeasibleOfferIDs)
 	if len(feasible) > 0 {
-		decision.SelectedOfferID = feasible[0].id
+		decision.SelectedOfferID = feasible[0].OfferSnapshotID
 	}
 	return decision, nil
 }
@@ -87,17 +82,17 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 		offer.Resources.EphemeralDiskBytes < required.EphemeralDisk.MinBytes {
 		return false
 	}
-	estimates, localityUnknown := referenceEstimates(input, offer)
+	estimates := referenceEstimates(input, offer)
 	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil && estimates.CostUSD.Expected > *maximum {
 		return false
 	}
-	// Only a candidate KNOWN to start late fails the latency SLO. A start
-	// latency over a locality nobody could state is a guess, and the goal is
-	// explicit that silence is uncertainty to price and never a hard
-	// constraint. The oracle refuses measured latency overrides, so an
-	// unknown locality here is the only estimate there could be.
+	// Only a candidate KNOWN to start late fails the latency SLO, so the bound
+	// is asked of the established part of the prediction. Seconds priced out of
+	// a silence are a guess, and the goal is explicit that silence is
+	// uncertainty to price and never a hard constraint; seconds of queue and
+	// provisioning are facts the offer stated, and those still bind.
 	if maximum := input.Workload.Spec.Placement.MaxP90StartSeconds; maximum > 0 &&
-		!localityUnknown && estimates.StartSeconds.P90 > maximum {
+		estimates.EstablishedStartSeconds.P90 > maximum {
 		return false
 	}
 	return true
@@ -119,11 +114,23 @@ func referenceCapacityAvailable(input scheduler.SchedulingInput, offer domain.Of
 		len(schedule.Bookings) < domain.RentalScheduleQueueCapacity+1
 }
 
+// referenceCandidate is the reference model's own candidate record: enough of
+// one for the Run's objective to rank it, and nothing else. Ranking is stated
+// against the same fields the production decision carries, so the two models
+// compare the same quantities or disagree visibly.
+func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
+	return domain.CandidateDecision{
+		OfferSnapshotID: offer.ID,
+		Estimates:       referenceEstimates(input, offer),
+		ScoreUSD:        referenceScore(input, offer),
+	}
+}
+
 func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot) float64 {
-	estimates, _ := referenceEstimates(input, offer)
+	estimates := referenceEstimates(input, offer)
 	weights := input.Weights
 	if weights.StartLatencyUSDPerSecond == 0 && input.Workload.Spec.Placement.Objective == domain.ObjectiveBalanced {
-		weights.StartLatencyUSDPerSecond = 0.0005
+		weights.StartLatencyUSDPerSecond = domain.BalancedWaitingUSDPerSecond
 	}
 	score := estimates.CostUSD.Expected +
 		weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
@@ -134,12 +141,12 @@ func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot)
 	return math.Round(score*1_000_000) / 1_000_000
 }
 
-// referenceEstimates is the reference model's own account of a candidate, and
-// whether any part of it rests on a silence. It answers the second question as
-// one boolean rather than as a state per kind of content, because that is all
-// any caller here asks: an estimate over content nobody could describe is a
-// price and never a measurement, whichever content it was.
-func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) (domain.CandidateEstimates, bool) {
+// referenceEstimates is the reference model's own account of a candidate,
+// including how much of its start prediction anybody established. It derives
+// that the same way the scheduler does and from the same two published facts,
+// which is what makes disagreeing about it a disagreement about the models
+// rather than about which silences each one happened to notice.
+func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
 	queue := 0.0
 	if schedule, exists := input.Schedules[offer.RentalID]; exists {
 		queue = schedule.ExpectedWaitSeconds()
@@ -155,6 +162,15 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
 	fetch := referenceObjectStoreSeconds(fetchBytes)
 	start := queue + provision + pull + fetch + 1
+	established := queue + provision + 1
+	if locality != domain.LocalityUnknown {
+		established += pull
+	}
+	for _, found := range evidence {
+		if found.Locality != domain.LocalityUnknown {
+			established += referenceObjectStoreSeconds(found.FetchBytes)
+		}
+	}
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
 		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
@@ -164,15 +180,14 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	}
 	billed := math.Max(runtime, float64(offer.Pricing.MinimumChargeSeconds))
 	return domain.CandidateEstimates{
-		QueueSeconds:     domain.Estimate{Expected: queue},
-		ProvisionSeconds: domain.Estimate{Expected: provision},
-		PullSeconds:      domain.Estimate{Expected: pull},
-		ArtifactSeconds:  domain.Estimate{Expected: fetch},
-		StartSeconds:     domain.Estimate{Expected: start, P90: start * 1.25},
-		CostUSD:          domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
-	}, locality == domain.LocalityUnknown || slices.ContainsFunc(evidence, func(found domain.ArtifactEvidence) bool {
-		return found.Locality == domain.LocalityUnknown
-	})
+		QueueSeconds:            domain.Estimate{Expected: queue},
+		ProvisionSeconds:        domain.Estimate{Expected: provision},
+		PullSeconds:             domain.Estimate{Expected: pull},
+		ArtifactSeconds:         domain.Estimate{Expected: fetch},
+		StartSeconds:            domain.Estimate{Expected: start, P90: start * 1.25},
+		EstablishedStartSeconds: domain.Estimate{Expected: established, P90: established * 1.25},
+		CostUSD:                 domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
+	}
 }
 
 // referenceObjectStoreSeconds is the reference model's own account of reading a

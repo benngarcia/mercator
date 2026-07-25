@@ -512,11 +512,11 @@ complete because it works against a live provider.
     immutable object, so a host has bytes that were checked against it or owes all
     of them.
   - The answer reaches the score through `CandidateEstimates.ArtifactSeconds` and
-    the start estimate it feeds, and through no weighted term. `SchedulingInput.
-    Weights` is never populated in production beyond the balanced objective's
-    0.0005 start-latency default, so a locality term routed through `ScoreWeights`
-    would be multiplied by zero. Fixing that at the source is phase 4 and is
-    deliberately not smuggled in here.
+    the start estimate it feeds. This entry claimed it reached the score through
+    no weighted term, which was the inverse of what the code did and is corrected
+    in the entry below: the start estimate's only path into `ScoreUSD` was
+    `Weights.StartLatencyUSDPerSecond`, so the whole capability was inert for
+    three of the four objectives.
   - `CandidateDecision.ArtifactEvidence` is what each candidate was found holding,
     one entry per declared input, stated beside `ImageLocality` rather than folded
     into it. They are answers about different content: an image is what the
@@ -557,6 +557,77 @@ complete because it works against a live provider.
     not otherwise state the case the goal is most explicit about. And the runner's
     raw-JSON reader is deleted: the domain type carries the field now, so reading
     around it would be the second vocabulary this plan keeps deleting.
+- [x] 2026-07-25: Answer the review of the Artifact-locality commit. Two reviews
+  falsified six things, and five of them were one shape: a rule the corpus had no
+  way to construct a world for, so deleting the rule changed nothing.
+  - The objective decides which candidate wins. `cheapest`, `fastest_start`, and
+    `fastest_completion` are public API values, and until now they were words
+    Mercator accepted and never read: every candidate was ranked on one blended
+    dollar score whose only time term was `Weights.StartLatencyUSDPerSecond`,
+    which nothing populates in production outside the balanced objective's 0.0005
+    default. So the whole Artifact-locality slice was inert for three of the four
+    objectives, and a Run that asked for the fastest start was placed on whichever
+    machine was a fraction of a cent cheaper, or on whichever offer ID sorted
+    first when prices tied. `PlacementPolicy.Prefers` is the ranking, stated in
+    the domain beside the objective it reads: least dollars then earliest ready
+    for cheapest and balanced, earliest ready then least dollars for the two
+    speed objectives. It is a ranking rather than an exchange rate on purpose.
+    Turning a second of waiting into dollars needs a number nobody measured, and
+    inventing one per objective would be the unmeasured constant this plan keeps
+    deleting; which quantity a Run asked for the least of orders candidates on its
+    own. `SelectionReason` names the rule so the record says what it ranked on,
+    because a Run that asked for the earliest start and got the costliest machine
+    is explained by its objective and not by LOWEST_SCORE.
+  - `ScoreWeights` stays as the seam calibration fills in phase 4, documented as
+    something nothing populates. The 0.0005 literal it duplicated in the scheduler
+    and the oracle is now `domain.BalancedWaitingUSDPerSecond`, said once.
+  - A start bound strikes out only lateness somebody established. Widening the
+    unknown-locality escape hatch to Artifact evidence disabled
+    `MaxP90StartSeconds` outright for any Run reading an Artifact, including for
+    queue and provisioning, which the offer states as facts: a Run refusing to
+    wait three minutes could be placed on a machine fifteen minutes deep in its
+    own queue because one input was unreadable.
+    `CandidateEstimates.EstablishedStartSeconds` carries the part of the
+    prediction that rests on stated facts, the bound is asked of that, and the
+    silence is still priced into the full prediction. A measured latency is
+    established too, so `startEstimate` returns the sample for both halves and the
+    `SampleCount` special case is gone.
+  - `safety.locality_is_never_infeasibility` is restated against that estimate and
+    is no longer vacuous. Its clauses fired only on decisions hand-built in a unit
+    test, because no Blueprint in the corpus combined `max_start_latency` with
+    `consumes_artifacts`, so reverting the scheduler to let silence become
+    infeasibility left every Lab execution green. The rule now reads the refusal
+    against the bound the decision itself recorded, and
+    `a-late-start-must-be-a-fact` is the conformance Blueprint it is a law about.
+  - `node.Registry.offer` projects the copies the node reports.
+    `capability.NodeFacts.Artifacts` has carried them since Artifacts existed and
+    the offer projection dropped them, so on the only reusable lane there is,
+    every candidate was recorded holding nothing anybody could describe and
+    charged the whole read for content already on its disk. `Known` follows the
+    same rule the image inventory follows: an enrolled node answered, so an empty
+    list from one is the truthful claim that it holds no copies.
+  - A fixture can put a copy on capacity Mercator does not control.
+    `HostSpec.artifact_replicas` is the Artifact half of `cached_images`, and
+    without it the rule that borrowed capacity publishes no Artifact inventory was
+    a rule about a world no fixture could build: silence and absence were the same
+    state every time, and deleting the guard in either simulator changed nothing.
+    `onlyKeptCapacityHoldsWhatItRan` now admits a seeded copy on such a machine
+    exactly as it admits seeded image content, and forbids one it accumulated.
+  - A fixture can state a copy that claims the wrong content.
+    `ArtifactReplicaSpec.content_digest` is the machine an operator restored an
+    older snapshot onto: a checked copy filed under this version's name whose
+    bytes are the previous version's. The digest half of `ArtifactInventory.Holds`
+    was unreachable without it, and `safety.artifact_replica_verified` was part of
+    why: it forbade the state outright. Its digest clause now applies to copies
+    this world delivered, which do carry the catalog digest, and not to what the
+    World Tape seeded, which is a fact about that machine's own bookkeeping and
+    exactly what the subtraction exists to catch.
+  - Judgment calls. `fastest_completion` ranks on start plus the runtime the Run
+    expects, which is the same ordering `fastest_start` produces until something
+    predicts per-candidate throughput. It is written as the sum it means rather
+    than as the shortcut it currently equals. `established_start_seconds` is a
+    required field on the public estimate set, following `artifact_seconds` from
+    the commit before it rather than inventing a second convention.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -578,8 +649,8 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it; a production object-store client, mutable caches, prefetch, and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | not started |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; a production object-store client, mutable caches, prefetch, and producer affinity remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -684,22 +755,47 @@ Phase 3 added:
   why the rule is not simply "the version is durable": a copy was fetched from a
   publication, or it is the output the producing Run wrote on its way to
   becoming one.
-- `dataset-gravity-beats-image-cache` (green): three machines at one price for
+- `dataset-gravity-beats-image-cache` (green): four machines at one price for
   one Run that reads a 40GB dataset, so nothing but what each holds can decide
   the placement. The Rental holding a checked copy owes 40MB of image and beats
   the Rental holding the whole image and no copy, because 640 seconds of object
-  store dwarfs 0.64 seconds of registry. The third is a machine Mercator has not
-  enrolled: it may be sitting on both and nothing there can be asked, so it
+  store dwarfs 0.64 seconds of registry. The third Rental reports a checked copy
+  under this version's name whose bytes are another version's, which is the
+  machine an operator restored an older snapshot onto, and it owes the whole read:
+  a copy of other content is worth exactly what no copy is worth. The fourth is a
+  machine Mercator has not enrolled, and World Truth says it is sitting on the
+  image and on a checked copy of the dataset. Nothing there can be asked, so it
   records `unknown` and is priced the whole read rather than the zero its silence
-  used to buy. Every rate is equal on purpose.
+  used to buy, and never the zero its copy would have bought if an offer could
+  carry it. Every rate is equal on purpose.
+- `the-objective-decides-what-wins` (green): one world, two Runs, and the only
+  difference between them is the objective each stated. The warm Rental is a
+  second from ready at 4 USD an hour, the cold one nearly sixteen minutes at 2.
+  A Run that asked for the cheapest capacity takes the cold machine; a Run that
+  asked for the fastest start takes the warm one, pays double, and records
+  `EARLIEST_START` rather than claiming it compared prices. Ranking on cost alone
+  fails it with the hurried Run placed on the cold machine.
 - `dataset-gravity-worth-waiting` (target, missing `rental_schedule`): the same
   gravity behind a running Booking. It now states one missing capability rather
   than three, because Artifacts and their per-candidate evidence exist.
+- `a-late-start-must-be-a-fact` (conformance): one Run refusing to wait three
+  minutes and reading a 40GB dataset, against a Rental a second from ready, a
+  machine that does not exist yet stating ten minutes of provisioning, and a
+  borrowed host nothing can be asked about. The provisioning is a fact about that
+  offer, so the bound strikes it out; the borrowed host's twenty minutes is what
+  its content would cost from nowhere, so the same bound leaves it alone. It is
+  the only Blueprint that combines a start bound with an Artifact the Run reads,
+  which is what gives `safety.locality_is_never_infeasibility` a recorded decision
+  to be a law about.
 - `safety.locality_is_never_infeasibility` (Lab invariant): no candidate in any
-  recorded Booking Decision is refused for what it holds, and a host that could
-  not say what it holds is never refused on a start latency nothing measured. It
-  is the one rule in this registry stated entirely against Mercator's own
-  decisions, because a candidate Mercator struck out leaves a trace nowhere else.
+  recorded Booking Decision is refused for what it holds, and a candidate refused
+  for a late start has to have established that lateness against the bound the
+  decision recorded. It is the one rule in this registry stated entirely against
+  Mercator's own decisions, because a candidate Mercator struck out leaves a trace
+  nowhere else. Stating it against the established estimate rather than against
+  "was anything unknown" is what keeps it from buying silence an exemption from a
+  bound: a machine deep in its own stated queue is late whatever it could say
+  about its disk.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, every Artifact copy a host holds is either seeded or
@@ -709,8 +805,8 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 21 regression Blueprints: 13 green and 8 target, beside one demo,
-one minimized case, and four conformance Blueprints.
+The corpus is 22 regression Blueprints: 14 green and 8 target, beside one demo,
+one minimized case, and five conformance Blueprints.
 
 ## What phase 2 does not yet do
 
@@ -828,7 +924,10 @@ The demo Blueprint's normalized bundle hash moved from
 `sha256:d8766ff9fe41cb65c27f2ec502256dc70dd6ba2b663504e936491b6985d99ee4` to
 `sha256:0b3e8a2e6388ed362e473ab3610f6fbedc12b4a44ab7ba590fcea51b320078f4`, which
 is the two new decision fields entering the record, and checkpoint 14 still
-reconstructs the bundle to the same hash byte for byte.
+reconstructs the bundle to the same hash byte for byte. Answering the review of
+that commit moved it again, to
+`sha256:bf75c96873f2bd51363f83357c270f5d4d6b8724eaeb174be3631bc62ddc6598`, which
+is `established_start_seconds` entering the record.
 
 Three limits are worth stating rather than hiding.
 
@@ -858,6 +957,68 @@ go test -race ./internal/domain ./internal/scheduler ./internal/lab \
   ./internal/httpapi ./cmd/mercator -count=1
 cd web/app && bun run typecheck && bun run test && bun run build
 ```
+
+### Phase 3 the objective, the start bound, and the seams review found
+
+On 2026-07-25, the review of the commit above was answered. Each claim is held by
+a deliberate break that fails it:
+
+- ranking candidates on cost alone, which is what the tree shipped for every
+  objective but balanced, fails `the-objective-decides-what-wins` with `run
+  "in-a-hurry": expected "rental-warm" to win, but the decision placed on
+  "rental-cold"`, and fails
+  `TestTheObjectiveDecidesWhichCandidateWins/fastest_start` and
+  `/fastest_completion`. That is the state the capability shipped in: three of the
+  four public objectives were words nothing read;
+- deleting the second ranking term, so equal prices fall back to the offer ID,
+  fails `TestEqualPricesAreDecidedByWhatEachCandidateHolds`. Two machines at one
+  price is the case Artifact locality exists to decide, and it is the shape of
+  every fixture in this slice;
+- asking the start bound of the whole prediction rather than of
+  `EstablishedStartSeconds` fails `a-late-start-must-be-a-fact` through the
+  invariant rather than through an assertion: `Lab invariant
+  "safety.locality_is_never_infeasibility" failed: Run "run-impatient": candidate
+  "silent-host" was refused for a p90 start of 1162.67s against a bound of
+  180.00s, and only 1.25s of that was established`. Before that Blueprint existed,
+  the same break left every Lab execution green;
+- waiving the bound whenever any locality was unknown, which is what the reviewed
+  commit did, fails the same Blueprint from the other side with `ten minutes of
+  stated provisioning did not bust a three-minute bound: []`;
+- dropping `Artifacts` from `node.Registry.offer` fails every case of
+  `TestANodeOffersTheCopiesItHolds` with `an enrolled node answered, so its
+  Artifact inventory is never a silence`. That is the state the tree shipped in:
+  the node reported its copies and the offer discarded them;
+- deleting the digest clause from `ArtifactInventory.Holds` fails
+  `dataset-gravity-beats-image-cache` with `expected "rental-dataset" to win, but
+  the decision placed on "rental-restored-snapshot"` and `Artifact
+  "artifact:imagenet:v2.41": expected "cold", recorded "hot"`, and fails
+  `TestANodeOffersTheCopiesItHolds/a_checked_copy_of_other_content_under_this_name
+  _is_worth_nothing`. Nothing in the tree could reach that clause before, because
+  no fixture could state a copy whose claim disagrees with the catalog;
+- deleting the Artifact guard from `fake.Machine.publishedArtifacts` fails
+  `dataset-gravity-beats-image-cache` with `candidate "borrowed-host":
+  artifact_seconds: want at least 639, got 0`, and deleting the matching line from
+  `lab.simulatedWorld.publishedOffers` fails
+  `TestWhatABorrowedMachineHoldsIsNotSomethingMercatorKnows` with `the decision
+  recorded [{... Locality:hot FetchBytes:0}] for a copy nothing of Mercator's can
+  be asked about`. Both guards were unfalsifiable until a fixture could put a copy
+  on capacity Mercator does not control.
+
+Two limits are worth stating rather than hiding.
+
+`ScoreWeights` still has four terms nothing populates, and the objective is what
+decides a placement instead. That is deliberate: a reliability or uncertainty
+penalty in dollars needs an exchange rate nobody has measured, and the terms are
+kept as the seam calibration fills rather than deleted, because phase 4 is where a
+measurement replaces the assumption. Nothing in the tree reads them today, so a
+reader should treat a weighted score as arithmetic over one live term.
+
+`safety.artifact_replica_verified` no longer checks the digest of a copy the World
+Tape seeded, only of copies this world delivered. A seeded claim that disagrees
+with the catalog is a fact about that machine's own bookkeeping, and it has to be
+expressible for the subtraction that catches it to be reachable. What a Lab
+Blueprint therefore cannot yet state is a copy whose claim went stale after the
+world began.
 
 ### Phase 3 Artifact durability
 

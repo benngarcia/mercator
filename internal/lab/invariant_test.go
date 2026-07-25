@@ -306,31 +306,52 @@ func queuedBehindOneShotCapacity() eventlog.CloudEvent {
 
 // TestSilenceIsPricedAndAMeasurementBinds is the second clause of
 // safety.locality_is_never_infeasibility, which the registry's own failing case
-// cannot reach: a candidate struck out on a bound it was only predicted to miss
-// because nobody could say what it holds. The two rows are the whole rule. A
-// prediction over a silence is a price, and refusing capacity on it removes
-// machines that may already be holding every byte; a measured start latency for
-// this offer is a measurement whatever anyone could enumerate, so it binds.
+// cannot reach: a candidate struck out on a start bound. All three rows are the
+// rule, and the last one is why it is stated against the established estimate
+// rather than against "was anything unknown". A prediction over a silence is a
+// price, and refusing capacity on it removes machines that may already be
+// holding every byte. A measured start latency for this offer is a measurement
+// whatever anyone could enumerate. And a machine already deep in its own stated
+// queue is late whatever it could say about its disk, so one unreadable input
+// must not buy it an exemption from the bound.
 func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 	for _, refusal := range []struct {
 		name        string
-		sampleCount int
+		start       domain.Estimate
+		established domain.Estimate
 		lawful      bool
 	}{
-		{"a start latency predicted over content nobody could describe", 0, false},
-		{"a start latency measured on this offer", 4, true},
+		{
+			name:        "a start latency predicted over content nobody could describe",
+			start:       domain.Estimate{P90: 900},
+			established: domain.Estimate{P90: 1.25},
+		},
+		{
+			name:        "a start latency measured on this offer",
+			start:       domain.Estimate{P90: 900, SampleCount: 4},
+			established: domain.Estimate{P90: 900, SampleCount: 4},
+			lawful:      true,
+		},
+		{
+			name:        "a queue the offer stated, beside an input nothing could enumerate",
+			start:       domain.Estimate{P90: 1926},
+			established: domain.Estimate{P90: 1126},
+			lawful:      true,
+		},
 	} {
 		t.Run(refusal.name, func(t *testing.T) {
 			observation := InvariantObservation{
 				MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_slo_refusal", domain.BookingDecision{
-					ID:    "dec_slo_refusal",
-					RunID: "run-impatient",
+					ID:     "dec_slo_refusal",
+					RunID:  "run-impatient",
+					Policy: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, MaxP90StartSeconds: 180},
 					Candidates: []domain.CandidateDecision{{
 						OfferSnapshotID:  "borrowed-host",
 						ImageLocality:    domain.LocalityUnknown,
 						ArtifactEvidence: []domain.ArtifactEvidence{{ArtifactID: "artifact-1", Locality: domain.LocalityUnknown, FetchBytes: 1}},
 						Estimates: domain.CandidateEstimates{
-							StartSeconds: domain.Estimate{P90: 900, SampleCount: refusal.sampleCount},
+							StartSeconds:            refusal.start,
+							EstablishedStartSeconds: refusal.established,
 						},
 						Rejections: []domain.Violation{{
 							Code: "LATENCY_SLO_EXCEEDED",

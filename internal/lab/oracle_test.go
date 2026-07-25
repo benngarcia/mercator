@@ -63,7 +63,7 @@ func TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes(t *testing.T) {
 		t.Fatalf("evaluate production scheduler: %v", err)
 	}
 	warm := candidateFor(t, production, "rental-warm")
-	reference, _ := referenceEstimates(input, offerFor(t, input, "rental-warm"))
+	reference := referenceEstimates(input, offerFor(t, input, "rental-warm"))
 
 	if warm.ImageLocality != domain.LocalityPartial {
 		t.Fatalf("image locality = %q, want partial: the bytes are here and the chain is not", warm.ImageLocality)
@@ -99,7 +99,7 @@ func TestTheReferenceModelPricesArtifactLocalityTheSameWayProductionDoes(t *test
 		t.Fatalf("evaluate production scheduler: %v", err)
 	}
 	warm := candidateFor(t, production, "rental-warm")
-	reference, _ := referenceEstimates(input, offerFor(t, input, "rental-warm"))
+	reference := referenceEstimates(input, offerFor(t, input, "rental-warm"))
 
 	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityCold {
 		t.Fatalf("the decision recorded %+v, and this host holds no copy of the dataset", warm.ArtifactEvidence)
@@ -149,7 +149,7 @@ func TestNeitherModelPricesAnUncheckedCopyAsWarmth(t *testing.T) {
 				t.Fatalf("evaluate production scheduler: %v", err)
 			}
 			candidate := candidateFor(t, production, "rental-warm")
-			reference, _ := referenceEstimates(input, holder)
+			reference := referenceEstimates(input, holder)
 
 			if owes := candidate.Estimates.ArtifactSeconds.Expected > 0; owes != copyOnDisk.owes {
 				t.Errorf("production priced %s at %v seconds, and owing a fetch should be %v",

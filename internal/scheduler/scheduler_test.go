@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -702,4 +703,71 @@ func schedulerCandidate(t *testing.T, decision domain.BookingDecision, offerID s
 	}
 	t.Fatalf("the decision records no candidate for %q", offerID)
 	return domain.CandidateDecision{}
+}
+
+// TestTheObjectiveDecidesWhichCandidateWins is what a Run's stated objective
+// does to a placement. Each row is the same two offers: one a fraction of a cent
+// cheaper per second and forty seconds from ready, the other pricier and five
+// seconds from ready. Nothing populates ScoreWeights in production, so before
+// the objective ordered candidates every one of these rows returned the cheaper
+// machine and the words in the public API meant nothing.
+func TestTheObjectiveDecidesWhichCandidateWins(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	for _, choice := range []struct {
+		objective domain.PlacementObjective
+		winner    string
+		reason    string
+	}{
+		{domain.ObjectiveCheapest, "off_slow", "LOWEST_SCORE"},
+		{domain.ObjectiveFastestStart, "off_fast", "EARLIEST_START"},
+		{domain.ObjectiveFastestCompletion, "off_fast", "EARLIEST_COMPLETION"},
+	} {
+		t.Run(string(choice.objective), func(t *testing.T) {
+			workload := schedulerRevision()
+			workload.Spec.Placement.Objective = choice.objective
+
+			decision, err := New().Evaluate(context.Background(), SchedulingInput{
+				RunID:        "run_1",
+				Workload:     workload,
+				Offers:       []domain.OfferSnapshot{schedulerOffer("off_slow", now, 0.00010, 40), schedulerOffer("off_fast", now, 0.00012, 5)},
+				ModelVersion: "latency-v1",
+				EvaluatedAt:  now,
+			})
+			if err != nil {
+				t.Fatalf("evaluate: %v", err)
+			}
+			if decision.SelectedOfferSnapshotID != choice.winner {
+				t.Fatalf("a Run that asked for %q landed on %q", choice.objective, decision.SelectedOfferSnapshotID)
+			}
+			if !slices.Contains(decision.SelectionReasonCodes, choice.reason) {
+				t.Fatalf("the decision recorded %v, and it ranked candidates on %q", decision.SelectionReasonCodes, choice.reason)
+			}
+		})
+	}
+}
+
+// TestEqualPricesAreDecidedByWhatEachCandidateHolds is the case Artifact
+// locality was added for and the one a pure cost ranking cannot answer. Two
+// machines at one price, one of them forty seconds from ready, and the cheapest
+// objective still has a second term to fall back on. Without it the winner is
+// whichever offer ID sorts first, and every locality answer in the decision is
+// arithmetic nobody read.
+func TestEqualPricesAreDecidedByWhatEachCandidateHolds(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	workload := schedulerRevision()
+	workload.Spec.Placement.Objective = domain.ObjectiveCheapest
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{schedulerOffer("off_a_slow", now, 0.0001, 40), schedulerOffer("off_b_ready", now, 0.0001, 1)},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if decision.SelectedOfferSnapshotID != "off_b_ready" {
+		t.Fatalf("two machines at one price were decided by %q rather than by how ready each is", decision.SelectedOfferSnapshotID)
+	}
 }

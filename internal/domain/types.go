@@ -730,7 +730,21 @@ type CandidateEstimates struct {
 	// has to fetch a dataset forty times its size.
 	ArtifactSeconds Estimate `json:"artifact_seconds"`
 	StartSeconds    Estimate `json:"start_seconds"`
-	CostUSD         Estimate `json:"cost_usd"`
+	// EstablishedStartSeconds is the part of that prediction somebody
+	// established: queue and provisioning, which the offer states as facts,
+	// plus the content an inventory actually answered about. What it leaves out
+	// is what content nobody could describe would cost from nowhere, which is a
+	// price and never a measurement.
+	//
+	// It exists because those are the only seconds a hard start bound may
+	// strike a candidate out on. Refusing a machine over content it merely
+	// failed to enumerate refuses it for a guess; waiving the bound wholesale
+	// whenever anything was unreadable lets a machine with fifteen minutes of
+	// stated queue escape a three-minute bound because one input could not be
+	// enumerated. Splitting the prediction is what lets each second be judged
+	// by what it rests on.
+	EstablishedStartSeconds Estimate `json:"established_start_seconds"`
+	CostUSD                 Estimate `json:"cost_usd"`
 }
 
 type RunOutcome string

@@ -67,7 +67,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		}
 	}
 	for _, host := range spec.Hosts {
-		if err := world.AddMachine(simHost(spec, host)); err != nil {
+		if err := world.AddMachine(simHost(spec, host, clock.Now())); err != nil {
 			return nil, err
 		}
 	}
@@ -103,7 +103,7 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 		HeldDiffIDs:      map[string]bool{},
 		ReportsDiffIDs:   rental.ReportsDiffIDs,
 		HeldImages:       map[string]bool{},
-		ArtifactReplicas: simArtifactReplicas(spec, rental, start),
+		ArtifactReplicas: simArtifactReplicas(spec, rental.ArtifactReplicas, start),
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
@@ -138,17 +138,18 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 }
 
 // simArtifactReplicas is the local copy of each Artifact this machine was found
-// holding. The copy carries the catalog's content digest and what the fixture
-// says the copy is worth, because a copy nobody checked is not evidence that
-// the right bytes are here.
-func simArtifactReplicas(spec WorldSpec, rental RentalSpec, at time.Time) map[string]domain.ArtifactReplica {
+// holding: the digest the copy claims and what the fixture says checking it was
+// worth. Both are the machine's own bookkeeping rather than the catalog's, which
+// is what lets a fixture state a copy nobody checked and a copy that was checked
+// against content this version does not have.
+func simArtifactReplicas(spec WorldSpec, declared []ArtifactReplicaSpec, at time.Time) map[string]domain.ArtifactReplica {
 	catalog := spec.artifactsByID()
-	replicas := make(map[string]domain.ArtifactReplica, len(rental.ArtifactReplicas))
-	for _, held := range rental.ArtifactReplicas {
+	replicas := make(map[string]domain.ArtifactReplica, len(declared))
+	for _, held := range declared {
 		artifact := catalog[held.Artifact]
 		replica := domain.ArtifactReplica{
 			ArtifactID:    artifact.ID,
-			ContentDigest: artifact.ContentDigest,
+			ContentDigest: held.Digest(artifact),
 			SizeBytes:     int64(artifact.Size),
 			State:         held.State,
 		}
@@ -173,12 +174,13 @@ func simRentalOffer(rental RentalSpec) domain.OfferSnapshot {
 // simHost is a machine Mercator has not enrolled. It may hold content, and
 // nothing on it can be asked about it, so what it holds is world truth that no
 // offer carries.
-func simHost(spec WorldSpec, host HostSpec) *fake.Machine {
+func simHost(spec WorldSpec, host HostSpec, at time.Time) *fake.Machine {
 	machine := &fake.Machine{
-		Offer:       simHostOffer(host),
-		HeldLayers:  map[string]int64{},
-		HeldDiffIDs: map[string]bool{},
-		HeldImages:  map[string]bool{},
+		Offer:            simHostOffer(host),
+		HeldLayers:       map[string]int64{},
+		HeldDiffIDs:      map[string]bool{},
+		HeldImages:       map[string]bool{},
+		ArtifactReplicas: simArtifactReplicas(spec, host.ArtifactReplicas, at),
 	}
 	for _, ref := range host.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {

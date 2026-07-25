@@ -4137,6 +4137,7 @@
           "pull_seconds",
           "artifact_seconds",
           "start_seconds",
+          "established_start_seconds",
           "cost_usd"
         ],
         "properties": {
@@ -4155,6 +4156,10 @@
           },
           "start_seconds": {
             "$ref": "#/components/schemas/Estimate"
+          },
+          "established_start_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess."
           },
           "cost_usd": {
             "$ref": "#/components/schemas/Estimate"

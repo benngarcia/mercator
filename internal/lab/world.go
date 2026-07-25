@@ -334,16 +334,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		}
 		world.seededLocality[rental.ID] = state.seededDigests()
 		world.truth[rental.ID] = cloneHostState(state)
-		world.seededReplicas[rental.ID] = make(map[string]bool, len(rental.ArtifactReplicas))
-		for _, held := range rental.ArtifactReplicas {
-			replica := world.store.replicaOf(held.Artifact, tape.Start)
-			replica.State = held.State
-			if !replica.State.Usable() {
-				replica.VerifiedAt = time.Time{}
-			}
-			world.replicas[held.Artifact][rental.ID] = replica
-			world.seededReplicas[rental.ID][held.Artifact] = true
-		}
+		world.seedReplicas(rental.ID, rental.ArtifactReplicas, tape.InitialWorld, tape.Start)
 		world.cacheMounts[rental.ID] = map[string]uint64{}
 		for _, name := range rental.CacheMounts {
 			world.cacheMounts[rental.ID][name] = 1
@@ -365,6 +356,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
 		world.seededLocality[host.ID] = state.seededDigests()
 		world.truth[host.ID] = cloneHostState(state)
+		world.seedReplicas(host.ID, host.ArtifactReplicas, tape.InitialWorld, tape.Start)
 	}
 	for _, marketplace := range tape.InitialWorld.Marketplace {
 		state := hostState{
@@ -391,6 +383,28 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	}
 	world.publishObservations()
 	return world, nil
+}
+
+// seedReplicas is what one machine was already holding when this world began.
+// It is stated for any machine a Blueprint declares, whether Mercator controls
+// it or borrows a slot on it, because a copy can genuinely be on either: what
+// differs is whether an offer can say so, and that is decided at publication.
+//
+// The copy carries the digest the machine claims rather than the catalog's,
+// which is how a fixture states a host whose local index still names this
+// version after an operator restored an older snapshot underneath it.
+func (world *simulatedWorld) seedReplicas(offerID string, held []scenario.ArtifactReplicaSpec, spec scenario.WorldSpec, at time.Time) {
+	world.seededReplicas[offerID] = make(map[string]bool, len(held))
+	for _, declared := range held {
+		replica := world.store.replicaOf(declared.Artifact, at)
+		replica.ContentDigest = declared.Digest(spec.Artifact(declared.Artifact))
+		replica.State = declared.State
+		if !replica.State.Usable() {
+			replica.VerifiedAt = time.Time{}
+		}
+		world.replicas[declared.Artifact][offerID] = replica
+		world.seededReplicas[offerID][declared.Artifact] = true
+	}
 }
 
 func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec, offerID string, available *bool, billing scenario.BillingSpec) {

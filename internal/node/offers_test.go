@@ -282,7 +282,90 @@ func TestAnUnresolvedManifestLeavesEveryCandidateIndistinguishable(t *testing.T)
 
 const nodeWorkspace = "ws_offers"
 
+// TestANodeOffersTheCopiesItHolds is the Artifact half of the same contract, and
+// the same defect one layer along: the node reported its copies and the offer
+// projection dropped them, so on the only reusable lane that exists every
+// candidate was recorded holding nothing anybody could describe and charged the
+// whole read for content already on its disk.
+func TestANodeOffersTheCopiesItHolds(t *testing.T) {
+	version := domain.ArtifactVersion{
+		ID:            "artifact:imagenet:v2.41",
+		WorkspaceID:   nodeWorkspace,
+		ContentDigest: "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+		SizeBytes:     40_000_000_000,
+	}
+	cases := map[string]struct {
+		held      []domain.ArtifactReplica
+		wantHolds bool
+	}{
+		"a node holding a checked copy of this version owes nothing for it": {
+			held: []domain.ArtifactReplica{{
+				ArtifactID:    version.ID,
+				ContentDigest: version.ContentDigest,
+				SizeBytes:     version.SizeBytes,
+				State:         domain.ArtifactReplicaVerified,
+			}},
+			wantHolds: true,
+		},
+		"a copy nobody checked is worth what no copy is worth": {
+			held: []domain.ArtifactReplica{{
+				ArtifactID:    version.ID,
+				ContentDigest: version.ContentDigest,
+				SizeBytes:     version.SizeBytes,
+				State:         domain.ArtifactReplicaUnverified,
+			}},
+		},
+		// The machine an operator restored an older snapshot onto. Its index
+		// still names this version and the bytes under it are another version's,
+		// so reading the name alone promises the Run the wrong dataset quickly.
+		"a checked copy of other content under this name is worth nothing": {
+			held: []domain.ArtifactReplica{{
+				ArtifactID:    version.ID,
+				ContentDigest: "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+				SizeBytes:     version.SizeBytes,
+				State:         domain.ArtifactReplicaVerified,
+			}},
+		},
+		"a node holding no copies says so rather than saying nothing": {held: nil},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			registry := readyNodeHolding(t, nil, testCase.held)
+
+			offers, err := registry.Offers(context.Background(), nodeWorkspace)
+			if err != nil {
+				t.Fatalf("list node offers: %v", err)
+			}
+
+			inventory := offers[0].Artifacts
+			if !inventory.Known {
+				t.Fatal("an enrolled node answered, so its Artifact inventory is never a silence")
+			}
+			if inventory.Holds(version) != testCase.wantHolds {
+				t.Errorf("holds a readable copy = %v, want %v", inventory.Holds(version), testCase.wantHolds)
+			}
+			fetch, evidence := domain.ArtifactFetchWork([]domain.ArtifactVersion{version}, inventory)
+			wantFetch := version.SizeBytes
+			wantLocality := domain.LocalityCold
+			if testCase.wantHolds {
+				wantFetch, wantLocality = 0, domain.LocalityHot
+			}
+			if fetch != wantFetch {
+				t.Errorf("owes %d bytes, want %d", fetch, wantFetch)
+			}
+			if len(evidence) != 1 || evidence[0].Locality != wantLocality {
+				t.Errorf("recorded %+v, want locality %q", evidence, wantLocality)
+			}
+		})
+	}
+}
+
 func readyNode(t *testing.T, held []capability.ImageLocality) *node.Registry {
+	t.Helper()
+	return readyNodeHolding(t, held, nil)
+}
+
+func readyNodeHolding(t *testing.T, images []capability.ImageLocality, copies []domain.ArtifactReplica) *node.Registry {
 	t.Helper()
 	registry, clock := newRegistry(t)
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
@@ -301,7 +384,8 @@ func readyNode(t *testing.T, held []capability.ImageLocality) *node.Registry {
 		Facts: capability.NodeFacts{
 			ObservedAt: clock.Now(),
 			Host:       capability.HostFacts{OS: "linux", Architecture: "amd64", ContainerRuntime: "docker"},
-			Images:     held,
+			Images:     images,
+			Artifacts:  copies,
 		},
 	}
 	if _, err := registry.Enroll(context.Background(), request); err != nil {

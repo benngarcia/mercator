@@ -985,6 +985,8 @@ export interface components {
             /** @description What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from pull_seconds because it is a different transfer over different content from a different authority. */
             artifact_seconds: components["schemas"]["Estimate"];
             start_seconds: components["schemas"]["Estimate"];
+            /** @description The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess. */
+            established_start_seconds: components["schemas"]["Estimate"];
             cost_usd: components["schemas"]["Estimate"];
         };
         CandidateDecision: {

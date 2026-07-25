@@ -226,6 +226,7 @@ const CandidateEstimateSet = Schema.Struct({
   pull_seconds: Estimate,
   artifact_seconds: Estimate,
   start_seconds: Estimate,
+  established_start_seconds: Estimate,
   cost_usd: Estimate,
 });
 const CandidateDisposition = Schema.Literals([

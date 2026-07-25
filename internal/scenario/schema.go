@@ -169,10 +169,17 @@ type HostSpec struct {
 	// runs on it, so nothing can ask it and no offer reports it: the content is
 	// world truth that Placement cannot see, which is the position an operator's
 	// own Docker host is in.
-	CachedImages   []string       `json:"cached_images,omitempty"`
-	RatePerHourUSD float64        `json:"rate_per_hour_usd"`
-	Billing        BillingSpec    `json:"billing,omitempty"`
-	Resources      *ResourcesSpec `json:"resources,omitempty"`
+	CachedImages []string `json:"cached_images,omitempty"`
+	// ArtifactReplicas is the immutable content this machine happens to be
+	// sitting on, and it is invisible for the same reason its images are.
+	// Without it a fixture could only put a copy where Mercator can already see
+	// one, so the rule that borrowed capacity publishes no Artifact inventory
+	// was a rule about a case no fixture could construct: silence and absence
+	// were the same world every time, and deleting the rule changed nothing.
+	ArtifactReplicas []ArtifactReplicaSpec `json:"artifact_replicas,omitempty"`
+	RatePerHourUSD   float64               `json:"rate_per_hour_usd"`
+	Billing          BillingSpec           `json:"billing,omitempty"`
+	Resources        *ResourcesSpec        `json:"resources,omitempty"`
 }
 
 // ExecutionLane reports what this offer becomes once allocated, defaulting to
@@ -231,6 +238,24 @@ func (spec ArtifactSpec) Version(workspaceID string) domain.ArtifactVersion {
 type ArtifactReplicaSpec struct {
 	Artifact string                      `json:"artifact"`
 	State    domain.ArtifactReplicaState `json:"state"`
+	// ContentDigest is what this copy claims its bytes hash to, when that is not
+	// what the catalog says the version is. It is how a fixture states the
+	// machine an operator restored an older snapshot of a volume onto: the host
+	// reports a checked copy filed under the version's name and the bytes under
+	// it belong to the version before. Omitted means the copy claims what the
+	// catalog claims, which is every ordinary case.
+	ContentDigest string `json:"content_digest,omitempty"`
+}
+
+// Digest is what this copy claims. Only the control plane can say what the
+// claim is worth: the host reports what it checked against, the catalog says
+// what the version is, and a copy naming content this version does not have is
+// worth exactly what no copy is worth.
+func (spec ArtifactReplicaSpec) Digest(artifact ArtifactSpec) string {
+	if spec.ContentDigest != "" {
+		return spec.ContentDigest
+	}
+	return artifact.ContentDigest
 }
 
 // Start is the scripted clock's origin for this world.
@@ -1162,27 +1187,8 @@ func (w WorldSpec) validate() error {
 				return fmt.Errorf("rental %q caches undefined layer %q", rental.ID, digest)
 			}
 		}
-		for _, replica := range rental.ArtifactReplicas {
-			artifact, defined := artifacts[replica.Artifact]
-			if !defined {
-				return fmt.Errorf("rental %q holds undefined Artifact %q", rental.ID, replica.Artifact)
-			}
-			if !replica.State.Valid() {
-				return fmt.Errorf(
-					"rental %q holds Artifact %q in state %q, which is neither verified nor unverified",
-					rental.ID, replica.Artifact, replica.State,
-				)
-			}
-			// A copy of content nothing has produced is a copy of nothing. The
-			// object store is what makes an Artifact exist, so a machine can only
-			// be found holding a version that was published before this world
-			// started.
-			if !artifact.Prepublished() {
-				return fmt.Errorf(
-					"rental %q holds Artifact %q, which Run %q has not produced yet",
-					rental.ID, replica.Artifact, artifact.ProducedBy,
-				)
-			}
+		if err := validateArtifactReplicas("rental "+rental.ID, rental.ArtifactReplicas, artifacts); err != nil {
+			return err
 		}
 		cacheMounts := map[string]bool{}
 		for _, name := range rental.CacheMounts {
@@ -1230,6 +1236,9 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("duplicate id %q", host.ID)
 		}
 		ids[host.ID] = true
+		if err := validateArtifactReplicas("host "+host.ID, host.ArtifactReplicas, artifacts); err != nil {
+			return err
+		}
 		if host.RatePerHourUSD <= 0 {
 			return fmt.Errorf("host %q needs a positive rate_per_hour_usd", host.ID)
 		}
@@ -1314,6 +1323,39 @@ func (billing BillingSpec) validate(owner string) error {
 	}
 	if billing.MinimumCharge != nil && billing.MinimumCharge.Duration() <= 0 {
 		return fmt.Errorf("%s minimum charge must be positive", owner)
+	}
+	return nil
+}
+
+// validateArtifactReplicas is what any machine in this world may be declared
+// holding, whether Mercator controls it or borrows a slot on it. Both are
+// places a copy can genuinely be, and they differ in what an offer can say
+// about the copy rather than in whether it may exist.
+func validateArtifactReplicas(machine string, replicas []ArtifactReplicaSpec, artifacts map[string]ArtifactSpec) error {
+	for _, replica := range replicas {
+		artifact, defined := artifacts[replica.Artifact]
+		if !defined {
+			return fmt.Errorf("%s holds undefined Artifact %q", machine, replica.Artifact)
+		}
+		if !replica.State.Valid() {
+			return fmt.Errorf(
+				"%s holds Artifact %q in state %q, which is neither verified nor unverified",
+				machine, replica.Artifact, replica.State,
+			)
+		}
+		if replica.ContentDigest != "" && !ociDigestPattern.MatchString(replica.ContentDigest) {
+			return fmt.Errorf("%s holds Artifact %q under a claim that is not an exact sha256 digest", machine, replica.Artifact)
+		}
+		// A copy of content nothing has produced is a copy of nothing. The
+		// object store is what makes an Artifact exist, so a machine can only
+		// be found holding a version that was published before this world
+		// started.
+		if !artifact.Prepublished() {
+			return fmt.Errorf(
+				"%s holds Artifact %q, which Run %q has not produced yet",
+				machine, replica.Artifact, artifact.ProducedBy,
+			)
+		}
 	}
 	return nil
 }
@@ -1561,6 +1603,13 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 		}
 	}
 	return nil
+}
+
+// Artifact is what this world says one version is. The Lab builds its object
+// store from the same declarations the placement simulator does, so a copy's
+// claim reads the same in both worlds or the two disagree about a fixture.
+func (w WorldSpec) Artifact(id string) ArtifactSpec {
+	return w.artifactsByID()[id]
 }
 
 func (w WorldSpec) artifactsByID() map[string]ArtifactSpec {

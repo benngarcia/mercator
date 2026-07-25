@@ -1,0 +1,68 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One Run that refuses to wait more than three minutes and reads a 40GB dataset, against three machines. The Rental holding the whole image and a checked copy of the dataset is a second from ready and takes the Run at the highest price, because that is the only candidate whose promptness anybody established. The machine that does not exist yet states ten minutes of provisioning, which is a fact about that offer whatever its disk turns out to contain, so the bound strikes it out. The borrowed host beside them states nothing anybody can check: it is priced the whole image and the whole read, nearly twenty minutes past the bound, and it is not struck out, because nothing has established that it is slow and it may already hold every byte. Both halves are needed. A bound waived whenever any input was unreadable lets stated lateness escape it; a bound applied to the whole prediction refuses machines that may already hold every byte. This is also the only Blueprint that combines a start bound with an Artifact the Run reads, which is what gives safety.locality_is_never_infeasibility a recorded decision to be a law about: turn the silence into a refusal and the rule fails on this execution rather than staying green over decisions no world produced.",
+  "seed": "mercator-lab-late-start-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          },
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "warm-rental",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "artifact_replicas": [{"artifact": "artifact:imagenet:v2.41", "state": "verified"}],
+        "rate_per_hour_usd": 4.0
+      }
+    ],
+    "hosts": [
+      {
+        "id": "silent-host",
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "slow-provision",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {"expected": "10m", "p90": "18m"}
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "impatient",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "max_start_latency": "3m",
+          "expected_runtime": "10m",
+          "max_runtime": "30m",
+          "consumes_artifacts": ["artifact:imagenet:v2.41"]
+        }
+      }
+    ]
+  }
+}

@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -123,9 +124,80 @@ func TestWhatABorrowedMachineHoldsIsNotSomethingMercatorKnows(t *testing.T) {
 	if pull := candidatePullSeconds(t, decision, "local-docker"); pull < 200 {
 		t.Fatalf("the Run was priced %.2fs of pull from content no offer could carry", pull)
 	}
+	// The Artifact half of the same silence. This machine is sitting on a
+	// checked copy of the dataset in World Truth and no offer can say so, so the
+	// copy buys the Run nothing, and the decision records whose silence it was
+	// rather than a machine that answered and holds none of it.
+	truthCopy, held := truth.Artifacts.Replica(borrowedWarmthArtifact)
+	if !held || !truthCopy.State.Usable() {
+		t.Fatalf("World Truth says the borrowed machine holds %+v of the dataset, and the Blueprint seeded it a checked copy", truth.Artifacts)
+	}
+	borrowed := candidateFor(t, decision, "local-docker")
+	if found := borrowed.ArtifactEvidence; len(found) != 1 || found[0].Locality != domain.LocalityUnknown {
+		t.Fatalf("the decision recorded %+v for a copy nothing of Mercator's can be asked about", found)
+	}
+	if fetch := borrowed.Estimates.ArtifactSeconds.Expected; fetch < 100 {
+		t.Fatalf("the Run was priced %.2fs of Artifact read, and 7GB crosses a 500 Mbps link in 112s", fetch)
+	}
 }
 
-const borrowedWarmthImage = "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"
+const (
+	borrowedWarmthImage    = "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"
+	borrowedWarmthArtifact = "artifact:reference-set:v1"
+)
+
+// TestAStartBoundStrikesOutStatedLatenessAndNotSilence is the start-bound rule
+// at L1, and it is the execution safety.locality_is_never_infeasibility is a law
+// about: no Blueprint in the corpus combined a start bound with an Artifact the
+// Run reads, so every clause of that rule was checked against decisions no
+// world had produced.
+//
+// Both halves are one rule read from either end. Ten minutes of provisioning is
+// what the offer says about itself, so the Run's three-minute bound removes that
+// candidate whatever its disk holds. The borrowed host's twenty minutes is what
+// its content would cost from nowhere, so the same bound leaves it alone.
+func TestAStartBoundStrikesOutStatedLatenessAndNotSilence(t *testing.T) {
+	execution := openConformanceExecution(t, "a-late-start-must-be-a-fact")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 8 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	decision := bookingDecisions(t, execution)["run-impatient"]
+	if decision.SelectedOfferSnapshotID != "warm-rental" {
+		t.Fatalf("the Run landed on %q, want the only machine whose promptness anybody established", decision.SelectedOfferSnapshotID)
+	}
+	provisionable := candidateFor(t, decision, "slow-provision")
+	if provisionable.Feasible || !refusedForLatency(provisionable) {
+		t.Fatalf("ten minutes of stated provisioning did not bust a three-minute bound: %+v", provisionable.Rejections)
+	}
+	silent := candidateFor(t, decision, "silent-host")
+	if !silent.Feasible {
+		t.Fatalf("a machine nothing could enumerate was refused: %+v", silent.Rejections)
+	}
+	if silent.Estimates.StartSeconds.P90 <= 180 {
+		t.Fatalf("the silent host is predicted ready in %.2fs, and the case needs a prediction past the bound", silent.Estimates.StartSeconds.P90)
+	}
+	if silent.Estimates.EstablishedStartSeconds.P90 > 180 {
+		t.Fatalf("the silent host established %.2fs of lateness, and nothing there answered any question", silent.Estimates.EstablishedStartSeconds.P90)
+	}
+	if !slices.Contains(decision.SelectionReasonCodes, "WITHIN_START_SLO") {
+		t.Fatalf("the decision recorded %v for a candidate predicted inside its own bound", decision.SelectionReasonCodes)
+	}
+}
+
+func refusedForLatency(candidate domain.CandidateDecision) bool {
+	return slices.ContainsFunc(candidate.Rejections, func(rejection domain.Violation) bool {
+		return rejection.Code == "LATENCY_SLO_EXCEEDED"
+	})
+}
 
 func openConformanceExecution(t *testing.T, name string) *Execution {
 	t.Helper()
