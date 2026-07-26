@@ -28,16 +28,16 @@ type runState struct {
 	// the application stated the moment. It is nil until a report arrives and is
 	// never derived from startedAt: a running process is not a ready one, and only
 	// the workload can tell the difference.
-	readyAt                  *time.Time
+	readyAt       *time.Time
 	launchFailure *launchFailureData
 	// deferral is why admission last told this Run to wait, and queuedSince is
 	// when it first did. The two come apart on purpose: the reason is replaced
 	// every time the answer changes, and the moment the wait started is what the
 	// class's bound is measured from and must never move.
-	deferral      *domain.AdmissionDeferral
-	queuedSince   time.Time
-	deferralCount int
-	attemptCount  int
+	deferral                 *domain.AdmissionDeferral
+	queuedSince              time.Time
+	deferralCount            int
+	attemptCount             int
 	excludedOfferSnapshotIDs []string
 	cancelRequested          bool
 	firstTerminal            *terminalFact
