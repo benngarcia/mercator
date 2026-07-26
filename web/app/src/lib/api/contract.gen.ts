@@ -1065,7 +1065,7 @@ export interface components {
             adapter_type?: string;
             native_ref?: string;
             /** @enum {string} */
-            disposition: "run_now_existing_rental" | "queue_existing_rental" | "provision_fresh_rental";
+            disposition: "run_now_existing_rental" | "queue_existing_rental" | "provision_fresh_rental" | "launch_ephemeral";
             feasible: boolean;
             rejections?: components["schemas"]["Violation"][];
             /**

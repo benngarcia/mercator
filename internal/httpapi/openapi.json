@@ -4328,7 +4328,8 @@
             "enum": [
               "run_now_existing_rental",
               "queue_existing_rental",
-              "provision_fresh_rental"
+              "provision_fresh_rental",
+              "launch_ephemeral"
             ]
           },
           "feasible": {

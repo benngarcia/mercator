@@ -91,6 +91,7 @@ func (e CacheEvidenceLocality) Valid() bool {
 
 // Defines values for CandidateDecisionDisposition.
 const (
+	LaunchEphemeral      CandidateDecisionDisposition = "launch_ephemeral"
 	ProvisionFreshRental CandidateDecisionDisposition = "provision_fresh_rental"
 	QueueExistingRental  CandidateDecisionDisposition = "queue_existing_rental"
 	RunNowExistingRental CandidateDecisionDisposition = "run_now_existing_rental"
@@ -99,6 +100,8 @@ const (
 // Valid indicates whether the value is a known member of the CandidateDecisionDisposition enum.
 func (e CandidateDecisionDisposition) Valid() bool {
 	switch e {
+	case LaunchEphemeral:
+		return true
 	case ProvisionFreshRental:
 		return true
 	case QueueExistingRental:
