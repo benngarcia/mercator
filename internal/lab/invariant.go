@@ -104,6 +104,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.readiness_is_reported_not_inferred", check: readinessIsReportedNotInferred},
 		invariantRule{id: "safety.prediction_is_recorded_against_its_actual", check: predictionIsRecordedAgainstItsActual},
 		invariantRule{id: "safety.candidate_identity_recurs", check: candidateIdentityRecurs},
+		invariantRule{id: "safety.prediction_states_its_provenance", check: predictionStatesItsProvenance},
 		invariantRule{id: "safety.idempotent_external_commands", check: idempotentExternalCommands},
 		invariantRule{id: "safety.lease_fencing", check: leaseFencing},
 		invariantRule{id: "safety.artifact_dependencies", check: artifactDependencies},
@@ -1062,6 +1063,121 @@ func candidateIdentityRecurs(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// predictionStatesItsProvenance is the law on what a prediction has to say about
+// itself. Every stage of every recorded candidate names the level its answer
+// came from and how many measured launches stand behind it, and an answer
+// claiming this exact candidate names a key that is not the listing it arrived
+// on.
+//
+// The last clause is the load-bearing one. A marketplace mints a fresh ask ID
+// for every search of a machine that was already there, so a history filed under
+// the listing accumulates keys holding one sample each and reports every one of
+// them as candidate-specific evidence: the answer is wrong, the sample count is
+// right, and nothing in the record says which. Comparing the key the estimator
+// read against the listing the offer arrived under is what catches it, and the
+// corpus states the world it happens in by publishing one machine under two ask
+// IDs.
+//
+// The other clauses are about the record being readable at all. A stage with no
+// level cannot be told from a stage answered by a constant, a keyed level with
+// no samples is a claim of evidence with none behind it, and a prior carrying
+// samples is the opposite: measured launches filed under an answer that says
+// nobody has watched this happen.
+func predictionStatesItsProvenance(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			for _, stage := range domain.LaunchStages {
+				if err := stageStatesItsProvenance(decision.RunID, candidate, stage); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// stageStatesItsProvenance holds one stage of one candidate to what its level
+// claims. The key is checked against the candidate's own recorded identity as
+// well as against the listing, because those are the two ways an exact-candidate
+// answer goes wrong: filed under something that does not recur, or filed under
+// some other candidate's key entirely.
+func stageStatesItsProvenance(runID string, candidate domain.CandidateDecision, stage domain.LaunchStage) error {
+	answer := candidate.Estimates.Stages.Stage(stage)
+	switch answer.Level {
+	case "":
+		return fmt.Errorf(
+			"Run %q predicted candidate %q spending %.2fs on %s, and the record does not say what that rests on",
+			runID, candidate.OfferSnapshotID, answer.Expected, stage,
+		)
+	case domain.LevelPrior:
+		if answer.SampleCount != 0 || answer.Key != "" {
+			return fmt.Errorf(
+				"Run %q answered candidate %q's %s stage from the prior, and filed %d samples under %q against it",
+				runID, candidate.OfferSnapshotID, stage, answer.SampleCount, answer.Key,
+			)
+		}
+		return nil
+	case domain.LevelExactCandidate, domain.LevelProviderAndRegion, domain.LevelProvider:
+		return keyedAnswerIsHonest(runID, candidate, stage, answer)
+	default:
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage at level %q, which is not a level of the hierarchy",
+			runID, candidate.OfferSnapshotID, stage, answer.Level,
+		)
+	}
+}
+
+func keyedAnswerIsHonest(runID string, candidate domain.CandidateDecision, stage domain.LaunchStage, answer domain.Estimate) error {
+	if answer.SampleCount <= 0 || answer.Key == "" {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage at level %q from %d samples under %q, which is a claim of evidence with none behind it",
+			runID, candidate.OfferSnapshotID, stage, answer.Level, answer.SampleCount, answer.Key,
+		)
+	}
+	if !candidate.Candidate.Recurs() {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage at level %q under %q, and nothing about this capacity outlives its listing",
+			runID, candidate.OfferSnapshotID, stage, answer.Level, answer.Key,
+		)
+	}
+	for _, listing := range []string{candidate.OfferSnapshotID, candidate.NativeRef} {
+		if listing != "" && strings.Contains(answer.Key, listing) {
+			return fmt.Errorf(
+				"Run %q answered candidate %q's %s stage under the key %q, which names the listing %q rather than what recurs",
+				runID, candidate.OfferSnapshotID, stage, answer.Key, listing,
+			)
+		}
+	}
+	if answer.Level != domain.LevelExactCandidate {
+		return nil
+	}
+	if own := candidate.Candidate.Candidate(contentStage(stage)); answer.Key != own {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage out of %q, and this candidate is %q",
+			runID, candidate.OfferSnapshotID, stage, answer.Key, own,
+		)
+	}
+	return nil
+}
+
+// contentStage is which stages carry the content in their key, stated here
+// rather than read from the estimator. A rule that asked the predictor which key
+// it should have used would be the predictor agreeing with itself: this is the
+// Lab's own account of which durations are a property of what was pulled and
+// which are a property of the machine.
+func contentStage(stage domain.LaunchStage) bool {
+	switch stage {
+	case domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch, domain.StageApplicationReady:
+		return true
+	default:
+		return false
+	}
 }
 
 // keyedCandidate is what a candidate key has already been handed out for: the

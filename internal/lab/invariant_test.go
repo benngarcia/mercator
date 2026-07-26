@@ -35,8 +35,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 31 {
-		t.Fatalf("latest invariant results = %d, want 31", len(latest))
+	if len(latest) != 32 {
+		t.Fatalf("latest invariant results = %d, want 32", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -377,6 +377,26 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				}),
 			}
 		},
+		// A prediction reporting this exact candidate out of the ask its listing
+		// arrived under. The seconds and the sample count read as evidence about
+		// this machine, and the key they came from is a number the marketplace
+		// mints per search: whatever launch is behind them, it can never be read
+		// back and it was never about this candidate.
+		"safety.prediction_states_its_provenance": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				bookingDecidedEvent("decision-1", domain.BookingDecision{
+					RunID: "run-1",
+					Candidates: []domain.CandidateDecision{{
+						OfferSnapshotID: "ask-4417",
+						Candidate: domain.CandidateIdentity{
+							Lane: domain.LaneEphemeral, Provider: "simvast", Region: "US-CA",
+							Accelerator: "nvidia-a100x2", ImageDigest: "sha256:image",
+						},
+						Estimates: domain.CandidateEstimates{Stages: keyedStages("ask-4417")},
+					}},
+				}),
+			}
+		},
 		"liveness.admitted_run_progress": func(observation *InvariantObservation) {
 			observation.Now = now.Add(25 * time.Hour)
 			observation.Runs = []domain.RunRecord{{ID: "run-1", Phase: "running"}}
@@ -533,6 +553,155 @@ func TestEveryClauseOfTheCandidateIdentityRuleCanFail(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEveryClauseOfThePredictionProvenanceRuleCanFail is the provenance rule read
+// the way every law here has to be readable. The registry's single deliberate
+// case drives the clause the rule exists for, an exact-candidate answer read out
+// of the listing it arrived on, and each of the others is shown failing on the
+// one record it is there to catch. None of these records is written by any code
+// in this tree, which is what a standing rule is for: it is what the tree would
+// have to start writing for the record to stop being auditable.
+func TestEveryClauseOfThePredictionProvenanceRuleCanFail(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	machine := domain.CandidateIdentity{
+		Lane: domain.LaneEphemeral, Provider: "simvast", Region: "US-CA",
+		Machine: "machine-77", Accelerator: "nvidia-a100x2", ImageDigest: "sha256:image",
+	}
+	for name, answer := range map[string]domain.Estimate{
+		// A prediction that does not say what it rests on. Ninety seconds from five
+		// launches of this machine and ninety seconds from a constant read the same,
+		// and a calibration cannot tell which of them it is allowed to grade.
+		"a stage that names no level at all": {Expected: 90},
+		// Samples filed under an answer that says nobody has ever watched this
+		// happen. One of the two statements is false and the record does not say
+		// which.
+		"a prior carrying samples": {Expected: 90, Level: domain.LevelPrior, SampleCount: 3, Key: machine.Candidate(true)},
+		// A level claiming measured launches with none behind it.
+		"a keyed level with nothing measured under it": {
+			Expected: 90, Level: domain.LevelProviderAndRegion, Key: machine.ProviderAndRegion(),
+		},
+		// An answer at a level of the hierarchy with no key to have read it from.
+		"a keyed level naming no key": {Expected: 90, Level: domain.LevelProvider, SampleCount: 2},
+		// The clause the rule exists for: this exact candidate, answered out of the
+		// ask ID the listing arrived under, which a marketplace mints per search.
+		"an exact-candidate answer read out of the listing": {
+			Expected: 90, Level: domain.LevelExactCandidate, SampleCount: 1, Key: "ask-4417",
+		},
+		// The same defect wearing the provider's own name for the listing.
+		"an answer read out of the provider's native reference": {
+			Expected: 90, Level: domain.LevelExactCandidate, SampleCount: 1, Key: "lane=ephemeral;native=4417",
+		},
+		// An exact-candidate answer about some other machine. The key recurs, the
+		// samples are real, and they are somebody else's.
+		"an exact-candidate answer under another candidate's key": {
+			Expected: 90, Level: domain.LevelExactCandidate, SampleCount: 4,
+			Key: "lane=ephemeral;provider=simvast;machine=machine-88;image=sha256:image",
+		},
+		// A level nothing in the hierarchy answers at.
+		"a level the hierarchy does not have": {
+			Expected: 90, Level: domain.PredictionLevel("guess"), SampleCount: 1, Key: machine.Candidate(true),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := predictionObservation(now, machine, everyStage(answer))
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.prediction_states_its_provenance",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("%s was reported as a prediction that states its provenance: %+v", name, result)
+			}
+		})
+	}
+}
+
+// TestAnAnsweredStageAndAPriorAreBothHonestProvenance is the counterpart: the
+// rule has to pass the two records production actually writes, or it could only
+// be satisfied by a tree that predicts nothing.
+func TestAnAnsweredStageAndAPriorAreBothHonestProvenance(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	machine := domain.CandidateIdentity{
+		Lane: domain.LaneEphemeral, Provider: "simvast", Region: "US-CA",
+		Machine: "machine-77", Accelerator: "nvidia-a100x2", ImageDigest: "sha256:image",
+	}
+	for name, answer := range map[string]func(domain.LaunchStage) domain.Estimate{
+		// The content stages carry the content in their key and the machine stages
+		// do not, which is what keeps one machine's boot history from being split
+		// across every image the fleet ever ran on it.
+		"a stage answered from this machine's own launches": func(stage domain.LaunchStage) domain.Estimate {
+			return domain.Estimate{
+				Expected: 30, Level: domain.LevelExactCandidate, SampleCount: 1,
+				Key: machine.Candidate(contentStage(stage)),
+			}
+		},
+		"a stage answered from the province the machine is in": func(domain.LaunchStage) domain.Estimate {
+			return domain.Estimate{
+				Expected: 90, Level: domain.LevelProviderAndRegion, SampleCount: 2, Key: machine.ProviderAndRegion(),
+			}
+		},
+		"a stage nobody has ever measured": func(domain.LaunchStage) domain.Estimate {
+			return domain.Estimate{Expected: 300, Level: domain.LevelPrior}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := predictionObservation(now, machine, answer)
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.prediction_states_its_provenance",
+			)
+
+			if result.Status != InvariantPassed {
+				t.Fatalf("%s was reported as a violation: %s", name, result.Violation)
+			}
+		})
+	}
+}
+
+// predictionObservation is one recorded decision whose candidate answered every
+// stage the same way, which is what lets a case state the answer alone.
+func predictionObservation(now time.Time, identity domain.CandidateIdentity, answer func(domain.LaunchStage) domain.Estimate) InvariantObservation {
+	return InvariantObservation{
+		StartedAt:       now,
+		Now:             now,
+		World:           WorldTruthSnapshot{At: now, Offers: []domain.OfferSnapshot{gpuOffer("ask-4417", 2)}},
+		Workloads:       map[string]domain.WorkloadRevision{},
+		RentalSchedules: map[string]domain.RentalSchedule{},
+		RunRequirements: map[string]RunArrival{},
+		ArtifactCatalog: map[string]domain.ArtifactVersion{},
+		SeededLocality:  map[string]map[string]bool{},
+		MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("decision-1", domain.BookingDecision{
+			RunID: "run-1",
+			Candidates: []domain.CandidateDecision{{
+				OfferSnapshotID: "ask-4417",
+				NativeRef:       "4417",
+				Candidate:       identity,
+				Estimates: domain.CandidateEstimates{Stages: domain.LaunchStageEstimates{}.Answered(
+					func(stage domain.LaunchStage, _ domain.Estimate) domain.Estimate { return answer(stage) },
+				)},
+			}},
+		})},
+	}
+}
+
+// everyStage is one answer given whatever stage is asked, so a case about the
+// record itself states it once rather than eight times.
+func everyStage(answer domain.Estimate) func(domain.LaunchStage) domain.Estimate {
+	return func(domain.LaunchStage) domain.Estimate { return answer }
+}
+
+// keyedStages is every stage answered as this exact candidate out of the listing
+// the offer arrived under, which is the record the deliberate registry case is
+// about.
+func keyedStages(listing string) domain.LaunchStageEstimates {
+	return domain.LaunchStageEstimates{}.Answered(
+		func(domain.LaunchStage, domain.Estimate) domain.Estimate {
+			return domain.Estimate{Expected: 90, Level: domain.LevelExactCandidate, SampleCount: 1, Key: listing}
+		},
+	)
 }
 
 // reusable is the same listing in the other lane: capacity Mercator would enrol a
