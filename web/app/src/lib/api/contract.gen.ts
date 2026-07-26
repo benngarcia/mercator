@@ -892,6 +892,8 @@ export interface components {
             required?: unknown;
             offered?: unknown;
             message: string;
+            /** @description Whether this refusal names capacity that is spent right now and comes back when the work spending it finishes, rather than what the machine is. It is what decides whether work behind a Run refused everywhere is competing with it for the same machine. */
+            ended_by_waiting?: boolean;
         };
         AcceleratorInventory: {
             vendor: string;

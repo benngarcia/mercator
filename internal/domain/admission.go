@@ -16,8 +16,15 @@ const (
 	DeferredNoFeasibleOffer = "NO_FEASIBLE_OFFER"
 	// DeferredNoCapacityFits is a Run nothing would take, waiting for capacity to
 	// be added. Every machine the fleet published was weighed against it, and none
-	// of them holds a queue this Run could be waiting on, so waiting for the fleet
-	// as it stands changes nothing.
+	// of them could hold it once the capacity it is spending now comes back, so
+	// waiting for the fleet as it stands changes nothing.
+	//
+	// It is decided from what each machine refused the Run for and never from what
+	// each machine happens to be doing. A refusal that names capacity somebody is
+	// spending ends when they stop spending it; a refusal that names what the
+	// machine is does not end at all. Reading a Booking as the difference made
+	// every occupied machine look like a wait, so one ask nothing could hold
+	// emptied a fleet as soon as any other Run was running on it.
 	//
 	// It is a reason of its own because the queue turns on the difference. Work
 	// behind a Run waiting for a machine to come free is waiting for that same
@@ -55,12 +62,27 @@ type AdmissionDeferral struct {
 	QueuedSeconds        float64 `json:"queued_seconds"`
 	MaxQueueDelaySeconds float64 `json:"max_queue_delay_seconds"`
 	// ProjectedWaitSeconds is the shortest wait the decision says this Run
-	// faces, projected from the Bookings Mercator holds on the capacity it was
-	// refused from. It is absent where no candidate carried a schedule to
-	// project from, which is a wait nobody measured rather than a wait of
-	// nothing.
-	ProjectedWaitSeconds float64       `json:"projected_wait_seconds,omitempty"`
-	Behind               []QueuedAhead `json:"behind,omitempty"`
+	// faces, projected from the Bookings Mercator holds on the capacity that
+	// could hold it. It is absent where nothing that could hold this Run carried
+	// a schedule to project from, which is a wait nobody measured rather than a
+	// wait of nothing.
+	ProjectedWaitSeconds float64 `json:"projected_wait_seconds,omitempty"`
+	// Weighed is how many machines the fleet published that this Run was measured
+	// against, and CouldHold how many of those could take it once the capacity
+	// they are spending now comes back.
+	//
+	// They are the evidence the reason above rests on, and they are recorded
+	// because the reason alone cannot be checked. A wait for capacity to be added
+	// and a fleet that published nothing read identically to an operator who is
+	// told only that no offer was feasible, and a rule that has to police which of
+	// the two waits Mercator recorded has nothing to police it against.
+	//
+	// A wait admission caused rather than Placement weighed nothing, and says so
+	// with a zero: what a Run held behind work that outranks it is waiting for is
+	// the queue, and the fleet was never asked.
+	Weighed   int           `json:"weighed"`
+	CouldHold int           `json:"could_hold"`
+	Behind    []QueuedAhead `json:"behind,omitempty"`
 }
 
 // QueuedAhead is one piece of work a deferred Run is waiting behind: either a

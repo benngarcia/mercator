@@ -1,0 +1,51 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One machine with 200GB of room, six hours into a Booking, and a Run arrives asking for 900GB. The answer is the one an idle fleet gives: no machine here can hold it, so it waits for capacity to be added and the record projects no wait at all. What it must not be is refused. A projected wait was taken off every candidate whose Rental held a Booking, feasible or not, so this Run inherited the six hours somebody else declared as a max runtime, its class's four hour deadline was already inside that, and admission closed it as DEADLINE_UNREACHABLE at its very first pass having queued it for zero seconds. The identical submission against the identical idle machine was queued and kept for four hours, so whether a Run was told its deadline could not be met turned on whether an unrelated Run happened to be on a machine that could never take it either way. A wait nobody measured and a wait of zero are different facts, and the deadline rule refuses to guess over the difference: the projection now comes only from machines that could hold this Run once the capacity they are spending comes back, and none of these could.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-only",
+        "version": 1,
+        "running": {
+          "booking": "booking-long",
+          "run": "holds-the-machine-all-day",
+          "remaining_max_runtime": "6h"
+        }
+      }
+    ]
+  },
+  "request": {
+    "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+    "service_class": "standard",
+    "resources": {"disk": "900GB"},
+    "expected_runtime": "10m",
+    "max_runtime": "20m"
+  },
+  "expect": {
+    "outcome": "defer",
+    "deferral": {
+      "reason": "NO_CAPACITY_FITS",
+      "behind": [],
+      "weighed": 1,
+      "could_hold": 0,
+      "projected_wait_seconds": 0
+    }
+  }
+}

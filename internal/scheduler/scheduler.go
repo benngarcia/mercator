@@ -300,6 +300,9 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 			Required: "offer not rejected by an earlier attempt",
 			Offered:  offer.ID,
 			Message:  "Offer was rejected as unavailable by an earlier launch attempt.",
+			// What this machine refused was a launch, and what it said was that it
+			// had nothing to run it on. That is capacity somebody else is spending.
+			EndedByWaiting: true,
 		})
 	}
 	if !offer.Lane.Valid() {
@@ -324,10 +327,10 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.max_containers", Required: len(workload.Spec.Containers), Offered: offer.Capabilities.Container.MaxContainers, Message: "Offer cannot run the required number of containers."})
 	}
 	if !offer.Capacity.Available && !queueable(input, offer) {
-		violations = append(violations, domain.Violation{Code: "CAPACITY_UNAVAILABLE", Path: "capacity.available", Required: true, Offered: false, Message: "Offer capacity evidence says the capacity is not currently available."})
+		violations = append(violations, domain.Violation{Code: "CAPACITY_UNAVAILABLE", Path: "capacity.available", Required: true, Offered: false, Message: "Offer capacity evidence says the capacity is not currently available.", EndedByWaiting: true})
 	}
 	if schedule, ok := input.Schedules[offer.RentalID]; ok && len(schedule.Bookings) >= domain.RentalScheduleQueueCapacity+1 {
-		violations = append(violations, domain.Violation{Code: "QUEUE_CAPACITY_EXCEEDED", Path: "rental_schedule.bookings", Required: domain.RentalScheduleQueueCapacity + 1, Offered: len(schedule.Bookings), Message: "Rental Schedule has no open Booking position."})
+		violations = append(violations, domain.Violation{Code: "QUEUE_CAPACITY_EXCEEDED", Path: "rental_schedule.bookings", Required: domain.RentalScheduleQueueCapacity + 1, Offered: len(schedule.Bookings), Message: "Rental Schedule has no open Booking position.", EndedByWaiting: true})
 	}
 	if !offer.Capabilities.Container.SupportsDigestRefs {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})

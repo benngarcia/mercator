@@ -178,6 +178,15 @@ waits for is a queue an operator cannot read. `effective_priority` and
 `queued_seconds` are what the record says the Run was worth and how long it had
 been waiting, which is the only visible evidence that waiting promotes anything.
 
+`weighed` and `could_hold` are the fleet the wait was measured against: how many
+machines this Run was weighed against, and how many of those could have taken it
+once the capacity they are spending came back. They are the evidence the reason
+rests on, and stating them is how a fixture tells a fleet that published nothing
+from a fleet that weighed this Run and refused it. A machine that is both busy and
+too small counts in the first and never in the second.
+`projected_wait_seconds` is the wait the record projects from the Bookings on the
+capacity that could hold this Run, and zero states that nothing projected one.
+
 An arrival-driven Lab Blueprint uses:
 
 ```json

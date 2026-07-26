@@ -1621,6 +1621,41 @@ func TestAnImpossibleAskLeavesThisFleetRunning(t *testing.T) {
 	fleet.queueForWantOfCapacity(t, oversized)
 }
 
+// TestAnImpossibleAskLeavesABusyFleetRunning is the same claim about the fleet
+// every real workspace has, which is one with something already running on it. The
+// case above starts from an idle machine, and an idle machine is the one state in
+// which a classification read off the Bookings Mercator holds happens to agree with
+// what the machines actually refused.
+//
+// The node is occupied before the impossible ask arrives here. Its Rental now holds
+// a Booking, so a candidate built from it carries a projected start whether it could
+// ever run the work or not: reading that as the difference between the two waits
+// recorded a Run needing 900GiB of a 400GiB machine as waiting for capacity to come
+// free, which is a wait the queue makes later work respect. The Run behind it fits
+// the machine and belongs in the queue for it, one Booking behind the work that is
+// there, and it was told to wait for a machine three times this fleet's size to be
+// bought instead.
+func TestAnImpossibleAskLeavesABusyFleetRunning(t *testing.T) {
+	fleet := startFleet(t)
+
+	occupies := fleet.submitRun(t)
+	fleet.awaitOccupied(t, fleet.nodeID)
+	oversized := fleet.submitRunNeedingDisk(t, 900<<30)
+	fleet.queueForWantOfCapacity(t, oversized)
+	fits := fleet.submitRunNeedingDisk(t, 100<<30)
+
+	if selected := fleet.decision(t, fits).SelectedOfferSnapshotID; selected != fleet.nodeID {
+		t.Fatalf("a Run needing 100GiB of this machine's 400GiB was placed on %q, and it belongs in the queue for the node that has the room", selected)
+	}
+	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, oversized) {
+		t.Fatalf("a Run needing 900GiB was sent to a machine with 400GiB free: %v", launched)
+	}
+	if occupying := fleet.runtime.launchedRuns(); !slices.Contains(occupying, occupies) {
+		t.Fatalf("the machine this case needs busy is running %v", occupying)
+	}
+	fleet.queueForWantOfCapacity(t, oversized)
+}
+
 // TestTheFleetListingReportsTheRoomThisMachineReallyHas is the whole chain
 // against a real container daemon: this host's Docker names the filesystem it
 // keeps content on, the production agent measures it, the node protocol carries

@@ -126,6 +126,25 @@ func (candidate CandidateDecision) Priced() bool {
 	return candidate.Estimates.CostUSD.Source != CostUnpriced
 }
 
+// CouldHoldOnceFree reports whether this machine could take this Run once the
+// capacity it is spending right now comes back. A candidate nothing refused
+// could take it already. A candidate refused for what the machine is, or for
+// what its publisher never said, could not take it whenever anybody waited.
+//
+// It is the question the admission queue is ordered on, which is why it is asked
+// of the refusals rather than of the Bookings. A machine that is both busy and
+// too small is busy and too small: reading the Booking alone made every occupied
+// machine in the fleet look like a wait this Run was in, so one ask nothing could
+// hold emptied a workspace as soon as anything else was running.
+func (candidate CandidateDecision) CouldHoldOnceFree() bool {
+	for _, refusal := range candidate.Rejections {
+		if !refusal.EndedByWaiting {
+			return false
+		}
+	}
+	return true
+}
+
 // Preferred reports whether this candidate is the better placement. It is a
 // total order: candidates that tie on dollars take the one that is ready sooner,
 // and candidates that tie on both fall back to the offer snapshot ID, so one

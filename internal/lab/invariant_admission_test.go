@@ -58,9 +58,15 @@ func TestBackfillMayNotTakeTheSlotAStarvedRunIsWaitingFor(t *testing.T) {
 
 // TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane is the queue's second
 // law at L1. The placement corpus can show admission ordering two Runs; only this
-// shows the machine actually running the second one, through the offer catalog, with
+// shows the machines actually running the other two, through the offer catalog, with
 // the real orchestrator, event log, and Run projection in the loop, while the Run
-// nothing can hold goes on waiting beside it.
+// nothing can hold goes on waiting beside them.
+//
+// The fleet is busy while the impossible ask is weighed, which is what makes the
+// case. One machine is five hours into work of its own, so a classification read off
+// the Bookings Mercator holds rather than off what each machine refused calls the
+// impossible ask a wait for capacity to come free, keeps the queue with it, and
+// leaves the idle machine standing beside the Run that fits it.
 //
 // It is driven to completion because the impossible Run never becomes placeable. The
 // execution has to reach the moment its class says the answer stopped being worth
@@ -78,21 +84,35 @@ func TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane(t *testing.T) {
 	}
 
 	decisions := bookingDecisions(t, execution)
-	if selected := decisions["run-fits"].SelectedOfferSnapshotID; selected != "rental-only" {
-		t.Fatalf("the Run that fits this fleet was placed on %q, and the one machine here has room for it", selected)
+	if selected := decisions["run-occupies"].SelectedOfferSnapshotID; selected != "rental-big" {
+		t.Fatalf("the Run needing 150GB was placed on %q, and only the 200GB machine has the room", selected)
+	}
+	if selected := decisions["run-fits"].SelectedOfferSnapshotID; selected != "rental-small" {
+		t.Fatalf("the Run that fits this fleet was placed on %q, and the idle machine here has room for it", selected)
 	}
 	if _, placed := decisions["run-impossible"]; placed {
-		t.Fatalf("a Run asking for 900GB was placed on a machine with 200GB")
+		t.Fatalf("a Run asking for 900GB was placed on a fleet whose largest machine has 200GB")
 	}
-	waiting := recordedAdmission(t, execution, "run-impossible")
-	if waiting.Reason != domain.DeferredNoCapacityFits && waiting.Reason != domain.RefusedDeadlineUnreachable {
-		t.Fatalf("the impossible Run's record says it waited for %q", waiting.Reason)
+	// It was never told to wait at all. A Run ordered behind the impossible ask is
+	// the defect, and it is visible as one deferral of a Run the fleet had room for
+	// the moment it arrived.
+	if deferral, waited := admissionRecord(t, execution, "run-fits"); waited {
+		t.Fatalf("the Run that fits was told to wait for %q behind %v", deferral.Reason, deferral.Behind)
+	}
+	waiting, _ := admissionRecord(t, execution, "run-impossible")
+	if waiting.Reason != domain.DeferredNoCapacityFits {
+		t.Fatalf("the impossible Run's record says it waited for %q, and every machine in this fleet was weighed against it", waiting.Reason)
+	}
+	if waiting.Weighed != 2 || waiting.CouldHold != 0 {
+		t.Fatalf("the record says %d machines were weighed and %d of them could hold this Run, and the fleet has two machines and neither can",
+			waiting.Weighed, waiting.CouldHold)
 	}
 }
 
-// recordedAdmission is the first thing admission said about one Run, read off the
-// public log the way an operator reads it.
-func recordedAdmission(t *testing.T, execution *Execution, runID string) domain.AdmissionDeferral {
+// admissionRecord is the first thing admission said about one Run, read off the
+// public log the way an operator reads it, and whether it said anything at all: a
+// Run the fleet had room for on arrival was never told to wait.
+func admissionRecord(t *testing.T, execution *Execution, runID string) (domain.AdmissionDeferral, bool) {
 	t.Helper()
 	events, err := execution.runtime.mercatorEvents(context.Background())
 	if err != nil {
@@ -108,10 +128,9 @@ func recordedAdmission(t *testing.T, execution *Execution, runID string) domain.
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
 			t.Fatalf("read the deferral: %v", err)
 		}
-		return payload.Deferral
+		return payload.Deferral, true
 	}
-	t.Fatalf("admission recorded nothing at all about %q", runID)
-	return domain.AdmissionDeferral{}
+	return domain.AdmissionDeferral{}, false
 }
 
 func admissionObservation(now time.Time, workloads map[string]domain.WorkloadRevision, events []eventlog.CloudEvent) InvariantObservation {

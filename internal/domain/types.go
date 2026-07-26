@@ -220,6 +220,25 @@ type Violation struct {
 	Required any    `json:"required,omitempty"`
 	Offered  any    `json:"offered,omitempty"`
 	Message  string `json:"message"`
+	// EndedByWaiting is whether this refusal names capacity that is spent right
+	// now and comes back when the work spending it finishes. It is stated where
+	// each check is made rather than derived from the code downstream, because
+	// only the check knows which of the two it found, and the answer decides
+	// whether work behind this Run is competing with it for the same machine.
+	//
+	// It is false by default, and that is the safe direction on purpose. A
+	// refusal wrongly said to end on its own makes every later arrival wait
+	// behind a Run this machine may never take, which is the head-of-line block
+	// the admission queue exists to prevent. A refusal wrongly said to be
+	// permanent only stops this Run from holding the queue, and its own class
+	// bound and deadline still govern how long it waits.
+	//
+	// Room is deliberately not one of them. Nothing in this tree collects
+	// garbage, Mercator observes no other tenant's content and commands no
+	// removal of it, so a machine short of room is a machine short of room until
+	// somebody adds a disk. When a runtime reclaims space, what it reclaims will
+	// be a fact this flag can be set from.
+	EndedByWaiting bool `json:"ended_by_waiting,omitempty"`
 }
 
 type OfferKind string

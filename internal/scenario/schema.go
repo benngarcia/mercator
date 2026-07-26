@@ -1179,6 +1179,21 @@ type DeferralExpectation struct {
 	Priority *Bound `json:"effective_priority,omitempty"`
 	// QueuedSeconds asserts how long the record says it had been waiting.
 	QueuedSeconds *Bound `json:"queued_seconds,omitempty"`
+	// Weighed asserts how many machines the record says this Run was measured
+	// against, and CouldHold how many of them could have taken it once the capacity
+	// they are spending came back. They are the evidence the reason rests on: a
+	// fixture stating only the reason cannot tell a fleet that published nothing
+	// from a fleet that weighed this Run and refused it, and that difference is what
+	// the queue is ordered on.
+	Weighed   *Bound `json:"weighed,omitempty"`
+	CouldHold *Bound `json:"could_hold,omitempty"`
+	// ProjectedWait asserts the wait the record says this Run faces, projected
+	// from the Bookings Mercator holds on capacity that could hold it. Zero states
+	// that nothing projected one, which is what a fixture needs to say about a Run
+	// no machine can take: it is the number the deadline rule refuses a Run on, and
+	// a projection off a machine that could never run the work refuses it for
+	// somebody else's runtime.
+	ProjectedWait *Bound `json:"projected_wait_seconds,omitempty"`
 }
 
 type BookingExpectation struct {

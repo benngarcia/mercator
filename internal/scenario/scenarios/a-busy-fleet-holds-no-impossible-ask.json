@@ -1,0 +1,85 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Two machines, and the impossible ask arrives while one of them is working. rental-big has 200GB and a Booking that runs for another 45 minutes; rental-small has 100GB and nothing on it. A Run asking for 900GB is weighed against both, neither can hold it, and the wait is one for capacity to be added: two machines weighed, none that could hold it once the capacity they are spending comes back. A minute later a Run asking for 50GB arrives and takes the idle machine. Nothing in the fleet's answer to the impossible ask changed when the big machine got busy, and that is the claim. Classifying the wait from the Bookings rather than from the refusals said the opposite: a candidate whose Rental holds a Booking carries a projected start whether it could ever run the work or not, so the impossible ask was recorded as a wait for capacity to come free, kept the queue, and the 50GB Run was ordered behind it at effective priority 50 against the ask's 53 with rental-small standing idle until the ask's own four hour deadline cleared it. One continuously busy machine anywhere in the workspace was enough to keep the exemption switched off for the whole fleet, which is the defect an-impossible-ask-holds-no-queue could not state, because there the fleet is idle when the fitting Run arrives.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-big",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "rental-small",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "100GB"},
+        "rate_per_hour_usd": 1.0
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-big",
+        "version": 1,
+        "running": {
+          "booking": "booking-active",
+          "run": "occupies-the-big-machine",
+          "remaining_max_runtime": "45m"
+        }
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "asks-for-a-machine-nobody-has",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "900GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_CAPACITY_FITS",
+          "behind": [],
+          "effective_priority": 50,
+          "queued_seconds": 0,
+          "weighed": 2,
+          "could_hold": 0
+        }
+      }
+    },
+    {
+      "advance": "1m"
+    },
+    {
+      "submit": "fits-the-idle-machine",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "50GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-small",
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+        "candidates": {
+          "rental-small": {"feasible": true, "image_locality": "hot"},
+          "rental-big": {"feasible": true, "queue_seconds": 2640}
+        }
+      }
+    }
+  ]
+}

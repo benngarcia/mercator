@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "One machine with 200GB of room, and the first Run asks for 900GB. Nothing in this fleet can hold it, so admission queues it and says which of the two waits it is in: NO_CAPACITY_FITS is a wait for capacity to be added, because every machine the fleet published was weighed against this Run and none of them holds a queue it could be waiting on. A minute later the second Run asks for 100GB and takes the machine, which a minute of the first Run's waiting is what makes worth stating: the impossible Run now outranks a fresh arrival of its own class, so the queue has every reason to order the fitting Run behind it and must not. That is the whole claim: a wait nobody can end holds no queue, and until the queue read the difference one impossible submission emptied the fleet, because the Run that fitted was ordered behind an ask nothing could satisfy until the impossible Run's own class deadline cleared it, four hours later for standard work and never for a class that declares no deadline. The third step is the same Run asked again once the machine is busy, and the answer moves: the record can now project when that machine comes free, so the wait becomes NO_FEASIBLE_OFFER and names the work holding it. Two things are stated there. The queue reading a machine that is both occupied and too small as worth waiting behind lasts exactly as long as the projection does. And a second deferral of one Run is a fact Mercator can actually write: the command each one is appended under used to be named after the reason alone, so the second time admission said the same thing about a changed queue the append replayed a spent key against a different hash and every refresh of that Run answered 502 for as long as the state held.",
+  "summary": "One machine with 200GB of room, and the first Run asks for 900GB. Nothing in this fleet can hold it, so admission queues it and says which of the two waits it is in: NO_CAPACITY_FITS is a wait for capacity to be added, because every machine the fleet published was weighed against this Run and none of them could hold it once the capacity it is spending came back. The record states that evidence beside the reason, one machine weighed and none that could hold it, because the reason on its own cannot be checked against anything. A minute later the second Run asks for 100GB and takes the machine, which a minute of the first Run's waiting is what makes worth stating: the impossible Run now outranks a fresh arrival of its own class, so the queue has every reason to order the fitting Run behind it and must not. That is the whole claim: a wait nobody can end holds no queue, and until the queue read the difference one impossible submission emptied the fleet, because the Run that fitted was ordered behind an ask nothing could satisfy until the impossible Run's own class deadline cleared it, four hours later for standard work and never for a class that declares no deadline. The third step is the same Run asked again once the machine is busy, and the answer does not move. A machine that is both occupied and too small is occupied and too small: the Booking on it is not a wait this Run is in, so the record still says one machine was weighed, none could hold it, and nothing is in front of it. Reading the Booking rather than the refusal is what made the classification collapse the moment anything else in the workspace was running, and it is why nothing new is appended here: a wait that has not changed is not restated.",
   "classification": "green",
   "world": {
     "images": {
@@ -36,7 +36,9 @@
           "reason": "NO_CAPACITY_FITS",
           "behind": [],
           "effective_priority": 50,
-          "queued_seconds": 0
+          "queued_seconds": 0,
+          "weighed": 1,
+          "could_hold": 0
         }
       }
     },
@@ -69,10 +71,10 @@
       "expect": {
         "outcome": "defer",
         "deferral": {
-          "reason": "NO_FEASIBLE_OFFER",
-          "behind": ["fits-what-is-there"],
-          "effective_priority": {"at_least": 53, "at_most": 54},
-          "queued_seconds": 60
+          "reason": "NO_CAPACITY_FITS",
+          "behind": [],
+          "weighed": 1,
+          "could_hold": 0
         }
       }
     }

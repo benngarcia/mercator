@@ -96,7 +96,7 @@ func applyToQueue(waiting map[string]waitingRun, event eventlog.StoredEvent) err
 		}
 		queued.runID = event.StreamID
 		queued.class = data.Deferral.Class
-		queued.holdsTheQueue = data.Deferral.Reason != domain.DeferredNoCapacityFits
+		queued.holdsNoQueue = holdsNoQueue(queued.holdsNoQueue, data.Deferral)
 		waiting[event.StreamID] = queued
 	case EventAdmissionRefused, EventRunClosed:
 		delete(waiting, event.StreamID)
@@ -116,6 +116,26 @@ func applyToQueue(waiting map[string]waitingRun, event eventlog.StoredEvent) err
 	return nil
 }
 
+// holdsNoQueue is what one deferral establishes about the wait a Run is in.
+// Only Placement can establish it, because only Placement weighed the fleet: a
+// Run told it waits behind work that outranks it was measured against no machine
+// at all, and a wait like that leaves what the fleet last said standing rather
+// than overwriting it.
+//
+// That is not a detail of bookkeeping. An impossible ask holds no queue, so it is
+// itself ordered behind the first Run that outranks it, and a deferral that read
+// the ordering as an answer about capacity would put the ask straight back in
+// front of the fleet it can never use.
+func holdsNoQueue(established bool, deferral domain.AdmissionDeferral) bool {
+	switch deferral.Reason {
+	case domain.DeferredNoCapacityFits:
+		return true
+	case domain.DeferredNoFeasibleOffer:
+		return false
+	}
+	return established
+}
+
 // admissionQueue is the work already waiting, which is the only thing a Run has
 // to be ordered against. Work that is running is not in it: a machine is held by
 // whoever is on it, and no priority takes that away.
@@ -129,13 +149,18 @@ type waitingRun struct {
 	runID string
 	class domain.ServiceClass
 	since time.Time
-	// holdsTheQueue is whether this Run's wait is one other work has to respect.
-	// A Run waiting for capacity to come free holds the queue, because whatever is
-	// behind it wants the same capacity. A Run every machine in the fleet was
-	// weighed against and none of them could hold is waiting for capacity to
-	// arrive, and it holds nothing: work that fits the fleet as it stands is not
-	// competing with it for anything.
-	holdsTheQueue bool
+	// holdsNoQueue is whether this Run's wait is one other work does not have to
+	// respect. A Run waiting for capacity to come free holds the queue, because
+	// whatever is behind it wants the same capacity. A Run every machine in the
+	// fleet was weighed against and none of them could hold is waiting for
+	// capacity to arrive, and it holds nothing: work that fits the fleet as it
+	// stands is not competing with it for anything.
+	//
+	// It is stated as the exemption rather than as the rule so that the zero value
+	// is the rule. A Run whose record says nothing about the fleet holds the queue
+	// like every other wait, and only a placement that weighed the fleet and found
+	// nothing in it may take that away.
+	holdsNoQueue bool
 }
 
 // queuePosition is one Run's standing in the queue at one moment: what its class
@@ -186,7 +211,7 @@ func (queue admissionQueue) position(runID string, state runState, at time.Time)
 func (queue admissionQueue) ahead(run queuePosition) []domain.QueuedAhead {
 	var behind []domain.QueuedAhead
 	for _, other := range queue.waiting {
-		if other.runID == run.runID || !other.holdsTheQueue {
+		if other.runID == run.runID || other.holdsNoQueue {
 			continue
 		}
 		policy := other.class.Admission()
@@ -245,26 +270,50 @@ func (o *Orchestrator) deferOrRefuse(
 
 // placementDeferral is the wait a decision that selected nothing puts a Run in:
 // which of the two waits it is, what the record says is in front of it, and the
-// soonest anything it was weighed against comes free.
+// soonest anything that could hold this Run comes free.
+//
+// Everything it answers is answered over the machines that could hold this Run
+// once the capacity they are spending comes back, and never over the whole
+// candidate set. A machine that can never take this Run is not a wait it is in:
+// naming it as work ahead tells an operator to wait for a machine that will
+// refuse the Run again, projecting a start from it decides this Run's deadline on
+// somebody else's runtime, and counting it as a queue this Run is in is what let
+// one impossible ask empty a fleet the moment anything else was running.
 func placementDeferral(run queuePosition, decision domain.BookingDecision) (domain.AdmissionDeferral, bool) {
-	wait, projected := shortestProjectedWait(decision)
+	waitable := couldHoldOnceFree(decision)
+	wait, projected := shortestProjectedWait(waitable)
 	reason := domain.DeferredNoFeasibleOffer
-	if len(decision.Candidates) > 0 && !projected {
+	if len(decision.Candidates) > 0 && len(waitable) == 0 {
 		reason = domain.DeferredNoCapacityFits
 	}
-	deferral := run.deferral(reason, workAhead(decision))
+	deferral := run.deferral(reason, workAhead(waitable))
 	deferral.ProjectedWaitSeconds = wait
+	deferral.Weighed = len(decision.Candidates)
+	deferral.CouldHold = len(waitable)
 	return deferral, projected
 }
 
-// shortestProjectedWait is the soonest the record says anything this Run was
-// weighed against comes free, projected from Bookings Mercator itself holds. A
-// decision whose candidates carried no schedule projected nothing, and the
-// difference between that and a wait of zero is what the deadline rule refuses to
-// guess over.
-func shortestProjectedWait(decision domain.BookingDecision) (float64, bool) {
-	shortest, projected := 0.0, false
+// couldHoldOnceFree is the machines this decision weighed that could take this
+// Run when whatever they are spending now comes back. It is the whole fleet as
+// far as a wait is concerned, and the rest of the candidate set is a record of
+// machines this Run is not competing for.
+func couldHoldOnceFree(decision domain.BookingDecision) []domain.CandidateDecision {
+	var waitable []domain.CandidateDecision
 	for _, candidate := range decision.Candidates {
+		if candidate.CouldHoldOnceFree() {
+			waitable = append(waitable, candidate)
+		}
+	}
+	return waitable
+}
+
+// shortestProjectedWait is the soonest the record says anything that could hold
+// this Run comes free, projected from Bookings Mercator itself holds. A candidate
+// that carried no schedule projected nothing, and the difference between that and
+// a wait of zero is what the deadline rule refuses to guess over.
+func shortestProjectedWait(candidates []domain.CandidateDecision) (float64, bool) {
+	shortest, projected := 0.0, false
+	for _, candidate := range candidates {
 		if candidate.RentalSchedule == nil {
 			continue
 		}
@@ -277,13 +326,13 @@ func shortestProjectedWait(decision domain.BookingDecision) (float64, bool) {
 }
 
 // workAhead is what this Run is waiting behind, read off the decision Mercator
-// recorded: the Runs whose Bookings hold the capacity its candidates were weighed
-// against. Their effective priority is left at zero, which is not a ranking. Work
-// that already holds a machine is ahead because it is there.
-func workAhead(decision domain.BookingDecision) []domain.QueuedAhead {
+// recorded: the Runs whose Bookings hold the capacity that could otherwise have
+// taken it. Their effective priority is left at zero, which is not a ranking.
+// Work that already holds a machine is ahead because it is there.
+func workAhead(candidates []domain.CandidateDecision) []domain.QueuedAhead {
 	var ahead []domain.QueuedAhead
 	seen := map[string]bool{}
-	for _, candidate := range decision.Candidates {
+	for _, candidate := range candidates {
 		if candidate.RentalSchedule == nil {
 			continue
 		}

@@ -310,6 +310,21 @@ func assertAdmission(events []eventlog.StoredEvent, name string, expect ExpectSp
 			fail("queued_seconds: %s", problem)
 		}
 	}
+	if want.Weighed != nil {
+		if problem := want.Weighed.Check(float64(deferral.Weighed)); problem != "" {
+			fail("the machines weighed: %s", problem)
+		}
+	}
+	if want.CouldHold != nil {
+		if problem := want.CouldHold.Check(float64(deferral.CouldHold)); problem != "" {
+			fail("the machines that could hold this Run once free: %s", problem)
+		}
+	}
+	if want.ProjectedWait != nil {
+		if problem := want.ProjectedWait.Check(deferral.ProjectedWaitSeconds); problem != "" {
+			fail("projected_wait_seconds: %s", problem)
+		}
+	}
 	return failures
 }
 

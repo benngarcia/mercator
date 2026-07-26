@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "One machine with 200GB of room under the real control plane, and the first Run asks for 900GB. No machine in this fleet can hold it, so admission queues it: the wait is for capacity to be added and not for capacity to come free, and nothing in the fleet as it stands is what the Run is competing for. A minute later a Run asking for 100GB arrives, and it runs. That minute is what makes the case: the impossible Run has aged past a fresh arrival of its own class, so the queue has every reason to order the second Run behind it. Ordering it there is what emptied a workspace, because the wait it would be respecting is one nothing that can arrive ends, and the Run holding it up is not waiting for the machine the second Run would take. This is the placement corpus's claim asserted at L1, where the queue is replayed out of the public log and safety.nothing_waits_behind_an_impossible_ask is what adjudicates it.",
+  "summary": "Two machines under the real control plane, one of them working all day, and a Run that asks for 900GB. rental-big has 200GB and takes a Run that needs 150GB of it for the next five hours; rental-small has 100GB and nothing on it. The impossible ask is weighed against both and neither can hold it, so it waits for capacity to be added, and the Run that arrives a minute later asking for 50GB runs on the idle machine straight away without being told to wait at all. The busy machine is the whole point of the world. Classifying the wait from the Bookings Mercator holds rather than from what each machine refused made one occupied machine anywhere in the workspace enough to record the impossible ask as a wait for capacity to come free, which keeps the queue: the 50GB Run was then ordered behind an ask nothing in the fleet can satisfy, and rental-small stood idle until the ask's own four hour deadline cleared it. This is the placement corpus's claim asserted at L1, where the queue is replayed out of the public log and safety.nothing_waits_behind_an_impossible_ask adjudicates it against the fleet each deferral says it weighed.",
   "seed": "mercator-lab-impossible-ask-v1",
   "world": {
     "images": {
@@ -21,10 +21,24 @@
     },
     "rentals": [
       {
-        "id": "rental-only",
+        "id": "rental-big",
         "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
         "resources": {"disk": "200GB"},
         "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "rental-small",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "100GB"},
+        "rate_per_hour_usd": 1.0
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "occupies",
+        "candidate": "rental-big",
+        "minimum": "5h",
+        "maximum": "5h"
       }
     ]
   },
@@ -32,8 +46,19 @@
     "type": "fixed",
     "runs": [
       {
-        "name": "impossible",
+        "name": "occupies",
         "at": "0s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "standard",
+          "resources": {"disk": "150GB"},
+          "expected_runtime": "5h",
+          "max_runtime": "6h"
+        }
+      },
+      {
+        "name": "impossible",
+        "at": "1m",
         "request": {
           "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
           "service_class": "standard",
@@ -44,11 +69,11 @@
       },
       {
         "name": "fits",
-        "at": "1m",
+        "at": "2m",
         "request": {
           "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
           "service_class": "standard",
-          "resources": {"disk": "100GB"},
+          "resources": {"disk": "50GB"},
           "expected_runtime": "5m",
           "max_runtime": "10m"
         }

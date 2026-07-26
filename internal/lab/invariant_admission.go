@@ -94,6 +94,11 @@ func describeQueuedAhead(ahead []domain.QueuedAhead) string {
 // leaving it there, so the two laws would contradict each other on the one world
 // where a fleet holds a Run it can never place.
 //
+// Which Runs those are is read off the fleet each deferral records rather than off
+// the reason beside it, for the reason
+// safety.nothing_waits_behind_an_impossible_ask states: the reason is the answer
+// under examination.
+//
 // The queue is replayed out of the public log rather than read off the read
 // model, because the question is about a moment that has passed. What matters is
 // who was waiting when the decision was taken, and the projection only ever says
@@ -112,10 +117,6 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 			if err != nil {
 				return err
 			}
-			if !waitsForCapacity(deferral) {
-				delete(queue, runID)
-				continue
-			}
 			// The moment a wait began never moves, and what the Run is waiting for
 			// does: a Run whose fleet filled up while it waited is waiting for
 			// something the ordering has to respect, and one whose fleet emptied is
@@ -125,6 +126,7 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 				held.since = at
 			}
 			held.class = deferral.Class
+			held.heldByNothing = heldByNothing(held.heldByNothing, deferral)
 			queue[runID] = held
 		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
 			delete(queue, runID)
@@ -158,12 +160,27 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 type queuedRun struct {
 	class domain.ServiceClass
 	since time.Time
+	// heldByNothing is what the record last established about the fleet's answer
+	// to this Run: weighed against every machine it published and held by none of
+	// them. A Run in that state is waiting for capacity to be added, so the
+	// ordering is not over it.
+	heldByNothing bool
 }
 
-// waitsForCapacity reports whether this wait is one the ordering is over: a wait for
-// capacity to come free rather than for capacity to be added.
-func waitsForCapacity(deferral domain.AdmissionDeferral) bool {
-	return deferral.Reason != domain.DeferredNoCapacityFits
+// heldByNothing is what one deferral establishes about the fleet's answer to the
+// Run it is about: measured against every machine the fleet published, and none of
+// them able to hold it once the capacity they are spending comes back.
+//
+// It is derived from the machines the deferral says were weighed rather than from
+// the reason Mercator recorded, because the reason is what these laws exist to
+// hold to account. A deferral that weighed nothing establishes nothing and leaves
+// the last answer standing: a Run held behind work that outranks it was measured
+// against no machine at all.
+func heldByNothing(established bool, deferral domain.AdmissionDeferral) bool {
+	if deferral.Weighed == 0 {
+		return established
+	}
+	return deferral.CouldHold == 0
 }
 
 func admittedInClassOrder(observation InvariantObservation, queue map[string]queuedRun, runID string, at time.Time) error {
@@ -179,6 +196,9 @@ func admittedInClassOrder(observation InvariantObservation, queue map[string]que
 			continue
 		}
 		held := queue[other]
+		if held.heldByNothing {
+			continue
+		}
 		waited := at.Sub(held.since).Seconds()
 		otherPolicy := held.class.Admission()
 		otherPriority := otherPolicy.EffectivePriority(waited)
@@ -207,12 +227,20 @@ func admittedInClassOrder(observation InvariantObservation, queue map[string]que
 // impossible Run's own class deadline clears it, which for a class that declares no
 // deadline is never.
 //
+// What makes a Run impossible here is the evidence its own deferral carries and
+// never the reason Mercator wrote beside it. The reason is the answer under
+// examination: production decides the ordering from it, so a law that read the
+// same word could only ever fail on the ordering step, and the classification that
+// says which Runs the ordering exempts would be the one thing nothing policed.
+// A record of machines weighed and none of them able to hold this Run is a fact
+// about the fleet, and it stands whatever Mercator went on to call it.
+//
 // It is replayed out of the public log rather than read off the read model because
 // it is a rule about the moment a decision was taken: what matters is what Mercator
 // had already recorded about the Run it named as ahead, and the projection only
 // says what is true now.
 func nothingWaitsBehindAnImpossibleAsk(observation InvariantObservation) error {
-	waiting := map[string]bool{}
+	impossible := map[string]bool{}
 	for _, event := range observation.MercatorEvents {
 		runID := strings.TrimPrefix(event.Subject, "runs/")
 		switch event.Type {
@@ -221,32 +249,32 @@ func nothingWaitsBehindAnImpossibleAsk(observation InvariantObservation) error {
 			if err != nil {
 				return err
 			}
-			if err := heldByNothingImpossible(waiting, runID, deferral); err != nil {
+			if err := heldByNothingImpossible(impossible, runID, deferral); err != nil {
 				return err
 			}
-			waiting[runID] = !waitsForCapacity(deferral)
+			impossible[runID] = heldByNothing(impossible[runID], deferral)
 		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
-			delete(waiting, runID)
+			delete(impossible, runID)
 		case orchestrator.EventBookingDecided:
 			decision, err := recordedDecision(event)
 			if err != nil {
 				return err
 			}
 			if decision.SelectedOfferSnapshotID != "" {
-				delete(waiting, decision.RunID)
+				delete(impossible, decision.RunID)
 			}
 		}
 	}
 	return nil
 }
 
-func heldByNothingImpossible(waiting map[string]bool, runID string, deferral domain.AdmissionDeferral) error {
+func heldByNothingImpossible(impossible map[string]bool, runID string, deferral domain.AdmissionDeferral) error {
 	for _, ahead := range deferral.Behind {
-		if !waiting[ahead.RunID] {
+		if !impossible[ahead.RunID] {
 			continue
 		}
 		return fmt.Errorf(
-			"Run %q of class %q was told it waits behind %q, and the record already said no machine in this fleet can take %q at all",
+			"Run %q of class %q was told it waits behind %q, and the record already said every machine this fleet published was weighed against %q and none of them can hold it",
 			runID, deferral.Class, ahead.RunID, ahead.RunID,
 		)
 	}
