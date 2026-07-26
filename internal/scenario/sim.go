@@ -719,6 +719,10 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	if req.MaxRuntime != nil {
 		spec.Execution.MaxRuntimeSeconds = int64(req.MaxRuntime.Duration().Seconds())
 	}
+	// A fixture that says nothing about how many refusals its Run survives gets
+	// what a caller who says nothing gets, which is normalisation's business and
+	// which is one attempt.
+	spec.Execution.MaxPreStartAttempts = req.MaxPreStartAttempts
 	if req.MaxStartLatency != nil {
 		spec.Placement.MaxP90StartSeconds = req.MaxStartLatency.Duration().Seconds()
 	}

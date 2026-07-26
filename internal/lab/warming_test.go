@@ -557,6 +557,126 @@ func TestAPublishedRiskHistoryReachesTheRecordAtL1(t *testing.T) {
 	}
 }
 
+// TestAPublishedRateIsNotWhatAMachineDoes is the published risk history beside a
+// world that contradicts it, which is the half the corpus could not state.
+//
+// Two reviewers made the same objection to the record above: a rate is copied
+// from a fixture onto an offer onto a decision, and no simulated world can
+// produce the event it is a rate of, so a Blueprint may say a machine refuses
+// every start and be graded green while that machine starts everything. The term
+// that will price a refusal is a probability times the start of the redo a
+// refusal causes, and a corpus that cannot produce the redo cannot falsify it.
+//
+// This is that world. The Run takes the machine whose provider measured it and
+// never saw it refuse a start, because the two histories are recorded and priced
+// nowhere and the placement falls through to the offer ID, and that machine
+// refuses the launch. Mercator strikes it out and places the Run on the listing
+// whose provider published the worse record, where it runs and succeeds.
+//
+// What the record says about the two providers does not move. A rate is what a
+// provider measured and published, and Mercator has begun measuring nothing about
+// machines on its providers' behalf, so a refusal that really happened leaves both
+// histories exactly as they were stated. That separation is the thing to keep when
+// the redo is priced: the prediction reads the published rate, and what the world
+// then does is what the prediction is scored against.
+func TestAPublishedRateIsNotWhatAMachineDoes(t *testing.T) {
+	execution := openConformanceExecution(t, "a-published-rate-is-not-what-a-machine-does")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 12 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	decisions := decisionsFor(t, execution, "run-unlucky")
+	if len(decisions) != 2 {
+		t.Fatalf("the Run was placed %d times, and a refused start is answered by placing it again", len(decisions))
+	}
+	refused, redone := decisions[0], decisions[1]
+	if refused.SelectedOfferSnapshotID != "ask-a-clean-record" {
+		t.Fatalf("the Run was first placed on %q, and the two histories rank nothing so the offer ID decides", refused.SelectedOfferSnapshotID)
+	}
+	if !slices.Contains(runEventTypes(t, execution, "run-unlucky"), orchestrator.EventLaunchFailed) {
+		t.Fatalf("the machine took the launch, and this world is the one where the machine its provider stands behind refuses it")
+	}
+	struckOut := candidateFor(t, redone, "ask-a-clean-record")
+	if struckOut.Feasible || struckOut.Rejections[0].Code != "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE" {
+		t.Fatalf("the machine that refused the start was weighed again as %+v", struckOut.Rejections)
+	}
+	if redone.SelectedOfferSnapshotID != "ask-b-bad-record" {
+		t.Fatalf("the redo landed on %q, and the only machine left is the one whose provider published the worse record", redone.SelectedOfferSnapshotID)
+	}
+	clean := domain.ReliabilityEvidence{
+		StartFailures: domain.StatedRate{Rate: 0, Confidence: 0.9},
+		Interruptions: domain.StatedRate{Rate: 0, Confidence: 0.9},
+	}
+	bad := domain.ReliabilityEvidence{
+		StartFailures: domain.StatedRate{Rate: 0.4, Confidence: 0.9},
+		Interruptions: domain.StatedRate{Rate: 0.25, Confidence: 0.9},
+	}
+	for _, decision := range decisions {
+		if got := candidateFor(t, decision, "ask-a-clean-record").Reliability; got != clean {
+			t.Fatalf("the decision records %+v for the machine that refused the start, and a rate is what its provider measured", got)
+		}
+		if got := candidateFor(t, decision, "ask-b-bad-record").Reliability; got != bad {
+			t.Fatalf("the decision records %+v for the machine that took the work, and a rate is what its provider measured", got)
+		}
+	}
+	if outcome := projectedRun(t, execution, "run-unlucky").Outcome; outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("the Run closed %q, and the machine its provider says refuses two starts in five started it", outcome)
+	}
+}
+
+// decisionsFor is every placement this Run was given, in the order they were
+// taken. The map beside it keeps one decision per Run, which is the wrong shape
+// for a Run placed twice: the redo is the whole subject here.
+func decisionsFor(t *testing.T, execution *Execution, runID string) []domain.BookingDecision {
+	t.Helper()
+	stored, err := execution.runtime.mercatorEvents(context.Background())
+	if err != nil {
+		t.Fatalf("read Mercator events: %v", err)
+	}
+	var decisions []domain.BookingDecision
+	for _, event := range stored {
+		cloud := event.CloudEvent()
+		if cloud.Type != orchestrator.EventBookingDecided {
+			continue
+		}
+		var payload struct {
+			Decision domain.BookingDecision `json:"decision"`
+		}
+		if err := json.Unmarshal(cloud.Data, &payload); err != nil {
+			t.Fatalf("decode Booking Decision: %v", err)
+		}
+		if payload.Decision.RunID == runID {
+			decisions = append(decisions, payload.Decision)
+		}
+	}
+	return decisions
+}
+
+// runEventTypes is everything this Run's own stream says happened to it.
+func runEventTypes(t *testing.T, execution *Execution, runID string) []string {
+	t.Helper()
+	stored, err := execution.runtime.mercatorEvents(context.Background())
+	if err != nil {
+		t.Fatalf("read Mercator events: %v", err)
+	}
+	var types []string
+	for _, event := range stored {
+		cloud := event.CloudEvent()
+		if cloud.Subject == "runs/"+runID {
+			types = append(types, cloud.Type)
+		}
+	}
+	return types
+}
+
 // TestTheRunStreamRecordsAStartNobodyInferred is the observed-start claim at L1.
 // The placement corpus can prove that a start latency read off the run stream is
 // the world's own moment; only this proves it through the real orchestrator, event

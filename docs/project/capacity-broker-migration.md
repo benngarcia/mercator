@@ -2336,6 +2336,64 @@ complete because it works against a live provider.
     start budget is mostly unpacking is admitted unverified rather than refused. The
     answer is a measured unpack rate, which is a node slice and a calibration
     question, not a constant promoted to a measurement here.
+- [x] 2026-07-26: Answer the second review of the risk-history commit. Two reviewers
+  refuted seven claims on it, five of which the first review of that commit had
+  already fixed and which reproduce nowhere in this tree. The two that survive are
+  both about the same thing: a rule the code obeys and nothing enforces, and a rate
+  the corpus can state and no world can produce.
+  - What a score may doubt is a law now. The reliability entry was removed from both
+    models' confidences, and the rule that removal rests on was left stated in three
+    comments and pinned by two fixtures, which is the exact shape the defect survived
+    a phase in. `domain.ScoredAnswers` declares the questions the score reads an
+    answer to, which is the capacity claim and the eight stages of a launch, and
+    `safety.doubt_only_the_answers_the_score_reads` holds every recorded decision to
+    it. What it forbids can only ever run one way: a stated confidence is charged and
+    a silence is not, so doubt about an answer the score never reads penalises the
+    publisher that measured its machine, leaves alone the publisher that said nothing,
+    leaves alone the publisher certain its machine refuses every start, and ranks the
+    machine nobody measured above all three. `safety.score_is_reproducible_from_the_record`
+    could never see it, because both models charged the same doubt and the score
+    reproduced from the record exactly. Restoring the entry to the production scheduler
+    fails the L1 execution through the new rule, naming the candidate, the tenth of a
+    point, and the answer it was about.
+  - The corpus can produce a refused start now. `RequestSpec.max_pre_start_attempts`
+    is the missing vocabulary: the API has carried the bound since launches could
+    fail, no Blueprint could state it, so every Run in this corpus was normalised to
+    one attempt and closed the moment any machine turned it away. A Run placed again
+    on other capacity is the whole consequence a refusal has, and the term that will
+    price a published refusal rate is a probability times the start of exactly that
+    redo, so the successor slice had no world to be falsified in.
+  - `a-published-rate-is-not-what-a-machine-does` is that world at L1. Two listings
+    at one price and one warmth. The Run takes the machine whose provider measured it
+    and never saw it refuse a start, because the histories rank nothing and the offer
+    ID decides, and the world refuses that launch through the fault the corpus has
+    always had for a provider that rejects a command. Mercator strikes the machine out
+    with `PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE` and places the Run on the listing
+    whose provider published the worse record, where it runs and succeeds. Both
+    decisions record both histories unchanged, which is the second claim: a rate is
+    what a provider measured and published, Mercator measures nothing about machines
+    on its providers' behalf, and a refusal that really happened moves neither number.
+    Three breaks fail it: removing the fault, removing the attempt bound, and stopping
+    the Lab world publishing the history at all.
+  - Rejected, with evidence. Five findings describe the tree as it was at that commit
+    and not as it is. The reliability confidence left `scheduler.confidences` and
+    `lab.referenceConfidences` in "Doubt only the answers the score reads"; the
+    vocabulary moved from `RentalSpec` to `MarketplaceOfferSpec`, where the one
+    production publisher actually attaches it, in "Make a launch eight predicted
+    stages"; `ReliabilityEvidence` became two independently stated rates and
+    `vast.interruptionHistory` stopped inventing a start failure rate at full
+    confidence, with `reliability2` a pointer so a silent ask publishes no history,
+    in "State a rate somebody measured". A sixth is refuted outright: the Lab world
+    has been able to refuse a launch since the fault vocabulary existed, through
+    `provider.launch` and `reject_command`, and `provider-rejection-single-run` is a
+    Blueprint in the corpus that does it.
+  - Open, and named rather than fixed. No world can interrupt work it is already
+    running. `ExternalPhaseFailed` is terminal in the orchestrator, so an interrupted
+    Run would close failed rather than be placed again, and there is no interruption
+    policy for a fixture to be about: what a published interruption rate costs cannot
+    be stated until Mercator decides what it does when a machine drops a running
+    workload. Simulating one now would state a world the control plane has no answer
+    for.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what

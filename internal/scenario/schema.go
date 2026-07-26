@@ -988,6 +988,17 @@ type RequestSpec struct {
 	// semantics. What the world then spends is WorldSpec.launch.application_ready,
 	// and the two are stated separately so neither derives the other.
 	ExpectedReady *Duration `json:"expected_ready,omitempty"`
+	// MaxPreStartAttempts is how many times a machine may refuse to start this Run
+	// before Mercator gives up on it. The API has carried it since launches could
+	// fail and no Blueprint could state it, so every Run in this corpus was
+	// normalised to one attempt and closed the moment any machine turned it away.
+	//
+	// Which meant the corpus could state a machine that refuses a start and could
+	// never state the redo that follows one. A Run placed again on another machine
+	// is the whole consequence a refusal has, and the term that will price a
+	// published refusal rate is a probability times the start of exactly that
+	// redo, so the successor slice had no world to be falsified in.
+	MaxPreStartAttempts int `json:"max_pre_start_attempts,omitempty"`
 	// ServiceClass is the kind of work this Run says it is, and the only thing
 	// that says what waiting is worth to it. It is a string rather than the domain
 	// type so a fixture can state a class Mercator does not know, which is a world
