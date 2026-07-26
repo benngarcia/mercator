@@ -99,7 +99,11 @@ func startRuntimeWithLease(t *testing.T, lease time.Duration) (string, *daemon.R
 	served := make(chan error, 1)
 	go func() { served <- runtime.Serve(listener) }()
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		// The same budget the production entrypoint gives itself. Draining waits
+		// for whatever an enrolled node is holding open, so a shorter one here
+		// asserts something about this machine's timing rather than about the
+		// daemon shutting down cleanly.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := runtime.Shutdown(ctx); err != nil {
 			t.Fatalf("shutdown runtime: %v", err)

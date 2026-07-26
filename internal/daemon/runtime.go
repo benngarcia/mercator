@@ -407,12 +407,18 @@ func (r *Runtime) Serve(listener net.Listener) error {
 	return r.server.Serve(listener)
 }
 
-// Shutdown drains HTTP requests, stops and joins background reconciliation,
-// then closes SQLite. Repeated calls return the first shutdown result.
+// Shutdown stops and joins background reconciliation, drains HTTP requests, then
+// closes SQLite. Repeated calls return the first shutdown result.
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	r.shutdownOnce.Do(func() {
-		httpErr := r.server.Shutdown(ctx)
+		// Background work is told to stop before requests are drained, and joined
+		// after. Reconciliation and preparation both send commands to machines, and
+		// an enrolled node receives one by holding a request open on this same
+		// server, so draining while they are still starting work is waiting for
+		// requests this process is still creating. Joining them first would spend
+		// the caller's drain budget on a sweep that answers to nobody.
 		r.stopReconcile()
+		httpErr := r.server.Shutdown(ctx)
 		<-r.reconcileDone
 		<-r.prepareDone
 		storageErr := r.storage.Close()
