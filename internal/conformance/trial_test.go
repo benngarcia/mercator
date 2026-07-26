@@ -64,6 +64,18 @@ func TestRunnerVerifiesARealReportedRunAndConfirmedCleanup(t *testing.T) {
 	if evidence.Run.BookingDecision.SelectedOfferSnapshotID == "" || len(evidence.Run.Events) == 0 || evidence.Run.StartedAt.IsZero() {
 		t.Fatalf("run evidence is incomplete: %+v", evidence.Run)
 	}
+	// The probe reported its own readiness over the real report endpoint, with the
+	// moment it became ready, and the record carries it. That is the actual of the
+	// last stage of a launch, and it is the one stage nothing but the workload can
+	// report: the trial's verdict reads it, so a probe that ran and never said so
+	// fails rather than passing with that stage unproven.
+	if evidence.Run.ApplicationReadyAt == nil {
+		t.Fatalf("the trial recorded no moment the probe became ready: %+v", evidence.Run)
+	}
+	if evidence.Run.ApplicationReadyAt.Before(evidence.Run.StartedAt) || evidence.Run.ApplicationReadyAt.After(time.Now().UTC()) {
+		t.Fatalf("the probe reported readiness at %s, and the trial ran from %s to now",
+			evidence.Run.ApplicationReadyAt.Format(time.RFC3339Nano), evidence.Run.StartedAt.Format(time.RFC3339Nano))
+	}
 }
 
 func TestRunnerLaunchCancelProvesARealLaunchAndConfirmedCleanup(t *testing.T) {

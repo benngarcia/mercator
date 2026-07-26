@@ -247,6 +247,13 @@ func successfulRunFailure(mode Mode, run RunEvidence) *TrialFailure {
 	if !containsEvent(run.EventTypes, orchestrator.EventRunReported) {
 		return &TrialFailure{Code: "PROBE_REPORT_MISSING", Message: "probe Run closed without a signed workload report"}
 	}
+	// The probe reports its own readiness, and the record has to carry the moment.
+	// A report that arrived without one leaves the last stage of the launch with no
+	// actual, which is the untyped callback this contract replaced: an event saying
+	// something happened and nothing able to say when.
+	if run.ApplicationReadyAt == nil {
+		return &TrialFailure{Code: "PROBE_READY_MOMENT_MISSING", Message: "probe Run recorded no moment its application became ready"}
+	}
 	if run.Outcome != string(domain.RunOutcomeSucceeded) || run.ExitCode == nil || *run.ExitCode != 0 {
 		return &TrialFailure{Code: "PROBE_FAILED", Message: "probe Run did not finish with exit code zero"}
 	}

@@ -185,7 +185,14 @@ func (client trialClient) captureRunEvidence(ctx context.Context, workspaceID st
 }
 
 func runEvidence(run domain.RunRecord) RunEvidence {
-	return RunEvidence{ID: run.ID, Outcome: string(run.Outcome), ExitCode: run.ExitCode, Cleanup: string(run.Cleanup), Closed: run.Closed}
+	return RunEvidence{
+		ID:                 run.ID,
+		ApplicationReadyAt: run.ReadyAt,
+		Outcome:            string(run.Outcome),
+		ExitCode:           run.ExitCode,
+		Cleanup:            string(run.Cleanup),
+		Closed:             run.Closed,
+	}
 }
 
 func (client trialClient) do(ctx context.Context, method, path, idempotencyKey string, body, response any) error {

@@ -1,0 +1,114 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One Run and two machines, and what separates them is which stages of a launch each of them still owes. The machine that does not exist yet publishes ten minutes of provisioning and this world really spends them: two minutes acquiring it, six booting it, two enrolling Mercator's runtime. Then 500MB of image crosses the link, the bytes are applied, and the container runtime is asked for a process, which is three more stages that cost nothing anywhere before this fixture. The Rental beside it holds the image assembled and is idle, so its only remaining stages are the container starting and the application coming up: that is what makes the fixture able to say which stages belong to the machine and which belong to the workload. The Run is opportunistic and the cheap machine wins, so the record it leaves is the whole waterfall: eight stages predicted, and eight actuals to measure them against. Eleven minutes in, the container has been running for a moment and the application has said nothing, because a running process is not a serving one. Four minutes after that it reports ready, three minutes after its own process began, against the two minutes the workload declared.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "500MB"}
+        ]
+      }
+    },
+    "launch": {
+      "unpack": "30s",
+      "container_start": "20s",
+      "application_ready": "3m"
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e"],
+        "rate_per_hour_usd": 20.0
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-cheap",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {
+          "expected": "10m",
+          "p90": "15m",
+          "acquisition": "2m",
+          "boot": "6m",
+          "agent_ready": "2m"
+        }
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "server",
+      "request": {
+        "image": "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e",
+        "service_class": "opportunistic",
+        "expected_runtime": "1h",
+        "max_runtime": "2h",
+        "expected_ready": "2m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-cheap",
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_OPPORTUNISTIC"],
+        "disposition": "terminate",
+        "no_start_observed": true,
+        "no_ready_reported": true,
+        "candidates": {
+          "rental-warm": {
+            "feasible": true,
+            "image_locality": "hot",
+            "stages": {
+              "acquisition": {"seconds": 0, "source": "machine_exists"},
+              "boot": {"seconds": 0, "source": "machine_exists"},
+              "agent_ready": {"seconds": 0, "source": "machine_exists"},
+              "image_fetch": {"seconds": 0, "source": "image_inventory", "confidence": 1},
+              "unpack": {"seconds": 0, "source": "image_inventory", "confidence": 1},
+              "artifact_fetch": {"seconds": 0, "source": "workload_reads_nothing"},
+              "container_start": {"seconds": 1, "source": "scheduler"},
+              "application_ready": {"seconds": 120, "source": "workload.expected_ready"}
+            }
+          },
+          "fresh-cheap": {
+            "feasible": true,
+            "image_locality": "unknown",
+            "stages": {
+              "acquisition": {"seconds": 0, "source": "unpublished"},
+              "boot": {"seconds": 600, "source": "offer"},
+              "agent_ready": {"seconds": 0, "source": "unpublished"},
+              "image_fetch": {"seconds": {"at_least": 8, "at_most": 9}, "source": "inventory_unknown", "confidence": 0.5},
+              "unpack": {"seconds": 0, "source": "inventory_unknown"},
+              "artifact_fetch": {"seconds": 0, "source": "workload_reads_nothing"},
+              "container_start": {"seconds": 1, "source": "scheduler"},
+              "application_ready": {"seconds": 120, "source": "workload.expected_ready"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "advance": "11m"
+    },
+    {
+      "reconcile": "server",
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-cheap",
+        "start_latency_seconds": {"at_least": 658, "at_most": 659},
+        "no_ready_reported": true
+      }
+    },
+    {
+      "advance": "4m"
+    },
+    {
+      "reconcile": "server",
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-cheap",
+        "start_latency_seconds": {"at_least": 658, "at_most": 659},
+        "ready_latency_seconds": 180
+      }
+    }
+  ]
+}
