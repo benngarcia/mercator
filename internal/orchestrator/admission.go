@@ -35,7 +35,7 @@ func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string,
 	if behind := queue.ahead(waiting); len(behind) > 0 {
 		return false, o.recordDeferral(ctx, workspaceID, runID, version, state, waiting.deferral(domain.DeferredBehindHigherClass, behind))
 	}
-	return true, o.stepPlace(ctx, workspaceID, runID, version, state, waiting)
+	return o.stepPlace(ctx, workspaceID, runID, version, state, waiting)
 }
 
 // admissionQueue is every Run in this workspace admission has already told to

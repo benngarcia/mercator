@@ -2394,6 +2394,36 @@ complete because it works against a live provider.
     be stated until Mercator decides what it does when a machine drops a running
     workload. Simulating one now would state a world the control plane has no answer
     for.
+- [x] 2026-07-26: Stop the advance loop the queue left spinning. Admission turned a
+  Run no candidate would take from an error into a deferral, and `stepAdmit`
+  reported that placement had moved the Run whatever placement did. A deferral the
+  record already carries appends nothing, so `AdvanceRun` re-derived the same state
+  and deferred again without end: one submission to a control plane with no capacity
+  burned a core inside its own HTTP request, held that Run's lock for as long as the
+  caller waited, and never answered. It reproduced on this workstation as
+  `TestANodeThatCannotMeasureItsDiskWinsNoPlacement` timing out at ten minutes with
+  `internal/daemon` failing the whole suite, and it is a production hang rather than
+  a test one: the stack is `CreateRun` through `Intake` to the same loop.
+  - `stepPlace` reports whether the Run moved. A placement that selected nothing has
+    not moved it: admission has queued it and the next tick asks again. Retry
+    exhaustion still reports progress, because closing a Run is a transition the loop
+    has to reduce.
+  - `TestARunNothingCanTakeWaitsInsteadOfSpinning` holds it, and the bound is what
+    states the claim. The fixed loop answers in milliseconds; the broken one only
+    stops when the deadline kills the query it is in the middle of, which is what
+    makes the case a failure rather than a hang. Reverting the fix fails it with
+    `advance a Run nothing can take: orchestrator: read the launch history: context
+    deadline exceeded`.
+  - Two daemon cases asserted the contract admission replaced. `refuseToPlace`
+    expected 502 from a refresh, and a Run nothing can take is now queued with the
+    reason on the Run itself, so `queueForWantOfCapacity` reads the phase and
+    `NO_FEASIBLE_OFFER` off the daemon's own answer. That is a stronger assertion
+    than the status code was: 502 said only that something had failed.
+  - Judgment call. The loop and the two stale cases belong to the admission slice,
+    which has no entry in this log and left `internal/scenario` changes uncommitted in
+    the worktree. They are recorded here because they were found while verifying the
+    launch waterfall, and a branch whose suite cannot finish cannot verify anything.
+    The uncommitted scenario work was left exactly as it was found.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what

@@ -769,11 +769,26 @@ func (f *fleet) advance(t *testing.T, runID string) {
 	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusOK)
 }
 
-// refuseToPlace drives one Run forward the way the reconcile sweep does and
-// expects the daemon to answer that it found nowhere to put it.
-func (f *fleet) refuseToPlace(t *testing.T, runID string) {
+// queueForWantOfCapacity drives one Run forward the way the reconcile sweep does
+// and expects the daemon to answer that it queued it because nothing would take
+// it. It reads the answer the caller gets rather than an error code: admission
+// records a Run nothing can take as waiting, so the refresh succeeds and what an
+// operator acts on is the phase and the reason on the Run itself.
+func (f *fleet) queueForWantOfCapacity(t *testing.T, runID string) {
 	t.Helper()
-	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusBadGateway)
+	var response struct {
+		Run struct {
+			Phase     string `json:"phase"`
+			Admission struct {
+				Reason string `json:"reason"`
+			} `json:"admission"`
+		} `json:"run"`
+	}
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+	if response.Run.Phase != "queued" || response.Run.Admission.Reason != domain.DeferredNoFeasibleOffer {
+		t.Fatalf("run %q is %q waiting for %q, and nothing in this fleet has room for it",
+			runID, response.Run.Phase, response.Run.Admission.Reason)
+	}
 }
 
 // nodes is the operator's own view of the fleet, kept as the typed answer and
@@ -1533,7 +1548,7 @@ func TestANodeThatCannotMeasureItsDiskWinsNoPlacement(t *testing.T) {
 		t.Fatalf("a node that could not measure its disk offered %d bytes of room", offered)
 	}
 	runID := fleet.submitRun(t)
-	fleet.refuseToPlace(t, runID)
+	fleet.queueForWantOfCapacity(t, runID)
 
 	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, runID) {
 		t.Fatalf("a Run was sent to a machine whose room nobody established: %v", launched)
@@ -1544,15 +1559,14 @@ func TestANodeThatCannotMeasureItsDiskWinsNoPlacement(t *testing.T) {
 // of the same bug, end to end through the public API. One Run asks for less
 // disk than the node has and lands on it, which before this commit no Run
 // declaring any disk at all could do. One asks for more than the machine has,
-// and the daemon answers that it found nowhere to put it and never asks the node
-// to run it.
+// and the daemon queues it for want of capacity and never asks the node to run
+// it.
 //
-// The refusal is read from the daemon's answer rather than from a recorded
-// rejection because a Run that finds no feasible offer records no Booking
-// Decision at all today, which is its own gap in the explanation record. What
-// the refusal names is asserted where a decision exists: the Blueprint
-// a-host-that-cannot-hold-the-data-is-not-warm holds RESOURCE_INSUFFICIENT
-// against the disk the Run asked for.
+// The waiting is read from the daemon's answer, which is where admission put it:
+// a Run no candidate would take is queued with the reason on the Run itself.
+// Which candidate was struck out and why is asserted where a decision exists:
+// the Blueprint a-host-that-cannot-hold-the-data-is-not-warm holds
+// RESOURCE_INSUFFICIENT against the disk the Run asked for.
 func TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout(t *testing.T) {
 	fleet := startFleet(t)
 
@@ -1560,7 +1574,7 @@ func TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout(t *testing.T) {
 	fleet.completeWorkload(t, fits, 0)
 	fleet.awaitOutcome(t, fits, "succeeded")
 	oversized := fleet.submitRunNeedingDisk(t, 900<<30)
-	fleet.refuseToPlace(t, oversized)
+	fleet.queueForWantOfCapacity(t, oversized)
 
 	if selected := fleet.decision(t, fits).SelectedOfferSnapshotID; selected != fleet.nodeID {
 		t.Fatalf("a Run needing 100GiB landed on %q, and the node has 400GiB free", selected)

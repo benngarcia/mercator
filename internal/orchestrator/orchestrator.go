@@ -508,22 +508,24 @@ func offerFromDecision(decision domain.BookingDecision) (domain.OfferSnapshot, e
 }
 
 // stepPlace decides placement and records the decision, attempt, and launch
-// intent in one append, so the intent is durable before any adapter call.
-func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState, run queuePosition) error {
+// intent in one append, so the intent is durable before any adapter call. It
+// reports whether the Run moved, because a placement that selected nothing has
+// not moved it: admission queues that Run and the next tick asks again.
+func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState, run queuePosition) (bool, error) {
 	attemptNumber := state.attemptCount + 1
 	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, state.excludedOfferSnapshotIDs)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if decision.SelectedOfferSnapshotID == "" {
 		if state.replacementEligible() {
-			return o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
+			return true, o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
 		}
-		return o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, decision)
+		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, decision)
 	}
 	nextSchedule, err := reserveDecision(*state.requested, decision, schedule)
 	if err != nil {
-		return err
+		return false, err
 	}
 	events := []eventlog.NewEvent{
 		mustEvent(runID, "booking_decided_"+decision.Booking.ID, EventBookingDecided, bookingDecisionData{Decision: decision}, o.now()),
@@ -532,10 +534,10 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	if decision.Booking.State == domain.BookingStateQueued {
 		request, requestErr := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
 		if requestErr != nil {
-			return requestErr
+			return false, requestErr
 		}
 		_, err = o.commitSchedule(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
-		return err
+		return true, err
 	}
 	reportPublicURL, reportToken := "", ""
 	if o.reportingPublicURL != "" && o.reportingSigner != nil && o.reportingSigner.Enabled() {
@@ -544,7 +546,7 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	}
 	launchReq, err := buildLaunchRequest(workspaceID, runID, *state.requested, attempt, selectedOffer, reportPublicURL, reportToken)
 	if err != nil {
-		return err
+		return false, err
 	}
 	events = append(events,
 		mustEvent(runID, "attempt_created_"+attempt.AttemptID, EventAttemptCreated, attempt, o.now()),
@@ -552,10 +554,10 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	)
 	request, err := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = o.commitSchedule(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
-	return err
+	return true, err
 }
 
 func reserveDecision(requested runRequestedData, decision domain.BookingDecision, schedule domain.RentalSchedule) (domain.RentalSchedule, error) {
