@@ -218,12 +218,18 @@ func TestTheMachineThatWroteTheContentStillReadsTheObjectStore(t *testing.T) {
 	}
 }
 
-// TestAConsumerReadsTheCopyAFetchLeftBehind is what a replica is for, on the one
-// copy anybody may be placed on: one a fetch of Mercator's landed and checked
-// against the catalog. The reference consumer fetched the stale set at 45m, and
-// the Run behind it reads what that fetch left rather than crossing the link
-// again.
-func TestAConsumerReadsTheCopyAFetchLeftBehind(t *testing.T) {
+// TestOneRunsReadIsNoCopyForTheNextRun is what a workload reading its own inputs
+// is worth to the Run behind it: nothing. The reference consumer read the stale
+// set out of the object store at 45m, and the Run that lands on that same machine
+// afterwards reads all 2GB again, because nothing of Mercator's fetched those
+// bytes, nothing hashed them, and no runtime in this tree attaches a replica to a
+// container or files what one downloaded for itself.
+//
+// The saving a checked copy does buy is asserted where such a copy can exist: on a
+// machine a preparation of Mercator's fetched onto, which the prewarming
+// conformance holds, and on a machine declared holding one before the world
+// started, which most of the corpus holds.
+func TestOneRunsReadIsNoCopyForTheNextRun(t *testing.T) {
 	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
 	defer func() {
 		if err := execution.Close(); err != nil {
@@ -233,15 +239,24 @@ func TestAConsumerReadsTheCopyAFetchLeftBehind(t *testing.T) {
 
 	driveInMinuteSteps(t, execution, 80)
 
-	if source := artifactReadSource(t, execution, "run-warm-consumer", staleSetArtifact); source != "replica" {
-		t.Fatalf("the consumer read its input from %q, and its host holds a copy a fetch checked", source)
+	decisions := bookingDecisions(t, execution)
+	host := decisions["run-warm-consumer"].SelectedOfferSnapshotID
+	if reader := decisions["run-reference-consumer"].SelectedOfferSnapshotID; host != reader {
+		t.Fatalf(
+			"the second reader landed on %q and the first read the store on %q, and this case is one machine reading one Artifact twice",
+			host, reader,
+		)
 	}
-	candidate := candidateFor(t, bookingDecisions(t, execution)["run-warm-consumer"], "producer-rental")
-	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityHot {
-		t.Fatalf("the host holding a checked copy records %+v of it", candidate.ArtifactEvidence)
+	if source := artifactReadSource(t, execution, "run-warm-consumer", staleSetArtifact); source != "object_store" {
+		t.Fatalf("the consumer read its input from %q, and the read before it left this host no copy", source)
 	}
-	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 0 {
-		t.Errorf("the host already holding a checked copy was priced %v seconds to read it", seconds)
+	candidate := candidateFor(t, decisions["run-warm-consumer"], host)
+	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityCold {
+		t.Fatalf("the host that read this Artifact for the previous Run records %+v of it", candidate.ArtifactEvidence)
+	}
+	// 2GB at 500 Mbps is 32 seconds, which is the read this machine owes again.
+	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 32 {
+		t.Errorf("the decision priced %v seconds to read 2GB the previous Run read here already, want 32", seconds)
 	}
 }
 
@@ -268,9 +283,12 @@ func TestAnUncheckedCopySavesNothing(t *testing.T) {
 	if source := artifactReadSource(t, execution, "run-reference-consumer", staleSetArtifact); source != "object_store" {
 		t.Fatalf("the Run read its input from %q, and the copy on that host was never checked", source)
 	}
+	// The read repaired nothing either. A workload reading past an unchecked copy
+	// into its own container leaves that copy exactly as unchecked as it found it,
+	// so this machine is no warmer for the Run behind it.
 	after := replicaOf(t, execution, staleSetArtifact, "producer-rental")
-	if after.State != domain.ArtifactReplicaVerified || after.VerifiedAt.IsZero() {
-		t.Fatalf("the fetch left a %+v copy behind, and a fetch checks what it downloaded", after)
+	if after.State != domain.ArtifactReplicaUnverified {
+		t.Fatalf("the copy on this host is %+v after a Run read past it, and nothing of Mercator's checked those bytes", after)
 	}
 }
 

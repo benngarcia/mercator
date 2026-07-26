@@ -323,6 +323,16 @@ type pendingPull struct {
 	completesAt time.Time
 }
 
+// contentSourcePrewarm and contentSourceLaunch are why content is moving onto a
+// machine, which the ledger records beside every transfer. A host warmed because
+// Mercator asked it to get ready and a host warmed because it ran something are
+// different facts about that machine, and one law reads exactly this difference:
+// only a preparation may leave an Artifact copy behind.
+const (
+	contentSourcePrewarm = "prewarm"
+	contentSourceLaunch  = "launch"
+)
+
 // pendingReplica is Artifact content still moving from the object store onto a
 // host. A copy exists when its bytes have landed and their digest matched, not
 // when the launch that wanted it was accepted. Like a pull it is named by the
@@ -1526,7 +1536,7 @@ func (world *simulatedWorld) pullRunImage(execution externalExecution, image str
 			offerID:     execution.OfferID,
 			runID:       execution.RunID,
 			launchKey:   execution.LaunchKey,
-			source:      "launch",
+			source:      contentSourceLaunch,
 			image:       image,
 			layers:      layers,
 			fetched:     fetched,
@@ -1583,10 +1593,17 @@ func (world *simulatedWorld) readableReplica(artifactID, offerID string) (domain
 // readRunArtifacts resolves every input this execution declared and answers when
 // the last of them is readable on the host. A copy this host may read is read
 // where there is one and costs nothing, which is the whole value of a replica;
-// anything else is fetched from the object store, because a copy nobody checked
+// anything else is read out of the object store, because a copy nobody checked
 // against this version is not evidence that the right bytes are here. The ledger
 // records which it was and what the copy claimed, so what a Run read is a fact
 // rather than an inference from world state.
+//
+// What the read does not leave behind is a copy. A workload reads its own inputs
+// into its own container: no runtime in this tree attaches a replica to a Run or
+// fetches one on its behalf at launch, so nothing hashes those bytes and nothing
+// files them, and a machine that read 40GB for one Run owes the same read for the
+// next. Only a fetch Mercator issued leaves a replica, which is the rule the
+// output side of this file already holds for the same reason.
 func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consumes []string) time.Time {
 	ready := world.now
 	for _, artifactID := range consumes {
@@ -1596,16 +1613,6 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 		if !readable {
 			source = "object_store"
 			completesAt = world.now.Add(world.store.transferDuration(artifactID))
-			version, _ := world.store.entry(artifactID)
-			world.replicating = append(world.replicating, pendingReplica{
-				offerID:     execution.OfferID,
-				runID:       execution.RunID,
-				launchKey:   execution.LaunchKey,
-				source:      source,
-				artifactID:  artifactID,
-				bytes:       version.SizeBytes,
-				completesAt: completesAt,
-			})
 		}
 		world.recordEffect(
 			OperationArtifactRead,
@@ -1626,7 +1633,6 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 		)
 		ready = later(ready, completesAt)
 	}
-	world.settleReplicas()
 	return ready
 }
 

@@ -11,8 +11,13 @@ import (
 // The host reports a checked copy of the dataset and the bytes under that name
 // are the version before it, which is the state restoring a volume snapshot
 // leaves a machine in. Placement charges the whole read for it, and so does the
-// world: the Run reads 40GB out of the object store, and the copy the machine
-// holds afterwards is the one it checked on arrival.
+// world: the Run reads 40GB out of the object store.
+//
+// What the machine holds afterwards is the restored snapshot, untouched. A
+// workload reads its inputs into its own container, and nothing of Mercator's
+// hashed or filed those bytes, so this host stays exactly as wrong as it was and
+// the next Run sent here is priced the same 640 seconds. Repairing it is a
+// preparation Mercator issues, and nothing was ever queued here to ask for one.
 //
 // A placement corpus cannot reach this. Every predicate in the control plane
 // already compares the copy's digest against the catalog, so a Booking Decision
@@ -42,9 +47,9 @@ func TestARestoredSnapshotIsReadOutOfTheObjectStore(t *testing.T) {
 	}
 	replica := replicaOf(t, execution, imagenetArtifact, restoredHost)
 	catalog := worldFactsOf(execution).ArtifactCatalog[imagenetArtifact]
-	if replica.ContentDigest != catalog.ContentDigest || !replica.State.Usable() {
-		t.Fatalf("the machine kept %+v after reading the object store, and the catalog says %s",
-			replica, catalog.ContentDigest)
+	if replica.ContentDigest == catalog.ContentDigest {
+		t.Fatalf("the machine holds %+v after the Run read the object store, and no fetch of Mercator's ever landed here",
+			replica)
 	}
 }
 
