@@ -4224,6 +4224,12 @@
           "native_ref": {
             "type": "string"
           },
+          "region": {
+            "type": "string"
+          },
+          "instance_type": {
+            "type": "string"
+          },
           "observed_at": {
             "type": "string",
             "format": "date-time"

@@ -1051,6 +1051,8 @@ export interface components {
              */
             lane: "reusable" | "ephemeral";
             native_ref: string;
+            region?: string;
+            instance_type?: string;
             /** Format: date-time */
             observed_at: string;
             /** Format: date-time */
