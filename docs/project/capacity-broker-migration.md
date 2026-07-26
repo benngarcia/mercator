@@ -1765,6 +1765,82 @@ complete because it works against a live provider.
     clock offset belongs with the slice that gives the simulated worlds one. And this
     pass ran beside a concurrent session in the same worktree: its Lab half landed
     inside that session's commit `6858429` rather than in a commit of its own.
+- [x] 2026-07-26: Make a launch a waterfall of eight predicted stages, each with
+  an actual of its own. The record carried four quantities, and one of them,
+  `domain.LaunchSeconds`, stood for agent enrollment, container creation, and
+  application readiness together. A single number covering three stages cannot be
+  calibrated: an actual for it is the sum of three durations with three causes, and
+  measuring any one of them could not replace it. Five of the eight stages the phase
+  goal names had no prediction, and three of them cost no time in either simulated
+  world, so a prediction of any of them was measured against nothing.
+  - `domain.LaunchStage` names the eight in the order a launch goes through them and
+    `domain.LaunchStageEstimates` carries one distribution each, read through one
+    ordered list so a stage cannot reach the record without reaching the bundle, the
+    invariant, the reference model, and the console with it.
+  - A published provisioning claim is read as a claim about boot, because that is
+    what its only publisher in this tree calls it: Shadeform states a min and max
+    `boot_in_sec` for an instance type and nothing else about getting one.
+    Acquisition and agent enrollment are published by nobody, so they are predicted
+    as nothing and the record says whose silence that was, `unpublished` for capacity
+    that has to be allocated and `machine_exists` for capacity already running
+    Mercator's runtime. A share of the published claim would attribute a provider's
+    boot window to stages the provider never mentioned, and a prior of Mercator's
+    would be a number invented for every listing in every catalog. The consequence is
+    a machine prediction short of the truth by whatever acquisition and enrollment
+    really take, which the per-stage record now shows: the L1 fixture predicts zero
+    acquisition against an actual of two minutes.
+  - Application readiness is predicted from the workload's own declaration and from
+    nothing else. Readiness is the application's semantics, so no machine fact and no
+    provider claim predicts it, and a Run that declares none is predicted none rather
+    than charged a prior. It is deliberately not part of `StartSeconds`, because the
+    actual a start is calibrated against is the container's own start moment and
+    readiness is a later one.
+  - The image answer becomes two stages over two resources, a fetch across a link and
+    an assembly of bytes already on the disk. Confidence is stated per stage, so a
+    host with nothing to fetch is certain about the fetch and doubtful about the
+    assembly it still owes, where one answer used to carry the lower of the two.
+  - `WorldSpec.launch` is what a launch costs after its content arrives: `unpack`,
+    `container_start`, and `application_ready`, each a stated duration rather than
+    arithmetic over a rate, because a world computing what the predictor computes
+    would make every prediction right by construction. Both simulated worlds spend
+    them, and the launch effect's consequence carries what each of the eight stages
+    really took. That ledger is the only source of six of those actuals: Mercator can
+    observe a container starting and an application reporting ready, and nothing in
+    production tells it when a machine finished booting.
+  - Application readiness is a typed report. `compute.run.reported.v1` with type
+    `ready` requires `data.ready_at` and reduces into `domain.RunRecord.ReadyAt`. The
+    moment is the application's own rather than the moment Mercator appended the
+    event, which is the defect the observed start moment was fixed for one stage over.
+    The conformance probe was already sending a `ready` report, with a scenario name
+    and no moment, and nothing in the tree read it: that is the untyped callback this
+    slice is about. Both simulated worlds deliver readiness as an inbound call,
+    because routing it through the provider seam would make a running process and a
+    serving one the same fact again.
+  - `predictions.jsonl` carries a row per stage beside the runtime and start-latency
+    aggregates, and `safety.prediction_is_recorded_against_its_actual` is the Lab
+    invariant: for every launch the Effect Ledger accepted, every stage the world
+    spent has both halves in the record, and no stage the world spent is one the
+    record cannot name. The two halves are read from independent places, which is what
+    stops the rule being satisfied by the predictor agreeing with itself. It is
+    deliberately not stated as accuracy: how close a prediction lands is a calibration
+    metric, and a rule of that shape would fail on a fixture whose world is simply
+    slow, which several of these fixtures are on purpose.
+  - A Blueprint states stages by name in one map, replacing `provision_seconds`,
+    `pull_seconds`, `pull_source`, `pull_confidence`, and `artifact_seconds`. A stage
+    cannot be added to the record without a way to state it, and a fixture asserts
+    seconds, source, and confidence together because zero seconds means two opposite
+    things. `a-launch-is-eight-stages` is the placement fixture and
+    `conformance/every-stage-of-a-launch-has-an-actual` the same claim at L1.
+  - Judgment calls. The world spends unpack on any launch that had bytes to fetch or
+    content it holds unassembled, while the scheduler charges assembly only for
+    content a host already fetched: the two are meant to differ, and a fetch whose
+    assembly the model folds into the transfer rate is a gap the per-stage record now
+    shows rather than hides. An Artifact stage for a Run that reads nothing names that
+    silence, `workload_reads_nothing`, because an empty source is what the new rule
+    reads as a stage nobody predicted. And the slice's own statement that five stages
+    take zero time was written before the observed-start slice landed: three did, and
+    the three are the ones this commit makes cost time.
+
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1787,7 +1863,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a start is a moment somebody observed, recorded on the run stream as a distinct fact from launch acceptance and calibrated against in the Run Bundle, with acquisition, boot, and agent enrollment spent by both simulated worlds; the hierarchical estimator, owned economics, and replanning remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; the hierarchical estimator, owned economics, and replanning remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -2010,7 +2086,32 @@ Phase 3 added:
   rather than one, the start actual sourced `run_stream.execution_started`, the
   predicted value equal to what the winning candidate's own decision recorded, and
   the two differing: a calibration set whose columns came from one piece of code
-  teaches nothing.
+  teaches nothing. It carries ten records per Run now, one per launch stage beside
+  the two aggregates.
+- `a-launch-is-eight-stages` (green): the waterfall. A machine that does not exist
+  yet publishes ten minutes of provisioning and this world spends them over three
+  stages, then moves 500MB of image, applies it, and asks a container runtime for a
+  process; the Rental beside it holds the image assembled and idle, so its only
+  remaining stages are the container starting and the application coming up, which
+  is what lets the fixture say which stages belong to the machine and which to the
+  workload. Eleven minutes in the container has been running for a moment and the
+  application has said nothing; four minutes later it reports ready, three minutes
+  after its own process began, against the two it declared. Returning nothing from
+  any of the world's three new spends fails it, each on its own number.
+- `every-stage-of-a-launch-has-an-actual` (conformance): the same waterfall at L1,
+  and the only place the per-stage record can be read. Every one of the eight rows
+  has a prediction sourced from the Booking Decision and an actual sourced from the
+  Effect Ledger, boot is predicted at what the provider published against an actual
+  the world spent, acquisition is predicted at nothing because nobody publishes one,
+  and readiness is predicted at what the workload declared against an actual only the
+  workload could state.
+- `safety.prediction_is_recorded_against_its_actual` (Lab invariant): for every
+  launch the Effect Ledger accepted, the record carries a prediction and an actual
+  for each stage the world simulated, and names no stage it cannot carry. The two
+  halves are read from independent places, so the rule cannot be satisfied by the
+  predictor agreeing with itself. It is deliberately not accuracy: that is a
+  calibration metric, and a rule of that shape would fail on a fixture whose world is
+  simply slow.
 - `safety.start_is_observed_not_inferred` (Lab invariant): no adjudicated Run
   carries a start moment Mercator derived. Every moment the run stream records is
   one an observation of that Run reported, no moment is later than the look that
@@ -2403,6 +2504,79 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 the launch waterfall
+
+On 2026-07-26, on the amd64 Linux workstation, the eight-stage record was written
+against the world and both Blueprints were promoted in the same change once green.
+Each claim is held by a deliberate break that fails it:
+
+- returning nothing from `LaunchSpec.ContainerStartSpend` fails
+  `a-launch-is-eight-stages` with `start_latency_seconds: want at least 658, got
+  638`. That is the state both worlds shipped in: a container runtime asked for a
+  process handed one back in the same instant;
+- returning nothing from `LaunchSpec.UnpackSpend` fails it with `want at least
+  658, got 628`;
+- returning nothing from `ProvisioningSpec.BootSpend` fails it with `want at least
+  658, got 298` and, one stage down the waterfall, `records its application ready
+  at 2030-01-01T00:07:58Z, and the fixture says it has not said so`. A machine that
+  boots instantly is ready four minutes before the fixture says anything can be;
+- returning nothing from `LaunchSpec.ApplicationReadySpend` fails it with
+  `ready_latency_seconds: want exactly 180, got 0` and with the same premature
+  readiness. That is the state the tree shipped in for readiness as a whole: an
+  untyped callback nothing keyed on, so a workload was serving the moment its
+  process existed;
+- dropping one stage out of the world's launch consequence fails
+  `safety.prediction_is_recorded_against_its_actual` through the registry's own
+  deliberate case: the decision predicted all eight, the ledger reports seven, and
+  the unpack the machine really did is a prediction measured against nothing;
+- deleting `controlPlane.deliverReadiness` fails
+  `TestEveryStageOfALaunchHasAnActual` with `the Run projection carries start
+  2030-01-01 00:10:58 +0000 UTC and readiness <nil>`;
+- refusing to reduce a readiness report into `RunRecord.ReadyAt` fails
+  `TestRunnerVerifiesARealReportedRunAndConfirmedCleanup` with `verdict =
+  "failed"` and `ApplicationReadyAt:<nil>`, which is the trial reading
+  `PROBE_READY_MOMENT_MISSING` off a probe that ran, reported, and left the last
+  stage of its launch unproven;
+- pricing the whole image answer as one stage fails
+  `TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes` and
+  `TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked`, which now assert
+  that a machine holding every byte of an unassembled image is charged the assembly
+  and no transfer.
+
+Two limits are worth stating rather than hiding.
+
+No new live-container case was added for readiness. The application-ready stage has
+no node-side and no provider-side participant by construction: its authority is the
+workload posting to the public report endpoint, which is exercised against the real
+HTTP server, the real report signer, and the real probe code in
+`internal/conformance`. Driving the probe inside a real container would need the
+committed probe image built in the test and a daemon whose public URL is reachable
+from the Docker bridge, which is the conformance runner's own production
+configuration and belongs with the phase 5 provider work rather than with this
+slice. What did run live on this machine, against Docker Engine 29.6.2 with the
+overlayfs storage driver: `TestTheNodeReportsWhenTheContainerStarted`,
+`TestDockerRuntimeReportsTheLayersItUnpacked`,
+`TestEveryImageThisDaemonHoldsIsAssembled`,
+`TestALaunchThatNeverRunsLeavesNoCacheBehind`,
+`TestAContainerThatNeverStartsIsNotACacheThisNodeHolds`,
+`TestANodeReportsTheMomentItsContainerReallyStarted`, and
+`TestTheFleetListingReportsTheRoomThisMachineReallyHas`, none of them skipped.
+
+Nothing in production predicts acquisition or agent enrollment, and nothing
+measures either. Both are recorded as unpublished, which is honest and is a
+prediction of zero seconds for the two stages a fresh machine spends most of its
+first minutes in. The hierarchical estimator is what replaces them with a history,
+and the actuals it will read now exist.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/adapter/fake ./internal/orchestrator \
+  ./internal/conformance ./internal/conformanceprobe ./internal/daemon \
+  ./internal/nodeagent ./internal/httpapi -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
 
 ### Phase 3 the second review of the service class
 

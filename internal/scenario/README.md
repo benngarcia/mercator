@@ -101,7 +101,7 @@ A single-decision Blueprint:
     "offer": "rental-warm",
     "candidates": {
       "rental-warm": {
-        "artifact_seconds": 0,
+        "stages": {"artifact_fetch": {"seconds": 0, "source": "artifact_inventory"}},
         "artifact_evidence": {"artifact:imagenet:v2.41": "hit"}
       }
     }
@@ -113,8 +113,17 @@ A single-decision Blueprint:
 the Run reads: `"hit"` for a checked copy of exactly that version, `"miss"` for
 none, and `"unknown"` for a machine that could not enumerate its copies at all.
 A copy nobody checked is a miss, because it is not evidence the right bytes are
-here. `artifact_seconds` is what that candidate would still spend reading its
-inputs out of the object store.
+here.
+
+`stages` is what that candidate was predicted to spend on each stage of the
+launch, by the stage's own name: `acquisition`, `boot`, `agent_ready`,
+`image_fetch`, `unpack`, `artifact_fetch`, `container_start`, and
+`application_ready`. Each states any of `seconds`, `source`, and `confidence`,
+and the three belong together because zero seconds means two opposite things:
+nothing to do where somebody answered, and nobody could say where nothing did.
+What the world then spends on the last three is `world.launch`, stated separately
+from any of this so that no actual is derived from the prediction it is measured
+against.
 
 `request` and `expect` are the single-decision shorthand. A Placement fixture
 that advances virtual time or submits several Runs uses `timeline`; each step
