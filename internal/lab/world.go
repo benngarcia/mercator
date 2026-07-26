@@ -847,8 +847,9 @@ func (world *simulatedWorld) settlePublications() {
 }
 
 // keepReplica records a verified local copy landing on one host, when it landed
-// and where it came from. Both origins produce the same fact about the machine,
-// which is why they produce one effect: the ledger says which it was.
+// and which fetch put it there. Only a fetch can: the copy is worth what checking
+// it against the catalog says it is worth, and nothing checks bytes it did not
+// read.
 func (world *simulatedWorld) keepReplica(artifactID, offerID, runID, launchKey, source string, at time.Time) {
 	// Capacity that keeps nothing keeps no Artifact copy either, for the same
 	// two reasons it keeps no image: a provisionable offer is a machine that
@@ -1606,13 +1607,20 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 	return ready
 }
 
-// storeRunOutputs is what a finished producer leaves behind, in the two places
-// it leaves it. The output is written to the host that computed it, where it is
-// a local copy like any other, and then uploaded to the object store, where it
-// becomes an Artifact anyone can depend on. The gap between the two is the whole
-// point: a consumer admitted on the first has been admitted on bytes that live
-// on one machine. Both moments are measured from when the process exited, which
-// is the only clock a workload's output has.
+// storeRunOutputs is what a finished producer leaves behind: bytes on the host
+// that computed them, and an upload that makes those bytes an Artifact anyone can
+// depend on. The gap between the two is the whole point, because a consumer
+// admitted on the first would have been admitted on content that lives on one
+// machine. Both moments are measured from when the process exited, which is the
+// only clock a workload's output has.
+//
+// What it does not leave is a replica. A workload writes its output inside its
+// own container, and no runtime in the tree enumerates, hashes, or files that
+// content: verified live on a real daemon, a node reports no copy of what its own
+// workload just wrote. So the write is recorded as the world fact it is, evidence
+// of nothing anybody may be placed on, and the producing host owes the same read
+// as every other machine until a fetch Mercator issued lands a checked copy
+// there.
 // roomForOutputs is the machine deciding whether what this workload computed
 // will fit on it. Content a Run produces is content on somebody's disk, and no
 // one else could have accounted for it: a Run declares which Artifacts it
@@ -1635,7 +1643,19 @@ func (world *simulatedWorld) roomForOutputs(execution externalExecution) bool {
 func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at time.Time) {
 	arrival := world.runs[execution.RunID]
 	for _, artifactID := range arrival.Request.ProducesArtifacts {
-		world.keepReplica(artifactID, execution.OfferID, execution.RunID, execution.LaunchKey, "run_output", at)
+		version, _ := world.store.entry(artifactID)
+		world.recordEffect(
+			OperationArtifactWritten,
+			"artifact-written/"+execution.LaunchKey+"/"+artifactID,
+			EffectCommandAccepted,
+			EffectResponseDelivered,
+			execution.RunID,
+			execution.LaunchKey,
+			"",
+			map[string]any{"artifact_id": artifactID, "offer_id": execution.OfferID},
+			map[string]any{"size_bytes": version.SizeBytes, "written_at": at},
+			"",
+		)
 		world.publishing = append(world.publishing, pendingPublication{
 			artifactID:  artifactID,
 			runID:       execution.RunID,

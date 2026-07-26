@@ -19,13 +19,12 @@ const (
 )
 
 // TestAConsumerWaitsForDurabilityAndNotForACopy is the durability claim at L1.
-// The producer writes its checkpoint onto the host it ran on, and the object
-// store takes it a transfer later. Between those two moments a copy of the
-// content exists on a machine and the Artifact does not exist, and where
-// Mercator placed the consumer is the test of which of the two it was waiting
-// for. The consumer entered the control plane at virtual zero, which is the
-// point: admission is a decision Mercator holds a Run through, not a door the
-// Run was kept outside of.
+// The producer writes its checkpoint on the host it ran on, and the object store
+// takes it a transfer later. Between those two moments the bytes exist on a
+// machine and the Artifact does not exist, and where Mercator placed the consumer
+// is the test of which of the two it was waiting for. The consumer entered the
+// control plane at virtual zero, which is the point: admission is a decision
+// Mercator holds a Run through, not a door the Run was kept outside of.
 func TestAConsumerWaitsForDurabilityAndNotForACopy(t *testing.T) {
 	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
 	defer func() {
@@ -37,7 +36,7 @@ func TestAConsumerWaitsForDurabilityAndNotForACopy(t *testing.T) {
 	driveInMinuteSteps(t, execution, 80)
 
 	effects := execution.runtime.world.effectRecords()
-	writtenAt := effectTime(t, effects, OperationArtifactReplicated, checkpointArtifact)
+	writtenAt := effectTime(t, effects, OperationArtifactWritten, checkpointArtifact)
 	publishedAt := effectTime(t, effects, OperationArtifactPublished, checkpointArtifact)
 	requestedAt := runRequestedAt(t, execution, "run-checkpoint-consumer")
 	placedAt := runPlacedAt(t, execution, "run-checkpoint-consumer")
@@ -173,11 +172,15 @@ func TestAConsumerRunsWhenTheOnlyCopyIsGone(t *testing.T) {
 	}
 }
 
-// TestAConsumerReadsTheCopyItsHostAlreadyHolds is what a replica is for. The
-// checkpoint consumer lands on the host that produced its input and reads the
-// copy there, which is the optimisation the object store makes safe rather than
-// the thing that made the Run possible.
-func TestAConsumerReadsTheCopyItsHostAlreadyHolds(t *testing.T) {
+// TestTheMachineThatWroteTheContentStillReadsTheObjectStore is what a workload's
+// own output is worth to the next Run: nothing. The checkpoint consumer lands on
+// the very host the checkpoint was written on and reads the object store anyway,
+// because a workload writes its output inside its own container and no runtime in
+// the tree enumerates, hashes, or files that content. A real node on a real
+// daemon reports no copy of what its own workload just wrote, which is what
+// internal/nodeagent proves live, and this is the same fact where Placement can
+// see it.
+func TestTheMachineThatWroteTheContentStillReadsTheObjectStore(t *testing.T) {
 	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
 	defer func() {
 		if err := execution.Close(); err != nil {
@@ -187,8 +190,48 @@ func TestAConsumerReadsTheCopyItsHostAlreadyHolds(t *testing.T) {
 
 	driveInMinuteSteps(t, execution, 80)
 
-	if source := artifactReadSource(t, execution, "run-checkpoint-consumer", checkpointArtifact); source != "replica" {
-		t.Fatalf("the consumer read its input from %q, and its host wrote that content itself", source)
+	written := effectTime(t, execution.runtime.world.effectRecords(), OperationArtifactWritten, checkpointArtifact)
+	if written.IsZero() {
+		t.Fatal("the producer never wrote its output anywhere, so this case is about nothing")
+	}
+	if source := artifactReadSource(t, execution, "run-checkpoint-consumer", checkpointArtifact); source != "object_store" {
+		t.Fatalf("the consumer read its input from %q on the machine that wrote it, and nothing checked those bytes", source)
+	}
+	candidate := candidateFor(t, bookingDecisions(t, execution)["run-checkpoint-consumer"], "producer-rental")
+	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityCold {
+		t.Fatalf("the host that wrote the checkpoint records %+v of it", candidate.ArtifactEvidence)
+	}
+	// 10GB at 500 Mbps is 160 seconds, which is the read this candidate owes on
+	// content it produced itself.
+	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 160 {
+		t.Errorf("the decision priced %v seconds of read on content this machine wrote, want 160", seconds)
+	}
+}
+
+// TestAConsumerReadsTheCopyAFetchLeftBehind is what a replica is for, on the one
+// copy anybody may be placed on: one a fetch of Mercator's landed and checked
+// against the catalog. The reference consumer fetched the stale set at 45m, and
+// the Run behind it reads what that fetch left rather than crossing the link
+// again.
+func TestAConsumerReadsTheCopyAFetchLeftBehind(t *testing.T) {
+	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	driveInMinuteSteps(t, execution, 80)
+
+	if source := artifactReadSource(t, execution, "run-warm-consumer", staleSetArtifact); source != "replica" {
+		t.Fatalf("the consumer read its input from %q, and its host holds a copy a fetch checked", source)
+	}
+	candidate := candidateFor(t, bookingDecisions(t, execution)["run-warm-consumer"], "producer-rental")
+	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityHot {
+		t.Fatalf("the host holding a checked copy records %+v of it", candidate.ArtifactEvidence)
+	}
+	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 0 {
+		t.Errorf("the host already holding a checked copy was priced %v seconds to read it", seconds)
 	}
 }
 
@@ -255,15 +298,6 @@ func TestTheDecisionRecordsWhatEachCandidateHoldsOfTheRunsInputs(t *testing.T) {
 		t.Errorf("the decision priced %v seconds of Artifact fetch, and 7GB crosses a 500 Mbps link in 112s", seconds)
 	}
 
-	// The checkpoint consumer is the other half: it landed where its input was
-	// produced, and that copy was checked on the way to the object store.
-	warm := candidateFor(t, decisions["run-checkpoint-consumer"], "producer-rental")
-	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityHot {
-		t.Fatalf("the host that produced the checkpoint records %+v of it", warm.ArtifactEvidence)
-	}
-	if seconds := warm.Estimates.ArtifactSeconds.Expected; seconds != 0 {
-		t.Errorf("the host already holding a checked copy was priced %v seconds to read it", seconds)
-	}
 }
 
 // TestARunsRecordedWorkloadCarriesItsArtifacts is the control plane's own
@@ -337,11 +371,11 @@ func TestWhenAnArtifactBecameDurableDoesNotDependOnPolling(t *testing.T) {
 			fastPublished, slowPublished,
 		)
 	}
-	fastWritten := replicaOf(t, fast, checkpointArtifact, "producer-rental").VerifiedAt
-	slowWritten := replicaOf(t, slow, checkpointArtifact, "producer-rental").VerifiedAt
+	fastWritten := effectTime(t, fast.runtime.world.effectRecords(), OperationArtifactWritten, checkpointArtifact)
+	slowWritten := effectTime(t, slow.runtime.world.effectRecords(), OperationArtifactWritten, checkpointArtifact)
 	if fastWritten.IsZero() || !fastWritten.Equal(slowWritten) {
 		t.Fatalf(
-			"the producer's own copy landed at %s under one cadence and %s under the other",
+			"the producer wrote its output at %s under one cadence and %s under the other",
 			fastWritten, slowWritten,
 		)
 	}

@@ -338,6 +338,7 @@ func effectMutatesWorld(operation string) bool {
 		OperationImagePull,
 		OperationImageRetained,
 		OperationArtifactRead,
+		OperationArtifactWritten,
 		OperationArtifactReplicated,
 		OperationArtifactPublished,
 		OperationCacheMountAttach,
@@ -437,17 +438,13 @@ func publicationSequences(observation InvariantObservation) (map[string]uint64, 
 // no copy claims a digest that version does not have, every copy traces back to
 // the object store, and no Run reads a copy nothing checked against the catalog.
 //
-// "Traces back to the object store" has exactly two shapes, and the second is
-// why the rule is not simply "the version is durable": a copy was fetched from a
-// publication, or it is the output the producing Run wrote on its way to
-// becoming one. A copy of a version nothing published and no Run produced there
-// is content from nowhere, which is what a replica standing in for an authority
+// "Traces back to the object store" is exactly the version being durable, with
+// no second shape. Content a workload wrote for itself is not one of these: no
+// runtime enumerates, hashes, or files it, so it is a write in the ledger and
+// never a copy in an inventory. A replica of a version nothing published is
+// content from nowhere, which is what a replica standing in for an authority
 // looks like.
 func artifactReplicaVerified(observation InvariantObservation) error {
-	produced, err := locallyProducedReplicas(observation.Effects)
-	if err != nil {
-		return err
-	}
 	for _, replica := range observation.World.ArtifactReplicas {
 		version, known := observation.ArtifactCatalog[replica.ArtifactID]
 		if !known {
@@ -468,38 +465,14 @@ func artifactReplicaVerified(observation InvariantObservation) error {
 				replica.OfferID, replica.ArtifactID, replica.ContentDigest, version.ContentDigest,
 			)
 		}
-		if !version.Durable() && !produced[replica.ArtifactID+"/"+replica.OfferID] {
+		if !version.Durable() {
 			return fmt.Errorf(
-				"offer %q holds a copy of Artifact %q, which nothing published and no Run produced there",
+				"offer %q holds a copy of Artifact %q, which nothing published",
 				replica.OfferID, replica.ArtifactID,
 			)
 		}
 	}
 	return artifactReadsWereVerified(observation.Effects)
-}
-
-// locallyProducedReplicas is every copy a Run wrote where it ran, keyed by
-// version and host. It is the one legitimate reason a copy can exist before the
-// object store holds anything.
-func locallyProducedReplicas(effects []EffectRecord) (map[string]bool, error) {
-	produced := map[string]bool{}
-	for _, effect := range effects {
-		if effect.Operation != OperationArtifactReplicated || effect.Command != EffectCommandAccepted {
-			continue
-		}
-		var request struct {
-			ArtifactID string `json:"artifact_id"`
-			OfferID    string `json:"offer_id"`
-			Source     string `json:"source"`
-		}
-		if err := json.Unmarshal(effect.Request, &request); err != nil {
-			return nil, fmt.Errorf("decode Artifact replication %s: %w", effect.ID, err)
-		}
-		if request.Source == "run_output" {
-			produced[request.ArtifactID+"/"+request.OfferID] = true
-		}
-	}
-	return produced, nil
 }
 
 func artifactReadsWereVerified(effects []EffectRecord) error {
@@ -880,8 +853,7 @@ func heldCopiesAreExplained(offer domain.OfferSnapshot, seeded, replicated map[s
 }
 
 // replicatedByOffer reads back which Artifact copies the ledger says landed on
-// each host, whether a fetch delivered them or the Run that produced them wrote
-// them there.
+// each host, every one of them delivered by a fetch.
 func replicatedByOffer(effects []EffectRecord) (map[string]map[string]bool, error) {
 	replicated := map[string]map[string]bool{}
 	for _, effect := range effects {

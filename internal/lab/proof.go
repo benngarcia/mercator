@@ -45,7 +45,7 @@ func VerifyVerticalProof(ctx context.Context, bundle RunBundle) (ProofReport, er
 		facts.result(4, scenario.EvidenceCapacityPrepared, facts.hasAcceptedEffect(OperationProviderLaunch, "run-producer"), "the provider accepted the producer launch"),
 		facts.result(5, scenario.EvidenceArtifactPublished, facts.hasAcceptedEffect(OperationArtifactPublished, "run-producer"), "the producer published an immutable Artifact to the object store"),
 		facts.result(6, scenario.EvidenceConsumerUnblocked, facts.consumerFollowedArtifact(), "Mercator placed the consumer only after Artifact publication"),
-		facts.result(7, scenario.EvidenceWarmthObserved, facts.consumerUsesArtifactReplica(), "the consumer selected the Rental holding its Artifact"),
+		facts.result(7, scenario.EvidenceWarmthObserved, facts.consumerUsesArtifactReplica(), "the consumer selected a Rental holding a checked copy of one input and was priced the read it owed on the other"),
 		facts.result(8, scenario.EvidenceQueueVsFreshCompared, facts.comparesQueueAndFresh("run-consumer"), "consumer scheduling compared standing queue delay with fresh provisioning"),
 		facts.result(9, scenario.EvidenceAmbiguousDelivery, facts.hasLostAcceptedLaunch(), "the provider accepted a launch whose response was lost"),
 		facts.result(10, scenario.EvidenceReconciledWithoutDuplicate, facts.oneAcceptedLaunchPerRun(), "reconciliation produced one accepted external launch per Run"),
@@ -212,8 +212,16 @@ func (facts proofFacts) consumerFollowedArtifact() bool {
 
 // consumerUsesArtifactReplica is Placement having chosen the host holding the
 // content the Run reads, on the strength of holding it. It reads the decision
-// Mercator recorded: the selected candidate cites a checked copy of every
-// Artifact this Run consumes, and the evidence exists at all.
+// Mercator recorded: the selected candidate cites a copy something checked of an
+// Artifact this Run reads and owes no read for it, and owes the whole read of
+// every input nothing verified there.
+//
+// Both halves are the claim. The consumer reads its producer's checkpoint and a
+// dataset a fetch put on this machine before the world started, and only the
+// second is warmth: a workload writes its output inside its own container and no
+// runtime enumerates, hashes, or files that content, so the machine that computed
+// the checkpoint owes the same read for it as any other. A rule that asked only
+// for warmth would pass on a decision that had invented some.
 //
 // The rule this replaced asked only whether the producer's output landed on the
 // offer the consumer was selected on. That passed on a Blueprint with one
@@ -226,15 +234,20 @@ func (facts proofFacts) consumerUsesArtifactReplica() bool {
 		return false
 	}
 	selected := selectedCandidate(decision)
-	if selected == nil || len(selected.ArtifactEvidence) == 0 {
+	if selected == nil || len(selected.ArtifactEvidence) < 2 {
 		return false
 	}
+	checked := 0
 	for _, found := range selected.ArtifactEvidence {
-		if found.Locality != domain.LocalityHot {
+		if found.Locality == domain.LocalityHot && found.FetchBytes == 0 {
+			checked++
+			continue
+		}
+		if found.FetchBytes == 0 {
 			return false
 		}
 	}
-	return true
+	return checked > 0
 }
 
 func (facts proofFacts) hasLostAcceptedLaunch() bool {

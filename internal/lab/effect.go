@@ -13,15 +13,19 @@ const (
 	OperationProviderTerminate   = "provider.terminate"
 	OperationProviderListOwned   = "provider.list_owned"
 	OperationControlPlaneRestart = "control_plane.restart"
-	// The three Artifact operations are three different facts, and collapsing
-	// any two of them is how a local copy starts standing in for durable
-	// content. OperationArtifactRead is a consuming launch resolving one input,
-	// and says whether it read a verified local copy or fetched from the object
-	// store. OperationArtifactReplicated is a verified copy landing on a host,
-	// whether a Run wrote it or the object store served it.
-	// OperationArtifactPublished is the durable copy reaching the object store,
-	// which is the only thing that makes an Artifact consumable.
+	// The four Artifact operations are four different facts, and collapsing any
+	// two of them is how a local copy starts standing in for durable content.
+	// OperationArtifactRead is a consuming launch resolving one input, and says
+	// whether it read a verified local copy or fetched from the object store.
+	// OperationArtifactWritten is a workload having produced its output on the
+	// host it ran on: bytes nothing of Mercator's fetched, hashed, or filed, which
+	// is why it is not a replica and why no offer for that host says anything
+	// about it. OperationArtifactReplicated is a verified copy landing on a host,
+	// which only a fetch Mercator issued can leave. OperationArtifactPublished is
+	// the durable copy reaching the object store, which is the only thing that
+	// makes an Artifact consumable.
 	OperationArtifactRead       = "artifact.read"
+	OperationArtifactWritten    = "artifact.written"
 	OperationArtifactReplicated = "artifact.replicated"
 	OperationArtifactPublished  = "artifact.published"
 	// OperationCacheMountAttach is a container being created with a cache

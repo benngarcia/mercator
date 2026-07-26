@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "Three claims about what makes an Artifact consumable, under the real control plane. A producer writes its checkpoint onto the host it ran on and then uploads it, and its consumer stays out of Mercator across that whole gap: the local copy is not what it was waiting for. Later, a Run consumes an Artifact whose only copy sat on a Rental whose lease has since elapsed, and it runs anyway, fetching from the object store, because the copy was an optimisation and the store is the authority. That same Run also reads an Artifact whose copy is sitting on the host it landed on, and fetches it from the store anyway, because nobody ever checked those bytes against the catalog.",
+  "summary": "Four claims about what makes an Artifact consumable, under the real control plane. A producer writes its checkpoint on the host it ran on and then uploads it, and its consumer waits across that whole gap: the bytes on that machine are not what it was waiting for, and they are not a copy anybody may be placed on either, because nothing of Mercator's fetched or checked them. Later, a Run consumes an Artifact whose only copy sat on a Rental whose lease has since elapsed, and it runs anyway, fetching from the object store, because the copy was an optimisation and the store is the authority. That same Run also reads an Artifact whose copy is sitting on the host it landed on, and fetches it from the store anyway, because nobody ever checked those bytes against the catalog. The last Run reads what that fetch left behind, checked on arrival, which is the one thing a local copy is worth: no read at all.",
   "seed": "mercator-lab-artifact-durability-v1",
   "world": {
     "images": {
@@ -91,6 +91,16 @@
             "artifact:reference-set:v1",
             "artifact:stale-set:v1"
           ]
+        }
+      },
+      {
+        "name": "warm-consumer",
+        "at": "50m",
+        "request": {
+          "image": "worker@sha256:9f2c1e2a7b6d4f8e0a3c5b7d9e1f2a4c6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f",
+          "expected_runtime": "5m",
+          "max_runtime": "20m",
+          "consumes_artifacts": ["artifact:stale-set:v1"]
         }
       }
     ]
