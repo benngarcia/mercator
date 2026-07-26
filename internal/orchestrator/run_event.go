@@ -224,6 +224,13 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		startedAt := data.StartedAt.UTC()
 		state.startedAt = &startedAt
+		// A readiness already filed for a moment before this one is not this
+		// container's readiness. The two moments come from different authorities,
+		// the workload's arrives first as often as not, and neither of them can
+		// check the order on its own, so it is checked here as well.
+		if state.readyAt != nil && state.readyAt.Before(startedAt) {
+			state.readyAt = nil
+		}
 
 	case EventRunReported:
 		var data runReportedData
@@ -233,11 +240,17 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if err := data.validate(); err != nil {
 			return invalidRunEvent(stored, err.Error())
 		}
-		if ready, stated := data.readyAt(); stated {
-			// The application's own moment rather than the moment Mercator appended
-			// the report. A readiness stamped when the control plane got round to
-			// writing it down would move with the polling cadence, which is the
-			// defect the observed start moment was fixed for one stage over.
+		// The application's own moment rather than the moment Mercator appended
+		// the report, and only where that moment is one Mercator can defend: no
+		// later than the read that carried it, and no earlier than the container
+		// it is about. Adopting whatever arrived is the defect the observed start
+		// moment was fixed for one stage over, asked here in the same terms.
+		//
+		// The first defensible moment stands. A workload reports its readiness
+		// once, so a second report is a repeat rather than a correction, and a
+		// readiness that moved afterwards would rewrite a measurement already
+		// recorded against a prediction.
+		if ready, established := data.establishedReady(stored.OccurredAt, state.startedAt); established && state.readyAt == nil {
 			state.readyAt = &ready
 		}
 		if data.terminal() && state.firstTerminal == nil {

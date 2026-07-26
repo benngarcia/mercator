@@ -101,6 +101,41 @@ func (report runReportedData) readyAt() (time.Time, bool) {
 	return data.ReadyAt.UTC(), true
 }
 
+// establishedReady is the moment this report establishes the application became
+// ready, and whether it establishes one at all. It is the readiness half of
+// adapter.ExternalObservation.EstablishedStart, and it exists for the same reason:
+// the workload is the authority on the moment, and a moment Mercator cannot defend
+// is not a measurement however authoritative its author.
+//
+// A moment later than the read that carried it is a clock Mercator does not share
+// rather than anything the application saw. The application reads its own clock and
+// the host's, so a container on a machine running an hour ahead reports a readiness
+// an hour in Mercator's future, and filing it would put an hour of invented ready
+// latency in the Run Bundle as the workload's own measurement. reportedAt is
+// Mercator's own clock on the fact that carried the claim, which is what makes the
+// comparison mean anything.
+//
+// A moment before the container started is an application serving before its
+// process existed. That ordering is the one relation between two stages of a launch
+// Mercator holds itself to, and the two moments come from different authorities, so
+// nothing else would notice: a node states the start and the workload states the
+// readiness. Where no start was established there is nothing to order against, and
+// the moment is taken on the clock bound alone.
+//
+// The report itself is kept whatever this answers. What the workload said is a fact
+// about the workload; this decides what Mercator adopts as the Run's readiness.
+func (report runReportedData) establishedReady(reportedAt time.Time, startedAt *time.Time) (time.Time, bool) {
+	moment, stated := report.readyAt()
+	switch {
+	case !stated || moment.After(reportedAt.UTC()):
+		return time.Time{}, false
+	case startedAt != nil && moment.Before(*startedAt):
+		return time.Time{}, false
+	default:
+		return moment, true
+	}
+}
+
 func (report runReportedData) validate() error {
 	switch {
 	case report.Type == "":
