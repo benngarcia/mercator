@@ -276,8 +276,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// seconds read like every other prediction in the record, and there is
 		// nobody at all behind the number they were divided by.
 		"safety.transfer_rate_is_attributed": func(observation *InvariantObservation) {
-			observation.World.Offers = []domain.OfferSnapshot{{ID: "rental-warm"}}
-			observation.MercatorEvents = []eventlog.CloudEvent{pricedAtARate(measuredByNobody())}
+			observation.MercatorEvents = []eventlog.CloudEvent{pricedAtARate(observation.Now, measuredByNobody())}
 		},
 		"safety.locality_is_never_infeasibility": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{refusedForHoldingNothing()}
@@ -674,27 +673,25 @@ func runRecordReady(readyAt string) domain.RunRecord {
 // for a faster answer cannot write one of them and stay green.
 func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
-	measured := domain.OfferSnapshot{
-		ID:         "rental-warm",
-		ObservedAt: now,
-		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
+	reading := func(confidence float64) []domain.NetworkFact {
+		return []domain.NetworkFact{{
 			Scope:      domain.NetworkScopeObjectStore,
 			Statistic:  "p10",
 			ValueMbps:  200,
 			Source:     "node_probe",
 			ObservedAt: now,
-			Confidence: 0.9,
-		}}},
+			Confidence: confidence,
+		}}
 	}
-	disowned := measured
-	disowned.Network.Download[0].Confidence = 0
+	measured := reading(0.9)
+	disowned := reading(0)
 
 	for name, observed := range map[string]struct {
-		offer domain.OfferSnapshot
-		rate  domain.TransferRate
+		published []domain.NetworkFact
+		rate      domain.TransferRate
 	}{
 		"priced a transfer from nothing it names": {
-			offer: measured,
+			published: measured,
 			rate: domain.TransferRate{
 				Stage: domain.StageArtifactFetch,
 				Scope: domain.NetworkScopeObjectStore,
@@ -703,7 +700,7 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 			},
 		},
 		"priced a transfer from a measurement and an assumption at once": {
-			offer: measured,
+			published: measured,
 			rate: domain.TransferRate{
 				Stage:       domain.StageArtifactFetch,
 				Scope:       domain.NetworkScopeObjectStore,
@@ -714,11 +711,11 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 			},
 		},
 		"priced a transfer at a measured rate this machine never reported": {
-			offer: measured,
-			rate:  measuredByNobody(),
+			published: measured,
+			rate:      measuredByNobody(),
 		},
 		"priced a transfer at a measurement its own publisher disowned": {
-			offer: disowned,
+			published: disowned,
 			rate: domain.TransferRate{
 				Stage:       domain.StageArtifactFetch,
 				Scope:       domain.NetworkScopeObjectStore,
@@ -728,7 +725,7 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 			},
 		},
 		"priced a transfer at a measurement of another path": {
-			offer: measured,
+			published: measured,
 			rate: domain.TransferRate{
 				Stage:       domain.StageImageFetch,
 				Scope:       domain.NetworkScopeRegistry,
@@ -740,10 +737,13 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			observation := InvariantObservation{
-				StartedAt:      now,
-				Now:            now,
-				World:          WorldTruthSnapshot{At: now, Offers: []domain.OfferSnapshot{observed.offer}},
-				MercatorEvents: []eventlog.CloudEvent{pricedAtARate(observed.rate)},
+				StartedAt: now,
+				Now:       now,
+				World: WorldTruthSnapshot{
+					At:             now,
+					PublishedPaths: map[string][]domain.NetworkFact{"rental-warm": observed.published},
+				},
+				MercatorEvents: []eventlog.CloudEvent{pricedAtARate(now, observed.rate)},
 			}
 
 			result := invariantResultByID(t,
@@ -768,8 +768,8 @@ func TestARatePricedFromTheStatedAssumptionIsNotAViolation(t *testing.T) {
 	observation := InvariantObservation{
 		StartedAt: now,
 		Now:       now,
-		World:     WorldTruthSnapshot{At: now, Offers: []domain.OfferSnapshot{{ID: "rental-warm", ObservedAt: now}}},
-		MercatorEvents: []eventlog.CloudEvent{pricedAtARate(domain.TransferRateFor(
+		World:     WorldTruthSnapshot{At: now},
+		MercatorEvents: []eventlog.CloudEvent{pricedAtARate(now, domain.TransferRateFor(
 			domain.StageUnpack, "", 2_000_000_000, domain.UnpackRate(),
 		))},
 	}
@@ -781,6 +781,52 @@ func TestARatePricedFromTheStatedAssumptionIsNotAViolation(t *testing.T) {
 
 	if result.Status != InvariantPassed {
 		t.Fatalf("assembly priced from the assumption every host in the fleet is assumed to unpack at was reported as a violation: %s", result.Violation)
+	}
+}
+
+// TestARateMeasuredOnCapacitySinceRetiredIsNotAViolation is the third side of the
+// law, and the one that decides what the rule is stated over. A decision is taken
+// at a moment and judged at a later one: the machine that lost this placement sat
+// idle, its lease elapsed, and the world took it away with everything on it. The
+// placement was correct, the fact was published, and it was stood behind when the
+// number was divided by. A rule asked of the fleet as it stands now reports that as
+// a rate nobody measured, which is the accusation it exists to make about a
+// prediction that invented one.
+func TestARateMeasuredOnCapacitySinceRetiredIsNotAViolation(t *testing.T) {
+	decidedAt := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	observation := InvariantObservation{
+		StartedAt: decidedAt,
+		Now:       decidedAt.Add(time.Hour),
+		World: WorldTruthSnapshot{
+			At:     decidedAt.Add(time.Hour),
+			Offers: nil,
+			PublishedPaths: map[string][]domain.NetworkFact{"rental-warm": {{
+				Scope:      domain.NetworkScopeObjectStore,
+				Statistic:  "p10",
+				ValueMbps:  200,
+				Source:     "node_probe",
+				ObservedAt: decidedAt,
+				Confidence: 0.9,
+			}}},
+		},
+		MercatorEvents: []eventlog.CloudEvent{pricedAtARate(decidedAt, domain.TransferRate{
+			Stage:       domain.StageArtifactFetch,
+			Scope:       domain.NetworkScopeObjectStore,
+			Mbps:        200,
+			Bytes:       40_000_000_000,
+			Confidence:  0.9,
+			Measurement: "node_probe",
+		})},
+	}
+
+	result := invariantResultByID(t,
+		DefaultInvariantRegistry().Evaluate(observation),
+		"safety.transfer_rate_is_attributed",
+	)
+
+	if result.Status != InvariantPassed {
+		t.Fatalf("a read priced from a path the machine published, on capacity the world has since retired, was reported as a violation: %s",
+			result.Violation)
 	}
 }
 
@@ -1297,10 +1343,11 @@ func launchSpendingEveryStageBut(runID string, omitted domain.LaunchStage) Effec
 // pricedAtARate is a Booking Decision whose one candidate was charged a transfer
 // at one rate. It is the whole input to the attribution rule: the rule reads what
 // a decision recorded about where a rate came from, and nothing else.
-func pricedAtARate(rate domain.TransferRate) eventlog.CloudEvent {
+func pricedAtARate(at time.Time, rate domain.TransferRate) eventlog.CloudEvent {
 	return bookingDecidedEvent("evt_transfer_rate", domain.BookingDecision{
-		ID:    "dec_transfer_rate",
-		RunID: "run-reader",
+		ID:          "dec_transfer_rate",
+		RunID:       "run-reader",
+		EvaluatedAt: at,
 		Candidates: []domain.CandidateDecision{{
 			OfferSnapshotID: "rental-warm",
 			Feasible:        true,

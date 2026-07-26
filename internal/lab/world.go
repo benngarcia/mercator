@@ -133,7 +133,12 @@ type WorldTruthSnapshot struct {
 	Offers           []domain.OfferSnapshot `json:"offers"`
 	ActiveExecutions []externalExecution    `json:"active_executions"`
 	ArtifactReplicas []ArtifactReplica      `json:"artifact_replicas"`
-	CacheMounts      []CacheMountState      `json:"cache_mounts"`
+	// PublishedPaths is every network fact each machine in this world published
+	// about the paths it crosses, by offer, including machines this world has since
+	// retired. Offers above are the fleet as it stands; this is what the fleet has
+	// said, which is what a rule about a decision already taken has to ask.
+	PublishedPaths map[string][]domain.NetworkFact `json:"published_paths,omitempty"`
+	CacheMounts    []CacheMountState               `json:"cache_mounts"`
 	// Disk is what each machine's content is taking up, stated as World Truth
 	// because an offer states only what is left. A rule that read the remainder
 	// could never catch a world that lost track of the difference.
@@ -461,6 +466,13 @@ type simulatedWorld struct {
 	// about Mercator rather than a property of the capacity.
 	prewarm *scenario.PrewarmSpec
 
+	// publishedPaths is what every machine in this world has told Mercator about
+	// the paths it crosses, kept by offer and never removed. A machine is retired
+	// when its lease elapses and the decisions taken about it stay in the record, so
+	// a rule about one of those decisions has to be able to read what the machine
+	// published while it was here.
+	publishedPaths map[string][]domain.NetworkFact
+
 	// paths is what this world declared about the links its machines cross, read
 	// for the world's own transfer model rather than off the offers Mercator sees.
 	// How fast a path is and how much its publisher stands behind having measured
@@ -506,6 +518,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		seededReplicas: map[string]map[string]bool{},
 		cacheMounts:    map[string]map[string]CacheMountState{},
 		prewarm:        tape.InitialWorld.Prewarm,
+		publishedPaths: map[string][]domain.NetworkFact{},
 		paths:          slices.Clone(tape.InitialWorld.Paths),
 		launch:         tape.InitialWorld.Launch,
 		prepared:       map[string]bool{},
@@ -552,7 +565,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			state.offer.Pricing = domain.PriceModel{Currency: "USD"}
 			state.offer.Capabilities.Pricing = domain.PricingCapabilities{}
 		}
-		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = layer
@@ -594,7 +607,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			}
 			state.heldImages[domain.ReferenceDigest(reference)] = true
 		}
-		applyOfferWorldFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
 		world.seededLocality[host.ID] = state.seededDigests()
 		world.truth[host.ID] = cloneHostState(state)
 		world.seedReplicas(host.ID, host.ArtifactReplicas, tape.InitialWorld, tape.Start)
@@ -624,7 +637,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			// expectation would make that expectation right by construction.
 			provisioning: marketplace.Provisioning,
 		}
-		applyOfferWorldFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, marketplace.Billing)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, marketplace.Billing)
 		world.seededLocality[marketplace.ID] = state.seededDigests()
 		state.offer.Provisioning = &domain.Estimate{
 			Expected: marketplace.Provisioning.Expected.Duration().Seconds(),
@@ -718,7 +731,13 @@ func (world *simulatedWorld) seedCaches(offerID string, held []scenario.HeldCach
 	}
 }
 
-func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec, offerID string, available *bool, billing scenario.BillingSpec) {
+// publishOfferFacts is one machine being handed what this world says about it,
+// and this world writing down what it handed over. The publication outlives the
+// machine on purpose: a placement is decided at one moment and judged at a later
+// one, and a rule that asked only the machines still standing would read a
+// correct decision about capacity since retired as a decision priced from
+// nothing.
+func (world *simulatedWorld) publishOfferFacts(offer *domain.OfferSnapshot, spec scenario.WorldSpec, offerID string, available *bool, billing scenario.BillingSpec) {
 	if available != nil {
 		offer.Capacity.Available = *available
 	}
@@ -726,7 +745,8 @@ func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec,
 	if billing.MinimumCharge != nil {
 		offer.Pricing.MinimumChargeSeconds = int64(billing.MinimumCharge.Duration().Seconds())
 	}
-	offer.Network = world.Paths.PublishedFacts(offerID, world.Start())
+	offer.Network = spec.Paths.PublishedFacts(offerID, spec.Start())
+	world.publishedPaths[offerID] = slices.Clone(offer.Network.Download)
 }
 
 // prepareRun is the world learning about a Run it will be asked to execute. An
@@ -1076,6 +1096,7 @@ func (world *simulatedWorld) truthSnapshot() WorldTruthSnapshot {
 		ActiveExecutions: executions,
 		ArtifactReplicas: world.artifactReplicas(),
 		CacheMounts:      world.cacheMountStates(),
+		PublishedPaths:   maps.Clone(world.publishedPaths),
 		Disk:             world.diskLedgers(),
 	}
 }

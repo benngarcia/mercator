@@ -774,6 +774,16 @@ const PathFactSource = "blueprint_path"
 // state. Stamping certainty here made every declared path one Mercator had to act
 // on, so no Blueprint could state the machine that publishes a number its own
 // publisher disowns.
+//
+// A declared path carries no expiry, because a fixture states a path this world
+// has and a machine that keeps crossing it keeps measuring it. It carried one for
+// a day, and the day was an arbitrary constant with a defect behind it: a machine
+// is seeded once and its facts are stamped once, so an execution driven past the
+// expiry watched every declared path go silent while both worlds went on moving
+// bytes at the rate the fixture declared, and every measured rate already recorded
+// against those machines became a number nothing published. A fixture that wants
+// Mercator to read silence states a confidence of zero, which is silence at the
+// moment it is read and stays that way.
 func (paths PathSpecs) PublishedFacts(offerID string, at time.Time) domain.NetworkFacts {
 	facts := domain.NetworkFacts{}
 	for _, path := range paths {
@@ -787,7 +797,6 @@ func (paths PathSpecs) PublishedFacts(offerID string, at time.Time) domain.Netwo
 			Source:      PathFactSource,
 			SampleCount: 1,
 			ObservedAt:  at,
-			ValidUntil:  at.Add(24 * time.Hour),
 			Confidence:  path.Confidence(),
 		})
 	}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 func loadFixtureText(t *testing.T, text string) (Scenario, error) {
@@ -329,5 +331,23 @@ func TestBoundChecksExactAndRangeExpectations(t *testing.T) {
 	atLeast := float64(200)
 	if problem := (Bound{AtLeast: &atLeast}).Check(199); problem == "" {
 		t.Fatalf("at_least bound must reject a smaller value")
+	}
+}
+
+// TestADeclaredPathIsStillPublishedADayLater is the standing of a fixture's own
+// declaration. A machine is seeded once and stamps its facts once, so an expiry
+// measured from the world's start is a moment every long execution crosses: past
+// it, Mercator read silence about a path it had been reading all along, both
+// simulated worlds went on moving bytes at the declared rate, and every measured
+// rate already recorded against those machines named a fact nothing published.
+func TestADeclaredPathIsStillPublishedADayLater(t *testing.T) {
+	start := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	paths := PathSpecs{{From: "rental-near-the-data", To: "objects.example", Scope: "object_store", P10Mbps: 4000}}
+
+	facts := paths.PublishedFacts("rental-near-the-data", start)
+
+	fact, answered := facts.DownloadP10(domain.NetworkScopeObjectStore, start.Add(48*time.Hour))
+	if !answered || fact.ValueMbps != 4000 {
+		t.Fatalf("two days into the execution the machine publishes %+v about a path this world still crosses at 4000 Mbps", facts)
 	}
 }

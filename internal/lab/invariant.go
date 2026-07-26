@@ -1088,10 +1088,16 @@ func candidateKeyIsHonest(runID string, candidate domain.CandidateDecision, offe
 // compares the facts a candidate key summarizes, counting the accelerators rather
 // than grouping them: a machine with twice the cards, or with the same cards in two
 // memory sizes, is a different product however a probe reported its inventory.
+//
+// The lane is one of those facts. A world may sell one product both ways, and the
+// reusable listing becomes a machine with an enrolled runtime whose disk outlives
+// the Run while the one-shot holds nothing, so two offers that differ only in their
+// lane are two things to learn about and a shared key is a collision.
 func sameCapacity(first, second domain.OfferSnapshot) bool {
 	firstCards, firstMemory := acceleratorTotals(first)
 	secondCards, secondMemory := acceleratorTotals(second)
 	return first.MachineID == second.MachineID &&
+		first.Lane == second.Lane &&
 		first.AdapterType == second.AdapterType &&
 		first.Region == second.Region &&
 		first.InstanceType == second.InstanceType &&
@@ -1113,9 +1119,9 @@ func describeCapacity(first, second domain.OfferSnapshot) string {
 	firstCards, firstMemory := acceleratorTotals(first)
 	secondCards, secondMemory := acceleratorTotals(second)
 	return fmt.Sprintf(
-		"%s is machine %q on %s/%s/%s with %d cards of %d bytes, and %s is machine %q on %s/%s/%s with %d cards of %d bytes",
-		first.ID, first.MachineID, first.AdapterType, first.Region, first.InstanceType, firstCards, firstMemory,
-		second.ID, second.MachineID, second.AdapterType, second.Region, second.InstanceType, secondCards, secondMemory,
+		"%s is %s machine %q on %s/%s/%s with %d cards of %d bytes, and %s is %s machine %q on %s/%s/%s with %d cards of %d bytes",
+		first.ID, first.Lane, first.MachineID, first.AdapterType, first.Region, first.InstanceType, firstCards, firstMemory,
+		second.ID, second.Lane, second.MachineID, second.AdapterType, second.Region, second.InstanceType, secondCards, secondMemory,
 	)
 }
 
@@ -1437,17 +1443,13 @@ func transferRateIsAttributed(observation InvariantObservation) error {
 	if err != nil {
 		return err
 	}
-	published := map[string]domain.OfferSnapshot{}
-	for _, offer := range observation.World.Offers {
-		published[offer.ID] = offer
-	}
 	for _, decision := range decisions {
 		for _, candidate := range decision.Candidates {
 			for _, rate := range candidate.TransferRates {
 				if err := ratePricedFromSomething(decision, candidate, rate); err != nil {
 					return err
 				}
-				if err := measuredRateWasReported(decision, candidate, rate, published); err != nil {
+				if err := measuredRateWasReported(decision, candidate, rate, observation.World.PublishedPaths); err != nil {
 					return err
 				}
 			}
@@ -1467,30 +1469,33 @@ func ratePricedFromSomething(decision domain.BookingDecision, candidate domain.C
 }
 
 // measuredRateWasReported holds the second clause: a rate the record presents as
-// measured has to be a number some host or path fact actually reported, at the
-// scope it was priced over, and one its own publisher still stands behind. A
-// disowned or expired fact is silence for every other reader here, so it may not
-// become a measurement by being divided by.
+// measured has to be a number some machine in this world really published, at the
+// scope it was priced over, and one its publisher stood behind when the placement
+// was taken. A disowned or expired fact is silence for every other reader here, so
+// it may not become a measurement by being divided by.
+//
+// It is asked of what the world published and at the decision's own moment, which
+// is the only question the record can answer. Capacity is retired while the
+// decisions taken about it stay written down, so a rule stated against the fleet
+// as it stands now would turn a correct placement into a violation the moment the
+// losing machine's lease elapsed, and would report it in the words of the thing it
+// exists to catch. A measurement nobody ever published still fails here, because
+// this world remembers every fact it handed to Mercator and no machine's silence
+// becomes a publication by being forgotten.
 func measuredRateWasReported(
 	decision domain.BookingDecision,
 	candidate domain.CandidateDecision,
 	rate domain.TransferRate,
-	published map[string]domain.OfferSnapshot,
+	published map[string][]domain.NetworkFact,
 ) error {
 	if rate.Measurement == "" {
 		return nil
 	}
-	offer, known := published[candidate.OfferSnapshotID]
-	if !known {
-		return fmt.Errorf(
-			"Run %q: candidate %q priced its %s stage at %.2f Mbps measured by %q, and this world publishes no such machine to have measured it",
-			decision.RunID, candidate.OfferSnapshotID, rate.Stage, rate.Mbps, rate.Measurement,
-		)
-	}
-	fact, answered := offer.Network.DownloadP10(rate.Scope, offer.ObservedAt)
+	reported := domain.NetworkFacts{Download: published[candidate.OfferSnapshotID]}
+	fact, answered := reported.DownloadP10(rate.Scope, decision.EvaluatedAt)
 	if !answered || fact.ValueMbps != rate.Mbps {
 		return fmt.Errorf(
-			"Run %q: candidate %q priced its %s stage at %.2f Mbps measured by %q, and %s published about its %q path",
+			"Run %q: candidate %q priced its %s stage at %.2f Mbps measured by %q, and %s published about its %q path when the decision was taken",
 			decision.RunID, candidate.OfferSnapshotID, rate.Stage, rate.Mbps, rate.Measurement,
 			describeReportedPath(fact, answered), rate.Scope,
 		)
@@ -1507,7 +1512,7 @@ func describeRateProvenance(rate domain.TransferRate) string {
 
 func describeReportedPath(fact domain.NetworkFact, answered bool) string {
 	if !answered {
-		return "nothing its publisher stands behind was"
+		return "nothing its publisher stood behind was"
 	}
 	return fmt.Sprintf("%.2f Mbps was", fact.ValueMbps)
 }
