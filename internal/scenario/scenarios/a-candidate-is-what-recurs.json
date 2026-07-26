@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "The candidates a fleet has to be able to tell apart and put together: two asks for one marketplace machine that must key as one candidate, a third ask in the same place whose cards hold half the memory and must key as another, a fourth whose probe reported its eight cards as two entries of four and must key as the same product as the ask that reported them whole, a fifth holding half as many of that product and keying as another, an enrolled machine that keys as itself, and a one-shot product publishing nothing that outlives its listing, which has no key at all and about which nothing may ever claim candidate-specific evidence.",
+  "summary": "The candidates a fleet has to be able to tell apart and put together: two asks for one marketplace machine that must key as one candidate, a third ask in the same place whose cards hold half the memory and must key as another, a fourth whose probe reported its eight cards as two entries of four and must key as the same product as the ask that reported them whole, a fifth holding half as many of that product and keying as another, an enrolled machine that keys as the machine its backend named and never as the lease or the listing this fixture named it by, and a one-shot product publishing nothing that outlives its listing, which has no key at all and about which nothing may ever claim candidate-specific evidence.",
   "classification": "green",
   "world": {
     "images": {
@@ -79,7 +79,7 @@
     "outcome": "place",
     "offer": "enrolled-a100",
     "candidates": {
-      "enrolled-a100": {"candidate": "provider=simnode;machine=enrolled-a100"},
+      "enrolled-a100": {"candidate": "provider=simnode;machine=node-1"},
       "ask-4417": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
       "ask-90218": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
       "ask-51120": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x8"},

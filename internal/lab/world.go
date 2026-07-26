@@ -521,15 +521,17 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	for _, artifact := range tape.InitialWorld.Artifacts {
 		world.replicas[artifact.ID] = map[string]domain.ArtifactReplica{}
 	}
-	for _, rental := range tape.InitialWorld.Rentals {
+	for index, rental := range tape.InitialWorld.Rentals {
 		state := hostState{
 			offer: labOffer(
 				rental.ID,
 				domain.OfferKindStanding,
 				domain.LaneReusable,
-				// A Rental is a machine this world keeps, so it names one: the Rental ID is
-				// the host every Booking on it lands on.
-				labCandidate{provider: rental.Provider, region: rental.Region, machine: rental.ID},
+				// A Rental is a machine this world keeps, so it names one. The machine is
+				// not the lease and not the listing: the fixture's ID is both of those,
+				// and the handle the backend has for the machine behind them is minted
+				// by the world exactly as a node ID is minted by the registry.
+				labCandidate{provider: rental.Provider, region: rental.Region, machine: scenario.NodeHandle(index)},
 				rental.RatePerHourUSD,
 				rental.Resources,
 			),
@@ -568,15 +570,17 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		world.seedReplicas(rental.ID, rental.ArtifactReplicas, tape.InitialWorld, tape.Start)
 		world.seedCaches(rental.ID, rental.CacheMounts, tape.Start)
 	}
-	for _, host := range tape.InitialWorld.Hosts {
+	for index, host := range tape.InitialWorld.Hosts {
 		state := hostState{
 			offer: labOffer(
 				host.ID,
 				domain.OfferKindStanding,
 				domain.LaneEphemeral,
 				// A borrowed host holds nothing for Mercator and is the same machine next
-				// time, which is the position an operator's own Docker daemon is in.
-				labCandidate{machine: host.ID},
+				// time, which is the position an operator's own Docker daemon is in: it
+				// names itself with the daemon's own ID rather than with the endpoint
+				// Mercator reached it through.
+				labCandidate{machine: scenario.DaemonHandle(index)},
 				host.RatePerHourUSD,
 				host.Resources,
 			),

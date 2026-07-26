@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,13 +58,13 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	}
 	world.ApplicationReadySpend = spec.Launch.ApplicationReadySpend()
 	world.ApplicationBecomesReady = spec.Launch.ApplicationBecomesReady()
-	for _, rental := range spec.Rentals {
-		if err := world.AddMachine(simMachine(spec, rental, spec.rentalSchedule(rental.ID), clock)); err != nil {
+	for index, rental := range spec.Rentals {
+		if err := world.AddMachine(simMachine(spec, rental, spec.rentalSchedule(rental.ID), clock, NodeHandle(index))); err != nil {
 			return nil, err
 		}
 	}
-	for _, host := range spec.Hosts {
-		if err := world.AddMachine(simHost(spec, host, clock.Now())); err != nil {
+	for index, host := range spec.Hosts {
+		if err := world.AddMachine(simHost(spec, host, clock.Now(), DaemonHandle(index))); err != nil {
 			return nil, err
 		}
 	}
@@ -245,10 +246,10 @@ func (seeded *simSeededSchedules) elapsed(ctx context.Context, now time.Time) er
 	return nil
 }
 
-func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Machine {
+func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock, machineID string) *fake.Machine {
 	start := clock.Now()
 	machine := &fake.Machine{
-		Offer:            simRentalOffer(spec, rental),
+		Offer:            simRentalOffer(spec, rental, machineID),
 		HeldLayers:       map[string]int64{},
 		HeldDiffIDs:      map[string]bool{},
 		ReportsDiffIDs:   rental.ReportsDiffIDs,
@@ -347,13 +348,15 @@ func simHeldCaches(held []HeldCacheSpec, at time.Time) map[string]domain.CacheMo
 // simRentalOffer builds the offer for a Rental: standing capacity Mercator holds
 // across Runs, which is what makes it reusable and the only thing warmth can
 // accumulate on.
-func simRentalOffer(spec WorldSpec, rental RentalSpec) domain.OfferSnapshot {
+func simRentalOffer(spec WorldSpec, rental RentalSpec, machineID string) domain.OfferSnapshot {
 	offer := simOffer(spec, rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneReusable
 	// A Rental is a machine this world keeps, so it names one and a history about it
-	// is filed under the machine rather than under a product.
-	offer.MachineID = rental.ID
+	// is filed under the machine rather than under a product. The machine is not the
+	// lease: the fixture's ID is the lease and the listing, and the handle the
+	// backend has for the machine behind them is its own string.
+	offer.MachineID = machineID
 	offer.Region = rental.Region
 	if rental.Provider != "" {
 		offer.AdapterType = rental.Provider
@@ -372,9 +375,9 @@ func simRentalOffer(spec WorldSpec, rental RentalSpec) domain.OfferSnapshot {
 // simHost is a machine Mercator has not enrolled. It may hold content, and
 // nothing on it can be asked about it, so what it holds is world truth that no
 // offer carries.
-func simHost(spec WorldSpec, host HostSpec, at time.Time) *fake.Machine {
+func simHost(spec WorldSpec, host HostSpec, at time.Time, machineID string) *fake.Machine {
 	machine := &fake.Machine{
-		Offer:               simHostOffer(spec, host),
+		Offer:               simHostOffer(spec, host, machineID),
 		HeldLayers:          map[string]int64{},
 		HeldDiffIDs:         map[string]bool{},
 		HeldImages:          map[string]bool{},
@@ -396,13 +399,15 @@ func simHost(spec WorldSpec, host HostSpec, at time.Time) *fake.Machine {
 // machine exists, so the offer is standing and owes no provisioning; nothing on
 // it can hold content or run a second workload for Mercator, so it is in the
 // ephemeral lane and reports an inventory it cannot enumerate.
-func simHostOffer(spec WorldSpec, host HostSpec) domain.OfferSnapshot {
+func simHostOffer(spec WorldSpec, host HostSpec, machineID string) domain.OfferSnapshot {
 	offer := simOffer(spec, host.ID, "conn_hosts", host.RatePerHourUSD, host.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneEphemeral
 	// A borrowed host keeps nothing for Mercator and is the same machine next time,
-	// which is the position an operator's own Docker daemon is in.
-	offer.MachineID = host.ID
+	// which is the position an operator's own Docker daemon is in: it names itself
+	// with the daemon's own ID rather than with the endpoint Mercator reached it
+	// through, which is what the fixture's ID is.
+	offer.MachineID = machineID
 	offer.Pricing.SetupFeeUSD = host.Billing.SetupFeeUSD
 	if host.Billing.MinimumCharge != nil {
 		offer.Pricing.MinimumChargeSeconds = int64(host.Billing.MinimumCharge.Duration().Seconds())
@@ -439,6 +444,29 @@ func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.Offe
 	offer.Lane = spec.ExecutionLane()
 	return offer
 }
+
+// NodeHandle is the handle the simulated backend has for the machine behind the
+// nth Rental a world declares, and DaemonHandle the same for the nth borrowed
+// host. Neither is the ID the fixture gave the capacity, and that is the point.
+//
+// In production three different strings name three different things about one
+// candidate: a node names itself with its node ID, the Rental beside it is a lease
+// an operator may invite two machines against, and the offer ID is a hash of the
+// connection the capacity was reached through. Both simulated worlds used the
+// fixture's ID for all three, so a key derived from the lease or from the listing
+// agreed with a key derived from the machine in every Blueprint in the corpus, and
+// the clause that a key names the machine and never the listing could not fail
+// anywhere. What a machine is called is the world's business rather than the
+// fixture's, exactly as a node ID is the registry's, so it is minted here.
+//
+// Both worlds read these, because a Blueprint that meant one machine in the
+// placement corpus and another in the Lab would be two fixtures wearing one name.
+func NodeHandle(index int) string { return "node-" + strconv.Itoa(index+1) }
+
+// DaemonHandle is the machine a borrowed host is, named the way a Docker endpoint
+// names itself: the daemon's own ID, which is not the endpoint it was reached
+// through.
+func DaemonHandle(index int) string { return "daemon-" + strconv.Itoa(index+1) }
 
 // HostInventory is the machine a fixture described, defaulting to a generous
 // GPU box wherever it described nothing. Both simulated worlds read it: a

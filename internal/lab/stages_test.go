@@ -280,7 +280,12 @@ func TestACandidateIsWhatRecursThroughTheWholeLabWorld(t *testing.T) {
 	if keys["ask-2211"] == keys["ask-2212"] {
 		t.Fatalf("eight cards and four share the key %q", keys["ask-2211"])
 	}
-	if keys["enrolled-a100"] != "provider=simnode;machine=enrolled-a100" {
+	// The machine Mercator keeps is filed under the machine, and this world names
+	// the machine behind the lease something the lease is not: "enrolled-a100" is
+	// the Rental and the listing, and node-1 is the host. A key derived from either
+	// of the first two is a key about a lease two machines can share or about a
+	// search result, and both used to be this same string.
+	if keys["enrolled-a100"] != "provider=simnode;machine=node-1" {
 		t.Fatalf("the machine Mercator keeps is filed under %q", keys["enrolled-a100"])
 	}
 	// The one-shot pool publishes nothing that outlives its listing, so it has no
