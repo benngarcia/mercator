@@ -90,9 +90,13 @@ func (o *Orchestrator) launchedCandidates(ctx context.Context, workspaceID strin
 }
 
 // selectedCandidate is what the decision took the machine it placed on to be. A
-// decision that placed nowhere describes no launch, and a candidate that cannot
-// recur is dropped here rather than filed under a key that can never be read
-// back: an ask ID a marketplace mints per search is not a thing to learn about.
+// decision that placed nowhere describes no launch.
+//
+// Capacity that cannot recur is filed anyway, and the estimator is where that
+// stops mattering: a one-shot pool has no key of its own, so its launch lands
+// only on the levels it does have and can never be read back as evidence about
+// this exact candidate. Dropping it here would throw away the only thing anyone
+// can ever learn about a lane whose capacity holds nothing.
 func selectedCandidate(decision domain.BookingDecision) (domain.CandidateIdentity, bool) {
 	if decision.SelectedOfferSnapshotID == "" {
 		return domain.CandidateIdentity{}, false
@@ -101,7 +105,7 @@ func selectedCandidate(decision domain.BookingDecision) (domain.CandidateIdentit
 		if candidate.OfferSnapshotID != decision.SelectedOfferSnapshotID {
 			continue
 		}
-		return candidate.Candidate, candidate.Candidate.Recurs()
+		return candidate.Candidate, true
 	}
 	return domain.CandidateIdentity{}, false
 }

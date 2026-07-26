@@ -1140,12 +1140,6 @@ func keyedAnswerIsHonest(runID string, candidate domain.CandidateDecision, stage
 			runID, candidate.OfferSnapshotID, stage, answer.Level, answer.SampleCount, answer.Key,
 		)
 	}
-	if !candidate.Candidate.Recurs() {
-		return fmt.Errorf(
-			"Run %q answered candidate %q's %s stage at level %q under %q, and nothing about this capacity outlives its listing",
-			runID, candidate.OfferSnapshotID, stage, answer.Level, answer.Key,
-		)
-	}
 	for _, listing := range []string{candidate.OfferSnapshotID, candidate.NativeRef} {
 		if listing != "" && strings.Contains(answer.Key, listing) {
 			return fmt.Errorf(
@@ -1156,6 +1150,12 @@ func keyedAnswerIsHonest(runID string, candidate domain.CandidateDecision, stage
 	}
 	if answer.Level != domain.LevelExactCandidate {
 		return nil
+	}
+	if !candidate.Candidate.Recurs() {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage as this exact candidate under %q, and nothing about this capacity outlives its listing",
+			runID, candidate.OfferSnapshotID, stage, answer.Key,
+		)
 	}
 	if own := candidate.Candidate.Candidate(contentStage(stage)); answer.Key != own {
 		return fmt.Errorf(

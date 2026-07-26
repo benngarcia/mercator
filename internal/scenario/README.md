@@ -118,9 +118,10 @@ here.
 `stages` is what that candidate was predicted to spend on each stage of the
 launch, by the stage's own name: `acquisition`, `boot`, `agent_ready`,
 `image_fetch`, `unpack`, `artifact_fetch`, `container_start`, and
-`application_ready`. Each states any of `seconds`, `source`, and `confidence`,
-and the three belong together because zero seconds means two opposite things:
-nothing to do where somebody answered, and nobody could say where nothing did. A
+`application_ready`. Each states any of `seconds`, `source`, `confidence`,
+`level`, and `samples`, and the first three belong together because zero seconds
+means two opposite things: nothing to do where somebody answered, and nobody
+could say where nothing did. A
 name outside those eight is refused at load, because the record answers about an
 unknown stage with a zero estimate from no source, so a misspelled key would assert
 nothing and quietly replace the assertion the fixture was written for.
@@ -130,6 +131,19 @@ against. `world.launch.application_never_ready` is the world where the process r
 and the application behind it never reports that it can do work, which has to be
 stated because an omitted `application_ready` already means a world that spends
 nothing on the stage.
+
+`level` and `samples` are where a stage's answer came from: `exact_candidate` for
+measured launches of this candidate, then `provider_and_region`, then `provider`,
+then `prior` for a stage nothing has ever measured, which is a published claim, a
+stated constant, or what the workload declared about itself. `samples` is how many
+measured launches stand behind the answer, and zero is a real assertion because it
+is the one a prior makes. A fixture about the hierarchy states both beside the
+seconds: the same ninety seconds read from this machine's own launches and from
+the province it sits in are different claims, and only these say which was made.
+A machine that has to answer differently from the rest of the fleet states its own
+`application_ready` on its listing; a marketplace that names the hardware behind a
+listing states `machine`, which is what lets one machine be published under two
+listing IDs.
 
 `request` and `expect` are the single-decision shorthand. A Placement fixture
 that advances virtual time or submits several Runs uses `timeline`; each step
