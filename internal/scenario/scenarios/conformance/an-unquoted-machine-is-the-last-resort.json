@@ -1,0 +1,46 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "An unpriced Rental at L1. Two machines hold the whole 2GB image and are a second from ready. One is quoted at 2.00 USD an hour and the other is a machine nobody has quoted, which is what an enrolled node whose operator configured no shadow price publishes. The Run allows unknown pricing, so the unquoted machine is a candidate rather than a refusal, and it still loses: the score is in dollars and it has none, so reading the absence as zero made the machine Mercator actually pays for the most expensive thing in the fleet. The winner has the higher score and the decision records PRICED_BEFORE_UNPRICED, because nothing else in the record says which rule ranked them. This is the Blueprint the Lab's own world statement about an unpriced Rental is falsifiable through: publish the default priced offer for it again and the unquoted machine is priced at nothing and takes every placement.",
+  "seed": "mercator-lab-unquoted-machine-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2": {
+        "layers": [
+          {
+            "digest": "sha256:1f5a1b0d90ba2d7c2d1e0f19e4c6a2b9de8fd0c3a6b1e2f4c5d6a7b8c9d0e1f2",
+            "size": "2GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-quoted",
+        "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
+        "rate_per_hour_usd": 2.0
+      },
+      {
+        "id": "rental-unquoted",
+        "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
+        "unpriced": true
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "thrifty",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2",
+          "allow_unknown_pricing": true,
+          "expected_runtime": "10m",
+          "max_runtime": "30m"
+        }
+      }
+    ]
+  }
+}

@@ -388,3 +388,97 @@ func TestAClassMercatorDoesNotKnowIsRefusedAtL1(t *testing.T) {
 		t.Fatalf("a Run refused at the door left %d events behind, and a refusal is not a Run", len(stored))
 	}
 }
+
+// TestADisownedLinkFactBuysWhatSilenceBuysAtL1 is the two silences under the real
+// control plane, and the execution the Lab's own world statement about path
+// confidence is falsifiable through.
+//
+// A Run states a floor on how fast a candidate reaches the registry and says it
+// would rather run on a machine nobody has measured than not run. Four Rentals at
+// one price: one measured 750 Mbps and stands behind it, one measured 100 and
+// stands behind it, one published 5 Gbps and disowned it, one published nothing.
+// The measurement decides the placement, the machine measured too slow is refused
+// with the speed it published, and the disowned publisher sits in every column
+// beside the machine that said nothing.
+func TestADisownedLinkFactBuysWhatSilenceBuysAtL1(t *testing.T) {
+	execution := openConformanceExecution(t, "a-link-nobody-measured-is-not-a-slow-link")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 8 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	decision := bookingDecisions(t, execution)["run-picky"]
+	if decision.SelectedOfferSnapshotID != "rental-measured" {
+		t.Fatalf("the Run landed on %q, and the only machine that answered its floor measured 750 Mbps", decision.SelectedOfferSnapshotID)
+	}
+	slow := candidateFor(t, decision, "rental-slow")
+	if slow.Feasible {
+		t.Fatalf("a machine that published 100 Mbps cleared a 500 Mbps floor")
+	}
+	rejection := slow.Rejections[0]
+	if rejection.Code != "NETWORK_FACT_UNSATISFIED" || rejection.Offered != 100.0 {
+		t.Fatalf("the record says %+v, and this machine measured too slow rather than measuring nothing", rejection)
+	}
+	disowned := candidateFor(t, decision, "rental-disowned")
+	silent := candidateFor(t, decision, "rental-silent")
+	for _, candidate := range []domain.CandidateDecision{disowned, silent} {
+		if !candidate.Feasible {
+			t.Fatalf("%s was refused as %+v, and this Run allows a link nobody measured", candidate.OfferSnapshotID, candidate.Rejections)
+		}
+	}
+	if disowned.Estimates.PullSeconds != silent.Estimates.PullSeconds {
+		t.Fatalf("the disowned publisher was priced %+v and the silent machine %+v, and a number nobody stands behind is the silence it is",
+			disowned.Estimates.PullSeconds, silent.Estimates.PullSeconds)
+	}
+	if disowned.Estimates.PullSeconds.Expected <= candidateFor(t, decision, "rental-measured").Estimates.PullSeconds.Expected {
+		t.Fatalf("the machine that disowned 5 Gbps was priced %.2fs of pull, no worse than the machine that measured 750 Mbps",
+			disowned.Estimates.PullSeconds.Expected)
+	}
+}
+
+// TestAnUnquotedMachineIsTheLastResortAtL1 is the unpriced Rental under the real
+// control plane, and the execution the Lab's own world statement about a machine
+// nobody quoted is falsifiable through. Both machines hold the whole image and are
+// a second from ready; the one nobody quoted has no dollars, so it is ranked
+// behind the one somebody did and the decision says so.
+func TestAnUnquotedMachineIsTheLastResortAtL1(t *testing.T) {
+	execution := openConformanceExecution(t, "an-unquoted-machine-is-the-last-resort")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 8 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	decision := bookingDecisions(t, execution)["run-thrifty"]
+	if decision.SelectedOfferSnapshotID != "rental-quoted" {
+		t.Fatalf("the Run landed on %q, and the alternative is a machine nobody has quoted", decision.SelectedOfferSnapshotID)
+	}
+	unquoted := candidateFor(t, decision, "rental-unquoted")
+	if !unquoted.Feasible {
+		t.Fatalf("the unquoted machine was refused as %+v, and this Run said it would rather run there than not run", unquoted.Rejections)
+	}
+	if unquoted.Priced() || unquoted.Estimates.CostUSD.Source != domain.CostUnpriced {
+		t.Fatalf("the unquoted machine records cost %+v, and this world says nobody has priced it", unquoted.Estimates.CostUSD)
+	}
+	quoted := candidateFor(t, decision, "rental-quoted")
+	if quoted.ScoreUSD <= unquoted.ScoreUSD {
+		t.Fatalf("the selected machine scored %.6f against the unquoted machine's %.6f, and the case needs the winner to be the one with the higher score",
+			quoted.ScoreUSD, unquoted.ScoreUSD)
+	}
+	if !slices.Contains(decision.SelectionReasonCodes, "PRICED_BEFORE_UNPRICED") {
+		t.Fatalf("the decision recorded %v, and it took the costlier machine because the cheaper one had no price", decision.SelectionReasonCodes)
+	}
+}
