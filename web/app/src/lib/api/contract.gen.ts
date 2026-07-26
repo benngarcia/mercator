@@ -1105,8 +1105,13 @@ export interface components {
             /** @description What this Run is billed for running here, over the runtime it declared. A machine whose price nobody published has no such number and predicts none: its source reads "unpriced", which is what the ranking reads to place it behind every candidate somebody priced. A rate of zero is a machine somebody says is free, which is a different answer. */
             cost_usd: components["schemas"]["Estimate"];
         };
-        /** @description What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider, which is how the record says no history about it can ever be read again. */
+        /** @description What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider and a lane, which is how the record says no history about it can ever be read again. */
         CandidateIdentity: {
+            /**
+             * @description What this capacity is for: a machine Mercator controls through an enrolled runtime and can hand successive workloads to, or a provider-native one-shot execution that holds nothing once its workload exits. It is part of the identity because the two have different stages to predict and different disks afterwards, so one key over both would report each lane's history as the other's.
+             * @enum {string}
+             */
+            lane?: "reusable" | "ephemeral";
             /** @description The machine this capacity is, where its backend can name one. It is never the lease and never the route Mercator took to reach the machine. */
             machine?: string;
             /** @description The backend the capacity comes from, which is the coarsest thing worth learning about and the only field every candidate has. */
