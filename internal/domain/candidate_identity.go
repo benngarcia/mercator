@@ -140,8 +140,21 @@ func (identity CandidateIdentity) Recurs() bool {
 // must read it as "no key" rather than as a key that happens to be blank.
 // Recurs is the question, and this returning nothing is the same answer stated
 // where a store would otherwise be written to.
+//
+// Unknown content has no content key, and the same answer says so. A registry that
+// is throttled, unreachable, unauthorized, or too slow leaves the manifest
+// unreadable, which is a placement Mercator still takes because silence about an
+// image is not infeasibility. What it may not do is name the content anyway: every
+// image the fleet could not resolve would collapse into one key per machine, and a
+// 900MB image's pull history would then be read back as exact-content evidence for
+// a 40GB image whose manifest also happened to be unreadable. The capacity levels
+// are unaffected, because what a machine spends booting is a property of the
+// machine.
 func (identity CandidateIdentity) Candidate(includeImage bool) string {
 	if !identity.Recurs() {
+		return ""
+	}
+	if includeImage && identity.ImageDigest == "" {
 		return ""
 	}
 	parts := []string{"lane=" + string(identity.Lane), "provider=" + identity.Provider}

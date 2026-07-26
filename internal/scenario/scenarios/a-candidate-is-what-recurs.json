@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "The candidates a fleet has to be able to tell apart and put together: two asks for one marketplace machine that must key as one candidate, a third ask in the same place whose cards hold half the memory and must key as another, a fourth whose probe reported its eight cards as two entries of four and must key as the same product as the ask that reported them whole, a fifth holding half as many of that product and keying as another, an enrolled machine that keys as the machine its backend named and never as the lease or the listing this fixture named it by, a listing of that same first product its provider sells as a one-shot execution instead, which is not the same thing to learn about and must key as another candidate, and a one-shot product publishing nothing that outlives its listing, which has no key at all and about which nothing may ever claim candidate-specific evidence.",
+  "summary": "The candidates a fleet has to be able to tell apart and put together: two asks for one marketplace machine that must key as one candidate, a third ask in the same place whose cards hold half the memory and must key as another, a fourth whose probe reported its eight cards as two entries of four and must key as the same product as the ask that reported them whole, a fifth holding half as many of that product and keying as another, an enrolled machine that keys as the machine its backend named and never as the lease or the listing this fixture named it by, a listing of that same first product its provider sells as a one-shot execution instead, which is not the same thing to learn about and must key as another candidate, the same enrolled machine filed under a second key that carries the content it was asked to run, because what a pull costs is a property of the content and what a boot costs is not, and a one-shot product publishing nothing that outlives its listing, which has no key at all and about which nothing may ever claim candidate-specific evidence.",
   "classification": "green",
   "world": {
     "images": {
@@ -88,7 +88,10 @@
     "outcome": "place",
     "offer": "enrolled-a100",
     "candidates": {
-      "enrolled-a100": {"candidate": "lane=reusable;provider=simnode;machine=node-1"},
+      "enrolled-a100": {
+        "candidate": "lane=reusable;provider=simnode;machine=node-1",
+        "content": "lane=reusable;provider=simnode;machine=node-1;image=sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"
+      },
       "ask-4417": {"candidate": "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
       "ask-90218": {"candidate": "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
       "ask-51120": {"candidate": "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x8"},

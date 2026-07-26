@@ -434,6 +434,11 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 			fail("candidate: want %q, got %q", *expect.Candidate, recorded)
 		}
 	}
+	if expect.Content != nil {
+		if recorded := candidate.Candidate.Candidate(true); recorded != *expect.Content {
+			fail("content: want %q, got %q", *expect.Content, recorded)
+		}
+	}
 	if expect.Feasible != nil && candidate.Feasible != *expect.Feasible {
 		fail("expected feasible=%v, got %v (rejections %s)", *expect.Feasible, candidate.Feasible, describeRejections(candidate.Rejections))
 	}

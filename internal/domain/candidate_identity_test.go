@@ -237,6 +237,29 @@ func TestCapacityNobodyClassifiedHasNoKey(t *testing.T) {
 	}
 }
 
+// TestContentNobodyCouldNameHasNoContentKey is the content dimension of the same
+// law the capacity dimension already held. A registry that is throttled,
+// unreachable, or too slow leaves the manifest unreadable, and Mercator still places
+// the Run because silence about an image is not infeasibility. What it cannot do is
+// file a pull history under a key whose content is unknown: every image the fleet
+// could not resolve would share one key per machine, and a 900MB image's timings
+// would be read back as exact-content evidence about a 40GB one.
+func TestContentNobodyCouldNameHasNoContentKey(t *testing.T) {
+	node := enrolledNode("node-1", "rnt_abc")
+
+	unresolved := domain.CandidateIdentityOf(node, "")
+
+	if key := unresolved.Candidate(true); key != "" {
+		t.Fatalf("an image nobody could name is filed under the content key %q", key)
+	}
+	// The machine's own stages are unaffected. What a host spends booting is a
+	// property of the host, and a registry that would not answer says nothing about
+	// it.
+	if unresolved.Candidate(false) == "" {
+		t.Fatalf("a machine lost its own key because a registry would not answer: %+v", unresolved)
+	}
+}
+
 func TestAMachineStageIgnoresTheImageItWasAskedToRun(t *testing.T) {
 	node := enrolledNode("node-1", "rnt_abc")
 

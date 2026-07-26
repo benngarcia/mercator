@@ -355,7 +355,13 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// machine's cards. The rule counts the cards where the key groups them, so
 		// it can see a machine with twice the hardware wearing another's name.
 		"safety.candidate_identity_recurs": func(observation *InvariantObservation) {
-			shared := domain.CandidateIdentity{Provider: "simvast", Region: "US-CA", Accelerator: "nvidia-a100x2"}
+			shared := domain.CandidateIdentity{
+				Lane:        domain.LaneEphemeral,
+				Provider:    "simvast",
+				Region:      "US-CA",
+				Accelerator: "nvidia-a100x2",
+				ImageDigest: "sha256:image",
+			}
 			observation.World.Offers = []domain.OfferSnapshot{
 				gpuOffer("ask-4417", 2),
 				gpuOffer("ask-90218", 4),

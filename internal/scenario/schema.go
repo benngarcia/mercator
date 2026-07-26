@@ -1103,7 +1103,17 @@ type CandidateExpectation struct {
 	// empty string is a real assertion, and it says this candidate cannot recur and
 	// nothing may ever claim evidence about it.
 	Candidate *string `json:"candidate,omitempty"`
-	Feasible  *bool   `json:"feasible,omitempty"`
+	// Content asserts the key a history about this candidate running this Run's
+	// image is filed under: the candidate key with the content on the end, for the
+	// stages whose duration is a property of what was pulled rather than of the
+	// machine.
+	//
+	// The empty string is a real assertion here too, and it says the content is not
+	// known: a registry that would not answer leaves Mercator unable to name what it
+	// is about to run, and a content key naming no content would file every image in
+	// the fleet whose manifest was unreadable under one name per machine.
+	Content  *string `json:"content,omitempty"`
+	Feasible *bool   `json:"feasible,omitempty"`
 	// Disposition asserts what Placement recorded this candidate as: reusing,
 	// queueing on, or provisioning a Rental, or launching a one-shot ephemeral
 	// execution that holds nothing afterwards.

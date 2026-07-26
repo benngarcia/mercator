@@ -1030,8 +1030,9 @@ func candidateIdentityRecurs(observation InvariantObservation) error {
 	for _, offer := range observation.World.Offers {
 		published[offer.ID] = offer
 	}
-	keyed := map[string]domain.OfferSnapshot{}
+	keyed := map[string]keyedCandidate{}
 	for _, decision := range decisions {
+		asked := imageAsked(observation, decision.RunID)
 		for _, candidate := range decision.Candidates {
 			offer, known := published[candidate.OfferSnapshotID]
 			if !known {
@@ -1044,16 +1045,43 @@ func candidateIdentityRecurs(observation InvariantObservation) error {
 			if key == "" {
 				continue
 			}
-			if first, clash := keyed[key]; clash && !sameCapacity(first, offer) {
+			held, clash := keyed[key]
+			switch {
+			case clash && !sameCapacity(held.offer, offer):
 				return fmt.Errorf(
 					"Run %q filed candidate %q under the key %q, and %s already holds it: %s",
-					decision.RunID, offer.ID, key, first.ID, describeCapacity(first, offer),
+					decision.RunID, offer.ID, key, held.offer.ID, describeCapacity(held.offer, offer),
+				)
+			case clash && held.image != asked:
+				return fmt.Errorf(
+					"Run %q filed candidate %q under the content key %q, and it already holds %q: two Runs asked this machine for different content",
+					decision.RunID, offer.ID, key, held.image,
 				)
 			}
-			keyed[key] = offer
+			keyed[key] = keyedCandidate{offer: offer, image: asked}
 		}
 	}
 	return nil
+}
+
+// keyedCandidate is what a candidate key has already been handed out for: the
+// capacity it was filed about and the content that capacity was asked to run.
+type keyedCandidate struct {
+	offer domain.OfferSnapshot
+	image string
+}
+
+// imageAsked is the image Mercator recorded it was asked to run for this Run, read
+// out of its own workload record rather than out of the identity under judgment. A
+// key that carries content has to have been derived from the content this Run
+// named, and asking the identity what content it names would be the derivation
+// agreeing with itself.
+func imageAsked(observation InvariantObservation, runID string) string {
+	workload, known := observation.Workloads[runID]
+	if !known || len(workload.Spec.Containers) == 0 {
+		return ""
+	}
+	return workload.Spec.Containers[0].Image
 }
 
 // candidateKeyIsHonest holds the two clauses about one recorded candidate: a key
