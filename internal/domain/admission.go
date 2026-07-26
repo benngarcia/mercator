@@ -8,13 +8,28 @@ package domain
 // moment it was asked.
 
 const (
-	// DeferredNoFeasibleOffer is a Run nothing would take. Every candidate was
-	// struck out, and what it waits behind is the work occupying the capacity
-	// those candidates were refused from.
+	// DeferredNoFeasibleOffer is a Run nothing would take, waiting for capacity to
+	// come free. Every candidate was struck out, and what it waits behind is the
+	// work occupying the capacity those candidates were refused from. A fleet that
+	// published nothing at all is the same wait: nothing was weighed against this
+	// Run, so nothing has been established about what would hold it.
 	DeferredNoFeasibleOffer = "NO_FEASIBLE_OFFER"
-	// DeferredBehindHigherClass is a Run that could have been placed and may
-	// not be, because work Mercator already owes an answer to outranks it.
-	DeferredBehindHigherClass = "BEHIND_HIGHER_CLASS"
+	// DeferredNoCapacityFits is a Run nothing would take, waiting for capacity to
+	// be added. Every machine the fleet published was weighed against it, and none
+	// of them holds a queue this Run could be waiting on, so waiting for the fleet
+	// as it stands changes nothing.
+	//
+	// It is a reason of its own because the queue turns on the difference. Work
+	// behind a Run waiting for a machine to come free is waiting for that same
+	// machine. Work behind a Run waiting for a machine to arrive is only being
+	// stopped by it, and one impossible submission would otherwise empty a fleet.
+	DeferredNoCapacityFits = "NO_CAPACITY_FITS"
+	// DeferredBehindHigherPriority is a Run that could have been placed and may
+	// not be, because work Mercator already owes an answer to outranks it. The
+	// ordering is on effective priority and not on the class alone: a Run of the
+	// same class that has waited longer outranks a fresh arrival, and a reason
+	// naming the class would report that as a class this Run is behind.
+	DeferredBehindHigherPriority = "BEHIND_HIGHER_PRIORITY"
 	// RefusedDeadlineUnreachable is a Run whose class states a moment it must
 	// have started by that the queue in front of it is already past. It is
 	// refused rather than queued, because queueing it would be promising a

@@ -521,7 +521,8 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 		if state.replacementEligible() {
 			return true, o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
 		}
-		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, decision)
+		deferral, projected := placementDeferral(run, decision)
+		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, deferral, projected)
 	}
 	nextSchedule, err := reserveDecision(*state.requested, decision, schedule)
 	if err != nil {

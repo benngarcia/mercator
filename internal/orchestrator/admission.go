@@ -33,7 +33,8 @@ func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string,
 	}
 	waiting := queue.position(runID, state, o.now().UTC())
 	if behind := queue.ahead(waiting); len(behind) > 0 {
-		return false, o.recordDeferral(ctx, workspaceID, runID, version, state, waiting.deferral(domain.DeferredBehindHigherClass, behind))
+		deferral := waiting.deferral(domain.DeferredBehindHigherPriority, behind)
+		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, deferral, false)
 	}
 	return o.stepPlace(ctx, workspaceID, runID, version, state, waiting)
 }
@@ -85,13 +86,18 @@ func applyToQueue(waiting map[string]waitingRun, event eventlog.StoredEvent) err
 		if err := json.Unmarshal(event.Data, &data); err != nil {
 			return fmt.Errorf("orchestrator: read the admission queue: %w", err)
 		}
-		if _, queued := waiting[event.StreamID]; queued {
-			// The moment a wait started never moves. The class's own bound is
-			// measured from it, and a Run told to wait for a second reason has
-			// not started waiting again.
-			return nil
+		// The moment a wait started never moves. The class's own bound is measured
+		// from it, and a Run told to wait for a second reason has not started
+		// waiting again. What it is waiting for does move, and the latest answer is
+		// the one the queue is ordered against.
+		queued := waiting[event.StreamID]
+		if queued.since.IsZero() {
+			queued.since = event.OccurredAt.UTC()
 		}
-		waiting[event.StreamID] = waitingRun{runID: event.StreamID, class: data.Deferral.Class, since: event.OccurredAt.UTC()}
+		queued.runID = event.StreamID
+		queued.class = data.Deferral.Class
+		queued.holdsTheQueue = data.Deferral.Reason != domain.DeferredNoCapacityFits
+		waiting[event.StreamID] = queued
 	case EventAdmissionRefused, EventRunClosed:
 		delete(waiting, event.StreamID)
 	case EventBookingDecided:
@@ -117,11 +123,19 @@ type admissionQueue struct {
 	waiting []waitingRun
 }
 
-// waitingRun is one Run in the queue: what class it is and when its wait began.
+// waitingRun is one Run in the queue: what class it is, when its wait began, and
+// whether work behind it has to wait for it.
 type waitingRun struct {
 	runID string
 	class domain.ServiceClass
 	since time.Time
+	// holdsTheQueue is whether this Run's wait is one other work has to respect.
+	// A Run waiting for capacity to come free holds the queue, because whatever is
+	// behind it wants the same capacity. A Run every machine in the fleet was
+	// weighed against and none of them could hold is waiting for capacity to
+	// arrive, and it holds nothing: work that fits the fleet as it stands is not
+	// competing with it for anything.
+	holdsTheQueue bool
 }
 
 // queuePosition is one Run's standing in the queue at one moment: what its class
@@ -154,17 +168,25 @@ func (queue admissionQueue) position(runID string, state runState, at time.Time)
 
 // ahead is everything already waiting that this Run may not be admitted past.
 //
-// One rule and one exemption. A Run does not go past work worth more than it is,
+// One rule and two exemptions. A Run does not go past work worth more than it is,
 // which is what stops a stream of urgent arrivals from stepping over everything
-// that has been waiting. The exemption is the class's own declared backfill
-// eligibility, and it is the only thing that grants it: taking capacity that is
-// going spare is the whole point of a class that says waiting costs it nothing.
-// It stops at a Run that has waited longer than its class allows, because
-// capacity a starved Run is waiting for is not capacity going spare.
+// that has been waiting.
+//
+// The first exemption is the class's own declared backfill eligibility, and it is
+// the only thing that grants it: taking capacity that is going spare is the whole
+// point of a class that says waiting costs it nothing. It stops at a Run that has
+// waited longer than its class allows, because capacity a starved Run is waiting
+// for is not capacity going spare.
+//
+// The second is a Run that holds no queue at all: one every machine in the fleet
+// was weighed against and none of them could take. Ordering work behind it is
+// ordering it behind a wait for capacity nobody has, which leaves a machine idle
+// beside work that fits it and stalls a workspace on one impossible submission
+// until that Run's own deadline clears it.
 func (queue admissionQueue) ahead(run queuePosition) []domain.QueuedAhead {
 	var behind []domain.QueuedAhead
 	for _, other := range queue.waiting {
-		if other.runID == run.runID {
+		if other.runID == run.runID || !other.holdsTheQueue {
 			continue
 		}
 		policy := other.class.Admission()
@@ -195,26 +217,44 @@ func (run queuePosition) deferral(reason string, behind []domain.QueuedAhead) do
 	}
 }
 
-// deferOrRefuse is what admission does with a Run Placement would not place. It
-// waits, unless its class states a moment it must have started by that the queue
+// deferOrRefuse is what admission does with a Run it will not admit now. It
+// waits, unless its class states a moment it must have started by that the wait
 // in front of it is already past, in which case waiting is a promise the record
 // says cannot be kept and the Run is refused instead.
+//
+// It is asked of every wait and not only of the one Placement caused. A Run held
+// behind work that outranks it is waiting exactly as much as a Run no machine
+// would take, and admission that checked the deadline on one and not the other
+// would keep a Run queued for ever past the moment its own class says the answer
+// stopped being worth having.
 func (o *Orchestrator) deferOrRefuse(
 	ctx context.Context,
 	workspaceID, runID string,
 	version uint64,
 	state runState,
 	run queuePosition,
-	decision domain.BookingDecision,
+	deferral domain.AdmissionDeferral,
+	projected bool,
 ) error {
-	wait, projected := shortestProjectedWait(decision)
-	deferral := run.deferral(domain.DeferredNoFeasibleOffer, workAhead(decision))
-	deferral.ProjectedWaitSeconds = wait
-	if run.policy.DeadlineUnreachable(run.queued, wait, projected) {
+	if run.policy.DeadlineUnreachable(run.queued, deferral.ProjectedWaitSeconds, projected) {
 		deferral.Reason = domain.RefusedDeadlineUnreachable
 		return o.recordRefusal(ctx, workspaceID, runID, version, state, deferral)
 	}
 	return o.recordDeferral(ctx, workspaceID, runID, version, state, deferral)
+}
+
+// placementDeferral is the wait a decision that selected nothing puts a Run in:
+// which of the two waits it is, what the record says is in front of it, and the
+// soonest anything it was weighed against comes free.
+func placementDeferral(run queuePosition, decision domain.BookingDecision) (domain.AdmissionDeferral, bool) {
+	wait, projected := shortestProjectedWait(decision)
+	reason := domain.DeferredNoFeasibleOffer
+	if len(decision.Candidates) > 0 && !projected {
+		reason = domain.DeferredNoCapacityFits
+	}
+	deferral := run.deferral(reason, workAhead(decision))
+	deferral.ProjectedWaitSeconds = wait
+	return deferral, projected
 }
 
 // shortestProjectedWait is the soonest the record says anything this Run was
@@ -283,7 +323,7 @@ func (o *Orchestrator) recordDeferral(
 	if state.deferral != nil && sameDeferral(*state.deferral, deferral) {
 		return nil
 	}
-	return o.appendEvents(ctx, workspaceID, runID, version, "advance:admission_deferred:"+deferral.Reason, []eventlog.NewEvent{
+	return o.appendEvents(ctx, workspaceID, runID, version, admissionCommand(state, "deferred"), []eventlog.NewEvent{
 		mustEvent(runID, admissionEventID(state), EventAdmissionDeferred, admissionDeferredData{Deferral: deferral}, o.now()),
 	})
 }
@@ -303,16 +343,32 @@ func (o *Orchestrator) recordRefusal(
 		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, o.now()),
 		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true, Reason: refusal.Reason}, o.now()),
 	}
+	command := admissionCommand(state, "refused")
 	if state.bookingQueued() {
-		return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, "advance:admission_refused", events)
+		return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, command, events)
 	}
-	return o.appendEvents(ctx, workspaceID, runID, version, "advance:admission_refused", events)
+	return o.appendEvents(ctx, workspaceID, runID, version, command, events)
 }
 
 // admissionEventID numbers each deferral of one Run, because they are separate
 // facts about separate moments and an event ID is unique within its stream.
 func admissionEventID(state runState) string {
 	return fmt.Sprintf("admission_%d", state.deferralCount+1)
+}
+
+// admissionCommand names the command one admission fact is appended under, and it
+// carries the same number the fact does.
+//
+// A key that named only the reason was spent on the first Run this reason applied
+// to. The second time admission said the same thing about a changed queue, the
+// append replayed a command key against a different request hash, the event log
+// refused it as an idempotency conflict, and AdvanceRun returned that error to
+// every caller for as long as the state held: the refresh answered 502, the sweep
+// logged it each tick, and the Run's own record stayed frozen at the stale answer.
+// Recording the nth admission decision about a Run is a distinct command from
+// recording the (n-1)th, so the key says which one it is.
+func admissionCommand(state runState, outcome string) string {
+	return "advance:" + admissionEventID(state) + ":" + outcome
 }
 
 // sameDeferral reports whether two deferrals say the same thing. The seconds and

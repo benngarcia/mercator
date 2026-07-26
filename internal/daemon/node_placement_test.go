@@ -770,10 +770,17 @@ func (f *fleet) advance(t *testing.T, runID string) {
 }
 
 // queueForWantOfCapacity drives one Run forward the way the reconcile sweep does
-// and expects the daemon to answer that it queued it because nothing would take
-// it. It reads the answer the caller gets rather than an error code: admission
-// records a Run nothing can take as waiting, so the refresh succeeds and what an
-// operator acts on is the phase and the reason on the Run itself.
+// and expects the daemon to answer that it queued it because no machine in this
+// fleet has room for it. It reads the answer the caller gets rather than an error
+// code: admission records a Run nothing can take as waiting, so the refresh
+// succeeds and what an operator acts on is the phase and the reason on the Run
+// itself.
+//
+// The reason is the one that says the fleet was measured. Every node here was
+// weighed against the Run and none of them could hold it, which is a different
+// answer from a machine that could hold it being busy: the second is a wait for
+// capacity to come free, and it is the only one of the two that work behind this
+// Run has to respect.
 func (f *fleet) queueForWantOfCapacity(t *testing.T, runID string) {
 	t.Helper()
 	var response struct {
@@ -785,7 +792,7 @@ func (f *fleet) queueForWantOfCapacity(t *testing.T, runID string) {
 		} `json:"run"`
 	}
 	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
-	if response.Run.Phase != "queued" || response.Run.Admission.Reason != domain.DeferredNoFeasibleOffer {
+	if response.Run.Phase != "queued" || response.Run.Admission.Reason != domain.DeferredNoCapacityFits {
 		t.Fatalf("run %q is %q waiting for %q, and nothing in this fleet has room for it",
 			runID, response.Run.Phase, response.Run.Admission.Reason)
 	}
