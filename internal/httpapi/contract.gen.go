@@ -490,7 +490,10 @@ type CandidateDecision struct {
 	NativeRef       string                         `json:"native_ref,omitempty"`
 	OfferSnapshotId string                         `json:"offer_snapshot_id"`
 	Rejections      []Violation                    `json:"rejections,omitempty"`
-	ScoreUsd        float64                        `json:"score_usd,omitempty"`
+
+	// RentalSchedule One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them.
+	RentalSchedule ScheduleEvidence `json:"rental_schedule,omitempty"`
+	ScoreUsd       float64          `json:"score_usd,omitempty"`
 }
 
 // CandidateDecisionDisposition defines model for CandidateDecision.Disposition.
@@ -1003,6 +1006,33 @@ type RunResponse struct {
 	RunId string `json:"run_id"`
 }
 
+// RunningBookingEvidence The Booking holding the Rental when a decision was made. Its runtimes are what it has left rather than what its Run declared, because a Booking twenty-nine minutes into half an hour is one minute of waiting.
+type RunningBookingEvidence struct {
+	BookingId string `json:"booking_id"`
+
+	// RemainingExpectedRuntimeSeconds The p50 runtime this Booking has left, which is what a projected start behind it is made of.
+	RemainingExpectedRuntimeSeconds float64 `json:"remaining_expected_runtime_seconds,omitempty"`
+
+	// RemainingMaxRuntimeSeconds The enforced maximum runtime this Booking has left, which is what a latest start for anything waiting behind it is made of.
+	RemainingMaxRuntimeSeconds float64 `json:"remaining_max_runtime_seconds,omitempty"`
+	RunId                      string  `json:"run_id"`
+}
+
+// ScheduleEvidence One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them.
+type ScheduleEvidence struct {
+	// Preceding The Bookings already waiting on this Rental, in the order they will run.
+	Preceding []WaitingBookingEvidence `json:"preceding,omitempty"`
+
+	// ProjectedStartSeconds How long work arriving at this moment waits for this Rental, projected from where the Bookings above actually are.
+	ProjectedStartSeconds float64 `json:"projected_start_seconds"`
+
+	// Running The Booking holding the Rental when a decision was made. Its runtimes are what it has left rather than what its Run declared, because a Booking twenty-nine minutes into half an hour is one minute of waiting.
+	Running RunningBookingEvidence `json:"running,omitempty"`
+
+	// Version The schedule version this decision was weighed against. A Booking the decision creates follows it.
+	Version int64 `json:"version"`
+}
+
 // SinkResult defines model for SinkResult.
 type SinkResult = sinks.Result
 
@@ -1011,6 +1041,18 @@ type SinkStatus = sinks.Status
 
 // Violation defines model for Violation.
 type Violation = domain.Violation
+
+// WaitingBookingEvidence A Booking that had not started when a decision was made. It still owes every second its Run declared, which is why these fields carry the declared runtimes rather than remaining ones.
+type WaitingBookingEvidence struct {
+	BookingId string `json:"booking_id"`
+
+	// ExpectedRuntimeSeconds The p50 runtime this Booking's Run declared.
+	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds,omitempty"`
+
+	// MaxRuntimeSeconds The enforced maximum runtime this Booking's Run declared.
+	MaxRuntimeSeconds float64 `json:"max_runtime_seconds,omitempty"`
+	RunId             string  `json:"run_id"`
+}
 
 // WorkloadRevision defines model for WorkloadRevision.
 type WorkloadRevision = domain.WorkloadRevision

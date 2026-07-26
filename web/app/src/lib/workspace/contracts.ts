@@ -229,10 +229,17 @@ const CandidateEstimateSet = Schema.Struct({
   established_start_seconds: Estimate,
   cost_usd: Estimate,
 });
+// CandidateDisposition is what Placement recorded a candidate as. The three
+// Rental dispositions reuse, queue on, or provision capacity Mercator keeps;
+// launch_ephemeral is a one-shot execution that holds nothing once its workload
+// exits. Leaving it out made the common case undecodable: every candidate on a
+// provider-native execution product failed this schema, which is the whole
+// ephemeral lane.
 const CandidateDisposition = Schema.Literals([
   "run_now_existing_rental",
   "queue_existing_rental",
   "provision_fresh_rental",
+  "launch_ephemeral",
 ]);
 export const Booking = Schema.Struct({
   id: Schema.String,

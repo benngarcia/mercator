@@ -296,5 +296,7 @@ function dispositionLabel(disposition: CandidateDecision["disposition"]): string
       return "Queue";
     case "provision_fresh_rental":
       return "Fresh";
+    case "launch_ephemeral":
+      return "One-shot";
   }
 }

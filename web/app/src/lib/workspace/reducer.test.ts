@@ -97,6 +97,30 @@ function requestedMessage(
   return requested;
 }
 
+// A one-shot execution on a provider-native product is the whole ephemeral
+// lane, and the console could not read one: "launch_ephemeral" was missing from
+// the hand-written disposition literals, so every Booking Decision that
+// recorded the common case threw on decode instead of reaching the timeline.
+test("reads a Booking Decision that launched a one-shot ephemeral execution", () => {
+  const decided = bookingDecidedMessage({
+    eventID: "evt_booking_ephemeral",
+    globalPosition: 2,
+    runID: "run-one-shot",
+    bookingID: "booking-one-shot",
+    state: "running",
+    candidateDisposition: "launch_ephemeral",
+  });
+
+  const workspace = [
+    requestedMessage("run-one-shot", "evt_requested_one_shot", 1),
+    decided,
+  ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
+
+  expect(workspace.runs["run-one-shot"]?.decision?.candidates[0]?.disposition).toBe(
+    "launch_ephemeral",
+  );
+});
+
 function bookingDecidedMessage(input: {
   eventID: string;
   globalPosition: number;
@@ -104,6 +128,7 @@ function bookingDecidedMessage(input: {
   bookingID: string;
   state: "running" | "queued";
   afterBookingID?: string;
+  candidateDisposition?: string;
 }): WorkspaceMessage {
   return {
     type: "domain_event",
@@ -127,7 +152,24 @@ function bookingDecidedMessage(input: {
           model_version: "scheduler-v1",
           policy: { objective: "cheapest" },
           collection_report: {},
-          candidates: [],
+          candidates: input.candidateDisposition
+            ? [
+                {
+                  offer_snapshot_id: "offer-warm",
+                  disposition: input.candidateDisposition,
+                  feasible: true,
+                  estimates: {
+                    queue_seconds: {},
+                    provision_seconds: {},
+                    pull_seconds: {},
+                    artifact_seconds: {},
+                    start_seconds: {},
+                    established_start_seconds: {},
+                    cost_usd: {},
+                  },
+                },
+              ]
+            : [],
           selected_offer_snapshot_id: "offer-warm",
           booking: {
             id: input.bookingID,

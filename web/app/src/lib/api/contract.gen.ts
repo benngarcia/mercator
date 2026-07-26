@@ -1078,9 +1078,57 @@ export interface components {
             /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name. */
             cache_evidence?: components["schemas"]["CacheEvidence"][];
             disk?: components["schemas"]["DiskDemand"];
+            /** @description The Broker state this candidate was weighed against, present only for a Rental that has Bookings on it. The queue estimate beside it is the projection; this is what the projection was read from. A Rental nothing is assigned to records none, because an empty schedule offered as evidence reads as a queue that was measured rather than one that does not exist. */
+            rental_schedule?: components["schemas"]["ScheduleEvidence"];
             estimates: components["schemas"]["CandidateEstimates"];
             /** Format: double */
             score_usd?: number;
+        };
+        /** @description The Booking holding the Rental when a decision was made. Its runtimes are what it has left rather than what its Run declared, because a Booking twenty-nine minutes into half an hour is one minute of waiting. */
+        RunningBookingEvidence: {
+            booking_id: string;
+            run_id: string;
+            /**
+             * Format: double
+             * @description The enforced maximum runtime this Booking has left, which is what a latest start for anything waiting behind it is made of.
+             */
+            remaining_max_runtime_seconds?: number;
+            /**
+             * Format: double
+             * @description The p50 runtime this Booking has left, which is what a projected start behind it is made of.
+             */
+            remaining_expected_runtime_seconds?: number;
+        };
+        /** @description A Booking that had not started when a decision was made. It still owes every second its Run declared, which is why these fields carry the declared runtimes rather than remaining ones. */
+        WaitingBookingEvidence: {
+            booking_id: string;
+            run_id: string;
+            /**
+             * Format: double
+             * @description The enforced maximum runtime this Booking's Run declared.
+             */
+            max_runtime_seconds?: number;
+            /**
+             * Format: double
+             * @description The p50 runtime this Booking's Run declared.
+             */
+            expected_runtime_seconds?: number;
+        };
+        /** @description One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them. */
+        ScheduleEvidence: {
+            /**
+             * Format: int64
+             * @description The schedule version this decision was weighed against. A Booking the decision creates follows it.
+             */
+            version: number;
+            running?: components["schemas"]["RunningBookingEvidence"];
+            /** @description The Bookings already waiting on this Rental, in the order they will run. */
+            preceding?: components["schemas"]["WaitingBookingEvidence"][];
+            /**
+             * Format: double
+             * @description How long work arriving at this moment waits for this Rental, projected from where the Bookings above actually are.
+             */
+            projected_start_seconds: number;
         };
         Booking: {
             id: string;
