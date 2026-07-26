@@ -36,7 +36,7 @@
   "expect": {
     "outcome": "place",
     "offer": "rental-warm",
-    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
     "disposition": "release",
     "candidates": {
       "rental-warm": {"feasible": true, "pull_seconds": 0},

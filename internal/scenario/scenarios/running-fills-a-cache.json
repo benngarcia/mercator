@@ -42,6 +42,7 @@
       "submit": "first",
       "request": {
         "image": "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e",
+        "service_class": "standard",
         "expected_runtime": "10m",
         "max_runtime": "20m",
         "cache_mounts": [
@@ -77,6 +78,7 @@
       "submit": "second",
       "request": {
         "image": "builder@sha256:3c9d5f1a7e2b4c6d8f0a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e",
+        "service_class": "standard",
         "expected_runtime": "5m",
         "max_runtime": "20m",
         "cache_mounts": [

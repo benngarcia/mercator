@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -110,6 +111,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
+		invariantRule{id: "safety.score_is_reproducible_from_the_record", check: scoreIsReproducibleFromTheRecord},
 		invariantRule{id: "safety.prewarm_yields_to_real_work", check: prewarmYieldsToRealWork},
 		invariantRule{id: "safety.prewarm_rate_within_bound", check: prewarmRateWithinBound},
 		invariantRule{
@@ -756,6 +758,57 @@ func unreadableShare(evidence []domain.ArtifactEvidence) float64 {
 // arithmeticTolerance is how far two readings of the same seconds may differ
 // before the difference is a disagreement rather than floating-point noise.
 const arithmeticTolerance = 1e-6
+
+// scoreIsReproducibleFromTheRecord is the standing guard on the score being
+// derivable rather than merely reported. For every candidate of every Booking
+// Decision Mercator recorded, ScoreUSD is the arithmetic over the terms that
+// decision itself carries, at the weights it says it used.
+//
+// What it forbids is a scoring term whose input is nowhere in the record. Such a
+// term is invisible: it moves placements that a reader with the whole decision in
+// front of them cannot explain, and no rule can police a number nobody wrote
+// down. That is not hypothetical. Two definitions of uncertainty ran side by side
+// for a phase, one counting the confidences a candidate's answers carried and the
+// other counting facts read straight off the offer, and they agreed on every
+// decision only because both were multiplied by zero. The first Run scored with a
+// nonzero weight would have made them disagree about every borrowed host, and
+// nothing here would have said so.
+//
+// It says nothing about whether the weights are the right ones. Which rate a class
+// declares is a policy statement, and this rule is about the record being enough
+// to check the arithmetic that rate was used in.
+func scoreIsReproducibleFromTheRecord(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			derived := decision.Weights.ScoreUSD(candidate, decision.Policy.ExpectedRuntimeSeconds)
+			if math.Abs(derived-candidate.ScoreUSD) <= arithmeticTolerance {
+				continue
+			}
+			return fmt.Errorf(
+				"Run %q: candidate %q recorded a score of %.6f USD, and the terms recorded beside it at the weights the decision states derive %.6f: %s",
+				decision.RunID, candidate.OfferSnapshotID, candidate.ScoreUSD, derived, describeScoreTerms(decision, candidate),
+			)
+		}
+	}
+	return nil
+}
+
+// describeScoreTerms is every quantity the derivation had to work with, so a
+// failure names what the record held rather than only that it disagreed.
+func describeScoreTerms(decision domain.BookingDecision, candidate domain.CandidateDecision) string {
+	return fmt.Sprintf(
+		"cost %.6f USD, start %.2fs, declared runtime %.2fs, uncertainty %.3f points, weights %+v",
+		candidate.Estimates.CostUSD.Expected,
+		candidate.Estimates.StartSeconds.Expected,
+		decision.Policy.ExpectedRuntimeSeconds,
+		candidate.Uncertainty(),
+		decision.Weights,
+	)
+}
 
 // localityProvenance is the standing guard on how a host becomes warm. Content
 // arrives on a machine exactly two ways: the World Tape seeded it there, or a

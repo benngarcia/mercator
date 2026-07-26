@@ -715,8 +715,11 @@ export interface components {
             download?: components["schemas"]["NetworkDownloadRequirement"];
         };
         PlacementPolicy: {
-            /** @enum {string} */
-            objective: "cheapest" | "fastest_start" | "fastest_completion" | "balanced";
+            /**
+             * @description The kind of work this Run is, which is the only thing that says what waiting is worth to it. Every class declares its own exchange rate, and the score is computed over those rates: interactive prices a second of waiting to the start at twenty times the rent of the machine doing the waiting, standard at that rent, experimental and batch price it to the finish at twice and a fifth of it, and opportunistic prices it at nothing and takes whatever costs least. A class Mercator does not know is refused with SERVICE_CLASS_UNKNOWN rather than ranked on price alone. Omitted means standard.
+             * @enum {string}
+             */
+            service_class: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
             /** Format: double */
             max_p90_start_seconds?: number;
             /** Format: double */
@@ -1081,8 +1084,32 @@ export interface components {
             /** @description The Broker state this candidate was weighed against, present only for a Rental that has Bookings on it. The queue estimate beside it is the projection; this is what the projection was read from. A Rental nothing is assigned to records none, because an empty schedule offered as evidence reads as a queue that was measured rather than one that does not exist. */
             rental_schedule?: components["schemas"]["ScheduleEvidence"];
             estimates: components["schemas"]["CandidateEstimates"];
-            /** Format: double */
+            /** @description What each answer this candidate was scored on is worth, one entry per source that stated one. It is the whole input to the score's uncertainty term, recorded so score_usd can be re-derived from this record: a scoring term whose input is not here is a term no reader can check. An answer nobody stated a confidence for is absent rather than zero, because stating no opinion is not the same as stating that an answer is worthless. */
+            confidences?: components["schemas"]["Confidence"][];
+            /**
+             * Format: double
+             * @description What this candidate is worth to this Run in dollars, lowest first: the cost it would be billed, plus the dollars its service class says it would rather pay than wait, plus the dollars it would rather pay than act on a doubtful answer. Every quantity it multiplies is recorded beside it, at the weights the decision states, so it can be re-derived rather than trusted. An infeasible candidate scores nothing, because it has no price.
+             */
             score_usd?: number;
+        };
+        /** @description One answer a placement rested on and what its source said it was worth. */
+        Confidence: {
+            /** @description What was being answered, in the vocabulary of whatever answered: the capacity claim, the reliability history, the image transfer, the Artifact read. */
+            answer: string;
+            /** Format: double */
+            value: number;
+        };
+        /** @description The exchange rates one service class declares, which are what a score is computed over. They are recorded on every decision rather than looked up, because a rate that changes would otherwise silently rewrite the arithmetic of every decision already taken. The two reliability terms a score will eventually carry are absent on purpose: probability times the cost of starting again is a derivation over a prediction, and a flat penalty invented for it now would be an unmeasured constant. */
+        ScoreWeights: {
+            /** Format: double */
+            start_latency_usd_per_second?: number;
+            /** Format: double */
+            completion_latency_usd_per_second?: number;
+            /**
+             * Format: double
+             * @description What one whole point of doubt costs. A point is one answer worth nothing.
+             */
+            uncertainty_penalty_usd?: number;
         };
         /** @description The Booking holding the Rental when a decision was made. Its runtimes are what it has left rather than what its Run declared, because a Booking twenty-nine minutes into half an hour is one minute of waiting. */
         RunningBookingEvidence: {
@@ -1152,6 +1179,8 @@ export interface components {
             evaluated_at: string;
             model_version: string;
             policy: components["schemas"]["PlacementPolicy"];
+            /** @description The exchange rates every candidate below was scored at, which the Run's service class declared. */
+            weights: components["schemas"]["ScoreWeights"];
             collection_report: components["schemas"]["CollectionReport"];
             candidates: components["schemas"]["CandidateDecision"][];
             selected_offer_snapshot_id?: string;

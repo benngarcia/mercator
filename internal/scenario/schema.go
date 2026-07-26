@@ -405,6 +405,22 @@ type RentalSpec struct {
 	RatePerHourUSD float64         `json:"rate_per_hour_usd"`
 	Billing        BillingSpec     `json:"billing,omitempty"`
 	Resources      *ResourcesSpec  `json:"resources,omitempty"`
+	// CapacityConfidence is how sure whoever published this machine's capacity
+	// claim was of it. Omitted means certain, which is what every simulated
+	// provider says about a machine it can see. A fixture states less when the
+	// world under test is one where the answers a placement rests on are worth
+	// different amounts, which is the only way the uncertainty term can be shown
+	// pricing anything.
+	CapacityConfidence *float64 `json:"capacity_confidence,omitempty"`
+}
+
+// Confidence is how sure this machine's publisher is of its capacity claim, and
+// certainty where the fixture stated nothing.
+func (spec RentalSpec) Confidence() float64 {
+	if spec.CapacityConfidence == nil {
+		return 1
+	}
+	return *spec.CapacityConfidence
 }
 
 // HeldCacheSpec is one mutable cache a machine was found holding. The workspace
@@ -565,7 +581,11 @@ type RequestSpec struct {
 	Resources       *ResourcesSpec `json:"resources,omitempty"`
 	MaxRuntime      *Duration      `json:"max_runtime,omitempty"`
 	ExpectedRuntime *Duration      `json:"expected_runtime,omitempty"`
-	Objective       string         `json:"objective,omitempty"`
+	// ServiceClass is the kind of work this Run says it is, and the only thing
+	// that says what waiting is worth to it. It is a string rather than the domain
+	// type so a fixture can state a class Mercator does not know, which is a world
+	// the corpus has to be able to build: the refusal is the behaviour under test.
+	ServiceClass string `json:"service_class,omitempty"`
 	// MaxStartLatency is the p90 start latency this Run refuses to exceed. It
 	// is the only hard bound in the request that image locality feeds, which is
 	// what makes it the one place a candidate can be struck out for what it was
@@ -688,6 +708,18 @@ type CandidateExpectation struct {
 	// what a warm cache saves is work inside the application and nothing here
 	// has measured that.
 	Caches map[string]string `json:"cache_evidence,omitempty"`
+	// Uncertainty asserts how far the answers this candidate was scored on fell
+	// short of certainty, in points. One point is one answer worth nothing. It is
+	// stated separately from the score because it is the term a fixture is usually
+	// about: a machine nobody could ask and a machine that answered and holds
+	// nothing owe the same seconds, and this is what says whether the silence was
+	// charged once or twice.
+	Uncertainty *Bound `json:"uncertainty,omitempty"`
+	// ScoreUSD asserts what this candidate was worth to this Run, in dollars. It
+	// is the whole arithmetic in one number, which is what makes a fixture able to
+	// state that a class's exchange rate was applied rather than merely that the
+	// winner came out right.
+	ScoreUSD *Bound `json:"score_usd,omitempty"`
 }
 
 type ScheduleEvidenceExpectation struct {

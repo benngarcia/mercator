@@ -99,6 +99,120 @@ func TestOpenCompletesV052BookingDecisionMigration(t *testing.T) {
 	assertMigratedLegacyBooking(t, ctx, storage)
 }
 
+// TestOpenRenamesLegacyPlacementObjectives is the service class rename on
+// history. A Run that stated an objective carries a word nothing reads, in three
+// places: the public request, the private one, and the policy its Booking Decision
+// was taken under. Each becomes the class that prices waiting the way that
+// objective ranked it, and the objective is gone rather than kept beside it,
+// because two vocabularies for one answer is how they drift.
+func TestOpenRenamesLegacyPlacementObjectives(t *testing.T) {
+	ctx, db := openLegacyObjectiveFixture(t)
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	for _, migrated := range []struct {
+		column string
+		path   string
+		want   domain.ServiceClass
+	}{
+		{"data_json", "$.workload_revision.spec.placement.service_class", domain.ClassInteractive},
+		{"private_data", "$.workload_revision.spec.placement.service_class", domain.ClassInteractive},
+		{"data_json", "$.decision.policy.service_class", domain.ClassBatch},
+	} {
+		var class string
+		query := "SELECT json_extract(" + migrated.column + ", '" + migrated.path + "') FROM events WHERE json_type(" + migrated.column + ", '" + migrated.path + "') = 'text'"
+		if err := db.QueryRowContext(ctx, query).Scan(&class); err != nil {
+			t.Fatalf("read %s at %s: %v", migrated.column, migrated.path, err)
+		}
+		if domain.ServiceClass(class) != migrated.want {
+			t.Errorf("%s at %s = %q, want %q", migrated.column, migrated.path, class, migrated.want)
+		}
+	}
+	// The rates each old decision was actually scored at, which were nearly all
+	// zero: nothing populated the weights in production, so a Run that asked for
+	// the cheapest capacity was scored on price and nothing else.
+	var weights string
+	if err := db.QueryRowContext(ctx, `
+		SELECT json_extract(data_json, '$.decision.weights') FROM events
+		WHERE json_type(data_json, '$.decision.weights') IS NOT NULL
+	`).Scan(&weights); err != nil {
+		t.Fatalf("read migrated weights: %v", err)
+	}
+	if weights != "{}" {
+		t.Errorf("migrated weights = %s, and the cheapest objective was scored on price alone", weights)
+	}
+	var objectives int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM events
+		WHERE json_type(data_json, '$.workload_revision.spec.placement.objective') IS NOT NULL
+		   OR json_type(private_data, '$.workload_revision.spec.placement.objective') IS NOT NULL
+		   OR json_type(data_json, '$.decision.policy.objective') IS NOT NULL
+	`).Scan(&objectives); err != nil {
+		t.Fatalf("count remaining objectives: %v", err)
+	}
+	if objectives != 0 {
+		t.Errorf("%d events still state a placement objective", objectives)
+	}
+}
+
+// TestOpenRefusesToRenameObjectivesWhileARunIsOpen is why the rename is safe on
+// history and nowhere else. A Run still open is a Run whose next event Mercator
+// appends from state it has already read, so rewriting the vocabulary underneath
+// it leaves one stream speaking both.
+func TestOpenRefusesToRenameObjectivesWhileARunIsOpen(t *testing.T) {
+	ctx, db := openLegacyObjectiveFixture(t)
+	if _, err := db.ExecContext(ctx, `DELETE FROM events WHERE event_type = 'compute.run.closed.v1'`); err != nil {
+		t.Fatalf("reopen the legacy run: %v", err)
+	}
+
+	_, err := sqlitestore.New(ctx, db)
+
+	if err == nil || !strings.Contains(err.Error(), "open legacy placement objectives") {
+		t.Fatalf("open storage error = %v", err)
+	}
+}
+
+// TestOpenRefusesAnObjectiveWithNoServiceClass keeps the mapping from guessing.
+// An objective outside the four that existed prices a historical Run's waiting at
+// a rate nobody chose, and a decision record is not a place to guess.
+func TestOpenRefusesAnObjectiveWithNoServiceClass(t *testing.T) {
+	ctx, db := openLegacyObjectiveFixture(t)
+	if _, err := db.ExecContext(ctx, `
+		UPDATE events
+		SET data_json = json_set(data_json, '$.decision.policy.objective', 'whatever_is_free')
+		WHERE json_type(data_json, '$.decision.policy.objective') = 'text'
+	`); err != nil {
+		t.Fatalf("write an objective nothing maps: %v", err)
+	}
+
+	_, err := sqlitestore.New(ctx, db)
+
+	if err == nil || !strings.Contains(err.Error(), `objective "whatever_is_free" has no service class`) {
+		t.Fatalf("open storage error = %v", err)
+	}
+}
+
+func openLegacyObjectiveFixture(t *testing.T) (context.Context, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mercator.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	fixture, err := os.ReadFile("testdata/legacy_objective_event.sql")
+	if err != nil {
+		t.Fatalf("read legacy objective fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(fixture)); err != nil {
+		t.Fatalf("load legacy objective fixture: %v", err)
+	}
+	return ctx, db
+}
+
 func openLegacyEventFixture(t *testing.T) (context.Context, *sql.DB) {
 	t.Helper()
 	ctx := context.Background()

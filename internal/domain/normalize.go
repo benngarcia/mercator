@@ -61,9 +61,13 @@ func NormalizeWorkloadRevision(rev WorkloadRevision) WorkloadRevision {
 		out.Spec.Network.Inbound = InboundNetworkNone
 	}
 
-	// Placement objective defaults to "balanced".
-	if out.Spec.Placement.Objective == "" {
-		out.Spec.Placement.Objective = ObjectiveBalanced
+	// A Run that says nothing about the kind of work it is gets the class that
+	// says nothing either: standard prices a second of waiting at what the machine
+	// doing the waiting costs. Only an omission is filled. A class Mercator does
+	// not know is left alone so validation refuses it, because defaulting an
+	// unrecognised word would place work at rates its caller never asked for.
+	if out.Spec.Placement.Class == "" {
+		out.Spec.Placement.Class = ClassStandard
 	}
 
 	// Execution: bounded max runtime and a single pre-start attempt.

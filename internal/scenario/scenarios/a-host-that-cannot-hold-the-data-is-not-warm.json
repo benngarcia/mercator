@@ -53,6 +53,7 @@
       "submit": "reads-the-dataset",
       "request": {
         "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
         "expected_runtime": "20m",
         "max_runtime": "1h",
         "consumes_artifacts": ["artifact:imagenet:v2.41"]
@@ -60,7 +61,7 @@
       "expect": {
         "outcome": "place",
         "offer": "rental-roomy",
-        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
         "disposition": "release",
         "candidates": {
           "rental-unmeasured": {
@@ -91,6 +92,7 @@
       "submit": "needs-the-room",
       "request": {
         "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
         "resources": {"disk": "100GB"},
         "expected_runtime": "20m",
         "max_runtime": "1h"
@@ -98,7 +100,7 @@
       "expect": {
         "outcome": "place",
         "offer": "rental-roomy",
-        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
         "candidates": {
           "rental-unmeasured": {
             "feasible": false,
@@ -123,6 +125,7 @@
       "submit": "reserves-room-and-reads",
       "request": {
         "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
         "resources": {"disk": "150GB"},
         "expected_runtime": "20m",
         "max_runtime": "1h",
@@ -131,7 +134,7 @@
       "expect": {
         "outcome": "place",
         "offer": "rental-vast",
-        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
         "candidates": {
           "rental-unmeasured": {
             "feasible": false,

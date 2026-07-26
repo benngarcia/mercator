@@ -460,6 +460,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		if rental.IdleLeaseExpiresIn != nil {
 			state.leaseExpiresAt = tape.Start.Add(rental.IdleLeaseExpiresIn.Duration())
 		}
+		state.offer.Capacity.Confidence = rental.Confidence()
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
@@ -946,7 +947,10 @@ func (world *simulatedWorld) setOfferAvailable(id string, available bool) {
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	state := world.truth[id]
-	state.offer.Capacity = domain.CapacityEvidence{Available: available, Confidence: 1}
+	// Only whether the capacity is there changes. How sure its publisher is of
+	// that answer is a property of the publisher, so a world that reclaims a
+	// machine does not also become certain about one it was unsure of.
+	state.offer.Capacity.Available = available
 	world.truth[id] = state
 }
 
@@ -1133,7 +1137,7 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		ReservedDiskBytes: request.Resources.EphemeralDisk.MinBytes,
 	}
 	if offer.offer.Kind == domain.OfferKindStanding {
-		offer.offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
+		offer.offer.Capacity.Available = false
 		world.truth[request.SelectedOfferSnapshotID] = offer
 	}
 	// A process cannot execute bytes that have not landed, and that is as true
@@ -1319,7 +1323,7 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 		delete(world.executions, launchKey)
 		world.cancelTransfers(launchKey)
 		if offer := world.truth[execution.OfferID]; offer.offer.Kind == domain.OfferKindStanding {
-			offer.offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: 1}
+			offer.offer.Capacity.Available = true
 			world.truth[execution.OfferID] = offer
 		}
 		world.publishObservations()

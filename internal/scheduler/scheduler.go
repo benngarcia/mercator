@@ -33,23 +33,7 @@ type SchedulingInput struct {
 	// content digest are properties of the content, and a host that does not
 	// hold something cannot be asked how big it is.
 	Artifacts        []domain.ArtifactVersion
-	Weights          ScoreWeights
 	LatencyEstimates map[string]domain.Estimate
-}
-
-// ScoreWeights turns each predicted quantity into the dollars a caller says it
-// is worth. Nothing populates it in production: it is the seam calibration
-// fills in phase 4, and until something measures those exchange rates the only
-// one stated is what the balanced objective presumes waiting costs. Which
-// candidate wins is decided by the Run's objective rather than by these
-// weights, because ranking a Run that asked for the earliest start on a blended
-// dollar score would answer a question it did not ask.
-type ScoreWeights struct {
-	StartLatencyUSDPerSecond      float64
-	CompletionLatencyUSDPerSecond float64
-	StartFailurePenaltyUSD        float64
-	InterruptionPenaltyUSD        float64
-	UncertaintyPenaltyUSD         float64
 }
 
 type deterministicScheduler struct{}
@@ -65,9 +49,15 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 	if input.ModelVersion == "" {
 		input.ModelVersion = "latency-v1"
 	}
-	if input.Weights.StartLatencyUSDPerSecond == 0 && input.Workload.Spec.Placement.Objective == domain.ObjectiveBalanced {
-		input.Weights.StartLatencyUSDPerSecond = domain.BalancedWaitingUSDPerSecond
+	// A class Mercator cannot price is refused rather than ranked. CreateRun
+	// already turns such a Run away, so reaching here means a revision was stored
+	// by something that did not ask: scoring it would rank every candidate on
+	// price alone and record a reason naming a class nothing declared.
+	class := input.Workload.Spec.Placement.Class
+	if !class.Known() {
+		return domain.BookingDecision{}, fmt.Errorf("scheduler: workload states service class %q, which Mercator cannot price", class)
 	}
+	weights := class.Weights()
 
 	decision := domain.BookingDecision{
 		RunID:                  input.RunID,
@@ -75,6 +65,7 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		EvaluatedAt:            input.EvaluatedAt.UTC(),
 		ModelVersion:           input.ModelVersion,
 		Policy:                 input.Workload.Spec.Placement,
+		Weights:                weights,
 		CollectionReport: domain.CollectionReport{
 			ConnectionsQueried: connectionIDs(input.Offers),
 		},
@@ -84,18 +75,18 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 	bestIndex := -1
 	offers := sortedOffers(input.Offers)
 	for _, offer := range offers {
-		candidate := evaluateOffer(input, offer)
+		candidate := evaluateOffer(input, weights, offer)
 		decision.Candidates = append(decision.Candidates, candidate)
 		if !candidate.Feasible {
 			continue
 		}
-		if bestIndex == -1 || decision.Policy.Prefers(candidate, decision.Candidates[bestIndex]) {
+		if bestIndex == -1 || candidate.Preferred(decision.Candidates[bestIndex]) {
 			bestIndex = len(decision.Candidates) - 1
 		}
 	}
 	if bestIndex >= 0 {
 		decision.SelectedOfferSnapshotID = decision.Candidates[bestIndex].OfferSnapshotID
-		decision.SelectionReasonCodes = []string{"FEASIBLE", decision.Policy.SelectionReason()}
+		decision.SelectionReasonCodes = []string{"FEASIBLE", class.SelectionReason()}
 		decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, selectionReason(decision.Candidates[bestIndex].Disposition))
 		if code := startSLOReason(input.Workload.Spec.Placement.MaxP90StartSeconds, decision.Candidates[bestIndex]); code != "" {
 			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, code)
@@ -188,20 +179,16 @@ func runtimeBounds(workload domain.WorkloadRevision) (float64, float64) {
 	return expectedRuntime, maxRuntime
 }
 
-func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
+// evaluateOffer is one candidate: what it was found holding, what that leaves it
+// to do, whether it may be used at all, and what it is worth to a Run of this
+// class. The score is computed last and from the record, never from the offer:
+// every quantity it multiplies is a field of the candidate below, which is what
+// lets a reader re-derive it and what lets the Lab police a term whose input
+// nobody wrote down.
+func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer domain.OfferSnapshot) domain.CandidateDecision {
 	work := estimateCandidate(input, offer)
 	rejections := feasibilityViolations(input, offer, work)
-	estimates := work.estimates
-	score := estimates.CostUSD.Expected +
-		input.Weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
-		input.Weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
-		input.Weights.StartFailurePenaltyUSD*offer.Reliability.StartFailureRate +
-		input.Weights.InterruptionPenaltyUSD*offer.Reliability.InterruptionRate +
-		input.Weights.UncertaintyPenaltyUSD*uncertaintyPenalty(offer)
-	if len(rejections) > 0 {
-		score = 0
-	}
-	return domain.CandidateDecision{
+	candidate := domain.CandidateDecision{
 		OfferSnapshotID:  offer.ID,
 		ConnectionID:     offer.ConnectionID,
 		AdapterType:      offer.AdapterType,
@@ -220,9 +207,30 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 		CacheEvidence:  domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
 		Disk:           work.disk,
 		RentalSchedule: scheduleEvidence(input, offer),
-		Estimates:      estimates,
-		ScoreUSD:       round(score, 6),
+		Estimates:      work.estimates,
+		Confidences:    confidences(offer, work.estimates),
 	}
+	candidate.ScoreUSD = weights.ScoreUSD(candidate, input.Workload.Spec.Placement.ExpectedRuntimeSeconds)
+	return candidate
+}
+
+// confidences is what each answer this candidate was scored on is worth, in the
+// order the placement asked the questions. Only an answer whose source stated a
+// confidence is recorded: zero means nobody said, and recording a silence as
+// worthlessness would charge every candidate for questions this Run never asked.
+func confidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Confidence {
+	var stated []domain.Confidence
+	for _, answer := range []domain.Confidence{
+		{Answer: "capacity", Value: offer.Capacity.Confidence},
+		{Answer: "reliability", Value: offer.Reliability.Confidence},
+		{Answer: "pull_seconds", Value: estimates.PullSeconds.Confidence},
+		{Answer: "artifact_seconds", Value: estimates.ArtifactSeconds.Confidence},
+	} {
+		if answer.Value > 0 {
+			stated = append(stated, answer)
+		}
+	}
+	return stated
 }
 
 // scheduleEvidence is the Broker state this candidate was weighed against. A
@@ -662,10 +670,10 @@ func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalitySt
 // durable copy is what makes the content consumable at all, and a host-local
 // copy only ever changes how long getting to it takes.
 //
-// The answer reaches the score through this estimate, the start estimate it
-// feeds, and the objective that ranks candidates on it. Nothing populates
-// SchedulingInput.Weights in production, so a locality term routed through
-// ScoreWeights would be multiplied by zero for every Run.
+// The answer reaches the score through this estimate and the start estimate it
+// feeds, which the Run's class prices by the second. It is deliberately not a
+// weighted locality term of its own: what a candidate holds is worth the seconds
+// it saves, and a second is worth what the class says it is worth.
 //
 // Confidence follows the same rule transfers already follow: a host that owes
 // nothing is certainly zero seconds away, and every other answer crosses a link
@@ -848,20 +856,4 @@ func connectionIDs(offers []domain.OfferSnapshot) []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-func uncertaintyPenalty(offer domain.OfferSnapshot) float64 {
-	penalty := 0.0
-	if offer.Capacity.Confidence > 0 && offer.Capacity.Confidence < 1 {
-		penalty += 1 - offer.Capacity.Confidence
-	}
-	if offer.Reliability.Confidence > 0 && offer.Reliability.Confidence < 1 {
-		penalty += 1 - offer.Reliability.Confidence
-	}
-	return penalty
-}
-
-func round(v float64, places int) float64 {
-	factor := math.Pow10(places)
-	return math.Round(v*factor) / factor
 }

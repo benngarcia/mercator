@@ -1,74 +1,101 @@
 package domain
 
-import "slices"
+import "math"
 
-// This file is what a Run's stated objective does to a placement. The objective
-// is public API, so "fastest_start" is a promise Mercator makes about where the
-// Run lands, and until this existed it was a word that changed nothing: every
-// candidate was ranked on one blended dollar score whose only time term was a
-// weight nothing populated outside the balanced objective, so a Run that asked
-// to start soonest was placed on whichever machine was a fraction of a cent
-// cheaper and, when prices tied, on whichever offer ID sorted first.
+// This file is the score. One number decides a placement, and the whole of it is
+// stated here: the dollars the Run will be billed, plus the dollars its
+// ServiceClass says it would rather pay than wait, plus the dollars it would
+// rather pay than act on an answer nobody stands behind.
 //
-// An objective is a ranking rather than an exchange rate. Converting a second
-// of waiting into dollars needs a number nobody has measured, and inventing one
-// per objective would be the unmeasured constant this codebase keeps deleting.
-// What a Run did state is which quantity it wants least of, and that orders
-// candidates on its own.
+// Before a class declared those rates, the second and third terms were
+// multiplied by zero for every Run in production, so the score was the price and
+// nothing else, and the Run's stated objective had to order candidates on its
+// own to mean anything at all. The exchange rate is what removes that
+// indirection: the class states what waiting costs it, and cost and waiting
+// become comparable quantities rather than two rankings.
 
-// BalancedWaitingUSDPerSecond is what the balanced objective presumes a second
-// spent waiting to start is worth: 1.80 USD an hour, roughly the rent on the
-// machine doing the waiting. It is a stated assumption rather than a
-// measurement, said once here so the scheduler and the Lab's reference model
-// cannot disagree about a number neither of them measured.
-const BalancedWaitingUSDPerSecond = 0.0005
-
-// Prefers reports whether this candidate is the better placement under the
-// objective the Run stated. It is a total order: candidates that tie on every
-// term the objective names fall back to the offer snapshot ID, so one offer set
-// produces one decision however the offers arrived.
-func (policy PlacementPolicy) Prefers(candidate, incumbent CandidateDecision) bool {
-	if order := slices.Compare(policy.rank(candidate), policy.rank(incumbent)); order != 0 {
-		return order < 0
-	}
-	return candidate.OfferSnapshotID < incumbent.OfferSnapshotID
+// ScoreWeights is what one ServiceClass declares its seconds and its doubts are
+// worth. It is stated by the class rather than passed into Placement, because a
+// weight nothing populates is a term multiplied by zero, and this whole file was
+// dead code for exactly that reason.
+type ScoreWeights struct {
+	StartLatencyUSDPerSecond      float64 `json:"start_latency_usd_per_second,omitempty"`
+	CompletionLatencyUSDPerSecond float64 `json:"completion_latency_usd_per_second,omitempty"`
+	// UncertaintyPenaltyUSD is what a whole point of doubt costs. A point is one
+	// answer worth nothing; see CandidateDecision.Uncertainty for what counts.
+	UncertaintyPenaltyUSD float64 `json:"uncertainty_penalty_usd,omitempty"`
 }
 
-// rank is what this objective orders candidates by, most significant term
-// first. Every objective ends in the term another one leads with: a Run that
-// asked for speed still takes the cheaper of two equally quick machines, and a
-// Run that asked for price still takes the quicker of two equally cheap ones,
-// which is the only thing that lets locality decide a placement between offers
-// at one price.
+// ScoreUSD is what this candidate is worth to a Run whose class declared these
+// weights, in dollars, lowest first.
 //
-// Completion is start plus the runtime the Run expects. That runtime is the
-// same for every candidate today, so this ranks exactly as fastest_start does
-// until something predicts per-candidate throughput, which is phase 4. It is
-// written as the sum it means rather than as the shortcut it currently equals.
-func (policy PlacementPolicy) rank(candidate CandidateDecision) []float64 {
-	cost := candidate.ScoreUSD
+// It reads nothing but the candidate record the decision keeps, which is what
+// makes the score reproducible: a reader with the decision in front of them can
+// re-derive this number, and a scoring term whose input is not recorded cannot be
+// added without the Lab noticing. Two definitions of uncertainty drifted apart
+// under exactly that blind spot, one of them reading facts off the offer that no
+// decision carried, and neither could be caught while both were multiplied by
+// zero.
+//
+// An infeasible candidate scores nothing. It has no price because it is not for
+// sale, and ranking it beside the others would have the cheapest refusal win.
+func (weights ScoreWeights) ScoreUSD(candidate CandidateDecision, expectedRuntimeSeconds float64) float64 {
+	if !candidate.Feasible {
+		return 0
+	}
 	start := candidate.Estimates.StartSeconds.Expected
-	switch policy.Objective {
-	case ObjectiveFastestStart:
-		return []float64{start, cost}
-	case ObjectiveFastestCompletion:
-		return []float64{start + policy.ExpectedRuntimeSeconds, cost}
-	default:
-		return []float64{cost, start}
-	}
+	return round(candidate.Estimates.CostUSD.Expected+
+		weights.StartLatencyUSDPerSecond*start+
+		weights.CompletionLatencyUSDPerSecond*(start+expectedRuntimeSeconds)+
+		weights.UncertaintyPenaltyUSD*candidate.Uncertainty(), 6)
 }
 
-// SelectionReason names the rule that chose the winner, so the decision record
-// says what it ranked on. A Run that asked for the earliest start and got the
-// costliest machine is explained by its own objective, and recording that as
-// LOWEST_SCORE would describe a comparison Mercator did not make.
-func (policy PlacementPolicy) SelectionReason() string {
-	switch policy.Objective {
-	case ObjectiveFastestStart:
-		return "EARLIEST_START"
-	case ObjectiveFastestCompletion:
-		return "EARLIEST_COMPLETION"
-	default:
-		return "LOWEST_SCORE"
+// Uncertainty is how far this candidate's own answers fall short of certainty,
+// summed over the confidences the decision recorded beside it.
+//
+// It counts confidences and never facts. A host that could not say what it holds
+// is already priced twice for that silence, once as the whole content it might
+// have to fetch and once as the confidence cap on the seconds that takes, so
+// adding a point for the unknown inventory on top was charging the same doubt a
+// third time. What is left is the honest question: how much is each answer this
+// candidate was scored on worth?
+//
+// An answer nobody stated a confidence for states no opinion and counts nothing.
+// Zero is silence rather than worthlessness, and a doubt about a silence is not
+// two doubts.
+func (candidate CandidateDecision) Uncertainty() float64 {
+	shortfall := 0.0
+	for _, confidence := range candidate.Confidences {
+		if confidence.Value > 0 && confidence.Value < 1 {
+			shortfall += 1 - confidence.Value
+		}
 	}
+	return shortfall
+}
+
+// Preferred reports whether this candidate is the better placement. It is a
+// total order: candidates that tie on dollars take the one that is ready sooner,
+// and candidates that tie on both fall back to the offer snapshot ID, so one
+// offer set produces one decision however the offers arrived.
+//
+// There is one rule for every class, because the class is already in the score.
+// A ranking per class was what the objective needed while the exchange rates were
+// dead; now that a second of waiting has a price, a Run that hates waiting and a
+// Run that does not are comparing the same quantity in the same units.
+func (candidate CandidateDecision) Preferred(over CandidateDecision) bool {
+	if candidate.ScoreUSD != over.ScoreUSD {
+		return candidate.ScoreUSD < over.ScoreUSD
+	}
+	if candidate.Estimates.StartSeconds.Expected != over.Estimates.StartSeconds.Expected {
+		return candidate.Estimates.StartSeconds.Expected < over.Estimates.StartSeconds.Expected
+	}
+	return candidate.OfferSnapshotID < over.OfferSnapshotID
+}
+
+// round is how precisely a score is stated. Six places is well below a cent and
+// well above the noise of summing four terms, and it is applied in one place so
+// the reference model and the record cannot disagree about the last digit.
+func round(value float64, places int) float64 {
+	factor := math.Pow10(places)
+	return math.Round(value*factor) / factor
 }

@@ -290,24 +290,27 @@ func (e NodeSummaryState) Valid() bool {
 	}
 }
 
-// Defines values for PlacementPolicyObjective.
+// Defines values for PlacementPolicyServiceClass.
 const (
-	Balanced          PlacementPolicyObjective = "balanced"
-	Cheapest          PlacementPolicyObjective = "cheapest"
-	FastestCompletion PlacementPolicyObjective = "fastest_completion"
-	FastestStart      PlacementPolicyObjective = "fastest_start"
+	Batch         PlacementPolicyServiceClass = "batch"
+	Experimental  PlacementPolicyServiceClass = "experimental"
+	Interactive   PlacementPolicyServiceClass = "interactive"
+	Opportunistic PlacementPolicyServiceClass = "opportunistic"
+	Standard      PlacementPolicyServiceClass = "standard"
 )
 
-// Valid indicates whether the value is a known member of the PlacementPolicyObjective enum.
-func (e PlacementPolicyObjective) Valid() bool {
+// Valid indicates whether the value is a known member of the PlacementPolicyServiceClass enum.
+func (e PlacementPolicyServiceClass) Valid() bool {
 	switch e {
-	case Balanced:
+	case Batch:
 		return true
-	case Cheapest:
+	case Experimental:
 		return true
-	case FastestCompletion:
+	case Interactive:
 		return true
-	case FastestStart:
+	case Opportunistic:
+		return true
+	case Standard:
 		return true
 	default:
 		return false
@@ -480,7 +483,10 @@ type CandidateDecision struct {
 
 	// CacheEvidence What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name.
 	CacheEvidence []CacheEvidence `json:"cache_evidence,omitempty"`
-	ConnectionId  string          `json:"connection_id,omitempty"`
+
+	// Confidences What each answer this candidate was scored on is worth, one entry per source that stated one. It is the whole input to the score's uncertainty term, recorded so score_usd can be re-derived from this record: a scoring term whose input is not here is a term no reader can check. An answer nobody stated a confidence for is absent rather than zero, because stating no opinion is not the same as stating that an answer is worthless.
+	Confidences  []Confidence `json:"confidences,omitempty"`
+	ConnectionId string       `json:"connection_id,omitempty"`
 
 	// Disk What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else.
 	Disk        DiskDemand                   `json:"disk,omitempty"`
@@ -496,7 +502,9 @@ type CandidateDecision struct {
 
 	// RentalSchedule One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them.
 	RentalSchedule ScheduleEvidence `json:"rental_schedule,omitempty"`
-	ScoreUsd       float64          `json:"score_usd,omitempty"`
+
+	// ScoreUsd What this candidate is worth to this Run in dollars, lowest first: the cost it would be billed, plus the dollars its service class says it would rather pay than wait, plus the dollars it would rather pay than act on a doubtful answer. Every quantity it multiplies is recorded beside it, at the weights the decision states, so it can be re-derived rather than trusted. An infeasible candidate scores nothing, because it has no price.
+	ScoreUsd float64 `json:"score_usd,omitempty"`
 }
 
 // CandidateDecisionDisposition defines model for CandidateDecision.Disposition.
@@ -556,6 +564,13 @@ type CollectionReport struct {
 	ConnectionsFromCache []string `json:"connections_from_cache,omitempty"`
 	ConnectionsQueried   []string `json:"connections_queried,omitempty"`
 	ExcludedConnections  []string `json:"excluded_connections,omitempty"`
+}
+
+// Confidence One answer a placement rested on and what its source said it was worth.
+type Confidence struct {
+	// Answer What was being answered, in the vocabulary of whatever answered: the capacity claim, the reliability history, the image transfer, the Artifact read.
+	Answer string  `json:"answer"`
+	Value  float64 `json:"value"`
 }
 
 // ConnectionFailure defines model for ConnectionFailure.
@@ -865,15 +880,17 @@ type OfferSnapshot = domain.OfferSnapshot
 
 // PlacementPolicy defines model for PlacementPolicy.
 type PlacementPolicy struct {
-	AllowUnknownPricing    bool                     `json:"allow_unknown_pricing,omitempty"`
-	ExpectedRuntimeSeconds float64                  `json:"expected_runtime_seconds,omitempty"`
-	MaxExpectedCostUsd     float64                  `json:"max_expected_cost_usd,omitempty"`
-	MaxP90StartSeconds     float64                  `json:"max_p90_start_seconds,omitempty"`
-	Objective              PlacementPolicyObjective `json:"objective"`
+	AllowUnknownPricing    bool    `json:"allow_unknown_pricing,omitempty"`
+	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds,omitempty"`
+	MaxExpectedCostUsd     float64 `json:"max_expected_cost_usd,omitempty"`
+	MaxP90StartSeconds     float64 `json:"max_p90_start_seconds,omitempty"`
+
+	// ServiceClass The kind of work this Run is, which is the only thing that says what waiting is worth to it. Every class declares its own exchange rate, and the score is computed over those rates: interactive prices a second of waiting to the start at twenty times the rent of the machine doing the waiting, standard at that rent, experimental and batch price it to the finish at twice and a fifth of it, and opportunistic prices it at nothing and takes whatever costs least. A class Mercator does not know is refused with SERVICE_CLASS_UNKNOWN rather than ranked on price alone. Omitted means standard.
+	ServiceClass PlacementPolicyServiceClass `json:"service_class"`
 }
 
-// PlacementPolicyObjective defines model for PlacementPolicy.Objective.
-type PlacementPolicyObjective string
+// PlacementPolicyServiceClass The kind of work this Run is, which is the only thing that says what waiting is worth to it. Every class declares its own exchange rate, and the score is computed over those rates: interactive prices a second of waiting to the start at twenty times the rent of the machine doing the waiting, standard at that rent, experimental and batch price it to the finish at twice and a fifth of it, and opportunistic prices it at nothing and takes whatever costs least. A class Mercator does not know is refused with SERVICE_CLASS_UNKNOWN rather than ranked on price alone. Omitted means standard.
+type PlacementPolicyServiceClass string
 
 // PlacementPreviewRequest defines model for PlacementPreviewRequest.
 type PlacementPreviewRequest struct {
@@ -1034,6 +1051,15 @@ type ScheduleEvidence struct {
 
 	// Version The schedule version this decision was weighed against. A Booking the decision creates follows it.
 	Version int64 `json:"version"`
+}
+
+// ScoreWeights The exchange rates one service class declares, which are what a score is computed over. They are recorded on every decision rather than looked up, because a rate that changes would otherwise silently rewrite the arithmetic of every decision already taken. The two reliability terms a score will eventually carry are absent on purpose: probability times the cost of starting again is a derivation over a prediction, and a flat penalty invented for it now would be an unmeasured constant.
+type ScoreWeights struct {
+	CompletionLatencyUsdPerSecond float64 `json:"completion_latency_usd_per_second,omitempty"`
+	StartLatencyUsdPerSecond      float64 `json:"start_latency_usd_per_second,omitempty"`
+
+	// UncertaintyPenaltyUsd What one whole point of doubt costs. A point is one answer worth nothing.
+	UncertaintyPenaltyUsd float64 `json:"uncertainty_penalty_usd,omitempty"`
 }
 
 // SinkResult defines model for SinkResult.

@@ -136,7 +136,7 @@ func TestRequestedAllocationSchedulesAndReachesPodCreation(t *testing.T) {
 				Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
 			}},
 			Resources: resources,
-			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveCheapest, ExpectedRuntimeSeconds: 60},
+			Placement: domain.PlacementPolicy{Class: domain.ClassBatch, ExpectedRuntimeSeconds: 60},
 		},
 	}
 	// Placement sees offers as the Broker hands them over, with the lane

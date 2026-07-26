@@ -59,6 +59,20 @@ Mercator's ordered sequence of nonterminal Bookings assigned to one Rental.
 It contains at most one running Booking followed by at most four queued Bookings.
 _Avoid_: Machine queue, daemon queue
 
+**Service Class**:
+The kind of work a Run is, as its caller declared it, and the only thing that
+says what waiting is worth to it. The five classes are interactive, standard,
+batch, experimental, and opportunistic, and each declares its own exchange rates:
+what a second of waiting costs, whether that second is counted to the start or to
+the finish, and what an answer nobody stands behind costs. Placement computes one
+dollar score over those rates, so cost and waiting are comparable quantities
+rather than two rankings, and every Booking Decision records the rates it was
+scored at. It replaced the placement objective outright: an objective named a
+quantity to minimise and never what a second of it was worth, so the terms that
+would have converted seconds into dollars were multiplied by zero. A class
+Mercator does not know is refused where the Run enters.
+_Avoid_: Objective, priority (alone), tier, QoS
+
 **Placement**:
 The activity of evaluating Offers and Rentals to choose where a Run goes.
 Its audited outcome is a Booking Decision. "Scheduling" refers only to queue

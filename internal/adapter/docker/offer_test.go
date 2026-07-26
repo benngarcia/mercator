@@ -246,6 +246,7 @@ func TestGPUSpecSchedulesOnGPUDockerOfferAndRejectsCPUOnlyOffer(t *testing.T) {
 			Image:    "ghcr.io/acme/train@sha256:0000000000000000000000000000000000000000000000000000000000000000",
 			Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
 		}},
+		Placement: domain.PlacementPolicy{Class: domain.ClassStandard},
 		Resources: domain.ResourceRequirements{
 			CPU:          domain.CPURequirement{MinMillis: 1000},
 			Memory:       domain.MemoryRequirement{MinBytes: 1 << 30},

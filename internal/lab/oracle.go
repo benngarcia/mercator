@@ -33,11 +33,11 @@ func SolveSmallWorld(input scheduler.SchedulingInput) (ReferenceDecision, error)
 		}
 		feasible = append(feasible, referenceCandidate(input, offer))
 	}
-	// The Run's objective orders the candidates here exactly as it does in
-	// production, because which quantity a Run asked for the least of is a
-	// statement about the placement and not about either model's arithmetic.
-	policy := input.Workload.Spec.Placement
-	sort.Slice(feasible, func(i, j int) bool { return policy.Prefers(feasible[i], feasible[j]) })
+	// Candidates are ordered here exactly as they are in production: least
+	// dollars, then earliest ready, then the offer ID. What differs per Run is
+	// what its class said a second of waiting is worth, and that is already in
+	// each candidate's own score.
+	sort.Slice(feasible, func(i, j int) bool { return feasible[i].Preferred(feasible[j]) })
 	decision := ReferenceDecision{FeasibleOfferIDs: make([]string, len(feasible))}
 	for index, candidate := range feasible {
 		decision.FeasibleOfferIDs[index] = candidate.OfferSnapshotID
@@ -122,30 +122,44 @@ func referenceCapacityAvailable(input scheduler.SchedulingInput, offer domain.Of
 }
 
 // referenceCandidate is the reference model's own candidate record: enough of
-// one for the Run's objective to rank it, and nothing else. Ranking is stated
-// against the same fields the production decision carries, so the two models
-// compare the same quantities or disagree visibly.
+// one to be ranked, and nothing else. It is stated against the same fields the
+// production decision carries, so the two models compare the same quantities or
+// disagree visibly.
+//
+// The confidences are the reference model's own, derived from its own estimates,
+// which is what keeps the uncertainty term independent. Both models now count the
+// same thing, the shortfall of the answers this candidate was scored on, and the
+// definitions that drifted apart counted different things and agreed only because
+// each was multiplied by zero.
 func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
-	return domain.CandidateDecision{
+	estimates := referenceEstimates(input, offer)
+	candidate := domain.CandidateDecision{
 		OfferSnapshotID: offer.ID,
-		Estimates:       referenceEstimates(input, offer),
-		ScoreUSD:        referenceScore(input, offer),
+		Feasible:        true,
+		Estimates:       estimates,
+		Confidences:     referenceConfidences(offer, estimates),
 	}
+	weights := input.Workload.Spec.Placement.Class.Weights()
+	candidate.ScoreUSD = weights.ScoreUSD(candidate, input.Workload.Spec.Placement.ExpectedRuntimeSeconds)
+	return candidate
 }
 
-func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot) float64 {
-	estimates := referenceEstimates(input, offer)
-	weights := input.Weights
-	if weights.StartLatencyUSDPerSecond == 0 && input.Workload.Spec.Placement.Objective == domain.ObjectiveBalanced {
-		weights.StartLatencyUSDPerSecond = domain.BalancedWaitingUSDPerSecond
+// referenceConfidences is what this model says each of its own answers is worth.
+// A published capacity or reliability confidence is worth what its publisher said;
+// a transfer duration is worth what the reference content estimate concluded.
+func referenceConfidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Confidence {
+	var stated []domain.Confidence
+	for _, answer := range []domain.Confidence{
+		{Answer: "capacity", Value: offer.Capacity.Confidence},
+		{Answer: "reliability", Value: offer.Reliability.Confidence},
+		{Answer: "pull_seconds", Value: estimates.PullSeconds.Confidence},
+		{Answer: "artifact_seconds", Value: estimates.ArtifactSeconds.Confidence},
+	} {
+		if answer.Value > 0 {
+			stated = append(stated, answer)
+		}
 	}
-	score := estimates.CostUSD.Expected +
-		weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
-		weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
-		weights.StartFailurePenaltyUSD*offer.Reliability.StartFailureRate +
-		weights.InterruptionPenaltyUSD*offer.Reliability.InterruptionRate +
-		weights.UncertaintyPenaltyUSD*referenceUncertainty(offer)
-	return math.Round(score*1_000_000) / 1_000_000
+	return stated
 }
 
 // referenceEstimates is the reference model's own account of a candidate,
@@ -158,8 +172,14 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	provision := referenceProvision(offer)
 	work, locality := input.Image.StartWork(offer.Images)
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
-	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes))
+	pull := referenceContent(
+		referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()),
+		referenceImageConfidence(work, locality, offer.RegistryDownload()),
+	)
+	fetch := referenceContent(
+		referenceObjectStoreSeconds(fetchBytes),
+		referenceArtifactConfidence(evidence, fetchBytes),
+	)
 	establishedPull := domain.Estimate{}
 	if locality != domain.LocalityUnknown {
 		establishedPull = pull
@@ -170,7 +190,10 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 			establishedBytes += found.FetchBytes
 		}
 	}
-	establishedFetch := referenceContent(referenceObjectStoreSeconds(establishedBytes))
+	establishedFetch := referenceContent(
+		referenceObjectStoreSeconds(establishedBytes),
+		referenceArtifactConfidence(evidence, establishedBytes),
+	)
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
 		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
@@ -251,12 +274,50 @@ func referenceProvision(offer domain.OfferSnapshot) domain.Estimate {
 	return estimate
 }
 
-// referenceContent is what content that has to move costs, tail included. Half
-// again as long is this model's own pessimism about a transfer, and it is stated
-// here rather than applied to the finished sum because a start's tail is made of
-// each part's tail.
-func referenceContent(seconds float64) domain.Estimate {
-	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds * 1.5}
+// referenceContent is what content that has to move costs, tail included, and
+// what this model says that answer is worth. Half again as long is its own
+// pessimism about a transfer, stated here rather than applied to the finished sum
+// because a start's tail is made of each part's tail.
+func referenceContent(seconds, confidence float64) domain.Estimate {
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds * 1.5, Confidence: confidence}
+}
+
+// referenceImageConfidence is what this model thinks its own image answer is
+// worth. Certainty belongs to a host that owes nothing and said so. A host that
+// owes a transfer crosses a link nothing has measured; a host that owes local
+// assembly is being timed against a rate nothing has measured either; and a host
+// that said nothing at all is being charged bytes nobody established. None of
+// those may be worth more than an assumed link.
+//
+// An image nothing could resolve gets no confidence at all, because the model
+// stated no opinion rather than a doubtful one: the same nothing is charged to
+// every candidate, so there is nothing to be uncertain between.
+func referenceImageConfidence(work domain.ImageWork, locality domain.LocalityState, link domain.LinkSpeed) float64 {
+	if work.None() {
+		if locality == domain.LocalityUnknown {
+			return 0
+		}
+		return 1
+	}
+	if work.UnpackBytes > 0 || locality == domain.LocalityUnknown {
+		return min(link.Confidence, domain.AssumedLinkConfidence)
+	}
+	return link.Confidence
+}
+
+// referenceArtifactConfidence is what this model thinks its own Artifact answer
+// is worth. A Run that reads nothing is not a Run with a doubtful read, so it
+// carries no confidence at all; a host that owes nothing is certain; and every
+// read that has to happen crosses a link nothing has measured.
+func referenceArtifactConfidence(evidence []domain.ArtifactEvidence, bytes int64) float64 {
+	switch {
+	case len(evidence) == 0:
+		return 0
+	case bytes == 0:
+		return 1
+	default:
+		return domain.AssumedLinkConfidence
+	}
 }
 
 // referenceStart assembles a start out of the parts a candidate waits on, plus
@@ -295,23 +356,6 @@ func referenceStartWorkSeconds(work domain.ImageWork, bandwidthMbps float64) flo
 	}
 	return float64(work.TransferBytes*8)/1_000_000/bandwidthMbps +
 		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
-}
-
-func referenceUncertainty(offer domain.OfferSnapshot) float64 {
-	penalty := 0.0
-	if offer.Capacity.Confidence > 0 && offer.Capacity.Confidence < 1 {
-		penalty += 1 - offer.Capacity.Confidence
-	}
-	if offer.Reliability.Confidence > 0 && offer.Reliability.Confidence < 1 {
-		penalty += 1 - offer.Reliability.Confidence
-	}
-	if !offer.Images.Known {
-		penalty++
-	}
-	if !offer.Pricing.Known {
-		penalty++
-	}
-	return penalty
 }
 
 func CheckOfferOrderIndependence(ctx context.Context, production scheduler.Scheduler, input scheduler.SchedulingInput) error {

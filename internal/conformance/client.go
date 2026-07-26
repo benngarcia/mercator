@@ -120,8 +120,11 @@ func successWorkload(workspaceID string, trial Trial, platform domain.Platform) 
 		Spec: domain.WorkloadSpec{
 			Containers: []domain.ContainerSpec{{Name: "main", Image: trial.Image, Platform: platform, Args: arguments}},
 			Resources:  resources,
-			Placement:  domain.PlacementPolicy{Objective: domain.ObjectiveCheapest, ExpectedRuntimeSeconds: trial.Timeout.Seconds(), MaxExpectedCostUSD: &budget},
-			Execution:  domain.ExecutionPolicy{MaxRuntimeSeconds: int64(trial.Timeout.Seconds()), MaxPreStartAttempts: 1},
+			// A probe Run is batch work: nobody is watching it start, it is bounded
+			// by a cost ceiling, and what a trial is buying is the cheapest proof
+			// that this Connection can run a container at all.
+			Placement: domain.PlacementPolicy{Class: domain.ClassBatch, ExpectedRuntimeSeconds: trial.Timeout.Seconds(), MaxExpectedCostUSD: &budget},
+			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: int64(trial.Timeout.Seconds()), MaxPreStartAttempts: 1},
 		},
 	}
 }

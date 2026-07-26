@@ -230,6 +230,17 @@ func (m *Machine) openCaches(caches []domain.CacheMount, at time.Time) {
 // borrows and a machine that does not exist yet report nothing, which is what
 // every provider adapter in the tree publishes. What such a machine holds stays
 // true and stays readable as world state; no offer says it.
+// capacityConfidence is how sure this machine's publisher is that the capacity it
+// is claiming is there. A machine registered without an opinion is certain, which
+// is what a simulated provider can honestly say about a machine it can see: it
+// answers from world state rather than from a stale catalog.
+func (m *Machine) capacityConfidence() float64 {
+	if m.Offer.Capacity.Confidence == 0 {
+		return 1
+	}
+	return m.Offer.Capacity.Confidence
+}
+
 func (m *Machine) publishedInventory(now time.Time) domain.ImageInventory {
 	if !m.Offer.KeepsWhatItRuns() {
 		return domain.ImageInventory{}
@@ -637,11 +648,11 @@ func (w *World) machineOffer(machine *Machine, now time.Time) domain.OfferSnapsh
 		// queued Booking instead. It remains visible now so the decision records
 		// the running Booking's expected (p50) remaining runtime as
 		// queue-delay evidence; the enforced max bound backs latest-start math.
-		offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
+		offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: machine.capacityConfidence()}
 		offer.Queue = &domain.QueueSnapshot{QueuedWorkSeconds: machine.expectedRemainingAt(now).Seconds(), ActiveSlots: 1}
 		return offer
 	}
-	offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: 1}
+	offer.Capacity = domain.CapacityEvidence{Available: true, Confidence: machine.capacityConfidence()}
 	offer.Queue = &domain.QueueSnapshot{}
 	return offer
 }

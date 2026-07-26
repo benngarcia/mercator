@@ -140,21 +140,16 @@ type NetworkDownloadRequirement struct {
 	AllowUnknown             bool         `json:"allow_unknown"`
 }
 
-type PlacementObjective string
-
-const (
-	ObjectiveCheapest          PlacementObjective = "cheapest"
-	ObjectiveFastestStart      PlacementObjective = "fastest_start"
-	ObjectiveFastestCompletion PlacementObjective = "fastest_completion"
-	ObjectiveBalanced          PlacementObjective = "balanced"
-)
-
 type PlacementPolicy struct {
-	Objective              PlacementObjective `json:"objective"`
-	MaxP90StartSeconds     float64            `json:"max_p90_start_seconds,omitempty"`
-	ExpectedRuntimeSeconds float64            `json:"expected_runtime_seconds,omitempty"`
-	MaxExpectedCostUSD     *float64           `json:"max_expected_cost_usd,omitempty"`
-	AllowUnknownPricing    bool               `json:"allow_unknown_pricing,omitempty"`
+	// Class is the kind of work this Run is, and the only thing that says what
+	// waiting is worth to it. See serviceclass.go: the class carries the exchange
+	// rates the score is computed over, which is why it replaced the placement
+	// objective rather than sitting beside one.
+	Class                  ServiceClass `json:"service_class"`
+	MaxP90StartSeconds     float64      `json:"max_p90_start_seconds,omitempty"`
+	ExpectedRuntimeSeconds float64      `json:"expected_runtime_seconds,omitempty"`
+	MaxExpectedCostUSD     *float64     `json:"max_expected_cost_usd,omitempty"`
+	AllowUnknownPricing    bool         `json:"allow_unknown_pricing,omitempty"`
 }
 
 type ExecutionPolicy struct {
@@ -684,12 +679,18 @@ type Booking struct {
 }
 
 type BookingDecision struct {
-	ID                      string              `json:"id"`
-	RunID                   string              `json:"run_id,omitempty"`
-	WorkloadRevisionDigest  string              `json:"workload_revision_digest"`
-	EvaluatedAt             time.Time           `json:"evaluated_at"`
-	ModelVersion            string              `json:"model_version"`
-	Policy                  PlacementPolicy     `json:"policy"`
+	ID                     string          `json:"id"`
+	RunID                  string          `json:"run_id,omitempty"`
+	WorkloadRevisionDigest string          `json:"workload_revision_digest"`
+	EvaluatedAt            time.Time       `json:"evaluated_at"`
+	ModelVersion           string          `json:"model_version"`
+	Policy                 PlacementPolicy `json:"policy"`
+	// Weights is the exchange rate every candidate below was scored at, which the
+	// Run's ServiceClass declared. It is recorded rather than left to be looked up,
+	// because a rate that changes would silently rewrite the arithmetic of every
+	// decision already taken: with it here, a reader re-derives ScoreUSD from the
+	// record instead of trusting it.
+	Weights                 ScoreWeights        `json:"weights"`
 	CollectionReport        CollectionReport    `json:"collection_report"`
 	Candidates              []CandidateDecision `json:"candidates"`
 	SelectedOfferSnapshotID string              `json:"selected_offer_snapshot_id,omitempty"`
@@ -748,7 +749,25 @@ type CandidateDecision struct {
 	// offered as evidence is a queue nobody has.
 	RentalSchedule *ScheduleEvidence  `json:"rental_schedule,omitempty"`
 	Estimates      CandidateEstimates `json:"estimates"`
-	ScoreUSD       float64            `json:"score_usd,omitempty"`
+	// Confidences is what each answer this candidate was scored on is worth, one
+	// entry per source that stated one. It is the whole input to the uncertainty
+	// term, recorded so the score can be re-derived from the record: a term whose
+	// input is not here is a term no reader can check and no rule can police,
+	// which is how two definitions of uncertainty came to disagree about every
+	// borrowed host while both were multiplied by zero.
+	Confidences []Confidence `json:"confidences,omitempty"`
+	ScoreUSD    float64      `json:"score_usd,omitempty"`
+}
+
+// Confidence is one answer a placement rested on and what its source said it was
+// worth. Zero is not recorded: an answer nobody stated a confidence for states no
+// opinion, which is different from an answer stated to be worthless.
+type Confidence struct {
+	// Answer names what was being answered, in the vocabulary of the thing that
+	// answered: the capacity claim, the reliability history, the image transfer,
+	// the Artifact read.
+	Answer string  `json:"answer"`
+	Value  float64 `json:"value"`
 }
 
 // ScheduleEvidence is one Rental Schedule as a placement decision read it: the

@@ -11,9 +11,21 @@ export interface DecisionPanelProps {
   className?: string;
 }
 
-// objectiveLabel humanizes a placement objective enum.
-function objectiveLabel(objective: string): string {
-  return phaseLabel(objective);
+// serviceClassLabel humanizes the class of work a Run said it is.
+function serviceClassLabel(serviceClass: string): string {
+  return phaseLabel(serviceClass);
+}
+
+// waitingRate is what this decision's weights say a second of waiting was worth
+// to the Run, and to which moment it was counted. It is the exchange rate the
+// score was computed over, so a reader who wants to know why the costliest
+// machine won reads it here rather than inferring it.
+function waitingRate(weights: BookingDecision["weights"]): string | null {
+  const start = weights.start_latency_usd_per_second ?? 0;
+  const completion = weights.completion_latency_usd_per_second ?? 0;
+  if (start > 0) return `$${start}/s to start`;
+  if (completion > 0) return `$${completion}/s to finish`;
+  return null;
 }
 
 interface ConnectionGroupProps {
@@ -51,19 +63,21 @@ function ConnectionGroup({ label, ids, tone }: ConnectionGroupProps) {
 }
 
 /**
- * DecisionPanel summarizes a BookingDecision: the selected offer, the policy
- * objective and constraints, the model version, the human-readable selection
+ * DecisionPanel summarizes a BookingDecision: the selected offer, the Run's
+ * service class and the rates it was scored at, the policy constraints, the
+ * model version, the human-readable selection
  * reason codes, and the collection report (which connections were queried,
  * served from cache, or excluded). It pairs with CandidateTable to answer
  * "what did the broker decide, and why".
  */
 export function DecisionPanel({ decision, className }: DecisionPanelProps) {
-  const { policy, collection_report: report } = decision;
+  const { policy, weights, collection_report: report } = decision;
+  const waiting = waitingRate(weights);
   const selected = decision.selected_offer_snapshot_id;
 
   return (
     <div className={cn("flex flex-col", className)}>
-      {/* Headline: selected offer + objective, with reason codes inline. */}
+      {/* Headline: selected offer + service class, with reason codes inline. */}
       <div className="flex flex-col gap-4 pb-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-2">
@@ -98,7 +112,7 @@ export function DecisionPanel({ decision, className }: DecisionPanelProps) {
             ) : null}
           </div>
           <Badge className="border-primary/30 bg-primary/10 text-primary">
-            {objectiveLabel(policy.objective)}
+            {serviceClassLabel(policy.service_class)}
           </Badge>
         </div>
 
@@ -126,6 +140,17 @@ export function DecisionPanel({ decision, className }: DecisionPanelProps) {
               ) : undefined
             }
           />
+          {waiting !== null ? (
+            <StatBlock label="Waiting priced at" value={waiting} mono />
+          ) : null}
+          {weights.uncertainty_penalty_usd !== undefined &&
+          weights.uncertainty_penalty_usd > 0 ? (
+            <StatBlock
+              label="Doubt priced at"
+              value={`$${weights.uncertainty_penalty_usd}/point`}
+              mono
+            />
+          ) : null}
           {policy.max_p90_start_seconds !== undefined ? (
             <StatBlock
               label="Max p90 start"

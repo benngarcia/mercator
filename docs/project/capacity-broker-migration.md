@@ -1247,6 +1247,84 @@ complete because it works against a live provider.
     Nothing in production implements `orchestrator.ArtifactCatalog`, so no
     production Run declares an Artifact and the Artifact half of the desired set is
     exercised at L1 and against a real object store rather than end to end.
+- [x] 2026-07-26: Make the class of work a Run is the thing that prices waiting,
+  and turn on the score terms that were multiplied by zero. `ServiceClass`
+  replaces `PlacementObjective` outright, with no shim and no derived objective,
+  and it carries the exchange rates the score is finally computed over.
+  - An objective named a quantity to minimise and never what a second of it was
+    worth, which is why the ranking had to honour it separately: `ScoreWeights`
+    was a struct nothing populated, so `StartLatencyUSDPerSecond`,
+    `CompletionLatencyUSDPerSecond` and `UncertaintyPenaltyUSD` were multiplied by
+    zero in production and only the balanced objective's one default ever fired.
+    A class states the rate, so cost and waiting become one comparable quantity
+    and there is one ranking rule for every class: least dollars, then earliest
+    ready, then the offer ID. `domain.ServiceClass.Weights` is the declaration and
+    `domain.ScoreWeights.ScoreUSD` is the whole arithmetic, said once and read by
+    the scheduler, the Lab's reference model, and the rule below.
+  - Every class states a multiple of one number. `domain.WaitingUSDPerSecond` is
+    what a second of waiting costs the machine doing the waiting, 1.80 USD an
+    hour, and interactive prices it at twenty times that to the start, standard at
+    exactly that to the start, experimental at twice it to the finish, batch at a
+    fifth of it to the finish, and opportunistic at nothing, which is what makes
+    opportunistic the one class ranked on price alone. One rate to argue with
+    rather than five, and each class measures waiting to the moment that matters
+    to it.
+  - The two uncertainty definitions are collapsed before either fires.
+    `scheduler.uncertaintyPenalty` counted the capacity and reliability
+    confidences a candidate was given; `lab.referenceUncertainty` counted those
+    plus a full point for an unenumerated image inventory and another for unknown
+    pricing. They agreed on every decision only because both were multiplied by
+    zero, and the first Run scored at a nonzero rate would have made them disagree
+    about every machine Mercator borrows a slot on. The extra points are deleted
+    as double counting: unknown inventory is already priced twice, once as the
+    whole content that might have to arrive and once as the cap on the confidence
+    of the seconds that takes. What is left is the shortfall of the answers the
+    candidate itself was scored on, stated the same way in both models.
+  - The score is reproducible from the record. `BookingDecision.Weights` is the
+    rate every candidate was scored at, and `CandidateDecision.Confidences` is
+    every answer the uncertainty term counted, so a reader re-derives ScoreUSD
+    instead of trusting it. `safety.score_is_reproducible_from_the_record` is the
+    Lab invariant, and what it forbids is a term whose input is nowhere in the
+    record: that is exactly how the two definitions drifted unnoticed, one of them
+    reading facts off an offer no decision carried.
+  - The refusal is loud. `POST /v1/runs` with a class Mercator cannot price is
+    refused `400 SERVICE_CLASS_UNKNOWN` at the door, and Placement refuses to rank
+    such a Run at all, because both used to fall through a `default:` that ranked
+    on price and recorded a reason naming a class nothing declared: a caller would
+    have learned their word was ignored from the bill.
+  - History is migrated rather than shimmed. The sqlite migration renames
+    `objective` to `service_class` in the requested workload, public and private,
+    and in the policy each Booking Decision was taken under, mapping cheapest to
+    batch, balanced to standard, fastest_start to interactive, and
+    fastest_completion to experimental. Nothing maps to opportunistic, because no
+    objective could say waiting is free. It refuses to run while any stream
+    carrying the old field is still open, and refuses an objective it has no class
+    for rather than guessing one. It also writes onto each old decision the weights
+    it was actually scored at, which were nearly all zero, so the whole log is
+    reproducible and not merely the part written since a class carried a rate.
+  - While the six wire surfaces were open, `launch_ephemeral` went into the
+    `CandidateDecision.disposition` enum in `openapi.json` and into the
+    hand-written Effect `Schema.Literals` in `contracts.ts`. It had been missing
+    from both since the lane split, so the console could not decode a Booking
+    Decision on the whole ephemeral lane, and two exhaustive switches over the
+    disposition rendered nothing for it.
+  - Judgment calls. The class declares the exchange rates and nothing else yet.
+    Priority, aging, group parallelism, backfill eligibility, interruption
+    permission, and the queue-on-warm preference have no reader anywhere in this
+    tree, and a declared field nothing consumes is the defect this plan has
+    deleted five times: each becomes a field in the slice that prices it. Maximum
+    queue delay and maximum cost are deliberately not restated on the class, because
+    `PlacementPolicy.MaxP90StartSeconds` and `MaxExpectedCostUSD` are those bounds
+    and are enforced today; a second copy would be two authorities for one refusal.
+    The two reliability terms are left unpriced and deleted from `ScoreWeights`
+    rather than kept at zero: they come back as expected redo cost, which is
+    probability times a predicted start, so a flat penalty invented for them now
+    would be the unmeasured constant this plan keeps deleting. The uncertainty
+    penalty is derived from each class's own waiting rate over
+    `domain.UncertaintySeconds` rather than being a second invented number per
+    class. And every fixture that equalises price so locality decides now states
+    the class whose rate preserves that intent, because `running-fills-a-cache`
+    turns on less than half a cent.
 - [x] 2026-07-26: Seed the Bookings a placement world starts with, and let five
   queue fixtures state the answer. A Blueprint that said a Rental was busy stated
   it twice and only one of the two reached Mercator: the world knew the machine
@@ -1311,7 +1389,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; candidate prediction, owned economics, and replanning remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -1429,13 +1507,27 @@ Phase 3 added:
   records `unknown` and is priced the whole read rather than the zero its silence
   used to buy, and never the zero its copy would have bought if an offer could
   carry it. Every rate is equal on purpose.
-- `the-objective-decides-what-wins` (green): one world, two Runs, and the only
-  difference between them is the objective each stated. The warm Rental is a
-  second from ready at 4 USD an hour, the cold one nearly sixteen minutes at 2.
-  A Run that asked for the cheapest capacity takes the cold machine; a Run that
-  asked for the fastest start takes the warm one, pays double, and records
-  `EARLIEST_START` rather than claiming it compared prices. Ranking on cost alone
-  fails it with the hurried Run placed on the cold machine.
+- `the-service-class-decides-what-wins` (green, replacing
+  `the-objective-decides-what-wins`): one world, two Runs, and the only difference
+  between them is the class of work each says it is. The warm Rental is a second
+  from ready at 4 USD an hour, the cold one fifteen minutes at 2. The batch Run
+  takes the cold machine, because batch work values a second of waiting at a fifth
+  of the machine's own rent and the price gap is larger than that. The interactive
+  Run takes the warm one, pays double, and the decision records
+  `SERVICE_CLASS_INTERACTIVE` and the weights it was scored at. Both candidates
+  pin their score in dollars, so the exchange rate is asserted rather than
+  inferred from which machine won: zeroing the class's weights places the hurried
+  Run on the cold machine.
+- `uncertainty-is-priced-once` (green): three machines at one price for one 18.04GB
+  image. One enumerated itself and holds the image, so it owes nothing and is
+  certain of that. One is a machine Mercator has not enrolled that World Truth says
+  is sitting on the whole image: it is charged the whole fetch and half a point of
+  doubt, which is what a duration over an unmeasured link is worth, and that half
+  point is the whole uncertainty term for it. One holds the image and publishes a
+  capacity claim it is 70 percent sure of, which is three tenths of a point and the
+  only thing separating it from the first. Restoring either extra point the
+  reference model used to add, for an unenumerated inventory or for unknown
+  pricing, fails it on the recorded uncertainty and on the score.
 - `dataset-gravity-worth-waiting` (green): the same gravity behind a running
   Booking. The Rental holding the dataset is busy for eight more minutes and the
   Rental with the perfect image cache is idle, and the Run queues for the dataset,
@@ -1501,6 +1593,23 @@ Phase 3 added:
   discounted out of the localities and per-kind seconds recorded beside it, so a
   scheduler that counted a silence as established fails while agreeing with itself
   perfectly.
+- `safety.score_is_reproducible_from_the_record` (Lab invariant): for every
+  candidate of every Booking Decision Mercator recorded, ScoreUSD is the arithmetic
+  over the terms that decision itself carries, at the weights it says it used. What
+  it forbids is a scoring term whose input is nowhere in the record: such a term
+  moves placements a reader with the whole decision in front of them cannot
+  explain, and no rule can police a number nobody wrote down. That is not
+  hypothetical, and it is why the rule arrives with the class rather than after it:
+  two definitions of uncertainty ran side by side for a phase, one counting the
+  confidences a candidate's answers carried and the other counting facts read
+  straight off the offer, and they agreed on every decision only because both were
+  multiplied by zero.
+- `a-class-mercator-does-not-know-is-refused` (conformance): one idle Rental
+  holding the image, and one Run that says it is urgent. There is no urgent class,
+  so the Run has stated no exchange rate at all, and Mercator refuses it where it
+  enters rather than ranking every candidate on price alone. The world would have
+  placed it, which is what makes the refusal a choice rather than a consequence,
+  and no event is written for a Run turned away at the door.
 - `cache-mounts-never-cross-a-workspace` (conformance): five Runs, two tenants,
   and one shared machine beside a spare. Both tenants declare a cache called
   compiler-cache, so the machine holds two, and the recorded decisions say so: the
@@ -1633,8 +1742,8 @@ Phase 4 added:
   `safety.ephemeral_capacity_not_reused`, now read seeded schedules at L0 as well
   as schedules the Broker committed.
 
-The corpus is 24 regression Blueprints: 21 green and 3 target, beside one demo,
-one minimized case, and nine conformance Blueprints. The count is read off the
+The corpus is 25 regression Blueprints: 22 green and 3 target, beside one demo,
+one minimized case, and ten conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.

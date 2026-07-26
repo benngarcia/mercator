@@ -104,7 +104,7 @@ func validRevision() domain.WorkloadRevision {
 				EphemeralDisk: domain.DiskRequirement{MinBytes: 1 << 30},
 			},
 			Network:   domain.NetworkRequirements{Inbound: domain.InboundNetworkNone},
-			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, ExpectedRuntimeSeconds: 60},
+			Placement: domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 60},
 			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 120, MaxPreStartAttempts: 3},
 		},
 	}

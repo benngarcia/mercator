@@ -361,6 +361,12 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 			fail("cache %q: expected %q, recorded %q", cache, want, found.Locality)
 		}
 	}
+	// The uncertainty is read off the candidate's own recorded confidences rather
+	// than recomputed, because that record is the whole input to the term and a
+	// fixture reading anything else would assert a number the score was not
+	// computed from.
+	checkBound("uncertainty", expect.Uncertainty, candidate.Uncertainty())
+	checkBound("score_usd", expect.ScoreUSD, candidate.ScoreUSD)
 	return failures
 }
 

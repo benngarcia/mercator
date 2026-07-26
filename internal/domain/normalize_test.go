@@ -36,8 +36,8 @@ func TestNormalizeFillsOmittedDefaults(t *testing.T) {
 	if out.Spec.Network.Inbound != InboundNetworkNone {
 		t.Fatalf("network inbound: got %q want none", out.Spec.Network.Inbound)
 	}
-	if out.Spec.Placement.Objective != ObjectiveBalanced {
-		t.Fatalf("objective: got %q want balanced", out.Spec.Placement.Objective)
+	if out.Spec.Placement.Class != ClassStandard {
+		t.Fatalf("service class: got %q want standard", out.Spec.Placement.Class)
 	}
 	if out.Spec.Execution.MaxRuntimeSeconds != DefaultMaxRuntimeSeconds {
 		t.Fatalf("max runtime: got %d want %d", out.Spec.Execution.MaxRuntimeSeconds, DefaultMaxRuntimeSeconds)
@@ -90,7 +90,7 @@ func TestNormalizeNeverOverridesExplicitValues(t *testing.T) {
 				EphemeralDisk: DiskRequirement{MinBytes: 32 << 30},
 			},
 			Network:   NetworkRequirements{Inbound: InboundNetworkPublicPort},
-			Placement: PlacementPolicy{Objective: ObjectiveCheapest},
+			Placement: PlacementPolicy{Class: ClassBatch},
 			Execution: ExecutionPolicy{MaxRuntimeSeconds: 99, MaxPreStartAttempts: 5},
 		},
 	}
@@ -104,8 +104,8 @@ func TestNormalizeNeverOverridesExplicitValues(t *testing.T) {
 	if out.Spec.Network.Inbound != InboundNetworkPublicPort {
 		t.Fatalf("explicit inbound overridden: %q", out.Spec.Network.Inbound)
 	}
-	if out.Spec.Placement.Objective != ObjectiveCheapest {
-		t.Fatalf("explicit objective overridden: %q", out.Spec.Placement.Objective)
+	if out.Spec.Placement.Class != ClassBatch {
+		t.Fatalf("explicit service class overridden: %q", out.Spec.Placement.Class)
 	}
 	if out.Spec.Execution.MaxRuntimeSeconds != 99 || out.Spec.Execution.MaxPreStartAttempts != 5 {
 		t.Fatalf("explicit execution overridden: %+v", out.Spec.Execution)

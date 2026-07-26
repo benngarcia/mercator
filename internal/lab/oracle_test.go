@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"slices"
 	"testing"
 	"time"
@@ -150,6 +151,68 @@ func TestBothModelsRefuseAHostTheContentDoesNotFitOn(t *testing.T) {
 	// changes what a candidate with space is worth.
 	if roomy := candidateFor(t, production, "fresh-4090"); !roomy.Feasible {
 		t.Fatalf("a machine with room was refused beside the one without: %+v", roomy.Rejections)
+	}
+}
+
+// TestBothModelsPriceDoubtTheSameWay is the two uncertainty definitions collapsed
+// into one, held by the only thing that can hold it: an independent model scoring
+// the same candidates and getting the same dollars.
+//
+// They disagreed for a phase and nothing could say so. The scheduler counted the
+// capacity and reliability confidences a candidate was given; the reference model
+// counted those plus a full point for an unenumerated image inventory and another
+// for unknown pricing. Both were multiplied by zero in every Run either model ever
+// scored, so the disagreement was invisible until a class declared a rate, at
+// which point it would have moved the winner on every machine Mercator borrows a
+// slot on.
+//
+// Every candidate here is a machine with something to be unsure about: one that
+// cannot be asked what it holds, one whose publisher is 70 percent sure of its
+// capacity, and one that answered and owes a transfer over a link nothing has
+// measured. The Run is interactive, so a point of doubt is 0.60 USD and a term
+// deleted from either model shows up in the dollars.
+func TestBothModelsPriceDoubtTheSameWay(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Workload.Spec.Placement.Class = domain.ClassInteractive
+	borrowed := offerFor(t, input, "rental-warm")
+	borrowed.ID, borrowed.RentalID, borrowed.NativeRef = "borrowed-host", "", "borrowed-host"
+	borrowed.Kind, borrowed.Lane = domain.OfferKindStanding, domain.LaneEphemeral
+	// Nothing of Mercator's runs there, so nothing enumerates it.
+	borrowed.Images = domain.ImageInventory{}
+	doubted := offerFor(t, input, "rental-warm")
+	doubted.ID, doubted.RentalID, doubted.NativeRef = "doubted-rental", "doubted-rental", "doubted-rental"
+	doubted.Capacity.Confidence = 0.7
+	input.Offers = append(input.Offers, borrowed, doubted)
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+
+	doubtful := 0
+	for _, candidate := range production.Candidates {
+		reference := referenceCandidate(input, offerFor(t, input, candidate.OfferSnapshotID))
+		if candidate.Uncertainty() > 0 {
+			doubtful++
+		}
+		if candidate.Uncertainty() != reference.Uncertainty() {
+			t.Errorf("candidate %q: production counted %v points of doubt over %+v, the reference model %v over %+v",
+				candidate.OfferSnapshotID, candidate.Uncertainty(), candidate.Confidences,
+				reference.Uncertainty(), reference.Confidences)
+		}
+		if math.Abs(candidate.ScoreUSD-reference.ScoreUSD) > 1e-6 {
+			t.Errorf("candidate %q: production scored %.6f USD, the reference model %.6f",
+				candidate.OfferSnapshotID, candidate.ScoreUSD, reference.ScoreUSD)
+		}
+	}
+	if doubtful != len(production.Candidates) {
+		t.Fatalf("only %d of %d candidates carry any doubt, so agreeing about it proves less than it should",
+			doubtful, len(production.Candidates))
+	}
+	borrowedCandidate := candidateFor(t, production, "borrowed-host")
+	if borrowedCandidate.Uncertainty() != domain.AssumedLinkConfidence {
+		t.Fatalf("the machine nobody can ask carries %v points of doubt, and the only unsure answer it has is a transfer over an unmeasured link: %+v",
+			borrowedCandidate.Uncertainty(), borrowedCandidate.Confidences)
 	}
 }
 
@@ -472,7 +535,11 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 		t.Fatalf("load Blueprint: %v", err)
 	}
 	request := blueprint.Arrivals.Runs[0].Request
+	// A Run always states a class by the time Placement sees one: intake fills the
+	// omission and refuses a word it cannot price. The small world states standard,
+	// which prices a second of waiting at what the machine doing the waiting costs.
 	workload := scenario.WorkloadForRun(labWorkspace, "run-reference", request)
+	workload.Spec.Placement.Class = domain.ClassStandard
 	now := blueprint.World.Start()
 	warm := labOffer("rental-warm", domain.OfferKindStanding, domain.LaneReusable, 2.5, request.Resources)
 	warm.ObservedAt = now

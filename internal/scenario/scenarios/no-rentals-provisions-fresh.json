@@ -34,7 +34,7 @@
   "expect": {
     "outcome": "place",
     "offer": "fresh-quick",
-    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
     "disposition": "terminate",
     "candidates": {
       "fresh-quick": {

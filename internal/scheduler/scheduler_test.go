@@ -12,15 +12,14 @@ import (
 
 func TestSchedulerSelectsLowestDeterministicScore(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	workload := schedulerRevision()
+	workload.Spec.Placement.Class = domain.ClassInteractive
 	input := SchedulingInput{
 		RunID:        "run_1",
-		Workload:     schedulerRevision(),
+		Workload:     workload,
 		Offers:       []domain.OfferSnapshot{schedulerOffer("off_slow", now, 0.00010, 40), schedulerOffer("off_fast", now, 0.00012, 5)},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		Weights: ScoreWeights{
-			StartLatencyUSDPerSecond: 0.001,
-		},
 	}
 
 	decision, err := New().Evaluate(context.Background(), input)
@@ -413,43 +412,48 @@ func TestSchedulerAllowsUnknownNetworkWhenPolicyAllowsIt(t *testing.T) {
 	}
 }
 
-func TestSchedulerAppliesRiskAndUncertaintyPenalties(t *testing.T) {
+// TestTheClassPricesTheDoubtInTheAnswersItWasGiven is the uncertainty term
+// firing. Two machines five seconds from ready, the cheaper of them publishing a
+// capacity claim it is only forty percent sure of, and an interactive Run that
+// would rather pay than act on that. The shortfall is priced from the class's own
+// exchange rate, so the machine that costs 0.02 USD less over this Run is not
+// worth the doubt.
+//
+// The reliability rates on both offers are deliberately unpriced. Probability
+// times the cost of starting again is a derivation over a prediction, and any
+// flat dollar penalty invented for it now would be exactly the unmeasured
+// constant this model keeps deleting.
+func TestTheClassPricesTheDoubtInTheAnswersItWasGiven(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	stable := schedulerOffer("off_stable", now, 0.00012, 5)
-	stable.Capacity.Confidence = 0.99
-	stable.Reliability = domain.ReliabilityEvidence{
-		StartFailureRate: 0.01,
-		InterruptionRate: 0.01,
-		Confidence:       0.99,
-	}
 	risky := schedulerOffer("off_risky", now, 0.00010, 5)
 	risky.Capacity.Confidence = 0.4
-	risky.Reliability = domain.ReliabilityEvidence{
-		StartFailureRate: 0.35,
-		InterruptionRate: 0.25,
-		Confidence:       0.5,
-	}
+	workload := schedulerRevision()
+	workload.Spec.Placement.Class = domain.ClassInteractive
 
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
-		Workload:     schedulerRevision(),
+		Workload:     workload,
 		Offers:       []domain.OfferSnapshot{risky, stable},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		Weights: ScoreWeights{
-			StartFailurePenaltyUSD: 1,
-			InterruptionPenaltyUSD: 1,
-			UncertaintyPenaltyUSD:  1,
-		},
 	})
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
 	if decision.SelectedOfferSnapshotID != "off_stable" {
-		t.Fatalf("expected lower-risk offer to win, got %+v", decision)
+		t.Fatalf("the cheaper machine won on a capacity claim it is 40%% sure of, got %+v", decision)
 	}
-	if findCandidate(t, decision, "off_risky").ScoreUSD <= findCandidate(t, decision, "off_stable").ScoreUSD {
-		t.Fatalf("expected risk penalties to increase risky score, got %+v", decision.Candidates)
+	doubted := findCandidate(t, decision, "off_risky")
+	if doubted.Uncertainty() != 0.6 {
+		t.Fatalf("the doubted candidate carries %v points of uncertainty, and its capacity claim was worth 0.4: %+v",
+			doubted.Uncertainty(), doubted.Confidences)
+	}
+	if doubted.ScoreUSD <= findCandidate(t, decision, "off_stable").ScoreUSD {
+		t.Fatalf("doubt was priced at nothing: %+v", decision.Candidates)
+	}
+	if decision.Weights != domain.ClassInteractive.Weights() {
+		t.Fatalf("the decision recorded weights %+v, and it scored at %+v", decision.Weights, domain.ClassInteractive.Weights())
 	}
 }
 
@@ -481,28 +485,24 @@ func TestSchedulerDecisionStableAcrossOfferOrder(t *testing.T) {
 		schedulerOffer("off_slow", now, 0.00010, 40),
 		schedulerOffer("off_fast", now, 0.00012, 5),
 	}
+	workload := schedulerRevision()
+	workload.Spec.Placement.Class = domain.ClassInteractive
 	forward, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
-		Workload:     schedulerRevision(),
+		Workload:     workload,
 		Offers:       offers,
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		Weights: ScoreWeights{
-			StartLatencyUSDPerSecond: 0.001,
-		},
 	})
 	if err != nil {
 		t.Fatalf("evaluate forward: %v", err)
 	}
 	reversed, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
-		Workload:     schedulerRevision(),
+		Workload:     workload,
 		Offers:       []domain.OfferSnapshot{offers[1], offers[0]},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		Weights: ScoreWeights{
-			StartLatencyUSDPerSecond: 0.001,
-		},
 	})
 	if err != nil {
 		t.Fatalf("evaluate reversed: %v", err)
@@ -572,7 +572,7 @@ func schedulerRevision() domain.WorkloadRevision {
 					AllowUnknown:             false,
 				},
 			},
-			Placement: domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, MaxP90StartSeconds: 180, ExpectedRuntimeSeconds: 900},
+			Placement: domain.PlacementPolicy{Class: domain.ClassStandard, MaxP90StartSeconds: 180, ExpectedRuntimeSeconds: 900},
 		},
 	}
 }
@@ -795,26 +795,35 @@ func schedulerCandidate(t *testing.T, decision domain.BookingDecision, offerID s
 	return domain.CandidateDecision{}
 }
 
-// TestTheObjectiveDecidesWhichCandidateWins is what a Run's stated objective
-// does to a placement. Each row is the same two offers: one a fraction of a cent
-// cheaper per second and forty seconds from ready, the other pricier and five
-// seconds from ready. Nothing populates ScoreWeights in production, so before
-// the objective ordered candidates every one of these rows returned the cheaper
-// machine and the words in the public API meant nothing.
-func TestTheObjectiveDecidesWhichCandidateWins(t *testing.T) {
+// TestTheServiceClassDecidesWhichCandidateWins is what a Run's stated class does
+// to a placement. Every row is the same two offers: one a fifth of a cent cheaper
+// an hour and forty seconds from ready, the other pricier and five seconds from
+// ready. What differs is the exchange rate each class declares, and the winner
+// changes with it, which is what a class is for.
+//
+// Before the class carried the rate, every one of these rows returned the same
+// machine: the score's only time term was a weight nothing populated, so
+// "fastest_start" was a word the public API accepted and nothing read.
+func TestTheServiceClassDecidesWhichCandidateWins(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	for _, choice := range []struct {
-		objective domain.PlacementObjective
-		winner    string
-		reason    string
+		class  domain.ServiceClass
+		winner string
 	}{
-		{domain.ObjectiveCheapest, "off_slow", "LOWEST_SCORE"},
-		{domain.ObjectiveFastestStart, "off_fast", "EARLIEST_START"},
-		{domain.ObjectiveFastestCompletion, "off_fast", "EARLIEST_COMPLETION"},
+		// Somebody is watching, so thirty-five seconds is worth 0.35 USD and the
+		// cheaper machine is not.
+		{domain.ClassInteractive, "off_fast"},
+		// Waiting costs what the machine costs, which is less than the price gap.
+		{domain.ClassStandard, "off_slow"},
+		{domain.ClassBatch, "off_slow"},
+		// The answer is the point and the next iteration is behind it.
+		{domain.ClassExperimental, "off_fast"},
+		// Waiting is free, so this is the price and nothing else.
+		{domain.ClassOpportunistic, "off_slow"},
 	} {
-		t.Run(string(choice.objective), func(t *testing.T) {
+		t.Run(string(choice.class), func(t *testing.T) {
 			workload := schedulerRevision()
-			workload.Spec.Placement.Objective = choice.objective
+			workload.Spec.Placement.Class = choice.class
 
 			decision, err := New().Evaluate(context.Background(), SchedulingInput{
 				RunID:        "run_1",
@@ -827,25 +836,53 @@ func TestTheObjectiveDecidesWhichCandidateWins(t *testing.T) {
 				t.Fatalf("evaluate: %v", err)
 			}
 			if decision.SelectedOfferSnapshotID != choice.winner {
-				t.Fatalf("a Run that asked for %q landed on %q", choice.objective, decision.SelectedOfferSnapshotID)
+				t.Fatalf("a %q Run landed on %q", choice.class, decision.SelectedOfferSnapshotID)
 			}
-			if !slices.Contains(decision.SelectionReasonCodes, choice.reason) {
-				t.Fatalf("the decision recorded %v, and it ranked candidates on %q", decision.SelectionReasonCodes, choice.reason)
+			if !slices.Contains(decision.SelectionReasonCodes, choice.class.SelectionReason()) {
+				t.Fatalf("the decision recorded %v, and it was scored at the %q class's rates",
+					decision.SelectionReasonCodes, choice.class)
+			}
+			if decision.Weights != choice.class.Weights() {
+				t.Fatalf("the decision recorded weights %+v, and this class declares %+v", decision.Weights, choice.class.Weights())
 			}
 		})
 	}
 }
 
-// TestEqualPricesAreDecidedByWhatEachCandidateHolds is the case Artifact
-// locality was added for and the one a pure cost ranking cannot answer. Two
-// machines at one price, one of them forty seconds from ready, and the cheapest
-// objective still has a second term to fall back on. Without it the winner is
-// whichever offer ID sorts first, and every locality answer in the decision is
-// arithmetic nobody read.
+// TestAClassMercatorCannotPriceIsRefusedRatherThanRanked is the other half of the
+// same rule. Scoring a Run whose class declares nothing ranks every candidate on
+// price alone and records a reason naming a class nothing declared, which is the
+// silent fallback this replaced: a caller would learn their word was ignored from
+// the bill. CreateRun refuses such a Run at the door, so reaching Placement means
+// a revision was stored by something that did not ask.
+func TestAClassMercatorCannotPriceIsRefusedRatherThanRanked(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	workload := schedulerRevision()
+	workload.Spec.Placement.Class = "urgent"
+
+	_, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{schedulerOffer("off_slow", now, 0.00010, 40)},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), `service class "urgent"`) {
+		t.Fatalf("evaluating a Run of an unknown class returned %v", err)
+	}
+}
+
+// TestEqualPricesAreDecidedByWhatEachCandidateHolds is the case Artifact locality
+// was added for and the one a pure cost ranking cannot answer. Two machines at one
+// price, one of them forty seconds from ready, and a batch Run that values a
+// second of waiting at a fifth of the machine's rent. That fifth is what turns
+// locality into dollars; without any rate at all the winner is whichever offer ID
+// sorts first and every locality answer in the decision is arithmetic nobody read.
 func TestEqualPricesAreDecidedByWhatEachCandidateHolds(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
 	workload := schedulerRevision()
-	workload.Spec.Placement.Objective = domain.ObjectiveCheapest
+	workload.Spec.Placement.Class = domain.ClassBatch
 
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
@@ -859,5 +896,8 @@ func TestEqualPricesAreDecidedByWhatEachCandidateHolds(t *testing.T) {
 	}
 	if decision.SelectedOfferSnapshotID != "off_b_ready" {
 		t.Fatalf("two machines at one price were decided by %q rather than by how ready each is", decision.SelectedOfferSnapshotID)
+	}
+	if findCandidate(t, decision, "off_b_ready").ScoreUSD >= findCandidate(t, decision, "off_a_slow").ScoreUSD {
+		t.Fatalf("the readier machine did not score lower, so the offer ID decided it: %+v", decision.Candidates)
 	}
 }

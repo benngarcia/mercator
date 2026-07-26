@@ -54,6 +54,7 @@
   },
   "request": {
     "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "service_class": "standard",
     "expected_runtime": "20m",
     "max_runtime": "1h",
     "consumes_artifacts": ["artifact:imagenet:v2.41"]
@@ -61,7 +62,7 @@
   "expect": {
     "outcome": "place",
     "offer": "rental-dataset",
-    "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
     "candidates": {
       "rental-dataset": {
         "feasible": true,

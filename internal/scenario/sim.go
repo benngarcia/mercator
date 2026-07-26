@@ -319,6 +319,10 @@ func simRentalOffer(rental RentalSpec) domain.OfferSnapshot {
 	offer := simOffer(rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneReusable
+	// Whether the capacity is there is answered when the offer is read, because
+	// the machine may be busy by then. How sure its publisher is of that answer is
+	// a property of the publisher, so it is stated here and carried through.
+	offer.Capacity.Confidence = rental.Confidence()
 	return offer
 }
 
@@ -545,9 +549,11 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 			}}
 		}
 	}
-	if req.Objective != "" {
-		spec.Placement.Objective = domain.PlacementObjective(req.Objective)
-	}
+	// A fixture that says nothing about the kind of work its Run is gets whatever
+	// a caller who says nothing gets, which is normalisation's business rather
+	// than this translation's. A class Mercator does not know is carried through
+	// verbatim, because a Blueprint stating one is a fixture about the refusal.
+	spec.Placement.Class = domain.ServiceClass(req.ServiceClass)
 	if req.ExpectedRuntime != nil {
 		spec.Placement.ExpectedRuntimeSeconds = req.ExpectedRuntime.Duration().Seconds()
 	}

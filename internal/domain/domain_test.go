@@ -189,7 +189,7 @@ func validRevision() WorkloadRevision {
 					AllowUnknown:             false,
 				},
 			},
-			Placement: PlacementPolicy{Objective: ObjectiveBalanced, MaxP90StartSeconds: 180, ExpectedRuntimeSeconds: 900},
+			Placement: PlacementPolicy{Class: ClassStandard, MaxP90StartSeconds: 180, ExpectedRuntimeSeconds: 900},
 			Execution: ExecutionPolicy{MaxRuntimeSeconds: 1800, MaxPreStartAttempts: 3},
 		},
 	}

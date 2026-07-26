@@ -78,6 +78,17 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 			Message: "Expected runtime cannot exceed the enforced maximum runtime.",
 		})
 	}
+	// The class is what waiting is priced at, so a class Mercator cannot price is
+	// refused where the Run enters. Ranking such a Run on cost alone would place
+	// interactive work on the slowest machine in the fleet and record a reason
+	// naming a class nothing declared.
+	if !rev.Spec.Placement.Class.Known() {
+		violations = append(violations, Violation{
+			Code: "SERVICE_CLASS_UNKNOWN", Path: "spec.placement.service_class",
+			Required: KnownServiceClasses, Offered: rev.Spec.Placement.Class,
+			Message: "A Run states the class of work it is, and Mercator prices only the classes it knows.",
+		})
+	}
 	violations = append(violations, validateArtifactRequirements(rev.Spec.Artifacts)...)
 	violations = append(violations, validateCacheRequirements(rev.Spec.Caches)...)
 	for i, port := range container.Ports {

@@ -50,6 +50,7 @@
       "submit": "resolved",
       "request": {
         "image": "trainer@sha256:6ce45a60733c41462d62e62fb98fd1622ac468a661f54bff450574cb255cca0b",
+        "service_class": "standard",
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },
@@ -82,6 +83,7 @@
       "submit": "unreadable",
       "request": {
         "image": "mystery@sha256:4a90ab7a93e3324470f02fba88cf9f7b528798a067f860391e0a1aba595abb0f",
+        "service_class": "standard",
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },

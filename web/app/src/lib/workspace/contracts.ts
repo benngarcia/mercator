@@ -50,12 +50,19 @@ const NetworkRequirements = Schema.Struct({
     }),
   ),
 });
+// PlacementPolicy carries the class of work a Run is, which is the only thing
+// that says what waiting is worth to it, beside the hard bounds it refuses to
+// cross. The class replaced a placement objective outright: an objective named a
+// quantity to minimise and never what a second of it cost, so the console shows
+// the class and the rates it declares rather than a word nothing was computed
+// from.
 const PlacementPolicy = Schema.Struct({
-  objective: Schema.Literals([
-    "cheapest",
-    "fastest_start",
-    "fastest_completion",
-    "balanced",
+  service_class: Schema.Literals([
+    "interactive",
+    "standard",
+    "batch",
+    "experimental",
+    "opportunistic",
   ]),
   max_p90_start_seconds: Schema.optionalKey(Schema.Number),
   expected_runtime_seconds: Schema.optionalKey(Schema.Number),
@@ -220,6 +227,21 @@ const Violation = Schema.Struct({
   offered: Schema.optionalKey(Schema.Unknown),
   message: Schema.String,
 });
+// Confidence is one answer a placement rested on and what its source said it was
+// worth. The uncertainty term of a score is the shortfall summed over exactly
+// these, which is what lets a reader re-derive a score rather than trust it.
+const Confidence = Schema.Struct({
+  answer: Schema.String,
+  value: Schema.Number,
+});
+// ScoreWeights is the exchange rates a service class declares. Every decision
+// records the ones it was scored at, because a rate that changed would otherwise
+// silently rewrite the arithmetic of every decision already taken.
+const ScoreWeights = Schema.Struct({
+  start_latency_usd_per_second: Schema.optionalKey(Schema.Number),
+  completion_latency_usd_per_second: Schema.optionalKey(Schema.Number),
+  uncertainty_penalty_usd: Schema.optionalKey(Schema.Number),
+});
 const CandidateEstimateSet = Schema.Struct({
   queue_seconds: Estimate,
   provision_seconds: Estimate,
@@ -258,6 +280,7 @@ export const BookingDecision = Schema.Struct({
   evaluated_at: Schema.String,
   model_version: Schema.String,
   policy: PlacementPolicy,
+  weights: ScoreWeights,
   collection_report: Schema.Struct({
     connections_queried: Schema.optionalKey(mutableArray(Schema.String)),
     connections_from_cache: Schema.optionalKey(mutableArray(Schema.String)),
@@ -273,6 +296,7 @@ export const BookingDecision = Schema.Struct({
       feasible: Schema.Boolean,
       rejections: Schema.optionalKey(mutableArray(Violation)),
       estimates: CandidateEstimateSet,
+      confidences: Schema.optionalKey(mutableArray(Confidence)),
       score_usd: Schema.optionalKey(Schema.Number),
     }),
   ),

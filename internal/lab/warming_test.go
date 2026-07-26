@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -354,4 +355,36 @@ func candidatePullSeconds(t *testing.T, decision domain.BookingDecision, offerID
 	}
 	t.Fatalf("Run %q has no candidate for offer %q", decision.RunID, offerID)
 	return 0
+}
+
+// TestAClassMercatorDoesNotKnowIsRefusedAtL1 is the loud refusal through the real
+// control plane's own create path. The world would place this Run: one idle Rental
+// holding the whole image. What it says about itself is that it is urgent, and
+// there is no urgent class, so it has stated no exchange rate at all. Mercator
+// refuses it where it enters rather than accepting it and ranking every candidate
+// on price alone, which is how a caller would otherwise learn their word was
+// ignored: from the bill.
+func TestAClassMercatorDoesNotKnowIsRefusedAtL1(t *testing.T) {
+	execution := openConformanceExecution(t, "a-class-mercator-does-not-know-is-refused")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	_, err := execution.Drive(context.Background(), Advance(time.Minute))
+
+	if err == nil {
+		t.Fatal("a Run stating a class Mercator cannot price was accepted")
+	}
+	if !strings.Contains(err.Error(), "SERVICE_CLASS_UNKNOWN") {
+		t.Fatalf("the refusal was %v, and it has to name the field the caller got wrong", err)
+	}
+	stored, err := execution.runtime.mercatorEvents(context.Background())
+	if err != nil {
+		t.Fatalf("read Mercator events: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("a Run refused at the door left %d events behind, and a refusal is not a Run", len(stored))
+	}
 }

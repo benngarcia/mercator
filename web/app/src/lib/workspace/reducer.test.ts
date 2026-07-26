@@ -150,7 +150,8 @@ function bookingDecidedMessage(input: {
           workload_revision_digest: "sha256:fixture",
           evaluated_at: "2030-01-01T00:00:01Z",
           model_version: "scheduler-v1",
-          policy: { objective: "cheapest" },
+          policy: { service_class: "batch" },
+          weights: { completion_latency_usd_per_second: 0.0001 },
           collection_report: {},
           candidates: input.candidateDisposition
             ? [
@@ -181,7 +182,7 @@ function bookingDecidedMessage(input: {
               : {}),
             schedule_version: 1,
           },
-          selection_reason_codes: ["LOWEST_SCORE"],
+          selection_reason_codes: ["FEASIBLE", "SERVICE_CLASS_BATCH"],
         },
       },
     },

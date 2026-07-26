@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 24 {
-		t.Fatalf("latest invariant results = %d, want 24", len(latest))
+	if len(latest) != 25 {
+		t.Fatalf("latest invariant results = %d, want 25", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -244,6 +244,9 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		},
 		"safety.locality_is_never_infeasibility": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{refusedForHoldingNothing()}
+		},
+		"safety.score_is_reproducible_from_the_record": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{scoredOnATermReadOffTheOffer()}
 		},
 		"liveness.lost_response_reconciliation": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{{CorrelationID: "run-missing", Response: EffectResponseLost}}
@@ -594,7 +597,7 @@ func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 				MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_slo_refusal", domain.BookingDecision{
 					ID:                   "dec_slo_refusal",
 					RunID:                "run-impatient",
-					Policy:               domain.PlacementPolicy{Objective: domain.ObjectiveBalanced, MaxP90StartSeconds: 180},
+					Policy:               domain.PlacementPolicy{Class: domain.ClassStandard, MaxP90StartSeconds: 180},
 					Candidates:           []domain.CandidateDecision{candidate},
 					SelectionReasonCodes: []string{"NO_FEASIBLE_OFFERS"},
 				})},
@@ -610,6 +613,78 @@ func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAScoreOffTheOfferIsNotReproducibleFromTheRecord is the reproducibility rule
+// shown catching the thing it exists for, and leaving alone the thing it does not.
+//
+// The unlawful decision is scored on a term whose input is nowhere in it: a full
+// point of doubt for a machine that could not enumerate its images, read off the
+// offer the way the reference model used to read it. Its confidences say the
+// answers it was given were worth half a point, so the record derives 0.30 USD of
+// doubt and the score claims 0.90. That is exactly how the two definitions of
+// uncertainty drifted: nothing in the record could tell them apart, and nothing
+// could tell them apart while both were multiplied by zero.
+//
+// The lawful decision beside it is the same machine scored on the confidences it
+// recorded, which is the honest version of the same placement.
+func TestAScoreOffTheOfferIsNotReproducibleFromTheRecord(t *testing.T) {
+	for _, decision := range []struct {
+		name     string
+		scoreUSD float64
+		lawful   bool
+	}{
+		{"a score derived from the confidences the candidate recorded", 0.643333, true},
+		{"a score charged a point for an inventory nobody recorded", 1.243333, false},
+	} {
+		t.Run(decision.name, func(t *testing.T) {
+			observation := InvariantObservation{
+				MercatorEvents: []eventlog.CloudEvent{borrowedHostScoredAt(decision.scoreUSD)},
+			}
+
+			err := scoreIsReproducibleFromTheRecord(observation)
+
+			if decision.lawful && err != nil {
+				t.Fatalf("%s was called a violation: %v", decision.name, err)
+			}
+			if !decision.lawful && err == nil {
+				t.Fatalf("%s raised nothing", decision.name)
+			}
+		})
+	}
+}
+
+// borrowedHostScoredAt is one interactive placement on a machine nothing could
+// ask: 0.33 USD of rent, one second of launch at a hundredth of a dollar, and a
+// transfer estimate worth half of certainty.
+func borrowedHostScoredAt(scoreUSD float64) eventlog.CloudEvent {
+	return bookingDecidedEvent("evt_score_record", domain.BookingDecision{
+		ID:      "dec_score_record",
+		RunID:   "run-hurried",
+		Policy:  domain.PlacementPolicy{Class: domain.ClassInteractive, ExpectedRuntimeSeconds: 600},
+		Weights: domain.ClassInteractive.Weights(),
+		Candidates: []domain.CandidateDecision{{
+			OfferSnapshotID: "host-unaskable",
+			Feasible:        true,
+			ImageLocality:   domain.LocalityUnknown,
+			Estimates: domain.CandidateEstimates{
+				PullSeconds:  domain.Estimate{Expected: 289.14, Confidence: 0.5},
+				StartSeconds: domain.Estimate{Expected: 1},
+				CostUSD:      domain.Estimate{Expected: 0.333333},
+			},
+			Confidences: []domain.Confidence{
+				{Answer: "capacity", Value: 1},
+				{Answer: "pull_seconds", Value: 0.5},
+			},
+			ScoreUSD: scoreUSD,
+		}},
+		SelectionReasonCodes: []string{"FEASIBLE", domain.ClassInteractive.SelectionReason()},
+	})
+}
+
+// scoredOnATermReadOffTheOffer is the decision the reproducibility rule forbids.
+func scoredOnATermReadOffTheOffer() eventlog.CloudEvent {
+	return borrowedHostScoredAt(1.243333)
 }
 
 // refusedForHoldingNothing is the decision the locality rule forbids: a machine

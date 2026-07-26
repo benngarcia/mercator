@@ -49,13 +49,14 @@
       "submit": "trainer",
       "request": {
         "image": "trainer@sha256:1d12367e38d42cbadc64e72ba3e2093db9d6ed002d28bf5a29f8209d5e08db57",
+        "service_class": "standard",
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },
       "expect": {
         "outcome": "place",
         "offer": "ready-host",
-        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
         "disposition": "release",
         "candidates": {
           "ready-host": {

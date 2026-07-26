@@ -3329,16 +3329,18 @@
       "PlacementPolicy": {
         "type": "object",
         "required": [
-          "objective"
+          "service_class"
         ],
         "properties": {
-          "objective": {
+          "service_class": {
             "type": "string",
+            "description": "The kind of work this Run is, which is the only thing that says what waiting is worth to it. Every class declares its own exchange rate, and the score is computed over those rates: interactive prices a second of waiting to the start at twenty times the rent of the machine doing the waiting, standard at that rent, experimental and batch price it to the finish at twice and a fifth of it, and opportunistic prices it at nothing and takes whatever costs least. A class Mercator does not know is refused with SERVICE_CLASS_UNKNOWN rather than ranked on price alone. Omitted means standard.",
             "enum": [
-              "cheapest",
-              "fastest_start",
-              "fastest_completion",
-              "balanced"
+              "interactive",
+              "standard",
+              "batch",
+              "experimental",
+              "opportunistic"
             ]
           },
           "max_p90_start_seconds": {
@@ -4375,9 +4377,54 @@
           "estimates": {
             "$ref": "#/components/schemas/CandidateEstimates"
           },
+          "confidences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Confidence"
+            },
+            "description": "What each answer this candidate was scored on is worth, one entry per source that stated one. It is the whole input to the score's uncertainty term, recorded so score_usd can be re-derived from this record: a scoring term whose input is not here is a term no reader can check. An answer nobody stated a confidence for is absent rather than zero, because stating no opinion is not the same as stating that an answer is worthless."
+          },
           "score_usd": {
             "type": "number",
+            "format": "double",
+            "description": "What this candidate is worth to this Run in dollars, lowest first: the cost it would be billed, plus the dollars its service class says it would rather pay than wait, plus the dollars it would rather pay than act on a doubtful answer. Every quantity it multiplies is recorded beside it, at the weights the decision states, so it can be re-derived rather than trusted. An infeasible candidate scores nothing, because it has no price."
+          }
+        }
+      },
+      "Confidence": {
+        "type": "object",
+        "description": "One answer a placement rested on and what its source said it was worth.",
+        "required": [
+          "answer",
+          "value"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "What was being answered, in the vocabulary of whatever answered: the capacity claim, the reliability history, the image transfer, the Artifact read."
+          },
+          "value": {
+            "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "ScoreWeights": {
+        "type": "object",
+        "description": "The exchange rates one service class declares, which are what a score is computed over. They are recorded on every decision rather than looked up, because a rate that changes would otherwise silently rewrite the arithmetic of every decision already taken. The two reliability terms a score will eventually carry are absent on purpose: probability times the cost of starting again is a derivation over a prediction, and a flat penalty invented for it now would be an unmeasured constant.",
+        "properties": {
+          "start_latency_usd_per_second": {
+            "type": "number",
+            "format": "double"
+          },
+          "completion_latency_usd_per_second": {
+            "type": "number",
+            "format": "double"
+          },
+          "uncertainty_penalty_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "What one whole point of doubt costs. A point is one answer worth nothing."
           }
         }
       },
@@ -4520,6 +4567,7 @@
           "evaluated_at",
           "model_version",
           "policy",
+          "weights",
           "collection_report",
           "candidates",
           "selection_reason_codes"
@@ -4543,6 +4591,10 @@
           },
           "policy": {
             "$ref": "#/components/schemas/PlacementPolicy"
+          },
+          "weights": {
+            "$ref": "#/components/schemas/ScoreWeights",
+            "description": "The exchange rates every candidate below was scored at, which the Run's service class declared."
           },
           "collection_report": {
             "$ref": "#/components/schemas/CollectionReport"

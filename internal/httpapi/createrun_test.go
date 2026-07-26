@@ -212,3 +212,37 @@ func newMinimalCreateServer(t *testing.T, outcome adapter.ExternalPhase, extra .
 	resolver := ociresolver.NewStaticResolver(nil, ociresolver.WithSyntheticDigests(), ociresolver.WithAssumedPlatform("linux/amd64"))
 	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver})
 }
+
+// TestCreateRunRefusesAServiceClassMercatorCannotPrice is the answer a caller gets
+// for a word Mercator has no exchange rate for. The class is what says a second of
+// waiting is worth anything at all, so accepting the Run and ranking it on price
+// alone would place work somebody is waiting on onto the slowest machine in the
+// fleet and record a reason naming a class nothing declared. The caller learns it
+// here instead of from the bill.
+func TestCreateRunRefusesAServiceClassMercatorCannotPrice(t *testing.T) {
+	handler := newMinimalCreateServer(t, adapter.ExternalPhaseSucceeded)
+
+	body := []byte(`{"run_id":"run_urgent","workload":{"spec":{"containers":[{"image":"busybox"}],"placement":{"service_class":"urgent"}}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(body))
+	req.Header.Set("Idempotency-Key", "idem_urgent")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("submitting a Run of an unknown class returned %d: %s", rec.Code, rec.Body.String())
+	}
+	var refusal ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &refusal); err != nil {
+		t.Fatalf("decode the refusal: %v", err)
+	}
+	if refusal.Code != "SERVICE_CLASS_UNKNOWN" {
+		t.Fatalf("the refusal is %+v, and the caller has to be able to tell which field they got wrong", refusal)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/runs/run_urgent?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("the refused Run reads %d from the API, and Mercator never accepted it", rec.Code)
+	}
+}

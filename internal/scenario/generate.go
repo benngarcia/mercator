@@ -297,7 +297,7 @@ func (generator *blueprintGenerator) request(image string) RequestSpec {
 		Resources:       generatedRunResources(),
 		ExpectedRuntime: &expected,
 		MaxRuntime:      &maximum,
-		Objective:       "balanced",
+		ServiceClass:    string(domain.ClassStandard),
 		CacheMounts:     []CacheMountSpec{{Name: "build-cache", CompatibilityKey: "generated-v1", Size: ByteSize(2e9)}},
 		Phases: []WorkloadPhaseSpec{
 			{Name: "prepare", Duration: Duration(2 * time.Minute)},

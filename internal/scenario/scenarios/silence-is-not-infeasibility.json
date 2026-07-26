@@ -42,7 +42,7 @@
       "expect": {
         "outcome": "place",
         "offer": "silent-host",
-        "reasons": ["FEASIBLE", "LOWEST_SCORE", "START_SLO_UNVERIFIED"],
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD", "START_SLO_UNVERIFIED"],
         "disposition": "release",
         "candidates": {
           "empty-rental": {

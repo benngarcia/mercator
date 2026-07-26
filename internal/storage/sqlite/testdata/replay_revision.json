@@ -21,7 +21,7 @@
     },
     "network": { "inbound": "none" },
     "placement": {
-      "objective": "balanced",
+      "service_class": "standard",
       "expected_runtime_seconds": 60
     },
     "execution": {
