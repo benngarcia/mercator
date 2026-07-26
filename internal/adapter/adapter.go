@@ -155,6 +155,29 @@ type ExternalObservation struct {
 	NativeJSON string     `json:"native_json,omitempty"`
 }
 
+// ObservedStart answers whether this observation establishes when the workload
+// began. It does when the holder said the work had begun and said when, by the
+// moment Mercator read it. Two moments a holder can publish are not that.
+//
+// A moment later than the read that carried it is a clock Mercator does not share
+// rather than anything it saw: a host running an hour ahead publishes a start an
+// hour in the future, and Mercator recording it would file a start latency an hour
+// too large as a measurement and trip the Lab's own start rule for a moment it only
+// passed through. A moment carried by a phase saying the work has not begun is the
+// claim every provider in this tree makes from the moment it accepts a launch:
+// RunPod says RUNNING and publishes lastStartedAt while the image is still landing,
+// which is why an address is what makes a pod running here, and the same distrust
+// has to reach the moment or the phase gate buys nothing.
+//
+// The observation still carries what the holder said either way. This decides what
+// Mercator adopts as the Run's own start, not what the provider is recorded saying.
+func (o ExternalObservation) ObservedStart() bool {
+	if o.StartedAt == nil || o.StartedAt.IsZero() || o.StartedAt.After(o.ObservedAt) {
+		return false
+	}
+	return o.Phase == ExternalPhaseRunning || o.Phase.Exited()
+}
+
 type ReleaseRequest struct {
 	WorkspaceID       string
 	ConnectionID      string

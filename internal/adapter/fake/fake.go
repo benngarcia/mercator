@@ -34,6 +34,12 @@ type Adapter struct {
 	// and remove the owned object.
 	releaseCount   int
 	terminateCount int
+	// publishedStart, when set, makes this provider publish the moment it gave a
+	// container a process, on a clock that runs the offset it holds from Mercator's.
+	// Nil is a provider that publishes no start moment at all, which is what most
+	// of them do and what silence has to keep looking like here.
+	publishedStart *time.Duration
+	startedAt      map[string]time.Time
 	// verifyErr is the error returned by Verify. Defaults to nil (success).
 	verifyErr error
 	// listOffersErr, when set, is returned by ListOffers instead of offers.
@@ -95,6 +101,18 @@ func WithListOffersError(err error) Option {
 	}
 }
 
+// WithPublishedStart makes this provider report the moment it gave the container
+// a process, dated on its own clock: skew is how far that clock runs from
+// Mercator's, so a positive skew is a host publishing a start Mercator has not
+// reached yet. Every provider in this tree keeps its own clock, and this is the
+// only knob that lets a case ask what Mercator does with a moment it cannot have
+// observed.
+func WithPublishedStart(skew time.Duration) Option {
+	return func(a *Adapter) {
+		a.publishedStart = &skew
+	}
+}
+
 // WithNow replaces the wall clock used to stamp receipts and observations.
 // Scenario harnesses inject a scripted clock; the default is time.Now.
 func WithNow(now func() time.Time) Option {
@@ -110,6 +128,7 @@ func New(options ...Option) *Adapter {
 		objects:       map[string]adapter.OwnedExternalObject{},
 		ops:           map[string]operationRecord{},
 		observeCount:  map[string]int{},
+		startedAt:     map[string]time.Time{},
 	}
 	for _, option := range options {
 		option(a)
@@ -170,6 +189,9 @@ func (a *Adapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.
 		Phase:          phase,
 	}
 	a.objects[req.LaunchKey] = object
+	// The moment this provider gave the container a process, which it publishes on
+	// its own clock and only if it publishes one at all.
+	a.startedAt[req.LaunchKey] = a.now().UTC()
 	receipt := adapter.LaunchReceipt{
 		ExternalID:     externalID,
 		LaunchKey:      req.LaunchKey,
@@ -208,6 +230,7 @@ func (a *Adapter) Observe(_ context.Context, req adapter.ObserveRequest) (adapte
 		LaunchKey:  object.LaunchKey,
 		Phase:      phase,
 		ObservedAt: a.now().UTC(),
+		StartedAt:  a.startMoment(object.LaunchKey),
 		NativeJSON: fmt.Sprintf(`{"adapter":"fake","external_id":%q}`, object.ExternalID),
 	}
 	switch phase {
@@ -227,6 +250,18 @@ func (a *Adapter) Observe(_ context.Context, req adapter.ObserveRequest) (adapte
 		observation.ExitCode = &code
 	}
 	return observation, nil
+}
+
+// startMoment is what this provider says about when the container was given a
+// process: nothing unless it was configured to publish one, and its own clock's
+// reading of that moment when it was.
+func (a *Adapter) startMoment(launchKey string) *time.Time {
+	started, launched := a.startedAt[launchKey]
+	if a.publishedStart == nil || !launched {
+		return nil
+	}
+	published := started.Add(*a.publishedStart)
+	return &published
 }
 
 func (a *Adapter) Release(_ context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {

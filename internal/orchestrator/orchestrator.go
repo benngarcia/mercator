@@ -993,8 +993,14 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 // and boot have no production observation at all until an agent bootstraps on
 // provisioned capacity, and deriving them from when the launch was accepted would
 // put Mercator's own arithmetic into the log as though somebody had measured it.
+//
+// It is also not every moment a holder publishes. A start Mercator can defend is
+// one an observation established, which adapter.ExternalObservation decides for
+// every lane at once, so a foreign clock running ahead and a provider calling a
+// pod started before it has run anything are refused here rather than three times
+// in three adapters.
 func startMoment(state runState, observation adapter.ExternalObservation) *time.Time {
-	if observation.StartedAt == nil || observation.StartedAt.IsZero() || state.startedAt != nil {
+	if state.startedAt != nil || !observation.ObservedStart() {
 		return nil
 	}
 	moment := observation.StartedAt.UTC()
