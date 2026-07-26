@@ -462,16 +462,33 @@ func TestContainerFromInspectSaysTheEpochIsNoStartAtAll(t *testing.T) {
 	}
 }
 
+// TestContainerFromInspectRefusesAMomentItCannotRead covers both moments this
+// payload carries, because both are load-bearing and only one of them was held.
+// Reading State.StartedAt as the zero moment reports a running container as never
+// started and publishes no start for the whole lane. Reading Created as the zero
+// moment is worse: Launch returns it as the launch's accepted moment, and
+// invalidLaunchReceipt refuses a receipt with no acceptance, so every reduce of that
+// Run's stream wedges. A daemon states both in one format, so a case that rewrites
+// one and not the other leaves half the promise unbreakable.
 func TestContainerFromInspectRefusesAMomentItCannotRead(t *testing.T) {
-	unreadable := strings.Replace(runningContainerInspectPayload, `"2026-07-26T11:56:20.807652173Z"`, `"Sun Jul 26 11:56:20 2026"`, 1)
-
-	_, err := containerFromInspect([]byte(unreadable))
-
-	if err == nil {
-		t.Fatalf("a daemon whose start moment this adapter cannot read was read anyway")
+	unreadable := map[string]string{
+		"State.StartedAt": `"2026-07-26T11:56:20.807652173Z"`,
+		"Created":         `"2026-07-26T11:56:20.618952831Z"`,
 	}
-	if !strings.Contains(err.Error(), "State.StartedAt") {
-		t.Fatalf("the error does not name the field the daemon stated unreadably: %v", err)
+
+	for field, stated := range unreadable {
+		t.Run(field, func(t *testing.T) {
+			payload := strings.Replace(runningContainerInspectPayload, stated, `"Sun Jul 26 11:56:20 2026"`, 1)
+
+			_, err := containerFromInspect([]byte(payload))
+
+			if err == nil {
+				t.Fatalf("a daemon whose %s this adapter cannot read was read anyway", field)
+			}
+			if !strings.Contains(err.Error(), field) {
+				t.Fatalf("the error does not name the field the daemon stated unreadably: %v", err)
+			}
+		})
 	}
 }
 
