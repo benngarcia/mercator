@@ -1327,46 +1327,149 @@ complete because it works against a live provider.
     conformance test on a real daemon. No entry here may call artifact locality a
     saving a Run collects until that lands.
 - [x] 2026-07-25: Read a host-local copy only when it is the version the catalog
-  names. The simulated world decided a copy was worth reading from the copy's own
-  state alone, in three places: what a launch reads, what a launch still needs
-  room for, and what a preparation still owes. Every predicate in the control
-  plane already compares the copy's digest against the catalog, so a machine
-  reporting a checked copy of the version before this one was priced the whole
-  640 second read by placement and then handed the workload those bytes for
-  nothing, in the same execution, with every invariant green. Preparation answered
-  ready with zero fetched bytes there, so nothing re-checked it either.
-  `simulatedWorld.readableReplica` is the one predicate now, this world's half of
-  `domain.ArtifactInventory.Holds`, and the `artifact.read` effect records the
-  digest the copy claimed so a law about reads can be stated against the catalog
-  rather than against the machine's own bookkeeping.
+  names. The simulated world decided a copy was worth reading from the copy's
+  own state alone, in what a launch reads and in what a launch still needs room
+  for. Every predicate in the control plane already compares the copy's digest
+  against the catalog, so a machine reporting a checked copy of the version
+  before this one was priced the whole 640 second read by placement and then
+  handed the workload those bytes for nothing, in the same execution, with every
+  invariant green. `simulatedWorld.readableReplica` is the one predicate now,
+  this world's half of `domain.ArtifactInventory.Holds`.
   - `a-restored-snapshot-is-not-a-copy` (conformance) is the world that produces
-    it: the estimate charges 40GB, the execution reads 40GB out of the object
-    store, and the copy the machine keeps afterwards is the one it checked on
-    arrival. It has to be a conformance Blueprint, because the Booking Decision
+    it: the estimate charges 40GB and the execution reads 40GB out of the object
+    store. It has to be a conformance Blueprint, because the Booking Decision
     was already right and only an execution can say which bytes the workload was
     handed. Deliberate break, since removed: trusting the copy's own state fails
     `safety.artifact_replica_verified` with `Run "run-consumer" read Artifact
-    "artifact:imagenet:v2.41" from a copy on offer "rental-restored-snapshot"
-    claiming digest sha256:2b2b..., and the catalog says sha256:1a1a...`.
-  - The disk half gets no case of its own. A candidate that cannot hold the read
-    it owes is refused at placement and never launches there, so what the world
-    would have answered is unobservable in a green execution, and the answer rests
-    on being the same predicate rather than on a fixture describing a machine no
-    Run would have been sent to.
-  - Owed, and reachable by nothing today: the silence branch of
-    `orchestrator.alreadyHeld`. Inverting it, so that silence about a machine's
-    copies reads as presence and nothing is ever prepared on such a machine,
-    leaves `go test ./...` green on this workstation. The state it decides is a
-    queued placement on capacity that cannot say what it holds, which production
-    has as a reusable Rental with no node enrolled on it and which no Blueprint
-    can state: Lab capacity that keeps what it runs always enumerates its copies,
-    and Lab capacity that does not may never be queued behind. Its only
-    consequence is thrown away as well, because `PrepareReceipt.Unsupported` is
-    written by both `Broker.Prepare` and the Lab world and read by nobody, so a
-    machine that refused the whole desire is indistinguishable from one that took
-    it. Both halves belong to the slice that teaches the Lab about reusable
-    capacity with no runtime of Mercator's on it and records what a machine said
-    it could not prepare.
+    "artifact:imagenet:v2.41" from the replica on offer
+    "rental-restored-snapshot" and was handed digest sha256:2b2b..., and the
+    catalog says sha256:1a1a...`.
+  - The disk half is stated in the Lab's own failing case for disk rather than
+    in a case of its own. `a-machine-with-no-room-refuses-the-work` already
+    describes the one machine that can reach the world's refusal at all,
+    capacity whose inventory is silent, because silence is priced and never
+    refused: it now holds a checked copy of another version under this version's
+    name, so forty of its sixty gigabytes are spent on bytes this launch cannot
+    use, and World Truth refuses the work Placement selected it for. Deliberate
+    break, since removed: trusting the copy's state leaves eleven gigabytes of
+    work on twenty gigabytes of free disk, the launch is accepted, and the read
+    fails `safety.artifact_replica_verified` on `offer "cramped-host"`.
+  - Two claims this entry made when it was written were wrong, and the
+    corrections are in the entry below: preparation was said to answer ready
+    with zero fetched bytes on that machine, which no fixture reached and which
+    no node does, and the silence branch of `orchestrator.alreadyHeld` was said
+    to be reachable by nothing, which was false in two ways.
+- [x] 2026-07-25: Stop the Lab keeping copies nothing keeps, and stop preparing
+  on machines Mercator cannot see. Two reviewers refuted parts of the entry
+  above and of the entry before it; what follows is what was actually true and
+  what changed.
+  - A launch read left a verified copy behind. `readRunArtifacts` filed one for
+    every input read out of the object store, so a machine was warm afterwards
+    for content a workload had downloaded into its own container. Nothing in
+    production performs that: `PrepareArtifact` is the only fetch in the tree,
+    its only issuer is this controller over queued placements, and the launch
+    command has carried no Artifact mount since it was deleted for promising an
+    attachment nothing performs. `locality_provenance` now reads the source on
+    `artifact.replicated`, so a copy explained only by an execution is no copy,
+    and re-adding the launch side fails it with `offer "producer-rental" holds a
+    copy of Artifact "artifact:checkpoint:v1" with no World Tape seed and no
+    preparation recorded landing one there`. The fourth Run of
+    `artifact-must-be-durable-before-a-consumer-runs` was the entry above's
+    "reads what that fetch left behind"; it lands on that same machine and is
+    priced the whole 2GB again, which is what a real node charges it, and the
+    unchecked copy it read past is still unchecked. The saving a checked copy
+    buys is asserted where such a copy can exist: on the prepared host of
+    `prewarming-never-starves-real-work`, at both ends now, the decision pricing
+    zero and both Runs reading the local disk.
+  - The `artifact.read` effect recorded the digest and state of whatever copy
+    the machine had under that name, including on a read out of the object
+    store, so a green execution's own ledger said the workload was handed
+    another version's bytes and the law skipped every read whose source was not
+    a replica. A read now records what it served, and
+    `artifact_replica_verified` holds over every accepted read.
+  - `prefetchArtifact` answered ready with zero fetched bytes for a copy the
+    machine already held. Deleted rather than covered:
+    `nodeagent.PrepareArtifact` streams the source it was given and rewrites the
+    record from the stream with no test for a copy already on the disk, so
+    answering ready credited a node with a decision no node makes. What keeps
+    the same bytes from crossing the link twice is the operation identity, on
+    this seam and on a real one alike.
+  - The silence branch of `alreadyHeld` was reachable, twice. `catalog[id]`
+    returns a zero `OfferSnapshot` when a queued placement's machine is absent
+    from the current listing, and a node that keeps no replica store reports
+    `ArtifactInventory{}` on every heartbeat. The first was not silence about an
+    inventory at all, it was a machine Mercator could say nothing about, and in
+    the reusable lane it was a defect rather than a wasted command: a node
+    leaves the catalog through the same `record.Alive` predicate that makes
+    `Registry.Ref` refuse, so the desire became a command `Broker.Prepare`
+    errors on and `Prewarm` ended the whole fleet's pass, leaving every other
+    tenant's desire unstated, withdrawals included, on every trigger for as long
+    as the Booking stayed queued there. A queued placement whose machine is not
+    on offer now states nothing, and the silence that remains is the one the
+    branch always claimed: a machine on offer whose runtime cannot enumerate
+    what it holds. Stated at the orchestrator seam both ways, because no
+    Blueprint can take capacity out of the catalog while a Booking is queued on
+    it.
+  - `PrepareReceipt.Unsupported` is still written by both `Broker.Prepare` and
+    the Lab world and read by nobody, so a machine that refused the whole desire
+    is still indistinguishable from one that took it. That is the half of the
+    earlier note that stands, and it belongs to the slice that records what a
+    machine said it could not prepare.
+  - The live half ran on this workstation, amd64 Linux with a native daemon:
+    MinIO in a container of its own, a presigned GET the node reads with no
+    credential of any kind, a copy of another version's bytes reported
+    unverified under the digest it actually produced, and a real container's own
+    output reported as no copy at all. That last case is the production fact
+    both halves of the withdrawal rest on: this node's enumeration answers about
+    its replica store, so bytes a container wrote or downloaded for itself are
+    bytes Mercator is not told about.
+- [x] 2026-07-25: Close phase 3, and make its live half actually run. The three
+  classes of locality are exact: OCI image content named in both digest spaces and
+  subtracted from what a node reports, immutable Artifacts with the object store as
+  their authority, and mutable caches keyed per workspace and generation. Disk is a
+  resource all of it is accounted against, preparation is bounded so it cannot
+  starve admitted work, and producer affinity was built and withdrawn because no
+  shipped node can be in the state its discount fired in. Closing the phase turned
+  up two things about the evidence rather than about the product, and both were
+  assumptions from the machine the earlier slices were written on:
+  - the entire L4 half of this phase was skipping on this workstation, and none of
+    it skipped for a reason about this machine. `internal/nodeagent`'s gate pulled
+    the image a case needs and treated any failed pull as an environment that
+    proves nothing, so an address that has spent Docker Hub's anonymous quota
+    skipped image assembly, layer reporting, disk measurement, cache isolation and
+    Artifact replication while holding busybox, `registry:2` and `minio/minio`
+    unpacked on the daemon the whole time. What those cases check is the agent
+    against what this daemon itself reports, so a copy already here is the same
+    evidence as one fetched a second ago. The pull is now a refresh, and only a
+    reference this machine can neither pull nor already hold stops a case. Ten live
+    cases run as a result, including every live case slices 4 through 9 rest on.
+    The one case that genuinely needs Docker Hub, the public-image comparison,
+    proves it can read that exact manifest anonymously before it starts and skips
+    on 429 for the same reason it skips when offline. `requireDockerHubReachable`
+    is deleted: it proved a registry answers, which an address being throttled does
+    not contradict, so it was passing a gate meant to prove the read was possible;
+  - `TestIntegrationDockerAdapterLaunchObserveRelease` named `linux/arm64`
+    outright, which is the laptop the ephemeral lane was written on. On this amd64
+    host it asked Docker for a foreign build, so it could not use the image the
+    daemon holds and failed trying to fetch one. It is opt-in behind
+    `MERCATOR_DOCKER_INTEGRATION`, so no suite has ever run it here and nothing
+    caught it. It now asks the daemon what it is through `CLIClient.Info` and
+    `OCIArch`, the same reader production places standing offers from.
+  - Both are test-harness defects and neither changes a production answer. They are
+    recorded here because they are the difference between a phase whose live half
+    ran and a phase that reported skips, and because the first one had been silently
+    true since slice 4.
+  - What phase 3 does not leave finished is one thing above all others, and it is
+    not a locality question. No production deployment can run a workload that
+    declares an Artifact input at all: `cmd/mercator` builds the orchestrator with
+    no `ArtifactCatalog`, so such a Run is refused at intake with
+    `ARTIFACT_CATALOG_UNAVAILABLE`. Artifact durability, Artifact locality, the read
+    a candidate still owes, and the whole Artifact half of preparation are therefore
+    exercised in the Lab and against a MinIO container, and reach no operator until
+    a production object-store client lands. That client, the attachment in
+    [#171](https://github.com/benngarcia/mercator/issues/171), withdrawal on a node
+    in [#170](https://github.com/benngarcia/mercator/issues/170), and a preparation
+    that can be refused and retried are the four things phase 3 hands forward.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1523,11 +1626,13 @@ Phase 3 added:
 - `a-restored-snapshot-is-not-a-copy` (conformance): the execution half of that
   third Rental, on the one machine in the world, so it is the machine the Run
   goes to. The decision prices the whole 40GB read for a checked copy of another
-  version filed under this one's name, the Run then reads all 40GB out of the
-  object store rather than the bytes the machine happened to be holding, and what
-  the machine keeps afterwards is the copy it checked on arrival. A placement
-  corpus cannot reach this: the Booking Decision was right either way, and only an
-  execution can say which bytes the workload was handed.
+  version filed under this one's name, and the Run then reads all 40GB out of the
+  object store rather than the bytes the machine happened to be holding. The
+  restored snapshot is still there afterwards: a workload reads its inputs into
+  its own container, so nothing repaired this machine and the next Run sent here
+  owes the same 640 seconds. A placement corpus cannot reach this: the Booking
+  Decision was right either way, and only an execution can say which bytes the
+  workload was handed.
 - `the-objective-decides-what-wins` (green): one world, two Runs, and the only
   difference between them is the objective each stated. The warm Rental is a
   second from ready at 4 USD an hour, the cold one nearly sixteen minutes at 2.
@@ -1566,12 +1671,17 @@ Phase 3 added:
   demand places it on the machine that cannot keep the promise it was admitted
   on.
 - `a-machine-with-no-room-refuses-the-work` (Lab testdata): capacity Mercator
-  borrows a slot on, twenty gigabytes of disk, and one Run needing a ten gigabyte
-  image and a forty gigabyte dataset. It says nothing about what it holds, so
-  Placement cannot establish the shortfall and selects it, which is the only way
-  a launch can still arrive somewhere it does not fit. The machine refuses the
-  work rather than taking it and filling up partway through, and deleting the
-  refusal fails the execution through `safety.disk_reservation_respected`.
+  borrows a slot on, sixty gigabytes of disk with forty already spent on a checked
+  copy of the version before the one it reads, and one Run needing a ten gigabyte
+  image and the forty gigabyte dataset the catalog names. It says nothing about
+  what it holds, so Placement cannot establish the shortfall and selects it, which
+  is the only way a launch can still arrive somewhere it does not fit. The machine
+  refuses the work rather than taking it and filling up partway through, and
+  deleting the refusal fails the execution through
+  `safety.disk_reservation_respected`. The copy is what makes it the disk half of
+  what a copy is worth as well: counting another version's bytes as this version's
+  leaves the work fitting, and the read that follows fails
+  `safety.artifact_replica_verified`.
 - `a-run-that-cannot-write-its-output-fails` (Lab testdata): a producer on a
   twenty gigabyte machine computing a forty gigabyte checkpoint. Nothing could
   have priced it, because a Run declares which Artifacts it publishes and never
