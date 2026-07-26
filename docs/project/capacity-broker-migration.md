@@ -2502,6 +2502,83 @@ complete because it works against a live provider.
     that observes it inside that window. What admission should do at that bound is a
     decision about refusal policy rather than about the queue's order, and it needs its
     own slice.
+  - Refuted, and repaired in the entry below. Three of the claims here held only for a
+    fleet of one machine, which is the only shape anything recorded in this entry ever
+    built. Both waits were classified by asking whether any candidate carried a Rental
+    Schedule, so the exemption switched off for the whole workspace as soon as anything
+    was running anywhere in it; the "self-correcting" bullet has the defect backwards, a
+    machine that is both occupied and too small holds the queue for exactly as long as
+    it is occupied; and the law could fail only on the ordering step, because it decided
+    which Runs the ordering exempts with the same predicate the production code did.
+
+- [x] 2026-07-26: Classify a wait from what the fleet refused. Two reviewers refuted the
+  entry above. The queue read the two waits off a proxy for what each machine is doing,
+  and every fixture in the slice weighed the fitting Run against an idle fleet, which is
+  the one state in which that proxy agrees with what the machines actually said.
+  - `NO_CAPACITY_FITS` was assigned when no candidate carried a Rental Schedule, and
+    `scheduler.scheduleEvidence` attaches one to every candidate whose Rental holds a
+    Booking whether that candidate is feasible or not. So one machine busy anywhere in
+    the workspace recorded every unplaceable Run as a wait for capacity to come free,
+    which keeps the queue, and a Run that fitted an untouched machine was ordered behind
+    an ask nothing in the fleet can satisfy until that ask's four hour deadline cleared
+    it. Because the classification is re-derived every tick, a continuously busy machine
+    kept the exemption switched off for the whole fleet.
+  - A refusal now states where it is made whether waiting ends it. Capacity the offer
+    says is spent, a Rental Schedule with no open Booking position, and an offer an
+    earlier launch attempt found unavailable are capacity somebody is spending and it
+    comes back. Everything else refused for what the machine is or for what nobody
+    published. `domain.CandidateDecision.CouldHoldOnceFree` is the question the queue
+    asks of one machine, and the two waits are the answer summed over the fleet.
+  - Room is deliberately a refusal waiting does not end, which is a judgment call.
+    Nothing in this tree collects garbage, Mercator observes no other tenant's content
+    and commands no removal of it, so a machine short of room is short of room until
+    somebody adds a disk. It is also the safe direction: a refusal wrongly said to end
+    on its own makes later arrivals wait behind a Run the machine may never take, and a
+    refusal wrongly said to be permanent only stops that Run from holding the queue,
+    where its class bound and its deadline still govern how long it waits. When a
+    runtime reclaims space, what it reclaims will be a fact `Violation.EndedByWaiting`
+    can be set from.
+  - Everything a wait says is now answered over the machines that could hold the Run
+    once free. What it waits behind, because naming work on a machine that will refuse
+    it again tells an operator to wait for nothing. And the projected wait, which is
+    what the deadline rule reads: a Run needing 900GB of a 200GB machine inherited the
+    six hours somebody else declared as a max runtime on it, and was closed
+    `DEADLINE_UNREACHABLE` at its first pass with zero seconds queued, while the
+    identical submission against the identical idle machine was queued and kept for four
+    hours. `a-wait-nobody-can-end-is-not-a-missed-deadline` is that case.
+  - Only Placement may set what a Run is waiting for. A Run held behind work that
+    outranks it weighed no machine at all, so that deferral leaves what the fleet last
+    said standing. Otherwise the exemption undid itself: an impossible ask holds no
+    queue, so it is itself ordered behind the first Run that outranks it, and reading
+    that ordering as an answer about capacity put the ask back in front of the fleet it
+    can never use. `a-wait-the-queue-caused-says-nothing-about-capacity` states it.
+  - A deferral records the fleet it was measured against: how many machines were weighed
+    and how many of them could have held the Run. The reason alone cannot be checked
+    against anything, and a Blueprint can now state both.
+  - `safety.nothing_waits_behind_an_impossible_ask` is stated over that evidence rather
+    than over the reason, which is what the second reviewer's mutation showed it had to
+    be. Deleting the `NO_CAPACITY_FITS` branch reinstated the fleet-emptying defect in
+    full and every one of the thirty-six laws passed, because the law computed
+    impossibility with the same predicate the production code decided the queue with.
+    It now fails by name on exactly that mutation. `safety.service_class_admission_order`
+    reads the same evidence, so the two laws cannot disagree about which Runs are in the
+    queue.
+  - The corpus states the busy fleet at every level.
+    `a-busy-fleet-holds-no-impossible-ask` is the reviewer's own world: two machines,
+    one working for another 45 minutes, and the 50GB Run takes the idle one.
+    `conformance/an-impossible-ask-empties-no-fleet` is two machines with one of them
+    five hours into work of its own, and it now asserts that the Run that fits was never
+    told to wait at all. `TestAnImpossibleAskLeavesABusyFleetRunning` is the same claim
+    through the public API against a node that is already running something.
+  - Every claim has a case that fails without its fix, verified one at a time by
+    mutating the production code and running the fixture: the classification as three
+    green Blueprints and the daemon case, the deadline as a Run refused at its first
+    pass, the ordering clause as a record naming the impossible ask, and the law as a
+    named invariant failure at L1.
+  - Still open, unchanged by this repair. A Run nothing in the fleet can hold stays
+    queued past its class's maximum queue delay until its deadline refuses it, and
+    `liveness.aging_prevents_starvation` calls that starvation on any execution that
+    observes it inside that window.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
