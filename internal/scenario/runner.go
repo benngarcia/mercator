@@ -53,6 +53,7 @@ func Run(backend Backend, sc Scenario) (Result, error) {
 	}
 	defer session.Close()
 	start := sc.World.Start()
+	bookings := seededBookings(sc.World)
 	var failures []string
 	for i, step := range sc.Steps() {
 		switch {
@@ -60,7 +61,7 @@ func Run(backend Backend, sc Scenario) (Result, error) {
 			if err := session.Submit(step.Submit, *step.Request); err != nil {
 				failures = append(failures, fmt.Sprintf("step %d: submit %q: %v", i+1, step.Submit, err))
 			}
-			failures = append(failures, assertExpect(session, start, step.Submit, *step.Expect)...)
+			failures = append(failures, assertExpect(session, start, bookings, step.Submit, *step.Expect)...)
 		case step.Advance != nil:
 			if err := session.AdvanceClock(step.Advance.Duration()); err != nil {
 				failures = append(failures, fmt.Sprintf("step %d: advance %s: %v", i+1, step.Advance.Duration(), err))
@@ -69,7 +70,7 @@ func Run(backend Backend, sc Scenario) (Result, error) {
 			if err := session.Reconcile(step.Reconcile); err != nil {
 				failures = append(failures, fmt.Sprintf("step %d: reconcile %q: %v", i+1, step.Reconcile, err))
 			}
-			failures = append(failures, assertExpect(session, start, step.Reconcile, *step.Expect)...)
+			failures = append(failures, assertExpect(session, start, bookings, step.Reconcile, *step.Expect)...)
 		}
 	}
 	return Result{Failures: failures, Notes: session.Notes()}, nil
@@ -166,7 +167,48 @@ func (rec recordedDecision) describe() string {
 	}
 }
 
-func assertExpect(session Session, start time.Time, name string, expect ExpectSpec) []string {
+// bookingNames is what each name a fixture gives a Booking turns out to be. A
+// Booking a world starts with answers to the name it was seeded under, because
+// that is the identity the Broker holds for it. A Booking a decision creates
+// answers to whatever Mercator hashed, which no fixture can predict and none
+// should: the fixture's name is the corpus's handle for it, so the corpus can
+// say which Booking a later one waits behind.
+type bookingNames map[string]string
+
+func seededBookings(world WorldSpec) bookingNames {
+	names := bookingNames{}
+	for _, schedule := range world.RentalSchedules {
+		if schedule.Running != nil {
+			names[schedule.Running.BookingID] = schedule.Running.BookingID
+		}
+		for _, queued := range schedule.Queued {
+			names[queued.BookingID] = queued.BookingID
+		}
+	}
+	return names
+}
+
+// bind records which Booking a fixture's name turned out to mean, and refuses
+// both ways it can go wrong: a name that meant one Booking and now means
+// another, and two names for one Booking, which is Mercator handing a second Run
+// an identity another Run already holds.
+func (names bookingNames) bind(name, id string) error {
+	if id == "" {
+		return fmt.Errorf("the decision recorded a Booking with no identity")
+	}
+	if held, ok := names[name]; ok && held != id {
+		return fmt.Errorf("expected the Booking already recorded as %q, got %q", held, id)
+	}
+	for other, held := range names {
+		if held == id && other != name {
+			return fmt.Errorf("expected a Booking of its own, got %q, which Mercator already minted for %q", id, other)
+		}
+	}
+	names[name] = id
+	return nil
+}
+
+func assertExpect(session Session, start time.Time, bookings bookingNames, name string, expect ExpectSpec) []string {
 	events, err := session.RunEvents(name)
 	if err != nil {
 		return []string{fmt.Sprintf("run %q: read events: %v", name, err)}
@@ -192,7 +234,7 @@ func assertExpect(session Session, start time.Time, name string, expect ExpectSp
 		}
 	}
 	if expect.Booking != nil {
-		failures = append(failures, assertBooking(rec, start, name, *expect.Booking)...)
+		failures = append(failures, assertBooking(rec, start, bookings, name, *expect.Booking)...)
 	}
 	if expect.Disposition != "" {
 		disposition, ok := latestDisposition(events)
@@ -203,12 +245,12 @@ func assertExpect(session Session, start time.Time, name string, expect ExpectSp
 		}
 	}
 	for _, id := range sortedKeys(expect.Candidates) {
-		failures = append(failures, assertCandidate(rec, name, id, expect.Candidates[id])...)
+		failures = append(failures, assertCandidate(rec, bookings, name, id, expect.Candidates[id])...)
 	}
 	return failures
 }
 
-func assertBooking(rec recordedDecision, start time.Time, name string, expect BookingExpectation) []string {
+func assertBooking(rec recordedDecision, start time.Time, bookings bookingNames, name string, expect BookingExpectation) []string {
 	booking, ok := rec.booking()
 	if !ok {
 		return []string{fmt.Sprintf("run %q: expected Booking %q, but the decision records none", name, expect.BookingID)}
@@ -217,8 +259,8 @@ func assertBooking(rec recordedDecision, start time.Time, name string, expect Bo
 	fail := func(format string, args ...any) {
 		failures = append(failures, fmt.Sprintf("run %q: Booking %q: ", name, expect.BookingID)+fmt.Sprintf(format, args...))
 	}
-	if booking.BookingID != expect.BookingID {
-		fail("expected id %q, got %q", expect.BookingID, booking.BookingID)
+	if err := bookings.bind(expect.BookingID, booking.BookingID); err != nil {
+		fail("%v", err)
 	}
 	if booking.RentalID != expect.RentalID {
 		fail("expected Rental %q, got %q", expect.RentalID, booking.RentalID)
@@ -226,8 +268,8 @@ func assertBooking(rec recordedDecision, start time.Time, name string, expect Bo
 	if booking.State != expect.State {
 		fail("expected state %q, got %q", expect.State, booking.State)
 	}
-	if booking.AfterBookingID != expect.AfterBooking {
-		fail("expected predecessor %q, got %q", expect.AfterBooking, booking.AfterBookingID)
+	if after := bookings[expect.AfterBooking]; booking.AfterBookingID != after {
+		fail("expected predecessor %q (%q), got %q", expect.AfterBooking, after, booking.AfterBookingID)
 	}
 	if booking.ScheduleVersion != expect.ScheduleVersion {
 		fail("expected schedule version %d, got %d", expect.ScheduleVersion, booking.ScheduleVersion)
@@ -254,7 +296,7 @@ func describeTime(value *time.Time) string {
 	return value.Format(time.RFC3339)
 }
 
-func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpectation) []string {
+func assertCandidate(rec recordedDecision, bookings bookingNames, name, id string, expect CandidateExpectation) []string {
 	var failures []string
 	fail := func(format string, args ...any) {
 		failures = append(failures, fmt.Sprintf("run %q: candidate %q: ", name, id)+fmt.Sprintf(format, args...))
@@ -296,7 +338,7 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 		fail("image_locality: want %q, got %q", expect.ImageLocality, candidate.ImageLocality)
 	}
 	if expect.Schedule != nil {
-		failures = append(failures, assertScheduleEvidence(rec, name, id, *expect.Schedule)...)
+		failures = append(failures, assertScheduleEvidence(rec, bookings, name, id, *expect.Schedule)...)
 	}
 	checkBound("artifact_seconds", expect.ArtifactSeconds, candidate.Estimates.ArtifactSeconds.Expected)
 	for _, artifactID := range sortedKeys(expect.Artifacts) {
@@ -376,7 +418,7 @@ type scheduleEvidenceRecord struct {
 	ProjectedStartSeconds float64 `json:"projected_start_seconds"`
 }
 
-func assertScheduleEvidence(rec recordedDecision, name, id string, expect ScheduleEvidenceExpectation) []string {
+func assertScheduleEvidence(rec recordedDecision, bookings bookingNames, name, id string, expect ScheduleEvidenceExpectation) []string {
 	actual, ok := candidateScheduleEvidence(rec, id)
 	if !ok {
 		return []string{fmt.Sprintf("run %q: candidate %q: records no RentalSchedule evidence", name, id)}
@@ -388,7 +430,7 @@ func assertScheduleEvidence(rec recordedDecision, name, id string, expect Schedu
 	if actual.Version != expect.Version {
 		fail("expected schedule version %d, got %d", expect.Version, actual.Version)
 	}
-	if actual.Running == nil || actual.Running.BookingID != expect.Running.BookingID || actual.Running.RunID != expect.Running.RunID ||
+	if actual.Running == nil || actual.Running.BookingID != bookings[expect.Running.BookingID] || actual.Running.RunID != expect.Running.RunID ||
 		actual.Running.RemainingMaxRuntimeSeconds != expect.Running.RemainingMaxRuntime.Duration().Seconds() ||
 		actual.Running.RemainingExpectedRuntimeSeconds != expect.Running.expectedRemaining().Duration().Seconds() {
 		fail("running Booking evidence does not match %+v", *expect.Running)
@@ -398,7 +440,7 @@ func assertScheduleEvidence(rec recordedDecision, name, id string, expect Schedu
 	} else {
 		for i, want := range expect.Preceding {
 			got := actual.Preceding[i]
-			if got.BookingID != want.BookingID || got.RunID != want.RunID ||
+			if got.BookingID != bookings[want.BookingID] || got.RunID != want.RunID ||
 				got.MaxRuntimeSeconds != want.MaxRuntime.Duration().Seconds() ||
 				got.ExpectedRuntimeSeconds != want.expected().Duration().Seconds() {
 				fail("preceding[%d] does not match %+v", i, want)

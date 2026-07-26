@@ -217,11 +217,25 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 		// model invented. The workspace comparison is why it is worth recording:
 		// a cache of the same name in another workspace is a different cache, and
 		// it must never read as warmth on this Run's record.
-		CacheEvidence: domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
-		Disk:          work.disk,
-		Estimates:     estimates,
-		ScoreUSD:      round(score, 6),
+		CacheEvidence:  domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
+		Disk:           work.disk,
+		RentalSchedule: scheduleEvidence(input, offer),
+		Estimates:      estimates,
+		ScoreUSD:       round(score, 6),
 	}
+}
+
+// scheduleEvidence is the Broker state this candidate was weighed against. A
+// Rental with no Bookings on it records none: the queue estimate already says
+// there is nothing to wait for, and an empty schedule offered as evidence reads
+// as a queue that was measured rather than one that does not exist.
+func scheduleEvidence(input SchedulingInput, offer domain.OfferSnapshot) *domain.ScheduleEvidence {
+	schedule, scheduled := input.Schedules[offer.RentalID]
+	if !scheduled || len(schedule.Bookings) == 0 {
+		return nil
+	}
+	evidence := schedule.Evidence(input.EvaluatedAt)
+	return &evidence
 }
 
 func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, work candidateWork) []domain.Violation {

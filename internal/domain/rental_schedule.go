@@ -74,6 +74,36 @@ func (schedule RentalSchedule) ExpectedWaitSeconds(now time.Time) float64 {
 	return seconds
 }
 
+// Evidence is this schedule as a decision reads it at now: which version
+// answered, what holds the Rental, what is already waiting, and the wait that
+// projects from them. It is built here rather than by the caller because the
+// remaining runtimes and the projection are this type's own arithmetic, and a
+// record derived a second way would be a second opinion about one queue.
+func (schedule RentalSchedule) Evidence(now time.Time) ScheduleEvidence {
+	evidence := ScheduleEvidence{
+		Version:               schedule.Version,
+		ProjectedStartSeconds: schedule.ExpectedWaitSeconds(now),
+	}
+	for index, scheduled := range schedule.Bookings {
+		if index == 0 {
+			evidence.Running = &RunningBookingEvidence{
+				BookingID:                       scheduled.Booking.ID,
+				RunID:                           scheduled.Booking.RunID,
+				RemainingMaxRuntimeSeconds:      scheduled.RemainingMaxSeconds(now),
+				RemainingExpectedRuntimeSeconds: scheduled.RemainingExpectedSeconds(now),
+			}
+			continue
+		}
+		evidence.Preceding = append(evidence.Preceding, WaitingBookingEvidence{
+			BookingID:              scheduled.Booking.ID,
+			RunID:                  scheduled.Booking.RunID,
+			MaxRuntimeSeconds:      scheduled.RemainingMaxSeconds(now),
+			ExpectedRuntimeSeconds: scheduled.RemainingExpectedSeconds(now),
+		})
+	}
+	return evidence
+}
+
 func (schedule RentalSchedule) Reserve(request BookingRequest) (RentalSchedule, Booking, error) {
 	if err := validBookingRequest(schedule, request); err != nil {
 		return RentalSchedule{}, Booking{}, err

@@ -739,9 +739,51 @@ type CandidateDecision struct {
 	// a Run that landed nowhere has to be explainable, and a reader who could see
 	// only the seconds could not tell a machine that was passed over from one
 	// with nowhere to put the work.
-	Disk      DiskDemand         `json:"disk,omitzero"`
-	Estimates CandidateEstimates `json:"estimates"`
-	ScoreUSD  float64            `json:"score_usd,omitempty"`
+	Disk DiskDemand `json:"disk,omitzero"`
+	// RentalSchedule is the Broker state this candidate was weighed against,
+	// recorded only for a Rental that has Bookings on it. The queue seconds
+	// beside it are the projection; this is what the projection was read from,
+	// which is what keeps a wait auditable after the schedule has moved on. A
+	// Rental nothing is assigned to records none, because an empty schedule
+	// offered as evidence is a queue nobody has.
+	RentalSchedule *ScheduleEvidence  `json:"rental_schedule,omitempty"`
+	Estimates      CandidateEstimates `json:"estimates"`
+	ScoreUSD       float64            `json:"score_usd,omitempty"`
+}
+
+// ScheduleEvidence is one Rental Schedule as a placement decision read it: the
+// version that answered, the Booking holding the Rental, the Bookings already
+// waiting in front of this Run, and the wait that projects from them. A schedule
+// moves, so the wait a Run was priced was read from one version of it at one
+// moment, and a decision that recorded only the seconds leaves nobody able to
+// retrace them.
+type ScheduleEvidence struct {
+	Version   uint64                   `json:"version"`
+	Running   *RunningBookingEvidence  `json:"running,omitempty"`
+	Preceding []WaitingBookingEvidence `json:"preceding,omitempty"`
+	// ProjectedStartSeconds is how long work arriving now waits for this Rental,
+	// projected from where the Bookings above actually are.
+	ProjectedStartSeconds float64 `json:"projected_start_seconds"`
+}
+
+// RunningBookingEvidence is the Booking holding the Rental. Its runtimes are
+// what it has left rather than what its Run declared, because a Booking
+// twenty-nine minutes into half an hour is one minute of waiting.
+type RunningBookingEvidence struct {
+	BookingID                       string  `json:"booking_id"`
+	RunID                           string  `json:"run_id"`
+	RemainingMaxRuntimeSeconds      float64 `json:"remaining_max_runtime_seconds"`
+	RemainingExpectedRuntimeSeconds float64 `json:"remaining_expected_runtime_seconds"`
+}
+
+// WaitingBookingEvidence is a Booking that has not started. It still owes every
+// second its Run declared, which is why these fields carry the declared names
+// rather than the remaining ones: one field name cannot mean both.
+type WaitingBookingEvidence struct {
+	BookingID              string  `json:"booking_id"`
+	RunID                  string  `json:"run_id"`
+	MaxRuntimeSeconds      float64 `json:"max_runtime_seconds"`
+	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds"`
 }
 
 type CandidateDisposition string
