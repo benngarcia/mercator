@@ -84,6 +84,14 @@ func (s *Service) CreateRevision(ctx context.Context, req CreateRevisionRequest)
 	revision := req.Revision
 	revision.WorkspaceID = req.WorkspaceID
 	revision.WorkloadID = req.WorkloadID
+	// Fill the omissions a minimal create body leaves before validating, which is
+	// the order NormalizeWorkloadRevision documents and the order run intake
+	// already uses. This door stored what it validated, so validating raw input
+	// made the two doors disagree about one body: a revision omitting its service
+	// class was refused here and filled with standard by POST /v1/runs, and a
+	// revision that did get stored raw was served back with no class at all,
+	// which is not a PlacementPolicy the wire contract allows.
+	revision = domain.NormalizeWorkloadRevision(revision)
 	if violations := domain.ValidateWorkloadRevision(revision); len(violations) > 0 {
 		return domain.WorkloadRevision{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
 	}

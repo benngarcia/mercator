@@ -82,6 +82,12 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 	// refused where the Run enters. Ranking such a Run on cost alone would place
 	// interactive work on the slowest machine in the fleet and record a reason
 	// naming a class nothing declared.
+	//
+	// Unlike the bound above, this one is deliberately not read as an effective
+	// value: an omitted class is NormalizeWorkloadRevision's to fill, and filling
+	// it a second time here would let a revision be stored with no class at all
+	// while validation said it had one. Every caller normalises first, so what
+	// reaches this check is a class somebody stated.
 	if !rev.Spec.Placement.Class.Known() {
 		violations = append(violations, Violation{
 			Code: "SERVICE_CLASS_UNKNOWN", Path: "spec.placement.service_class",

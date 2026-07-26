@@ -246,3 +246,53 @@ func TestCreateRunRefusesAServiceClassMercatorCannotPrice(t *testing.T) {
 		t.Fatalf("the refused Run reads %d from the API, and Mercator never accepted it", rec.Code)
 	}
 }
+
+// TestBothDoorsFillTheOmittedServiceClass is the one body that reaches Mercator
+// two ways. A caller who says nothing about the kind of work a Run is gets
+// standard, which prices a second of waiting at what the machine doing the
+// waiting costs, and the two doors have to agree about that: POST /v1/runs
+// carries the whole revision inline, POST /v1/workloads/{id}/revisions stores one
+// for later Runs to name, and a revision stored with no class at all is not a
+// PlacementPolicy this API publishes.
+func TestBothDoorsFillTheOmittedServiceClass(t *testing.T) {
+	handler := newHTTPTestServer(t)
+	createBody := mustMarshal(t, CreateWorkloadRequest{WorkspaceId: "ws_1", WorkloadId: "wrk_1", Name: "trainer"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/workloads", bytes.NewReader(createBody))
+	req.Header.Set("Idempotency-Key", "idem_workload")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create workload returned %d: %s", rec.Code, rec.Body.String())
+	}
+	classless := httpRevision()
+	classless.Spec.Placement = domain.PlacementPolicy{ExpectedRuntimeSeconds: 60}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/workloads/wrk_1/revisions?workspace_id=ws_1", bytes.NewReader(mustMarshal(t, CreateRevisionRequest{Revision: classless})))
+	req.Header.Set("Idempotency-Key", "idem_revision")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("storing a revision that omits its class returned %d: %s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/workloads/wrk_1/revisions/wrev_1?workspace_id=ws_1", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var stored struct {
+		Revision domain.WorkloadRevision `json:"revision"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &stored); err != nil {
+		t.Fatalf("decode the stored revision: %v", err)
+	}
+	if stored.Revision.Spec.Placement.Class != domain.ClassStandard {
+		t.Errorf("the stored revision reads class %q, and a revision the API serves has to state one", stored.Revision.Spec.Placement.Class)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/runs?workspace_id=ws_1", bytes.NewReader(mustMarshal(t, CreateRunRequest{RunId: "run_classless", Workload: classless})))
+	req.Header.Set("Idempotency-Key", "idem_run_classless")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("submitting a Run that omits its class returned %d: %s", rec.Code, rec.Body.String())
+	}
+}
