@@ -1232,8 +1232,17 @@ var localityPaths = map[string]bool{
 // this rule exists to prevent. So a LATENCY_SLO_EXCEEDED rejection must be
 // justified by the candidate's own established start prediction: queue and
 // provisioning, which the offer stated, plus content some inventory answered
-// about. A measured start latency is established too, because that is a
-// measurement about this offer whatever anyone could enumerate.
+// about crossing a path some machine measured. A measured start latency is
+// established too, because that is a measurement about this offer whatever
+// anyone could enumerate.
+//
+// The path is asked about for the same reason the content is. A transfer is
+// bytes over a rate, and a machine nobody has measured the path of is priced
+// from the fleet-wide prior every silent machine is priced from, so seconds out
+// of that prior refuse capacity for a number nothing on the machine answered
+// for. Counting an exact byte count as established and then dividing it by a
+// guess is how a bound could refuse a silence while the record showed nothing
+// but established content.
 //
 // Stating it against the established estimate rather than against "was anything
 // unknown" is what keeps the rule from buying silence an exemption. A machine
@@ -1245,8 +1254,8 @@ var localityPaths = map[string]bool{
 // with the established estimate recorded beside it is asking the scheduler to
 // confirm its own arithmetic: both sides read one number, so the error where that
 // number is the thing computed wrong is invisible. So the second reading
-// recomputes what was discounted from the per-candidate localities and per-kind
-// seconds the decision records independently of the answer it reached.
+// recomputes what was discounted from the localities, the transfer rates, and the
+// per-kind seconds the decision records, independently of the answer it reached.
 func localityIsNeverInfeasibility(observation InvariantObservation) error {
 	decisions, err := recordedDecisions(observation)
 	if err != nil {
@@ -1320,18 +1329,58 @@ func silenceWasTakenBackOut(decision domain.BookingDecision, candidate domain.Ca
 	)
 }
 
-// pricedSilenceSeconds is what this candidate was charged for content nothing
-// could describe, recomputed from the localities the decision recorded and the
-// seconds it recorded per kind of content. The Artifact half converts bytes into
-// seconds through the unreadable share of the read itself, so this rule holds no
-// opinion about the rate the scheduler used and cannot be satisfied by agreeing
-// with it.
+// pricedSilenceSeconds is what this candidate was charged for a launch nobody
+// could describe, recomputed from the localities, the rates, and the seconds the
+// decision recorded per kind of content. It holds no opinion about the arithmetic
+// the scheduler did and cannot be satisfied by agreeing with it: the shares are
+// read off the record's own evidence and applied to the record's own seconds.
+//
+// A duration is bytes over a rate and either one can be a silence. Bytes nobody
+// enumerated are the half this rule was written for. Seconds over a rate nothing
+// on the machine published are the other half and are worth no less: the number
+// dividing them is the same fleet-wide prior every silent machine is given, so a
+// bound refusing capacity on them refuses it for a number nobody answered for.
+// The two silences overlap on a stage that suffered both, and a stage is charged
+// once at whichever share of it was larger, because a stage discounted twice
+// would demand a discount larger than the seconds it was charged.
 func pricedSilenceSeconds(candidate domain.CandidateDecision) float64 {
+	stages := candidate.Estimates.Stages
+	unenumerated := imageIsUnknownShare(candidate.ImageLocality)
 	seconds := 0.0
-	if candidate.ImageLocality == domain.LocalityUnknown {
-		seconds += candidate.Estimates.Stages.ImageFetch.Expected + candidate.Estimates.Stages.Unpack.Expected
+	for _, priced := range []struct {
+		stage    domain.LaunchStage
+		estimate domain.Estimate
+		silent   float64
+	}{
+		{domain.StageImageFetch, stages.ImageFetch, unenumerated},
+		{domain.StageUnpack, stages.Unpack, unenumerated},
+		{domain.StageArtifactFetch, stages.ArtifactFetch, unreadableShare(candidate.ArtifactEvidence)},
+	} {
+		seconds += priced.estimate.Expected * max(priced.silent, guessedRateShare(candidate, priced.stage))
 	}
-	return seconds + candidate.Estimates.Stages.ArtifactFetch.Expected*unreadableShare(candidate.ArtifactEvidence)
+	return seconds
+}
+
+// imageIsUnknownShare is how much of an image a host that cannot enumerate itself
+// is charged for, which is all of it: the whole content is priced because nothing
+// said the bytes are here and nothing said they are not.
+func imageIsUnknownShare(locality domain.LocalityState) float64 {
+	if locality == domain.LocalityUnknown {
+		return 1
+	}
+	return 0
+}
+
+// guessedRateShare is how much of one stage's seconds came out of a rate nobody
+// measured, which is all of them or none: a stage records the one throughput it
+// was priced from, and Mercator's own prior divides every byte of it or none.
+func guessedRateShare(candidate domain.CandidateDecision, stage domain.LaunchStage) float64 {
+	for _, rate := range candidate.TransferRates {
+		if rate.Stage == stage && rate.Assumption != "" {
+			return 1
+		}
+	}
+	return 0
 }
 
 // unreadableShare is how much of what this candidate owes on its declared inputs

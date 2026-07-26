@@ -470,23 +470,46 @@ func labArtifactVersion(publishedAt time.Time) domain.ArtifactVersion {
 	}
 }
 
-// TestNeitherModelTurnsSilenceIntoInfeasibility is the rule at the one place an
-// image locality answer can strike a candidate out. A Run that refuses to wait
-// gets to refuse a machine that was found to be slow; a machine nobody could
-// ask has not been found to be anything. Pricing its silence as the whole image
-// is what stops it outranking a host that is provably ready, and pricing is as
-// far as it may go: the goal is explicit that unknown locality is uncertainty
-// and never a hard constraint. Both models have to say so, because a reference
-// model that struck out the silent candidate would make the production
-// scheduler's refusal to look like a bug.
+// measuredRegistryPath is one machine standing behind a reading of its own link
+// to the registry. It is the rate Mercator would have assumed about a machine
+// that said nothing, on purpose: the seconds are then the same seconds either
+// way, so what a case using it turns on is that a machine published them rather
+// than that this model guessed them.
+func measuredRegistryPath(at time.Time) domain.NetworkFacts {
+	return domain.NetworkFacts{Download: []domain.NetworkFact{{
+		Scope:      domain.NetworkScopeRegistry,
+		Statistic:  "p10",
+		ValueMbps:  domain.DefaultRegistryDownloadMbps,
+		Source:     "node_image_pull",
+		ObservedAt: at.Add(-time.Minute),
+		ValidUntil: at.Add(time.Hour),
+		Confidence: 0.9,
+	}}}
+}
+
+// TestNeitherModelTurnsSilenceIntoInfeasibility is the rule at the one place a
+// start prediction can strike a candidate out. A Run that refuses to wait gets to
+// refuse a machine that was found to be slow, and a machine is only found to be
+// slow when both halves of the finding are somebody's: the bytes it has to move
+// and the rate they move at. A host nobody could ask what it holds has not been
+// found to be anything, and neither has a host that enumerated itself perfectly
+// over a path nothing has ever measured, because what turns its exact byte count
+// into minutes is the fleet-wide prior every silent machine is given. Pricing
+// either silence as the whole fetch is what stops it outranking a host that is
+// provably ready, and pricing is as far as it may go: the goal is explicit that
+// unknown locality is uncertainty and never a hard constraint. Both models have
+// to say so, because a reference model that struck out the silent candidate would
+// make the production scheduler's refusal look like a bug.
 func TestNeitherModelTurnsSilenceIntoInfeasibility(t *testing.T) {
 	for _, machine := range []struct {
 		name      string
 		inventory domain.ImageInventory
+		measured  bool
 		feasible  bool
 	}{
-		{"a Rental that enumerated itself and holds none of the image", domain.ImageInventory{Known: true}, false},
-		{"a machine nothing of Mercator's runs on", domain.ImageInventory{}, true},
+		{"a Rental that enumerated itself, holds none of the image, and measured its link", domain.ImageInventory{Known: true}, true, false},
+		{"a Rental that enumerated itself and holds none of the image over a path nobody measured", domain.ImageInventory{Known: true}, false, true},
+		{"a machine nothing of Mercator's runs on", domain.ImageInventory{}, true, true},
 	} {
 		t.Run(machine.name, func(t *testing.T) {
 			input := smallSchedulingInput(t)
@@ -494,6 +517,10 @@ func TestNeitherModelTurnsSilenceIntoInfeasibility(t *testing.T) {
 			silent := offerFor(t, input, "rental-warm")
 			silent.Images = machine.inventory
 			silent.Images.ObservedAt = input.EvaluatedAt
+			silent.Network = domain.NetworkFacts{}
+			if machine.measured {
+				silent.Network = measuredRegistryPath(input.EvaluatedAt)
+			}
 			input.Offers = []domain.OfferSnapshot{silent}
 
 			production, err := scheduler.New().Evaluate(context.Background(), input)

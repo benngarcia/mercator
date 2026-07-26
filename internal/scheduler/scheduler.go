@@ -842,7 +842,7 @@ func imageEstimates(
 	return imageStage(
 			transferSeconds(work.TransferBytes, registry),
 			work.TransferBytes,
-			registry.Confidence,
+			registry,
 			source,
 			locality,
 			modelVersion,
@@ -850,7 +850,7 @@ func imageEstimates(
 		imageStage(
 			storage.TransferSeconds(work.UnpackBytes),
 			work.UnpackBytes,
-			storage.Confidence,
+			storage,
 			source,
 			locality,
 			modelVersion,
@@ -869,32 +869,57 @@ func transferSeconds(bytes int64, link domain.LinkSpeed) float64 {
 
 // imageStage is one stage of getting an image ready, priced from the bytes it
 // has to move and the rate they move at.
-func imageStage(seconds float64, bytes int64, rateConfidence float64, source string, locality domain.LocalityState, modelVersion string) contentWork {
+func imageStage(seconds float64, bytes int64, rate domain.LinkSpeed, source string, locality domain.LocalityState, modelVersion string) contentWork {
 	estimate := domain.Estimate{Source: source, ModelVersion: modelVersion}
 	if bytes == 0 {
 		if locality != domain.LocalityUnknown {
 			estimate.Confidence = 1
 		}
-		return establishedIfDescribed(estimate, locality)
+		return establishedIfDescribed(estimate, locality, rate)
 	}
 	estimate.Expected, estimate.P50, estimate.P90 = seconds, seconds, seconds*1.5
-	estimate.Confidence = rateConfidence
+	estimate.Confidence = rate.Confidence
 	if locality == domain.LocalityUnknown {
 		estimate.Confidence = min(estimate.Confidence, domain.AssumedLinkConfidence)
 	}
-	return establishedIfDescribed(estimate, locality)
+	return establishedIfDescribed(estimate, locality, rate)
 }
 
 // establishedIfDescribed splits one image prediction into the whole price and
 // the part of it somebody established. A host that could not say what it holds
 // is charged this whole image and establishes none of it: nothing said the bytes
 // are here, and nothing said they are not. Every other answer counts bytes a
-// manifest and an inventory both spoke about.
-func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalityState) contentWork {
+// manifest and an inventory both spoke about, for as long as the seconds they
+// buy are established too.
+func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalityState, rate domain.LinkSpeed) contentWork {
 	if locality == domain.LocalityUnknown {
 		return contentWork{predicted: estimate}
 	}
-	return contentWork{predicted: estimate, established: estimate}
+	return contentWork{predicted: estimate, established: establishedOverAMeasuredPath(estimate, rate)}
+}
+
+// establishedOverAMeasuredPath is the second half of the same question, asked of
+// the rate rather than the bytes. Seconds are the product of the two and either
+// one can be a silence, so a byte count a manifest and an inventory both spoke
+// about still buys a duration nobody established when what divides it is
+// Mercator's own fleet-wide prior.
+//
+// It exists because the established half is what a Run's hard start bound is
+// allowed to refuse capacity on, and a machine nothing has measured the path of
+// would otherwise be struck out for a number nothing on it answered for. That is
+// silence about a path becoming infeasibility by arithmetic, which the goal
+// forbids in the same words it forbids it for locality. Priced is as far as
+// either silence may go, and the prediction still charges every one of those
+// seconds, so the unmeasured machine never outranks one that measured a fast
+// path.
+//
+// Nothing to move is nothing to wait for at any rate at all, so a stage with no
+// bytes establishes its zero over a path nobody has ever described.
+func establishedOverAMeasuredPath(estimate domain.Estimate, rate domain.LinkSpeed) domain.Estimate {
+	if estimate.Expected > 0 && !rate.Measured() {
+		return domain.Estimate{}
+	}
+	return estimate
 }
 
 // artifactEstimate prices what this candidate would still have to read out of
@@ -916,9 +941,10 @@ func artifactEstimate(inventory domain.ArtifactInventory, content candidateConte
 	if len(content.evidence) == 0 {
 		return contentWork{predicted: domain.Estimate{Source: source, ModelVersion: modelVersion}}
 	}
+	answered := objectStoreRead(establishedFetchBytes(content.evidence), store, source, modelVersion)
 	return contentWork{
 		predicted:   objectStoreRead(content.fetch, store, source, modelVersion),
-		established: objectStoreRead(establishedFetchBytes(content.evidence), store, source, modelVersion),
+		established: establishedOverAMeasuredPath(answered, store),
 	}
 }
 

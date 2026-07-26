@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "One Run that refuses to wait more than three minutes to start, and two machines at one price that would both take nearly five. The Rental enumerated itself and holds none of the image, so it is struck out: that is a measured fact about a machine, and a hard bound is what a Run gets to do with one. The borrowed host cannot be asked at all, and the same bound must not strike it out, because nobody has established that it is slow. Silence is priced as the whole fetch so a machine nobody can describe never outranks one provably ready, and priced is as far as it goes. Turn that pricing into a rejection and the Run finds no capacity at all, on a machine that may already be holding every byte. What the decision must not do is call the placement compliant: the prediction is over the bound and rests on nothing, so it records START_SLO_UNVERIFIED rather than a promise made out of silence.",
+  "summary": "One Run that refuses to wait more than three minutes to start, and two machines at one price that would both take nearly five. The Rental enumerated itself, holds none of the image, and published what its link to the registry delivers, so both halves of its five minutes are somebody's measurement and it is struck out: that is what a hard bound is for. It publishes the same number Mercator would have assumed about it, which is deliberate: the seconds are the seconds either way, and what makes them refusable is that a machine said them rather than that this model guessed them. The borrowed host cannot be asked at all, and the same bound must not strike it out, because nobody has established that it is slow. Silence is priced as the whole fetch so a machine nobody can describe never outranks one provably ready, and priced is as far as it goes. Turn that pricing into a rejection and the Run finds no capacity at all, on a machine that may already be holding every byte. What the decision must not do is call the placement compliant: the prediction is over the bound and rests on nothing, so it records START_SLO_UNVERIFIED rather than a promise made out of silence.",
   "classification": "green",
   "world": {
     "images": {
@@ -28,6 +28,9 @@
         "id": "silent-host",
         "rate_per_hour_usd": 2.0
       }
+    ],
+    "paths": [
+      {"from": "empty-rental", "to": "registry.example", "scope": "registry", "p10_mbps": 500, "confidence": 0.9}
     ]
   },
   "timeline": [

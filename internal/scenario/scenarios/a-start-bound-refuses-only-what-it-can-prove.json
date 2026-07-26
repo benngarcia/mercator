@@ -1,0 +1,78 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One Run that refuses to wait a quarter of an hour to start, and two machines holding the whole image that both have to read the same forty gigabytes. One measured its path to the object store at 200 Mbps and published it, which is nearly half an hour of reading and a p90 of forty minutes, and is why the bound strikes it out: a Run gets to refuse a machine that is known to be late. The other has never measured that path, so the only thing known about it is the byte count, and the seconds are Mercator's own prior divided into them. That prior is what ranks it and it is not what refuses it: a duration over a rate nobody stands behind is a guess, and refusing capacity on a guess is how silence about a path becomes infeasibility. So the unmeasured machine is the placement, and the decision says so honestly, recording START_SLO_UNVERIFIED rather than a promise it cannot make out of its own assumption. Restore the assumed seconds to the established start and this Run finds no capacity at all, on two machines that may both be a minute from ready.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-that-measured-a-slow-path",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-nobody-measured-the-path-of",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "paths": [
+      {"from": "rental-that-measured-a-slow-path", "to": "objects.example", "scope": "object_store", "p10_mbps": 200, "confidence": 0.9}
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "service_class": "standard",
+    "max_start_latency": "15m",
+    "expected_runtime": "20m",
+    "max_runtime": "1h",
+    "consumes_artifacts": ["artifact:imagenet:v2.41"]
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-nobody-measured-the-path-of",
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD", "START_SLO_UNVERIFIED"],
+    "candidates": {
+      "rental-that-measured-a-slow-path": {
+        "feasible": false,
+        "image_locality": "hot",
+        "stages": {
+          "artifact_fetch": {
+            "seconds": 1600,
+            "source": "artifact_inventory",
+            "confidence": 0.9,
+            "rate": {"mbps": 200, "measurement": "blueprint_path"}
+          }
+        },
+        "artifact_evidence": {"artifact:imagenet:v2.41": "miss"},
+        "rejected": [{"code": "LATENCY_SLO_EXCEEDED", "path": "placement.max_p90_start_seconds"}]
+      },
+      "rental-nobody-measured-the-path-of": {
+        "feasible": true,
+        "image_locality": "hot",
+        "stages": {
+          "artifact_fetch": {
+            "seconds": 640,
+            "source": "artifact_inventory",
+            "confidence": 0.5,
+            "rate": {"mbps": 500, "assumption": "assumed_object_store_rate"}
+          }
+        },
+        "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+      }
+    }
+  }
+}

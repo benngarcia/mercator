@@ -413,6 +413,15 @@ type LinkSpeed struct {
 	Assumption string
 }
 
+// Measured reports whether some machine really published this number about this
+// path. It is what separates a duration Mercator may hold a candidate to from
+// one it may only price the candidate at: an assumed rate is the same fleet-wide
+// prior every silent machine is given, so the seconds derived from it are
+// Mercator's own opinion however exactly the bytes were counted.
+func (speed LinkSpeed) Measured() bool {
+	return speed.Measurement != ""
+}
+
 // DownloadRate is this host's pessimistic (p10) throughput over one kind of
 // path. A published fact is only worth what its publisher said it was worth, and
 // only while its publisher still stands behind it: a fact carries its own

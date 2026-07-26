@@ -253,6 +253,13 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		established.ImageFetch = domain.Estimate{}
 		established.Unpack = domain.Estimate{}
 	}
+	// So are seconds nobody measured the path of. A byte count an inventory
+	// answered about exactly is still divided by the same prior every silent
+	// machine is given, and a bound refusing capacity on that quotient refuses it
+	// for a number nothing on the machine ever published.
+	established.ImageFetch = referenceEstablished(established.ImageFetch, registry)
+	established.Unpack = referenceEstablished(established.Unpack, storage)
+	established.ArtifactFetch = referenceEstablished(established.ArtifactFetch, store)
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
 		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
@@ -268,6 +275,17 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		EstablishedStartSeconds: referenceStart(queue, established),
 		CostUSD:                 referenceCost(offer, billed),
 	}
+}
+
+// referenceEstablished is this model's own reading of which half of a transfer
+// prediction rests on somebody's measurement. Nothing to move is nothing to wait
+// for whatever the path, and every other duration is only as established as the
+// rate that produced it.
+func referenceEstablished(estimate domain.Estimate, rate domain.LinkSpeed) domain.Estimate {
+	if estimate.Expected > 0 && !rate.Measured() {
+		return domain.Estimate{}
+	}
+	return estimate
 }
 
 // referenceCost is what this model says running here is billed at. It states the

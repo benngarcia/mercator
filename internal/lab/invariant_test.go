@@ -1235,7 +1235,15 @@ func queuedOnADeadlineAlreadyReached(evaluatedAt time.Time) eventlog.CloudEvent 
 // what a scheduler counting a silence as established produces, and it is what the
 // mutation cases in warming_test.go drive through a real execution.
 //
-// The last two are lawful. A measured start latency for this offer is a
+// The third is the same mistake made about the other half of a duration, and it
+// is the one an exact byte count disguises: this machine enumerated its copies
+// and holds none of them, so nothing about the fetch is unknown except how fast
+// the path carries it, and the seconds it was refused on came out of the prior
+// every silent machine is priced from. Its lawful twin beside it changes one
+// field, the provenance of the rate, which is the whole difference between a
+// machine found to be slow and a machine Mercator guessed about.
+//
+// The last two are lawful for reasons of their own. A measured start latency for this offer is a
 // measurement whatever anyone could enumerate. And a machine already deep in its
 // own stated queue is late whatever it could say about its disk, so one
 // unreadable input must not buy it an exemption from the bound: the silence was
@@ -1246,6 +1254,26 @@ func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 		Locality:   domain.LocalityUnknown,
 		FetchBytes: 40_000_000_000,
 	}}
+	// The same forty gigabytes on a machine that enumerated its copies and holds
+	// none of them. The byte count is a fact here, which is what leaves the pair
+	// of refusals below turning on the rate alone.
+	enumeratedDataset := []domain.ArtifactEvidence{{
+		ArtifactID: "artifact:imagenet:v2.41",
+		Locality:   domain.LocalityCold,
+		FetchBytes: 40_000_000_000,
+	}}
+	readAt := func(rate domain.TransferRate) domain.CandidateDecision {
+		return domain.CandidateDecision{
+			ImageLocality:    domain.LocalityHot,
+			ArtifactEvidence: enumeratedDataset,
+			TransferRates:    []domain.TransferRate{rate},
+			Estimates: domain.CandidateEstimates{
+				Stages:                  domain.LaunchStageEstimates{ArtifactFetch: domain.Estimate{Expected: 640}},
+				StartSeconds:            domain.Estimate{Expected: 641, P90: 961},
+				EstablishedStartSeconds: domain.Estimate{Expected: 641, P90: 961},
+			},
+		}
+	}
 	for _, refusal := range []struct {
 		name      string
 		candidate domain.CandidateDecision
@@ -1280,6 +1308,29 @@ func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 					EstablishedStartSeconds: domain.Estimate{Expected: 930, P90: 1394},
 				},
 			},
+		},
+		{
+			name: "a guess about the path counted as established",
+			candidate: readAt(domain.TransferRate{
+				Stage:      domain.StageArtifactFetch,
+				Scope:      domain.NetworkScopeObjectStore,
+				Mbps:       domain.DefaultObjectStoreDownloadMbps,
+				Bytes:      40_000_000_000,
+				Confidence: domain.AssumedLinkConfidence,
+				Assumption: domain.AssumptionObjectStoreRate,
+			}),
+		},
+		{
+			name: "a path this machine measured itself",
+			candidate: readAt(domain.TransferRate{
+				Stage:       domain.StageArtifactFetch,
+				Scope:       domain.NetworkScopeObjectStore,
+				Mbps:        domain.DefaultObjectStoreDownloadMbps,
+				Bytes:       40_000_000_000,
+				Confidence:  0.9,
+				Measurement: "node_artifact_copy",
+			}),
+			lawful: true,
 		},
 		{
 			name: "a start latency measured on this offer",
