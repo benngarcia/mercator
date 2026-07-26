@@ -521,6 +521,11 @@ type World struct {
 	// world rather than about any machine: a runtime that started a container
 	// cannot see whether the thing inside it is serving.
 	ApplicationReadySpend time.Duration
+	// ApplicationBecomesReady is whether the applications here ever report they can
+	// do work. A world that says they never do is the failure mode the readiness
+	// stage exists to expose, and it has to be stated because a spend of nothing is
+	// already a world where a process is serving the instant it exists.
+	ApplicationBecomesReady bool
 	// readiness is every workload that will report itself ready and has not done
 	// so yet, keyed by launch key. A workload reports once, so an entry is dropped
 	// when it is handed over: a report re-delivered on every look would tell
@@ -682,6 +687,12 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 	// own clock. World truth stays above: this world knows when the container
 	// really began, and the host reporting it does not know its clock is wrong.
 	w.statedStarts[request.LaunchKey] = startsAt.Add(machine.ClockAhead)
+	if !w.ApplicationBecomesReady {
+		// A world whose applications never come up records no readiness at all,
+		// which is a different world from one whose applications are serving the
+		// instant their process exists.
+		return
+	}
 	readyAt := startsAt.Add(w.ApplicationReadySpend)
 	w.readyAt[request.LaunchKey] = readyAt
 	w.readiness[request.LaunchKey] = ReadinessReport{

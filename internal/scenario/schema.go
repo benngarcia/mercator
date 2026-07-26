@@ -200,7 +200,22 @@ type LaunchSpec struct {
 	// never the Run's declaration: a fixture states both, and the gap between
 	// them is what a calibration reads.
 	ApplicationReady *Duration `json:"application_ready,omitempty"`
+	// ApplicationNeverReady is a world where the workload's process runs and the
+	// application behind it never reports that it can do work. It is the failure
+	// mode the readiness stage exists to expose, and it is stated rather than
+	// derived because an omitted duration already means something here: every other
+	// stage reads silence as a world that spends nothing on it, and a readiness of
+	// nothing is a legitimate world where a process is serving the instant it
+	// exists. Without this, no fixture could say a workload started and never came
+	// up, and the guard that skips a launch which has not become ready was
+	// unreachable in both worlds.
+	ApplicationNeverReady bool `json:"application_never_ready,omitempty"`
 }
+
+// ApplicationBecomesReady is whether the applications in this world ever report
+// they can do work. A world that says they never do measures no readiness at all,
+// which is a different record from one measuring zero seconds of it.
+func (spec LaunchSpec) ApplicationBecomesReady() bool { return !spec.ApplicationNeverReady }
 
 // UnpackSpend is what assembling content costs here.
 func (spec LaunchSpec) UnpackSpend() time.Duration { return stated(spec.Unpack) }
@@ -1624,6 +1639,12 @@ func (step StepSpec) validate(submitted map[string]bool) error {
 }
 
 func (w WorldSpec) validate() error {
+	// A world cannot both time the readiness of its applications and say they never
+	// become ready. Reading one of the two silently would make the fixture's own
+	// sentence undecidable.
+	if w.Launch.ApplicationNeverReady && w.Launch.ApplicationReady != nil {
+		return fmt.Errorf("launch states application_ready and application_never_ready, which are two different worlds")
+	}
 	for ref, image := range w.Images {
 		if !ociImageRefPattern.MatchString(ref) {
 			return fmt.Errorf("image %q must be digest-pinned", ref)

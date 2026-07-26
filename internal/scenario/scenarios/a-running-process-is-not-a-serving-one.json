@@ -1,0 +1,67 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One Run on one idle Rental that holds the image assembled, so the only stages left are the container starting and the application coming up. The container runtime hands back a process twenty seconds in, and the application behind it never says it can do work. That is the failure mode the readiness stage exists to expose, and it is the one world neither simulator could state: every started workload reported ready, and a fixture that said nothing about readiness got a report at the same instant its container started, so thirty fixtures asserted by default that a running process is a serving one. Ten minutes later the Run is still running and the record still carries a start and no readiness, which is the honest answer rather than a readiness of zero seconds. The workload declares two minutes of expected readiness all the same, because that declaration is the only prediction of this stage there is and a prediction with no actual is exactly what a calibration has to be able to see.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "500MB"}
+        ]
+      }
+    },
+    "launch": {
+      "container_start": "20s",
+      "application_never_ready": true
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e"],
+        "rate_per_hour_usd": 4.0
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "stuck",
+      "request": {
+        "image": "server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e",
+        "service_class": "standard",
+        "expected_runtime": "30m",
+        "max_runtime": "1h",
+        "expected_ready": "2m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+        "disposition": "release",
+        "no_start_observed": true,
+        "no_ready_reported": true,
+        "candidates": {
+          "rental-warm": {
+            "feasible": true,
+            "image_locality": "hot",
+            "stages": {
+              "container_start": {"seconds": 1, "source": "scheduler"},
+              "application_ready": {"seconds": 120, "source": "workload.expected_ready"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "advance": "10m"
+    },
+    {
+      "reconcile": "stuck",
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "start_latency_seconds": 20,
+        "no_ready_reported": true
+      }
+    }
+  ]
+}

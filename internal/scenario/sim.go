@@ -56,6 +56,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		world.DefineArtifact(version)
 	}
 	world.ApplicationReadySpend = spec.Launch.ApplicationReadySpend()
+	world.ApplicationBecomesReady = spec.Launch.ApplicationBecomesReady()
 	for _, rental := range spec.Rentals {
 		if err := world.AddMachine(simMachine(spec, rental, spec.rentalSchedule(rental.ID), clock)); err != nil {
 			return nil, err

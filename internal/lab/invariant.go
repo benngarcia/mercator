@@ -315,6 +315,14 @@ func predictionIsRecordedAgainstItsActual(observation InvariantObservation) erro
 		}
 		for _, stage := range domain.LaunchStages {
 			seconds, simulated := spent[string(stage)]
+			if !simulated && waterfall.unreached[runID][stage] {
+				// A stage this launch never reached has nothing to measure, and the
+				// world said so rather than leaving it to be read off the absence. A
+				// workload that never comes up is the failure mode the readiness stage
+				// exists to expose, and demanding an actual for it would make that
+				// world unstatable.
+				continue
+			}
 			if !simulated {
 				return fmt.Errorf("Run %q launched and the ledger reports no %s actual, so that prediction is measured against nothing", runID, stage)
 			}

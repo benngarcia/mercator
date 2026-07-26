@@ -90,3 +90,61 @@ func TestEveryStageOfALaunchHasAnActual(t *testing.T) {
 		t.Fatalf("the application was ready %s after its process began, and this world takes four minutes", gap)
 	}
 }
+
+// TestAWorkloadThatNeverBecomesReadyMeasuresNoReadiness is the failure mode the
+// readiness stage exists to expose, driven at L1. A container starts, the
+// application behind it never reports it can do work, and the record has to say
+// three things without contradicting itself: the seven stages this launch reached
+// each have an actual, the eighth has none, and the reason it has none is that the
+// world says this workload never came up rather than that nothing timed it.
+//
+// The three readings of a missing readiness are wrong in different directions, which
+// is why the ledger states which one this is. A measured zero says the application
+// was serving the instant its process existed. An untimed stage says a launch path
+// lost its accounting. Neither is this world.
+func TestAWorkloadThatNeverBecomesReadyMeasuresNoReadiness(t *testing.T) {
+	execution := openConformanceExecution(t, "a-workload-that-never-becomes-ready")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 4 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("a workload that never became ready broke a standing rule: %v", err)
+	}
+
+	rows := bundlePredictions(t, execution)
+	ready := rows[string(domain.StageApplicationReady)+"_seconds"]
+	if ready.ActualSource != "launch_never_reached_stage" || ready.ActualSeconds != 0 {
+		t.Fatalf("the readiness row is sourced %q at %.2fs, and this world's application never reported at all",
+			ready.ActualSource, ready.ActualSeconds)
+	}
+	if ready.PredictedSeconds != 120 {
+		t.Fatalf("readiness was predicted %.2fs, and this workload declared two minutes of it",
+			ready.PredictedSeconds)
+	}
+	// The seven stages before it are measured, because the launch reached every one
+	// of them. A rule that let an unreached stage through would have to keep holding
+	// the rest, and this is where that is checked.
+	for _, stage := range domain.LaunchStages {
+		if stage == domain.StageApplicationReady {
+			continue
+		}
+		row := rows[string(stage)+"_seconds"]
+		if row.ActualSource != "effect_ledger.launch.stage_seconds" {
+			t.Fatalf("the %s actual came from %q, and this launch reached that stage", stage, row.ActualSource)
+		}
+	}
+	for _, run := range labRunRecords(t, execution) {
+		if run.ReadyAt != nil {
+			t.Fatalf("Run %q records an application readiness of %s in a world whose applications never report one",
+				run.ID, run.ReadyAt.Format(time.RFC3339Nano))
+		}
+	}
+}

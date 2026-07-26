@@ -264,6 +264,11 @@ type stageWaterfall struct {
 	predicted map[string]domain.LaunchStageEstimates
 	launched  map[string]bool
 	actual    map[string]map[string]float64
+	// unreached is the stages this launch never got to, which the world states
+	// rather than leaving to be inferred from a missing duration. A launch whose
+	// application never comes up has no readiness to measure, and that is a
+	// different record from a launch whose readiness nothing timed.
+	unreached map[string]map[domain.LaunchStage]bool
 }
 
 // records is one row per stage for this Run, in the order a launch goes through
@@ -289,8 +294,13 @@ func (waterfall stageWaterfall) records(runID string) []predictionActualRecord {
 		if waterfall.launched[runID] {
 			// A launch that reported no duration for this stage is named as that
 			// rather than as a measured zero, because a calibration reading zero
-			// seconds off a stage nobody timed would train on it.
+			// seconds off a stage nobody timed would train on it. A stage the launch
+			// never reached is named as that too, and it is a third thing again: the
+			// world says this workload never came up, so there was nothing to time.
 			row.ActualSource = "launch_reported_no_actual"
+			if waterfall.unreached[runID][stage] {
+				row.ActualSource = "launch_never_reached_stage"
+			}
 		}
 		if seconds, measured := actual[string(stage)]; measured {
 			row.ActualSeconds = seconds
@@ -306,6 +316,7 @@ func stageWaterfalls(effects []EffectRecord, mercatorEvents []eventlog.CloudEven
 		predicted: map[string]domain.LaunchStageEstimates{},
 		launched:  map[string]bool{},
 		actual:    map[string]map[string]float64{},
+		unreached: map[string]map[domain.LaunchStage]bool{},
 	}
 	for _, event := range mercatorEvents {
 		if event.Type != orchestrator.EventBookingDecided {
@@ -325,10 +336,19 @@ func stageWaterfalls(effects []EffectRecord, mercatorEvents []eventlog.CloudEven
 		}
 		waterfall.launched[effect.CorrelationID] = true
 		var consequence struct {
-			StageSeconds map[string]float64 `json:"stage_seconds"`
+			StageSeconds            map[string]float64 `json:"stage_seconds"`
+			ApplicationBecomesReady *bool              `json:"application_becomes_ready"`
 		}
-		if json.Unmarshal(effect.Consequence, &consequence) == nil && consequence.StageSeconds != nil {
+		if json.Unmarshal(effect.Consequence, &consequence) != nil {
+			continue
+		}
+		if consequence.StageSeconds != nil {
 			waterfall.actual[effect.CorrelationID] = consequence.StageSeconds
+		}
+		if consequence.ApplicationBecomesReady != nil && !*consequence.ApplicationBecomesReady {
+			waterfall.unreached[effect.CorrelationID] = map[domain.LaunchStage]bool{
+				domain.StageApplicationReady: true,
+			}
 		}
 	}
 	return waterfall, nil

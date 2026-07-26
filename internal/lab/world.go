@@ -1236,7 +1236,12 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 	execution.AssembledAt = later(execution.ImageAt, execution.ArtifactsAt).
 		Add(world.unpackSpend(execution.OfferID, request.Image))
 	execution.StartedAt = execution.AssembledAt.Add(world.launch.ContainerStartSpend())
-	execution.ApplicationReadyAt = execution.StartedAt.Add(world.launch.ApplicationReadySpend())
+	// A world whose applications never come up leaves this absent rather than equal
+	// to the start, which is the difference between a process that is serving the
+	// instant it exists and one that never serves at all.
+	if world.launch.ApplicationBecomesReady() {
+		execution.ApplicationReadyAt = execution.StartedAt.Add(world.launch.ApplicationReadySpend())
+	}
 	execution.CompletesAt = execution.StartedAt.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID))
 	world.executions[request.LaunchKey] = execution
 	// The caches this launch declared are opened with the container, which is at
@@ -1994,19 +1999,26 @@ func (world *simulatedWorld) matchEventFault(eventType, runID string) *scenario.
 // machine became ready: a fixture that says a machine boots for four minutes and
 // enrolls for thirty seconds has stated two actuals, and folding them back into
 // one would delete the fact the record exists to carry.
+// stageSeconds is what this launch spent on each stage it reached. A stage the
+// launch never reached carries no duration at all, because a stage that did not
+// happen and a stage that happened instantly are opposite facts and a calibration
+// reading the first as a zero would train on it.
 func (world *simulatedWorld) stageSeconds(execution externalExecution) map[string]float64 {
 	machine := world.truth[execution.OfferID].provisioning
 	content := later(execution.ImageAt, execution.ArtifactsAt)
-	return map[string]float64{
-		string(domain.StageAcquisition):      machine.AcquisitionSpend().Seconds(),
-		string(domain.StageBoot):             machine.BootSpend().Seconds(),
-		string(domain.StageAgentReady):       machine.AgentReadySpend().Seconds(),
-		string(domain.StageImageFetch):       execution.ImageAt.Sub(execution.ReadyAt).Seconds(),
-		string(domain.StageArtifactFetch):    execution.ArtifactsAt.Sub(execution.ReadyAt).Seconds(),
-		string(domain.StageUnpack):           execution.AssembledAt.Sub(content).Seconds(),
-		string(domain.StageContainerStart):   execution.StartedAt.Sub(execution.AssembledAt).Seconds(),
-		string(domain.StageApplicationReady): execution.ApplicationReadyAt.Sub(execution.StartedAt).Seconds(),
+	spent := map[string]float64{
+		string(domain.StageAcquisition):    machine.AcquisitionSpend().Seconds(),
+		string(domain.StageBoot):           machine.BootSpend().Seconds(),
+		string(domain.StageAgentReady):     machine.AgentReadySpend().Seconds(),
+		string(domain.StageImageFetch):     execution.ImageAt.Sub(execution.ReadyAt).Seconds(),
+		string(domain.StageArtifactFetch):  execution.ArtifactsAt.Sub(execution.ReadyAt).Seconds(),
+		string(domain.StageUnpack):         execution.AssembledAt.Sub(content).Seconds(),
+		string(domain.StageContainerStart): execution.StartedAt.Sub(execution.AssembledAt).Seconds(),
 	}
+	if !execution.ApplicationReadyAt.IsZero() {
+		spent[string(domain.StageApplicationReady)] = execution.ApplicationReadyAt.Sub(execution.StartedAt).Seconds()
+	}
+	return spent
 }
 
 func (world *simulatedWorld) recordLaunchEffect(request adapter.LaunchRequest, command EffectCommand, response EffectResponse, consequence any, faultID string) {
@@ -2027,6 +2039,11 @@ func (world *simulatedWorld) recordLaunchEffect(request adapter.LaunchRequest, c
 			"start_latency_seconds":  execution.StartedAt.Sub(execution.AcceptedAt).Seconds(),
 			"actual_runtime_seconds": execution.CompletesAt.Sub(execution.StartedAt).Seconds(),
 			"stage_seconds":          world.stageSeconds(execution),
+			// Whether the application behind this process ever comes up here. It is
+			// stated rather than inferred from the missing duration, because a stage
+			// with no actual is either a stage this world never reached or a stage
+			// nothing timed, and only the world can say which.
+			"application_becomes_ready": world.launch.ApplicationBecomesReady(),
 		}
 	}
 	world.recordEffect(
