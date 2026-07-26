@@ -47,7 +47,9 @@ type PrepareItem struct {
 	// being wanted when that Booking does.
 	RunID string
 	// Image is the digest-pinned reference to pull, and Platform is the build
-	// this host would run. A tag is never image identity.
+	// this host would run. A tag is never image identity, which is enforced
+	// where a Run is admitted: intake refuses an unpinned reference, so the
+	// digest below is content Mercator can name rather than a hope.
 	Image    string
 	Platform domain.Platform
 	// ArtifactID and ContentDigest are the version to replicate and what its
@@ -64,6 +66,11 @@ type PrepareItem struct {
 // Content is what this item names, in the vocabulary the holder reports. It is
 // the identity a ledger and a host both address this content by, so one item
 // wanted by two Runs is one piece of content rather than two.
+//
+// It is never empty. An image reaches here from an admitted Run, and a Run
+// whose image is not digest-pinned is refused at intake, so the digest is
+// present: an empty identity would be a prefix of every other one and would
+// make two different images look like one piece of content.
 func (item PrepareItem) Content() string {
 	if item.Kind == PrepareImage {
 		return domain.ReferenceDigest(item.Image)

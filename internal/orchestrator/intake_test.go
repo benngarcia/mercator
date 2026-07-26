@@ -23,7 +23,7 @@ func TestIntakeImageShorthandCreatesAndAdvances(t *testing.T) {
 		Image:          "busybox:latest",
 		Args:           []string{"echo", "hi"},
 		ResolveImage: func(_ context.Context, image, _ string) (string, string, error) {
-			return image + "@sha256:deadbeef", "linux/amd64", nil
+			return image + "@sha256:dededededededededededededededededededededededededededededededede", "linux/amd64", nil
 		},
 	})
 	if err != nil {
@@ -43,7 +43,7 @@ func TestIntakeImageShorthandCreatesAndAdvances(t *testing.T) {
 	for _, event := range events {
 		joined += string(event.Data) + string(event.PrivateData)
 	}
-	if !strings.Contains(joined, "@sha256:deadbeef") {
+	if !strings.Contains(joined, "@sha256:dededededededededededededededededededededededededededededededede") {
 		t.Fatalf("expected pinned image in events, got %s", joined)
 	}
 }
@@ -55,7 +55,7 @@ func TestIntakeReplayReturnsOriginalRun(t *testing.T) {
 		IdempotencyKey: "idem_intake_replay",
 		Image:          "busybox:latest",
 		ResolveImage: func(_ context.Context, image, _ string) (string, string, error) {
-			return image + "@sha256:deadbeef", "linux/amd64", nil
+			return image + "@sha256:dededededededededededededededededededededededededededededededede", "linux/amd64", nil
 		},
 	}
 	first, err := orch.Intake(context.Background(), req)
