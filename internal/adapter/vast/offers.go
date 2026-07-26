@@ -58,8 +58,16 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 		}
 		vendor := gpuVendor(o.GPUArch)
 		snapshots = append(snapshots, domain.OfferSnapshot{
-			ID:         "off_vast_" + strconv.FormatInt(o.ID, 10),
-			Kind:       domain.OfferKindProvisionable,
+			ID:   "off_vast_" + strconv.FormatInt(o.ID, 10),
+			Kind: domain.OfferKindProvisionable,
+			// The ask ID above is a fresh integer for every search of the same
+			// machine, so it is the one field a launch history must never be filed
+			// under. What recurs here is where the machine is and what card it
+			// holds, and Vast publishes both: geolocation states the place, and the
+			// accelerator inventory below states the product, because Vast sells
+			// asks against machines rather than named instance types and so states
+			// no InstanceType at all.
+			Region:     o.Geolocation,
 			NativeRef:  strconv.FormatInt(o.ID, 10),
 			ObservedAt: now,
 			ExpiresAt:  now.Add(5 * time.Minute),

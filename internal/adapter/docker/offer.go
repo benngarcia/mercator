@@ -186,6 +186,13 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 		ConnectionID: id.ConnectionID,
 		AdapterType:  "docker",
 		Kind:         domain.OfferKindStanding,
+		// The product a Docker endpoint offers is the host itself, named the way
+		// the endpoint identity names it. It is stated as a typed fact rather than
+		// left to be read off the offer ID: this ID does happen to recur, because
+		// the label is derived from the host, and a provider's listing ID beside it
+		// does not. Nothing about either ID says which, so a launch history that
+		// keyed on the ID would be right here and silently wrong there.
+		InstanceType: id.NativeRef,
 		NativeRef:    id.NativeRef,
 		ObservedAt:   now,
 		ExpiresAt:    now.Add(time.Hour),

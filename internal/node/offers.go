@@ -115,8 +115,14 @@ func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapsho
 		AdapterType:  AdapterType,
 		Kind:         domain.OfferKindStanding,
 		Lane:         domain.LaneReusable,
-		NativeRef:    record.ID,
-		ObservedAt:   record.Facts.ObservedAt,
+		// A node is the one candidate whose identity is the machine rather than a
+		// product, and it needs no region or instance type to say so: this offer
+		// keeps what it runs, so its Rental is what a second Run lands on and what
+		// a launch history is filed under. The region a machine sits in is its
+		// operator's to state and nothing enrolls one today, which is why it is
+		// left unstated here rather than guessed from the endpoint.
+		NativeRef:  record.ID,
+		ObservedAt: record.Facts.ObservedAt,
 		// An offer built from facts is only as good as the facts. Expiring it
 		// on their age is what stops Placement from choosing a machine whose
 		// last word is minutes old.

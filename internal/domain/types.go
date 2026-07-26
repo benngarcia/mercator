@@ -243,8 +243,28 @@ type OfferSnapshot struct {
 	// Lane is the offer's reuse semantics, stamped by the Broker from the
 	// backend's negotiated capability Declaration rather than claimed by the
 	// adapter itself. An adapter cannot advertise reuse it cannot perform.
-	Lane         ExecutionLane     `json:"lane"`
-	NativeRef    string            `json:"native_ref"`
+	Lane      ExecutionLane `json:"lane"`
+	NativeRef string        `json:"native_ref"`
+	// Region is where this capacity is, in the provider's own vocabulary. It is
+	// stated by the adapter because only the adapter knows: a Shadeform listing
+	// is placed by an explicit cloud and region, a Vast ask carries a
+	// geolocation, and a machine Mercator reaches through its own runtime is
+	// wherever its operator put it.
+	//
+	// It exists so a launch prediction has something to fall back to that is
+	// narrower than the whole provider. The Blueprint schema has carried a region
+	// on rentals and marketplace listings since it was authored and nothing has
+	// ever read it, because there was no offer field to read it into.
+	Region string `json:"region,omitempty"`
+	// InstanceType is the product name a provider sells this capacity under,
+	// where it sells one. It is the machine half of a recurring identity: two
+	// listings of one instance type in one region are the same product however
+	// differently the provider numbered them.
+	//
+	// A provider that sells no such thing states none. Vast sells asks against
+	// individual machines and has no product name, so its listings are
+	// distinguished by region and accelerator, which is what it does publish.
+	InstanceType string            `json:"instance_type,omitempty"`
 	ObservedAt   time.Time         `json:"observed_at"`
 	ExpiresAt    time.Time         `json:"expires_at"`
 	Platform     Platform          `json:"platform"`

@@ -49,10 +49,16 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 		}}
 	}
 	offer := domain.OfferSnapshot{
-		ID:         "off_shadeform_" + offerSlug(t.Cloud+"_"+region+"_"+t.ShadeInstanceType),
-		Kind:       domain.OfferKindProvisionable,
-		NativeRef:  nativeRef(t.Cloud, region, t.ShadeInstanceType),
-		ObservedAt: now,
+		ID:   "off_shadeform_" + offerSlug(t.Cloud+"_"+region+"_"+t.ShadeInstanceType),
+		Kind: domain.OfferKindProvisionable,
+		// Placement here is an explicit triple, and the region half of it is the
+		// cloud and the region together: a region name is only unique inside the
+		// cloud that named it, so "us-east-1" from two clouds is two places and a
+		// history filed under the bare name would average them.
+		Region:       t.Cloud + "/" + region,
+		InstanceType: t.ShadeInstanceType,
+		NativeRef:    nativeRef(t.Cloud, region, t.ShadeInstanceType),
+		ObservedAt:   now,
 		ExpiresAt:  now.Add(5 * time.Minute),
 		Platform:   domain.Platform{OS: domain.DefaultPlatformOS, Architecture: hostArchitecture(cfg.GPUType)},
 		Resources: domain.ResourceInventory{
