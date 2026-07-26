@@ -1519,7 +1519,22 @@ type RunRecord struct {
 	// tell the difference. It is absent until a report arrives, which is a stage
 	// with no actual rather than a workload that was ready the instant it started.
 	ReadyAt *time.Time `json:"ready_at,omitempty"`
-	Closed  bool       `json:"closed"`
+	// ServiceClass is the kind of work this Run's caller declared it to be, which
+	// is what decides where it sits in the admission queue and how fast waiting
+	// promotes it. It is on the read model rather than only in the workload
+	// revision because admission orders Runs against each other, and answering
+	// "who is ahead of me" off revisions would read a stream per open Run to
+	// place one.
+	ServiceClass ServiceClass `json:"service_class,omitempty"`
+	// QueuedSince is when admission first told this Run to wait. It survives the
+	// Run being admitted, because how long it waited is what its caller asks
+	// about afterwards, and it is absent on a Run admission never deferred.
+	QueuedSince *time.Time `json:"queued_since,omitempty"`
+	// Admission is why this Run is still waiting, as admission last recorded it.
+	// It is cleared the moment the Run is placed: a Run holding a Booking is not
+	// waiting on a decision, whatever it is still waiting for on the machine.
+	Admission *AdmissionDeferral `json:"admission,omitempty"`
+	Closed    bool               `json:"closed"`
 	// CreatedBy and CancelledBy are the audited principals of the create and
 	// cancel commands: a signed-in operator's email, or "bearer" for
 	// machine-token calls. Empty on runs recorded before auditing existed or

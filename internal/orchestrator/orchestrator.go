@@ -35,8 +35,17 @@ var (
 )
 
 const (
-	EventRunRequested            = "compute.run.requested.v1"
-	EventBookingDecided          = "compute.run.booking_decided.v1"
+	EventRunRequested   = "compute.run.requested.v1"
+	EventBookingDecided = "compute.run.booking_decided.v1"
+	// EventAdmissionDeferred is a Run being told to wait, and why. It is a
+	// public fact rather than a log line because the queue is something an
+	// operator has to be able to read: what this Run is behind, and what its
+	// class was worth at the moment it was asked.
+	EventAdmissionDeferred = "compute.run.admission_deferred.v1"
+	// EventAdmissionRefused is a Run admission would not queue, because its
+	// class states a moment it must have started by that the queue in front of
+	// it is already past.
+	EventAdmissionRefused        = "compute.run.admission_refused.v1"
 	EventBookingDispatched       = "compute.run.booking_dispatched.v1"
 	EventAttemptCreated          = "compute.run.attempt_created.v1"
 	EventLaunchIntentRecorded    = "compute.run.launch_intent_recorded.v1"
@@ -63,6 +72,8 @@ const (
 var runEventTypes = map[string]bool{
 	EventRunRequested:          true,
 	EventBookingDecided:        true,
+	EventAdmissionDeferred:     true,
+	EventAdmissionRefused:      true,
 	EventBookingDispatched:     true,
 	EventAttemptCreated:        true,
 	EventLaunchIntentRecorded:  true,
@@ -411,14 +422,15 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 	case state.bookingQueued():
 		return o.dispatchQueuedBooking(ctx, workspaceID, runID, version, state)
 	case state.launchIntent == nil, state.replacementEligible():
-		// Placement is where admission binds: a Run whose declared Artifacts are
-		// not all durable is not placed, and stays exactly where it is until one
-		// of them is published.
+		// A Run whose declared Artifacts are not all durable is not admitted at
+		// all, and stays exactly where it is until one of them is published. It
+		// is not queued either: waiting for content nobody has written yet is
+		// not waiting for capacity, and the queue is about capacity.
 		durable, err := o.inputsAreDurable(ctx, workspaceID, state.requested.Workload)
 		if err != nil || !durable {
 			return false, err
 		}
-		return true, o.stepPlace(ctx, workspaceID, runID, version, state)
+		return o.stepAdmit(ctx, workspaceID, runID, version, state)
 	case !state.launchAccepted && state.launchFailure == nil:
 		return o.stepLaunch(ctx, workspaceID, runID, version, state)
 	default:
@@ -497,7 +509,7 @@ func offerFromDecision(decision domain.BookingDecision) (domain.OfferSnapshot, e
 
 // stepPlace decides placement and records the decision, attempt, and launch
 // intent in one append, so the intent is durable before any adapter call.
-func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState) error {
+func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState, run queuePosition) error {
 	attemptNumber := state.attemptCount + 1
 	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, state.excludedOfferSnapshotIDs)
 	if err != nil {
@@ -507,7 +519,7 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 		if state.replacementEligible() {
 			return o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
 		}
-		return ErrNoFeasibleOffers
+		return o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, decision)
 	}
 	nextSchedule, err := reserveDecision(*state.requested, decision, schedule)
 	if err != nil {

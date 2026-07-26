@@ -121,6 +121,115 @@ func waitingToFinish(usdPerSecond float64) ScoreWeights {
 	}
 }
 
+// TopClassPriority is what the most urgent class starts at, and the only number
+// the aging rate below is derived from. It exists so a class cannot be given a
+// priority nothing can ever overtake: every rate here is stated as "how long
+// until this class outranks anything that could arrive".
+const TopClassPriority = 100.0
+
+// Admission is what a class says about waiting: where it starts in the queue,
+// how long Mercator may make it wait at all, the moment it must have started by,
+// and whether it may go past work that is already waiting.
+//
+// It is the class's statement rather than the Run's for the same reason the
+// exchange rates above are. A caller knows whether somebody is watching this
+// Run; nothing Mercator could measure knows it, and a per-Run priority is a
+// number every caller sets to the maximum.
+type Admission struct {
+	Priority             float64
+	MaxQueueDelaySeconds float64
+	// DeadlineSeconds is how long after admission first deferred it a Run of
+	// this class may still be started. Zero is a class that states no such
+	// moment, which is not a deadline of nothing: it is work whose value does
+	// not expire.
+	DeadlineSeconds float64
+	// BackfillEligible is the one thing that lets a Run past work already
+	// waiting that outranks it. It belongs to the class going past rather than
+	// to the class being passed, because taking capacity that is going spare is
+	// a statement about what this work is worth, not about what the other work
+	// is.
+	BackfillEligible bool
+}
+
+// Admission is what this class says about waiting.
+func (class ServiceClass) Admission() Admission {
+	switch class {
+	case ClassInteractive:
+		// Somebody is watching. Five minutes unplaced is already a failure, and
+		// ten is long past the point the answer was worth having.
+		return Admission{Priority: TopClassPriority, MaxQueueDelaySeconds: 5 * 60, DeadlineSeconds: 10 * 60}
+	case ClassExperimental:
+		// The next iteration is blocked behind this one, so a quarter of an hour
+		// of queue is the most it is worth, and an hour is the whole afternoon.
+		return Admission{Priority: 70, MaxQueueDelaySeconds: 15 * 60, DeadlineSeconds: 60 * 60}
+	case ClassStandard:
+		// Nobody is watching, and it should still get on with it.
+		return Admission{Priority: 50, MaxQueueDelaySeconds: 30 * 60, DeadlineSeconds: 4 * 60 * 60}
+	case ClassBatch:
+		// The value is in the result rather than in when it began, so an hour of
+		// queue is tolerable and a day is the point it stops being this run.
+		return Admission{Priority: 20, MaxQueueDelaySeconds: 60 * 60, DeadlineSeconds: 24 * 60 * 60}
+	case ClassOpportunistic:
+		// Waiting is free and the work does not expire, so this class states no
+		// deadline and is the only one that may take capacity going spare. Two
+		// hours is not what it is worth waiting: it is the longest Mercator will
+		// let anything sit unplaced without saying it has a starvation problem.
+		return Admission{Priority: 0, MaxQueueDelaySeconds: 2 * 60 * 60, BackfillEligible: true}
+	}
+	return Admission{}
+}
+
+// AgingPerSecond is how fast waiting promotes a Run of this class. It is derived
+// rather than declared: a Run outranks every class once it has waited half its
+// own maximum queue delay, which leaves the other half of the bound for capacity
+// to come free.
+//
+// Deriving it is what makes the bound a promise rather than a hope. A rate
+// chosen independently of the bound can be too slow for it, and the class would
+// then declare a maximum queue delay nothing in the ordering ever works toward.
+func (policy Admission) AgingPerSecond() float64 {
+	if policy.MaxQueueDelaySeconds <= 0 {
+		return 0
+	}
+	return (TopClassPriority + 1 - policy.Priority) / (policy.MaxQueueDelaySeconds / 2)
+}
+
+// EffectivePriority is what a Run of this class is worth after waiting this long.
+func (policy Admission) EffectivePriority(queuedSeconds float64) float64 {
+	if queuedSeconds <= 0 {
+		return policy.Priority
+	}
+	return policy.Priority + policy.AgingPerSecond()*queuedSeconds
+}
+
+// Starved reports whether this Run has waited longer than its class allows.
+// Nothing may be admitted past a Run in that state, backfill included: the
+// exemption that lets spare capacity be taken is about capacity going spare, and
+// capacity a starved Run is waiting for is not spare.
+func (policy Admission) Starved(queuedSeconds float64) bool {
+	return policy.MaxQueueDelaySeconds > 0 && queuedSeconds > policy.MaxQueueDelaySeconds
+}
+
+// DeadlineUnreachable reports whether this Run can no longer start in time, from
+// what has already elapsed and what the record says is in front of it.
+//
+// It is asked of a projected wait rather than of a guess, and where nothing
+// projected one it answers no: a Run refused capacity by machines that publish
+// no schedule is a Run whose wait nobody measured, and refusing it would turn
+// that silence into a missed deadline by arithmetic. The elapsed half needs
+// nothing measured at all, because a deadline already behind Mercator is not a
+// prediction.
+func (policy Admission) DeadlineUnreachable(queuedSeconds, waitSeconds float64, projected bool) bool {
+	switch {
+	case policy.DeadlineSeconds <= 0:
+		return false
+	case queuedSeconds >= policy.DeadlineSeconds:
+		return true
+	default:
+		return projected && queuedSeconds+waitSeconds > policy.DeadlineSeconds
+	}
+}
+
 // SelectionReason names the class whose exchange rates ranked the candidates, so
 // the decision record says what it was scored for. A Run that asked for an
 // interactive start and got the costliest machine is explained by its own class,

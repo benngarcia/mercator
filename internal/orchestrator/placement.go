@@ -16,11 +16,6 @@ import (
 // (provider failure, or a fail-closed partial aggregation).
 var ErrOfferQuery = errors.New("orchestrator: offer query failed")
 
-// ErrNoFeasibleOffers marks a complete placement evaluation that could not
-// select an Offer. Replacement placement treats this as retry exhaustion once
-// at least one stale Offer has already completed an attempt.
-var ErrNoFeasibleOffers = errors.New("orchestrator: no feasible offers")
-
 // PreviewPlacement evaluates placement for a workload without recording a run.
 // It uses the same offer query and scheduler path as live placement (decide).
 func (o *Orchestrator) PreviewPlacement(ctx context.Context, workspaceID, runID string, workload domain.WorkloadRevision) (domain.BookingDecision, error) {

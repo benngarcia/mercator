@@ -29,8 +29,15 @@ type runState struct {
 	// never derived from startedAt: a running process is not a ready one, and only
 	// the workload can tell the difference.
 	readyAt                  *time.Time
-	launchFailure            *launchFailureData
-	attemptCount             int
+	launchFailure *launchFailureData
+	// deferral is why admission last told this Run to wait, and queuedSince is
+	// when it first did. The two come apart on purpose: the reason is replaced
+	// every time the answer changes, and the moment the wait started is what the
+	// class's bound is measured from and must never move.
+	deferral      *domain.AdmissionDeferral
+	queuedSince   time.Time
+	deferralCount int
+	attemptCount  int
 	excludedOfferSnapshotIDs []string
 	cancelRequested          bool
 	firstTerminal            *terminalFact
@@ -98,6 +105,36 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.bookingDecision = &data.Decision
+		if data.Decision.SelectedOfferSnapshotID != "" {
+			// Placed work is not waiting on a decision, whatever it is still
+			// waiting for on the machine. How long it waited stays recorded.
+			state.deferral = nil
+		}
+
+	case EventAdmissionDeferred:
+		var data admissionDeferredData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidAdmissionDeferral(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.deferral = &data.Deferral
+		state.deferralCount++
+		if state.queuedSince.IsZero() {
+			state.queuedSince = stored.OccurredAt.UTC()
+		}
+
+	case EventAdmissionRefused:
+		var data admissionDeferredData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidAdmissionDeferral(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		state.deferral = &data.Deferral
+		state.deferralCount++
 
 	case EventBookingDispatched:
 		var data bookingDispatchedData
@@ -410,8 +447,21 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 		WorkloadRevisionID: state.requested.Workload.ID,
 		Phase:              "requested",
 		Cleanup:            domain.CleanupNotRequired,
+		ServiceClass:       state.requested.Workload.Spec.Placement.Class,
+		Admission:          state.deferral,
 		CreatedBy:          state.createdBy,
 		CancelledBy:        state.cancelledBy,
+	}
+	if !state.queuedSince.IsZero() {
+		queuedSince := state.queuedSince
+		record.QueuedSince = &queuedSince
+	}
+	// A Run admission is still holding is queued, which is the phase the
+	// lifecycle was missing: before this, a Run nothing could place read as
+	// "requested" for ever and was indistinguishable from one Mercator had not
+	// got to yet.
+	if state.deferral != nil && state.bookingDecision == nil {
+		record.Phase = "queued"
 	}
 	if state.launchIntent != nil {
 		record.Phase = "launching"

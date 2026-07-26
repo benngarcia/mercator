@@ -19,6 +19,14 @@ type bookingDecisionData struct {
 	Decision domain.BookingDecision `json:"decision"`
 }
 
+// admissionDeferredData carries one moment admission told a Run to wait, or
+// refused to let it wait. Both events carry the same shape because they are the
+// same account of the same question, and the reason inside says which answer it
+// was.
+type admissionDeferredData struct {
+	Deferral domain.AdmissionDeferral `json:"deferral"`
+}
+
 type bookingDispatchedData struct {
 	Booking domain.Booking `json:"booking"`
 }
@@ -231,6 +239,20 @@ func invalidBookingDecision(data bookingDecisionData) string {
 		return "decision.booking.state is invalid"
 	case data.Decision.Booking != nil && data.Decision.Booking.ScheduleVersion == 0:
 		return "decision.booking.schedule_version is required"
+	default:
+		return ""
+	}
+}
+
+// invalidAdmissionDeferral refuses a deferral that does not say what it is for.
+// A wait with no reason and a wait by a class Mercator cannot price are the two
+// ways this record stops answering the question it exists to answer.
+func invalidAdmissionDeferral(data admissionDeferredData) string {
+	switch {
+	case data.Deferral.Reason == "":
+		return "deferral.reason is required"
+	case !data.Deferral.Class.Known():
+		return fmt.Sprintf("deferral names service class %q, which Mercator cannot price", data.Deferral.Class)
 	default:
 		return ""
 	}
