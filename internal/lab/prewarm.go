@@ -133,10 +133,11 @@ func (world *simulatedWorld) prefetchImage(item adapter.PrepareItem, operation s
 
 // prefetchArtifact reads one immutable version out of the object store onto the
 // machine. The copy that lands is checked against the catalog on arrival, which
-// is what makes it worth reading later: an unchecked copy costs a consumer
-// exactly what no copy costs.
+// is what makes it worth reading later: an unchecked copy, and a checked copy of
+// other content filed under this version's name, cost a consumer exactly what no
+// copy costs, so both are fetched again rather than reported ready.
 func (world *simulatedWorld) prefetchArtifact(item adapter.PrepareItem, operation string) string {
-	if replica, held := world.replicas[item.ArtifactID][item.OfferSnapshotID]; held && replica.State.Usable() {
+	if _, readable := world.readableReplica(item.ArtifactID, item.OfferSnapshotID); readable {
 		world.recordPrefetchEffect(item, operation, EffectCommandAccepted, map[string]any{"ready": true, "fetched_bytes": 0})
 		return operation
 	}

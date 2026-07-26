@@ -436,7 +436,8 @@ func publicationSequences(observation InvariantObservation) (map[string]uint64, 
 // The object store is the authority and a replica is an optimisation over it, so
 // four things hold at once: no copy exists of content the catalog cannot name,
 // no copy claims a digest that version does not have, every copy traces back to
-// the object store, and no Run reads a copy nothing checked against the catalog.
+// the object store, and no Run reads a copy that was not checked against the
+// version it names.
 //
 // "Traces back to the object store" is exactly the version being durable, with
 // no second shape. Content a workload wrote for itself is not one of these: no
@@ -472,11 +473,18 @@ func artifactReplicaVerified(observation InvariantObservation) error {
 			)
 		}
 	}
-	return artifactReadsWereVerified(observation.Effects)
+	return artifactReadsWereVerified(observation)
 }
 
-func artifactReadsWereVerified(effects []EffectRecord) error {
-	for _, effect := range effects {
+// artifactReadsWereVerified is the read side of the same rule, stated against the
+// catalog rather than against the copy's own state alone. A host reporting a
+// checked copy has said what it checked those bytes against, and only the catalog
+// can say whether that is this version: restoring an older volume snapshot leaves
+// a machine holding a verified copy of the version before under this version's
+// name, and a Run handed those bytes read the wrong content at local-disk speed
+// on a candidate every predicate in the control plane priced at the whole read.
+func artifactReadsWereVerified(observation InvariantObservation) error {
+	for _, effect := range observation.Effects {
 		if effect.Operation != OperationArtifactRead || effect.Command != EffectCommandAccepted {
 			continue
 		}
@@ -485,8 +493,9 @@ func artifactReadsWereVerified(effects []EffectRecord) error {
 			OfferID    string `json:"offer_id"`
 		}
 		var read struct {
-			Source string                      `json:"source"`
-			State  domain.ArtifactReplicaState `json:"state"`
+			Source        string                      `json:"source"`
+			State         domain.ArtifactReplicaState `json:"state"`
+			ContentDigest string                      `json:"content_digest"`
 		}
 		if err := json.Unmarshal(effect.Request, &request); err != nil {
 			return fmt.Errorf("decode Artifact read %s: %w", effect.ID, err)
@@ -494,10 +503,19 @@ func artifactReadsWereVerified(effects []EffectRecord) error {
 		if err := json.Unmarshal(effect.Consequence, &read); err != nil {
 			return fmt.Errorf("decode Artifact read consequence %s: %w", effect.ID, err)
 		}
-		if read.Source == "replica" && !read.State.Usable() {
+		if read.Source != "replica" {
+			continue
+		}
+		if !read.State.Usable() {
 			return fmt.Errorf(
 				"Run %q read Artifact %q from a %q copy on offer %q, which nothing checked against the catalog",
 				effect.CorrelationID, request.ArtifactID, read.State, request.OfferID,
+			)
+		}
+		if digest := observation.ArtifactCatalog[request.ArtifactID].ContentDigest; read.ContentDigest != digest {
+			return fmt.Errorf(
+				"Run %q read Artifact %q from a copy on offer %q claiming digest %s, and the catalog says %s",
+				effect.CorrelationID, request.ArtifactID, request.OfferID, read.ContentDigest, digest,
 			)
 		}
 	}

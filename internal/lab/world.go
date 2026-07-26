@@ -1460,7 +1460,7 @@ func (world *simulatedWorld) launchFitsOnDisk(request adapter.LaunchRequest, arr
 	_, needed := state.missing(request.Image, world.images[request.Image].Layers)
 	needed += request.Resources.EphemeralDisk.MinBytes
 	for _, artifactID := range arrival.Request.ConsumesArtifacts {
-		if replica, held := world.replicas[artifactID][state.offer.ID]; !held || !replica.State.Usable() {
+		if _, readable := world.readableReplica(artifactID, state.offer.ID); !readable {
 			version, _ := world.store.entry(artifactID)
 			needed += version.SizeBytes
 		}
@@ -1563,19 +1563,37 @@ func transferDuration(bytes int64, bandwidthMbps float64) time.Duration {
 	return time.Duration(seconds * float64(time.Second))
 }
 
+// readableReplica is the copy one machine may read in place of the object store:
+// present, checked, and checked against what the catalog says this version is.
+// It is this world's half of domain.ArtifactInventory.Holds and it exists as one
+// function because three separate questions ask it, one of them from another
+// file: what a launch reads, what a launch still has to find room for, and what
+// a preparation still owes. A world that answered them from the copy's own state
+// alone would hand a Run another version's bytes, for free, on a machine every
+// predicate in the control plane had priced at the whole read.
+func (world *simulatedWorld) readableReplica(artifactID, offerID string) (domain.ArtifactReplica, bool) {
+	replica, held := world.replicas[artifactID][offerID]
+	if !held || !replica.State.Usable() {
+		return replica, false
+	}
+	version, known := world.store.entry(artifactID)
+	return replica, known && replica.ContentDigest == version.ContentDigest
+}
+
 // readRunArtifacts resolves every input this execution declared and answers when
-// the last of them is readable on the host. A verified local copy is read where
-// there is one and costs nothing, which is the whole value of a replica; anything
-// else is fetched from the object store, because a copy nobody checked is not
-// evidence that the right bytes are here. The ledger records which it was, so
-// what a Run read is a fact rather than an inference from world state.
+// the last of them is readable on the host. A copy this host may read is read
+// where there is one and costs nothing, which is the whole value of a replica;
+// anything else is fetched from the object store, because a copy nobody checked
+// against this version is not evidence that the right bytes are here. The ledger
+// records which it was and what the copy claimed, so what a Run read is a fact
+// rather than an inference from world state.
 func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consumes []string) time.Time {
 	ready := world.now
 	for _, artifactID := range consumes {
-		replica, held := world.replicas[artifactID][execution.OfferID]
+		replica, readable := world.readableReplica(artifactID, execution.OfferID)
 		source := "replica"
 		completesAt := world.now
-		if !held || !replica.State.Usable() {
+		if !readable {
 			source = "object_store"
 			completesAt = world.now.Add(world.store.transferDuration(artifactID))
 			version, _ := world.store.entry(artifactID)
@@ -1598,7 +1616,12 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 			execution.LaunchKey,
 			"",
 			map[string]any{"artifact_id": artifactID, "offer_id": execution.OfferID},
-			map[string]any{"source": source, "state": replica.State, "completes_at": completesAt},
+			map[string]any{
+				"source":         source,
+				"state":          replica.State,
+				"content_digest": replica.ContentDigest,
+				"completes_at":   completesAt,
+			},
 			"",
 		)
 		ready = later(ready, completesAt)
