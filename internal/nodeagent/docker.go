@@ -32,13 +32,34 @@ type DockerRuntime struct {
 	// labelPrefix namespaces the labels the agent stamps on its containers, so
 	// Observe reports Mercator's workloads and nothing else running on the box.
 	labelPrefix string
+	// artifactRoot is where this node keeps immutable Artifact copies. A daemon
+	// has no concept of one, so it is the agent's own durable storage rather
+	// than anything Docker manages. A runtime given none replicates nothing and
+	// reports no Artifact inventory, which is silence rather than an empty disk.
+	artifactRoot string
 }
 
-func NewDockerRuntime(binary string) *DockerRuntime {
+// RuntimeOption configures the Docker runtime.
+type RuntimeOption func(*DockerRuntime)
+
+// WithArtifactRoot gives this node somewhere to keep immutable Artifact copies.
+// It is the agent's own directory, stated by whoever started the agent, because
+// only they know which filesystem has the room: a default under the daemon's
+// storage would be a directory this process usually cannot write to, and one
+// under a temporary directory would lose every copy on reboot.
+func WithArtifactRoot(root string) RuntimeOption {
+	return func(docker *DockerRuntime) { docker.artifactRoot = root }
+}
+
+func NewDockerRuntime(binary string, options ...RuntimeOption) *DockerRuntime {
 	if binary == "" {
 		binary = "docker"
 	}
-	return &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator."}
+	runtime := &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator."}
+	for _, option := range options {
+		option(runtime)
+	}
+	return runtime
 }
 
 func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, error) {
@@ -74,6 +95,7 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 		return capability.NodeFacts{}, err
 	}
 	facts.Caches = caches
+	facts.Artifacts = docker.artifacts()
 	return facts, nil
 }
 
@@ -88,13 +110,6 @@ func (docker *DockerRuntime) PrepareImage(ctx context.Context, command capabilit
 		return fmt.Errorf("pull %s: %w", reference, err)
 	}
 	return nil
-}
-
-// PrepareArtifact is not implemented by the Docker runtime. Artifact
-// replication is phase 3 of the migration, and claiming it here would let
-// Placement believe in locality nothing produces.
-func (docker *DockerRuntime) PrepareArtifact(context.Context, capability.PrepareArtifactCommand) error {
-	return fmt.Errorf("%w: this node does not replicate Artifacts yet", capability.ErrCapabilityUnsupported)
 }
 
 // LaunchWorkload starts one container and returns once it is running. The

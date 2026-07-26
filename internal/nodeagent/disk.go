@@ -30,7 +30,27 @@ import (
 // deployment this agent has no way to fix and no reason to leave the fleet over:
 // its containers, their exits, and its own liveness are still the node's to
 // report.
-func (docker *DockerRuntime) diskFacts(root string) capability.DiskFacts {
+// A node that also keeps Artifact copies has content on two filesystems, and
+// the room it can promise is the smaller of the two. On an ordinary install
+// they are one filesystem and this changes nothing; where they are not, the
+// alternative is advertising a terabyte of daemon storage to a Run whose dataset
+// has to land in an agent directory with ten gigabytes left.
+func (docker *DockerRuntime) diskFacts(daemonRoot string) capability.DiskFacts {
+	daemon := statfsFacts(daemonRoot)
+	if docker.artifactRoot == "" {
+		return daemon
+	}
+	replicas := statfsFacts(docker.artifactRoot)
+	if !daemon.Known || !replicas.Known {
+		return capability.DiskFacts{}
+	}
+	if replicas.FreeBytes < daemon.FreeBytes {
+		return replicas
+	}
+	return daemon
+}
+
+func statfsFacts(root string) capability.DiskFacts {
 	if root == "" {
 		return capability.DiskFacts{}
 	}

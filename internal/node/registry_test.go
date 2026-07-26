@@ -550,27 +550,25 @@ func exitCode(code int) *int { return &code }
 // a declaration the runtime cannot honour is capacity Mercator believes in and
 // does not have. This node declared Artifact replicas, Cache Mounts, prewarming,
 // and garbage collection while the Docker runtime implemented none of them; each
-// becomes true again in the slice that earns it, and Cache Mounts is the second
-// one earned.
+// becomes true again in the slice that earns it, and only garbage collection is
+// still owed.
 func TestANodeDeclaresOnlyWhatItsRuntimePerforms(t *testing.T) {
 	registry, _ := newRegistry(t)
 
 	support := registry.NodeSupport()
 
-	if !support.ExactImageInventory {
-		t.Error("the agent enumerates the images and layers it unpacked, so this one is earned")
+	earned := map[string]bool{
+		"exact_image_inventory": support.ExactImageInventory,
+		"cache_mounts":          support.CacheMounts,
+		"prewarm":               support.Prewarm,
+		"artifact_replicas":     support.ArtifactReplicas,
 	}
-	if !support.CacheMounts {
-		t.Error("the agent attaches and enumerates workspace-scoped cache volumes, so this one is earned")
-	}
-	unearned := map[string]bool{
-		"artifact_replicas":  support.ArtifactReplicas,
-		"prewarm":            support.Prewarm,
-		"garbage_collection": support.GarbageCollection,
-	}
-	for name, declared := range unearned {
-		if declared {
-			t.Errorf("the node declares %s, and nothing on the machine performs it", name)
+	for name, declared := range earned {
+		if !declared {
+			t.Errorf("the agent performs %s, so the node has to declare it or Placement routes no work against it", name)
 		}
+	}
+	if support.GarbageCollection {
+		t.Error("the node declares garbage_collection, and nothing on the machine reclaims a byte")
 	}
 }

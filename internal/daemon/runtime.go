@@ -55,10 +55,26 @@ type Config struct {
 	// heartbeat. Zero takes the registry's default. Tests shorten it so lease
 	// expiry is stated rather than waited for.
 	NodeLease time.Duration
+	// Prewarm bounds the preparation this Mercator may have in flight for work
+	// it has not admitted. Nil takes DefaultPrewarmPolicy.
+	Prewarm *orchestrator.PrewarmPolicy
 
 	// ProviderFactory replaces the production catalog in lifecycle tests.
 	// Production callers leave it nil.
 	ProviderFactory *broker.Factory
+}
+
+// DefaultPrewarmPolicy is deliberately the most restrained bound that does
+// anything at all: one piece of content arriving speculatively at a time, and no
+// sooner than half a minute after the last. One is what an enrolled node can do
+// anyway, because its command worker performs one command at a time; the
+// interval bounds how often a reconcile sweep may start a fetch on a machine
+// whose real work has to come first. Both err on the side of preparing too
+// little, because too little costs a queued Run some of its start latency and
+// too much costs an admitted Run its start.
+var DefaultPrewarmPolicy = orchestrator.PrewarmPolicy{
+	MaxConcurrent: 1,
+	MinInterval:   30 * time.Second,
 }
 
 // Runtime owns the production HTTP server, broker graph, reconciliation loop,
@@ -163,7 +179,13 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		// on warmth however warm a host actually is.
 		orchestrator.WithImageManifests(manifests),
 	}
-	orchestratorOptions = append(orchestratorOptions, orchestrator.WithRentalSchedules(providerBroker))
+	orchestratorOptions = append(orchestratorOptions,
+		orchestrator.WithRentalSchedules(providerBroker),
+		// Preparation reaches enrolled nodes through the same Broker a launch
+		// does, which is what makes the prepare half of capability.NodeRuntime
+		// reachable from the control plane at all.
+		orchestrator.WithPrewarm(providerBroker, prewarmPolicy(cfg.Prewarm)),
+	)
 	if signer.Enabled() && cfg.PublicURL != "" {
 		orchestratorOptions = append(orchestratorOptions, orchestrator.WithReporting(cfg.PublicURL, signer))
 	}
@@ -410,9 +432,18 @@ type ReconcileResult struct {
 // returns the provider inventory observed after both paths run.
 func (r *Runtime) ReconcileWorkspace(ctx context.Context, workspaceID string) (ReconcileResult, error) {
 	advanced, advanceErr := r.orch.AdvanceOpenRuns(ctx, workspaceID)
+	_, prewarmErr := r.orch.Prewarm(ctx, workspaceID)
 	swept, sweepErr := r.janitor.Sweep(ctx, workspaceID)
 	owned, inventoryErr := r.ListOwned(ctx, workspaceID)
-	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Released, Owned: owned}, errors.Join(advanceErr, sweepErr, inventoryErr)
+	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Released, Owned: owned},
+		errors.Join(advanceErr, prewarmErr, sweepErr, inventoryErr)
+}
+
+func prewarmPolicy(configured *orchestrator.PrewarmPolicy) orchestrator.PrewarmPolicy {
+	if configured == nil {
+		return DefaultPrewarmPolicy
+	}
+	return *configured
 }
 
 func (r *Runtime) reconcile(ctx context.Context) {
@@ -454,6 +485,15 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 		}
 		if advanced.Closed > 0 {
 			log.Printf("run advancement sweep %s: closed %d of %d open runs", workspaceID, advanced.Closed, advanced.Open)
+		}
+		// Preparation is reconciled after the Runs move, because what Mercator
+		// wants prepared is derived from where they ended up. A machine that
+		// refuses it costs the fleet start latency and never correctness, so a
+		// failure here is logged rather than allowed to end the sweep.
+		if prepared, err := orch.Prewarm(ctx, workspaceID); err != nil {
+			log.Printf("prepare capacity sweep %s: %v", workspaceID, err)
+		} else if prepared.Sent {
+			log.Printf("prepare capacity sweep %s: asked for %d pieces of content", workspaceID, prepared.Wanted)
 		}
 		result, err := jan.Sweep(ctx, workspaceID)
 		if err != nil {

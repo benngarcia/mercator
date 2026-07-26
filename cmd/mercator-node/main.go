@@ -47,7 +47,13 @@ func run() error {
 	}
 	agent := nodeagent.New(
 		settings.identity,
-		nodeagent.NewDockerRuntime(settings.dockerBinary),
+		nodeagent.NewDockerRuntime(
+			settings.dockerBinary,
+			// Artifact copies are the agent's own durable storage rather than
+			// anything the daemon manages, so they live beside the state this
+			// agent already keeps on the filesystem the operator chose.
+			nodeagent.WithArtifactRoot(filepath.Join(settings.stateDir, "artifacts")),
+		),
 		nodeagent.NewHTTPTransport(settings.identity.ControlPlaneURL, nil),
 		state,
 		nodeagent.WithLogger(logger),

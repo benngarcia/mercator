@@ -196,6 +196,9 @@ func TestANodeThatGoesQuietStopsBeingOffered(t *testing.T) {
 
 type fleet struct {
 	address string
+	// control is this daemon itself, which is how a case drives the sweep that
+	// prepares capacity. Preparation answers no request.
+	control *daemon.Runtime
 	token   string
 	nodeID  string
 	// image is the digest-pinned reference every fleet Run places, served by
@@ -243,9 +246,10 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 	// where a Run lands, not how offers are aggregated.
 	t.Setenv("PATH", t.TempDir())
 	registry := startTrainerRegistry(t)
-	address := startRuntimeWithLease(t, 900*time.Millisecond)
+	address, control := startRuntimeWithLease(t, 900*time.Millisecond)
 	harness := &fleet{
 		address:      address,
+		control:      control,
 		token:        "operator-token",
 		image:        registry + "/acme/trainer@" + trainerIndexDigest,
 		rebuiltImage: registry + "/acme/trainer@" + rebuiltIndexDigest,
@@ -664,7 +668,10 @@ type scriptedRuntime struct {
 	unassembled []string
 	// undescribed is every image this runtime listed and could not account for,
 	// which is what a daemon that will not describe an image leaves behind.
-	undescribed  []string
+	undescribed []string
+	// prepared is every image the control plane asked this machine to fetch for
+	// work it had not admitted here.
+	prepared     []string
 	observations map[string]capability.WorkloadObservation
 	// launches is the command each Run arrived with, kept whole so a case can
 	// ask what this machine was actually told to attach and under whose
@@ -782,12 +789,31 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 	}, nil
 }
 
-func (runtime *scriptedRuntime) PrepareImage(context.Context, capability.PrepareImageCommand) error {
+// PrepareImage is the pull the control plane asked for on behalf of work it has
+// not admitted. It leaves the image behind exactly as a real pull does, which is
+// what makes the next heartbeat report a machine that is warm for a Run it has
+// never executed.
+func (runtime *scriptedRuntime) PrepareImage(_ context.Context, command capability.PrepareImageCommand) error {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.prepared = append(runtime.prepared, command.ManifestDigest)
+	if !slices.Contains(runtime.held, command.ManifestDigest) {
+		runtime.held = append(runtime.held, command.ManifestDigest)
+	}
 	return nil
 }
 
 func (runtime *scriptedRuntime) PrepareArtifact(context.Context, capability.PrepareArtifactCommand) error {
 	return nil
+}
+
+// preparedImages is every image this machine was asked to fetch ahead of a Run,
+// in the order it was asked. Counting them is how a case says Mercator asked
+// once rather than on every sweep.
+func (runtime *scriptedRuntime) preparedImages() []string {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return slices.Clone(runtime.prepared)
 }
 
 func (runtime *scriptedRuntime) LaunchWorkload(_ context.Context, command capability.LaunchWorkloadCommand) error {

@@ -621,7 +621,10 @@ func inspect(t *testing.T, reference, format string) string {
 
 // TestTheDockerRuntimeRefusesTheWorkItDoesNotDo is the machine half of the same
 // promise: what the node declares and what the runtime answers have to be the
-// same answer, and this is the one place the runtime says no out loud.
+// same answer, and this is the one place the runtime says no out loud. An agent
+// started with nowhere to keep Artifact copies replicates none and says so,
+// rather than writing a tenant's dataset into whichever directory it happens to
+// have been started in.
 func TestTheDockerRuntimeRefusesTheWorkItDoesNotDo(t *testing.T) {
 	runtime := NewDockerRuntime("")
 
@@ -629,6 +632,9 @@ func TestTheDockerRuntimeRefusesTheWorkItDoesNotDo(t *testing.T) {
 
 	if !errors.Is(err, capability.ErrCapabilityUnsupported) {
 		t.Fatalf("preparing an Artifact returned %v, want an unsupported-capability refusal", err)
+	}
+	if inventory := runtime.artifacts(); inventory.Known {
+		t.Fatalf("a node with nowhere to keep copies claims it enumerated them: %+v", inventory)
 	}
 }
 

@@ -89,18 +89,21 @@ func NewRegistry(store Store, signer *Signer, controlPlaneURL string, opts ...Op
 // NodeSupport reports what this runtime performs, which is the whole point of a
 // negotiated capability set: a declaration is a promise the control plane will
 // place work against, so anything declared here that the Docker runtime does not
-// do is Placement believing in locality nothing produces. Exact image inventory
-// and Cache Mounts are earned today: the agent enumerates the images and layers
-// it unpacked and reports the platform of each, and it attaches and enumerates
-// workspace-scoped cache volumes across workloads. It stores no Artifact
-// replica, accepts no preparation for a workload it was not asked to launch, and
-// reclaims no disk. Each of those becomes true in the slice that implements it,
-// and not before.
+// do is Placement believing in locality nothing produces. Four of the five are
+// earned today: the agent enumerates the images and layers it unpacked and
+// reports the platform of each, it attaches and enumerates workspace-scoped
+// cache volumes across workloads, it pulls an image it was not asked to launch
+// and answers Duplicate on a redelivery, and it replicates an immutable Artifact
+// from a location the control plane minted and reports the digest those bytes
+// actually hashed to. It still reclaims no disk, and garbage collection becomes
+// true in the slice that implements it and not before.
 func (registry *Registry) NodeSupport() capability.NodeSupport {
 	return capability.NodeSupport{
 		ContainerRuntime:       "docker",
 		ExactImageInventory:    true,
+		ArtifactReplicas:       true,
 		CacheMounts:            true,
+		Prewarm:                true,
 		MaxConcurrentWorkloads: 1,
 	}
 }
