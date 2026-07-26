@@ -73,16 +73,37 @@ func (candidate CandidateDecision) Uncertainty() float64 {
 	return shortfall
 }
 
+// Priced reports whether the dollars in this candidate's cost estimate are a
+// price somebody quoted. It reads the record rather than the offer, like every
+// other input to the ranking, and the record states it as the source of the cost
+// estimate, which is where every other missing answer here says it is missing.
+func (candidate CandidateDecision) Priced() bool {
+	return candidate.Estimates.CostUSD.Source != CostUnpriced
+}
+
 // Preferred reports whether this candidate is the better placement. It is a
 // total order: candidates that tie on dollars take the one that is ready sooner,
 // and candidates that tie on both fall back to the offer snapshot ID, so one
 // offer set produces one decision however the offers arrived.
 //
-// There is one rule for every class, because the class is already in the score.
-// A ranking per class was what the objective needed while the exchange rates were
-// dead; now that a second of waiting has a price, a Run that hates waiting and a
-// Run that does not are comparing the same quantity in the same units.
+// A machine nobody priced ranks behind every machine somebody did, and that is
+// asked first because it is not a comparison of dollars at all. The score is in
+// dollars and a candidate with no price has none: scoring the absence as zero
+// made the unpriced machine the cheapest thing in the fleet, so a Run that allowed
+// unknown pricing took it every time, however much later it would start and with
+// no price at all. AllowUnknownPricing says a caller would rather run on a machine
+// nobody priced than not run, which is what this ordering means, and never that
+// they prefer one.
+//
+// Otherwise there is one rule for every class, because the class is already in the
+// score. A ranking per class was what the objective needed while the exchange
+// rates were dead; now that a second of waiting has a price, a Run that hates
+// waiting and a Run that does not are comparing the same quantity in the same
+// units.
 func (candidate CandidateDecision) Preferred(over CandidateDecision) bool {
+	if candidate.Priced() != over.Priced() {
+		return candidate.Priced()
+	}
 	if candidate.ScoreUSD != over.ScoreUSD {
 		return candidate.ScoreUSD < over.ScoreUSD
 	}

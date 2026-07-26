@@ -42,7 +42,17 @@ function EstimateCell({
   if (!estimate) {
     return <span className="text-muted-foreground">—</span>;
   }
-  const { p50, p90, expected, confidence } = estimate;
+  const { p50, p90, expected, confidence, source } = estimate;
+  // A machine nobody quoted has no dollars, which is a different answer from a
+  // dash. The placement ranked it behind everything somebody priced, and a reader
+  // comparing the rows has to be able to see why.
+  if (source === "unpriced") {
+    return (
+      <span className="font-mono text-[0.6875rem] text-muted-foreground">
+        unpriced
+      </span>
+    );
+  }
   const allEmpty =
     p50 === undefined && p90 === undefined && expected === undefined;
   if (allEmpty) {

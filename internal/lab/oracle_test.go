@@ -625,3 +625,49 @@ func heldEverySpace(offer domain.OfferSnapshot) domain.OfferSnapshot {
 	offer.Images.ImageDigests = []string{warmImageDigest}
 	return offer
 }
+
+// TestBothModelsRefuseToPriceAMachineNobodyQuoted is the one term of the score
+// that had no answer at all. A machine whose price nobody published was scored as
+// costing zero dollars, and both models did it, so they agreed about a candidate
+// they were both wrong about: a Run allowing unknown pricing took the unquoted
+// machine over one somebody quoted, every time, because nothing is cheaper than
+// nothing.
+//
+// The absence is now stated in the record as the source of the cost estimate, and
+// both models state it, which is what lets the ranking read it. The reference
+// model used to charge a full point of doubt for unknown pricing instead. That
+// point was deleted with the inventory point beside it, and only the inventory one
+// was double counted; the answer here is not more doubt about a number, it is that
+// there is no number.
+func TestBothModelsRefuseToPriceAMachineNobodyQuoted(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Workload.Spec.Placement.AllowUnknownPricing = true
+	unquoted := offerFor(t, input, "rental-warm")
+	unquoted.ID, unquoted.RentalID, unquoted.NativeRef = "rental-unquoted", "rental-unquoted", "rental-unquoted"
+	unquoted.Pricing = domain.PriceModel{Currency: "USD"}
+	unquoted.Capabilities.Pricing = domain.PricingCapabilities{}
+	input.Offers = append(input.Offers, unquoted)
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	reference, err := SolveSmallWorld(input)
+	if err != nil {
+		t.Fatalf("solve the small world: %v", err)
+	}
+
+	if production.SelectedOfferSnapshotID != reference.SelectedOfferID {
+		t.Fatalf("production placed on %q and the reference model on %q", production.SelectedOfferSnapshotID, reference.SelectedOfferID)
+	}
+	if production.SelectedOfferSnapshotID == "rental-unquoted" {
+		t.Fatalf("both models chose the machine nobody priced over one somebody did")
+	}
+	candidate := candidateFor(t, production, "rental-unquoted")
+	if candidate.Priced() {
+		t.Errorf("the unquoted candidate records cost %+v, which reads as a price somebody stated", candidate.Estimates.CostUSD)
+	}
+	if referenceCandidate(input, unquoted).Priced() {
+		t.Errorf("the reference model prices the unquoted machine at %+v", referenceCandidate(input, unquoted).Estimates.CostUSD)
+	}
+}

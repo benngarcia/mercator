@@ -3356,7 +3356,8 @@
             "format": "double"
           },
           "allow_unknown_pricing": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none."
           }
         }
       },
@@ -4300,7 +4301,8 @@
             "description": "The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess."
           },
           "cost_usd": {
-            "$ref": "#/components/schemas/Estimate"
+            "$ref": "#/components/schemas/Estimate",
+            "description": "What this Run is billed for running here, over the runtime it declared. A machine whose price nobody published has no such number and predicts none: its source reads \"unpriced\", which is what the ranking reads to place it behind every candidate somebody priced. A rate of zero is a machine somebody says is free, which is a different answer."
           }
         }
       },

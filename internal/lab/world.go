@@ -461,6 +461,13 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			state.leaseExpiresAt = tape.Start.Add(rental.IdleLeaseExpiresIn.Duration())
 		}
 		state.offer.Capacity.Confidence = rental.Confidence()
+		if rental.Unpriced {
+			// Nobody quoted this machine. That is a statement about the world, so it
+			// is carried through as one rather than becoming a rate of zero, which
+			// would be a machine somebody says is free.
+			state.offer.Pricing = domain.PriceModel{Currency: "USD"}
+			state.offer.Capabilities.Pricing = domain.PricingCapabilities{}
+		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {

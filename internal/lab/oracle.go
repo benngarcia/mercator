@@ -90,8 +90,11 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 		return false
 	}
 	estimates := referenceEstimates(input, offer)
-	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil && estimates.CostUSD.Expected > *maximum {
-		return false
+	// A budget is not cleared by a candidate with no dollars to compare against it.
+	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil {
+		if estimates.CostUSD.Source == domain.CostUnpriced || estimates.CostUSD.Expected > *maximum {
+			return false
+		}
 	}
 	// Only a candidate KNOWN to start late fails the latency SLO, so the bound
 	// is asked of the established part of the prediction. Seconds priced out of
@@ -216,8 +219,19 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		ArtifactSeconds:         fetch,
 		StartSeconds:            referenceStart(queue, provision, pull, fetch),
 		EstablishedStartSeconds: referenceStart(queue, provision, establishedPull, establishedFetch),
-		CostUSD:                 domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
+		CostUSD:                 referenceCost(offer, billed),
 	}
+}
+
+// referenceCost is what this model says running here is billed at. It states the
+// absence of a price the same way production does, because that absence is what
+// the ranking reads: a model predicting zero dollars for a machine nobody quoted
+// would call it the cheapest candidate in the world and agree with nothing.
+func referenceCost(offer domain.OfferSnapshot, billedSeconds float64) domain.Estimate {
+	if !offer.Pricing.Known {
+		return domain.Estimate{Source: domain.CostUnpriced}
+	}
+	return domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billedSeconds}
 }
 
 // referenceDisk is the reference model's own account of what this Run asks of

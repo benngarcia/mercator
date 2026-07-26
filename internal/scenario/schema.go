@@ -403,8 +403,14 @@ type RentalSpec struct {
 	// owns it.
 	CacheMounts    []HeldCacheSpec `json:"cache_mounts,omitempty"`
 	RatePerHourUSD float64         `json:"rate_per_hour_usd"`
-	Billing        BillingSpec     `json:"billing,omitempty"`
-	Resources      *ResourcesSpec  `json:"resources,omitempty"`
+	// Unpriced states that nobody has quoted a price for this machine, which is
+	// what an enrolled node whose operator configured no shadow price publishes.
+	// It is not a rate of zero: a rate of zero is a machine somebody says is free,
+	// and this is a machine nobody can say anything about the cost of. A fixture
+	// states it instead of a rate, never beside one.
+	Unpriced  bool           `json:"unpriced,omitempty"`
+	Billing   BillingSpec    `json:"billing,omitempty"`
+	Resources *ResourcesSpec `json:"resources,omitempty"`
 	// CapacityConfidence is how sure whoever published this machine's capacity
 	// claim was of it. Omitted means certain, which is what every simulated
 	// provider says about a machine it can see. A fixture states less when the
@@ -604,6 +610,11 @@ type RequestSpec struct {
 	// type so a fixture can state a class Mercator does not know, which is a world
 	// the corpus has to be able to build: the refusal is the behaviour under test.
 	ServiceClass string `json:"service_class,omitempty"`
+	// AllowUnknownPricing says this Run would rather run on a machine nobody has
+	// quoted a price for than not run at all. It is what admits such a machine as
+	// a candidate, and it is never a preference for one: an unpriced candidate is
+	// ranked behind every candidate somebody priced.
+	AllowUnknownPricing bool `json:"allow_unknown_pricing,omitempty"`
 	// MaxStartLatency is the p90 start latency this Run refuses to exceed. It
 	// is the only hard bound in the request that image locality feeds, which is
 	// what makes it the one place a candidate can be struck out for what it was
@@ -1437,7 +1448,10 @@ func (w WorldSpec) validate() error {
 			}
 			cacheMounts[identity] = true
 		}
-		if rental.RatePerHourUSD <= 0 {
+		if rental.Unpriced && rental.RatePerHourUSD != 0 {
+			return fmt.Errorf("rental %q is unpriced and states a rate_per_hour_usd of %v", rental.ID, rental.RatePerHourUSD)
+		}
+		if !rental.Unpriced && rental.RatePerHourUSD <= 0 {
 			return fmt.Errorf("rental %q needs a positive rate_per_hour_usd", rental.ID)
 		}
 		if err := rental.Billing.validate("rental " + rental.ID); err != nil {

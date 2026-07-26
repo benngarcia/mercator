@@ -421,6 +421,12 @@ type PriceModel struct {
 	Known                bool    `json:"known"`
 }
 
+// CostUnpriced is the source a cost estimate names when nobody quoted a price for
+// the machine. It is a stated absence and not a prediction of nothing: there are
+// no dollars to compare, which is what CandidateDecision.Priced reads and what
+// keeps a machine Mercator would actually pay for from being scored as free.
+const CostUnpriced = "unpriced"
+
 type QueueSnapshot struct {
 	QueuedWorkSeconds float64 `json:"queued_work_seconds"`
 	ActiveSlots       int     `json:"active_slots"`

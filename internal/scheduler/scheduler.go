@@ -345,8 +345,19 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 			Message:  "Offer is known to start later than the requested p90 start latency, before any content nobody could describe is priced.",
 		})
 	}
-	if workload.Spec.Placement.MaxExpectedCostUSD != nil && estimates.CostUSD.Expected > *workload.Spec.Placement.MaxExpectedCostUSD {
-		violations = append(violations, domain.Violation{Code: "COST_LIMIT_EXCEEDED", Path: "placement.max_expected_cost_usd", Required: *workload.Spec.Placement.MaxExpectedCostUSD, Offered: estimates.CostUSD.Expected, Message: "Offer exceeds the requested maximum expected cost."})
+	// A bound on dollars is not cleared by a candidate that has no dollars. An
+	// unpriced machine reported a cost of zero, so it passed every budget a Run
+	// could state, which is the same fabrication as pricing it at nothing: the Run
+	// asked to spend no more than a number, and nobody can say what this spends.
+	if maximum := workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil {
+		offered := any(estimates.CostUSD.Expected)
+		exceeded := estimates.CostUSD.Expected > *maximum
+		if estimates.CostUSD.Source == domain.CostUnpriced {
+			offered, exceeded = domain.CostUnpriced, true
+		}
+		if exceeded {
+			violations = append(violations, domain.Violation{Code: "COST_LIMIT_EXCEEDED", Path: "placement.max_expected_cost_usd", Required: *maximum, Offered: offered, Message: "Offer exceeds the requested maximum expected cost."})
+		}
 	}
 	return violations
 }
@@ -550,7 +561,14 @@ func startEstimate(input SchedulingInput, offer domain.OfferSnapshot, parts ...d
 	return start
 }
 
+// costEstimate is what this Run is billed for running here, over the runtime it
+// declared. A machine nobody quoted has no such number, and the estimate says so
+// rather than predicting nothing: a rate of zero is a machine somebody says is
+// free, and a machine Mercator would actually pay for is not that.
 func costEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
+	if !offer.Pricing.Known {
+		return domain.Estimate{Source: domain.CostUnpriced, ModelVersion: input.ModelVersion}
+	}
 	seconds := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if seconds <= 0 {
 		seconds = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)

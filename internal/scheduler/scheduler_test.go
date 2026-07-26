@@ -943,3 +943,97 @@ func TestARunsDownloadFloorIsNotClearedByADisownedFact(t *testing.T) {
 		}
 	}
 }
+
+// TestAnUnpricedCandidateIsTakenOnlyWhenNothingPricedWillDo is what allowing
+// unknown pricing buys a Run. It admits a machine nobody has quoted, which is
+// what an enrolled node with no configured shadow price publishes, and it never
+// makes one preferable: the score is in dollars and that candidate has none, so
+// reading the absence as zero made the machine Mercator pays for the cheapest in
+// the fleet. It is the last resort it was asked to be, and it is taken when the
+// alternative is not running.
+func TestAnUnpricedCandidateIsTakenOnlyWhenNothingPricedWillDo(t *testing.T) {
+	now := time.Now().UTC()
+	workload := schedulerRevision()
+	workload.Spec.Placement.AllowUnknownPricing = true
+	priced := schedulerOffer("off_priced", now, 0.0002, 0)
+	unpriced := schedulerOffer("off_unpriced", now, 0, 0)
+	unpriced.Pricing = domain.PriceModel{Currency: "USD"}
+	unpriced.Capabilities.Pricing = domain.PricingCapabilities{}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_pricing",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{priced, unpriced},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if decision.SelectedOfferSnapshotID != "off_priced" {
+		t.Errorf("the placement chose %q over a machine somebody quoted", decision.SelectedOfferSnapshotID)
+	}
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID != "off_unpriced" {
+			continue
+		}
+		if !candidate.Feasible {
+			t.Errorf("the unquoted machine is infeasible, and this Run said it would rather run there than not run: %+v", candidate.Rejections)
+		}
+		if candidate.Priced() || candidate.Estimates.CostUSD.Source != domain.CostUnpriced {
+			t.Errorf("the unquoted machine records cost %+v, and a reader has to be able to tell an absent price from a free machine", candidate.Estimates.CostUSD)
+		}
+	}
+
+	unreachable := schedulerOffer("off_priced", now, 0.0002, 0)
+	unreachable.Resources.MemoryBytes = 1 << 20
+	fallback, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_pricing_fallback",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{unreachable, unpriced},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate the fallback: %v", err)
+	}
+	if fallback.SelectedOfferSnapshotID != "off_unpriced" {
+		t.Errorf("with nothing priced left to take, the placement chose %q, and a last resort that is never taken is a refusal", fallback.SelectedOfferSnapshotID)
+	}
+}
+
+// TestABudgetIsNotClearedByACandidateWithNoPrice is the same absence read as a
+// bound rather than as a ranking. A Run that states a maximum expected cost has
+// said what it will spend, and a candidate whose price nobody quoted cannot be
+// shown to spend less: it reported zero dollars, so it passed every budget any
+// Run could state.
+func TestABudgetIsNotClearedByACandidateWithNoPrice(t *testing.T) {
+	now := time.Now().UTC()
+	budget := 1.0
+	workload := schedulerRevision()
+	workload.Spec.Placement.AllowUnknownPricing = true
+	workload.Spec.Placement.MaxExpectedCostUSD = &budget
+	unpriced := schedulerOffer("off_unpriced", now, 0, 0)
+	unpriced.Pricing = domain.PriceModel{Currency: "USD"}
+	unpriced.Capabilities.Pricing = domain.PricingCapabilities{}
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_budget",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{unpriced},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	candidate := decision.Candidates[0]
+	if candidate.Feasible {
+		t.Fatalf("a Run that budgeted %.2f USD was offered a machine nobody priced and took it", budget)
+	}
+	if candidate.Rejections[0].Code != "COST_LIMIT_EXCEEDED" {
+		t.Errorf("the refusal is %+v, and the caller has to see which bound the candidate missed", candidate.Rejections)
+	}
+}
