@@ -299,21 +299,33 @@ func TestObserveMapsRunningStatus(t *testing.T) {
 // epoch seconds, and that is what a predicted start latency is measured against.
 // An instance it published none for leaves the moment absent, because a start
 // derived from the launch's acceptance is a zero this model would then learn from.
+//
+// The read moment is pinned, because this is one of the two seams in the tree
+// where the start moment crosses from a foreign clock into Mercator's record, and
+// a case reading the wall clock cannot state anything about the order of the two:
+// the fixture this replaced dated an instance's start half a day after the read
+// that carried it and passed.
 func TestObserveReportsTheInstancesOwnStartMoment(t *testing.T) {
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `{"instances":[
-			{"id":777,"label":"mercator-lk1","actual_status":"running","start_date":1785110400.5,"extra_env":[["MERCATOR_OWNERSHIP_TOKEN","own1"]]}
+			{"id":777,"label":"mercator-lk1","actual_status":"running","start_date":1785067100.5,"extra_env":[["MERCATOR_OWNERSHIP_TOKEN","own1"]]}
 		]}`), nil
 	})
+	read := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return read }
 
 	obs, err := a.Observe(context.Background(), observeRequest())
 
 	if err != nil {
 		t.Fatalf("observe: %v", err)
 	}
-	want := time.Unix(1785110400, int64(500*time.Millisecond)).UTC()
+	want := time.Date(2026, 7, 26, 11, 58, 20, int(500*time.Millisecond), time.UTC)
 	if obs.StartedAt == nil || !obs.StartedAt.Equal(want) {
 		t.Fatalf("the observation reports %v as this instance's start and Vast said %s", obs.StartedAt, want.Format(time.RFC3339Nano))
+	}
+	if obs.StartedAt.After(obs.ObservedAt) {
+		t.Fatalf("this instance's start %s is after the read %s that carried it, so nothing observed it",
+			obs.StartedAt.Format(time.RFC3339Nano), obs.ObservedAt.Format(time.RFC3339Nano))
 	}
 }
 
