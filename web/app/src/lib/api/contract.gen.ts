@@ -993,8 +993,16 @@ export interface components {
             /** Format: double */
             confidence?: number;
             source?: string;
+            /** @description How many measured launches stand behind this answer. Zero is the answer a prior gives, and it is a different claim from the same seconds read off one launch. */
             sample_count?: number;
             model_version?: string;
+            /**
+             * @description Which evidence answered this estimate: measured launches of this exact candidate, of this provider in this region, of this provider, or none at all. A prior is named rather than left blank so a reader can tell a measurement from a published claim, which the seconds alone cannot say.
+             * @enum {string}
+             */
+            level?: "exact_candidate" | "provider_and_region" | "provider" | "prior";
+            /** @description The key the samples were read under, where any were. It is recorded so a reader can check what Mercator took the candidate to be against what it then learned about: an answer claiming this exact candidate, filed under a number a marketplace mints per search, is a claim of candidate-specific evidence made out of a key that cannot have any. */
+            key?: string;
         };
         /** @description What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves. */
         ImageInventory: {

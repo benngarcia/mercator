@@ -191,6 +191,30 @@ func (e CleanupErrorDisposition) Valid() bool {
 	}
 }
 
+// Defines values for EstimateLevel.
+const (
+	ExactCandidate    EstimateLevel = "exact_candidate"
+	Prior             EstimateLevel = "prior"
+	Provider          EstimateLevel = "provider"
+	ProviderAndRegion EstimateLevel = "provider_and_region"
+)
+
+// Valid indicates whether the value is a known member of the EstimateLevel enum.
+func (e EstimateLevel) Valid() bool {
+	switch e {
+	case ExactCandidate:
+		return true
+	case Prior:
+		return true
+	case Provider:
+		return true
+	case ProviderAndRegion:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NetworkCapabilitiesInbound.
 const (
 	NetworkCapabilitiesInboundNone       NetworkCapabilitiesInbound = "none"
@@ -814,14 +838,25 @@ type ErrorResponse struct {
 
 // Estimate defines model for Estimate.
 type Estimate struct {
-	Confidence   float64 `json:"confidence,omitempty"`
-	Expected     float64 `json:"expected,omitempty"`
-	ModelVersion string  `json:"model_version,omitempty"`
-	P50          float64 `json:"p50,omitempty"`
-	P90          float64 `json:"p90,omitempty"`
-	SampleCount  int     `json:"sample_count,omitempty"`
-	Source       string  `json:"source,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Expected   float64 `json:"expected,omitempty"`
+
+	// Key The key the samples were read under, where any were. It is recorded so a reader can check what Mercator took the candidate to be against what it then learned about: an answer claiming this exact candidate, filed under a number a marketplace mints per search, is a claim of candidate-specific evidence made out of a key that cannot have any.
+	Key string `json:"key,omitempty"`
+
+	// Level Which evidence answered this estimate: measured launches of this exact candidate, of this provider in this region, of this provider, or none at all. A prior is named rather than left blank so a reader can tell a measurement from a published claim, which the seconds alone cannot say.
+	Level        EstimateLevel `json:"level,omitempty"`
+	ModelVersion string        `json:"model_version,omitempty"`
+	P50          float64       `json:"p50,omitempty"`
+	P90          float64       `json:"p90,omitempty"`
+
+	// SampleCount How many measured launches stand behind this answer. Zero is the answer a prior gives, and it is a different claim from the same seconds read off one launch.
+	SampleCount int    `json:"sample_count,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
+
+// EstimateLevel Which evidence answered this estimate: measured launches of this exact candidate, of this provider in this region, of this provider, or none at all. A prior is named rather than left blank so a reader can tell a measurement from a published claim, which the seconds alone cannot say.
+type EstimateLevel string
 
 // EventListResponse defines model for EventListResponse.
 type EventListResponse struct {
