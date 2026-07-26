@@ -283,6 +283,93 @@ func TestAnUnresolvedManifestLeavesEveryCandidateIndistinguishable(t *testing.T)
 
 const nodeWorkspace = "ws_offers"
 
+// TestANodeOffersTheRoomItActuallyHas is the capacity half of the same defect.
+// A node offer asserted that capacity was available, at full confidence, for
+// every machine inside its lease, including one the machine itself said was mid
+// workload. The reusable lane is the only source of standing offers in
+// production and every rule Placement has about waiting is written against an
+// offer that says it is occupied, so none of them were reachable: a node was
+// read as idle this instant, its queue priced at no waiting at all, and a
+// Booking behind it promised a start the machine had already missed.
+//
+// This runtime runs one workload at a time, so one container is the whole
+// machine.
+func TestANodeOffersTheRoomItActuallyHas(t *testing.T) {
+	registry, session := readyNodeReporting(t, nil, domain.ArtifactInventory{}, domain.CacheInventory{})
+	if !capacityOf(t, registry).Available {
+		t.Fatal("a node running nothing offered no capacity")
+	}
+
+	reportWorkload(t, registry, session, "evt-running", capability.WorkloadPhaseRunning, nil)
+
+	capacity := capacityOf(t, registry)
+	if capacity.Available {
+		t.Fatal("a node executing a workload offered capacity for another")
+	}
+	if capacity.Confidence != 1 {
+		t.Fatalf("the offer states %v confidence in a machine Mercator can see, want the full point it owns",
+			capacity.Confidence)
+	}
+}
+
+// TestANodeWhoseWorkloadExitedOffersItsCapacityBack is the other direction, and
+// the reason the claim is read off the node's own report rather than off anything
+// Mercator intended: the slot is free when the container is gone, which the
+// machine says before the control plane has finished the Booking that put it
+// there.
+func TestANodeWhoseWorkloadExitedOffersItsCapacityBack(t *testing.T) {
+	registry, session := readyNodeReporting(t, nil, domain.ArtifactInventory{}, domain.CacheInventory{})
+	reportWorkload(t, registry, session, "evt-running", capability.WorkloadPhaseRunning, nil)
+
+	exited := 0
+	reportWorkload(t, registry, session, "evt-exited", capability.WorkloadPhaseExited, &exited)
+
+	if !capacityOf(t, registry).Available {
+		t.Fatal("a node whose container exited still offered no capacity")
+	}
+}
+
+func capacityOf(t *testing.T, registry *node.Registry) domain.CapacityEvidence {
+	t.Helper()
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("list node offers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("the workspace offered %d machines, want the one enrolled node", len(offers))
+	}
+	return offers[0].Capacity
+}
+
+// reportWorkload is the node saying what its container is doing, over the same
+// authenticated path its agent reports through.
+func reportWorkload(
+	t *testing.T,
+	registry *node.Registry,
+	session capability.Enrollment,
+	eventID string,
+	phase capability.WorkloadPhase,
+	exitCode *int,
+) {
+	t.Helper()
+	observed := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	err := registry.RecordEvents(context.Background(), session.NodeID, session.SessionToken, []node.Event{{
+		ID:         eventID,
+		Kind:       node.EventWorkload,
+		ObservedAt: observed,
+		Workload: &capability.WorkloadObservation{
+			RunID:      "run-holding-the-machine",
+			AttemptID:  "attempt-1",
+			Phase:      phase,
+			ObservedAt: observed,
+			ExitCode:   exitCode,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("record %s: %v", phase, err)
+	}
+}
+
 // TestANodeOffersTheCopiesItHolds is the Artifact half of the same contract, and
 // the same defect one layer along: the node reported its copies and the offer
 // projection dropped them, so on the only reusable lane that exists every
@@ -452,20 +539,25 @@ func readyNode(t *testing.T, held []capability.ImageLocality) *node.Registry {
 
 func readyNodeHoldingCaches(t *testing.T, caches domain.CacheInventory) *node.Registry {
 	t.Helper()
-	return readyNodeReporting(t, nil, domain.ArtifactInventory{}, caches)
+	registry, _ := readyNodeReporting(t, nil, domain.ArtifactInventory{}, caches)
+	return registry
 }
 
 func readyNodeHolding(t *testing.T, images []capability.ImageLocality, copies domain.ArtifactInventory) *node.Registry {
 	t.Helper()
-	return readyNodeReporting(t, images, copies, domain.CacheInventory{})
+	registry, _ := readyNodeReporting(t, images, copies, domain.CacheInventory{})
+	return registry
 }
 
+// readyNodeReporting is one enrolled machine and the session it reports through,
+// because what a node is running is a fact it states rather than one anybody can
+// state for it.
 func readyNodeReporting(
 	t *testing.T,
 	images []capability.ImageLocality,
 	copies domain.ArtifactInventory,
 	caches domain.CacheInventory,
-) *node.Registry {
+) (*node.Registry, capability.Enrollment) {
 	t.Helper()
 	registry, clock := newRegistry(t)
 	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
@@ -489,8 +581,9 @@ func readyNodeReporting(
 			Caches:     caches,
 		},
 	}
-	if _, err := registry.Enroll(context.Background(), request); err != nil {
+	enrollment, err := registry.Enroll(context.Background(), request)
+	if err != nil {
 		t.Fatalf("enroll node: %v", err)
 	}
-	return registry
+	return registry, enrollment
 }

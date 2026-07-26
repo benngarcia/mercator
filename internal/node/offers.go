@@ -40,9 +40,45 @@ func (registry *Registry) Offers(ctx context.Context, workspaceID string) ([]dom
 		if !record.Alive(now) {
 			continue
 		}
-		offers = append(offers, registry.offer(record, now))
+		occupied, err := registry.occupied(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		offers = append(offers, registry.offer(record, occupied))
 	}
 	return offers, nil
+}
+
+// occupied is how many workloads this machine says it is executing right now.
+// The node owns container lifecycle, so this is its own report and not a
+// derivation from anything the control plane intended: a container it is still
+// running occupies the machine whether or not Mercator has a Booking for it, and
+// a Booking Mercator holds for a container that has exited occupies nothing.
+func (registry *Registry) occupied(ctx context.Context, record Record) (int, error) {
+	workloads, err := registry.store.Workloads(ctx, record.WorkspaceID, record.ID)
+	if err != nil {
+		return 0, err
+	}
+	occupied := 0
+	for _, workload := range workloads {
+		if occupies(workload.Phase) {
+			occupied++
+		}
+	}
+	return occupied, nil
+}
+
+// occupies reports whether a workload in this phase is holding a slot on the
+// machine. Everything up to the exit does: a container being prepared or created
+// is one the runtime has committed a slot to. An exit releases it, and a workload
+// the node has no record of was never on it.
+func occupies(phase capability.WorkloadPhase) bool {
+	switch phase {
+	case capability.WorkloadPhasePreparing, capability.WorkloadPhaseCreated, capability.WorkloadPhaseRunning:
+		return true
+	default:
+		return false
+	}
 }
 
 // offerFreshness is how long a node offer stays selectable without a newer
@@ -68,7 +104,7 @@ func (registry *Registry) Ref(ctx context.Context, workspaceID, nodeID string) (
 	return record.Ref(), nil
 }
 
-func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapshot {
+func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapshot {
 	host := record.Facts.Host
 	support := registry.NodeSupport()
 	platform := domain.Platform{OS: hostOS(host.OS), Architecture: host.Architecture}
@@ -131,10 +167,21 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		// reason: each entry names the workspace that owns it, and only the node
 		// can say what is on its disk.
 		Caches: record.Facts.Caches,
-		// Mercator observed this machine itself, through the heartbeat this
-		// projection is built from, so the confidence is its own and it is full. A
-		// provider catalog listing states none, because nobody published one.
-		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+		// What this machine can take right now, from what it says it is already
+		// running against how much it can run at once. A standing claim that
+		// capacity is available was the reusable lane asserting a machine mid
+		// workload was free: the queueing rules are all written against an offer
+		// that says it is occupied, so Placement read every node as idle, priced
+		// its queue at nothing, and never reached them.
+		//
+		// Mercator observed this machine itself, through the reports this
+		// projection is built from, so the confidence is its own and it is full,
+		// whichever answer it is. A provider catalog listing states none, because
+		// nobody published one.
+		Capacity: domain.CapacityEvidence{
+			Available:  occupied < support.MaxConcurrentWorkloads,
+			Confidence: 1,
+		},
 	}
 }
 
