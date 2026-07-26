@@ -280,7 +280,7 @@ func (o *Orchestrator) deferOrRefuse(
 // somebody else's runtime, and counting it as a queue this Run is in is what let
 // one impossible ask empty a fleet the moment anything else was running.
 func placementDeferral(run queuePosition, decision domain.BookingDecision) (domain.AdmissionDeferral, bool) {
-	waitable := couldHoldOnceFree(decision)
+	waitable := candidatesThatCouldHold(decision)
 	wait, projected := shortestProjectedWait(waitable)
 	reason := domain.DeferredNoFeasibleOffer
 	if len(decision.Candidates) > 0 && len(waitable) == 0 {
@@ -293,11 +293,11 @@ func placementDeferral(run queuePosition, decision domain.BookingDecision) (doma
 	return deferral, projected
 }
 
-// couldHoldOnceFree is the machines this decision weighed that could take this
-// Run when whatever they are spending now comes back. It is the whole fleet as
-// far as a wait is concerned, and the rest of the candidate set is a record of
+// candidatesThatCouldHold is the machines this decision weighed that could take
+// this Run when whatever they are spending now comes back. It is the whole fleet
+// as far as a wait is concerned, and the rest of the candidate set is a record of
 // machines this Run is not competing for.
-func couldHoldOnceFree(decision domain.BookingDecision) []domain.CandidateDecision {
+func candidatesThatCouldHold(decision domain.BookingDecision) []domain.CandidateDecision {
 	var waitable []domain.CandidateDecision
 	for _, candidate := range decision.Candidates {
 		if candidate.CouldHoldOnceFree() {

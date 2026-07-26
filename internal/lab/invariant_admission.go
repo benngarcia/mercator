@@ -249,7 +249,7 @@ func nothingWaitsBehindAnImpossibleAsk(observation InvariantObservation) error {
 			if err != nil {
 				return err
 			}
-			if err := heldByNothingImpossible(impossible, runID, deferral); err != nil {
+			if err := nothingAheadIsImpossible(impossible, runID, deferral); err != nil {
 				return err
 			}
 			impossible[runID] = heldByNothing(impossible[runID], deferral)
@@ -268,7 +268,7 @@ func nothingWaitsBehindAnImpossibleAsk(observation InvariantObservation) error {
 	return nil
 }
 
-func heldByNothingImpossible(impossible map[string]bool, runID string, deferral domain.AdmissionDeferral) error {
+func nothingAheadIsImpossible(impossible map[string]bool, runID string, deferral domain.AdmissionDeferral) error {
 	for _, ahead := range deferral.Behind {
 		if !impossible[ahead.RunID] {
 			continue
