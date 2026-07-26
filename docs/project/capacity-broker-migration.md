@@ -1162,6 +1162,85 @@ complete because it works against a live provider.
     is deliberately untouched: it does not reproduce on this host, it is a
     separate filed defect with its own regression test to write, and folding it
     into a locality slice would hide it.
+- [x] 2026-07-25: Prepare the machine a queued Run is going to, and stop when it
+  is not. The prepare command path was fully built and had no caller.
+  `capability.PrepareImageCommand` reached `docker pull` through
+  `node.CommandPrepareImage`, `Registry.PrepareImage`, operation-ID dedupe,
+  fencing, a durable command record, and the agent, and the only caller in the
+  tree was one test. `broker.Nodes` declared Offers, Ref, LaunchWorkload,
+  ObserveWorkload, and StopWorkload, so the prepare half of
+  `capability.NodeRuntime` was unreachable from the control plane's own
+  abstraction. Every Run that queued behind a Booking therefore paid its whole
+  pull when its turn came, on a machine that had been idle for that image the
+  entire time it waited.
+  - Preparation is desired state rather than a stream of orders.
+    `adapter.PrepareRequest` carries the whole of what Mercator wants prepared
+    for one workspace, and content absent from it is content Mercator has
+    stopped asking for. That shape is what makes withdrawal expressible at all: a
+    Run whose caller cancelled it must stop costing the machine it was queued on
+    disk and bandwidth, and "stop" is an absence rather than a command.
+    `orchestrator.Prewarm` reconciles the set on every advance and holds what it
+    last asked for in memory only, because the desire is derived from the event
+    log every time and a restarted Mercator recomputes and resends it.
+  - Speculation never competes with admitted work, and the control plane is the
+    only thing that can promise it: a node performs its commands in order, a link
+    carries what it carries, and a machine asked for six transfers performs six.
+    So the controller refuses to prepare a host where a Run it already admitted
+    is still getting ready. Nothing below the control plane reports that an image
+    is still landing, because a provider says running from the moment it accepts
+    a launch, so the answer is Mercator's own prediction measured from when the
+    launch was taken. Believing its own estimate is the honest reading: it is the
+    number the placement was made on.
+  - `safety.prewarm_yields_to_real_work` reads the ledger and finds no
+    speculative transfer overlapping the fetch an admitted Run is waiting for on
+    that machine, and no more of them in flight at once than the world allows. It
+    is stated as an overlap rather than as an ordering, because "precedes" is not
+    the failure: a prefetch that started first and is still running is exactly
+    the one in the way. `liveness.prefetch_converges` is the bounded half, that a
+    requested preparation reaches hot or cold rather than holding a machine's
+    room for hours with nobody able to say whether it is still coming.
+  - `node.prepare_image`, `node.prepare_artifact`, and `node.prepare_abandoned`
+    join the Effect Ledger and `effectMutatesWorld`, so
+    `safety.idempotent_external_commands` covers them. `image.retained` names why
+    the content came, which is what makes a host warmed by preparation
+    distinguishable from one warmed by execution: they are different facts about
+    a machine and the ledger had one word for both.
+  - Blueprint vocabulary gains `world.prewarm` bounds and
+    `arrivals.cancellations`. The corpus could not state a Run that goes away
+    before it runs, and that is the one world speculative preparation has to be
+    right about.
+  - `DockerRuntime.PrepareArtifact` stops refusing. It reads from the location
+    the command names and nowhere else, which is what keeps object-store material
+    off a machine an operator rents by the hour. The copy is hashed as it streams
+    and recorded under the digest those bytes produced rather than the digest it
+    was promised, and it lands under its final name only once complete. `Facts`
+    enumerates those copies, so an enrolled node stops publishing silence about
+    content it is holding. `NodeSupport.Prewarm` and `ArtifactReplicas` are true
+    again, having been withdrawn in the image-store commit; garbage collection is
+    the one still owed.
+  - Judgment calls. The desired set is per workspace rather than per host,
+    because what may be in flight at once is a fleet-wide bound and a per-host
+    command could not express it. A preparation identity carries the machine and
+    the content and never the Run, so two Runs wanting one image on one host want
+    one transfer. The Lab never restarts a preparation it abandoned under the
+    same identity: content Mercator stopped wanting and then wants again arrives
+    with the launch that needs it, and reusing the identity would leave one
+    operation ID with two consequences. The rate bound applies to additions only,
+    because waiting out an interval before telling a machine to stop is the
+    opposite of what the bound is for. The artifact root is stated by whoever
+    starts the agent rather than defaulted, and a node keeping copies outside the
+    daemon's storage advertises the smaller of the two filesystems.
+    `DefaultPrewarmPolicy` ships on at the most restrained bound that does
+    anything, because shipping it off would leave this capability exactly where
+    the prepare path already was.
+  - What is left. Withdrawal is not expressible on a node: its contract has one
+    command per piece of content and no way to say stop, so an item a desired set
+    no longer names is a pull that runs to completion there. The Lab world models
+    it because a provider seam can, and the node's half is
+    [#170](https://github.com/benngarcia/mercator/issues/170). Nothing in
+    production implements `orchestrator.ArtifactCatalog`, so no production Run
+    declares an Artifact and the Artifact half of the desired set is exercised at
+    L1 and against a real object store rather than end to end.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1183,7 +1262,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; a production object-store client, prefetch, and producer affinity remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -1402,6 +1481,31 @@ Phase 3 added:
   because storage is reached by the identity itself, here and on a container
   runtime alike: a volume is named by the workspace, the cache, and the generation
   together, so a resolution cannot wander without the derivation wandering first.
+- `prewarming-never-starves-real-work` (conformance): one machine and four Runs.
+  The first is admitted and spends ten minutes fetching the forty gigabytes it
+  runs, the second is queued behind it, and Mercator gets the machine ready for
+  it: the image and the twenty gigabyte dataset it reads, one at a time and no
+  sooner than a minute apart. Nothing starts until the admitted Run's own fetch
+  has landed, because a node performs its commands in order and both cross one
+  link. A third Run arrives once the machine holds both and its decision prices
+  that host at zero pull seconds and a checked copy, on a machine that has
+  executed neither. The fourth wants sixty gigabytes nothing else needs and its
+  caller withdraws it eight minutes in: the preparation stops and the room goes
+  back. Deleting the yielding guard, the concurrency bound, the withdrawal, or
+  the whole controller each fails it, three of them through an invariant.
+- `safety.prewarm_yields_to_real_work` (Lab invariant): no speculative transfer
+  is moving onto a machine at the same time as content a Run admitted there is
+  waiting for, and no more of them are in flight at once than the world stated.
+  It is an overlap rather than an ordering, because a prefetch that started first
+  and is still running is exactly the one in the way. It reads the ledger rather
+  than world state, because a transfer that has finished leaves nothing in world
+  state and the question is about the moment it was happening.
+- `liveness.prefetch_converges` (Lab invariant): a requested preparation reaches
+  an answer within two hours of virtual time, the content landing or Mercator
+  withdrawing it. What may never happen is the third state, a transfer holding a
+  machine's room and its link with nobody able to say whether it is still coming.
+  Assumptions: virtual time advances, and the registry and object store keep
+  answering.
 - `safety.locality_provenance` (Lab invariant): every digest a host holds is
   either seeded by the World Tape or recorded as retained there by an
   `image.retained` effect, every Artifact copy a host holds is either seeded or
@@ -1412,7 +1516,7 @@ Phase 3 added:
   is a fact the World Tape must be able to state.
 
 The corpus is 23 regression Blueprints: 15 green and 8 target, beside one demo,
-one minimized case, and six conformance Blueprints.
+one minimized case, and seven conformance Blueprints.
 
 ## What phase 2 does not yet do
 
@@ -1479,6 +1583,83 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 3 controlled prewarming
+
+On 2026-07-25, `prewarming-never-starves-real-work` was written against the
+world, driven as a target Blueprint, and promoted in the same change once green.
+Each claim is held by a deliberate break that fails it:
+
+- deleting the guard that refuses to prepare a host still getting ready for work
+  Mercator admitted there fails the Blueprint through the invariant: `Lab
+  invariant "safety.prewarm_yields_to_real_work" failed: machine "builder" was
+  fetching "sha256:7a1c..." speculatively for Run "run-patient" while Run
+  "run-long" was waiting on "trainer@sha256:5d7e..." to start there`. It also
+  fails `TestNothingIsPreparedOnAMachineStillGettingReadyForItsOwnRun` against
+  the production daemon, which is the same rule one layer up: `the machine was
+  asked to prepare [sha256:8888...] while the Run it was just given is still
+  fetching its own image`;
+- deleting the truncation to the world's concurrency bound fails it through the
+  same rule from the other side: `2 speculative fetches were in flight at
+  2030-01-01T00:11:00Z, and this world allows 1`;
+- never abandoning what a desired set no longer names fails
+  `TestPreparationStopsWhenTheRunThatWantedItGoesAway` with `the ledger records 0
+  withdrawals, want the one Run whose caller withdrew it`;
+- turning the controller off entirely, which is the state the tree shipped in,
+  fails `TestAPreparedHostIsWarmForARunThatNeverExecutedThere` with `the prepared
+  machine was priced 320.50 pull seconds and recorded "cold", want zero on a host
+  holding the image whole`. That is what a queued Run cost on a machine that had
+  been idle for its image the whole time it waited;
+- dropping the filter that stops Mercator asking for content a host already holds
+  fails the Blueprint twice, with `the ledger records 1 preparations, want the
+  image, the dataset, and the withdrawn one` and `the prepared machine was priced
+  320.00 seconds of Artifact read`: the desire never shrinks, so the second piece
+  of content never enters the concurrency window;
+- giving each dispatch a fresh operation identity, which is what a control plane
+  that treated preparation as an order rather than as desired state produces,
+  fails `TestARedeliveredPreparationPullsOnce` in `internal/nodeagent` with the
+  redelivery accepted as new work;
+- filing a fetched copy under the digest it was asked for rather than the digest
+  its bytes produced fails
+  `TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth` against MinIO on this
+  machine with `a copy whose bytes are another version's is reported "verified"`.
+
+The Artifact fetch conformance ran live. `docker info` answers on this host, so
+MinIO was started in a container of its own daemon, an object was written and
+read over presigned URLs, and the node reported the digest those bytes actually
+hashed to. The operator command that reproduces it by hand is recorded in
+`internal/nodeagent/artifact_live_test.go`. No issue was filed for that gap
+because there is none.
+
+The demo Blueprint's normalized bundle hash does not move. It states no
+`prewarm` bounds, so its control plane prepares nothing and no preparation effect
+enters its ledger.
+
+Two limits are worth stating rather than hiding.
+
+Withdrawal is not expressible on a node. `capability.NodeRuntime` has one command
+per piece of content and no way to say stop, so `broker.Prepare` can start a pull
+and cannot end one: an item the next desired set no longer names is a transfer
+that runs to completion on the machine, holding room a real launch may need. The
+Lab world models the withdrawal because a provider seam can, and the node's half
+is [#170](https://github.com/benngarcia/mercator/issues/170).
+
+Nothing in production implements `orchestrator.ArtifactCatalog`, so no production
+Run declares an Artifact and the Artifact half of a desired set never fires end to
+end. What the node does with one is held against a real object store, and what
+Mercator does with one is held at L1.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/adapter/fake ./internal/orchestrator \
+  ./internal/node ./internal/nodeagent ./internal/broker ./internal/httpapi \
+  ./internal/daemon ./cmd/mercator -count=1
+```
+
+Run on a Linux workstation against Docker Engine 29.6.2 on the containerd
+snapshotter, which is amd64 and not the arm64 macOS the earlier phase 3 slices
+were built on. Nothing in this slice behaved differently there.
 
 ### Phase 3 Artifact locality at placement
 
