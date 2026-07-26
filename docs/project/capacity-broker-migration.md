@@ -2613,6 +2613,52 @@ the launch.
 
 ## Verification evidence
 
+### Phase 4 the second review of the start moment
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
+Docker daemon. Each claim is held by a deliberate break that fails it:
+
+- reverting `bookingStartedAt` to adopting any moment that is not nil fails
+  `TestANodeWithASkewedClockDoesNotSetMercatorsOwn` with `the record says the Booking
+  has 3509.47s of enforced runtime left, and it ran out`, and fails
+  `TestABookingClockIsHeldToTheSameLawAsTheRunStream` at the Lab rule;
+- copying the node's own `ObservedAt` through `broker.observeOnNode` fails the same
+  fleet case with `the Run records a start of 2026-07-26T13:59:23Z, and its machine's
+  clock is an hour ahead of the control plane's`;
+- deleting the registry's receipt stamp fails
+  `TestAReportedWorkloadIsDatedByTheClockMercatorKeeps`, and fails both fleet start
+  cases with a 502 from the Broker refusing a report it cannot place on Mercator's
+  clock;
+- deleting the clause about a moment ahead of its read from
+  `adapter.EstablishedStart` fails `a-clock-nobody-shares-is-not-a-start` with
+  `records a start moment of 2030-01-01T01:00:20Z, and the fixture says nobody
+  observed one`, and the Lab rule keeps failing the same record on its own terms,
+  which is the independence the delegation had removed;
+- publishing the world's own truth instead of the machine's reading fails
+  `TestAHostRunningAheadIsRefusedThroughTheWholeLabWorld` with `the start-latency row
+  is sourced "run_stream.execution_started" with 20.00s`;
+- dropping the parse error on the node runtime's `State.StartedAt` fails
+  `TestARuntimeThatStatesAnUnreadableStartMomentFailsTheRead`, which drives a daemon
+  printing Go's default time form;
+- dropping the error on the Docker adapter's `Created` moment fails
+  `TestContainerFromInspectRefusesAMomentItCannotRead/Created`, which nothing in the
+  tree could fail before.
+
+The live half ran. `go test ./internal/nodeagent -run TestTheNodeReportsWhenTheContainerStarted`
+and the Docker adapter's integration case were exercised against this host's own
+Docker Engine, which is native here rather than behind a VM, so the two moments the
+adapter parses are the ones a real daemon printed. Mercator issue #165, the
+reachability probe with no timeout, does not reproduce on this host and was
+deliberately left alone.
+
+One limit is worth stating rather than hiding. The Booking clock's refusal is driven
+end to end only on the reusable lane. Both simulated worlds report running from the
+moment a launch is accepted, so the first observation the control plane gets carries
+no start moment and the schedule is measured from that read, which is the fallback
+the rule has to allow rather than the case it exists to catch. The lane where a start
+arrives with the first running observation is the one an enrolled node serves, and
+that is where the fleet case drives it.
+
 ### Phase 4 the launch waterfall
 
 On 2026-07-26, on the amd64 Linux workstation, the eight-stage record was written
