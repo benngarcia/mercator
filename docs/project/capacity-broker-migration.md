@@ -1705,6 +1705,66 @@ complete because it works against a live provider.
     `buildOffers` had no test over its reliability output at all; two now cover the
     measured ask and the silent one, and mutating `interruptionHistory` to state a
     start failure rate or to read silence as zero fails both.
+- [x] 2026-07-26: Answer the review of the ephemeral start-moment commit. Two
+  reviewers refuted parts of it, and what sat under the three new adapter cases was
+  a production rule missing rather than three fixtures merely being wrong.
+  - Mercator files only a start moment it can defend, and
+    `adapter.ExternalObservation.ObservedStart` is where the two things that
+    disqualify one are stated, so the rule holds for the reusable lane and all three
+    ephemeral adapters at once instead of three times in three adapters. A moment
+    later than the read that carried it is a clock Mercator does not share: a host an
+    hour ahead published a start an hour in the future, `execution_started` recorded
+    it, the Run Bundle filed a start latency an hour too large as a measurement, and
+    `safety.start_is_observed_not_inferred` then failed the execution for a moment
+    Mercator only passed through. A moment carried by a phase saying the work has not
+    begun is the claim every provider makes from the moment it accepts: RunPod
+    publishes `lastStartedAt` while the image is still landing, which is exactly why
+    an address is what makes a pod running here, and leaving the moment outside that
+    distrust bought the phase gate nothing. The observation still carries what the
+    holder said either way; only what Mercator adopts is refused.
+  - The Lab rule reads observations through that same law, which makes the clause
+    about a moment ahead of its read reachable and the refusal not a violation. The
+    clause was dead: deleting it left the whole tree green, because neither simulated
+    world can publish a start that has not arrived.
+    `TestEveryClauseOfTheStartRuleCanFail` drives all three clauses,
+    `TestAStartClaimMercatorRefusedIsNotAViolation` is the world the second loop would
+    otherwise blame Mercator for, and the fake provider gained the one knob that can
+    state either: it publishes the moment it gave a container a process, dated on its
+    own clock, and publishes nothing by default.
+  - The local Docker lane measured every start latency as a negative number. The
+    receipt's accepted moment was Mercator's clock after `docker start` returned,
+    which is later than the start the same daemon reports, and on a launch resolved as
+    a duplicate it was later by the whole retry gap: the container was made and given
+    a process by the first attempt, and only the acceptance was re-dated. It is now
+    the moment the daemon made the container, on the daemon's own clock, so both
+    moments in the subtraction come from one clock. A start earlier than its own
+    acceptance is not subtracted at all: the Run Bundle row names the pair it could
+    not measure with `start_before_launch_accepted` rather than filing a negative
+    wait.
+  - `docker inspect` moments are parsed loudly. Both were read with the error
+    dropped, so a daemon that renamed the field or stated the moment in another form
+    reported the epoch, the whole lane published no start, and every start-latency row
+    degraded to unobserved with nothing failing. The mapping is
+    `containerFromInspect` over one payload, its cases read a capture this host's
+    Engine 29.6.2 actually printed, and the live integration case compares the
+    observed start and the accepted moment against an independent `docker inspect`.
+    Deleting the parse fails a case offline and fails the live case.
+  - Both caught fixtures were wrong about the record they pinned. The Vast case dated
+    an instance's start half a day after the read that carried it and passed, because
+    the adapter under test read the wall clock. The RunPod case pinned a start on a
+    pod with no address, which this adapter reports as queued, so it canonized an
+    observation saying a workload had begun and had not begun at once. Both pin the
+    read moment now and assert the order, and the queued pod with a start already
+    published is its own case.
+  - Judgment calls. The refused claim is dropped silently rather than raised: the
+    observation event still records what the provider said, so nothing is hidden, and
+    failing a Run because its host keeps a skewed clock would take capacity out of
+    service over a stage nobody can measure. No World Tape vocabulary states provider
+    clock skew, so the production rule is held by the seam cases and the Lab rule by
+    hand-built records rather than by a Blueprint; a fixture that states a host's
+    clock offset belongs with the slice that gives the simulated worlds one. And this
+    pass ran beside a concurrent session in the same worktree: its Lab half landed
+    inside that session's commit `6858429` rather than in a commit of its own.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
