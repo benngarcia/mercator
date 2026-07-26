@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Two machines hold the same 18GB layer of the same image at the same price, and one of them has nowhere to put the 40GB dataset the Run reads. Room is not a preference the scheduler weighs down: nothing the cramped machine could delete helps, because every byte it gave up of this Run's content is a byte the Run needs back, so it is refused with RESOURCE_INSUFFICIENT naming its disk and the decision records the room it had beside what the Run asked of it. What may never refuse a machine is content nobody could enumerate, which is the other half of the same rule and is held in the Lab. The second Run states a disk floor of its own, which is room for what the Run itself writes and is asked for beside its content rather than out of it: until an offer stated real disk, that rejection was unreachable on capacity Mercator controls and every node in the fleet advertised zero bytes.",
+  "summary": "Three machines and one Run at a time. Two of them hold the same 18GB layer of the same image at the same price, and one of those has nowhere to put the 40GB dataset the Run reads: room is not a preference the scheduler weighs down, because nothing the cramped machine could delete helps. Every byte it gave up of this Run's content is a byte the Run needs back, so it is refused with RESOURCE_INSUFFICIENT naming its disk and the decision records the room it had beside what the Run asked of it. What may never refuse a machine is content nobody could enumerate, which is the other half of the same rule and is held in the Lab. The second Run states a disk floor of its own, and the machine that cannot meet it is struck out: until an offer stated real disk, that rejection was unreachable on capacity Mercator controls and every node in the fleet advertised zero bytes. The third Run states a floor the roomy machine could meet on its own and reads a second dataset beside it, and the two are spent against the same bytes, so the Run goes to the only machine with room for both. A floor asked for out of the content rather than beside it is a floor a Run is admitted on and does not get.",
   "classification": "green",
   "world": {
     "images": {
@@ -16,6 +16,11 @@
         "id": "artifact:imagenet:v2.41",
         "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
         "size": "40GB"
+      },
+      {
+        "id": "artifact:eval-set:v1",
+        "content_digest": "sha256:2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+        "size": "40GB"
       }
     ],
     "rentals": [
@@ -30,6 +35,11 @@
         "cached_layers": ["sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de"],
         "resources": {"disk": "200GB"},
         "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-vast",
+        "resources": {"disk": "400GB"},
+        "rate_per_hour_usd": 4.0
       }
     ]
   },
@@ -89,6 +99,35 @@
             "feasible": true,
             "image_locality": "hot",
             "pull_seconds": 0
+          }
+        }
+      }
+    },
+    {
+      "advance": "1m"
+    },
+    {
+      "submit": "reserves-room-and-reads",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "resources": {"disk": "150GB"},
+        "expected_runtime": "20m",
+        "max_runtime": "1h",
+        "consumes_artifacts": ["artifact:eval-set:v1"]
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-vast",
+        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "candidates": {
+          "rental-cramped": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
+          "rental-roomy": {
+            "feasible": false,
+            "artifact_evidence": {"artifact:eval-set:v1": "miss"},
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
           }
         }
       }
