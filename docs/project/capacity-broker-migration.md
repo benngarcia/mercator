@@ -2875,8 +2875,10 @@ the launch.
 
 On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
 native Docker Engine 29.6.2. Two reviewers refuted the first review of the identity,
-and six of their findings were real: four defects in what the specification could
-express and two false claims in this plan. A concurrent session held its own slice
+and all six of their findings were real. The key was blind to the execution lane and
+to content nobody could name, the rule could not judge two of the three clauses it
+advertised, neither simulated world could state the machine or the split inventory the
+breaks are about, and two claims in this plan were false. A concurrent session held its own slice
 open across `internal/lab/world.go`, `internal/lab/invariant.go` and
 `internal/scenario/schema.go` in the same worktree, so every suite below was run
 against a `git archive` of the commit rather than against the working tree, and only
