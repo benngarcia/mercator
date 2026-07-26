@@ -142,24 +142,27 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	if !found {
 		return adapter.ExternalObservation{LaunchKey: req.LaunchKey, Phase: adapter.ExternalPhaseReleased, ObservedAt: a.now().UTC()}, nil
 	}
+	// The observation carries no start moment, and the absence is the pod record
+	// read honestly. The only moment it holds about starting is lastStartedAt,
+	// which RunPod stamps when it places the pod: the image is still landing then,
+	// which is exactly why an address rather than a desired status is what makes a
+	// pod running here, and the value does not move when the container process
+	// finally begins. Publishing it would file the whole image pull inside the
+	// runtime and teach the calibration that a start RunPod took four minutes to
+	// reach cost five seconds. A phase gate cannot repair that: it postpones
+	// adopting a stale moment instead of correcting it, and on a pull that fails
+	// the pod goes straight to EXITED carrying the same moment.
+	//
+	// What would establish a start here is a moment about the process. Nothing in
+	// the pod record this adapter reads is one, so the stage stays unobserved until
+	// Mercator's own runtime is on the machine, which is the same answer Shadeform
+	// gives for created_at.
 	return adapter.ExternalObservation{
 		ExternalID: p.ID,
 		LaunchKey:  req.LaunchKey,
 		Phase:      phaseFromPod(p),
-		// When RunPod says it last gave this pod a process. A pod it has never
-		// started omits the field, and the observation then carries no start moment
-		// rather than one derived from when the launch was taken.
-		StartedAt:  podStartMoment(p),
 		ObservedAt: a.now().UTC(),
 	}, nil
-}
-
-func podStartMoment(p pod) *time.Time {
-	if p.LastStartedAt == nil || p.LastStartedAt.IsZero() {
-		return nil
-	}
-	startedAt := p.LastStartedAt.UTC()
-	return &startedAt
 }
 
 func (a *Adapter) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {

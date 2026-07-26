@@ -6,12 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const defaultBaseURL = "https://console.vast.ai"
@@ -66,22 +64,6 @@ type instance struct {
 	Verification  string     `json:"verification"`
 	PublicIP      string     `json:"public_ipaddr"`
 	ExtraEnv      [][]string `json:"extra_env"`
-	// StartDate is when Vast says this instance's container began, in epoch
-	// seconds. It is the one moment the instance record carries about the workload
-	// rather than about the request, and zero means Vast published none: the
-	// observation then states the start absent rather than deriving one from the
-	// moment the launch was accepted.
-	StartDate float64 `json:"start_date"`
-}
-
-// startedAt is when Vast says this instance began, and the zero moment when Vast
-// said nothing about it.
-func (i instance) startedAt() time.Time {
-	if i.StartDate <= 0 {
-		return time.Time{}
-	}
-	seconds, fraction := math.Modf(i.StartDate)
-	return time.Unix(int64(seconds), int64(fraction*float64(time.Second))).UTC()
 }
 
 // env flattens the instance's extra_env pairs into a map. Non-pair entries

@@ -273,81 +273,60 @@ func TestObserveMapsStatusAndVerifiesOwnership(t *testing.T) {
 	}
 }
 
-// TestObserveReportsThePodsOwnStartMoment is the calibration seam. A predicted
-// start latency is measured against started minus accepted, and RunPod publishes
-// exactly one moment about the workload rather than the request: the moment it
-// last gave the pod a process. A pod it has never started publishes none, and the
-// observation then states the start absent rather than deriving one from the
-// launch, which would make every start latency in the log zero.
+// TestObserveReportsNoStartForARunningPod is the calibration seam, and what it
+// pins is an absence. A predicted start latency is measured against started minus
+// accepted, and nothing in a pod record can supply the first half: lastStartedAt is
+// stamped when RunPod places the pod, which is minutes before the image has landed
+// and the container process exists, and it does not move when the process finally
+// begins. This pod is one this adapter calls running, four minutes after the moment
+// RunPod published, and the observation still states no start.
 //
-// The pod is one this adapter calls running, and the read moment is pinned. The
-// fixture this replaced was a pod with no address, which phaseFromPod reports as
-// queued, so it pinned an observation saying a workload had begun and had not
-// begun at once, and it read the wall clock, so it stated nothing about whether
-// the moment had arrived by the time Mercator read it.
-func TestObserveReportsThePodsOwnStartMoment(t *testing.T) {
+// Publishing it and letting a phase gate decide was the defect. The gate postpones
+// adopting a stale moment rather than correcting it: the Run Bundle filed five
+// seconds as a measured start for a start that took four minutes, and on a failed
+// pull the pod reaches EXITED still carrying the moment it was placed.
+func TestObserveReportsNoStartForARunningPod(t *testing.T) {
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","publicIp":"1.2.3.4","lastStartedAt":"2026-07-26T11:00:00Z","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
+		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","publicIp":"1.2.3.4","lastStartedAt":"2026-07-26T11:00:05Z","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
 	})
-	read := time.Date(2026, 7, 26, 11, 3, 5, 0, time.UTC)
-	a.now = func() time.Time { return read }
+	a.now = func() time.Time { return time.Date(2026, 7, 26, 11, 4, 10, 0, time.UTC) }
 
 	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
 
 	if err != nil {
 		t.Fatalf("observe: %v", err)
 	}
-	want := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
 	if obs.Phase != adapter.ExternalPhaseRunning {
-		t.Fatalf("phase = %q, and a start moment is a moment a running workload began", obs.Phase)
-	}
-	if obs.StartedAt == nil || !obs.StartedAt.Equal(want) {
-		t.Fatalf("the observation reports %v as this pod's start and RunPod said %s", obs.StartedAt, want.Format(time.RFC3339))
-	}
-	if obs.StartedAt.After(obs.ObservedAt) {
-		t.Fatalf("this pod's start %s is after the read %s that carried it, so nothing observed it",
-			obs.StartedAt.Format(time.RFC3339Nano), obs.ObservedAt.Format(time.RFC3339Nano))
-	}
-}
-
-// TestObserveReportsAQueuedPodsStartAsTheProviderFactItIs is the pod RunPod says
-// RUNNING about from the moment it accepts, with no address yet and its own start
-// moment already published. The adapter reports both, because a provider fact is
-// the adapter's to carry and not to correct, and both are what the control plane
-// needs to refuse the moment: a start that arrives with a phase saying the workload
-// has not begun is not this Run's start, which is decided once for every lane in
-// orchestrator.startMoment rather than three times here.
-func TestObserveReportsAQueuedPodsStartAsTheProviderFactItIs(t *testing.T) {
-	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","lastStartedAt":"2026-07-26T11:00:05Z","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
-	})
-	a.now = func() time.Time { return time.Date(2026, 7, 26, 11, 0, 10, 0, time.UTC) }
-
-	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
-
-	if err != nil {
-		t.Fatalf("observe: %v", err)
-	}
-	if obs.Phase != adapter.ExternalPhaseQueued {
-		t.Fatalf("phase = %q, and a pod with no address is not running work", obs.Phase)
-	}
-	if obs.StartedAt == nil || !obs.StartedAt.Equal(time.Date(2026, 7, 26, 11, 0, 5, 0, time.UTC)) {
-		t.Fatalf("the observation drops the moment RunPod published: %v", obs.StartedAt)
-	}
-}
-
-func TestObserveReportsNoStartForAPodRunPodNeverStarted(t *testing.T) {
-	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
-		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
-	})
-
-	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
-
-	if err != nil {
-		t.Fatalf("observe: %v", err)
+		t.Fatalf("phase = %q, and this pod has an address, so it is running", obs.Phase)
 	}
 	if obs.StartedAt != nil {
-		t.Fatalf("a pod RunPod published no start moment for reports %s", obs.StartedAt.Format(time.RFC3339Nano))
+		t.Fatalf("the observation reports %s as this workload's start, and the pod record establishes no such moment",
+			obs.StartedAt.Format(time.RFC3339Nano))
+	}
+}
+
+// TestObserveReportsNoStartForAnExitedPod is the same absence reached through a
+// terminal phase. A pull that fails takes the pod from placed to EXITED without
+// ever running the workload, and the moment RunPod stamped when it placed it is
+// still in the record: adopted, it would teach the calibration that a start is
+// instant for a workload that never began.
+func TestObserveReportsNoStartForAnExitedPod(t *testing.T) {
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"EXITED","lastStartedAt":"2026-07-26T12:00:00Z","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
+	})
+	a.now = func() time.Time { return time.Date(2026, 7, 26, 12, 4, 0, 0, time.UTC) }
+
+	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
+
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if obs.Phase != adapter.ExternalPhaseFailed {
+		t.Fatalf("phase = %q, and an exited pod RunPod says nothing else about is a failure", obs.Phase)
+	}
+	if obs.StartedAt != nil {
+		t.Fatalf("the observation reports %s as the start of a workload that never ran",
+			obs.StartedAt.Format(time.RFC3339Nano))
 	}
 }
 

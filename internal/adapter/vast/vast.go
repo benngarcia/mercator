@@ -206,19 +206,20 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	if !found {
 		return adapter.ExternalObservation{LaunchKey: req.LaunchKey, Phase: adapter.ExternalPhaseReleased, ObservedAt: a.now().UTC()}, nil
 	}
-	observation := adapter.ExternalObservation{
+	// No start moment, for the reason Shadeform states about created_at and RunPod
+	// about lastStartedAt: start_date is when Vast started this instance's contract,
+	// which is before the image has landed and before anything runs on it, and it
+	// does not move when the container process begins. An instance record is a fact
+	// about a machine, and when a container got a process is a fact about a
+	// container runtime. Reporting the contract's start as the workload's would fold
+	// a whole image pull into the runtime and calibrate the start estimator on close
+	// to nothing.
+	return adapter.ExternalObservation{
 		ExternalID: strconv.FormatInt(i.ID, 10),
 		LaunchKey:  req.LaunchKey,
 		Phase:      phaseFromInstance(i),
 		ObservedAt: a.now().UTC(),
-	}
-	// When Vast says this instance's container began. An instance it published no
-	// start date for leaves the moment absent, which is what a stage with no actual
-	// is: nothing here turns the launch's acceptance into a start.
-	if startedAt := i.startedAt(); !startedAt.IsZero() {
-		observation.StartedAt = &startedAt
-	}
-	return observation, nil
+	}, nil
 }
 
 func (a *Adapter) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {
