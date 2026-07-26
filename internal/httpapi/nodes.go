@@ -102,11 +102,12 @@ func nodeSummary(record node.Record) NodeSummary {
 	summary.Accelerators = accelerators
 	summary.LeaseExpires = record.LeaseExpires
 	summary.LastHeartbeatAt = record.LastHeartbeatAt
-	// A node states the room it established and separately whether it
-	// established any, because the two answers send an operator to different
-	// places: a full machine is one to clear out, and a machine that cannot be
-	// measured is a daemon this agent is not beside.
-	summary.DiskMeasured = record.Facts.Host.Disk.Known
+	// A node states the room it established and separately what is known about
+	// the measurement, because the answers send an operator to different places:
+	// a full machine is one to clear out, a machine that cannot be measured is a
+	// daemon this agent is not beside, and a machine nobody has heard from is
+	// one to go and start an agent on.
+	summary.DiskReport = NodeSummaryDiskReport(record.Disk())
 	summary.DiskFreeBytes = record.Facts.Host.Disk.FreeBytes
 	return summary
 }

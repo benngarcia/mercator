@@ -95,6 +95,43 @@ func (record Record) Alive(now time.Time) bool {
 	return record.State == StateReady && now.Before(record.LeaseExpires)
 }
 
+// DiskReport is what Mercator can say about one node's disk, which is three
+// answers and not two. Each sends an operator somewhere different, and a
+// boolean can only carry two, so the third gets told as one of the others.
+type DiskReport string
+
+const (
+	// DiskNeverReported is an identity nobody has heard from: invited and not
+	// yet enrolled, or enrolled by an agent whose first heartbeat has not
+	// landed. Nothing has been measured because nothing has been asked, and
+	// saying "this node could not measure its disk" about a machine that has
+	// never spoken states a fact about a daemon Mercator has never seen.
+	DiskNeverReported DiskReport = "never_reported"
+	// DiskUnmeasurable is a node that reported and could not measure: its
+	// daemon keeps content somewhere its agent cannot see. It stays in the
+	// fleet, it reports its containers and their exits, and it wins no
+	// placement that declares a disk floor.
+	DiskUnmeasurable DiskReport = "unmeasurable"
+	// DiskMeasured is a number this node established. Zero free bytes is a full
+	// machine, which is a thing to go and clear out rather than a thing nobody
+	// could read.
+	DiskMeasured DiskReport = "measured"
+)
+
+// Disk is which of the three this node's latest facts amount to. A node states
+// its own observation time on every report, which is what separates a machine
+// that has said nothing from one that answered.
+func (record Record) Disk() DiskReport {
+	switch {
+	case record.Facts.ObservedAt.IsZero():
+		return DiskNeverReported
+	case !record.Facts.Host.Disk.Known:
+		return DiskUnmeasurable
+	default:
+		return DiskMeasured
+	}
+}
+
 // CommandKind names one instruction a node can be asked to perform. The wire
 // carries the kind beside an opaque payload so the transport stays narrow
 // enough for a second runtime implementation to reuse.

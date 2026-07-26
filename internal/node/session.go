@@ -110,7 +110,11 @@ func (registry *Registry) RecordEvents(ctx context.Context, nodeID, sessionToken
 	if latestFacts == nil {
 		return nil
 	}
-	_, err = registry.store.Heartbeat(ctx, record.WorkspaceID, record.ID, *latestFacts, registry.now().UTC().Add(registry.lease))
+	// The report is kept as the machine can stand behind it. This and Enroll are
+	// the two doors facts come through, and what a node did not establish must
+	// not reach an offer or a listing as though it had.
+	established := latestFacts.Established()
+	_, err = registry.store.Heartbeat(ctx, record.WorkspaceID, record.ID, established, registry.now().UTC().Add(registry.lease))
 	return err
 }
 

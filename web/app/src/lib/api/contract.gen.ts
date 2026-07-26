@@ -1185,12 +1185,15 @@ export interface components {
             container_runtime?: string;
             accelerators?: number;
             /**
-             * Format: int64
-             * @description The room this node last measured on the filesystem its daemon keeps content on. It is what the node's offer states, so a node reporting none wins no placement that declares a disk floor.
+             * @description What is known about the room on the filesystem this node's daemon keeps content on, which is three answers and not two. never_reported is an identity nobody has heard from yet, so nothing has been measured because nothing has been asked. unmeasurable is a node that answered and could not measure: its daemon keeps content somewhere its agent cannot see, which costs it every placement that declares a disk floor and never its membership of the fleet. measured is a number this node established, and zero of it is a full machine.
+             * @enum {string}
              */
-            disk_free_bytes?: number;
-            /** @description Whether this node could measure its disk at all. A node whose daemon keeps its content somewhere the agent cannot see reports everything else and says nothing here, which costs it placements and never its membership of the fleet. */
-            disk_measured: boolean;
+            disk_report: "never_reported" | "unmeasurable" | "measured";
+            /**
+             * Format: int64
+             * @description The room this node last measured, always stated. It is zero unless disk_report is measured, because bytes nobody established are not room: it is what the node's offer advertises, so a node with none wins no placement that declares a disk floor. Zero with disk_report measured is a machine that is full.
+             */
+            disk_free_bytes: number;
         };
         NodeListResponse: {
             nodes: components["schemas"]["NodeSummary"][];

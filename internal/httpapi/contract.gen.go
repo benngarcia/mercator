@@ -242,6 +242,27 @@ func (e NetworkRequirementsInbound) Valid() bool {
 	}
 }
 
+// Defines values for NodeSummaryDiskReport.
+const (
+	Measured      NodeSummaryDiskReport = "measured"
+	NeverReported NodeSummaryDiskReport = "never_reported"
+	Unmeasurable  NodeSummaryDiskReport = "unmeasurable"
+)
+
+// Valid indicates whether the value is a known member of the NodeSummaryDiskReport enum.
+func (e NodeSummaryDiskReport) Valid() bool {
+	switch e {
+	case Measured:
+		return true
+	case NeverReported:
+		return true
+	case Unmeasurable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NodeSummaryState.
 const (
 	Enrolling NodeSummaryState = "enrolling"
@@ -798,21 +819,24 @@ type NodeSummary struct {
 	AgentVersion     string `json:"agent_version,omitempty"`
 	ContainerRuntime string `json:"container_runtime,omitempty"`
 
-	// DiskFreeBytes The room this node last measured on the filesystem its daemon keeps content on. It is what the node's offer states, so a node reporting none wins no placement that declares a disk floor.
-	DiskFreeBytes int64 `json:"disk_free_bytes,omitempty"`
+	// DiskFreeBytes The room this node last measured, always stated. It is zero unless disk_report is measured, because bytes nobody established are not room: it is what the node's offer advertises, so a node with none wins no placement that declares a disk floor. Zero with disk_report measured is a machine that is full.
+	DiskFreeBytes int64 `json:"disk_free_bytes"`
 
-	// DiskMeasured Whether this node could measure its disk at all. A node whose daemon keeps its content somewhere the agent cannot see reports everything else and says nothing here, which costs it placements and never its membership of the fleet.
-	DiskMeasured          bool      `json:"disk_measured"`
-	Generation            int64     `json:"generation"`
-	Id                    string    `json:"id"`
-	LastHeartbeatAt       time.Time `json:"last_heartbeat_at,omitempty"`
-	LeaseExpires          time.Time `json:"lease_expires,omitempty"`
-	RentalId              string    `json:"rental_id"`
-	ShadowPriceUsdPerHour float32   `json:"shadow_price_usd_per_hour"`
+	// DiskReport What is known about the room on the filesystem this node's daemon keeps content on, which is three answers and not two. never_reported is an identity nobody has heard from yet, so nothing has been measured because nothing has been asked. unmeasurable is a node that answered and could not measure: its daemon keeps content somewhere its agent cannot see, which costs it every placement that declares a disk floor and never its membership of the fleet. measured is a number this node established, and zero of it is a full machine.
+	DiskReport            NodeSummaryDiskReport `json:"disk_report"`
+	Generation            int64                 `json:"generation"`
+	Id                    string                `json:"id"`
+	LastHeartbeatAt       time.Time             `json:"last_heartbeat_at,omitempty"`
+	LeaseExpires          time.Time             `json:"lease_expires,omitempty"`
+	RentalId              string                `json:"rental_id"`
+	ShadowPriceUsdPerHour float32               `json:"shadow_price_usd_per_hour"`
 
 	// State What the control plane believes about this node. A lost node is unobserved, not dead.
 	State NodeSummaryState `json:"state"`
 }
+
+// NodeSummaryDiskReport What is known about the room on the filesystem this node's daemon keeps content on, which is three answers and not two. never_reported is an identity nobody has heard from yet, so nothing has been measured because nothing has been asked. unmeasurable is a node that answered and could not measure: its daemon keeps content somewhere its agent cannot see, which costs it every placement that declares a disk floor and never its membership of the fleet. measured is a number this node established, and zero of it is a full machine.
+type NodeSummaryDiskReport string
 
 // NodeSummaryState What the control plane believes about this node. A lost node is unobserved, not dead.
 type NodeSummaryState string

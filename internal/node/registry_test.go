@@ -323,6 +323,80 @@ func TestAHeartbeatRenewsTheLeaseAndReplacesTheNodesFacts(t *testing.T) {
 	}
 }
 
+// TestARoomNobodyMeasuredIsNeverOfferedAsRoom is the coupling between the two
+// halves of one report. A node states the room it has left and separately
+// whether it established the number, and nothing in the wire contract stops a
+// report from carrying both a measurement and a denial that it made one: an
+// agent that keeps a previous answer while marking it unestablished, an older
+// build, or another implementation of the NodeRuntime protocol. Read as two
+// independent fields it advertises 400GiB nobody measured, a Run with a floor
+// is admitted onto it, and the fleet listing states the contradiction back to
+// the operator. What the control plane keeps is the half the machine stands
+// behind, once, where the report comes in.
+func TestARoomNobodyMeasuredIsNeverOfferedAsRoom(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+
+	report(t, registry, bootstrap.NodeID, enrollment.SessionToken, node.Event{
+		ID:         "evt-heartbeat-unestablished-disk",
+		Kind:       node.EventHeartbeat,
+		ObservedAt: clock.Now(),
+		Facts: &capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host: capability.HostFacts{
+				OS:               "linux",
+				ContainerRuntime: "docker",
+				Disk:             capability.DiskFacts{Known: false, TotalBytes: 500 << 30, FreeBytes: 400 << 30},
+			},
+		},
+	})
+
+	offers, err := registry.Offers(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list node offers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("offers = %d, want the one enrolled node", len(offers))
+	}
+	if offers[0].Resources.EphemeralDiskBytes != 0 {
+		t.Fatalf("the offer advertises %d bytes of room from a measurement the node says it did not make",
+			offers[0].Resources.EphemeralDiskBytes)
+	}
+	records, err := registry.List(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+	if got := records[0].Facts.Host.Disk.FreeBytes; got != 0 {
+		t.Fatalf("the record kept %d bytes nobody established", got)
+	}
+	if got := records[0].Disk(); got != node.DiskUnmeasurable {
+		t.Fatalf("the node's disk reads %q, and the machine said it could not measure it", got)
+	}
+}
+
+// TestAnInvitedNodeHasReportedNothingRatherThanFailedToMeasure separates the
+// two answers a zero disk could mean. An identity exists before the machine
+// does, and until its agent speaks nobody has attempted a measurement, so
+// "this daemon cannot be measured" is a claim about a host Mercator has never
+// heard from.
+func TestAnInvitedNodeHasReportedNothingRatherThanFailedToMeasure(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+
+	records, err := registry.List(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list nodes: %v", err)
+	}
+
+	if len(records) != 1 || records[0].ID != bootstrap.NodeID {
+		t.Fatalf("records = %+v, want the invited identity", records)
+	}
+	if got := records[0].Disk(); got != node.DiskNeverReported {
+		t.Fatalf("an invited node's disk reads %q before its agent has said anything", got)
+	}
+}
+
 func TestASessionCredentialFromASupersededEnrollmentIsRejected(t *testing.T) {
 	registry, _ := newRegistry(t)
 	bootstrap := invite(t, registry)

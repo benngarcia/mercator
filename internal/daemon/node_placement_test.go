@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -205,7 +206,19 @@ type fleet struct {
 	submitted    int
 }
 
-func startFleet(t *testing.T) *fleet {
+// fleetOption changes what this fleet's one machine is before its agent starts
+// reporting, so a case can state the host it needs rather than the one every
+// other case happens to use.
+type fleetOption func(*fleet)
+
+// reporting is what this machine's agent establishes about its disk. A real
+// agent answers from statfs on the daemon's own root, and returns no disk fact
+// at all when it cannot see it.
+func reporting(disk capability.DiskFacts) fleetOption {
+	return func(f *fleet) { f.runtime.disk = disk }
+}
+
+func startFleet(t *testing.T, options ...fleetOption) *fleet {
 	t.Helper()
 	// No Docker on PATH, so the daemon seeds no local connection and the
 	// enrolled node is the only capacity in play. The point of these cases is
@@ -224,6 +237,9 @@ func startFleet(t *testing.T) *fleet {
 			trainerIndexDigest: {trainerBaseDiffID, trainerTopDiffID},
 			rebuiltIndexDigest: {trainerBaseDiffID, rebuiltTopDiffID},
 		}),
+	}
+	for _, option := range options {
+		option(harness)
 	}
 	bootstrap := harness.invite(t)
 	harness.nodeID = bootstrap.NodeID
@@ -456,21 +472,66 @@ func (f *fleet) refuseToPlace(t *testing.T, runID string) {
 	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusBadGateway)
 }
 
-// nodes is the operator's own view of the fleet.
+// nodes is the operator's own view of the fleet, kept as the typed answer and
+// as the JSON it arrived in. A number left off the wire decodes into the same
+// Go zero as a number stated as zero, so a listing that omits the room a full
+// machine has left is indistinguishable, in a struct, from one that says the
+// machine is full.
 func (f *fleet) nodes(t *testing.T) []nodeSummary {
 	t.Helper()
 	var response struct {
-		Nodes []nodeSummary `json:"nodes"`
+		Nodes []json.RawMessage `json:"nodes"`
 	}
 	f.call(t, http.MethodGet, "/v1/nodes?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
-	return response.Nodes
+	summaries := make([]nodeSummary, 0, len(response.Nodes))
+	for _, listed := range response.Nodes {
+		var summary nodeSummary
+		if err := json.Unmarshal(listed, &summary); err != nil {
+			t.Fatalf("decode node summary %s: %v", listed, err)
+		}
+		if err := json.Unmarshal(listed, &summary.stated); err != nil {
+			t.Fatalf("decode node summary fields %s: %v", listed, err)
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries
 }
 
 type nodeSummary struct {
 	ID            string `json:"id"`
 	State         string `json:"state"`
-	DiskMeasured  bool   `json:"disk_measured"`
+	DiskReport    string `json:"disk_report"`
 	DiskFreeBytes int64  `json:"disk_free_bytes"`
+	// stated is every field this summary actually carried, so a case can ask
+	// whether the answer was on the wire rather than whether it decoded to a
+	// zero.
+	stated map[string]json.RawMessage
+}
+
+func (summary nodeSummary) states(field string) bool {
+	_, stated := summary.stated[field]
+	return stated
+}
+
+func (summary nodeSummary) fields() []string { return slices.Sorted(maps.Keys(summary.stated)) }
+
+func (summary nodeSummary) String() string {
+	return fmt.Sprintf("node %s state=%s disk_report=%s disk_free_bytes=%d stating %v",
+		summary.ID, summary.State, summary.DiskReport, summary.DiskFreeBytes, summary.fields())
+}
+
+// summaryFor is one machine's line in the listing, found by the identity the
+// operator was given for it.
+func (f *fleet) summaryFor(t *testing.T, nodeID string) nodeSummary {
+	t.Helper()
+	listed := f.nodes(t)
+	for _, summary := range listed {
+		if summary.ID == nodeID {
+			return summary
+		}
+	}
+	t.Fatalf("the fleet listing has no line for node %q: %+v", nodeID, listed)
+	return nodeSummary{}
 }
 
 func (f *fleet) decision(t *testing.T, runID string) bookingDecision {
@@ -590,6 +651,11 @@ type scriptedRuntime struct {
 	// workspace. Everything a container runtime mounts has to be in there:
 	// nothing below the control plane can derive a cache.
 	launches map[string]capability.LaunchWorkloadCommand
+	// disk is what this machine's agent established about the filesystem its
+	// daemon keeps content on. A runtime that could only ever answer one way
+	// leaves the two cases an operator most needs told apart, a full machine
+	// and an unmeasurable one, unreachable from any fixture.
+	disk capability.DiskFacts
 }
 
 func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
@@ -598,6 +664,7 @@ func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
 		platforms:    map[string]domain.Platform{},
 		observations: map[string]capability.WorkloadObservation{},
 		launches:     map[string]capability.LaunchWorkloadCommand{},
+		disk:         capability.DiskFacts{Known: true, TotalBytes: 500 << 30, FreeBytes: 400 << 30},
 	}
 }
 
@@ -689,7 +756,7 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 			RuntimeVersion:   "27.0.0",
 			CPUMillis:        8000,
 			MemoryBytes:      32 << 30,
-			Disk:             capability.DiskFacts{Known: true, TotalBytes: 500 << 30, FreeBytes: 400 << 30},
+			Disk:             runtime.disk,
 		},
 		Images: images,
 	}, nil
@@ -1009,14 +1076,11 @@ func TestANodeOffersTheDiskItsHostReported(t *testing.T) {
 	}
 }
 
-// TestTheNodeListingSaysWhetherTheDiskWasMeasured is what an operator has to be
-// able to read. A node that could not measure its disk offers no room and wins
-// no placement that declares a floor, which every Run does, so a fleet listing
-// that showed only "ready" would leave a working machine looking idle for no
-// stated reason. The room and whether anybody established it are separate
-// answers because they send an operator to different places: a full machine is
-// one to clear out, and an unmeasurable one is a daemon this agent is not beside.
-func TestTheNodeListingSaysWhetherTheDiskWasMeasured(t *testing.T) {
+// TestTheNodeListingReportsTheRoomAMeasuredNodeHasLeft is what an operator has
+// to be able to read. A node that offers no room wins no placement that declares
+// a floor, which every Run does, so a fleet listing that showed only "ready"
+// would leave a working machine looking idle for no stated reason.
+func TestTheNodeListingReportsTheRoomAMeasuredNodeHasLeft(t *testing.T) {
 	fleet := startFleet(t)
 
 	listed := fleet.nodes(t)
@@ -1024,11 +1088,81 @@ func TestTheNodeListingSaysWhetherTheDiskWasMeasured(t *testing.T) {
 	if len(listed) != 1 {
 		t.Fatalf("the fleet listed %d nodes, want the one enrolled: %+v", len(listed), listed)
 	}
-	if !listed[0].DiskMeasured {
-		t.Fatalf("the node measured its disk and the listing says otherwise: %+v", listed[0])
+	if listed[0].DiskReport != "measured" {
+		t.Fatalf("the node measured its disk and the listing says %q: %+v", listed[0].DiskReport, listed[0])
 	}
 	if listed[0].DiskFreeBytes != 400<<30 {
 		t.Fatalf("the listing reports %d bytes free, and its host reported 400GiB", listed[0].DiskFreeBytes)
+	}
+}
+
+// TestTheNodeListingStatesTheRoomOnAMachineThatIsFull is the one value of the
+// number this field exists for. A machine with nothing left is the case an
+// operator most needs to find, and it is the value that disappears from a JSON
+// document the moment the field is written as optional: a reader then gets the
+// same answer for "this disk is full" and "this server said nothing about
+// room", and the two send them to different places.
+func TestTheNodeListingStatesTheRoomOnAMachineThatIsFull(t *testing.T) {
+	fleet := startFleet(t, reporting(capability.DiskFacts{Known: true, TotalBytes: 500 << 30, FreeBytes: 0}))
+
+	summary := fleet.summaryFor(t, fleet.nodeID)
+
+	if summary.DiskReport != "measured" {
+		t.Fatalf("a full machine measured its disk and the listing says %q: %+v", summary.DiskReport, summary)
+	}
+	if !summary.states("disk_free_bytes") {
+		t.Fatalf("the listing left the room off the wire for the machine that has none, stating only %v", summary.fields())
+	}
+	if summary.DiskFreeBytes != 0 {
+		t.Fatalf("the listing reports %d bytes free on a machine with none", summary.DiskFreeBytes)
+	}
+}
+
+// TestTheNodeListingTellsAnUnmeasurableDiskFromANodeNobodyHasHeardFrom is the
+// third answer a boolean cannot carry. A node that reported and could not
+// measure has a daemon its agent cannot see, and an identity that was invited
+// and never enrolled has had nothing asked of it at all: sending the second
+// operator after a daemon states a fact about a machine Mercator has never
+// heard from. Both machines offer no room, so the room alone cannot tell them
+// apart either.
+func TestTheNodeListingTellsAnUnmeasurableDiskFromANodeNobodyHasHeardFrom(t *testing.T) {
+	fleet := startFleet(t, reporting(capability.DiskFacts{}))
+	silent := fleet.invite(t)
+
+	unmeasurable := fleet.summaryFor(t, fleet.nodeID)
+	unheard := fleet.summaryFor(t, silent.NodeID)
+
+	if unmeasurable.DiskReport != "unmeasurable" {
+		t.Fatalf("a node whose agent cannot see its daemon is listed %q: %+v", unmeasurable.DiskReport, unmeasurable)
+	}
+	if unmeasurable.DiskFreeBytes != 0 {
+		t.Fatalf("a node that measured nothing offers %d bytes of room", unmeasurable.DiskFreeBytes)
+	}
+	if unheard.DiskReport != "never_reported" {
+		t.Fatalf("an identity nobody has heard from is listed %q, which is a claim about a daemon: %+v",
+			unheard.DiskReport, unheard)
+	}
+	if unheard.State != "enrolling" {
+		t.Fatalf("the invited identity is %q, want it still enrolling", unheard.State)
+	}
+}
+
+// TestANodeThatCannotMeasureItsDiskWinsNoPlacement is what the listing exists to
+// explain, driven end to end. The machine is enrolled, alive, and reporting its
+// containers, and every Run declares a disk floor, so a machine that established
+// no room is struck out of all of them. An operator reading only "ready" would
+// see a healthy node that never runs anything.
+func TestANodeThatCannotMeasureItsDiskWinsNoPlacement(t *testing.T) {
+	fleet := startFleet(t, reporting(capability.DiskFacts{}))
+
+	if offered := fleet.nodeOffer(t).Resources.EphemeralDiskBytes; offered != 0 {
+		t.Fatalf("a node that could not measure its disk offered %d bytes of room", offered)
+	}
+	runID := fleet.submitRun(t)
+	fleet.refuseToPlace(t, runID)
+
+	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, runID) {
+		t.Fatalf("a Run was sent to a machine whose room nobody established: %v", launched)
 	}
 }
 

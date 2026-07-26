@@ -177,7 +177,7 @@ func (registry *Registry) Enroll(ctx context.Context, request capability.Enrollm
 	enrolled, err := registry.store.Enroll(ctx, record.WorkspaceID, record.ID, Enrollment{
 		EnrollmentTokenID: TokenID(request.EnrollmentToken),
 		AgentVersion:      request.AgentVersion,
-		Facts:             request.Facts,
+		Facts:             request.Facts.Established(),
 		EnrolledAt:        now,
 		LeaseExpires:      now.Add(registry.lease),
 	})

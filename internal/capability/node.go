@@ -144,6 +144,22 @@ type NodeFacts struct {
 	Caches domain.CacheInventory `json:"caches,omitzero"`
 }
 
+// Established is this report with every measurement it says it did not make
+// erased. A report is a claim by a machine Mercator does not compile, and the
+// contract lets one arrive whose halves disagree: an agent that carries a
+// previous measurement forward while marking it unestablished, an older build,
+// or a third-party runtime implementing NodeRuntime. Whichever half a reader
+// happens to take then decides whether a placement is promised room nobody
+// established, and this tree has two readers, the offer projection and the
+// fleet listing. The control plane keeps the half the reporter stands behind,
+// once, where the report crosses into it.
+func (facts NodeFacts) Established() NodeFacts {
+	if !facts.Host.Disk.Known {
+		facts.Host.Disk = DiskFacts{}
+	}
+	return facts
+}
+
 // HostFacts is the substrate the node runs on, which is separate from what a
 // workload image carries. Mercator matches a workload's compatibility contract
 // against these, and never installs a workload's accelerator stack onto the
@@ -180,6 +196,10 @@ type HostFacts struct {
 // offer states the room a machine established, so a node that established none
 // advertises none and is struck out by the disk floor every workload carries,
 // in the Booking Decision where an operator can read it.
+//
+// Bytes stated beside Known false are bytes nobody established, and NodeFacts.
+// Established erases them where the report arrives. Every reader downstream is
+// therefore reading one answer rather than deciding between two.
 type DiskFacts struct {
 	Known      bool  `json:"known"`
 	TotalBytes int64 `json:"total_bytes,omitempty"`
