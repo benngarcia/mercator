@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 28 {
-		t.Fatalf("latest invariant results = %d, want 28", len(latest))
+	if len(latest) != 29 {
+		t.Fatalf("latest invariant results = %d, want 29", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -168,6 +168,16 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		"safety.prediction_is_recorded_against_its_actual": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{launchPredictingEveryStage("run-waterfall")}
 			observation.Effects = []EffectRecord{launchSpendingEveryStageBut("run-waterfall", domain.StageUnpack)}
+		},
+		// The world this exists to catch is the one the tree was in: the workload
+		// stated a readiness and the record took it whatever it said, so a host with
+		// the wrong clock filed an hour of ready latency as the application's own
+		// measurement. Nothing else in the registry reads the readiness at all.
+		"safety.readiness_is_reported_not_inferred": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				runReadinessReported("2026-07-24T13:04:10Z", "2026-07-24T12:05:00Z"),
+			}
+			observation.Runs = []domain.RunRecord{runRecordReady("2026-07-24T13:04:10Z")}
 		},
 		"safety.idempotent_external_commands": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{
@@ -540,6 +550,91 @@ func runStartRecorded(started string) eventlog.CloudEvent {
 		Type:    orchestrator.EventExecutionStarted,
 		Data:    []byte(`{"launch_key":"launch-1","started_at":"` + started + `"}`),
 	}
+}
+
+// TestEveryClauseOfTheReadinessRuleCanFail is the readiness rule read the way every
+// law here has to be readable. Four clauses, four records each one exists to catch,
+// and the registry's single deliberate case drives one of them.
+func TestEveryClauseOfTheReadinessRuleCanFail(t *testing.T) {
+	for name, observed := range map[string]struct {
+		events []eventlog.CloudEvent
+		runs   []domain.RunRecord
+	}{
+		"records a readiness no report of it stated": {
+			runs: []domain.RunRecord{runRecordReady("2026-07-24T12:06:00Z")},
+		},
+		"records a readiness its workload published ahead of the read that carried it": {
+			events: []eventlog.CloudEvent{runReadinessReported("2026-07-24T12:06:00Z", "2026-07-24T12:05:00Z")},
+			runs:   []domain.RunRecord{runRecordReady("2026-07-24T12:06:00Z")},
+		},
+		"records its application serving before its container started": {
+			events: []eventlog.CloudEvent{
+				runStartRecorded("2026-07-24T12:04:10Z"),
+				runReadinessReported("2026-07-24T12:00:00Z", "2026-07-24T12:05:00Z"),
+			},
+			runs: []domain.RunRecord{runRecordReady("2026-07-24T12:00:00Z")},
+		},
+		"throws away a readiness its workload stated": {
+			events: []eventlog.CloudEvent{runReadinessReported("2026-07-24T12:04:10Z", "2026-07-24T12:05:00Z")},
+			runs:   []domain.RunRecord{{ID: "run-1"}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := startRuleObservation(observed.events)
+			observation.Runs = observed.runs
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.readiness_is_reported_not_inferred",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("a Run that %s was reported as measuring a readiness its workload stated: %+v", name, result)
+			}
+		})
+	}
+}
+
+// TestAReadinessRefusedIsNotAViolation is the other side of the same law. A
+// workload on a host whose clock runs ahead states a moment Mercator cannot have
+// reached, the control plane declines to adopt it, and the report still sits in the
+// log saying what the workload said. The rule is about what Mercator recorded, so
+// the refusal is the rule holding rather than breaking.
+func TestAReadinessRefusedIsNotAViolation(t *testing.T) {
+	observation := startRuleObservation([]eventlog.CloudEvent{
+		runReadinessReported("2026-07-24T13:04:10Z", "2026-07-24T12:05:00Z"),
+	})
+	observation.Runs = []domain.RunRecord{{ID: "run-1"}}
+
+	result := invariantResultByID(t,
+		DefaultInvariantRegistry().Evaluate(observation),
+		"safety.readiness_is_reported_not_inferred",
+	)
+
+	if result.Status != InvariantPassed {
+		t.Fatalf("declining a readiness nobody could defend was reported as a violation: %s", result.Violation)
+	}
+}
+
+// runReadinessReported is run-1's workload saying it can do work, and the moment
+// Mercator appended the report saying so.
+func runReadinessReported(readyAt, readAt string) eventlog.CloudEvent {
+	return eventlog.CloudEvent{
+		Subject: "runs/run-1",
+		Type:    orchestrator.EventRunReported,
+		Time:    readAt,
+		Data:    []byte(`{"type":"ready","data":{"ready_at":"` + readyAt + `"}}`),
+	}
+}
+
+// runRecordReady is run-1 as Mercator's read model has it, carrying the readiness
+// the control plane adopted.
+func runRecordReady(readyAt string) domain.RunRecord {
+	moment, err := time.Parse(time.RFC3339Nano, readyAt)
+	if err != nil {
+		panic(err)
+	}
+	return domain.RunRecord{ID: "run-1", ReadyAt: &moment}
 }
 
 // TestEveryClauseOfTheDiskRuleCanFail is the disk rule read the way every law
@@ -1134,6 +1229,29 @@ func TestAHostRunningAheadIsRefusedThroughTheWholeLabWorld(t *testing.T) {
 				record.ActualSource, record.ActualSeconds)
 		}
 	}
+	// The application on that host reads the same clock, so its readiness is an hour
+	// in Mercator's future as well. The record has to carry the absence rather than
+	// the hour, and the projection is where the refusal shows.
+	for _, run := range labRunRecords(t, execution) {
+		if run.ReadyAt != nil {
+			t.Fatalf("Run %q records an application readiness of %s, stated by a workload whose host runs an hour ahead of Mercator",
+				run.ID, run.ReadyAt.Format(time.RFC3339Nano))
+		}
+	}
+}
+
+// labRunRecords is every Run in this execution as Mercator's own read model has it,
+// which is where the moments the control plane adopted live.
+func labRunRecords(t *testing.T, execution *Execution) []domain.RunRecord {
+	t.Helper()
+	records, err := execution.runtime.allRuns(context.Background())
+	if err != nil {
+		t.Fatalf("read run records: %v", err)
+	}
+	if len(records) == 0 {
+		t.Fatal("this execution recorded no Run at all")
+	}
+	return records
 }
 
 // startLatencyRows is every Run's start-latency row in this execution's Run

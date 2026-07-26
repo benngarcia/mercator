@@ -506,6 +506,10 @@ type World struct {
 	// the moment a process began and the only thing an observation can report it
 	// from once it has arrived.
 	startsAt map[string]time.Time
+	// readyAt is when each workload here really begins serving, which is what makes
+	// a report due. The moment the report carries is the same one read on its host's
+	// clock, and for one machine in this corpus those are not the same moment.
+	readyAt map[string]time.Time
 	// statedStarts is the same moment as each machine holding it would report it,
 	// which is world truth read on that host's own clock. The two are one map for
 	// every machine that keeps Mercator's clock and two for a machine that does
@@ -543,6 +547,7 @@ func NewWorld(clock *Clock, options ...Option) *World {
 		artifacts:    map[string]domain.ArtifactVersion{},
 		machines:     map[string]*Machine{},
 		startsAt:     map[string]time.Time{},
+		readyAt:      map[string]time.Time{},
 		statedStarts: map[string]time.Time{},
 		readiness:    map[string]ReadinessReport{},
 	}
@@ -677,10 +682,16 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 	// own clock. World truth stays above: this world knows when the container
 	// really began, and the host reporting it does not know its clock is wrong.
 	w.statedStarts[request.LaunchKey] = startsAt.Add(machine.ClockAhead)
+	readyAt := startsAt.Add(w.ApplicationReadySpend)
+	w.readyAt[request.LaunchKey] = readyAt
 	w.readiness[request.LaunchKey] = ReadinessReport{
 		WorkspaceID: request.WorkspaceID,
 		RunID:       request.RunID,
-		ReadyAt:     startsAt.Add(w.ApplicationReadySpend),
+		// The application reads the clock of the host it runs on, so what it states
+		// is the moment above on that machine's clock. World truth stays in readyAt:
+		// this world knows when the workload really began serving, and the workload
+		// reporting it does not know its host's clock is wrong.
+		ReadyAt: readyAt.Add(machine.ClockAhead),
 	}
 }
 
@@ -694,7 +705,10 @@ func (w *World) DueReadinessReports() []ReadinessReport {
 	var due []ReadinessReport
 	for _, launchKey := range slices.Sorted(maps.Keys(w.readiness)) {
 		report := w.readiness[launchKey]
-		if now.Before(report.ReadyAt) {
+		// Due on the world's own clock rather than on the clock the report states,
+		// because when a workload becomes ready is a fact about the world and the
+		// moment it names is a fact about its host.
+		if now.Before(w.readyAt[launchKey]) {
 			continue
 		}
 		delete(w.readiness, launchKey)

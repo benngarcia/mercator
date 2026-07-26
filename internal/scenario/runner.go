@@ -31,6 +31,12 @@ type Session interface {
 	AdvanceClock(d time.Duration) error
 	// RunEvents returns the named run's recorded event stream.
 	RunEvents(name string) ([]eventlog.StoredEvent, error)
+	// RunRecord is the named Run as Mercator's own read model has it. Readiness is
+	// asserted through it because a readiness report is a claim and the record is
+	// what Mercator adopted: a fixture reading the report could not state the world
+	// where a workload published a moment the control plane refused, which is the
+	// world a host with the wrong clock puts every one of its workloads in.
+	RunRecord(name string) (domain.RunRecord, error)
 	// Notes reports world or request ontology the backend could not express,
 	// so pending-red results say what was dropped.
 	Notes() []string
@@ -245,7 +251,7 @@ func assertExpect(session Session, start time.Time, bookings bookingNames, name 
 		}
 	}
 	failures = append(failures, assertStartMoment(events, name, expect)...)
-	failures = append(failures, assertReadyMoment(events, name, expect)...)
+	failures = append(failures, assertReadyMoment(session, events, name, expect)...)
 	for _, id := range sortedKeys(expect.Candidates) {
 		failures = append(failures, assertCandidate(rec, bookings, name, id, expect.Candidates[id])...)
 	}
@@ -286,7 +292,7 @@ func assertStartMoment(events []eventlog.StoredEvent, name string, expect Expect
 // the moment its process began, and the moment its application said it could do
 // work. It asserts nothing unless the fixture states one of them, because most
 // fixtures are about a placement decision and never run an application at all.
-func assertReadyMoment(events []eventlog.StoredEvent, name string, expect ExpectSpec) []string {
+func assertReadyMoment(session Session, events []eventlog.StoredEvent, name string, expect ExpectSpec) []string {
 	if expect.ReadyLatency == nil && !expect.NoReadyReported {
 		return nil
 	}
@@ -294,7 +300,10 @@ func assertReadyMoment(events []eventlog.StoredEvent, name string, expect Expect
 		return []string{fmt.Sprintf("run %q: ", name) + fmt.Sprintf(format, args...)}
 	}
 	started, observed := executionStartedAt(events)
-	ready, reported := applicationReadyAt(events)
+	ready, reported, err := applicationReadyAt(session, name)
+	if err != nil {
+		return fail("read run record: %v", err)
+	}
 	switch {
 	case expect.NoReadyReported && reported:
 		return fail("records its application ready at %s, and the fixture says it has not said so", ready.Format(time.RFC3339))
@@ -311,26 +320,21 @@ func assertReadyMoment(events []eventlog.StoredEvent, name string, expect Expect
 	return nil
 }
 
-// applicationReadyAt is the moment the application itself said it can do work,
-// which exists only when the application said so.
-func applicationReadyAt(events []eventlog.StoredEvent) (time.Time, bool) {
-	for index := len(events) - 1; index >= 0; index-- {
-		if events[index].Type != orchestrator.EventRunReported {
-			continue
-		}
-		var payload struct {
-			Type string `json:"type"`
-			Data struct {
-				ReadyAt time.Time `json:"ready_at"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(events[index].Data, &payload); err != nil ||
-			payload.Type != orchestrator.RunReportReady {
-			continue
-		}
-		return payload.Data.ReadyAt, true
+// applicationReadyAt is the readiness Mercator adopted for this Run, which exists
+// only where a workload stated a moment the control plane could defend. It is read
+// off the record rather than off the report for the same reason the start moment is
+// read off compute.run.execution_started.v1 rather than off the observation that
+// carried it: what a foreign clock published and what Mercator will measure against
+// are different facts, and only the second one is the Run's.
+func applicationReadyAt(session Session, name string) (time.Time, bool, error) {
+	record, err := session.RunRecord(name)
+	if err != nil {
+		return time.Time{}, false, err
 	}
-	return time.Time{}, false
+	if record.ReadyAt == nil {
+		return time.Time{}, false, nil
+	}
+	return record.ReadyAt.UTC(), true, nil
 }
 
 // launchAcceptedAt is the provider's own accepted moment, which is when this

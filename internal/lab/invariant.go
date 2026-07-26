@@ -101,6 +101,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.exclusive_booking_capacity", check: exclusiveBookingCapacity},
 		invariantRule{id: "safety.monotonic_terminal_state", check: monotonicTerminalState},
 		invariantRule{id: "safety.start_is_observed_not_inferred", check: startIsObservedNotInferred},
+		invariantRule{id: "safety.readiness_is_reported_not_inferred", check: readinessIsReportedNotInferred},
 		invariantRule{id: "safety.prediction_is_recorded_against_its_actual", check: predictionIsRecordedAgainstItsActual},
 		invariantRule{id: "safety.idempotent_external_commands", check: idempotentExternalCommands},
 		invariantRule{id: "safety.lease_fencing", check: leaseFencing},
@@ -394,6 +395,156 @@ func startIsObservedNotInferred(observation InvariantObservation) error {
 		}
 	}
 	return bookingClocksAreObserved(observation.RentalSchedules, looked)
+}
+
+// readinessIsReportedNotInferred is the same law over the last stage of a launch,
+// which is the one stage whose actual comes from outside Mercator entirely. A
+// provider, a node, and a container runtime can all see a process running and none
+// of them can see whether it is serving, so the workload is the only authority and
+// its report is the only source. That is exactly why the moment needs a rule: an
+// authority Mercator cannot check is an authority Mercator cannot check.
+//
+// Four clauses, each read from a different half of the record. What the Run
+// projection carries as its readiness must be a moment a readiness report on that
+// same Run stated, so no readiness is Mercator's own arithmetic. It must be no later
+// than the read that carried it, because a workload reads the clock of the host it
+// runs on and a host an hour ahead reports an hour of ready latency nothing
+// measured. It must not precede the start the same Run recorded, because an
+// application cannot serve before the process serving it exists and the two moments
+// come from two authorities that cannot see each other. And a Run whose report
+// stated a moment satisfying both must carry it, because a readiness that reads as
+// absent is the actual for this stage thrown away.
+//
+// The clauses are written out here rather than asked of the production predicate for
+// the reason safety.start_is_observed_not_inferred states one rule up: a
+// specification that asks the code to confirm its own arithmetic constrains nothing.
+//
+// A Run with no readiness at all is not a violation. A workload that never becomes
+// ready is a world this corpus can state, and the record saying nothing about the
+// stage is the honest answer for it.
+func readinessIsReportedNotInferred(observation InvariantObservation) error {
+	reported, err := readinessReportsByRun(observation)
+	if err != nil {
+		return err
+	}
+	for _, run := range observation.Runs {
+		if run.ReadyAt == nil {
+			continue
+		}
+		moment := run.ReadyAt.UTC()
+		if !reported[run.ID].stated(moment) {
+			return fmt.Errorf(
+				"Run %q records an application readiness of %s that no report of it stated, and its reports said %s",
+				run.ID, moment.Format(time.RFC3339Nano), reported[run.ID].describe(),
+			)
+		}
+		if !reported[run.ID].defensible(moment) {
+			return fmt.Errorf(
+				"Run %q records an application readiness of %s that arrived ahead of the read carrying it, and its reports said %s",
+				run.ID, moment.Format(time.RFC3339Nano), reported[run.ID].describe(),
+			)
+		}
+	}
+	return readinessFollowsItsContainer(observation, reported)
+}
+
+// readinessFollowsItsContainer is the pair of clauses that need the start moment
+// beside the readiness: the ordering of the two stages, and the readiness a Run was
+// told about and did not keep.
+func readinessFollowsItsContainer(observation InvariantObservation, reported map[string]readinessClaims) error {
+	_, started, err := startMomentsByRun(observation)
+	if err != nil {
+		return err
+	}
+	for _, run := range observation.Runs {
+		startedAt, observed := started[run.ID]
+		if run.ReadyAt != nil && observed && run.ReadyAt.UTC().Before(startedAt) {
+			return fmt.Errorf(
+				"Run %q records its application serving at %s and its container starting at %s",
+				run.ID, run.ReadyAt.UTC().Format(time.RFC3339Nano), startedAt.Format(time.RFC3339Nano),
+			)
+		}
+		if run.ReadyAt != nil {
+			continue
+		}
+		for _, claim := range reported[run.ID] {
+			if claim.defensible() && !(observed && claim.At.Before(startedAt)) {
+				return fmt.Errorf(
+					"Run %q was told its application was ready at %s by a report read at %s, and its record carries no readiness",
+					run.ID, claim.At.Format(time.RFC3339Nano), claim.ReadAt.Format(time.RFC3339Nano),
+				)
+			}
+		}
+	}
+	return nil
+}
+
+// readinessClaim is one readiness a workload stated and the moment Mercator read it
+// stating so. Both halves travel together because the whole question about a foreign
+// moment is how it compares with the read that carried it.
+type readinessClaim struct {
+	At     time.Time
+	ReadAt time.Time
+}
+
+func (claim readinessClaim) defensible() bool { return !claim.At.After(claim.ReadAt) }
+
+type readinessClaims []readinessClaim
+
+func (claims readinessClaims) stated(moment time.Time) bool {
+	return slices.ContainsFunc(claims, func(claim readinessClaim) bool { return claim.At.Equal(moment) })
+}
+
+func (claims readinessClaims) defensible(moment time.Time) bool {
+	return slices.ContainsFunc(claims, func(claim readinessClaim) bool {
+		return claim.At.Equal(moment) && claim.defensible()
+	})
+}
+
+func (claims readinessClaims) describe() string {
+	if len(claims) == 0 {
+		return "nothing"
+	}
+	described := make([]string, 0, len(claims))
+	for _, claim := range claims {
+		described = append(described, fmt.Sprintf("%s (read at %s)",
+			claim.At.Format(time.RFC3339Nano), claim.ReadAt.Format(time.RFC3339Nano)))
+	}
+	return strings.Join(described, ", ")
+}
+
+// readinessReportsByRun is every readiness a workload reported, by Run, with the
+// moment Mercator appended each report. Reports of any other type carry no readiness
+// and are not claims about one.
+func readinessReportsByRun(observation InvariantObservation) (map[string]readinessClaims, error) {
+	claims := map[string]readinessClaims{}
+	for _, event := range observation.MercatorEvents {
+		if event.Type != orchestrator.EventRunReported {
+			continue
+		}
+		var payload struct {
+			Type string `json:"type"`
+			Data struct {
+				ReadyAt time.Time `json:"ready_at"`
+			} `json:"data"`
+		}
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			return nil, fmt.Errorf("decode Run %q report: %w", runID, err)
+		}
+		if payload.Type != orchestrator.RunReportReady || payload.Data.ReadyAt.IsZero() {
+			continue
+		}
+		readAt, err := time.Parse(time.RFC3339Nano, event.Time)
+		if err != nil {
+			return nil, fmt.Errorf("decode Run %q report time: %w", runID, err)
+		}
+		claims[runID] = append(claims[runID], readinessClaim{
+			At:     payload.Data.ReadyAt.UTC(),
+			ReadAt: readAt.UTC(),
+		})
+	}
+	return claims, nil
 }
 
 // bookingClocksAreObserved holds the Rental Schedule to the same law as the run

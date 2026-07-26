@@ -601,6 +601,16 @@ func (s *simSession) RunEvents(name string) ([]eventlog.StoredEvent, error) {
 	return s.orch.GetRunEvents(context.Background(), simWorkspace, runID)
 }
 
+// RunRecord is this Run as Mercator's read model has it, which is where the
+// moments the control plane adopted live.
+func (s *simSession) RunRecord(name string) (domain.RunRecord, error) {
+	runID, ok := s.runs[name]
+	if !ok {
+		return domain.RunRecord{}, fmt.Errorf("run %q was never submitted", name)
+	}
+	return s.orch.GetRun(context.Background(), simWorkspace, runID)
+}
+
 func (s *simSession) Notes() []string { return s.notes }
 
 func (s *simSession) Close() {

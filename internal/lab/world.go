@@ -1309,7 +1309,13 @@ func (world *simulatedWorld) dueReadinessReports() []ReadinessReport {
 		due = append(due, ReadinessReport{
 			WorkspaceID: execution.WorkspaceID,
 			RunID:       execution.RunID,
-			ReadyAt:     execution.ApplicationReadyAt,
+			// The application reads the clock of the host it runs on, so the moment
+			// it states is world truth read on that clock. It is the same clock for
+			// every machine in this corpus but one, and the exception is the point: a
+			// workload on a host running ahead publishes a readiness Mercator has not
+			// reached, which Mercator has to refuse rather than file as an hour of
+			// ready latency nothing measured.
+			ReadyAt: execution.ApplicationReadyAt.Add(world.truth[execution.OfferID].clockAhead),
 		})
 	}
 	return due
