@@ -125,6 +125,49 @@ func TestABookingWithNoRecordedStartOwesItsWholeRuntime(t *testing.T) {
 	}
 }
 
+// TestAScheduleWhoseBookingIsPastItsBoundPromisesNothing is the difference
+// between a queue that was measured and one whose arithmetic ran out. Both
+// remaining runtimes bottom out at zero, so a Rental held by a Booking past the
+// runtime Mercator enforces reports the same wait an idle Rental reports, and a
+// Booking placed behind it would be handed a latest acceptable start of the
+// moment it was made. The schedule refuses instead, and the evidence it publishes
+// says how far past the bound the Booking holding the Rental has gone.
+func TestAScheduleWhoseBookingIsPastItsBoundPromisesNothing(t *testing.T) {
+	reserved := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	schedule, _, err := NewRentalSchedule("rental-warm").Reserve(BookingRequest{
+		BookingID:              "booking-active",
+		RunID:                  "run-active",
+		ExpectedRuntimeSeconds: 2700,
+		MaxRuntimeSeconds:      2700,
+		ReservedAt:             reserved,
+	})
+	if err != nil {
+		t.Fatalf("reserve the running Booking: %v", err)
+	}
+	overrun := reserved.Add(50 * time.Minute)
+
+	if !schedule.Exhausted(overrun) {
+		t.Fatalf("a Booking five minutes past its enforced 45 is a schedule that can still say when its Rental comes free")
+	}
+	if schedule.Exhausted(reserved.Add(44 * time.Minute)) {
+		t.Fatalf("a Booking inside its enforced bound exhausts nothing")
+	}
+	evidence := schedule.Evidence(overrun)
+	if evidence.Running.OverrunSeconds != 300 {
+		t.Errorf("the evidence records %v seconds of overrun, want the 300 the Booking is past its bound", evidence.Running.OverrunSeconds)
+	}
+	_, _, err = schedule.Reserve(BookingRequest{
+		BookingID:              "booking-arriving",
+		RunID:                  "run-arriving",
+		ExpectedRuntimeSeconds: 1200,
+		MaxRuntimeSeconds:      3600,
+		ReservedAt:             overrun,
+	})
+	if err == nil {
+		t.Fatalf("the schedule promised a start behind a Booking it cannot project, at the moment of the reservation itself")
+	}
+}
+
 func reservedSchedule(t *testing.T, now time.Time) RentalSchedule {
 	t.Helper()
 	schedule := NewRentalSchedule("rental-warm")

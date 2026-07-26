@@ -735,6 +735,11 @@ type RunningBookingEvidence struct {
 	RemainingMaxRuntime Duration `json:"remaining_max_runtime"`
 	// RemainingExpectedRuntime is the recorded p50; defaults to the max bound.
 	RemainingExpectedRuntime *Duration `json:"remaining_expected_runtime,omitempty"`
+	// Overrun is how far past the runtime Mercator enforces the record says this
+	// Booking has run. It is the only field that separates a Rental with nothing
+	// left to project from a Rental a moment from free, because both remaining
+	// runtimes above read zero on each. Omitted asserts none.
+	Overrun *Duration `json:"overrun,omitempty"`
 }
 
 func (e RunningBookingEvidence) expectedRemaining() Duration {
@@ -1168,7 +1173,8 @@ func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration
 		expect.Running.BookingID != schedule.Running.BookingID ||
 		expect.Running.RunID != schedule.Running.RunID ||
 		expect.Running.RemainingMaxRuntime.Duration() != schedule.runningMaxRemaining(elapsed) ||
-		expect.Running.expectedRemaining().Duration() != schedule.runningExpectedRemaining(elapsed) {
+		expect.Running.expectedRemaining().Duration() != schedule.runningExpectedRemaining(elapsed) ||
+		durationValue(expect.Running.Overrun) != schedule.runningOverrun(elapsed) {
 		return fmt.Errorf("RunningBooking evidence does not match the current schedule")
 	}
 	if len(expect.Preceding) != len(schedule.Queued) {
@@ -1227,6 +1233,18 @@ func (schedule RentalScheduleSpec) runningMaxRemaining(elapsed time.Duration) ti
 		return 0
 	}
 	return max(0, schedule.Running.RemainingMaxRuntime.Duration()-elapsed)
+}
+
+// runningOverrun is how far past its enforced maximum the running Booking has
+// gone by this point in the timeline. It is the arithmetic the remaining runtimes
+// stop being able to express: both bottom out at zero, so a fixture asserting a
+// machine nothing can project from and one asserting a machine a moment from
+// free would state the same evidence.
+func (schedule RentalScheduleSpec) runningOverrun(elapsed time.Duration) time.Duration {
+	if schedule.Running == nil {
+		return 0
+	}
+	return max(0, elapsed-schedule.Running.RemainingMaxRuntime.Duration())
 }
 
 func (schedule RentalScheduleSpec) runningExpectedRemaining(elapsed time.Duration) time.Duration {

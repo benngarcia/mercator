@@ -1,0 +1,76 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "The only warm Rental is held by a Booking whose enforced 45 minutes ran out 5 minutes ago, and the machine is still occupied. Every projection off that schedule reads zero, which is the same number an idle Rental reports, so a Run reading it would be told the busy machine is free this instant and would take a Booking whose latest acceptable start is the moment it was made. Mercator refuses the Rental instead, on the machine's own capacity evidence, and records the overrun beside the two remainders that ran out: a queue nothing can project is not a queue that was measured and found empty.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "booking": "booking-active",
+          "run": "run-active",
+          "remaining_max_runtime": "45m",
+          "completes_after": "90m"
+        }
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.5,
+        "provisioning": {"expected": "5m", "p90": "9m"}
+      }
+    ]
+  },
+  "timeline": [
+    {"advance": "50m"},
+    {
+      "submit": "iteration",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-4090",
+        "disposition": "terminate",
+        "candidates": {
+          "rental-warm": {
+            "feasible": false,
+            "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
+            "queue_seconds": 0,
+            "rental_schedule": {
+              "version": 1,
+              "running": {
+                "booking": "booking-active",
+                "run": "run-active",
+                "remaining_max_runtime": "0s",
+                "overrun": "5m"
+              },
+              "projected_start_in": "0s"
+            }
+          },
+          "fresh-4090": {"feasible": true, "provision_seconds": 300}
+        }
+      }
+    }
+  ]
+}

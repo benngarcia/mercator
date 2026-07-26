@@ -44,6 +44,19 @@ func (scheduled ScheduledBooking) RemainingMaxSeconds(now time.Time) float64 {
 	return remainingSeconds(scheduled.MaxRuntimeSeconds, scheduled.StartedAt, now)
 }
 
+// OverrunSeconds is how far past the runtime Mercator enforces this Booking has
+// run. It exists because the projections above bottom out at zero, and zero read
+// as a wait says a machine is a moment from free when what it says is that the
+// arithmetic ran out: enforcement is a reconciliation rather than an instant, so
+// a Booking whose node has gone quiet holds its Rental with nothing left to
+// project from. A Booking inside its bound has overrun nothing.
+func (scheduled ScheduledBooking) OverrunSeconds(now time.Time) float64 {
+	if scheduled.StartedAt.IsZero() {
+		return 0
+	}
+	return max(0, now.Sub(scheduled.StartedAt).Seconds()-scheduled.MaxRuntimeSeconds)
+}
+
 func remainingSeconds(declared float64, startedAt, now time.Time) float64 {
 	if startedAt.IsZero() {
 		return declared
@@ -74,6 +87,17 @@ func (schedule RentalSchedule) ExpectedWaitSeconds(now time.Time) float64 {
 	return seconds
 }
 
+// Exhausted reports whether this schedule can still say when its Rental comes
+// free. The Booking holding the Rental is past the runtime Mercator enforces, so
+// every projection from here reads zero, and zero is the same number a schedule
+// with nothing on it reports: a machine still occupied looks idle, the wait it
+// prices is nothing, and a Booking placed behind it gets a latest start already
+// at its deadline. Only the Booking at the head has taken the Rental, so it is
+// the only one that can be past anything.
+func (schedule RentalSchedule) Exhausted(now time.Time) bool {
+	return len(schedule.Bookings) > 0 && schedule.Bookings[0].RemainingMaxSeconds(now) <= 0
+}
+
 // Evidence is this schedule as a decision reads it at now: which version
 // answered, what holds the Rental, what is already waiting, and the wait that
 // projects from them. It is built here rather than by the caller because the
@@ -91,6 +115,7 @@ func (schedule RentalSchedule) Evidence(now time.Time) ScheduleEvidence {
 				RunID:                           scheduled.Booking.RunID,
 				RemainingMaxRuntimeSeconds:      scheduled.RemainingMaxSeconds(now),
 				RemainingExpectedRuntimeSeconds: scheduled.RemainingExpectedSeconds(now),
+				OverrunSeconds:                  scheduled.OverrunSeconds(now),
 			}
 			continue
 		}
@@ -213,6 +238,17 @@ func validBookingRequest(schedule RentalSchedule, request BookingRequest) error 
 	}
 	if len(schedule.Bookings) >= RentalScheduleQueueCapacity+1 {
 		return fmt.Errorf("Rental Schedule queue capacity is %d", RentalScheduleQueueCapacity)
+	}
+	// Nothing may be promised a start behind a Booking that is past the runtime
+	// Mercator enforces, because the start bounds this schedule would compute for
+	// it are the moment of the reservation itself: a guarantee handed out already
+	// at its deadline. Refusing here rather than trusting the caller is what keeps
+	// the record honest whatever selected this Rental.
+	if schedule.Exhausted(request.ReservedAt) {
+		return fmt.Errorf(
+			"Rental Schedule cannot promise a start behind Booking %q, which is %.0fs past the runtime Mercator enforces",
+			schedule.Bookings[0].Booking.ID, schedule.Bookings[0].OverrunSeconds(request.ReservedAt),
+		)
 	}
 	for _, scheduled := range schedule.Bookings {
 		if scheduled.Booking.ID == request.BookingID || scheduled.Booking.RunID == request.RunID {

@@ -414,6 +414,7 @@ type scheduleEvidenceRecord struct {
 		RunID                           string  `json:"run_id"`
 		RemainingMaxRuntimeSeconds      float64 `json:"remaining_max_runtime_seconds"`
 		RemainingExpectedRuntimeSeconds float64 `json:"remaining_expected_runtime_seconds"`
+		OverrunSeconds                  float64 `json:"overrun_seconds"`
 	} `json:"running,omitempty"`
 	Preceding []struct {
 		BookingID              string  `json:"booking_id"`
@@ -438,7 +439,8 @@ func assertScheduleEvidence(rec recordedDecision, bookings bookingNames, name, i
 	}
 	if actual.Running == nil || actual.Running.BookingID != bookings[expect.Running.BookingID] || actual.Running.RunID != expect.Running.RunID ||
 		actual.Running.RemainingMaxRuntimeSeconds != expect.Running.RemainingMaxRuntime.Duration().Seconds() ||
-		actual.Running.RemainingExpectedRuntimeSeconds != expect.Running.expectedRemaining().Duration().Seconds() {
+		actual.Running.RemainingExpectedRuntimeSeconds != expect.Running.expectedRemaining().Duration().Seconds() ||
+		actual.Running.OverrunSeconds != durationValue(expect.Running.Overrun).Seconds() {
 		fail("running Booking evidence does not match %+v", *expect.Running)
 	}
 	if len(actual.Preceding) != len(expect.Preceding) {

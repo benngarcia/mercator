@@ -110,6 +110,12 @@ func referenceQueueFull(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	return exists && len(schedule.Bookings) >= domain.RentalScheduleQueueCapacity+1
 }
 
+// referenceCapacityAvailable is this model's own answer to whether a machine may
+// be used: capacity that says it is there, or a Rental with an open position in a
+// schedule that can still say when it comes free. A schedule whose Booking is
+// past the runtime Mercator enforces projects no wait at all, so a model that
+// queued behind it would call an occupied machine immediately available and
+// disagree with production about a machine neither of them can project.
 func referenceCapacityAvailable(input scheduler.SchedulingInput, offer domain.OfferSnapshot) bool {
 	if offer.Capacity.Available {
 		return true
@@ -118,7 +124,8 @@ func referenceCapacityAvailable(input scheduler.SchedulingInput, offer domain.Of
 	return offer.Kind == domain.OfferKindStanding &&
 		exists &&
 		len(schedule.Bookings) > 0 &&
-		len(schedule.Bookings) < domain.RentalScheduleQueueCapacity+1
+		len(schedule.Bookings) <= domain.RentalScheduleQueueCapacity &&
+		!schedule.Exhausted(input.EvaluatedAt)
 }
 
 // referenceCandidate is the reference model's own candidate record: enough of

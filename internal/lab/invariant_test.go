@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 25 {
-		t.Fatalf("latest invariant results = %d, want 25", len(latest))
+	if len(latest) != 26 {
+		t.Fatalf("latest invariant results = %d, want 26", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -247,6 +247,12 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		},
 		"safety.score_is_reproducible_from_the_record": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{scoredOnATermReadOffTheOffer()}
+		},
+		// A Run queued behind a Booking with nothing left to project from. The
+		// latest start it was promised is the moment it was promised, so the
+		// guarantee was already spent when the decision recording it was written.
+		"safety.promised_start_is_still_ahead": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{queuedOnADeadlineAlreadyReached(now)}
 		},
 		"liveness.lost_response_reconciliation": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{{CorrelationID: "run-missing", Response: EffectResponseLost}}
@@ -496,6 +502,33 @@ func queuedBehindOneShotCapacity() eventlog.CloudEvent {
 			RunID:    "run-queued",
 			RentalID: "rnt_oneshot",
 			State:    domain.BookingStateQueued,
+		},
+	})
+}
+
+// queuedOnADeadlineAlreadyReached is the placement an exhausted schedule
+// produces: the Rental is held by a Booking past the runtime Mercator enforces, so
+// the remaining runtimes it projects from are zero and the arriving Run's latest
+// acceptable start is the instant of the decision itself.
+func queuedOnADeadlineAlreadyReached(evaluatedAt time.Time) eventlog.CloudEvent {
+	return bookingDecidedEvent("evt_deadline_reached", domain.BookingDecision{
+		ID:                      "dec_deadline_reached",
+		RunID:                   "run-arriving",
+		EvaluatedAt:             evaluatedAt,
+		SelectedOfferSnapshotID: "rental-warm",
+		Candidates: []domain.CandidateDecision{{
+			OfferSnapshotID: "rental-warm",
+			Disposition:     domain.CandidateDispositionQueue,
+			Feasible:        true,
+		}},
+		Booking: &domain.Booking{
+			ID:               "bkg_arriving",
+			RunID:            "run-arriving",
+			RentalID:         "rental-warm",
+			State:            domain.BookingStateQueued,
+			AfterBookingID:   "bkg_overrun",
+			ProjectedStartAt: &evaluatedAt,
+			LatestStartAt:    &evaluatedAt,
 		},
 	})
 }

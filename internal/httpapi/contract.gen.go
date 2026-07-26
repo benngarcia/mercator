@@ -1030,6 +1030,9 @@ type RunResponse struct {
 type RunningBookingEvidence struct {
 	BookingId string `json:"booking_id"`
 
+	// OverrunSeconds How far past the runtime Mercator enforces this Booking has run. Both remainders above bottom out at zero, so without this the record of a Rental nothing can project is the record a Rental a moment from free writes.
+	OverrunSeconds float64 `json:"overrun_seconds,omitempty"`
+
 	// RemainingExpectedRuntimeSeconds The p50 runtime this Booking has left, which is what a projected start behind it is made of.
 	RemainingExpectedRuntimeSeconds float64 `json:"remaining_expected_runtime_seconds,omitempty"`
 

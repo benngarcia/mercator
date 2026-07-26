@@ -4451,6 +4451,11 @@
             "type": "number",
             "format": "double",
             "description": "The p50 runtime this Booking has left, which is what a projected start behind it is made of."
+          },
+          "overrun_seconds": {
+            "type": "number",
+            "format": "double",
+            "description": "How far past the runtime Mercator enforces this Booking has run. Both remainders above bottom out at zero, so without this the record of a Rental nothing can project is the record a Rental a moment from free writes."
           }
         }
       },

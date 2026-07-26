@@ -112,6 +112,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
 		invariantRule{id: "safety.score_is_reproducible_from_the_record", check: scoreIsReproducibleFromTheRecord},
+		invariantRule{id: "safety.promised_start_is_still_ahead", check: promisedStartIsStillAhead},
 		invariantRule{id: "safety.prewarm_yields_to_real_work", check: prewarmYieldsToRealWork},
 		invariantRule{id: "safety.prewarm_rate_within_bound", check: prewarmRateWithinBound},
 		invariantRule{
@@ -793,6 +794,38 @@ func scoreIsReproducibleFromTheRecord(observation InvariantObservation) error {
 				decision.RunID, candidate.OfferSnapshotID, candidate.ScoreUSD, derived, describeScoreTerms(decision, candidate),
 			)
 		}
+	}
+	return nil
+}
+
+// promisedStartIsStillAhead is the guarantee half of a Booking that waits. Such a
+// Booking carries the latest moment it may start, computed from what the Bookings
+// ahead of it have left, and every one of those remainders bottoms out at zero. So
+// a Rental held by a Booking past the runtime Mercator enforces prices no wait at
+// all and hands the arriving Run a deadline that has already arrived: the
+// reconciler that expires missed deadlines removes the Booking on its first pass,
+// the Run is placed again, reads the same zero, and comes back to the same machine
+// that never came free.
+//
+// It is stated over the record rather than over the schedule because a promise can
+// only be judged against the moment it was made, and the decision is where that
+// moment is written down. It says nothing about a deadline that passes later:
+// waiting longer than promised is what expiry exists to answer.
+func promisedStartIsStillAhead(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		booking := decision.Booking
+		if booking == nil || booking.LatestStartAt == nil || booking.LatestStartAt.After(decision.EvaluatedAt) {
+			continue
+		}
+		return fmt.Errorf(
+			"Run %q took Booking %q on Rental %q promising a start no later than %s, and the decision that minted it was evaluated at %s",
+			decision.RunID, booking.ID, booking.RentalID,
+			booking.LatestStartAt.Format(time.RFC3339), decision.EvaluatedAt.Format(time.RFC3339),
+		)
 	}
 	return nil
 }

@@ -793,6 +793,12 @@ type RunningBookingEvidence struct {
 	RunID                           string  `json:"run_id"`
 	RemainingMaxRuntimeSeconds      float64 `json:"remaining_max_runtime_seconds"`
 	RemainingExpectedRuntimeSeconds float64 `json:"remaining_expected_runtime_seconds"`
+	// OverrunSeconds is how far past the runtime Mercator enforces this Booking
+	// has run. It is recorded because both remainders above bottom out at zero,
+	// and a record of nothing left is otherwise the same record a Rental a moment
+	// from free writes: the difference is the whole reason the candidate carrying
+	// it was refused.
+	OverrunSeconds float64 `json:"overrun_seconds,omitzero"`
 }
 
 // WaitingBookingEvidence is a Booking that has not started. It still owes every

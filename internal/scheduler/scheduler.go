@@ -569,12 +569,22 @@ func costEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Esti
 // queueable reports whether a Run may wait behind work already assigned here.
 // Only reusable capacity qualifies: waiting for a one-shot execution to finish
 // buys nothing, because the machine does not survive it.
+//
+// A schedule that can no longer say when its Rental comes free is not something
+// to wait behind either, and it is the one case where the machine's own capacity
+// evidence is the better answer: the Booking on it is past the runtime Mercator
+// enforces, so the wait projects to nothing while the offer says the capacity is
+// occupied. Queueing there would price a busy machine at zero seconds of waiting
+// and hand the arriving Run a latest start already at its deadline.
 func queueable(input SchedulingInput, offer domain.OfferSnapshot) bool {
-	if !offer.Lane.Reusable() {
+	if !offer.Lane.Reusable() || offer.Kind != domain.OfferKindStanding {
 		return false
 	}
 	schedule, ok := input.Schedules[offer.RentalID]
-	return offer.Kind == domain.OfferKindStanding && ok && len(schedule.Bookings) > 0 && len(schedule.Bookings) < domain.RentalScheduleQueueCapacity+1
+	if !ok || len(schedule.Bookings) == 0 || len(schedule.Bookings) > domain.RentalScheduleQueueCapacity {
+		return false
+	}
+	return !schedule.Exhausted(input.EvaluatedAt)
 }
 
 func candidateDisposition(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDisposition {

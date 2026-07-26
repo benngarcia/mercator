@@ -1125,6 +1125,11 @@ export interface components {
              * @description The p50 runtime this Booking has left, which is what a projected start behind it is made of.
              */
             remaining_expected_runtime_seconds?: number;
+            /**
+             * Format: double
+             * @description How far past the runtime Mercator enforces this Booking has run. Both remainders above bottom out at zero, so without this the record of a Rental nothing can project is the record a Rental a moment from free writes.
+             */
+            overrun_seconds?: number;
         };
         /** @description A Booking that had not started when a decision was made. It still owes every second its Run declared, which is why these fields carry the declared runtimes rather than remaining ones. */
         WaitingBookingEvidence: {
