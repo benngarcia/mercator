@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -100,6 +101,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.exclusive_booking_capacity", check: exclusiveBookingCapacity},
 		invariantRule{id: "safety.monotonic_terminal_state", check: monotonicTerminalState},
 		invariantRule{id: "safety.start_is_observed_not_inferred", check: startIsObservedNotInferred},
+		invariantRule{id: "safety.prediction_is_recorded_against_its_actual", check: predictionIsRecordedAgainstItsActual},
 		invariantRule{id: "safety.idempotent_external_commands", check: idempotentExternalCommands},
 		invariantRule{id: "safety.lease_fencing", check: leaseFencing},
 		invariantRule{id: "safety.artifact_dependencies", check: artifactDependencies},
@@ -300,6 +302,53 @@ func exclusiveBookingCapacity(observation InvariantObservation) error {
 // no production observation until an agent bootstraps on provisioned capacity, and
 // what the record must then say is that the stage is unobserved rather than that
 // it took no time.
+// predictionIsRecordedAgainstItsActual is ADR 0004's calibration requirement read
+// over the whole launch waterfall rather than over one number. A launch the
+// Effect Ledger accepted spent time on eight stages, and the record has to carry
+// both halves of each: what Mercator predicted that stage would cost, and what it
+// then cost.
+//
+// The two halves are read from independent places, which is what stops the rule
+// being satisfied by the predictor agreeing with itself. The prediction comes off
+// the Booking Decision Mercator wrote; the actual comes off the world's own launch
+// consequence in the ledger. Six of the eight have no other source: Mercator can
+// observe a container starting and an application reporting ready, and nothing in
+// production tells it when a machine finished booting.
+//
+// It is deliberately not stated as accuracy. How close a prediction lands is a
+// calibration metric, and a rule of that shape would fail on a fixture whose world
+// is simply slow, which is a legitimate world and several of these fixtures are
+// exactly that. What is a violation is a stage that happened and was predicted by
+// nothing, or a stage the world spent and the record cannot name.
+func predictionIsRecordedAgainstItsActual(observation InvariantObservation) error {
+	waterfall, err := stageWaterfalls(observation.Effects, observation.MercatorEvents)
+	if err != nil {
+		return err
+	}
+	for _, runID := range slices.Sorted(maps.Keys(waterfall.actual)) {
+		spent := waterfall.actual[runID]
+		predicted, decided := waterfall.predicted[runID]
+		if !decided {
+			return fmt.Errorf("Run %q had a launch accepted and no Booking Decision of its own to have predicted it", runID)
+		}
+		for _, stage := range domain.LaunchStages {
+			seconds, simulated := spent[string(stage)]
+			if !simulated {
+				return fmt.Errorf("Run %q launched and the ledger reports no %s actual, so that prediction is measured against nothing", runID, stage)
+			}
+			if predicted.Stage(stage).Source == "" {
+				return fmt.Errorf("Run %q spent %.2fs on the %s stage and nothing in the record predicted it", runID, seconds, stage)
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(spent)) {
+			if !slices.Contains(domain.LaunchStages, domain.LaunchStage(name)) {
+				return fmt.Errorf("Run %q spent time on %q, which is not a stage any prediction can be recorded against", runID, name)
+			}
+		}
+	}
+	return nil
+}
+
 func startIsObservedNotInferred(observation InvariantObservation) error {
 	reported, recorded, err := startMomentsByRun(observation)
 	if err != nil {

@@ -83,9 +83,6 @@ func assertModelsAgreeAboutCandidate(t *testing.T, production, reference domain.
 		production, reference domain.Estimate
 	}{
 		{"queue_seconds", production.Estimates.QueueSeconds, reference.Estimates.QueueSeconds},
-		{"provision_seconds", production.Estimates.Stages.Boot, reference.Estimates.Stages.Boot},
-		{"pull_seconds", production.Estimates.Stages.ImageFetch, reference.Estimates.Stages.ImageFetch},
-		{"artifact_seconds", production.Estimates.Stages.ArtifactFetch, reference.Estimates.Stages.ArtifactFetch},
 		{"start_seconds", production.Estimates.StartSeconds, reference.Estimates.StartSeconds},
 		{"established_start_seconds", production.Estimates.EstablishedStartSeconds, reference.Estimates.EstablishedStartSeconds},
 		{"cost_usd", production.Estimates.CostUSD, reference.Estimates.CostUSD},
@@ -93,6 +90,16 @@ func assertModelsAgreeAboutCandidate(t *testing.T, production, reference domain.
 		if !sameEstimate(stage.production, stage.reference) {
 			t.Errorf("candidate %q: %s: production predicted %s, the reference model %s",
 				production.OfferSnapshotID, stage.answer, describeEstimate(stage.production), describeEstimate(stage.reference))
+		}
+	}
+	// Every stage of the launch, read through the one list that names them, so a
+	// stage added to the record cannot be added without both models being held to
+	// it.
+	for _, stage := range domain.LaunchStages {
+		predicted, referenced := production.Estimates.Stages.Stage(stage), reference.Estimates.Stages.Stage(stage)
+		if !sameEstimate(predicted, referenced) {
+			t.Errorf("candidate %q: %s: production predicted %s, the reference model %s",
+				production.OfferSnapshotID, stage, describeEstimate(predicted), describeEstimate(referenced))
 		}
 	}
 	if production.Priced() != reference.Priced() {

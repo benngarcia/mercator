@@ -603,8 +603,28 @@ func TestTheRunStreamRecordsAStartNobodyInferred(t *testing.T) {
 	}
 
 	rows := bundlePredictions(t, execution)
-	if len(rows) != 2 {
+	// Two aggregates and one row per launch stage. The stage rows are what make the
+	// waterfall calibratable at all: a bundle carrying only the sum could say a
+	// start was ninety seconds late and never which stage was late.
+	if len(rows) != 2+len(domain.LaunchStages) {
 		t.Fatalf("the Bundle holds %d predicted-versus-actual records for one Run: %+v", len(rows), rows)
+	}
+	for _, stage := range domain.LaunchStages {
+		row, present := rows[string(stage)+"_seconds"]
+		if !present {
+			t.Fatalf("the Bundle carries no row for the %s stage", stage)
+		}
+		if row.ActualSource != "effect_ledger.launch.stage_seconds" {
+			t.Fatalf("the %s actual came from %q, and the world's own ledger is the only thing that spent it", stage, row.ActualSource)
+		}
+	}
+	// The stage the fixture is about: the provider published five minutes and the
+	// world spent four of them booting, so the prediction and the actual come from
+	// two places and disagree.
+	boot := rows[string(domain.StageBoot)+"_seconds"]
+	if boot.PredictedSeconds != 300 || boot.ActualSeconds != 240 {
+		t.Fatalf("boot was predicted %.2fs against an actual of %.2fs, and the fixture publishes 300 and spends 240",
+			boot.PredictedSeconds, boot.ActualSeconds)
 	}
 	start := rows["start_latency_seconds"]
 	if start.ActualSource != "run_stream.execution_started" {

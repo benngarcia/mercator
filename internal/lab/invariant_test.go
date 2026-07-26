@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 27 {
-		t.Fatalf("latest invariant results = %d, want 27", len(latest))
+	if len(latest) != 28 {
+		t.Fatalf("latest invariant results = %d, want 28", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -159,6 +159,15 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				runStartObserved("running", "2026-07-24T12:04:10Z", "2026-07-24T12:05:00Z"),
 				runStartRecorded("2026-07-24T12:00:00Z"),
 			}
+		},
+		// The world this exists to catch is a stage that happened and was measured
+		// against nothing. The decision predicted all eight stages, the world spent
+		// all eight, and the ledger reports seven: the unpack the machine really did
+		// is a prediction with no actual, which is the state a bundle would be
+		// exported in if a stage were dropped from the record.
+		"safety.prediction_is_recorded_against_its_actual": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{launchPredictingEveryStage("run-waterfall")}
+			observation.Effects = []EffectRecord{launchSpendingEveryStageBut("run-waterfall", domain.StageUnpack)}
 		},
 		"safety.idempotent_external_commands": func(observation *InvariantObservation) {
 			observation.Effects = []EffectRecord{
@@ -854,6 +863,64 @@ func refusedForHoldingNothing() eventlog.CloudEvent {
 		}},
 		SelectionReasonCodes: []string{"NO_FEASIBLE_OFFERS"},
 	})
+}
+
+// launchPredictingEveryStage is a Booking Decision that predicted the whole
+// waterfall, which is what makes a missing actual the only thing left to catch.
+func launchPredictingEveryStage(runID string) eventlog.CloudEvent {
+	stages := domain.LaunchStageEstimates{}
+	for _, stage := range domain.LaunchStages {
+		predicted := domain.Estimate{Expected: 10, P50: 10, P90: 15, Source: "test"}
+		switch stage {
+		case domain.StageAcquisition:
+			stages.Acquisition = predicted
+		case domain.StageBoot:
+			stages.Boot = predicted
+		case domain.StageAgentReady:
+			stages.AgentReady = predicted
+		case domain.StageImageFetch:
+			stages.ImageFetch = predicted
+		case domain.StageUnpack:
+			stages.Unpack = predicted
+		case domain.StageArtifactFetch:
+			stages.ArtifactFetch = predicted
+		case domain.StageContainerStart:
+			stages.ContainerStart = predicted
+		case domain.StageApplicationReady:
+			stages.ApplicationReady = predicted
+		}
+	}
+	return bookingDecidedEvent("evt_waterfall", domain.BookingDecision{
+		ID:                      "dec_waterfall",
+		RunID:                   runID,
+		SelectedOfferSnapshotID: "rental-warm",
+		Candidates: []domain.CandidateDecision{{
+			OfferSnapshotID: "rental-warm",
+			Feasible:        true,
+			Estimates:       domain.CandidateEstimates{Stages: stages},
+		}},
+	})
+}
+
+// launchSpendingEveryStageBut is the world's own account of a launch with one
+// stage left out of it.
+func launchSpendingEveryStageBut(runID string, omitted domain.LaunchStage) EffectRecord {
+	spent := map[string]float64{}
+	for _, stage := range domain.LaunchStages {
+		if stage == omitted {
+			continue
+		}
+		spent[string(stage)] = 12
+	}
+	return EffectRecord{
+		Sequence:      1,
+		Operation:     OperationProviderLaunch,
+		OperationID:   "launch-waterfall",
+		Command:       EffectCommandAccepted,
+		Response:      EffectResponseDelivered,
+		CorrelationID: runID,
+		Consequence:   mustJSON(map[string]any{"stage_seconds": spent}),
+	}
 }
 
 func bookingDecidedEvent(id string, decision domain.BookingDecision) eventlog.CloudEvent {

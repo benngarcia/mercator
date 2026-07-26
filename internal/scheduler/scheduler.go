@@ -932,7 +932,10 @@ func objectStoreSeconds(bytes int64) float64 {
 func artifactSource(inventory domain.ArtifactInventory, evidence []domain.ArtifactEvidence) string {
 	switch {
 	case len(evidence) == 0:
-		return ""
+		// A Run that reads nothing is not a Run whose read nobody could answer for.
+		// The stage costs no seconds either way, and the record has to say which of
+		// the two it was, because a stage with no source is a stage nothing predicted.
+		return "workload_reads_nothing"
 	case inventory.Known:
 		return "artifact_inventory"
 	default:

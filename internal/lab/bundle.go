@@ -208,7 +208,11 @@ func predictionActualRecords(tape WorldTape, effects []EffectRecord, mercatorEve
 	if err != nil {
 		return nil, err
 	}
-	records := make([]predictionActualRecord, 0, 2*len(tape.Events))
+	waterfalls, err := stageWaterfalls(effects, mercatorEvents)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]predictionActualRecord, 0, (2+len(domain.LaunchStages))*len(tape.Events))
 	for _, event := range tape.Events {
 		if event.Kind != EventRunArrived {
 			continue
@@ -235,8 +239,96 @@ func predictionActualRecords(tape WorldTape, effects []EffectRecord, mercatorEve
 			ActualSource:     "world_tape.actual_runtime",
 		})
 		records = append(records, starts.record(runID))
+		records = append(records, waterfalls.records(runID)...)
 	}
 	return records, nil
+}
+
+// stageWaterfall is one Run's launch as the record holds it: what Mercator
+// predicted each stage would cost, and what the world spent on each.
+//
+// The two halves come from independent places on purpose. The prediction is read
+// off the Booking Decision Mercator wrote, and the actual is read off the Effect
+// Ledger's own launch consequence, which is the world's account of what happened.
+// A record whose actual came from the predictor would be the predictor agreeing
+// with itself, and there is no other source for six of the eight: Mercator sees a
+// container start and an application report itself ready, and nothing in
+// production tells it when a machine finished booting.
+type stageWaterfall struct {
+	predicted map[string]domain.LaunchStageEstimates
+	actual    map[string]map[string]float64
+}
+
+// records is one row per stage for this Run, in the order a launch goes through
+// them. Every stage gets a row even where one half is missing, and the row says
+// which half: a stage nobody predicted and a stage predicted to cost nothing are
+// different facts, and so are a stage the world never reached and one it passed
+// through instantly.
+func (waterfall stageWaterfall) records(runID string) []predictionActualRecord {
+	predicted, decided := waterfall.predicted[runID]
+	actual, launched := waterfall.actual[runID]
+	rows := make([]predictionActualRecord, 0, len(domain.LaunchStages))
+	for _, stage := range domain.LaunchStages {
+		row := predictionActualRecord{
+			RunID:            runID,
+			Metric:           string(stage) + "_seconds",
+			PredictionSource: "no_booking_decision",
+			ActualSource:     "launch_not_accepted",
+		}
+		if decided {
+			row.PredictedSeconds = predicted.Stage(stage).Expected
+			row.PredictionSource = "booking_decision.estimates.stages." + string(stage)
+		}
+		if launched {
+			row.ActualSeconds = actual[string(stage)]
+			row.ActualSource = "effect_ledger.launch.stage_seconds"
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func stageWaterfalls(effects []EffectRecord, mercatorEvents []eventlog.CloudEvent) (stageWaterfall, error) {
+	waterfall := stageWaterfall{
+		predicted: map[string]domain.LaunchStageEstimates{},
+		actual:    map[string]map[string]float64{},
+	}
+	for _, event := range mercatorEvents {
+		if event.Type != orchestrator.EventBookingDecided {
+			continue
+		}
+		var payload struct {
+			Decision domain.BookingDecision `json:"decision"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			return stageWaterfall{}, fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
+		}
+		waterfall.predicted[payload.Decision.RunID] = selectedStages(payload.Decision)
+	}
+	for _, effect := range effects {
+		if effect.Operation != OperationProviderLaunch || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		var consequence struct {
+			StageSeconds map[string]float64 `json:"stage_seconds"`
+		}
+		if json.Unmarshal(effect.Consequence, &consequence) == nil && consequence.StageSeconds != nil {
+			waterfall.actual[effect.CorrelationID] = consequence.StageSeconds
+		}
+	}
+	return waterfall, nil
+}
+
+// selectedStages is what Mercator predicted the machine it chose would spend on
+// each stage, which is the only candidate's waterfall an actual can be compared
+// with.
+func selectedStages(decision domain.BookingDecision) domain.LaunchStageEstimates {
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == decision.SelectedOfferSnapshotID {
+			return candidate.Estimates.Stages
+		}
+	}
+	return domain.LaunchStageEstimates{}
 }
 
 // startLatencies is what Mercator predicted each Run's start would cost and what
