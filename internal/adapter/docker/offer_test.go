@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,11 @@ func TestOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
 
 	byHostKey := domain.CandidateIdentityOf(aggregated(byHost), "sha256:image").Candidate(true)
 	byContextKey := domain.CandidateIdentityOf(aggregated(byContext), "sha256:image").Candidate(true)
+	// The machine is named, before the two are compared. Two keys that agree because
+	// neither exists is the way this case passes while saying nothing.
+	if !strings.Contains(byHostKey, "machine="+info.ID) {
+		t.Fatalf("key %q does not name the daemon %q that answered", byHostKey, info.ID)
+	}
 	if byHostKey != byContextKey {
 		t.Fatalf("one machine keyed two ways:\n%s\n%s", byHostKey, byContextKey)
 	}

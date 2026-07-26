@@ -713,6 +713,12 @@ func TestIntegrationOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
 	}
 	directKey := domain.CandidateIdentityOf(aggregated(direct), "sha256:image").Candidate(true)
 	labelledKey := domain.CandidateIdentityOf(aggregated(labelled), "sha256:image").Candidate(true)
+	// This engine's own ID is in the key, checked before the two keys are compared:
+	// two keys agreeing because neither names a machine is how this case passes
+	// against a daemon it never reached.
+	if !strings.Contains(directKey, "machine="+info.ID) {
+		t.Fatalf("key %q does not name the engine %q that answered", directKey, info.ID)
+	}
 	if directKey != labelledKey {
 		t.Fatalf("one machine keyed two ways:\n%s\n%s", directKey, labelledKey)
 	}
