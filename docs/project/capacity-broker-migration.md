@@ -1577,6 +1577,88 @@ complete because it works against a live provider.
     bounded, because a published fact that arrives changed arrived from somewhere
     else.
 
+- [x] 2026-07-26: Make a start a moment somebody observed, and let the world spend
+  acquisition, boot, and agent enrollment. Decision V2 says predicted start
+  latency is calibrated against `started - accepted`, and nothing in the tree
+  could perform that subtraction: `adapter.ExternalObservation` carried no start
+  timestamp, `capability.WorkloadObservation.StartedAt` was written by the
+  contract and read by nobody, and the Lab computed `execution.StartedAt` and
+  reported it through no seam. Nothing can learn a stage duration until the stage
+  has an actual.
+  - `ExternalObservation.StartedAt` is what the thing holding the workload says
+    about when its process began. It is not `ObservedAt`, which is when Mercator
+    looked, and it is not the accepted moment, which is when the machine started
+    getting ready. The node's Docker runtime reads `State.StartedAt`, which is a
+    second read because `docker ps` carries it in no format, asked once for the
+    whole list; the Docker adapter reads it off inspect; RunPod reports
+    `lastStartedAt` and Vast reports `start_date`. Shadeform reports none and says
+    why: `created_at` is when the instance was asked for, so publishing it as a
+    workload's start would fold a whole acquisition and boot into the runtime.
+  - `compute.run.execution_started.v1` is the moment on the run stream, written
+    once per attempt from the first observation that carries one and cleared with
+    the launch when a new attempt begins. It is its own event because it is a
+    different fact from a phase: every provider in this tree reports running from
+    the moment it accepts, so a phase says only that Mercator asked.
+    `domain.RunRecord.StartedAt` is the read model and the public contract, absent
+    until something observed one.
+  - A Booking's runtime is measured from the container's own start where the
+    holder reported one. It used the moment Mercator polled, which is the same
+    defect one layer over: both runtimes a Booking declares are bounds on a
+    container. Where nobody reported a start it still falls back to the
+    observation, because a schedule needs a clock to project from and the last
+    thing Mercator can prove is the honest choice there; nothing derives the Run's
+    recorded start that way.
+  - Three of the eight launch stages cost zero time, because a provisionable
+    offer's provisioning was a published claim the world never spent: Launch put
+    an execution straight into running. `ProvisioningSpec` states each stage and
+    both simulated worlds spend them, so a pull and an Artifact read begin when
+    there is a machine to land on. The stages are stated separately from
+    `expected` and `p90` rather than derived from them, because a world that spent
+    its provider's own expectation would make that expectation right by
+    construction, and each is a pointer because a stage a fixture did not mention
+    and one it says costs nothing are different sentences.
+  - The Run Bundle holds two predicted-versus-actual records per Run.
+    `start_latency_seconds` is read entirely out of Mercator's own event log:
+    predicted from the selected candidate's start estimate, actual from the
+    accepted moment on the launch receipt to the start moment on the run stream. A
+    Run whose holder reported no start gets the row with the prediction and no
+    actual, sourced `start_not_observed`, because a zero there would teach a
+    calibration that every start is instant.
+  - `safety.start_is_observed_not_inferred` is the Lab invariant. Every start
+    moment the run stream records must be one an observation of that Run reported,
+    must not be later than the look that carried it, and must not be dropped when
+    a holder did report one. The three clauses read independent halves of the
+    record, so none is satisfied by Mercator agreeing with itself: deriving the
+    record from the accepted moment leaves the observation saying otherwise, and
+    fails six Lab executions.
+  - `a-start-is-a-moment-somebody-observed` is the L0 fixture and
+    `conformance/a-node-reports-when-the-container-really-started` is the same
+    claim at L1. `ExpectSpec.start_latency_seconds` is the vocabulary that makes
+    either statable, with `no_start_observed` as the other sentence. Shortening
+    the world's boot to zero fails the L0 fixture with "want at least 588, got
+    348.64"; deriving the moment from acceptance fails it with "got 0".
+  - `TestTheNodeReportsWhenTheContainerStarted` is the live half, run against
+    Docker Engine 29.6.2 on amd64 Linux with the containerd snapshotter: a
+    container launched through the production runtime, its start moment read back
+    and compared against an independent `docker inspect
+    {{.State.StartedAt}}`. `TestANodeReportsTheMomentItsContainerReallyStarted` is
+    the end-to-end seam over the public API, which is the fourth defect found at
+    `broker.observeOnNode` after Artifacts, `NodeFacts.Artifacts`, and cache
+    mounts: deleting the one line that carries the moment leaves the Run with no
+    start and every other test green.
+  - The console reads the moment instead of inventing it twice. `runningAt` was
+    stamped from the Booking Decision's own event time, which for a provisioned
+    machine is before that machine existed, and again from every observation, so a
+    reconnecting console reported a long-running workload as newly started.
+  - Judgment calls. A Run with no start moment is not an invariant violation:
+    acquisition and boot have no production observation until phase 5 bootstraps
+    an agent on provisioned capacity, and the record states the stage absent
+    rather than estimated. The existing fixtures state stages summing to the
+    expectation their provider published, because a machine that took as long as
+    it was said to take is a legitimate world and each of those fixtures is about
+    something else. And the whole slice was built beside a concurrent session in
+    the same worktree; the reliability entry above landed from that session and
+    the two changes are separate commits.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1599,7 +1681,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; candidate prediction, owned economics, and replanning remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a start is a moment somebody observed, recorded on the run stream as a distinct fact from launch acceptance and calibrated against in the Run Bundle, with acquisition, boot, and agent enrollment spent by both simulated worlds; the hierarchical estimator, owned economics, and replanning remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -1803,6 +1885,35 @@ Phase 3 added:
   discounted out of the localities and per-kind seconds recorded beside it, so a
   scheduler that counted a silence as established fails while agreeing with itself
   perfectly.
+- `a-start-is-a-moment-somebody-observed` (green): one Run of opportunistic work,
+  a Rental holding the whole image a second from ready at 20 USD an hour, and a
+  machine that does not exist yet at a dollar an hour whose provider publishes
+  five minutes of provisioning that the world really spends: thirty seconds
+  acquiring it, four minutes booting it, thirty seconds enrolling the runtime.
+  Waiting is free to this class so it takes the cheap machine, and the fixture
+  states both moments. At the decision nothing has observed a container and the
+  record says so; ten minutes later the recorded start is 588.64 seconds after the
+  launch was accepted. The provisionable candidate's `provision_seconds` of 300
+  sits beside it, so the published claim and the spent actual are both written
+  down and are different numbers. Shortening the world's boot to zero collapses
+  the two moments and fails it at 348.64; deriving the record from the accepted
+  launch fails it at zero.
+- `a-node-reports-when-the-container-really-started` (conformance): the same claim
+  through the real orchestrator, event log, and Run projection, and the only place
+  the Run Bundle can be read. Two predicted-versus-actual records for one Run
+  rather than one, the start actual sourced `run_stream.execution_started`, the
+  predicted value equal to what the winning candidate's own decision recorded, and
+  the two differing: a calibration set whose columns came from one piece of code
+  teaches nothing.
+- `safety.start_is_observed_not_inferred` (Lab invariant): no adjudicated Run
+  carries a start moment Mercator derived. Every moment the run stream records is
+  one an observation of that Run reported, no moment is later than the look that
+  carried it, and a moment a holder did report is never dropped. The three clauses
+  read independent halves of the record, so none can be satisfied by Mercator
+  agreeing with itself, and a Run with no start moment at all is not a violation:
+  acquisition and boot have no production observation until an agent bootstraps on
+  provisioned capacity, and what the record must then say is that the stage is
+  unobserved rather than that it took no time.
 - `safety.score_is_reproducible_from_the_record` (Lab invariant): for every
   candidate of every Booking Decision Mercator recorded, ScoreUSD is the arithmetic
   over the terms that decision itself carries, at the weights it says it used. What
