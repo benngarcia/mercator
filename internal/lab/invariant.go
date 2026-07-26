@@ -1475,14 +1475,18 @@ func localityProvenance(observation InvariantObservation) error {
 // by is, because seconds are the product of the two and either one can be
 // invented.
 //
-// Two things fail it. A transfer priced from nothing, naming neither a
+// Three things fail it. A transfer priced from nothing, naming neither a
 // measurement nor an assumption, is a duration whose reader cannot tell which it
 // was, and the two are different claims about the fleet: one says Mercator
 // measured this machine, the other says Mercator guessed the same way it guesses
 // about every machine. A transfer priced at a throughput presented as measured,
 // on a host that published no such fact, is worse: it is a number with a
 // measurement's standing and nobody behind it, and it is exactly what a
-// prediction slice reaching for a faster answer would write.
+// prediction slice reaching for a faster answer would write. And a transfer
+// priced from an assumption may not be worth what a measurement is worth, which
+// is the clause that keeps the first two from being bookkeeping: naming the
+// assumption honestly and then charging no doubt for it produces exactly the
+// ranking a fabricated measurement would.
 //
 // It is stated over what the decision recorded rather than over the arithmetic.
 // A rule that recomputed the seconds would be a second implementation of the
@@ -1500,6 +1504,9 @@ func transferRateIsAttributed(observation InvariantObservation) error {
 					return err
 				}
 				if err := measuredRateWasReported(decision, candidate, rate, observation.World.PublishedPaths); err != nil {
+					return err
+				}
+				if err := assumedRateIsWorthAGuess(decision, candidate, rate); err != nil {
 					return err
 				}
 			}
@@ -1551,6 +1558,53 @@ func measuredRateWasReported(
 		)
 	}
 	return nil
+}
+
+// assumedRateIsWorthAGuess holds the third clause: a transfer nobody measured is
+// worth at most domain.AssumedLinkConfidence, and so is the stage estimate it
+// produced. Nothing on the path answered, so the seconds are the fleet-wide
+// constant divided into bytes, and confidence is the one field that says so.
+//
+// It is the clause that gives the other two teeth. The score charges doubt from
+// the stage estimate's confidence, so a prediction that named its assumption
+// truthfully and then presented the duration as certain would rank an unmeasured
+// machine exactly where a machine that measured a gigabit path ranks, which is
+// the outcome a fabricated measurement buys and the one the whole slice exists to
+// stop. A prediction reaching for that is far likelier to arrive by raising an
+// assumption's confidence than by inventing a source, because raising it looks
+// like a tuning constant.
+//
+// Zero bytes is not judged here and cannot be: a stage with nothing to move
+// records no rate at all, and a host an inventory says holds the content is
+// certainly zero seconds from finishing.
+func assumedRateIsWorthAGuess(decision domain.BookingDecision, candidate domain.CandidateDecision, rate domain.TransferRate) error {
+	if rate.Assumption == "" {
+		return nil
+	}
+	part, worth, overconfident := overconfidentGuess(rate, candidate.Estimates.Stages.Stage(rate.Stage))
+	if !overconfident {
+		return nil
+	}
+	return fmt.Errorf(
+		"Run %q: candidate %q priced its %s stage from %q, which nothing on this machine measured, and %s is worth %.2f where a duration over an unmeasured rate is worth at most %.2f",
+		decision.RunID, candidate.OfferSnapshotID, rate.Stage, rate.Assumption, part, worth, domain.AssumedLinkConfidence,
+	)
+}
+
+// overconfidentGuess names which half of an unmeasured transfer claims more than
+// a guess is worth. The two are separate mistakes: the rate is what a future
+// caller of this model will divide by, and the stage estimate is what this
+// decision's own score already charged doubt from, so a rule that read only one
+// of them would pass a tree that had stopped carrying the rate's own confidence
+// onto the answer.
+func overconfidentGuess(rate domain.TransferRate, stage domain.Estimate) (string, float64, bool) {
+	if rate.Confidence > domain.AssumedLinkConfidence {
+		return "the rate itself", rate.Confidence, true
+	}
+	if stage.Confidence > domain.AssumedLinkConfidence {
+		return "the estimate it produced", stage.Confidence, true
+	}
+	return "", 0, false
 }
 
 func describeRateProvenance(rate domain.TransferRate) string {

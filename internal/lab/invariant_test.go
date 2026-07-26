@@ -277,7 +277,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// seconds read like every other prediction in the record, and there is
 		// nobody at all behind the number they were divided by.
 		"safety.transfer_rate_is_attributed": func(observation *InvariantObservation) {
-			observation.MercatorEvents = []eventlog.CloudEvent{pricedAtARate(observation.Now, measuredByNobody())}
+			observation.MercatorEvents = []eventlog.CloudEvent{pricedAtARate(observation.Now, measuredByNobody(), domain.Estimate{Expected: 80, P50: 80, P90: 120, Confidence: 0.9})}
 		},
 		"safety.locality_is_never_infeasibility": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{refusedForHoldingNothing()}
@@ -863,6 +863,11 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 	for name, observed := range map[string]struct {
 		published []domain.NetworkFact
 		rate      domain.TransferRate
+		// read is the answer the rate produced, stated only by the cases about what
+		// an unmeasured transfer is worth. Everywhere else the seconds are beside the
+		// point: the rule reads provenance, and a record that names nothing is
+		// unattributed whatever it predicted.
+		read domain.Estimate
 	}{
 		"priced a transfer from nothing it names": {
 			published: measured,
@@ -908,6 +913,30 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 				Measurement: "node_probe",
 			},
 		},
+		"charged no doubt for a rate it admits nothing measured": {
+			published: nil,
+			rate: domain.TransferRate{
+				Stage:      domain.StageArtifactFetch,
+				Scope:      domain.NetworkScopeObjectStore,
+				Mbps:       domain.DefaultObjectStoreDownloadMbps,
+				Bytes:      40_000_000_000,
+				Confidence: 1,
+				Assumption: domain.AssumptionObjectStoreRate,
+			},
+			read: domain.Estimate{Expected: 640, P50: 640, P90: 960, Confidence: 1},
+		},
+		"named its assumption and then answered as if it had measured": {
+			published: nil,
+			rate: domain.TransferRate{
+				Stage:      domain.StageArtifactFetch,
+				Scope:      domain.NetworkScopeObjectStore,
+				Mbps:       domain.DefaultObjectStoreDownloadMbps,
+				Bytes:      40_000_000_000,
+				Confidence: domain.AssumedLinkConfidence,
+				Assumption: domain.AssumptionObjectStoreRate,
+			},
+			read: domain.Estimate{Expected: 640, P50: 640, P90: 960, Confidence: 0.95},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			observation := InvariantObservation{
@@ -917,7 +946,7 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 					At:             now,
 					PublishedPaths: map[string][]domain.NetworkFact{"rental-warm": observed.published},
 				},
-				MercatorEvents: []eventlog.CloudEvent{pricedAtARate(now, observed.rate)},
+				MercatorEvents: []eventlog.CloudEvent{pricedAtARate(now, observed.rate, observed.read)},
 			}
 
 			result := invariantResultByID(t,
@@ -945,7 +974,7 @@ func TestARatePricedFromTheStatedAssumptionIsNotAViolation(t *testing.T) {
 		World:     WorldTruthSnapshot{At: now},
 		MercatorEvents: []eventlog.CloudEvent{pricedAtARate(now, domain.TransferRateFor(
 			domain.StageUnpack, "", 2_000_000_000, domain.UnpackRate(),
-		))},
+		), domain.Estimate{Expected: 8, P50: 8, P90: 12, Confidence: domain.AssumedLinkConfidence})},
 	}
 
 	result := invariantResultByID(t,
@@ -990,7 +1019,7 @@ func TestARateMeasuredOnCapacitySinceRetiredIsNotAViolation(t *testing.T) {
 			Bytes:       40_000_000_000,
 			Confidence:  0.9,
 			Measurement: "node_probe",
-		})},
+		}, domain.Estimate{Expected: 1600, P50: 1600, P90: 2400, Confidence: 0.9})},
 	}
 
 	result := invariantResultByID(t,
@@ -1515,9 +1544,14 @@ func launchSpendingEveryStageBut(runID string, omitted domain.LaunchStage) Effec
 }
 
 // pricedAtARate is a Booking Decision whose one candidate was charged a transfer
-// at one rate. It is the whole input to the attribution rule: the rule reads what
-// a decision recorded about where a rate came from, and nothing else.
-func pricedAtARate(at time.Time, rate domain.TransferRate) eventlog.CloudEvent {
+// at one rate and answered one estimate over it. It is the whole input to the
+// attribution rule: the rule reads what a decision recorded about where a rate
+// came from and what it then claimed the answer was worth, and nothing else.
+//
+// The estimate is filed under the read, because that is the stage the cases about
+// what a guess is worth price, and a decision recording a rate for one stage and
+// an answer for another would be a record the scheduler cannot write.
+func pricedAtARate(at time.Time, rate domain.TransferRate, read domain.Estimate) eventlog.CloudEvent {
 	return bookingDecidedEvent("evt_transfer_rate", domain.BookingDecision{
 		ID:          "dec_transfer_rate",
 		RunID:       "run-reader",
@@ -1526,6 +1560,9 @@ func pricedAtARate(at time.Time, rate domain.TransferRate) eventlog.CloudEvent {
 			OfferSnapshotID: "rental-warm",
 			Feasible:        true,
 			TransferRates:   []domain.TransferRate{rate},
+			Estimates: domain.CandidateEstimates{
+				Stages: domain.LaunchStageEstimates{ArtifactFetch: read},
+			},
 		}},
 		SelectedOfferSnapshotID: "rental-warm",
 		SelectionReasonCodes:    []string{"FEASIBLE"},
