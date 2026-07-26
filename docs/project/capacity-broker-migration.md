@@ -1326,6 +1326,47 @@ complete because it works against a live provider.
     the way a workload learns which of its inputs are local, and a live
     conformance test on a real daemon. No entry here may call artifact locality a
     saving a Run collects until that lands.
+- [x] 2026-07-25: Read a host-local copy only when it is the version the catalog
+  names. The simulated world decided a copy was worth reading from the copy's own
+  state alone, in three places: what a launch reads, what a launch still needs
+  room for, and what a preparation still owes. Every predicate in the control
+  plane already compares the copy's digest against the catalog, so a machine
+  reporting a checked copy of the version before this one was priced the whole
+  640 second read by placement and then handed the workload those bytes for
+  nothing, in the same execution, with every invariant green. Preparation answered
+  ready with zero fetched bytes there, so nothing re-checked it either.
+  `simulatedWorld.readableReplica` is the one predicate now, this world's half of
+  `domain.ArtifactInventory.Holds`, and the `artifact.read` effect records the
+  digest the copy claimed so a law about reads can be stated against the catalog
+  rather than against the machine's own bookkeeping.
+  - `a-restored-snapshot-is-not-a-copy` (conformance) is the world that produces
+    it: the estimate charges 40GB, the execution reads 40GB out of the object
+    store, and the copy the machine keeps afterwards is the one it checked on
+    arrival. It has to be a conformance Blueprint, because the Booking Decision
+    was already right and only an execution can say which bytes the workload was
+    handed. Deliberate break, since removed: trusting the copy's own state fails
+    `safety.artifact_replica_verified` with `Run "run-consumer" read Artifact
+    "artifact:imagenet:v2.41" from a copy on offer "rental-restored-snapshot"
+    claiming digest sha256:2b2b..., and the catalog says sha256:1a1a...`.
+  - The disk half gets no case of its own. A candidate that cannot hold the read
+    it owes is refused at placement and never launches there, so what the world
+    would have answered is unobservable in a green execution, and the answer rests
+    on being the same predicate rather than on a fixture describing a machine no
+    Run would have been sent to.
+  - Owed, and reachable by nothing today: the silence branch of
+    `orchestrator.alreadyHeld`. Inverting it, so that silence about a machine's
+    copies reads as presence and nothing is ever prepared on such a machine,
+    leaves `go test ./...` green on this workstation. The state it decides is a
+    queued placement on capacity that cannot say what it holds, which production
+    has as a reusable Rental with no node enrolled on it and which no Blueprint
+    can state: Lab capacity that keeps what it runs always enumerates its copies,
+    and Lab capacity that does not may never be queued behind. Its only
+    consequence is thrown away as well, because `PrepareReceipt.Unsupported` is
+    written by both `Broker.Prepare` and the Lab world and read by nobody, so a
+    machine that refused the whole desire is indistinguishable from one that took
+    it. Both halves belong to the slice that teaches the Lab about reusable
+    capacity with no runtime of Mercator's on it and records what a machine said
+    it could not prepare.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1474,6 +1515,14 @@ Phase 3 added:
   records `unknown` and is priced the whole read rather than the zero its silence
   used to buy, and never the zero its copy would have bought if an offer could
   carry it. Every rate is equal on purpose.
+- `a-restored-snapshot-is-not-a-copy` (conformance): the execution half of that
+  third Rental, on the one machine in the world, so it is the machine the Run
+  goes to. The decision prices the whole 40GB read for a checked copy of another
+  version filed under this one's name, the Run then reads all 40GB out of the
+  object store rather than the bytes the machine happened to be holding, and what
+  the machine keeps afterwards is the copy it checked on arrival. A placement
+  corpus cannot reach this: the Booking Decision was right either way, and only an
+  execution can say which bytes the workload was handed.
 - `the-objective-decides-what-wins` (green): one world, two Runs, and the only
   difference between them is the objective each stated. The warm Rental is a
   second from ready at 4 USD an hour, the cold one nearly sixteen minutes at 2.
