@@ -547,6 +547,14 @@ func simOffer(world WorldSpec, id, connectionID string, ratePerHourUSD float64, 
 // facts the offer publishes: this harness used to move every byte at one constant
 // whatever a fixture declared, so a machine's measured throughput could decide a
 // placement and change nothing about what the placement then cost.
+//
+// Reading the offer's facts here instead would be the same defect wearing a
+// reuse argument, and every fixture that declares a path its host stands behind
+// is blind to it, because the two numbers are then the same number.
+// a-world-crosses-the-path-its-host-disowned is the one that is not: the machine
+// disowns its own reading, so Mercator prices the pull from the fleet assumption
+// while this world spends what the path costs, and the substitution shows up as
+// the start the fixture asserts.
 func simLinkMbps(world WorldSpec, offerID string) map[domain.NetworkScope]float64 {
 	rates := map[domain.NetworkScope]float64{}
 	for _, path := range world.Paths {
