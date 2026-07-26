@@ -124,6 +124,92 @@ func TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth(t *testing.T) {
 	}
 }
 
+// TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote is the premise producer
+// affinity exists for, checked against a real daemon rather than assumed. A
+// workload publishes an Artifact itself, which is what the authority model says
+// it does, so the bytes are written inside its own container and Mercator is told
+// nothing about where. This node then reports no copy of that version: the
+// content is on this machine, the machine holds every byte of it, and its
+// enumeration answers about the replica store alone.
+//
+// That silence is why the producing host has to be recorded on the catalog entry
+// at publication. Nothing else in the system can say that this machine is the one
+// most likely to still be holding a 40GB dataset, and a consumer that could not
+// be told would price this machine exactly like a host that has never seen the
+// content.
+//
+// The same content then arrives through PrepareArtifact, from the same store the
+// workload uploaded it to, and now the node does report it. The two halves are
+// the difference between content on a disk and content Mercator can be asked
+// about, which is the difference the affinity record fills in.
+func TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote(t *testing.T) {
+	requireDocker(t)
+	pull(t, "busybox:latest")
+	endpoint := startObjectStore(t)
+	content := []byte(strings.Repeat("mercator producer affinity\n", 4096))
+	digest := "sha256:" + hex.EncodeToString(sliceDigest(content))
+	putObject(t, endpoint, "datasets", "checkpoint-v1", content)
+
+	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
+	writeArtifactInsideAContainer(t, runtime, "run-producer", content)
+
+	produced := runtime.artifacts()
+	if !produced.Known {
+		t.Fatalf("the node cannot enumerate its replica store at all, so this case cannot say what its silence means: %+v", produced)
+	}
+	if len(produced.Replicas) != 0 {
+		t.Fatalf("the node reports %+v of content its workload wrote into its own container", produced.Replicas)
+	}
+
+	command := capability.PrepareArtifactCommand{
+		ArtifactID:    "artifact:checkpoint:v1",
+		ContentDigest: digest,
+		Source:        presign(t, http.MethodGet, endpoint, "datasets", "checkpoint-v1", time.Hour),
+		SizeBytes:     int64(len(content)),
+	}
+	command.WorkspaceID = "ws_alpha"
+	if err := runtime.PrepareArtifact(context.Background(), command); err != nil {
+		t.Fatalf("replicate the Artifact this workload produced: %v", err)
+	}
+
+	replicated := runtime.artifacts()
+	if len(replicated.Replicas) != 1 || replicated.Replicas[0].State != domain.ArtifactReplicaVerified {
+		t.Fatalf("the node reports %+v after fetching the content itself", replicated.Replicas)
+	}
+	if replicated.Replicas[0].ContentDigest != digest {
+		t.Fatalf("the copy hashes to %q and the workload's own bytes hash to %q",
+			replicated.Replicas[0].ContentDigest, digest)
+	}
+}
+
+// writeArtifactInsideAContainer runs one real workload that publishes its output
+// the way a workload does: into its own filesystem, and then to the object store.
+// Nothing tells this node where those bytes went, which is the whole point.
+func writeArtifactInsideAContainer(t *testing.T, runtime *DockerRuntime, runID string, content []byte) {
+	t.Helper()
+	container := "mercator-" + runID + "-1"
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "--force", container).Run() })
+	command := capability.LaunchWorkloadCommand{
+		RunID:     runID,
+		AttemptID: "1",
+		BookingID: "bkg-" + runID,
+		Workload: domain.WorkloadSpec{Containers: []domain.ContainerSpec{{
+			Name:  "main",
+			Image: "busybox:latest",
+			Args:  []string{"sh", "-c", fmt.Sprintf("printf '%%s' '%s' > /checkpoint && sleep 30", string(content[:32]))},
+		}}},
+	}
+	command.WorkspaceID = "ws_alpha"
+	if err := runtime.LaunchWorkload(context.Background(), command); err != nil {
+		t.Fatalf("launch the producer: %v", err)
+	}
+}
+
+func sliceDigest(content []byte) []byte {
+	sum := sha256.Sum256(content)
+	return sum[:]
+}
+
 // startObjectStore runs MinIO on this machine's own daemon and answers where it
 // listens. It is a container rather than an in-process stand-in because the
 // claim is about a real S3-compatible endpoint.

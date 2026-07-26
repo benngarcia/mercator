@@ -1266,6 +1266,63 @@ complete because it works against a live provider.
   as the whole fleet's, which had made the concurrency bound unfailable in the
   only world where it matters. Evidence and the deliberate breaks are under
   "Phase 3 prewarming, the second review".
+- [x] 2026-07-25: Let a consumer prefer the machine its input was written on.
+  Nothing recorded which host produced an Artifact. The ledger that says where a
+  Run ran is scanned past, a node enumerates only the copies its own replica
+  store fetched, and a workload publishes its output itself, so the one machine
+  most likely to still be holding a 40GB dataset was scored exactly like every
+  other machine that could not say what it holds. Verified against the daemon on
+  this workstation: a real workload writes its output inside its own container,
+  the production runtime reports no copy of that version, and the same content
+  fetched from a real MinIO through `PrepareArtifact` is reported at once. Silence
+  about produced content is the real state of a real node, which is why the
+  producing host has to be recorded where the publication happens.
+  - `domain.ArtifactVersion.ProducedOnRentalID` is the record, stamped by the
+    publication beside the Run that made it. Only reusable capacity can carry it:
+    a one-shot execution's host is gone once its workload exits, so the honest
+    value there is empty, and an empty producing host matches no candidate,
+    because capacity that keeps nothing carries no Rental identity either and
+    comparing the two silences would make every such offer the producer of
+    everything.
+  - The preference is the read the consumer would not make. It reaches the score
+    through `ArtifactSeconds` and the objective that ranks candidates on it,
+    which is where every other locality answer is already priced. `ScoreWeights`
+    gains no field: four of its five terms are multiplied by zero in every
+    deployment, so a weighted affinity term would provably change no placement,
+    and a bonus subtracted from the score outside them would be a hard constraint
+    wearing a preference's clothes. Populating those weights is phase 4 work at
+    the source, and both the struct and this entry say so.
+  - The record answers only where the machine said nothing about the version. A
+    host that enumerated its copies and holds none it may read has made a
+    stronger claim, about itself, now, than anything Mercator remembers about
+    where bytes were written, and a consumer sent there on the record would pay a
+    transfer the estimate promised it would not. Zero seconds resting on the
+    record states no confidence at all, where an inventory saying the copy is here
+    states certainty: nothing re-checked that the copy outlived the Run that wrote
+    it.
+  - It is a preference by construction rather than by restraint. Affinity can
+    only ever remove seconds from one candidate, so no Run can be refused
+    capacity for it, which is what `safety.locality_is_never_infeasibility`
+    exists to guarantee and continues to hold with no new clause.
+  - The two models compute one uncertainty penalty. `internal/lab/oracle.go`
+    counted an offer nobody could enumerate and an offer with no price as
+    uncertainty and `internal/scheduler/scheduler.go` did not, and they agreed
+    only because the weight that reads the term is zero everywhere. It is
+    `OfferSnapshot.UncertaintyPenalty` now, said once, on the offer that owns the
+    facts, keeping the four terms those two implementations were already stated
+    against and gaining none: whether an offer that could not enumerate its
+    Artifact copies belongs there is a question for the calibration that will
+    finally read the number, because a penalty term nothing multiplies is a claim
+    no test can falsify.
+  - Judgment calls. `RentalSpec.enumerates_artifacts` is the world any of this
+    matters in: a machine Mercator controls whose runtime has no replica store.
+    What such a machine holds stays World Truth and no offer says it, suppressed
+    at publication in both simulators exactly as a borrowed slot's inventory is.
+    `produced_here` is an optional field on the public evidence rather than a
+    required one, unlike `artifact_seconds` before it, because false is the answer
+    for nearly every candidate of nearly every Run and a field that says "no"
+    everywhere is noise in the one place an operator reads for a reason.
+    `ArtifactResidentBytes` is deleted, having had no callers.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1287,7 +1344,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a consumer prefers the machine its input was published from, as the read it would not make there and never as a constraint; a production object-store client remains |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -1431,6 +1488,34 @@ Phase 3 added:
   minutes. What it waits for is the minute that is left, so it takes a queued
   Booking; a schedule that summed declared runtimes answered half an hour and
   reverting the projection turns the execution into `no feasible offers`.
+- `consumer-prefers-the-producing-host` (green): two Rentals at one price, both
+  holding the whole image, both unable to list their Artifact copies, and one of
+  them is the machine the 40GB dataset was written on. Nothing either machine
+  says separates them, so silence is charged the whole read on both; what
+  separates them is Mercator's own record of where the content was published, and
+  the consumer prefers that machine by the 640 seconds it would not spend there.
+  The ids are ordered so the neighbour takes any tie, because a fixture whose
+  winner is decided by offer-ID order proves nothing about affinity. Dropping the
+  discount hands it to the neighbour.
+- `producer-host-gone-still-places` (green): the same world with the producing
+  Rental's idle lease elapsing five minutes in and the consumer arriving ten
+  minutes in. It places on what is left, feasible with no rejection of any kind,
+  priced the object-store read it will actually pay. Applying the discount
+  without comparing which candidate the record names prices that read at nothing
+  and fails this fixture, which is the defect the affinity fixture alone cannot
+  catch: there, both candidates would be discounted and the winner would simply
+  swap.
+- `a-consumer-follows-its-producer` (conformance): the same claim where the
+  record is written the way production writes it. A producer computes a 10GB
+  checkpoint on the one Rental holding its image and the object store stamps that
+  Rental when the upload lands. The consumer runs a different image both Rentals
+  hold whole, so by the time it arrives nothing about images, price, room, or
+  queueing separates the two candidates, and it is placed on the strength of the
+  record alone. The world then confirms the estimate: the consumer's own
+  `artifact.read` resolves against the copy on that machine rather than against
+  the object store, so the 160 seconds it was not charged is a transfer that did
+  not happen. Publishing without recording the Rental leaves the catalog naming
+  nobody and fails it at the record.
 - `a-host-that-cannot-hold-the-data-is-not-warm` (green): three machines and one
   Run at a time. Two hold the same 18GB layer of the same image at the same
   price, and one of those has nowhere to put the 40GB dataset the Run reads, so
@@ -1647,6 +1732,52 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 3 producer affinity
+
+On 2026-07-25, on a Linux workstation against Docker Engine 29.6.2 on the
+containerd snapshotter, which is the second slice of this phase to run on amd64
+at all. Both Blueprints were written first, driven as targets, and promoted in
+the same change once green. Each claim is held by a deliberate break:
+
+- dropping the discount, so a silence is charged the whole read whoever produced
+  the content, fails `consumer-prefers-the-producing-host` with `expected
+  "rental-b-producer" to win, but the decision placed on "rental-a-neighbour"`
+  and `candidate "rental-b-producer": artifact_seconds: want exactly 0, got 640`;
+- taking the read off every candidate once the version names any producing host,
+  which is the same rule with the comparison against this offer left out, fails
+  both Blueprints with `candidate "rental-a-neighbour": artifact_seconds: want at
+  least 639, got 0`. This is why the second fixture exists: in the first, both
+  candidates would be discounted and the winner would simply swap, which one
+  fixture cannot tell from correctness;
+- letting the record override a machine that enumerated and holds no copy fails
+  `TestTheProducingHostIsPreferredOnlyWhereNothingElseAnswered` with `owes 0
+  bytes, want 40000000000` and `locality = "unknown", want "cold"`;
+- publishing without recording the Rental fails
+  `TestAConsumerFollowsTheMachineItsInputWasProducedOn` with `the catalog says
+  the checkpoint was produced on "", and the Run that published it ran on
+  "rental-b-producer"`, and dropping the discount fails the same case with the
+  consumer landing on the neighbour;
+- restoring the scheduler's own two-term uncertainty penalty fails
+  `TestBothModelsPriceUncertaintyFromTheSameFacts` with `reference scored
+  3.433333 and production scored 1.433333`, which is the divergence the dead
+  weight was hiding, worth exactly the two facts the oracle counted and the
+  scheduler did not;
+- making the node's replica enumeration skip every record fails the live case
+  with `the node reports [] after fetching the content itself`.
+
+The live half ran. `TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote` starts a
+MinIO container on this machine's own daemon, has the production `DockerRuntime`
+launch a real busybox workload that writes its output inside its own container,
+and reads the node's own Artifact inventory: enumerated, and empty. The same
+content then arrives through `PrepareArtifact` over a presigned GET and is
+reported verified against the digest the bytes produce. That is the premise the
+whole slice rests on, established rather than assumed: what a real node can say
+about content its own workload produced is nothing.
+
+The reachability probe's missing timeout, issue #165, is again deliberately
+untouched. It does not reproduce on this host, and it has its own regression test
+to write.
 
 ### Phase 3 controlled prewarming
 
