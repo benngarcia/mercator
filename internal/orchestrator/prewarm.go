@@ -44,14 +44,26 @@ type PrewarmPolicy struct {
 	MinInterval time.Duration
 }
 
-// WithPrewarm gives Mercator somewhere to send preparation and the bounds it
-// must stay inside. Without it nothing is ever prepared, which is what every
-// deployment before this had: the prepare command path existed and no caller
-// in the tree issued one.
-func WithPrewarm(prewarmer Prewarmer, policy PrewarmPolicy) Option {
+// PreparationClock is where the moment Mercator last began preparing something
+// is kept. It is durable state on purpose: a restart is not permission to start
+// speculating again, and a control plane restarting in a loop with an in-process
+// clock would begin a transfer on every boot, which is the rate bound not
+// existing. It is one moment rather than one per tenant because the bound it
+// serves is the fleet's.
+type PreparationClock interface {
+	LastBegan(ctx context.Context) (time.Time, bool, error)
+	RecordBegan(ctx context.Context, at time.Time) error
+}
+
+// WithPrewarm gives Mercator somewhere to send preparation, the bounds it must
+// stay inside, and the durable clock the rate bound is measured against. Without
+// it nothing is ever prepared, which is what every deployment before this had:
+// the prepare command path existed and no caller in the tree issued one.
+func WithPrewarm(prewarmer Prewarmer, policy PrewarmPolicy, clock PreparationClock) Option {
 	return func(o *Orchestrator) {
 		o.prewarmer = prewarmer
 		o.prewarmPolicy = policy
+		o.preparationClock = clock
 	}
 }
 
@@ -66,39 +78,26 @@ type PrewarmResult struct {
 	Stated int
 }
 
-// prewarmMemory is what this control plane last asked for, and when it last
-// began preparing anything. The desired sets are per tenant because that is how
-// they are stated; the moment is not, because the bound it serves is the
-// fleet's.
-//
-// It is in-process on purpose: each desired set is derived from the event log
-// every time, so a restarted Mercator recomputes it and restates it, which the
-// far side answers Duplicate. Persisting the sets would make a durable record of
+// prewarmMemory is what this control plane last asked each tenant for. It is
+// in-process on purpose: each desired set is derived from the event log every
+// time, so a restarted Mercator recomputes it and restates it, which the far
+// side answers Duplicate, and persisting the sets would make a durable record of
 // a cache.
+//
+// A restarted Mercator therefore cannot tell content it has already asked for
+// from content it has not, so it states nothing at all until the rate bound
+// allows a beginning. The price is that a withdrawal it discovers inside that
+// window waits for the same interval, which is the operator's own number.
 type prewarmMemory struct {
 	mu   sync.Mutex
 	sent map[string]map[string]bool
 	key  map[string]string
-	at   time.Time
 }
 
 func (memory *prewarmMemory) unchanged(workspaceID, key string) bool {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	return memory.key[workspaceID] == key
-}
-
-// tooSoon answers whether the rate bound is currently holding new preparation
-// back, whoever wants it. A pass that has just begun a transfer for one tenant
-// holds the next tenant's additions for the same reason it holds its own: the
-// link and the egress they would share are the ones this bound is about.
-func (memory *prewarmMemory) tooSoon(now time.Time, interval time.Duration) bool {
-	if interval <= 0 {
-		return false
-	}
-	memory.mu.Lock()
-	defer memory.mu.Unlock()
-	return !memory.at.IsZero() && now.Sub(memory.at) < interval
 }
 
 // withoutAdditions is this desire with every piece of content Mercator has not
@@ -118,11 +117,11 @@ func (memory *prewarmMemory) withoutAdditions(workspaceID string, wanted []adapt
 	return kept
 }
 
-// record remembers a desire Mercator has just stated, and moves the fleet's
-// clock when that desire named content it had not asked for before. A desire
-// that only drops content began no transfer, so it is not a moment the rate
-// bound measures from.
-func (memory *prewarmMemory) record(workspaceID, key string, wanted []adapter.PrepareItem, now time.Time) {
+// remember records a desire Mercator has just stated, and answers whether
+// stating it began any preparation. A desire naming only content this tenant was
+// already asked for began no transfer, and neither did one that only drops
+// content, so neither is a moment the rate bound measures from.
+func (memory *prewarmMemory) remember(workspaceID, key string, wanted []adapter.PrepareItem) bool {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	if memory.sent == nil {
@@ -139,9 +138,7 @@ func (memory *prewarmMemory) record(workspaceID, key string, wanted []adapter.Pr
 	}
 	memory.sent[workspaceID] = asked
 	memory.key[workspaceID] = key
-	if began {
-		memory.at = now
-	}
+	return began
 }
 
 // Prewarm reconciles what Mercator wants prepared with what it last asked for.
@@ -156,6 +153,9 @@ func (memory *prewarmMemory) record(workspaceID, key string, wanted []adapter.Pr
 func (o *Orchestrator) Prewarm(ctx context.Context) (PrewarmResult, error) {
 	if o.prewarmer == nil || o.prewarmPolicy.MaxConcurrent <= 0 {
 		return PrewarmResult{}, nil
+	}
+	if o.preparationClock == nil {
+		return PrewarmResult{}, fmt.Errorf("orchestrator: preparation is configured with no durable clock to bound its rate")
 	}
 	workspaces, err := o.ListRunWorkspaces(ctx)
 	if err != nil {
@@ -182,7 +182,11 @@ func (o *Orchestrator) Prewarm(ctx context.Context) (PrewarmResult, error) {
 // stateDesire hands one tenant's machines the content they should be holding,
 // and answers whether that desire crossed the boundary at all.
 func (o *Orchestrator) stateDesire(ctx context.Context, workspaceID string, wanted []adapter.PrepareItem) (bool, error) {
-	if o.prewarmed.tooSoon(o.now(), o.prewarmPolicy.MinInterval) {
+	holding, err := o.rateBoundHolds(ctx)
+	if err != nil {
+		return false, err
+	}
+	if holding {
 		wanted = o.prewarmed.withoutAdditions(workspaceID, wanted)
 	}
 	key := prewarmOperationKey(workspaceID, wanted)
@@ -196,8 +200,29 @@ func (o *Orchestrator) stateDesire(ctx context.Context, workspaceID string, want
 	}); err != nil {
 		return false, fmt.Errorf("orchestrator: prepare capacity for queued work: %w", err)
 	}
-	o.prewarmed.record(workspaceID, key, wanted, o.now())
+	if !o.prewarmed.remember(workspaceID, key, wanted) {
+		return true, nil
+	}
+	if err := o.preparationClock.RecordBegan(ctx, o.now()); err != nil {
+		return true, fmt.Errorf("orchestrator: record the moment preparation began: %w", err)
+	}
 	return true, nil
+}
+
+// rateBoundHolds answers whether the rate bound is holding new preparation back
+// right now, whoever wants it. It is read from the durable clock every time
+// rather than carried through the pass: a tenant that has just begun a transfer
+// holds the next tenant for the same reason it holds itself, and a restarted
+// control plane is held by what the last one did.
+func (o *Orchestrator) rateBoundHolds(ctx context.Context) (bool, error) {
+	if o.prewarmPolicy.MinInterval <= 0 {
+		return false, nil
+	}
+	began, ever, err := o.preparationClock.LastBegan(ctx)
+	if err != nil {
+		return false, fmt.Errorf("orchestrator: read the moment preparation last began: %w", err)
+	}
+	return ever && o.now().Sub(began) < o.prewarmPolicy.MinInterval, nil
 }
 
 // prewarmWant is one piece of content one tenant wants on one machine, with the

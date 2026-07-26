@@ -97,10 +97,17 @@ func TestOnePieceOfContentIsPreparedAtATime(t *testing.T) {
 // name is a prefix of the one already asked for, which is the shape that made a
 // control plane comparing desires as text read new content as content it had
 // already requested and skip the bound. It arrives between two ticks, so the
-// harness cannot supply the gap either.
+// harness cannot supply the gap either, and the control plane restarts the moment
+// it is recorded: the moment preparation last began is a fact about the fleet
+// rather than about the process, so a restarted Mercator is held by what the last
+// one did.
 func TestASecondSpeculativeFetchWaitsOutTheRateBound(t *testing.T) {
 	execution := driveBlueprintForEightyMinutes(t, rateBoundBlueprint)
 
+	restarts := controlPlaneRestarts(t, execution)
+	if len(restarts) != 1 {
+		t.Fatalf("the ledger records %d control plane restarts, want the one this Blueprint states: %+v", len(restarts), restarts)
+	}
 	starts := prefetchStarts(t, execution)
 	if len(starts) != 2 {
 		t.Fatalf("the ledger records %d preparations, want one per corpus version: %+v", len(starts), starts)
@@ -266,6 +273,19 @@ func TestABackgroundPreparationLoopTripsNoDispatcherDetector(t *testing.T) {
 			t.Fatalf("drive the execution: %v", err)
 		}
 	}
+}
+
+// controlPlaneRestarts is every moment this execution restarted Mercator, which
+// is what makes a claim about surviving one mean something.
+func controlPlaneRestarts(t *testing.T, execution *Execution) []time.Time {
+	t.Helper()
+	var restarts []time.Time
+	for _, effect := range execution.runtime.world.effectRecords() {
+		if effect.Operation == OperationControlPlaneRestart {
+			restarts = append(restarts, effect.At)
+		}
+	}
+	return restarts
 }
 
 // preparationStart is one speculative fetch as the ledger records it.

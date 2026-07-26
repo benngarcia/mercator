@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "One machine already holding the image, and three Runs that want two versions of one corpus. The first occupies the machine for forty minutes, so the other two queue and Mercator knows where they are going. The second wants artifact:corpus:v70 and Mercator asks for it. The third arrives ninety seconds later wanting artifact:corpus:v7, whose name is a prefix of the name already asked for, and the rate bound holds that second speculative fetch until five minutes after the first one started. Both halves of this fixture exist to be failable. A control plane that compared the new desire against the joined text of the last one would read v7 as content it had already asked for, decide the desire added nothing, skip the bound it only applies to additions, and start a second transfer inside the operator's minimum gap. A control plane with no rate bound at all would do the same. The gap here is longer than the cadence Mercator reconciles at and the third Run arrives between two ticks, so nothing about the harness can produce the gap on the control plane's behalf.",
+  "summary": "One machine already holding the image, and three Runs that want two versions of one corpus. The first occupies the machine for forty minutes, so the other two queue and Mercator knows where they are going. The second wants artifact:corpus:v70 and Mercator asks for it. The third arrives ninety seconds later wanting artifact:corpus:v7, whose name is a prefix of the name already asked for, and the rate bound holds that second speculative fetch until five minutes after the first one started. The control plane restarts the moment that third Run is recorded, and the bound still holds: when Mercator last began preparing is a moment that happened, so it is kept where a restart cannot lose it. Every part of this fixture exists to be failable. A control plane that compared the new desire against the joined text of the last one would read v7 as content it had already asked for, decide the desire added nothing, skip the bound it only applies to additions, and start a second transfer inside the operator's minimum gap. A control plane with no rate bound at all would do the same, and so would one whose clock lived only in the process that restarts here. The gap here is longer than the cadence Mercator reconciles at and the third Run arrives between two ticks, so nothing about the harness can produce the gap on the control plane's behalf.",
   "seed": "mercator-lab-prewarm-rate-bound-v1",
   "world": {
     "prewarm": {
@@ -66,6 +66,16 @@
       }
     ]
   },
+  "faults": [
+    {
+      "id": "restart-when-the-third-run-is-recorded",
+      "trigger": {
+        "event": "compute.run.requested.v1",
+        "run": "auditor"
+      },
+      "action": "restart_control_plane"
+    }
+  ],
   "arrivals": {
     "type": "fixed",
     "runs": [

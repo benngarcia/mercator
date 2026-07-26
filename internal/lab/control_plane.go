@@ -334,7 +334,7 @@ func (runtime *controlPlane) restartOrchestrator() {
 		orchestrator.WithClock(runtime.world.nowTime),
 		orchestrator.WithImageManifests(runtime.world),
 		orchestrator.WithArtifactCatalog(runtime.world),
-		orchestrator.WithPrewarm(runtime.world, runtime.prewarm),
+		orchestrator.WithPrewarm(runtime.world, runtime.prewarm, runtime.storage.Preparation()),
 		orchestrator.WithRentalSchedules(runtime.storage.RentalSchedules()),
 		orchestrator.WithRunProjection(runtime.storage.Runs()),
 	)

@@ -184,7 +184,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		// Preparation reaches enrolled nodes through the same Broker a launch
 		// does, which is what makes the prepare half of capability.NodeRuntime
 		// reachable from the control plane at all.
-		orchestrator.WithPrewarm(providerBroker, prewarmPolicy(cfg.Prewarm)),
+		orchestrator.WithPrewarm(providerBroker, prewarmPolicy(cfg.Prewarm), storage.Preparation()),
 	)
 	if signer.Enabled() && cfg.PublicURL != "" {
 		orchestratorOptions = append(orchestratorOptions, orchestrator.WithReporting(cfg.PublicURL, signer))

@@ -100,6 +100,7 @@ type Orchestrator struct {
 	prewarmer          Prewarmer
 	prewarmPolicy      PrewarmPolicy
 	prewarmed          prewarmMemory
+	preparationClock   PreparationClock
 }
 
 type Adapter interface {
