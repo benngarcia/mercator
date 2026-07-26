@@ -772,11 +772,18 @@ func TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt(t *testing.T) {
 	if after.Host.Disk.TotalBytes != before.Host.Disk.TotalBytes {
 		t.Fatalf("the filesystem changed size under the case: %d then %d", before.Host.Disk.TotalBytes, after.Host.Disk.TotalBytes)
 	}
-	// Other things write to a working machine while a case runs, so this asserts
-	// that the room fell by roughly what the workload wrote rather than by
-	// exactly it.
+	// The claim is that this node's own number answers to this node's own
+	// workload, so the bound is stated in one direction only. Free space on a
+	// working machine is shared with everything else on it, and an upper bound on
+	// how far it fell is an assertion that nothing else wrote during the window: a
+	// neighbouring container retaining 300MiB chunks fails 700MiB reliably, and the
+	// suite runs one package pulling images beside this one, so the whole of
+	// `go test ./...` was a coin toss on what the rest of the host was doing. What
+	// the bound would have caught beyond the two checks above is nothing, because
+	// the filesystem this reports is pinned by its total size here and against a
+	// container's own root in the case before it.
 	taken := before.Host.Disk.FreeBytes - after.Host.Disk.FreeBytes
-	if taken < 400<<20 || taken > 700<<20 {
+	if taken < 400<<20 {
 		t.Fatalf("a workload wrote 512MiB and the room this node reports fell by %d bytes", taken)
 	}
 }

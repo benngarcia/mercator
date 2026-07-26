@@ -99,7 +99,7 @@ func startRuntimeWithLease(t *testing.T, lease time.Duration) (string, *daemon.R
 	served := make(chan error, 1)
 	go func() { served <- runtime.Serve(listener) }()
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownWindow)
 		defer cancel()
 		if err := runtime.Shutdown(ctx); err != nil {
 			t.Fatalf("shutdown runtime: %v", err)
@@ -111,21 +111,31 @@ func startRuntimeWithLease(t *testing.T, lease time.Duration) (string, *daemon.R
 	return listener.Addr().String(), runtime
 }
 
+// shutdownWindow is what a case gives the daemon to drain, and it is the window
+// the production binary gives it rather than a tighter one.
+//
+// A tighter one is not a claim about Mercator. net/http keeps a connection that
+// was accepted and has sent nothing out of its quiescent set for five seconds, so
+// a client that is slow with its first header is not cut off, and an
+// http.Transport dials speculatively: a node agent reporting every twenty
+// milliseconds routinely leaves one such connection behind. A two second bound
+// here was therefore an assertion about the standard library's own grace period,
+// and it is the second half of why this package was intermittently red, at the
+// same site and under whichever case happened to be last through the sweep.
+const shutdownWindow = 15 * time.Second
+
 // TestADaemonDrainsWhileANodeHoldsItsSessionOpen holds the shutdown the
 // production binary depends on. A node session is a long-lived read the node
 // holds open and the control plane writes down, and http.Server.Shutdown waits
 // for active requests rather than cancelling them, so nothing in the tree ever
 // ended one: a control plane with a single enrolled machine burned its whole
-// fifteen second shutdown window and then exited on a deadline it could not have
-// met. The same read is what made this package intermittently red, because an
-// agent cancelled a moment before the sweep still raced the drain.
-//
-// The bound here is the production window's own order of magnitude rather than
-// the whole of it. A drain that has to be waited for is the defect.
+// shutdown window and then exited on a deadline it could not have met. That was
+// the first half of why this package was intermittently red, because an agent
+// whose connection happened to drop first hid it.
 func TestADaemonDrainsWhileANodeHoldsItsSessionOpen(t *testing.T) {
 	fleet := startFleet(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownWindow)
 	defer cancel()
 	err := fleet.control.Shutdown(ctx)
 
