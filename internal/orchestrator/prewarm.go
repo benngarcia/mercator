@@ -67,6 +67,27 @@ func WithPrewarm(prewarmer Prewarmer, policy PrewarmPolicy, clock PreparationClo
 	}
 }
 
+// PreparationTriggers is every recorded event after which what Mercator wants
+// prepared may be different: a Booking that named a machine, one that was
+// dispatched and is no longer speculative, a launch a host is now getting ready
+// for, a caller withdrawing work, and a Run whose machine is free again.
+//
+// Preparation has to be driven by them rather than by a timer alone. A control
+// plane that reconciled it on a sweep prepares nothing for a Run that arrived a
+// moment after the last one, and its own rate bound never binds either, because
+// no sweep cadence an operator would run is faster than the interval they would
+// state. Waking here is what makes the bound the thing that paces preparation
+// instead of the sweep.
+func PreparationTriggers() []string {
+	return []string{
+		EventBookingDecided,
+		EventBookingDispatched,
+		EventLaunchAccepted,
+		EventCancelRequested,
+		EventRunClosed,
+	}
+}
+
 // PrewarmResult is what one reconciliation of the fleet's desired set did.
 type PrewarmResult struct {
 	// Wanted is the content Mercator asked for, across every tenant, after both

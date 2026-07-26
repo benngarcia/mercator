@@ -47,6 +47,55 @@ func TestAQueuedRunPreparesTheMachineItIsGoingTo(t *testing.T) {
 	}
 }
 
+// TestAQueuedRunIsPreparedForWithoutWaitingForASweep is the production trigger.
+// Preparation used to happen only on the reconcile sweep, once a minute, so a Run
+// queued half a second after one waited out the rest of the minute before a byte
+// moved for it, and the operator's own bound on how often preparation may begin
+// could never hold anything back: two sweeps are never closer together than the
+// sweep's cadence, which is slower than any interval anyone would state. Nothing
+// here sweeps. The Run is submitted over HTTP and the machine is asked to prepare
+// because the Booking that named it was recorded.
+func TestAQueuedRunIsPreparedForWithoutWaitingForASweep(t *testing.T) {
+	fleet := startFleet(t)
+	fleet.holdsImageAlready(t, trainerIndexDigest)
+	running := fleet.submitRun(t)
+	fleet.runtime.awaitLaunch(t, running)
+	// A machine still getting ready for work Mercator has admitted there is one
+	// nothing speculative may touch, and that readiness is a moment in wall-clock
+	// time this Run's own decision named. It passes on a clock rather than on an
+	// event, which is why the sweep stays: what this case is about is the Run that
+	// arrives afterwards.
+	fleet.awaitPredictedStart(t, running)
+
+	fleet.submitRunFor(t, fleet.rebuiltImage)
+
+	waitFor(t, func() bool {
+		return len(fleet.runtime.preparedImages()) > 0
+	}, "the queued Run's host was never asked to prepare anything, and this case never swept")
+	if prepared := fleet.runtime.preparedImages(); len(prepared) != 1 || prepared[0] != rebuiltIndexDigest {
+		t.Fatalf("the machine was asked to prepare %v, want the queued Run's image once", prepared)
+	}
+	if launched := fleet.runtime.launchedRuns(); len(launched) != 1 {
+		t.Fatalf("the machine ran %v, and the queued Run has not been dispatched: preparation is not execution", launched)
+	}
+}
+
+// awaitPredictedStart waits out the start Mercator predicted for a Run it has
+// just launched. Nothing below the control plane reports that a host has finished
+// getting ready, so this is the same number the placement was made on.
+func (f *fleet) awaitPredictedStart(t *testing.T, runID string) {
+	t.Helper()
+	decision := f.decision(t, runID)
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID != decision.SelectedOfferSnapshotID {
+			continue
+		}
+		time.Sleep(time.Duration(candidate.Estimates.StartSeconds.Expected*float64(time.Second)) + 250*time.Millisecond)
+		return
+	}
+	t.Fatalf("Run %q has no candidate for the machine it was launched on", runID)
+}
+
 // TestNothingIsPreparedOnAMachineStillGettingReadyForItsOwnRun is the restraint
 // half, through the production daemon. This machine holds none of the first
 // Run's image, so Mercator's own decision says it is minutes from starting, and
@@ -123,9 +172,11 @@ func (f *fleet) holdsImageAlready(t *testing.T, digest string) {
 	}, "the machine never reported the image it was given")
 }
 
-// prepare drives one reconciliation of the desired preparation set, which is
-// what the production sweep does once a minute. Preparation answers no request,
-// so nothing an HTTP caller can do makes it happen.
+// prepare drives one reconciliation of the desired preparation set, which is what
+// the production sweep does once a minute. Preparation also happens on its own
+// when a Booking, a launch, a cancellation, or a closure changes what Mercator
+// wants prepared, so a case that sweeps is stating that the answer holds however
+// often Mercator looks rather than that looking is the only way it happens.
 func (f *fleet) prepare(t *testing.T) {
 	t.Helper()
 	if _, err := f.control.ReconcileWorkspace(context.Background(), daemon.DefaultWorkspaceID); err != nil {

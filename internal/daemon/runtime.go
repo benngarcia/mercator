@@ -19,6 +19,7 @@ import (
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
+	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/node"
@@ -88,6 +89,7 @@ type Runtime struct {
 
 	stopReconcile context.CancelFunc
 	reconcileDone chan struct{}
+	prepareDone   chan struct{}
 	nodes         *node.Registry
 
 	shutdownOnce sync.Once
@@ -268,9 +270,11 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		janitor:       workspaceJanitor,
 		stopReconcile: stopReconcile,
 		reconcileDone: make(chan struct{}),
+		prepareDone:   make(chan struct{}),
 		nodes:         nodes,
 	}
 	go runtime.reconcile(reconcileCtx)
+	go runtime.prepareWhenDesireChanges(reconcileCtx)
 	return runtime, nil
 }
 
@@ -410,6 +414,7 @@ func (r *Runtime) Shutdown(ctx context.Context) error {
 		httpErr := r.server.Shutdown(ctx)
 		r.stopReconcile()
 		<-r.reconcileDone
+		<-r.prepareDone
 		storageErr := r.storage.Close()
 		r.shutdownErr = errors.Join(httpErr, storageErr)
 	})
@@ -468,6 +473,64 @@ func (r *Runtime) reconcile(ctx context.Context) {
 				}
 			}
 			reconcileWorkspaces(ctx, r.orch, r.janitor)
+		}
+	}
+}
+
+// prepareWhenDesireChanges reconciles preparation as soon as something happened
+// that could change what Mercator wants prepared, which is what makes preparation
+// worth having: a Run submitted half a second after a sweep would otherwise wait
+// out the rest of a minute before anything was fetched for the machine it is
+// queued on, and the bound on how often preparation may begin would never be the
+// thing that held it back.
+//
+// It subscribes from the log's head, so a restart wakes on what happens next
+// rather than replaying every Booking this deployment ever made. Everything
+// already delivered is answered by one pass, because the desired set is derived
+// from all of it at once and reconciling per event would ask the same question
+// several times over.
+func (r *Runtime) prepareWhenDesireChanges(ctx context.Context) {
+	defer close(r.prepareDone)
+	events := r.storage.EventLog()
+	filter := eventlog.EventFilter{EventTypes: orchestrator.PreparationTriggers()}
+	head, err := events.LatestPosition(ctx, filter)
+	if err != nil {
+		log.Printf("read the log position to prepare from: %v", err)
+		return
+	}
+	deliveries, err := events.Subscribe(ctx, eventlog.SubscriptionRequest{
+		SubscriptionID: "daemon-preparation",
+		After:          head,
+		Filter:         filter,
+	})
+	if err != nil {
+		log.Printf("subscribe to the events that change what is prepared: %v", err)
+		return
+	}
+	for range deliveries {
+		drain(deliveries)
+		if ctx.Err() != nil {
+			return
+		}
+		if prepared, err := r.orch.Prewarm(ctx); err != nil {
+			log.Printf("prepare capacity for queued work: %v", err)
+		} else if prepared.Stated > 0 {
+			log.Printf("prepare capacity: asked %d workspaces for %d pieces of content", prepared.Stated, prepared.Wanted)
+		}
+	}
+}
+
+// drain takes everything already delivered off the channel. One reconciliation
+// answers all of it.
+func drain[T any](deliveries <-chan T) {
+	for {
+		select {
+		case _, open := <-deliveries:
+			if !open {
+				return
+			}
+		default:
+			return
 		}
 	}
 }
