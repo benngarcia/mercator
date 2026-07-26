@@ -134,9 +134,9 @@ func TestAStartBoundIsAskedOfThePublishedProvisioningTail(t *testing.T) {
 	}
 
 	candidate := schedulerCandidate(t, decision, "off_slow_tail")
-	if candidate.Estimates.ProvisionSeconds.P90 != 600 {
+	if candidate.Estimates.Stages.Boot.P90 != 600 {
 		t.Fatalf("the decision recorded a provisioning p90 of %v, and the provider published 600",
-			candidate.Estimates.ProvisionSeconds.P90)
+			candidate.Estimates.Stages.Boot.P90)
 	}
 	if candidate.Feasible {
 		t.Fatalf("a machine whose own publisher says it takes ten minutes in the tail met a five-minute bound: %+v", candidate.Estimates)
@@ -707,13 +707,13 @@ func TestArtifactLocalityDecidesBetweenOtherwiseIdenticalHosts(t *testing.T) {
 	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityHot {
 		t.Fatalf("the holder recorded %+v", warm.ArtifactEvidence)
 	}
-	if warm.Estimates.ArtifactSeconds.Expected != 0 || warm.Estimates.ArtifactSeconds.Confidence != 1 {
-		t.Fatalf("a host holding a checked copy was priced %+v, and it owes nothing", warm.Estimates.ArtifactSeconds)
+	if warm.Estimates.Stages.ArtifactFetch.Expected != 0 || warm.Estimates.Stages.ArtifactFetch.Confidence != 1 {
+		t.Fatalf("a host holding a checked copy was priced %+v, and it owes nothing", warm.Estimates.Stages.ArtifactFetch)
 	}
 	// 40GB at the assumed 500 Mbps is 640 seconds, over a link nothing measured.
 	empty := schedulerCandidate(t, decision, "off_cold")
-	if empty.Estimates.ArtifactSeconds.Expected != 640 || empty.Estimates.ArtifactSeconds.Confidence != domain.AssumedLinkConfidence {
-		t.Fatalf("a host holding no copy was priced %+v", empty.Estimates.ArtifactSeconds)
+	if empty.Estimates.Stages.ArtifactFetch.Expected != 640 || empty.Estimates.Stages.ArtifactFetch.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("a host holding no copy was priced %+v", empty.Estimates.Stages.ArtifactFetch)
 	}
 	if empty.ArtifactEvidence[0].FetchBytes != dataset.SizeBytes {
 		t.Fatalf("a host holding no copy owes %d bytes, and the version is %d", empty.ArtifactEvidence[0].FetchBytes, dataset.SizeBytes)
@@ -747,11 +747,11 @@ func TestAHostThatCannotEnumerateItsCopiesRecordsUnknownAndNotZero(t *testing.T)
 	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityUnknown {
 		t.Fatalf("a machine that cannot enumerate its copies recorded %+v", candidate.ArtifactEvidence)
 	}
-	if candidate.Estimates.ArtifactSeconds.Expected != 640 {
-		t.Fatalf("silence was priced %v seconds, and absence costs 640", candidate.Estimates.ArtifactSeconds.Expected)
+	if candidate.Estimates.Stages.ArtifactFetch.Expected != 640 {
+		t.Fatalf("silence was priced %v seconds, and absence costs 640", candidate.Estimates.Stages.ArtifactFetch.Expected)
 	}
-	if candidate.Estimates.ArtifactSeconds.Source != "inventory_unknown" {
-		t.Fatalf("the estimate names its source %q, and this one rests on a machine nobody could ask", candidate.Estimates.ArtifactSeconds.Source)
+	if candidate.Estimates.Stages.ArtifactFetch.Source != "inventory_unknown" {
+		t.Fatalf("the estimate names its source %q, and this one rests on a machine nobody could ask", candidate.Estimates.Stages.ArtifactFetch.Source)
 	}
 	if !candidate.Feasible {
 		t.Fatalf("a machine that cannot say what it holds was refused: %+v", candidate.Rejections)

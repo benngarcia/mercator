@@ -51,14 +51,18 @@
         "candidates": {
           "rental-warm": {
             "feasible": true,
-            "provision_seconds": 0,
-            "pull_seconds": 0,
+            "stages": {
+              "boot": {"seconds": 0},
+              "image_fetch": {"seconds": 0}
+            },
             "image_locality": "hot"
           },
           "fresh-cheap": {
             "feasible": true,
-            "provision_seconds": 300,
-            "pull_seconds": {"at_least": 285, "at_most": 292},
+            "stages": {
+              "boot": {"seconds": 300},
+              "image_fetch": {"seconds": {"at_least": 285, "at_most": 292}}
+            },
             "image_locality": "unknown"
           }
         }

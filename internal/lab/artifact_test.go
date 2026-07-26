@@ -251,7 +251,7 @@ func TestTheDecisionRecordsWhatEachCandidateHoldsOfTheRunsInputs(t *testing.T) {
 	}
 	// 5GB and 2GB at 500 Mbps is 80 + 32 seconds, which is what this candidate
 	// still owes on content none of which was ever checked here.
-	if seconds := candidate.Estimates.ArtifactSeconds.Expected; seconds != 112 {
+	if seconds := candidate.Estimates.Stages.ArtifactFetch.Expected; seconds != 112 {
 		t.Errorf("the decision priced %v seconds of Artifact fetch, and 7GB crosses a 500 Mbps link in 112s", seconds)
 	}
 
@@ -261,7 +261,7 @@ func TestTheDecisionRecordsWhatEachCandidateHoldsOfTheRunsInputs(t *testing.T) {
 	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityHot {
 		t.Fatalf("the host that produced the checkpoint records %+v of it", warm.ArtifactEvidence)
 	}
-	if seconds := warm.Estimates.ArtifactSeconds.Expected; seconds != 0 {
+	if seconds := warm.Estimates.Stages.ArtifactFetch.Expected; seconds != 0 {
 		t.Errorf("the host already holding a checked copy was priced %v seconds to read it", seconds)
 	}
 }

@@ -147,16 +147,16 @@ func TestAPreparedHostIsWarmForARunThatNeverExecutedThere(t *testing.T) {
 		t.Fatalf("the third Run landed on %q, want the prepared machine", decision.SelectedOfferSnapshotID)
 	}
 	candidate := candidateDecision(t, decision, "builder")
-	if candidate.Estimates.PullSeconds.Expected != 0 || candidate.ImageLocality != domain.LocalityHot {
+	if candidate.Estimates.Stages.ImageFetch.Expected != 0 || candidate.ImageLocality != domain.LocalityHot {
 		t.Fatalf(
 			"the prepared machine was priced %.2f pull seconds and recorded %q, want zero on a host holding the image whole",
-			candidate.Estimates.PullSeconds.Expected, candidate.ImageLocality,
+			candidate.Estimates.Stages.ImageFetch.Expected, candidate.ImageLocality,
 		)
 	}
-	if candidate.Estimates.ArtifactSeconds.Expected != 0 {
+	if candidate.Estimates.Stages.ArtifactFetch.Expected != 0 {
 		t.Fatalf(
 			"the prepared machine was priced %.2f seconds of Artifact read, want zero on a host holding a checked copy",
-			candidate.Estimates.ArtifactSeconds.Expected,
+			candidate.Estimates.Stages.ArtifactFetch.Expected,
 		)
 	}
 	// Warming by preparation and warming by execution are different facts about

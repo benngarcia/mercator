@@ -96,13 +96,17 @@
         "candidates": {
           "builder-a": {
             "feasible": true,
-            "pull_seconds": 0,
+            "stages": {
+              "image_fetch": {"seconds": 0}
+            },
             "queue_seconds": 0,
             "cache_evidence": {"build-cache": "hit"}
           },
           "builder-b": {
             "feasible": true,
-            "pull_seconds": 0,
+            "stages": {
+              "image_fetch": {"seconds": 0}
+            },
             "queue_seconds": 0,
             "cache_evidence": {"build-cache": "miss"}
           }

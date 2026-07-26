@@ -61,17 +61,15 @@
         "candidates": {
           "docker-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "image_inventory",
-            "pull_confidence": 1
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "image_inventory", "confidence": 1}
+            }
           },
           "bare-host": {
             "feasible": true,
-            "pull_seconds": {
-              "at_least": 380
-            },
-            "pull_source": "image_inventory",
-            "pull_confidence": 0.5
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 380}, "source": "image_inventory", "confidence": 0.5}
+            }
           }
         }
       }
@@ -94,15 +92,15 @@
         "candidates": {
           "docker-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_unauthorized",
-            "pull_confidence": 0
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_unauthorized", "confidence": 0}
+            }
           },
           "bare-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_unauthorized",
-            "pull_confidence": 0
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_unauthorized", "confidence": 0}
+            }
           }
         }
       }

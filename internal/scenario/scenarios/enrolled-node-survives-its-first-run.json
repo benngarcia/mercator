@@ -79,8 +79,10 @@
           "reusable-4090": {
             "feasible": true,
             "disposition": "run_now_existing_rental",
-            "provision_seconds": 0,
-            "pull_seconds": 0
+            "stages": {
+              "boot": {"seconds": 0},
+              "image_fetch": {"seconds": 0}
+            }
           }
         }
       }

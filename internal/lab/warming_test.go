@@ -138,7 +138,7 @@ func TestWhatABorrowedMachineHoldsIsNotSomethingMercatorKnows(t *testing.T) {
 	if found := borrowed.ArtifactEvidence; len(found) != 1 || found[0].Locality != domain.LocalityUnknown {
 		t.Fatalf("the decision recorded %+v for a copy nothing of Mercator's can be asked about", found)
 	}
-	if fetch := borrowed.Estimates.ArtifactSeconds.Expected; fetch < 100 {
+	if fetch := borrowed.Estimates.Stages.ArtifactFetch.Expected; fetch < 100 {
 		t.Fatalf("the Run was priced %.2fs of Artifact read, and 7GB crosses a 500 Mbps link in 112s", fetch)
 	}
 }
@@ -183,9 +183,9 @@ func TestAStartBoundStrikesOutStatedLatenessAndNotSilence(t *testing.T) {
 	// The tail the provider published, rather than one Mercator scaled off its
 	// own expectation. This offer says ten minutes on average and eighteen in its
 	// p90, and a p90 bound is a question about the eighteen.
-	if provisionable.Estimates.ProvisionSeconds.P90 != 18*time.Minute.Seconds() {
+	if provisionable.Estimates.Stages.Boot.P90 != 18*time.Minute.Seconds() {
 		t.Fatalf("the decision recorded a provisioning p90 of %.2fs, and this offer published 1080",
-			provisionable.Estimates.ProvisionSeconds.P90)
+			provisionable.Estimates.Stages.Boot.P90)
 	}
 	if provisionable.Estimates.EstablishedStartSeconds.P90 < 18*time.Minute.Seconds() {
 		t.Fatalf("the bound was enforced against %.2fs while the provider published an eighteen-minute p90",
@@ -340,7 +340,7 @@ func candidatePullSource(t *testing.T, decision domain.BookingDecision, offerID 
 	t.Helper()
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID == offerID {
-			return candidate.Estimates.PullSeconds.Source
+			return candidate.Estimates.Stages.ImageFetch.Source
 		}
 	}
 	t.Fatalf("Run %q has no candidate for offer %q", decision.RunID, offerID)
@@ -351,7 +351,7 @@ func candidatePullSeconds(t *testing.T, decision domain.BookingDecision, offerID
 	t.Helper()
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID == offerID {
-			return candidate.Estimates.PullSeconds.Expected
+			return candidate.Estimates.Stages.ImageFetch.Expected
 		}
 	}
 	t.Fatalf("Run %q has no candidate for offer %q", decision.RunID, offerID)
@@ -434,13 +434,13 @@ func TestADisownedLinkFactBuysWhatSilenceBuysAtL1(t *testing.T) {
 			t.Fatalf("%s was refused as %+v, and this Run allows a link nobody measured", candidate.OfferSnapshotID, candidate.Rejections)
 		}
 	}
-	if disowned.Estimates.PullSeconds != silent.Estimates.PullSeconds {
+	if disowned.Estimates.Stages.ImageFetch != silent.Estimates.Stages.ImageFetch {
 		t.Fatalf("the disowned publisher was priced %+v and the silent machine %+v, and a number nobody stands behind is the silence it is",
-			disowned.Estimates.PullSeconds, silent.Estimates.PullSeconds)
+			disowned.Estimates.Stages.ImageFetch, silent.Estimates.Stages.ImageFetch)
 	}
-	if disowned.Estimates.PullSeconds.Expected <= candidateFor(t, decision, "rental-measured").Estimates.PullSeconds.Expected {
+	if disowned.Estimates.Stages.ImageFetch.Expected <= candidateFor(t, decision, "rental-measured").Estimates.Stages.ImageFetch.Expected {
 		t.Fatalf("the machine that disowned 5 Gbps was priced %.2fs of pull, no worse than the machine that measured 750 Mbps",
-			disowned.Estimates.PullSeconds.Expected)
+			disowned.Estimates.Stages.ImageFetch.Expected)
 	}
 }
 

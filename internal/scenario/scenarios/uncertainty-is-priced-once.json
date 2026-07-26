@@ -46,26 +46,27 @@
     "candidates": {
       "rental-enumerated": {
         "feasible": true,
-        "pull_seconds": 0,
-        "pull_source": "image_inventory",
-        "pull_confidence": 1,
+        "stages": {
+          "image_fetch": {"seconds": 0, "source": "image_inventory", "confidence": 1}
+        },
         "image_locality": "hot",
         "uncertainty": 0,
         "score_usd": {"at_least": 0.343, "at_most": 0.344}
       },
       "rental-doubted": {
         "feasible": true,
-        "pull_seconds": 0,
-        "pull_confidence": 1,
+        "stages": {
+          "image_fetch": {"seconds": 0, "confidence": 1}
+        },
         "image_locality": "hot",
         "uncertainty": 0.3,
         "score_usd": {"at_least": 0.523, "at_most": 0.524}
       },
       "host-unaskable": {
         "feasible": true,
-        "pull_seconds": {"at_least": 285, "at_most": 292},
-        "pull_source": "inventory_unknown",
-        "pull_confidence": 0.5,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 285, "at_most": 292}, "source": "inventory_unknown", "confidence": 0.5}
+        },
         "image_locality": "unknown",
         "uncertainty": 0.5,
         "score_usd": {"at_least": 3.53, "at_most": 3.54}

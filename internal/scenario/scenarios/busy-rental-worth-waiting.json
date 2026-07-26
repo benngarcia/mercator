@@ -64,7 +64,9 @@
     "candidates": {
       "rental-warm": {
         "queue_seconds": 240,
-        "pull_seconds": 0,
+        "stages": {
+          "image_fetch": {"seconds": 0}
+        },
         "rental_schedule": {
           "version": 1,
           "running": {
@@ -76,7 +78,7 @@
           "projected_start_in": "4m"
         }
       },
-      "fresh-4090": {"provision_seconds": {"at_least": 300}}
+      "fresh-4090": {"stages": {"boot": {"seconds": {"at_least": 300}}}}
     }
   }
 }

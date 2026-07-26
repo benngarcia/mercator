@@ -45,12 +45,14 @@
     "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
     "disposition": "release",
     "candidates": {
-      "rental-warm": {"feasible": true, "pull_seconds": 0, "no_rental_schedule": true},
+      "rental-warm": {"feasible": true, "stages": {"image_fetch": {"seconds": 0}}, "no_rental_schedule": true},
       "fresh-4090": {
         "feasible": true,
         "no_rental_schedule": true,
-        "provision_seconds": {"at_least": 240},
-        "pull_seconds": {"at_least": 200}
+        "stages": {
+          "boot": {"seconds": {"at_least": 240}},
+          "image_fetch": {"seconds": {"at_least": 200}}
+        }
       }
     }
   }

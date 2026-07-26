@@ -289,12 +289,36 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 
 func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	runtime.world.setNow(now)
+	if err := runtime.deliverReadiness(ctx); err != nil {
+		return err
+	}
 	for _, workspace := range runtime.workspaces {
 		if err := runtime.advanceWorkspace(ctx, workspace); err != nil {
 			return err
 		}
 	}
 	return runtime.applyEventFaults(ctx)
+}
+
+// deliverReadiness is the applications in this world calling Mercator to say they
+// can do work. It runs before the Runs are advanced, because a readiness that has
+// arrived is a fact about a Run the same sweep then reasons over.
+//
+// It is an inbound call rather than something read off an observation, because
+// that is what application readiness is: the workload is the only authority, and
+// routing it through the provider seam would make a running process and a serving
+// one the same fact again.
+func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
+	for _, report := range runtime.world.dueReadinessReports() {
+		ready, err := orchestrator.NewApplicationReadyReport(report.ReadyAt)
+		if err != nil {
+			return err
+		}
+		if err := runtime.orchestrator.RecordReport(ctx, report.WorkspaceID, report.RunID, ready); err != nil {
+			return fmt.Errorf("report Lab readiness for Run %q: %w", report.RunID, err)
+		}
+	}
+	return nil
 }
 
 // advanceWorkspace drives one tenant's open Runs. An ambiguous launch is

@@ -504,6 +504,11 @@ export interface components {
              * @description When this Run's workload actually began, as the machine holding it reported the moment. Absent until something observed one, and never the moment the launch was accepted: the difference between those two is what a start-latency prediction is calibrated against.
              */
             started_at?: string;
+            /**
+             * Format: date-time
+             * @description When this Run's application reported that it can do work, as the application itself stated the moment. Only the workload knows: a provider, a node, and a container runtime can all see a process running, and none of them can see whether it is serving. Absent until a ready report arrives, which is a stage with no actual rather than a workload that was ready the instant it started.
+             */
+            ready_at?: string;
             closed: boolean;
             created_by?: string;
             cancelled_by?: string;
@@ -619,7 +624,7 @@ export interface components {
             connection: components["schemas"]["ConnectionRecord"];
         };
         ReportRunRequest: {
-            /** @description Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code. */
+            /** @description Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code. The reserved ready kind is the application saying it can do work and requires data.ready_at, the application's own moment: it completes the last stage of a launch, and a readiness with no moment in it leaves that stage with no actual. */
             type: string;
             data?: {
                 [key: string]: unknown;

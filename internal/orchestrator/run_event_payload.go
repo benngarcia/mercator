@@ -69,8 +69,36 @@ type runReportedData struct {
 	ExitCode *int            `json:"exit_code,omitempty"`
 }
 
+// RunReportReady is the application saying it can do work, and when it could. It
+// is the one report type Mercator reads the body of, because application
+// readiness is the last stage of a launch and nothing else in the system can
+// observe it: a provider, a node, and a container runtime can all see a process
+// running, and none of them can see whether it is serving.
+const RunReportReady = "ready"
+
+// applicationReadyData is the body of a readiness report. The moment is the
+// application's own, because the application is the authority: a moment stamped
+// when Mercator appended the event would move with the control plane's polling
+// cadence rather than with the workload.
+type applicationReadyData struct {
+	ReadyAt time.Time `json:"ready_at"`
+}
+
 func (report runReportedData) terminal() bool {
 	return report.Type == "exit"
+}
+
+// readyAt is the moment this report says the application became ready, and
+// whether it is one. A report of any other type says nothing about readiness.
+func (report runReportedData) readyAt() (time.Time, bool) {
+	if report.Type != RunReportReady {
+		return time.Time{}, false
+	}
+	var data applicationReadyData
+	if json.Unmarshal(report.Data, &data) != nil || data.ReadyAt.IsZero() {
+		return time.Time{}, false
+	}
+	return data.ReadyAt.UTC(), true
 }
 
 func (report runReportedData) validate() error {
@@ -81,9 +109,27 @@ func (report runReportedData) validate() error {
 		return fmt.Errorf("%w: exit reports require exit_code", ErrInvalidReport)
 	case !report.terminal() && report.ExitCode != nil:
 		return fmt.Errorf("%w: %s reports cannot include exit_code", ErrInvalidReport, report.Type)
+	case report.Type == RunReportReady:
+		// A readiness report with no moment in it is the untyped callback this type
+		// replaced: it says something happened and leaves the stage it completes
+		// with no actual.
+		if _, stated := report.readyAt(); !stated {
+			return fmt.Errorf("%w: ready reports require data.ready_at", ErrInvalidReport)
+		}
+		return nil
 	default:
 		return nil
 	}
+}
+
+// NewApplicationReadyReport is the workload's own readiness callback, built where
+// its one required fact cannot be left out.
+func NewApplicationReadyReport(readyAt time.Time) (RunReport, error) {
+	data, err := json.Marshal(applicationReadyData{ReadyAt: readyAt.UTC()})
+	if err != nil {
+		return nil, err
+	}
+	return NewRunReport(RunReportReady, data, nil)
 }
 
 type RunReport interface {

@@ -245,6 +245,7 @@ func assertExpect(session Session, start time.Time, bookings bookingNames, name 
 		}
 	}
 	failures = append(failures, assertStartMoment(events, name, expect)...)
+	failures = append(failures, assertReadyMoment(events, name, expect)...)
 	for _, id := range sortedKeys(expect.Candidates) {
 		failures = append(failures, assertCandidate(rec, bookings, name, id, expect.Candidates[id])...)
 	}
@@ -279,6 +280,57 @@ func assertStartMoment(events []eventlog.StoredEvent, name string, expect Expect
 		return fail("start_latency_seconds: %s", problem)
 	}
 	return nil
+}
+
+// assertReadyMoment reads the last stage of a launch out of the Run's own stream:
+// the moment its process began, and the moment its application said it could do
+// work. It asserts nothing unless the fixture states one of them, because most
+// fixtures are about a placement decision and never run an application at all.
+func assertReadyMoment(events []eventlog.StoredEvent, name string, expect ExpectSpec) []string {
+	if expect.ReadyLatency == nil && !expect.NoReadyReported {
+		return nil
+	}
+	fail := func(format string, args ...any) []string {
+		return []string{fmt.Sprintf("run %q: ", name) + fmt.Sprintf(format, args...)}
+	}
+	started, observed := executionStartedAt(events)
+	ready, reported := applicationReadyAt(events)
+	switch {
+	case expect.NoReadyReported && reported:
+		return fail("records its application ready at %s, and the fixture says it has not said so", ready.Format(time.RFC3339))
+	case expect.NoReadyReported:
+		return nil
+	case !observed:
+		return fail("records no start moment, so there is nothing to measure a readiness from")
+	case !reported:
+		return fail("records no readiness, so nothing said this workload can do work")
+	}
+	if problem := expect.ReadyLatency.Check(ready.Sub(started).Seconds()); problem != "" {
+		return fail("ready_latency_seconds: %s", problem)
+	}
+	return nil
+}
+
+// applicationReadyAt is the moment the application itself said it can do work,
+// which exists only when the application said so.
+func applicationReadyAt(events []eventlog.StoredEvent) (time.Time, bool) {
+	for index := len(events) - 1; index >= 0; index-- {
+		if events[index].Type != orchestrator.EventRunReported {
+			continue
+		}
+		var payload struct {
+			Type string `json:"type"`
+			Data struct {
+				ReadyAt time.Time `json:"ready_at"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(events[index].Data, &payload); err != nil ||
+			payload.Type != orchestrator.RunReportReady {
+			continue
+		}
+		return payload.Data.ReadyAt, true
+	}
+	return time.Time{}, false
 }
 
 // launchAcceptedAt is the provider's own accepted moment, which is when this

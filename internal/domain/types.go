@@ -1216,7 +1216,13 @@ type RunRecord struct {
 	// publishes no start moment reads as a stage with no actual rather than as one
 	// that took no time.
 	StartedAt *time.Time `json:"started_at,omitempty"`
-	Closed    bool       `json:"closed"`
+	// ReadyAt is when this Run's application reported that it can do work, as the
+	// application itself stated the moment. Only the workload knows: a running
+	// process is not a ready one, and no provider, node, or container runtime can
+	// tell the difference. It is absent until a report arrives, which is a stage
+	// with no actual rather than a workload that was ready the instant it started.
+	ReadyAt *time.Time `json:"ready_at,omitempty"`
+	Closed  bool       `json:"closed"`
 	// CreatedBy and CancelledBy are the audited principals of the create and
 	// cancel commands: a signed-in operator's email, or "bearer" for
 	// machine-token calls. Empty on runs recorded before auditing existed or

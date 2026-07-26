@@ -50,8 +50,8 @@
     "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
     "disposition": "release",
     "candidates": {
-      "rental-warm": {"feasible": true, "pull_seconds": {"at_most": 2}},
-      "fresh-4090": {"feasible": true, "pull_seconds": {"at_least": 200}}
+      "rental-warm": {"feasible": true, "stages": {"image_fetch": {"seconds": {"at_most": 2}}}},
+      "fresh-4090": {"feasible": true, "stages": {"image_fetch": {"seconds": {"at_least": 200}}}}
     }
   }
 }

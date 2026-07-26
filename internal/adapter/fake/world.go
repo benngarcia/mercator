@@ -142,6 +142,14 @@ type Machine struct {
 	// expectation would make that expectation right by construction. Standing
 	// capacity spends none of it, because the machine is already there.
 	ProvisionSpend time.Duration
+	// UnpackSpend is what this machine takes to turn content on its disk into a
+	// layer chain a container can start on, and ContainerStartSpend is what its
+	// runtime takes to create the container and hold a process in it. Both are
+	// stated durations for the reason ProvisionSpend is: a world computing the
+	// arithmetic the predictor computes would make the prediction right by
+	// construction.
+	UnpackSpend         time.Duration
+	ContainerStartSpend time.Duration
 
 	// fetching is content this machine is still pulling. A host holds an image
 	// when its bytes have arrived, not when the container was dispatched.
@@ -188,9 +196,15 @@ func (m *Machine) startExecution(image string, layers []Layer, caches []domain.C
 		}
 	}
 	// Nothing can be fetched onto a machine that does not exist yet, so the world
-	// spends acquisition, boot, and agent enrollment before the pull begins.
+	// spends acquisition, boot, and agent enrollment before the pull begins. Bytes
+	// that land are then applied, and only then does a runtime hand back a
+	// process: a launch is a waterfall, and a stage that costs nothing here is a
+	// stage no prediction of it could ever be measured against.
 	readyAt := now.Add(m.ProvisionSpend)
-	startsAt := readyAt.Add(transferDuration(bytes))
+	startsAt := readyAt.
+		Add(transferDuration(bytes)).
+		Add(m.assemblySpend(bytes, layers)).
+		Add(m.ContainerStartSpend)
 	if !m.Offer.KeepsWhatItRuns() {
 		return startsAt
 	}
@@ -413,6 +427,21 @@ func (m *Machine) inventory(now time.Time) domain.ImageInventory {
 	return inventory
 }
 
+// assemblySpend is what applying this launch's content costs here. A machine with
+// nothing to apply spends nothing: unpacking is work over bytes, and a host
+// holding the image assembled has none of it to do.
+func (m *Machine) assemblySpend(fetched int64, layers []Layer) time.Duration {
+	if fetched > 0 {
+		return m.UnpackSpend
+	}
+	for _, layer := range layers {
+		if m.Packed[layer.Digest] || m.Packed[layer.DiffID] {
+			return m.UnpackSpend
+		}
+	}
+	return 0
+}
+
 func transferDuration(bytes int64) time.Duration {
 	if bytes <= 0 {
 		return 0
@@ -472,6 +501,26 @@ type World struct {
 	// the moment a process began and the only thing an observation can report it
 	// from once it has arrived.
 	startsAt map[string]time.Time
+	// ApplicationReadySpend is how long after its process starts a workload here
+	// reports that it can do work. It is a fact about the applications in this
+	// world rather than about any machine: a runtime that started a container
+	// cannot see whether the thing inside it is serving.
+	ApplicationReadySpend time.Duration
+	// readiness is every workload that will report itself ready and has not done
+	// so yet, keyed by launch key. A workload reports once, so an entry is dropped
+	// when it is handed over: a report re-delivered on every look would tell
+	// Mercator the same thing forever.
+	readiness map[string]ReadinessReport
+}
+
+// ReadinessReport is one workload telling Mercator it can do work, with the
+// moment it could. The moment travels in the report because it is the
+// application's own: a readiness stamped when the control plane recorded it would
+// move with how often the control plane looks.
+type ReadinessReport struct {
+	WorkspaceID string
+	RunID       string
+	ReadyAt     time.Time
 }
 
 func NewWorld(clock *Clock, options ...Option) *World {
@@ -483,6 +532,7 @@ func NewWorld(clock *Clock, options ...Option) *World {
 		artifacts: map[string]domain.ArtifactVersion{},
 		machines:  map[string]*Machine{},
 		startsAt:  map[string]time.Time{},
+		readiness: map[string]ReadinessReport{},
 	}
 }
 
@@ -607,9 +657,34 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 	}
 	now := w.clock.Now()
 	machine.settle(now)
-	w.startsAt[request.LaunchKey] = machine.startExecution(
+	startsAt := machine.startExecution(
 		request.Image, w.images[request.Image].Layers, declaredCaches(request), now,
 	)
+	w.startsAt[request.LaunchKey] = startsAt
+	w.readiness[request.LaunchKey] = ReadinessReport{
+		WorkspaceID: request.WorkspaceID,
+		RunID:       request.RunID,
+		ReadyAt:     startsAt.Add(w.ApplicationReadySpend),
+	}
+}
+
+// DueReadinessReports is every workload here that has become ready and has not
+// said so yet. It is an inbound callback rather than something an observation
+// carries, because the workload is the only authority on whether it can do work.
+func (w *World) DueReadinessReports() []ReadinessReport {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := w.clock.Now()
+	var due []ReadinessReport
+	for _, launchKey := range slices.Sorted(maps.Keys(w.readiness)) {
+		report := w.readiness[launchKey]
+		if now.Before(report.ReadyAt) {
+			continue
+		}
+		delete(w.readiness, launchKey)
+		due = append(due, report)
+	}
+	return due
 }
 
 // Observe is the embedded adapter's answer with the world's own start moment on

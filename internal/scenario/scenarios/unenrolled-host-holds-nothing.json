@@ -47,7 +47,9 @@
         "candidates": {
           "held-4090": {
             "feasible": true,
-            "pull_seconds": {"at_least": 200}
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 200}}
+            }
           },
           "local-docker": {
             "feasible": false
@@ -74,11 +76,15 @@
           "local-docker": {
             "feasible": true,
             "disposition": "launch_ephemeral",
-            "pull_seconds": {"at_least": 200}
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 200}}
+            }
           },
           "held-4090": {
             "feasible": true,
-            "pull_seconds": 0
+            "stages": {
+              "image_fetch": {"seconds": 0}
+            }
           }
         }
       }
@@ -101,11 +107,15 @@
           "local-docker": {
             "feasible": true,
             "disposition": "launch_ephemeral",
-            "pull_seconds": {"at_least": 200}
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 200}}
+            }
           },
           "held-4090": {
             "feasible": true,
-            "pull_seconds": 0
+            "stages": {
+              "image_fetch": {"seconds": 0}
+            }
           }
         }
       }

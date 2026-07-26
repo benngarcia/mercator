@@ -55,6 +55,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		}
 		world.DefineArtifact(version)
 	}
+	world.ApplicationReadySpend = spec.Launch.ApplicationReadySpend()
 	for _, rental := range spec.Rentals {
 		if err := world.AddMachine(simMachine(spec, rental, spec.rentalSchedule(rental.ID), clock)); err != nil {
 			return nil, err
@@ -70,7 +71,9 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 			Offer: simMarketplaceOffer(spec, offer),
 			// What this world spends making the machine, read from the stages the
 			// Blueprint states rather than from the estimate the offer publishes.
-			ProvisionSpend: offer.Provisioning.Spend(),
+			ProvisionSpend:      offer.Provisioning.Spend(),
+			UnpackSpend:         spec.Launch.UnpackSpend(),
+			ContainerStartSpend: spec.Launch.ContainerStartSpend(),
 		}
 		if err := world.AddMachine(machine); err != nil {
 			return nil, err
@@ -250,6 +253,10 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 		HeldImages:       map[string]bool{},
 		ArtifactReplicas: simArtifactReplicas(spec, rental.ArtifactReplicas, start),
 		HeldCaches:       simHeldCaches(rental.CacheMounts, start),
+		// What a launch here costs once its content has arrived. A standing machine
+		// owes no provisioning and still owes both of these.
+		UnpackSpend:         spec.Launch.UnpackSpend(),
+		ContainerStartSpend: spec.Launch.ContainerStartSpend(),
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
@@ -352,11 +359,13 @@ func simRentalOffer(spec WorldSpec, rental RentalSpec) domain.OfferSnapshot {
 // offer carries.
 func simHost(spec WorldSpec, host HostSpec, at time.Time) *fake.Machine {
 	machine := &fake.Machine{
-		Offer:            simHostOffer(spec, host),
-		HeldLayers:       map[string]int64{},
-		HeldDiffIDs:      map[string]bool{},
-		HeldImages:       map[string]bool{},
-		ArtifactReplicas: simArtifactReplicas(spec, host.ArtifactReplicas, at),
+		Offer:               simHostOffer(spec, host),
+		HeldLayers:          map[string]int64{},
+		HeldDiffIDs:         map[string]bool{},
+		HeldImages:          map[string]bool{},
+		ArtifactReplicas:    simArtifactReplicas(spec, host.ArtifactReplicas, at),
+		UnpackSpend:         spec.Launch.UnpackSpend(),
+		ContainerStartSpend: spec.Launch.ContainerStartSpend(),
 	}
 	for _, ref := range host.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
@@ -557,7 +566,28 @@ func (s *simSession) Reconcile(name string) error {
 
 func (s *simSession) AdvanceClock(d time.Duration) error {
 	s.world.Clock().Advance(d)
+	if err := s.deliverReadiness(); err != nil {
+		return err
+	}
 	return s.schedules.elapsed(context.Background(), s.world.Clock().Now())
+}
+
+// deliverReadiness is the applications in this world calling Mercator to say they
+// can do work. It is an inbound call rather than something read off an
+// observation, because the workload is the only authority on readiness: routing
+// it through the provider seam would make a running process and a serving one the
+// same fact again.
+func (s *simSession) deliverReadiness() error {
+	for _, report := range s.world.DueReadinessReports() {
+		ready, err := orchestrator.NewApplicationReadyReport(report.ReadyAt)
+		if err != nil {
+			return err
+		}
+		if err := s.orch.RecordReport(context.Background(), report.WorkspaceID, report.RunID, ready); err != nil {
+			return fmt.Errorf("report readiness for Run %q: %w", report.RunID, err)
+		}
+	}
+	return nil
 }
 
 func (s *simSession) RunEvents(name string) ([]eventlog.StoredEvent, error) {
@@ -611,6 +641,9 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	spec.Placement.AllowUnknownPricing = req.AllowUnknownPricing
 	if req.ExpectedRuntime != nil {
 		spec.Placement.ExpectedRuntimeSeconds = req.ExpectedRuntime.Duration().Seconds()
+	}
+	if req.ExpectedReady != nil {
+		spec.Placement.ExpectedReadySeconds = req.ExpectedReady.Duration().Seconds()
 	}
 	if req.MaxRuntime != nil {
 		spec.Execution.MaxRuntimeSeconds = int64(req.MaxRuntime.Duration().Seconds())

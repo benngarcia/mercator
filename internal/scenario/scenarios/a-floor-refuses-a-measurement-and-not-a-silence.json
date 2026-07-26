@@ -37,8 +37,9 @@
     "candidates": {
       "rental-measured": {
         "feasible": true,
-        "pull_seconds": {"at_least": 21.8, "at_most": 21.9},
-        "pull_confidence": 0.9
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 21.8, "at_most": 21.9}, "confidence": 0.9}
+        }
       },
       "rental-slow": {
         "feasible": false,
@@ -46,14 +47,16 @@
       },
       "rental-disowned": {
         "feasible": true,
-        "pull_seconds": {"at_least": 32.4, "at_most": 32.6},
-        "pull_confidence": 0.5,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 32.4, "at_most": 32.6}, "confidence": 0.5}
+        },
         "uncertainty": 0.5
       },
       "rental-silent": {
         "feasible": true,
-        "pull_seconds": {"at_least": 32.4, "at_most": 32.6},
-        "pull_confidence": 0.5,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 32.4, "at_most": 32.6}, "confidence": 0.5}
+        },
         "uncertainty": 0.5
       }
     }

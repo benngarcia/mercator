@@ -82,7 +82,7 @@
           "projected_start_in": "6m"
         }
       },
-      "fresh-slow": {"feasible": true, "provision_seconds": 1800}
+      "fresh-slow": {"feasible": true, "stages": {"boot": {"seconds": 1800}}}
     }
   }
 }

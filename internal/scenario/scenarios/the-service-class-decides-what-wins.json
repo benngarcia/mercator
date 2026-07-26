@@ -49,14 +49,18 @@
         "candidates": {
           "rental-warm": {
             "feasible": true,
-            "artifact_seconds": 0,
+            "stages": {
+              "artifact_fetch": {"seconds": 0}
+            },
             "artifact_evidence": {"artifact:imagenet:v2.41": "hit"},
             "uncertainty": 0,
             "score_usd": {"at_least": 1.45, "at_most": 1.46}
           },
           "rental-cold": {
             "feasible": true,
-            "artifact_seconds": {"at_least": 639, "at_most": 641},
+            "stages": {
+              "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
+            },
             "artifact_evidence": {"artifact:imagenet:v2.41": "miss"},
             "uncertainty": 1,
             "score_usd": {"at_least": 0.88, "at_most": 0.89}
@@ -84,16 +88,20 @@
         "candidates": {
           "rental-warm": {
             "feasible": true,
-            "pull_seconds": 0,
-            "artifact_seconds": 0,
+            "stages": {
+              "image_fetch": {"seconds": 0},
+              "artifact_fetch": {"seconds": 0}
+            },
             "artifact_evidence": {"artifact:imagenet:v2.41": "hit"},
             "uncertainty": 0,
             "score_usd": {"at_least": 1.34, "at_most": 1.35}
           },
           "rental-cold": {
             "feasible": true,
-            "pull_seconds": {"at_least": 285, "at_most": 292},
-            "artifact_seconds": {"at_least": 639, "at_most": 641},
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 285, "at_most": 292}},
+              "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
+            },
             "artifact_evidence": {"artifact:imagenet:v2.41": "miss"},
             "uncertainty": 1,
             "score_usd": {"at_least": 21.9, "at_most": 22.0}

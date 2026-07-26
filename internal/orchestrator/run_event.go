@@ -24,6 +24,11 @@ type runState struct {
 	// start latency every prediction in phase 4 is calibrated against, and a
 	// derived value would make that subtraction zero for every Run in the log.
 	startedAt                *time.Time
+	// readyAt is when this attempt's application reported that it can do work, as
+	// the application stated the moment. It is nil until a report arrives and is
+	// never derived from startedAt: a running process is not a ready one, and only
+	// the workload can tell the difference.
+	readyAt                  *time.Time
 	launchFailure            *launchFailureData
 	attemptCount             int
 	excludedOfferSnapshotIDs []string
@@ -123,6 +128,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		// A new attempt is a new container, so the moment the previous one started
 		// says nothing about this one and is cleared with the launch it belonged to.
 		state.startedAt = nil
+		state.readyAt = nil
 		state.launchFailure = nil
 
 	case EventLaunchIntentRecorded:
@@ -226,6 +232,13 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		}
 		if err := data.validate(); err != nil {
 			return invalidRunEvent(stored, err.Error())
+		}
+		if ready, stated := data.readyAt(); stated {
+			// The application's own moment rather than the moment Mercator appended
+			// the report. A readiness stamped when the control plane got round to
+			// writing it down would move with the polling cadence, which is the
+			// defect the observed start moment was fixed for one stage over.
+			state.readyAt = &ready
 		}
 		if data.terminal() && state.firstTerminal == nil {
 			code := *data.ExitCode
@@ -404,6 +417,10 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 	if state.startedAt != nil {
 		startedAt := *state.startedAt
 		record.StartedAt = &startedAt
+	}
+	if state.readyAt != nil {
+		readyAt := *state.readyAt
+		record.ReadyAt = &readyAt
 	}
 	if state.cleanupRequested {
 		record.Phase = "cleaning_up"

@@ -672,9 +672,20 @@ func (decision bookingDecision) disposition() domain.CandidateDisposition {
 }
 
 func (decision bookingDecision) pullEstimate() domain.Estimate {
+	return decision.stageEstimate(domain.StageImageFetch)
+}
+
+// unpackEstimate is what the selected candidate was predicted to spend turning
+// content on its disk into a layer chain, which is the stage a machine that
+// fetched an image and never applied it owes on its own.
+func (decision bookingDecision) unpackEstimate() domain.Estimate {
+	return decision.stageEstimate(domain.StageUnpack)
+}
+
+func (decision bookingDecision) stageEstimate(stage domain.LaunchStage) domain.Estimate {
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID == decision.SelectedOfferSnapshotID {
-			return candidate.Estimates.PullSeconds
+			return candidate.Estimates.Stages.Stage(stage)
 		}
 	}
 	return domain.Estimate{}
@@ -1257,14 +1268,20 @@ func TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked(t *testing.T) {
 	if decision.imageLocality() != domain.LocalityPartial {
 		t.Fatalf("image locality = %q, want partial: every byte is here and none of it is ready", decision.imageLocality())
 	}
-	pull := decision.pullEstimate()
+	// Assembly is its own stage, and this machine owes that stage and no transfer.
+	// A record that folded them together would bill the network for bytes already
+	// on the disk and send an operator after a problem that is not there.
+	unpack := decision.unpackEstimate()
 	want := float64(18_000_000_000+40_000_000) / 1_000_000 / domain.AssumedUnpackMBps
-	if pull.Expected < want || pull.Expected > want+1 {
-		t.Fatalf("pull expected = %v seconds, want about %v: the bytes are here and the chain is not", pull.Expected, want)
+	if unpack.Expected < want || unpack.Expected > want+1 {
+		t.Fatalf("unpack expected = %v seconds, want about %v: the bytes are here and the chain is not", unpack.Expected, want)
 	}
-	if pull.Confidence != domain.AssumedLinkConfidence {
-		t.Fatalf("pull confidence = %v, want %v: nothing has measured how fast this machine unpacks",
-			pull.Confidence, domain.AssumedLinkConfidence)
+	if unpack.Confidence != domain.AssumedLinkConfidence {
+		t.Fatalf("unpack confidence = %v, want %v: nothing has measured how fast this machine unpacks",
+			unpack.Confidence, domain.AssumedLinkConfidence)
+	}
+	if fetch := decision.pullEstimate(); fetch.Expected != 0 {
+		t.Fatalf("a node holding every byte was charged %v seconds of transfer", fetch.Expected)
 	}
 }
 

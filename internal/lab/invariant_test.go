@@ -679,8 +679,10 @@ func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 				ImageLocality:    domain.LocalityUnknown,
 				ArtifactEvidence: unreadableDataset,
 				Estimates: domain.CandidateEstimates{
-					PullSeconds:             domain.Estimate{Expected: 289},
-					ArtifactSeconds:         domain.Estimate{Expected: 640},
+					Stages: domain.LaunchStageEstimates{
+						ImageFetch:    domain.Estimate{Expected: 289},
+						ArtifactFetch: domain.Estimate{Expected: 640},
+					},
 					StartSeconds:            domain.Estimate{Expected: 930, P90: 1394},
 					EstablishedStartSeconds: domain.Estimate{Expected: 1, P90: 1.25},
 				},
@@ -692,8 +694,10 @@ func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 				ImageLocality:    domain.LocalityUnknown,
 				ArtifactEvidence: unreadableDataset,
 				Estimates: domain.CandidateEstimates{
-					PullSeconds:             domain.Estimate{Expected: 289},
-					ArtifactSeconds:         domain.Estimate{Expected: 640},
+					Stages: domain.LaunchStageEstimates{
+						ImageFetch:    domain.Estimate{Expected: 289},
+						ArtifactFetch: domain.Estimate{Expected: 640},
+					},
 					StartSeconds:            domain.Estimate{Expected: 930, P90: 1394},
 					EstablishedStartSeconds: domain.Estimate{Expected: 930, P90: 1394},
 				},
@@ -705,8 +709,10 @@ func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 				ImageLocality:    domain.LocalityUnknown,
 				ArtifactEvidence: unreadableDataset,
 				Estimates: domain.CandidateEstimates{
-					PullSeconds:             domain.Estimate{Expected: 289},
-					ArtifactSeconds:         domain.Estimate{Expected: 640},
+					Stages: domain.LaunchStageEstimates{
+						ImageFetch:    domain.Estimate{Expected: 289},
+						ArtifactFetch: domain.Estimate{Expected: 640},
+					},
 					StartSeconds:            domain.Estimate{Expected: 900, P90: 900, SampleCount: 4},
 					EstablishedStartSeconds: domain.Estimate{Expected: 900, P90: 900, SampleCount: 4},
 				},
@@ -720,7 +726,7 @@ func TestSilenceIsPricedAndAMeasurementBinds(t *testing.T) {
 				ArtifactEvidence: unreadableDataset,
 				Estimates: domain.CandidateEstimates{
 					QueueSeconds:            domain.Estimate{Expected: 900, P90: 900},
-					ArtifactSeconds:         domain.Estimate{Expected: 640},
+					Stages:                  domain.LaunchStageEstimates{ArtifactFetch: domain.Estimate{Expected: 640}},
 					StartSeconds:            domain.Estimate{Expected: 1541, P90: 1861.25},
 					EstablishedStartSeconds: domain.Estimate{Expected: 901, P90: 901.25},
 				},
@@ -810,7 +816,7 @@ func borrowedHostScoredAt(scoreUSD float64) eventlog.CloudEvent {
 			Feasible:        true,
 			ImageLocality:   domain.LocalityUnknown,
 			Estimates: domain.CandidateEstimates{
-				PullSeconds:  domain.Estimate{Expected: 289.14, Confidence: 0.5},
+				Stages:       domain.LaunchStageEstimates{ImageFetch: domain.Estimate{Expected: 289.14, Confidence: 0.5}},
 				StartSeconds: domain.Estimate{Expected: 1},
 				CostUSD:      domain.Estimate{Expected: 0.333333},
 			},

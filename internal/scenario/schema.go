@@ -170,6 +170,49 @@ type WorldSpec struct {
 	// the whole difference between preparation that shortens a queued Run's
 	// start and preparation that starves the Run already running.
 	Prewarm *PrewarmSpec `json:"prewarm,omitempty"`
+	// Launch is what this world spends on the stages of a launch that nothing
+	// else in a fixture can state. A machine's provisioning states its own three;
+	// a path states what a transfer costs; these three are the rest.
+	Launch LaunchSpec `json:"launch,omitzero"`
+}
+
+// LaunchSpec is what a launch costs in this world after its content has arrived.
+// Each stage is stated as a duration rather than derived from a rate, because a
+// world that computed the same arithmetic the predictor computes would make the
+// prediction right by construction, and a stage whose actual agrees with its
+// prediction by construction can never be calibrated.
+//
+// Each is a pointer because a stage a fixture did not mention and a stage a
+// fixture says costs nothing are different sentences, and the second is the one
+// this record exists to catch: a container that starts instantly collapses the
+// observed start onto the moment the last byte landed.
+type LaunchSpec struct {
+	// Unpack is how long a machine here takes to turn content on its disk into a
+	// layer chain a container can start on. The world spends it on every launch
+	// that had content to fetch or content it holds unassembled, because bytes
+	// that arrive have to be applied before anything runs on them.
+	Unpack *Duration `json:"unpack,omitempty"`
+	// ContainerStart is how long a container runtime here takes to create the
+	// container and hold a process in it.
+	ContainerStart *Duration `json:"container_start,omitempty"`
+	// ApplicationReady is how long a workload here takes to report that it can do
+	// work, measured from its process starting. It is the world's own answer and
+	// never the Run's declaration: a fixture states both, and the gap between
+	// them is what a calibration reads.
+	ApplicationReady *Duration `json:"application_ready,omitempty"`
+}
+
+// UnpackSpend is what assembling content costs here.
+func (spec LaunchSpec) UnpackSpend() time.Duration { return stated(spec.Unpack) }
+
+// ContainerStartSpend is what creating a container and starting its process
+// costs here.
+func (spec LaunchSpec) ContainerStartSpend() time.Duration { return stated(spec.ContainerStart) }
+
+// ApplicationReadySpend is how long after its process starts a workload here
+// reports itself ready.
+func (spec LaunchSpec) ApplicationReadySpend() time.Duration {
+	return stated(spec.ApplicationReady)
 }
 
 // PrewarmSpec bounds speculative preparation. Both bounds are the control
@@ -675,8 +718,16 @@ type ProvisioningSpec struct {
 // provider's expectation is a claim, and a world that spent exactly what was
 // claimed would make the prediction right by construction.
 func (spec ProvisioningSpec) Spend() time.Duration {
-	return stated(spec.Acquisition) + stated(spec.Boot) + stated(spec.AgentReady)
+	return spec.AcquisitionSpend() + spec.BootSpend() + spec.AgentReadySpend()
 }
+
+// AcquisitionSpend, BootSpend, and AgentReadySpend are what this world takes over
+// each stage on its own. They are read one at a time because each has its own
+// prediction to be measured against: a record that carried only the sum could not
+// say whether a machine was slow to come out of a marketplace or slow to boot.
+func (spec ProvisioningSpec) AcquisitionSpend() time.Duration { return stated(spec.Acquisition) }
+func (spec ProvisioningSpec) BootSpend() time.Duration        { return stated(spec.Boot) }
+func (spec ProvisioningSpec) AgentReadySpend() time.Duration  { return stated(spec.AgentReady) }
 
 func stated(duration *Duration) time.Duration {
 	if duration == nil {
@@ -714,6 +765,12 @@ type RequestSpec struct {
 	Resources       *ResourcesSpec `json:"resources,omitempty"`
 	MaxRuntime      *Duration      `json:"max_runtime,omitempty"`
 	ExpectedRuntime *Duration      `json:"expected_runtime,omitempty"`
+	// ExpectedReady is how long this workload says it takes to become ready for
+	// work once its process is running. It is the only prediction of the
+	// application-ready stage there is, because readiness is the application's own
+	// semantics. What the world then spends is WorldSpec.launch.application_ready,
+	// and the two are stated separately so neither derives the other.
+	ExpectedReady *Duration `json:"expected_ready,omitempty"`
 	// ServiceClass is the kind of work this Run says it is, and the only thing
 	// that says what waiting is worth to it. It is a string rather than the domain
 	// type so a fixture can state a class Mercator does not know, which is a world
@@ -836,6 +893,17 @@ type ExpectSpec struct {
 	// point: zero is a workload that began the instant its launch was taken, and
 	// this is a workload nobody saw begin.
 	NoStartObserved bool `json:"no_start_observed,omitempty"`
+	// ReadyLatency asserts how long after its process started this Run's
+	// application reported that it can do work, read out of Mercator's own run
+	// stream. It is the actual of the last launch stage, and the only way this
+	// corpus can say that a running workload is not a ready one.
+	ReadyLatency *Bound `json:"ready_latency_seconds,omitempty"`
+	// NoReadyReported asserts that this Run's application has said nothing about
+	// its own readiness, so the record states the stage absent. It is its own field
+	// rather than a bound of zero for the reason NoStartObserved is: zero is a
+	// workload that was serving the instant its process appeared, and this is a
+	// workload that has not spoken.
+	NoReadyReported bool `json:"no_ready_reported,omitempty"`
 	// Candidates assert the per-candidate evidence the decision weighed,
 	// keyed by rental or marketplace offer ID.
 	Candidates map[string]CandidateExpectation `json:"candidates,omitempty"`

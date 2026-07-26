@@ -74,7 +74,7 @@
               "projected_start_in": "0s"
             }
           },
-          "fresh-4090": {"feasible": true, "provision_seconds": 300}
+          "fresh-4090": {"feasible": true, "stages": {"boot": {"seconds": 300}}}
         }
       }
     }

@@ -984,7 +984,7 @@ type ReportRunRequest struct {
 	// ExitCode Required when type is exit and forbidden for every other report type. The broker records the authoritative outcome and requests cleanup.
 	ExitCode *int `json:"exit_code,omitempty"`
 
-	// Type Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code.
+	// Type Report kind. The reserved exit kind is terminal and requires exit_code; every other kind is nonterminal and must omit exit_code. The reserved ready kind is the application saying it can do work and requires data.ready_at, the application's own moment: it completes the last stage of a launch, and a readiness with no moment in it leaves that stage with no actual.
 	Type string `json:"type"`
 }
 

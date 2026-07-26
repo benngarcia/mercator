@@ -48,14 +48,17 @@
           "empty-rental": {
             "feasible": false,
             "image_locality": "cold",
-            "pull_source": "image_inventory",
+            "stages": {
+              "image_fetch": {"source": "image_inventory"}
+            },
             "rejected": [{"code": "LATENCY_SLO_EXCEEDED", "path": "placement.max_p90_start_seconds"}]
           },
           "silent-host": {
             "feasible": true,
             "image_locality": "unknown",
-            "pull_seconds": {"at_least": 285, "at_most": 292},
-            "pull_source": "inventory_unknown"
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 285, "at_most": 292}, "source": "inventory_unknown"}
+            }
           }
         }
       }

@@ -52,15 +52,15 @@
         "candidates": {
           "first-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_throttled",
-            "pull_confidence": 0
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_throttled", "confidence": 0}
+            }
           },
           "second-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_throttled",
-            "pull_confidence": 0
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_throttled", "confidence": 0}
+            }
           }
         }
       }
@@ -83,15 +83,15 @@
         "candidates": {
           "first-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_unreachable",
-            "pull_confidence": 0
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_unreachable", "confidence": 0}
+            }
           },
           "second-host": {
             "feasible": true,
-            "pull_seconds": 0,
-            "pull_source": "registry_unreachable",
-            "pull_confidence": 0
+            "stages": {
+              "image_fetch": {"seconds": 0, "source": "registry_unreachable", "confidence": 0}
+            }
           }
         }
       }

@@ -67,29 +67,37 @@
       "rental-dataset": {
         "feasible": true,
         "image_locality": "partial",
-        "pull_seconds": {"at_least": 1, "at_most": 2},
-        "artifact_seconds": 0,
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 1, "at_most": 2}},
+          "artifact_fetch": {"seconds": 0}
+        },
         "artifact_evidence": {"artifact:imagenet:v2.41": "hit"}
       },
       "rental-imagecache": {
         "feasible": true,
         "image_locality": "hot",
-        "pull_seconds": 0,
-        "artifact_seconds": {"at_least": 639, "at_most": 641},
+        "stages": {
+          "image_fetch": {"seconds": 0},
+          "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
+        },
         "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
       },
       "rental-restored-snapshot": {
         "feasible": true,
         "image_locality": "hot",
-        "pull_seconds": 0,
-        "artifact_seconds": {"at_least": 639, "at_most": 641},
+        "stages": {
+          "image_fetch": {"seconds": 0},
+          "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
+        },
         "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
       },
       "borrowed-host": {
         "feasible": true,
         "image_locality": "unknown",
-        "pull_seconds": {"at_least": 285, "at_most": 292},
-        "artifact_seconds": {"at_least": 639, "at_most": 641},
+        "stages": {
+          "image_fetch": {"seconds": {"at_least": 285, "at_most": 292}},
+          "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
+        },
         "artifact_evidence": {"artifact:imagenet:v2.41": "unknown"}
       }
     }

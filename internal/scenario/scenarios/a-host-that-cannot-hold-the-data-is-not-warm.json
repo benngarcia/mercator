@@ -77,9 +77,10 @@
           "rental-roomy": {
             "feasible": true,
             "image_locality": "partial",
-            "pull_seconds": {"at_least": 1, "at_most": 2},
-            "pull_source": "image_inventory",
-            "artifact_seconds": {"at_least": 639, "at_most": 641},
+            "stages": {
+              "image_fetch": {"seconds": {"at_least": 1, "at_most": 2}, "source": "image_inventory"},
+              "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
+            },
             "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
           }
         }
@@ -113,7 +114,9 @@
           "rental-roomy": {
             "feasible": true,
             "image_locality": "hot",
-            "pull_seconds": 0
+            "stages": {
+              "image_fetch": {"seconds": 0}
+            }
           }
         }
       }

@@ -21,13 +21,23 @@ func TestSuccessReportsReadyThenZeroExit(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
+	before := time.Now().UTC()
 	exitCode := Run(context.Background(), []string{"success"}, reportEnvironment(server.URL), io.Discard, io.Discard)
+	after := time.Now().UTC()
 
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0", exitCode)
 	}
+	got := requestReports(requests)
+	// The application's own readiness moment cannot be a fixture literal, so it is
+	// asserted for what it has to be, a moment inside the probe's own run, and then
+	// taken out of the shape comparison.
+	readyAt := takeReadyMoment(t, got)
+	if readyAt.Before(before) || readyAt.After(after) {
+		t.Fatalf("ready_at = %s, and the probe ran between %s and %s", readyAt, before, after)
+	}
 	want := reportsFixture(t, "testdata/success_reports.json")
-	if got := requestReports(requests); !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("reports = %#v, want %#v", got, want)
 	}
 	for _, request := range requests {
@@ -158,6 +168,34 @@ func reportsFixture(t *testing.T, path string) []map[string]any {
 		t.Fatalf("decode fixture: %v", err)
 	}
 	return reports
+}
+
+// takeReadyMoment reads the moment out of the readiness report and removes it, so
+// the fixture beside it states the shape of what the probe sends without stating
+// a wall clock nobody can pin.
+func takeReadyMoment(t *testing.T, reports []map[string]any) time.Time {
+	t.Helper()
+	for _, report := range reports {
+		if report["type"] != "ready" {
+			continue
+		}
+		data, ok := report["data"].(map[string]any)
+		if !ok {
+			t.Fatal("the readiness report carries no data")
+		}
+		stated, ok := data["ready_at"].(string)
+		if !ok {
+			t.Fatalf("the readiness report states no moment: %#v", data)
+		}
+		delete(data, "ready_at")
+		moment, err := time.Parse(time.RFC3339Nano, stated)
+		if err != nil {
+			t.Fatalf("ready_at %q: %v", stated, err)
+		}
+		return moment.UTC()
+	}
+	t.Fatal("the probe sent no readiness report")
+	return time.Time{}
 }
 
 func requestReports(requests []recordedRequest) []map[string]any {

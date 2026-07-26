@@ -52,10 +52,12 @@
       "fresh-quick": {
         "feasible": true,
         "no_rental_schedule": true,
-        "provision_seconds": 240,
-        "pull_seconds": {"at_least": 200}
+        "stages": {
+          "boot": {"seconds": 240},
+          "image_fetch": {"seconds": {"at_least": 200}}
+        }
       },
-      "fresh-cheap": {"feasible": true, "provision_seconds": 600, "no_rental_schedule": true}
+      "fresh-cheap": {"feasible": true, "stages": {"boot": {"seconds": 600}}, "no_rental_schedule": true}
     }
   }
 }

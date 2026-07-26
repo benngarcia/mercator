@@ -83,9 +83,9 @@ func assertModelsAgreeAboutCandidate(t *testing.T, production, reference domain.
 		production, reference domain.Estimate
 	}{
 		{"queue_seconds", production.Estimates.QueueSeconds, reference.Estimates.QueueSeconds},
-		{"provision_seconds", production.Estimates.ProvisionSeconds, reference.Estimates.ProvisionSeconds},
-		{"pull_seconds", production.Estimates.PullSeconds, reference.Estimates.PullSeconds},
-		{"artifact_seconds", production.Estimates.ArtifactSeconds, reference.Estimates.ArtifactSeconds},
+		{"provision_seconds", production.Estimates.Stages.Boot, reference.Estimates.Stages.Boot},
+		{"pull_seconds", production.Estimates.Stages.ImageFetch, reference.Estimates.Stages.ImageFetch},
+		{"artifact_seconds", production.Estimates.Stages.ArtifactFetch, reference.Estimates.Stages.ArtifactFetch},
 		{"start_seconds", production.Estimates.StartSeconds, reference.Estimates.StartSeconds},
 		{"established_start_seconds", production.Estimates.EstablishedStartSeconds, reference.Estimates.EstablishedStartSeconds},
 		{"cost_usd", production.Estimates.CostUSD, reference.Estimates.CostUSD},
@@ -160,12 +160,19 @@ func TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes(t *testing.T) {
 	if warm.ImageLocality != domain.LocalityPartial {
 		t.Fatalf("image locality = %q, want partial: the bytes are here and the chain is not", warm.ImageLocality)
 	}
-	if reference.PullSeconds.Expected != warm.Estimates.PullSeconds.Expected {
-		t.Fatalf("reference priced %v seconds of image work, production priced %v",
-			reference.PullSeconds.Expected, warm.Estimates.PullSeconds.Expected)
+	if reference.Stages.Unpack.Expected != warm.Estimates.Stages.Unpack.Expected {
+		t.Fatalf("reference priced %v seconds of assembly, production priced %v",
+			reference.Stages.Unpack.Expected, warm.Estimates.Stages.Unpack.Expected)
 	}
-	if warm.Estimates.PullSeconds.Expected == 0 {
+	if warm.Estimates.Stages.Unpack.Expected == 0 {
 		t.Fatal("assembling 18GB was priced at nothing by both models, so neither is accounting for it")
+	}
+	// The other half of the same claim: this host owes assembly and no transfer, so
+	// a model folding the two together would price the network for bytes that are
+	// already on the disk.
+	if warm.Estimates.Stages.ImageFetch.Expected != 0 {
+		t.Fatalf("a host holding every byte was priced %v seconds of transfer",
+			warm.Estimates.Stages.ImageFetch.Expected)
 	}
 }
 
@@ -196,11 +203,11 @@ func TestTheReferenceModelPricesArtifactLocalityTheSameWayProductionDoes(t *test
 	if len(warm.ArtifactEvidence) != 1 || warm.ArtifactEvidence[0].Locality != domain.LocalityCold {
 		t.Fatalf("the decision recorded %+v, and this host holds no copy of the dataset", warm.ArtifactEvidence)
 	}
-	if reference.ArtifactSeconds.Expected != warm.Estimates.ArtifactSeconds.Expected {
+	if reference.Stages.ArtifactFetch.Expected != warm.Estimates.Stages.ArtifactFetch.Expected {
 		t.Fatalf("reference priced %v seconds of Artifact fetch, production priced %v",
-			reference.ArtifactSeconds.Expected, warm.Estimates.ArtifactSeconds.Expected)
+			reference.Stages.ArtifactFetch.Expected, warm.Estimates.Stages.ArtifactFetch.Expected)
 	}
-	if warm.Estimates.ArtifactSeconds.Expected == 0 {
+	if warm.Estimates.Stages.ArtifactFetch.Expected == 0 {
 		t.Fatal("reading 40GB out of the object store was priced at nothing by both models, so neither is accounting for it")
 	}
 }
@@ -379,13 +386,13 @@ func TestNeitherModelPricesAnUncheckedCopyAsWarmth(t *testing.T) {
 			candidate := candidateFor(t, production, "rental-warm")
 			reference := referenceEstimates(input, holder)
 
-			if owes := candidate.Estimates.ArtifactSeconds.Expected > 0; owes != copyOnDisk.owes {
+			if owes := candidate.Estimates.Stages.ArtifactFetch.Expected > 0; owes != copyOnDisk.owes {
 				t.Errorf("production priced %s at %v seconds, and owing a fetch should be %v",
-					copyOnDisk.name, candidate.Estimates.ArtifactSeconds.Expected, copyOnDisk.owes)
+					copyOnDisk.name, candidate.Estimates.Stages.ArtifactFetch.Expected, copyOnDisk.owes)
 			}
-			if reference.ArtifactSeconds.Expected != candidate.Estimates.ArtifactSeconds.Expected {
+			if reference.Stages.ArtifactFetch.Expected != candidate.Estimates.Stages.ArtifactFetch.Expected {
 				t.Errorf("reference priced %v seconds, production priced %v",
-					reference.ArtifactSeconds.Expected, candidate.Estimates.ArtifactSeconds.Expected)
+					reference.Stages.ArtifactFetch.Expected, candidate.Estimates.Stages.ArtifactFetch.Expected)
 			}
 		})
 	}
@@ -423,7 +430,7 @@ func TestNeitherModelTurnsArtifactSilenceIntoInfeasibility(t *testing.T) {
 		t.Fatalf("this machine was predicted to start in %.2fs, which is inside the bound, so the case proves nothing",
 			candidate.Estimates.StartSeconds.P90)
 	}
-	if candidate.Estimates.ArtifactSeconds.Expected == 0 {
+	if candidate.Estimates.Stages.ArtifactFetch.Expected == 0 {
 		t.Fatal("a machine that cannot say which copies it holds was priced nothing to read them")
 	}
 	if !candidate.Feasible {
