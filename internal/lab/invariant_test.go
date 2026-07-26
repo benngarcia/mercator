@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 23 {
-		t.Fatalf("latest invariant results = %d, want 23", len(latest))
+	if len(latest) != 24 {
+		t.Fatalf("latest invariant results = %d, want 24", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -278,6 +278,22 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 			observation.Effects = []EffectRecord{
 				admittedPullEffect(1, now, "rental-warm", "trainer@sha256:aaaa", now.Add(10*time.Minute)),
 				prefetchEffect(2, now.Add(time.Minute), OperationNodePrepareImage, "rental-warm", "sha256:bbbb", "run-queued"),
+			}
+		},
+		// Two speculative fetches begun a minute apart in a world that allows one
+		// every five. Neither of them competes with admitted work and only one is
+		// ever moving, so the depth rule and the starvation rule both pass: this
+		// is the control plane spending a machine's link faster than its operator
+		// said it may.
+		"safety.prewarm_rate_within_bound": func(observation *InvariantObservation) {
+			observation.Now = now.Add(2 * time.Minute)
+			observation.Prewarm = &scenario.PrewarmSpec{
+				MaxConcurrent: 2,
+				MinInterval:   scenario.Duration(5 * time.Minute),
+			}
+			observation.Effects = []EffectRecord{
+				prefetchEffect(1, now, OperationNodePrepareArtifact, "rental-warm", "artifact:corpus:v70", "run-queued"),
+				prefetchEffect(2, now.Add(time.Minute), OperationNodePrepareArtifact, "rental-warm", "artifact:corpus:v7", "run-audit"),
 			}
 		},
 		// A preparation that never resolved: the content has not landed, nothing

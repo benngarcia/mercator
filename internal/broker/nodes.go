@@ -135,9 +135,21 @@ func (b *Broker) Prepare(ctx context.Context, request adapter.PrepareRequest) (a
 }
 
 // prepareOnNode sends one piece of content to one machine. The operation
-// identity is the desired set's key and the content together, which is what
-// makes the command idempotent across a redelivery: the node has applied that
-// identity or it has not.
+// identity is the machine and the content, never the desired set that happened
+// to name them: a set is recomputed on every sweep and two Runs can want one
+// image, so an identity carrying either would have the node fetch the same bytes
+// again.
+//
+// What that identity answers is a redelivery of the same desire, and only that.
+// A node has applied an identity, is still working on it, or refused it, and the
+// operation store dedupes on the identity with no regard for which: a pull that
+// failed on the machine is answered Duplicate from then on, so this control plane
+// never asks that host for that content again while the node's own agent is
+// deliberately not remembering it so that a retry can happen. The defect is
+// recorded in docs/project/capacity-broker-migration.md under the prewarming
+// slice. It is not repaired here, because making a refusal reissuable changes
+// what an operation identity promises and needs a world that can refuse a fetch
+// before it has a specification that could fail on it.
 func (b *Broker) prepareOnNode(ctx context.Context, request adapter.PrepareRequest, item adapter.PrepareItem) (capability.OperationReceipt, error) {
 	ref, err := b.nodeRef(ctx, request.WorkspaceID, item.NativeRef)
 	if err != nil {

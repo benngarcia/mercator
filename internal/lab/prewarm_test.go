@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	prewarmBlueprint = "prewarming-never-starves-real-work"
-	analystImage     = "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
-	bulkyImage       = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
+	prewarmBlueprint   = "prewarming-never-starves-real-work"
+	rateBoundBlueprint = "prewarming-holds-its-own-rate-bound"
+	analystImage       = "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
+	bulkyImage         = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
 )
 
 // drivePrewarmExecution runs the Blueprint at the cadence a control plane
@@ -67,25 +68,71 @@ func TestPreparationWaitsForTheRunAlreadyAdmittedThere(t *testing.T) {
 	}
 }
 
-// TestOnePieceOfContentIsPreparedAtATime is the rate half. The Blueprint allows
-// one speculative transfer at a time and a minute between two of them starting,
-// and nothing below the control plane enforces either: a machine asked for both
-// at once fetches both.
+// TestOnePieceOfContentIsPreparedAtATime is the depth half. The Blueprint allows
+// one speculative transfer in flight and nothing below the control plane
+// enforces that: a machine asked for both at once fetches both.
+//
+// The rate half is deliberately not read here. This world's Runs arrive on
+// minute boundaries and the harness advances a minute at a time, so a gap of a
+// minute between two preparations is something the cadence produces rather than
+// something MinInterval holds: an assertion on it would pass with the bound
+// switched off. The bound is stated where it can fail, in
+// prewarming-holds-its-own-rate-bound.
 func TestOnePieceOfContentIsPreparedAtATime(t *testing.T) {
 	execution := drivePrewarmExecution(t)
 
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("the execution violates a standing rule: %v", err)
+	}
+}
+
+// TestASecondSpeculativeFetchWaitsOutTheRateBound is the rate claim, on a world
+// built so nothing but the bound can produce the gap. The machine already holds
+// the image, so the first desired set is one Artifact and Mercator asks for it a
+// minute in. The third Run arrives ninety seconds later wanting a version whose
+// name is a prefix of the one already asked for, which is the shape that made a
+// control plane comparing desires as text read new content as content it had
+// already requested and skip the bound. It arrives between two ticks, so the
+// harness cannot supply the gap either.
+func TestASecondSpeculativeFetchWaitsOutTheRateBound(t *testing.T) {
+	execution := driveRateBoundExecution(t)
+
 	starts := prefetchStarts(t, execution)
-	for index := 1; index < len(starts); index++ {
-		if gap := starts[index].At.Sub(starts[index-1].At); gap < time.Minute {
-			t.Fatalf(
-				"preparation of %q started %s after preparation of %q, and this world allows one a minute",
-				starts[index].Content, gap, starts[index-1].Content,
-			)
-		}
+	if len(starts) != 2 {
+		t.Fatalf("the ledger records %d preparations, want one per corpus version: %+v", len(starts), starts)
+	}
+	if starts[0].Content != "artifact:corpus:v70" || starts[1].Content != "artifact:corpus:v7" {
+		t.Fatalf("the machine prepared %q then %q, want the queued Run's version first", starts[0].Content, starts[1].Content)
+	}
+	if gap := starts[1].At.Sub(starts[0].At); gap < 5*time.Minute {
+		t.Fatalf(
+			"preparation of %q started %s after preparation of %q, and this world allows one no sooner than 5m",
+			starts[1].Content, gap, starts[0].Content,
+		)
 	}
 	if _, err := execution.Check(context.Background()); err != nil {
 		t.Fatalf("the execution violates a standing rule: %v", err)
 	}
+}
+
+// driveRateBoundExecution runs the rate-bound Blueprint at the cadence a control
+// plane reconciles at. It advances a minute at a time on purpose: the Run whose
+// arrival tests the bound lands between two of those ticks, which is where a
+// control plane really hears about work.
+func driveRateBoundExecution(t *testing.T) *Execution {
+	t.Helper()
+	execution := openConformanceExecution(t, rateBoundBlueprint)
+	t.Cleanup(func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	})
+	for range 80 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the execution: %v", err)
+		}
+	}
+	return execution
 }
 
 // TestAPreparedHostIsWarmForARunThatNeverExecutedThere is the whole point of the

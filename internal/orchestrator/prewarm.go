@@ -29,10 +29,12 @@ type PrewarmPolicy struct {
 	// at once. Zero turns preparation off, which is what a deployment that has
 	// not configured it has.
 	MaxConcurrent int
-	// MinInterval is the shortest gap between two speculative fetches starting.
-	// It bounds the rate rather than the depth, and it is deliberately not
-	// applied to withdrawals: stopping work that should not be happening is
-	// never something to do less often.
+	// MinInterval is the shortest gap between two moments Mercator may begin
+	// preparing. It bounds the rate rather than the depth: one desired set
+	// crosses the boundary at once and may start as many transfers as
+	// MaxConcurrent allows, and how often a new one may start is this. It is
+	// deliberately not applied to withdrawals: stopping work that should not be
+	// happening is never something to do less often.
 	MinInterval time.Duration
 }
 
@@ -64,14 +66,15 @@ type PrewarmResult struct {
 // answers Duplicate. Persisting it would make a durable record of a cache.
 type prewarmMemory struct {
 	mu   sync.Mutex
-	sent map[string]string
+	sent map[string]map[string]bool
+	key  map[string]string
 	at   map[string]time.Time
 }
 
 func (memory *prewarmMemory) unchanged(workspaceID, key string) bool {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
-	return memory.sent[workspaceID] == key
+	return memory.key[workspaceID] == key
 }
 
 // tooSoon answers whether the rate bound holds this desire back. A desire that
@@ -88,24 +91,32 @@ func (memory *prewarmMemory) tooSoon(workspaceID string, now time.Time, interval
 	return sent && now.Sub(last) < interval
 }
 
-func (memory *prewarmMemory) record(workspaceID, key string, now time.Time) {
+func (memory *prewarmMemory) record(workspaceID, key string, wanted []adapter.PrepareItem, now time.Time) {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	if memory.sent == nil {
-		memory.sent = map[string]string{}
+		memory.sent = map[string]map[string]bool{}
+		memory.key = map[string]string{}
 		memory.at = map[string]time.Time{}
 	}
-	memory.sent[workspaceID] = key
+	asked := make(map[string]bool, len(wanted))
+	for _, item := range wanted {
+		asked[prewarmItemKey(item)] = true
+	}
+	memory.sent[workspaceID] = asked
+	memory.key[workspaceID] = key
 	memory.at[workspaceID] = now
 }
 
-// held reports whether this desire still names content the memory has not seen.
+// adds reports whether this desire names content the memory has not asked for.
+// A desire that only drops content is not an addition, and the rate bound is
+// deliberately blind to it.
 func (memory *prewarmMemory) adds(workspaceID string, wanted []adapter.PrepareItem) bool {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	previous := memory.sent[workspaceID]
 	for _, item := range wanted {
-		if !strings.Contains(previous, prewarmItemKey(item)) {
+		if !previous[prewarmItemKey(item)] {
 			return true
 		}
 	}
@@ -139,7 +150,7 @@ func (o *Orchestrator) Prewarm(ctx context.Context, workspaceID string) (Prewarm
 	if err != nil {
 		return PrewarmResult{}, fmt.Errorf("orchestrator: prepare capacity for queued work: %w", err)
 	}
-	o.prewarmed.record(workspaceID, key, o.now())
+	o.prewarmed.record(workspaceID, key, wanted, o.now())
 	return PrewarmResult{Wanted: len(wanted), Sent: true, Receipt: receipt}, nil
 }
 

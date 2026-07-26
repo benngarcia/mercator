@@ -81,6 +81,55 @@ func prewarmYieldsToRealWork(observation InvariantObservation) error {
 	return concurrentPrefetchWithinBound(observation, prefetches)
 }
 
+// prewarmRateWithinBound is the standing guard on how often Mercator may start
+// speculating. It is the second half of the restraint the control plane puts on
+// itself, and it needs a rule of its own because the depth bound cannot express
+// it: a machine that is allowed one transfer at a time is still asked for a
+// fresh one the instant the last finishes, and a control plane that reconciled
+// its desired set on every tick would keep a host permanently busy with content
+// nobody has asked to run.
+//
+// The gap is measured between the moments preparation started rather than
+// between transfers, because one desired set crosses the boundary at once and
+// may open as many transfers as the depth bound allows. How many may be moving
+// together is concurrentPrefetchWithinBound's question; how often Mercator may
+// begin is this one.
+func prewarmRateWithinBound(observation InvariantObservation) error {
+	if observation.Prewarm == nil || observation.Prewarm.MinInterval.Duration() <= 0 {
+		return nil
+	}
+	prefetches, err := prefetchWindows(observation)
+	if err != nil {
+		return err
+	}
+	interval := observation.Prewarm.MinInterval.Duration()
+	starts := prefetchStartMoments(prefetches)
+	for index := 1; index < len(starts); index++ {
+		gap := starts[index].Sub(starts[index-1])
+		if gap >= interval {
+			continue
+		}
+		return fmt.Errorf(
+			"speculative preparation started at %s and again %s later at %s, and this world allows one no sooner than %s",
+			starts[index-1].Format(time.RFC3339Nano), gap, starts[index].Format(time.RFC3339Nano), interval,
+		)
+	}
+	return nil
+}
+
+// prefetchStartMoments is the distinct instants at which speculation began, in
+// order. A preparation with nothing to move is already absent from the windows,
+// which is what the rate bound is about: the interval governs when Mercator may
+// put content on a link, and answering that a host is ready puts nothing there.
+func prefetchStartMoments(prefetches []preparation) []time.Time {
+	starts := make([]time.Time, 0, len(prefetches))
+	for _, prefetch := range prefetches {
+		starts = append(starts, prefetch.from)
+	}
+	slices.SortFunc(starts, time.Time.Compare)
+	return slices.CompactFunc(starts, time.Time.Equal)
+}
+
 // concurrentPrefetchWithinBound sweeps the prefetch windows and reports the
 // moment more of them were open at once than the world allows. A Blueprint that
 // states no bound states no opinion, and a control plane with no bound prepares
