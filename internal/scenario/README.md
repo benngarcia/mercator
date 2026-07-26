@@ -170,6 +170,15 @@ The initial authored arrival type is `fixed`. Periodic and burst families land
 with the typed generator slice. Faults and proof checkpoints are typed and
 strictly validated before execution.
 
+A fault with the `provider.launch` trigger and the `reject_command` action is a
+machine refusing to start the work it was given. What follows a refusal is
+another placement, and `request.max_pre_start_attempts` is the complete bound on
+those placements: how many times Mercator hands a Run to a machine, the initial
+attempt included, and one where a Blueprint says nothing. The refusals a Run
+survives are therefore one fewer than the bound, so a Run left at the default
+closes with `RETRY_EXHAUSTED` the moment any machine turns it away, and stating
+one refusal and the redo that follows it takes `2`.
+
 ## Identity and units
 
 - Durations use Go syntax such as `"6m"` and `"1h30m"`.

@@ -988,9 +988,10 @@ type RequestSpec struct {
 	// semantics. What the world then spends is WorldSpec.launch.application_ready,
 	// and the two are stated separately so neither derives the other.
 	ExpectedReady *Duration `json:"expected_ready,omitempty"`
-	// MaxPreStartAttempts is how many times a machine may refuse to start this Run
-	// before Mercator gives up on it. The API has carried it since launches could
-	// fail and no Blueprint could state it, so every Run in this corpus was
+	// MaxPreStartAttempts is the complete pre-start bound: how many times Mercator
+	// hands this Run to a machine, the initial attempt included, so the refusals a
+	// Run survives are one fewer. The API has carried the bound since launches
+	// could fail and no Blueprint could state it, so every Run in this corpus was
 	// normalised to one attempt and closed the moment any machine turned it away.
 	//
 	// Which meant the corpus could state a machine that refuses a start and could
