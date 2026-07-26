@@ -193,6 +193,7 @@ func (e NetworkCapabilitiesInbound) Valid() bool {
 
 // Defines values for NetworkDownloadRequirementScope.
 const (
+	NetworkDownloadRequirementScopeObjectStore    NetworkDownloadRequirementScope = "object_store"
 	NetworkDownloadRequirementScopePublicInternet NetworkDownloadRequirementScope = "public_internet"
 	NetworkDownloadRequirementScopeRegistry       NetworkDownloadRequirementScope = "registry"
 )
@@ -200,6 +201,8 @@ const (
 // Valid indicates whether the value is a known member of the NetworkDownloadRequirementScope enum.
 func (e NetworkDownloadRequirementScope) Valid() bool {
 	switch e {
+	case NetworkDownloadRequirementScopeObjectStore:
+		return true
 	case NetworkDownloadRequirementScopePublicInternet:
 		return true
 	case NetworkDownloadRequirementScopeRegistry:
@@ -211,6 +214,7 @@ func (e NetworkDownloadRequirementScope) Valid() bool {
 
 // Defines values for NetworkFactScope.
 const (
+	NetworkFactScopeObjectStore    NetworkFactScope = "object_store"
 	NetworkFactScopePublicInternet NetworkFactScope = "public_internet"
 	NetworkFactScopeRegistry       NetworkFactScope = "registry"
 )
@@ -218,6 +222,8 @@ const (
 // Valid indicates whether the value is a known member of the NetworkFactScope enum.
 func (e NetworkFactScope) Valid() bool {
 	switch e {
+	case NetworkFactScopeObjectStore:
+		return true
 	case NetworkFactScopePublicInternet:
 		return true
 	case NetworkFactScopeRegistry:
@@ -332,6 +338,63 @@ func (e PortSpecExposure) Valid() bool {
 	case Private:
 		return true
 	case Public:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TransferRateScope.
+const (
+	ObjectStore    TransferRateScope = "object_store"
+	PublicInternet TransferRateScope = "public_internet"
+	Registry       TransferRateScope = "registry"
+)
+
+// Valid indicates whether the value is a known member of the TransferRateScope enum.
+func (e TransferRateScope) Valid() bool {
+	switch e {
+	case ObjectStore:
+		return true
+	case PublicInternet:
+		return true
+	case Registry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TransferRateStage.
+const (
+	Acquisition      TransferRateStage = "acquisition"
+	AgentReady       TransferRateStage = "agent_ready"
+	ApplicationReady TransferRateStage = "application_ready"
+	ArtifactFetch    TransferRateStage = "artifact_fetch"
+	Boot             TransferRateStage = "boot"
+	ContainerStart   TransferRateStage = "container_start"
+	ImageFetch       TransferRateStage = "image_fetch"
+	Unpack           TransferRateStage = "unpack"
+)
+
+// Valid indicates whether the value is a known member of the TransferRateStage enum.
+func (e TransferRateStage) Valid() bool {
+	switch e {
+	case Acquisition:
+		return true
+	case AgentReady:
+		return true
+	case ApplicationReady:
+		return true
+	case ArtifactFetch:
+		return true
+	case Boot:
+		return true
+	case ContainerStart:
+		return true
+	case ImageFetch:
+		return true
+	case Unpack:
 		return true
 	default:
 		return false
@@ -508,6 +571,9 @@ type CandidateDecision struct {
 
 	// ScoreUsd What this candidate is worth to this Run in dollars, lowest first: the cost it would be billed, plus the dollars its service class says it would rather pay than wait, plus the dollars it would rather pay than act on a doubtful answer. Every quantity it multiplies is recorded beside it, at the weights the decision states, so it can be re-derived rather than trusted. An infeasible candidate scores nothing, because it has no price.
 	ScoreUsd float64 `json:"score_usd,omitempty"`
+
+	// TransferRates The throughput each transfer stage of this launch was priced at and where that number came from, one entry per stage that had bytes to move. A stage with nothing to move records none, because there was no transfer to price. The seconds a candidate is charged are bytes over a rate, the bytes are explained by the locality evidence, and this is the other half: a machine priced at a throughput nothing on it ever reported and a machine priced at Mercator's own assumption produce the same seconds and are different claims.
+	TransferRates []TransferRate `json:"transfer_rates,omitempty"`
 }
 
 // CandidateDecisionDisposition defines model for CandidateDecision.Disposition.
@@ -1097,6 +1163,30 @@ type StatedRate struct {
 	Confidence float64 `json:"confidence"`
 	Rate       float64 `json:"rate"`
 }
+
+// TransferRate The throughput one stage of a launch was priced at, named by the stage and by the path it crosses. Exactly one of measurement and assumption is stated: a rate is either something somebody measured on this path or the constant Mercator falls back to when nobody did.
+type TransferRate struct {
+	// Assumption The stated constant this rate is when nothing measured the path. Absent when something did.
+	Assumption string `json:"assumption,omitempty"`
+
+	// Bytes What had to move at that rate, so the stage's seconds can be retraced from this record alone.
+	Bytes      int64   `json:"bytes"`
+	Confidence float64 `json:"confidence"`
+	Mbps       float64 `json:"mbps"`
+
+	// Measurement Who measured this path, in their own words. Absent when nothing measured it.
+	Measurement string `json:"measurement,omitempty"`
+
+	// Scope The path this rate describes. Absent for a rate that crosses no path: assembling content already on the disk is priced from a storage rate, and naming a link for it would invite a reader to check it against a measurement of something else.
+	Scope TransferRateScope `json:"scope,omitempty"`
+	Stage TransferRateStage `json:"stage"`
+}
+
+// TransferRateScope The path this rate describes. Absent for a rate that crosses no path: assembling content already on the disk is priced from a storage rate, and naming a link for it would invite a reader to check it against a measurement of something else.
+type TransferRateScope string
+
+// TransferRateStage defines model for TransferRate.Stage.
+type TransferRateStage string
 
 // Violation defines model for Violation.
 type Violation = domain.Violation

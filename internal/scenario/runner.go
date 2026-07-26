@@ -464,6 +464,7 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 		if want.Confidence != nil && recorded.Confidence != *want.Confidence {
 			fail("%s confidence: want %v, got %v", stage, *want.Confidence, recorded.Confidence)
 		}
+		assertTransferRate(fail, stage, candidate.TransferRates, want.Rate)
 	}
 	if expect.ImageLocality != "" && candidate.ImageLocality != expect.ImageLocality {
 		fail("image_locality: want %q, got %q", expect.ImageLocality, candidate.ImageLocality)
@@ -526,6 +527,32 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 		fail("records the risk history %+v, and nobody has measured this machine", candidate.Reliability)
 	}
 	return failures
+}
+
+// assertTransferRate holds one stage to the rate a fixture says it was priced at
+// and to where that number came from. A stage a fixture states a rate for and
+// the record has none of is the failure worth naming twice: it means the
+// candidate owed no bytes at that stage, so nothing was priced, and the seconds
+// beside it would have read as a satisfied assertion.
+func assertTransferRate(fail func(string, ...any), stage domain.LaunchStage, recorded []domain.TransferRate, want *TransferRateExpectation) {
+	if want == nil {
+		return
+	}
+	index := slices.IndexFunc(recorded, func(rate domain.TransferRate) bool { return rate.Stage == stage })
+	if index < 0 {
+		fail("%s rate: want %v Mbps, and the record prices no transfer at that stage at all", stage, want.Mbps)
+		return
+	}
+	rate := recorded[index]
+	if rate.Mbps != want.Mbps {
+		fail("%s rate: want %v Mbps, priced at %v", stage, want.Mbps, rate.Mbps)
+	}
+	if rate.Measurement != want.Measurement {
+		fail("%s rate: want the measurement %q, priced from %q", stage, want.Measurement, rate.Measurement)
+	}
+	if rate.Assumption != want.Assumption {
+		fail("%s rate: want the assumption %q, priced from %q", stage, want.Assumption, rate.Assumption)
+	}
 }
 
 // CacheExpectations is what a fixture's word for cache warmth means. A Cache

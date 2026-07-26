@@ -219,6 +219,7 @@ func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer dom
 		Disk:           work.disk,
 		RentalSchedule: scheduleEvidence(input, offer),
 		Estimates:      work.estimates,
+		TransferRates:  work.rates,
 		Confidences:    confidences(offer, work.estimates),
 	}
 	candidate.ScoreUSD = weights.ScoreUSD(candidate, input.Workload.Spec.Placement.ExpectedRuntimeSeconds)
@@ -422,7 +423,11 @@ type candidateWork struct {
 	estimates domain.CandidateEstimates
 	image     domain.LocalityState
 	artifacts []domain.ArtifactEvidence
-	disk      domain.DiskDemand
+	// rates is the throughput every stage that had bytes to move was priced at.
+	// It travels with the estimates because it is where they came from: one
+	// LinkSpeed produced the seconds and this account of them.
+	rates []domain.TransferRate
+	disk  domain.DiskDemand
 }
 
 // contentWork is what one kind of content costs this candidate and how much of
@@ -438,8 +443,9 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 	queue := queueEstimate(input, offer)
 	machine := provisionEstimate(input, offer)
 	content := contentFor(input, offer)
-	fetch, unpack := imageEstimates(input.Image, offer, content, input.ModelVersion)
-	inputs := artifactEstimate(offer.Artifacts, content, input.ModelVersion)
+	registry, store, storage := offer.DownloadRate(domain.NetworkScopeRegistry), offer.DownloadRate(domain.NetworkScopeObjectStore), domain.UnpackRate()
+	fetch, unpack := imageEstimates(input.Image, offer, content, registry, storage, input.ModelVersion)
+	inputs := artifactEstimate(offer.Artifacts, content, store, input.ModelVersion)
 	container := containerStartEstimate(input.ModelVersion)
 	ready := applicationReadyEstimate(input)
 	stages := domain.LaunchStageEstimates{
@@ -466,8 +472,25 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 		},
 		image:     content.locality,
 		artifacts: content.evidence,
+		rates:     transferRates(content, registry, storage, store),
 		disk:      content.disk,
 	}
+}
+
+// transferRates is what every stage of this launch that had bytes to move was
+// priced at, in the order a launch moves them. A stage with nothing to move
+// records nothing: there was no transfer, so there is no rate it was priced from,
+// and an entry would name a number the decision never divided by.
+func transferRates(content candidateContent, registry, storage, store domain.LinkSpeed) []domain.TransferRate {
+	priced := []domain.TransferRate{
+		domain.TransferRateFor(domain.StageImageFetch, domain.NetworkScopeRegistry, content.image.TransferBytes, registry),
+		// Assembly crosses no link, so it names no scope: the rate is a storage
+		// rate, and a reader checking it against a measurement of a path would be
+		// checking it against a measurement of something else.
+		domain.TransferRateFor(domain.StageUnpack, "", content.image.UnpackBytes, storage),
+		domain.TransferRateFor(domain.StageArtifactFetch, domain.NetworkScopeObjectStore, content.fetch, store),
+	}
+	return slices.DeleteFunc(priced, func(rate domain.TransferRate) bool { return rate.Bytes == 0 })
 }
 
 // containerStartEstimate is what asking this machine's container runtime for a
@@ -800,22 +823,27 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 // than charged, because the only content it could give up to make room is
 // content this Run needs back, and deleting that frees exactly what fetching it
 // again consumes.
-func imageEstimates(manifest domain.ImageManifest, offer domain.OfferSnapshot, content candidateContent, modelVersion string) (fetch, unpack contentWork) {
+func imageEstimates(
+	manifest domain.ImageManifest,
+	offer domain.OfferSnapshot,
+	content candidateContent,
+	registry, storage domain.LinkSpeed,
+	modelVersion string,
+) (fetch, unpack contentWork) {
 	work, locality := content.image, content.locality
 	source := pullSource(locality, manifest, offer.Images)
-	link := offer.RegistryDownload()
 	return imageStage(
-			transferSeconds(work.TransferBytes, link.Mbps),
+			transferSeconds(work.TransferBytes, registry),
 			work.TransferBytes,
-			link.Confidence,
+			registry.Confidence,
 			source,
 			locality,
 			modelVersion,
 		),
 		imageStage(
-			float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps,
+			storage.TransferSeconds(work.UnpackBytes),
 			work.UnpackBytes,
-			domain.AssumedLinkConfidence,
+			storage.Confidence,
 			source,
 			locality,
 			modelVersion,
@@ -825,11 +853,11 @@ func imageEstimates(manifest domain.ImageManifest, offer domain.OfferSnapshot, c
 // transferSeconds is how long bytes this host does not hold take to arrive over
 // this link, plus the half second a transfer costs before any of them move. A
 // host with nothing to fetch pays neither.
-func transferSeconds(bytes int64, mbps float64) float64 {
+func transferSeconds(bytes int64, link domain.LinkSpeed) float64 {
 	if bytes == 0 {
 		return 0
 	}
-	return float64(bytes*8)/1_000_000/mbps + 0.5
+	return link.TransferSeconds(bytes) + 0.5
 }
 
 // imageStage is one stage of getting an image ready, priced from the bytes it
@@ -876,28 +904,29 @@ func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalitySt
 // Confidence follows the same rule transfers already follow: a host that owes
 // nothing is certainly zero seconds away, and every other answer crosses a link
 // nothing has measured.
-func artifactEstimate(inventory domain.ArtifactInventory, content candidateContent, modelVersion string) contentWork {
+func artifactEstimate(inventory domain.ArtifactInventory, content candidateContent, store domain.LinkSpeed, modelVersion string) contentWork {
 	source := artifactSource(inventory, content.evidence)
 	if len(content.evidence) == 0 {
 		return contentWork{predicted: domain.Estimate{Source: source, ModelVersion: modelVersion}}
 	}
 	return contentWork{
-		predicted:   objectStoreRead(content.fetch, source, modelVersion),
-		established: objectStoreRead(establishedFetchBytes(content.evidence), source, modelVersion),
+		predicted:   objectStoreRead(content.fetch, store, source, modelVersion),
+		established: objectStoreRead(establishedFetchBytes(content.evidence), store, source, modelVersion),
 	}
 }
 
-// objectStoreRead is what reading these bytes out of the object store costs.
-// Bytes that do not have to move cost nothing and there is no doubt about it;
-// bytes that do cross a link nothing has measured, which is what caps the
-// answer's confidence however exactly the arithmetic on it reads.
-func objectStoreRead(bytes int64, source, modelVersion string) domain.Estimate {
-	seconds := objectStoreSeconds(bytes)
+// objectStoreRead is what reading these bytes out of the object store costs over
+// the path this host reaches it on. Bytes that do not have to move cost nothing
+// and there is no doubt about it; bytes that do are worth exactly what the rate
+// they cross is worth, which is a measurement on a host that published one and
+// Mercator's own assumption on a host that did not.
+func objectStoreRead(bytes int64, store domain.LinkSpeed, source, modelVersion string) domain.Estimate {
+	seconds := store.TransferSeconds(bytes)
 	estimate := domain.Estimate{
 		Expected:     seconds,
 		P50:          seconds,
 		P90:          seconds * 1.5,
-		Confidence:   domain.AssumedLinkConfidence,
+		Confidence:   store.Confidence,
 		Source:       source,
 		ModelVersion: modelVersion,
 	}
@@ -919,10 +948,6 @@ func establishedFetchBytes(evidence []domain.ArtifactEvidence) int64 {
 		}
 	}
 	return bytes
-}
-
-func objectStoreSeconds(bytes int64) float64 {
-	return float64(bytes*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
 }
 
 // artifactSource names whose evidence this answer rests on, and when it rests on

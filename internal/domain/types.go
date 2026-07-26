@@ -124,7 +124,13 @@ const (
 type NetworkScope string
 
 const (
-	NetworkScopeRegistry       NetworkScope = "registry"
+	NetworkScopeRegistry NetworkScope = "registry"
+	// NetworkScopeObjectStore is the path a host reads durable Artifact content
+	// over. It is a scope of its own because it is a different path from the
+	// registry one and routinely a different speed: a machine beside the object
+	// store and a machine beside the registry are different machines, and until
+	// this existed no fact anybody published could steer an Artifact read at all.
+	NetworkScopeObjectStore    NetworkScope = "object_store"
 	NetworkScopePublicInternet NetworkScope = "public_internet"
 )
 
@@ -154,7 +160,7 @@ type NetworkDownloadRequirement struct {
 // decides what silence buys through AllowUnknown, rather than a disowned fact
 // striking a candidate out where an identical silent one is admitted.
 //
-// It is the same fact OfferSnapshot.RegistryDownload prices the transfer from, so
+// It is the same fact OfferSnapshot.DownloadRate prices the transfer from, so
 // the bound and the prediction are asked of one measurement rather than of two
 // facts that happen to be published together.
 func (req NetworkDownloadRequirement) Answer(facts NetworkFacts, at time.Time) (NetworkFact, bool) {
@@ -324,6 +330,17 @@ func (offer OfferSnapshot) KeepsWhatItRuns() bool {
 // has nothing to do with either model.
 const DefaultRegistryDownloadMbps = 500.0
 
+// The names a transfer prediction gives the constant it was priced from when
+// nothing measured the path it crosses. They are recorded rather than derived,
+// because an operator reading a decision has to be able to tell a machine
+// Mercator measured from one it merely assumed, and a bare number cannot say
+// which it was.
+const (
+	AssumptionRegistryRate    = "assumed_registry_rate"
+	AssumptionObjectStoreRate = "assumed_object_store_rate"
+	AssumptionUnpackRate      = "assumed_unpack_rate"
+)
+
 // AssumedLinkConfidence is how much a transfer duration is worth when the bytes
 // that have to move are measured and the link they cross is not. It is
 // deliberately short of certainty: nothing measures a host's registry
@@ -346,40 +363,96 @@ const AssumedLinkConfidence = 0.5
 // replace it without replacing the other two.
 const AssumedContainerStartSeconds = 1.0
 
-// AssumedUnpackMBps is how fast a host is assumed to decompress content it
+// AssumedUnpackMbps is how fast a host is assumed to decompress content it
 // already holds into a runnable layer chain, when nothing has measured its
 // storage. It stands beside DefaultRegistryDownloadMbps for the same reason and
 // with the same standing: a stated assumption rather than a measurement, so a
 // duration derived from it is worth AssumedLinkConfidence, which is what any
 // duration over an unmeasured rate is worth.
-const AssumedUnpackMBps = 250.0
+//
+// It is 250 MB/s, stated in the unit every other rate in a decision is stated
+// in. One unit is what lets one arithmetic price every stage of a launch and one
+// record hold every rate a candidate was priced at, and a record that mixed the
+// two would put 250 and 2000 side by side for the same speed.
+const AssumedUnpackMbps = 2000.0
 
-// LinkSpeed is how fast content moves onto a host and how much a duration
-// derived from that number is worth. The two travel together because they are
-// one answer: a speed nothing stands behind cannot produce a confident
-// duration, however precise the arithmetic on it looks.
+// LinkSpeed is how fast content moves onto a host, how much a duration derived
+// from that number is worth, and where the number came from. The three travel
+// together because they are one answer: a speed nothing stands behind cannot
+// produce a confident duration however precise the arithmetic on it looks, and a
+// speed whose provenance is lost cannot be told from one somebody measured.
+//
+// Exactly one of Measurement and Assumption is set. Both empty is a rate nothing
+// stated, which is what a scope nobody declared an assumption for produces, and
+// it prices nothing: a caller reaching for it is asking about a transfer this
+// model cannot price.
 type LinkSpeed struct {
 	Mbps       float64
 	Confidence float64
+	// Measurement names the published fact this speed is, in the words of
+	// whoever published it.
+	Measurement string
+	// Assumption names the stated constant this speed is when nothing measured
+	// the path.
+	Assumption string
 }
 
-// RegistryDownload is this host's pessimistic (p10) registry throughput. A
-// published fact is only worth what its publisher said it was worth, and only
-// while it is still valid as of the moment this offer was observed: a fact
+// DownloadRate is this host's pessimistic (p10) throughput over one kind of
+// path. A published fact is only worth what its publisher said it was worth, and
+// only while it is still valid as of the moment this offer was observed: a fact
 // carries its own confidence and its own expiry, and reading the mere existence
 // of one as a measurement is how an unmeasured constant becomes a certainty.
-// Absent an answer the reply is the standing assumption, saying so.
-func (offer OfferSnapshot) RegistryDownload() LinkSpeed {
-	if fact, answered := offer.Network.DownloadP10(NetworkScopeRegistry, offer.ObservedAt); answered {
-		return LinkSpeed{Mbps: fact.ValueMbps, Confidence: fact.Confidence}
+// Absent an answer the reply is the standing assumption for that path, saying so.
+//
+// It is asked per scope rather than once, because an image crosses a link to a
+// registry and a dataset crosses a link to an object store, and one number for
+// both cannot tell a machine beside the data from a machine beside the images.
+func (offer OfferSnapshot) DownloadRate(scope NetworkScope) LinkSpeed {
+	if fact, answered := offer.Network.DownloadP10(scope, offer.ObservedAt); answered {
+		return LinkSpeed{Mbps: fact.ValueMbps, Confidence: fact.Confidence, Measurement: fact.Source}
 	}
-	return LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence}
+	return AssumedDownloadRate(scope)
 }
 
-// RegistryDownloadMbps is the speed alone, for the simulators that have to move
-// bytes rather than predict how long moving them takes.
-func (offer OfferSnapshot) RegistryDownloadMbps() float64 {
-	return offer.RegistryDownload().Mbps
+// AssumedDownloadRate is what Mercator falls back to over a path nobody
+// measured, named so a decision says it was an assumption. A scope with no
+// stated assumption answers with nothing at all rather than a zero somebody
+// could divide by: this model has no opinion about how fast content crosses a
+// path it has never described.
+func AssumedDownloadRate(scope NetworkScope) LinkSpeed {
+	switch scope {
+	case NetworkScopeRegistry:
+		return LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionRegistryRate}
+	case NetworkScopeObjectStore:
+		return LinkSpeed{Mbps: DefaultObjectStoreDownloadMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionObjectStoreRate}
+	default:
+		return LinkSpeed{}
+	}
+}
+
+// UnpackRate is how fast content already on the disk becomes a runnable layer
+// chain. Nothing measures a host's storage today, so it is the stated assumption
+// and says so. It is a rate of its own rather than the download rate reused,
+// because assembling bytes that are already here is different work over a
+// different resource: a machine on a slow link with fast disks is a real
+// machine, and one rate for both could not describe it.
+func UnpackRate() LinkSpeed {
+	return LinkSpeed{Mbps: AssumedUnpackMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionUnpackRate}
+}
+
+// TransferSeconds is how long these bytes take to cross this path, for the
+// readers that hold a rate and have to price a transfer over it. The Lab's
+// reference model keeps its own arithmetic on purpose, so that two models
+// disagreeing about a duration is a disagreement about the models.
+//
+// Nothing to move is nothing to wait for. A rate nobody stated is not, and is
+// deliberately not floored to zero: a stage that reads as free is a stage a
+// reader will believe, where an infinity is a placement nobody can record.
+func (speed LinkSpeed) TransferSeconds(bytes int64) float64 {
+	if bytes <= 0 {
+		return 0
+	}
+	return float64(bytes*8) / 1_000_000 / speed.Mbps
 }
 
 type ResourceInventory struct {
@@ -930,6 +1003,20 @@ type CandidateDecision struct {
 	// offered as evidence is a queue nobody has.
 	RentalSchedule *ScheduleEvidence  `json:"rental_schedule,omitempty"`
 	Estimates      CandidateEstimates `json:"estimates"`
+	// TransferRates is the throughput each transfer stage of this launch was
+	// priced at and where that number came from, one entry per stage that had
+	// bytes to move. A stage with nothing to move records none: there is no
+	// transfer to have priced, and an entry for it would be a rate the decision
+	// never used.
+	//
+	// It is recorded for the reason the confidences beside it are. The seconds a
+	// candidate is charged are bytes divided by a rate, the bytes are already
+	// explained by the locality evidence above, and without this the rate is the
+	// one half of the answer no reader could retrace. A machine priced at a
+	// throughput nothing on it ever reported and a machine priced at Mercator's
+	// own assumption produce the same seconds and are different claims, and
+	// safety.transfer_rate_is_attributed is stated over exactly this.
+	TransferRates []TransferRate `json:"transfer_rates,omitempty"`
 	// Confidences is what each answer this candidate was scored on is worth, one
 	// entry per source that stated one. It is the whole input to the uncertainty
 	// term, recorded so the score can be re-derived from the record: a term whose
@@ -957,6 +1044,55 @@ type Confidence struct {
 	// uncertainty term charges for.
 	Answer string  `json:"answer"`
 	Value  float64 `json:"value"`
+}
+
+// TransferRate is the throughput one stage of a launch was priced at, named by
+// the stage and by the path it crosses. It is the provenance of a duration
+// rather than the duration: what it exists to hold is that a rate somebody
+// measured and a rate Mercator assumed are different claims about the same
+// arithmetic, and that a decision must say which of the two it made.
+//
+// Scope is the path the rate describes, and is empty for a rate that crosses no
+// path: assembling content already on the disk is priced from a storage rate, and
+// naming a link for it would invite a reader to check it against a measurement of
+// something else.
+type TransferRate struct {
+	Stage LaunchStage  `json:"stage"`
+	Scope NetworkScope `json:"scope,omitempty"`
+	Mbps  float64      `json:"mbps"`
+	// Bytes is what had to move at that rate. It is here so the seconds the
+	// stage records can be retraced from the record alone rather than from the
+	// inventory arithmetic that produced them.
+	Bytes      int64   `json:"bytes"`
+	Confidence float64 `json:"confidence"`
+	// Measurement names the published fact this rate came from, in the words of
+	// whoever published it. Empty when nothing measured this path.
+	Measurement string `json:"measurement,omitempty"`
+	// Assumption names the stated constant this rate is when nothing measured
+	// the path. Empty when something did.
+	Assumption string `json:"assumption,omitempty"`
+}
+
+// Attributed reports whether this rate says where it came from. A rate that
+// names both a measurement and an assumption is as unattributed as one that
+// names neither: it describes a decision that cannot have been taken twice.
+func (rate TransferRate) Attributed() bool {
+	return (rate.Measurement == "") != (rate.Assumption == "")
+}
+
+// TransferRateFor is the record of one stage priced at one rate over these
+// bytes. The stage's estimate and this entry come from the same LinkSpeed, which
+// is what stops a decision from recording a rate it did not divide by.
+func TransferRateFor(stage LaunchStage, scope NetworkScope, bytes int64, speed LinkSpeed) TransferRate {
+	return TransferRate{
+		Stage:       stage,
+		Scope:       scope,
+		Mbps:        speed.Mbps,
+		Bytes:       bytes,
+		Confidence:  speed.Confidence,
+		Measurement: speed.Measurement,
+		Assumption:  speed.Assumption,
+	}
 }
 
 // ScheduleEvidence is one Rental Schedule as a placement decision read it: the

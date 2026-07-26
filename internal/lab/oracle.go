@@ -147,7 +147,12 @@ func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		OfferSnapshotID: offer.ID,
 		Feasible:        true,
 		Estimates:       estimates,
-		Confidences:     referenceConfidences(offer, estimates),
+		// The rate every transfer was priced at, recorded by this model for the
+		// reason the risk history below is: two models that price the same seconds
+		// off different rates agree about the answer and disagree about why, and a
+		// record only one of them keeps cannot catch it.
+		TransferRates: referenceTransferRates(input, offer),
+		Confidences:   referenceConfidences(offer, estimates),
 		// The risk history this model was given, carried through unpriced and
 		// undoubted. It is here so the two records hold the same answers: a term
 		// added to one model and not the other is the drift an independent model
@@ -179,6 +184,20 @@ func referenceConfidences(offer domain.OfferSnapshot, estimates domain.Candidate
 	return stated
 }
 
+// referenceTransferRates is this model's own account of what each stage that had
+// bytes to move was priced at. It reads the paths the same way it prices them,
+// and states nothing for a stage with nothing to move.
+func referenceTransferRates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) []domain.TransferRate {
+	work, _ := input.Image.StartWork(offer.Images)
+	fetchBytes, _ := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	stated := []domain.TransferRate{
+		domain.TransferRateFor(domain.StageImageFetch, domain.NetworkScopeRegistry, work.TransferBytes, offer.DownloadRate(domain.NetworkScopeRegistry)),
+		domain.TransferRateFor(domain.StageUnpack, "", work.UnpackBytes, domain.UnpackRate()),
+		domain.TransferRateFor(domain.StageArtifactFetch, domain.NetworkScopeObjectStore, fetchBytes, offer.DownloadRate(domain.NetworkScopeObjectStore)),
+	}
+	return slices.DeleteFunc(stated, func(rate domain.TransferRate) bool { return rate.Bytes == 0 })
+}
+
 // referenceEstimates is the reference model's own account of a candidate,
 // including how much of its start prediction anybody established. It derives
 // that the same way the scheduler does and from the same two published facts,
@@ -188,17 +207,25 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	queue := referenceQueue(input, offer)
 	work, locality := input.Image.StartWork(offer.Images)
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	// The rate each transfer crosses is asked of the offer rather than assumed,
+	// and asked per path: a machine beside the object store reads a dataset faster
+	// than one across the country from it, and a model that priced both at one
+	// constant would disagree with production about every machine that published a
+	// measurement of its own.
+	registry := offer.DownloadRate(domain.NetworkScopeRegistry)
+	store := offer.DownloadRate(domain.NetworkScopeObjectStore)
+	storage := domain.UnpackRate()
 	imageFetch := referenceContent(
-		referenceTransferSeconds(work.TransferBytes, offer.RegistryDownloadMbps()),
-		referenceImageStageConfidence(work.TransferBytes, locality, offer.RegistryDownload().Confidence),
+		referenceTransferSeconds(work.TransferBytes, registry.Mbps),
+		referenceImageStageConfidence(work.TransferBytes, locality, registry.Confidence),
 	)
 	unpack := referenceContent(
-		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps,
-		referenceImageStageConfidence(work.UnpackBytes, locality, domain.AssumedLinkConfidence),
+		referenceUnpackSeconds(work.UnpackBytes, storage.Mbps),
+		referenceImageStageConfidence(work.UnpackBytes, locality, storage.Confidence),
 	)
 	fetch := referenceContent(
-		referenceObjectStoreSeconds(fetchBytes),
-		referenceArtifactConfidence(evidence, fetchBytes),
+		referenceObjectStoreSeconds(fetchBytes, store.Mbps),
+		referenceArtifactConfidence(evidence, fetchBytes, store.Confidence),
 	)
 	establishedBytes := int64(0)
 	for _, found := range evidence {
@@ -207,8 +234,8 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		}
 	}
 	establishedFetch := referenceContent(
-		referenceObjectStoreSeconds(establishedBytes),
-		referenceArtifactConfidence(evidence, establishedBytes),
+		referenceObjectStoreSeconds(establishedBytes, store.Mbps),
+		referenceArtifactConfidence(evidence, establishedBytes, store.Confidence),
 	)
 	stages := domain.LaunchStageEstimates{
 		Boot:             referenceProvision(offer),
@@ -367,16 +394,18 @@ func referenceApplicationReady(input scheduler.SchedulingInput) domain.Estimate 
 
 // referenceArtifactConfidence is what this model thinks its own Artifact answer
 // is worth. A Run that reads nothing is not a Run with a doubtful read, so it
-// carries no confidence at all; a host that owes nothing is certain; and every
-// read that has to happen crosses a link nothing has measured.
-func referenceArtifactConfidence(evidence []domain.ArtifactEvidence, bytes int64) float64 {
+// carries no confidence at all; a host that owes nothing is certain; and a read
+// that has to happen is worth what the path it crosses is worth, which is a
+// measurement on a host that published one and an assumption on a host that did
+// not.
+func referenceArtifactConfidence(evidence []domain.ArtifactEvidence, bytes int64, rateConfidence float64) float64 {
 	switch {
 	case len(evidence) == 0:
 		return 0
 	case bytes == 0:
 		return 1
 	default:
-		return domain.AssumedLinkConfidence
+		return rateConfidence
 	}
 }
 
@@ -400,11 +429,19 @@ func referenceStart(queue domain.Estimate, stages domain.LaunchStageEstimates) d
 }
 
 // referenceObjectStoreSeconds is the reference model's own account of reading a
-// Run's declared inputs out of the object store. It carries no fixed overhead
-// because nothing has measured one: the only honest terms are the bytes and the
-// assumed rate they cross.
-func referenceObjectStoreSeconds(bytes int64) float64 {
-	return float64(bytes*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
+// Run's declared inputs out of the object store, over the path this host reaches
+// it on. It carries no fixed overhead because nothing has measured one: the only
+// honest terms are the bytes and the rate they cross.
+func referenceObjectStoreSeconds(bytes int64, mbps float64) float64 {
+	return float64(bytes*8) / 1_000_000 / mbps
+}
+
+// referenceUnpackSeconds is the reference model's own account of turning bytes
+// already on the disk into a layer chain. It is stated apart from the transfer
+// above it because it is different work over a different resource, priced from a
+// rate of its own.
+func referenceUnpackSeconds(bytes int64, mbps float64) float64 {
+	return float64(bytes*8) / 1_000_000 / mbps
 }
 
 // referenceTransferSeconds is the reference model's own account of bytes crossing

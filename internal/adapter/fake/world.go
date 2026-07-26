@@ -14,13 +14,15 @@ import (
 	"github.com/benngarcia/mercator/internal/ociresolver"
 )
 
-// registryMbps is how fast this world moves image content onto a machine. The
-// arithmetic below it is the world's own transfer model, deliberately
-// independent of the scheduler's prediction: a fixture is only meaningful when
-// the actual pull and the predicted pull are produced by different code. The
-// speed itself is the standing assumption about an unmeasured link, which is
-// stated once so the two models cannot disagree about what they never measured.
-const registryMbps = domain.DefaultRegistryDownloadMbps
+// unmeasuredLinkMbps is how fast this world moves content over a path no fixture
+// declared. The arithmetic below it is the world's own transfer model,
+// deliberately independent of the scheduler's prediction: a fixture is only
+// meaningful when the actual pull and the predicted pull are produced by
+// different code. The figure matches the standing assumption on purpose, because
+// an unmeasured path is the one case where both halves are guessing about the
+// same thing. A fixture that wants them to differ declares a path, and this world
+// then really spends what the path states.
+const unmeasuredLinkMbps = 500.0
 
 // Clock is a scripted wall clock shared by a World, its machines, and the
 // orchestrator under test. Time only moves when a scenario advances it, so
@@ -155,10 +157,25 @@ type Machine struct {
 	// about the moment this machine states when asked: a host does not know its
 	// clock is wrong, so it reads its container's start off the clock it has.
 	ClockAhead time.Duration
+	// LinkMbps is how fast this world really moves content of each kind onto this
+	// machine. It is world truth and never the facts the offer publishes: a fact
+	// carries a confidence, and a host that disowns its own measurement has told
+	// Mercator nothing while still crossing the path at the speed the path is. A
+	// scope missing from it is a path no fixture declared.
+	LinkMbps map[domain.NetworkScope]float64
 
 	// fetching is content this machine is still pulling. A host holds an image
 	// when its bytes have arrived, not when the container was dispatched.
 	fetching []transfer
+}
+
+// linkMbps is how fast content of one kind reaches this machine, and this
+// world's own constant over a path no fixture declared.
+func (m *Machine) linkMbps(scope domain.NetworkScope) float64 {
+	if declared, stated := m.LinkMbps[scope]; stated {
+		return declared
+	}
+	return unmeasuredLinkMbps
 }
 
 // transfer is one execution's arrival on this machine: the image it had to
@@ -207,7 +224,7 @@ func (m *Machine) startExecution(image string, layers []Layer, caches []domain.C
 	// stage no prediction of it could ever be measured against.
 	readyAt := now.Add(m.ProvisionSpend)
 	startsAt := readyAt.
-		Add(transferDuration(bytes)).
+		Add(transferDuration(bytes, m.linkMbps(domain.NetworkScopeRegistry))).
 		Add(m.assemblySpend(bytes, layers)).
 		Add(m.ContainerStartSpend)
 	if !m.Offer.KeepsWhatItRuns() {
@@ -447,11 +464,11 @@ func (m *Machine) assemblySpend(fetched int64, layers []Layer) time.Duration {
 	return 0
 }
 
-func transferDuration(bytes int64) time.Duration {
+func transferDuration(bytes int64, mbps float64) time.Duration {
 	if bytes <= 0 {
 		return 0
 	}
-	seconds := float64(bytes*8) / 1_000_000 / registryMbps
+	seconds := float64(bytes*8) / 1_000_000 / mbps
 	return time.Duration(seconds * float64(time.Second))
 }
 

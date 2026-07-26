@@ -75,6 +75,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 			ProvisionSpend:      offer.Provisioning.Spend(),
 			UnpackSpend:         spec.Launch.UnpackSpend(),
 			ContainerStartSpend: spec.Launch.ContainerStartSpend(),
+			LinkMbps:            simLinkMbps(spec, offer.ID),
 		}
 		if err := world.AddMachine(machine); err != nil {
 			return nil, err
@@ -261,6 +262,9 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 		// How far this host's own clock runs ahead of the control plane's, which is
 		// nothing for every machine no fixture says otherwise about.
 		ClockAhead: rental.Skew(),
+		// How fast this world really moves content onto the machine, which is the
+		// same declaration the offer publishes a fact about and never that fact.
+		LinkMbps: simLinkMbps(spec, rental.ID),
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
@@ -370,6 +374,7 @@ func simHost(spec WorldSpec, host HostSpec, at time.Time) *fake.Machine {
 		ArtifactReplicas:    simArtifactReplicas(spec, host.ArtifactReplicas, at),
 		UnpackSpend:         spec.Launch.UnpackSpend(),
 		ContainerStartSpend: spec.Launch.ContainerStartSpend(),
+		LinkMbps:            simLinkMbps(spec, host.ID),
 	}
 	for _, ref := range host.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {
@@ -484,35 +489,23 @@ func simOffer(world WorldSpec, id, connectionID string, ratePerHourUSD float64, 
 			RatePerSecondUSD: ratePerHourUSD / 3600,
 			Known:            true,
 		},
-		Network: simPathFacts(world, id),
+		Network: world.Paths.PublishedFacts(id, world.Start()),
 	}
 }
 
-// simPathFacts is what this machine has published about the links it crosses. A
-// Blueprint's paths are a statement about the world that has to reach Mercator:
-// this harness dropped them, so a fixture could declare a machine's measured
-// throughput and be scored against the standing assumption instead, with nothing
-// saying its statement went nowhere.
-func simPathFacts(world WorldSpec, offerID string) domain.NetworkFacts {
-	facts := domain.NetworkFacts{}
+// simLinkMbps is how fast this world really moves content of each kind onto one
+// machine, read from the Blueprint's own paths. It is world truth and not the
+// facts the offer publishes: this harness used to move every byte at one constant
+// whatever a fixture declared, so a machine's measured throughput could decide a
+// placement and change nothing about what the placement then cost.
+func simLinkMbps(world WorldSpec, offerID string) map[domain.NetworkScope]float64 {
+	rates := map[domain.NetworkScope]float64{}
 	for _, path := range world.Paths {
-		if path.From != offerID {
-			continue
+		if path.From == offerID {
+			rates[domain.NetworkScope(path.Scope)] = path.P10Mbps
 		}
-		facts.Download = append(facts.Download, domain.NetworkFact{
-			Scope:       domain.NetworkScope(path.Scope),
-			Statistic:   "p10",
-			ValueMbps:   path.P10Mbps,
-			Source:      "scenario-world",
-			SampleCount: 1,
-			ObservedAt:  world.Start(),
-			ValidUntil:  world.Start().Add(24 * time.Hour),
-			// How much the host stands behind its own measurement is the fixture's
-			// to state, and a host that disowns its number has published nothing.
-			Confidence: path.Confidence(),
-		})
 	}
-	return facts
+	return rates
 }
 
 // findLayer resolves a digest a fixture seeds directly onto a Rental back to

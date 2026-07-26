@@ -267,7 +267,7 @@ func TestARegistryLinkIsWorthWhatItsPublisherSaid(t *testing.T) {
 		want  LinkSpeed
 	}{
 		"nothing measured this link": {
-			want: LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence},
+			want: LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionRegistryRate},
 		},
 		"a valid measurement is worth what it says it is": {
 			facts: []NetworkFact{fact(250, 0.9, observed.Add(time.Hour))},
@@ -275,18 +275,18 @@ func TestARegistryLinkIsWorthWhatItsPublisherSaid(t *testing.T) {
 		},
 		"a measurement that expired before this offer was observed is not one": {
 			facts: []NetworkFact{fact(250, 0.9, observed.Add(-time.Hour))},
-			want:  LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence},
+			want:  LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionRegistryRate},
 		},
 		"a fact about another link says nothing about this one": {
 			facts: []NetworkFact{{Scope: NetworkScopePublicInternet, Statistic: "p10", ValueMbps: 900, Confidence: 1}},
-			want:  LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence},
+			want:  LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionRegistryRate},
 		},
 	}
 	for name, testCase := range cases {
 		t.Run(name, func(t *testing.T) {
 			offer := OfferSnapshot{ObservedAt: observed, Network: NetworkFacts{Download: testCase.facts}}
 
-			if got := offer.RegistryDownload(); got != testCase.want {
+			if got := offer.DownloadRate(NetworkScopeRegistry); got != testCase.want {
 				t.Fatalf("registry link = %+v, want %+v", got, testCase.want)
 			}
 		})

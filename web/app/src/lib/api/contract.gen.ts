@@ -712,7 +712,7 @@ export interface components {
         };
         NetworkDownloadRequirement: {
             /** @enum {string} */
-            scope: "registry" | "public_internet";
+            scope: "registry" | "object_store" | "public_internet";
             /** Format: double */
             min_p10_mbps: number;
             /** Format: int64 */
@@ -950,7 +950,7 @@ export interface components {
         };
         NetworkFact: {
             /** @enum {string} */
-            scope: "registry" | "public_internet";
+            scope: "registry" | "object_store" | "public_internet";
             statistic: string;
             /** Format: double */
             value_mbps: number;
@@ -1129,6 +1129,8 @@ export interface components {
             /** @description The Broker state this candidate was weighed against, present only for a Rental that has Bookings on it. The queue estimate beside it is the projection; this is what the projection was read from. A Rental nothing is assigned to records none, because an empty schedule offered as evidence reads as a queue that was measured rather than one that does not exist. */
             rental_schedule?: components["schemas"]["ScheduleEvidence"];
             estimates: components["schemas"]["CandidateEstimates"];
+            /** @description The throughput each transfer stage of this launch was priced at and where that number came from, one entry per stage that had bytes to move. A stage with nothing to move records none, because there was no transfer to price. The seconds a candidate is charged are bytes over a rate, the bytes are explained by the locality evidence, and this is the other half: a machine priced at a throughput nothing on it ever reported and a machine priced at Mercator's own assumption produce the same seconds and are different claims. */
+            transfer_rates?: components["schemas"]["TransferRate"][];
             /** @description What each answer this candidate was scored on is worth, one entry per source that stated one. It is the whole input to the score's uncertainty term, recorded so score_usd can be re-derived from this record: a scoring term whose input is not here is a term no reader can check. An answer nobody stated a confidence for is absent rather than zero, because stating no opinion is not the same as stating that an answer is worthless. */
             confidences?: components["schemas"]["Confidence"][];
             /**
@@ -1136,6 +1138,29 @@ export interface components {
              * @description What this candidate is worth to this Run in dollars, lowest first: the cost it would be billed, plus the dollars its service class says it would rather pay than wait, plus the dollars it would rather pay than act on a doubtful answer. Every quantity it multiplies is recorded beside it, at the weights the decision states, so it can be re-derived rather than trusted. An infeasible candidate scores nothing, because it has no price.
              */
             score_usd?: number;
+        };
+        /** @description The throughput one stage of a launch was priced at, named by the stage and by the path it crosses. Exactly one of measurement and assumption is stated: a rate is either something somebody measured on this path or the constant Mercator falls back to when nobody did. */
+        TransferRate: {
+            /** @enum {string} */
+            stage: "acquisition" | "boot" | "agent_ready" | "image_fetch" | "unpack" | "artifact_fetch" | "container_start" | "application_ready";
+            /**
+             * @description The path this rate describes. Absent for a rate that crosses no path: assembling content already on the disk is priced from a storage rate, and naming a link for it would invite a reader to check it against a measurement of something else.
+             * @enum {string}
+             */
+            scope?: "registry" | "object_store" | "public_internet";
+            /** Format: double */
+            mbps: number;
+            /**
+             * Format: int64
+             * @description What had to move at that rate, so the stage's seconds can be retraced from this record alone.
+             */
+            bytes: number;
+            /** Format: double */
+            confidence: number;
+            /** @description Who measured this path, in their own words. Absent when nothing measured it. */
+            measurement?: string;
+            /** @description The stated constant this rate is when nothing measured the path. Absent when something did. */
+            assumption?: string;
         };
         /** @description One answer a placement rested on and what its source said it was worth. */
         Confidence: {

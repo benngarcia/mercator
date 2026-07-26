@@ -1358,7 +1358,7 @@ func TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked(t *testing.T) {
 	// A record that folded them together would bill the network for bytes already
 	// on the disk and send an operator after a problem that is not there.
 	unpack := decision.unpackEstimate()
-	want := float64(18_000_000_000+40_000_000) / 1_000_000 / domain.AssumedUnpackMBps
+	want := float64((18_000_000_000+40_000_000)*8) / 1_000_000 / domain.AssumedUnpackMbps
 	if unpack.Expected < want || unpack.Expected > want+1 {
 		t.Fatalf("unpack expected = %v seconds, want about %v: the bytes are here and the chain is not", unpack.Expected, want)
 	}

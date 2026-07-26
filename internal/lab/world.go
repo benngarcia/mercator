@@ -458,6 +458,13 @@ type simulatedWorld struct {
 	// about Mercator rather than a property of the capacity.
 	prewarm *scenario.PrewarmSpec
 
+	// paths is what this world declared about the links its machines cross, read
+	// for the world's own transfer model rather than off the offers Mercator sees.
+	// How fast a path is and how much its publisher stands behind having measured
+	// it are different statements: a host that disowns its own number has published
+	// nothing to Mercator and still crosses the path at the speed the path is.
+	paths scenario.PathSpecs
+
 	// launch is what this world spends on the stages of a launch that happen
 	// after its content has arrived: assembling that content, creating the
 	// container, and the application reporting that it can do work. They are
@@ -496,6 +503,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		seededReplicas: map[string]map[string]bool{},
 		cacheMounts:    map[string]map[string]CacheMountState{},
 		prewarm:        tape.InitialWorld.Prewarm,
+		paths:          slices.Clone(tape.InitialWorld.Paths),
 		launch:         tape.InitialWorld.Launch,
 		prepared:       map[string]bool{},
 		executions:     map[string]externalExecution{},
@@ -685,25 +693,7 @@ func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec,
 	if billing.MinimumCharge != nil {
 		offer.Pricing.MinimumChargeSeconds = int64(billing.MinimumCharge.Duration().Seconds())
 	}
-	for _, path := range world.Paths {
-		if path.From != offerID {
-			continue
-		}
-		offer.Network.Download = append(offer.Network.Download, domain.NetworkFact{
-			Scope:       domain.NetworkScope(path.Scope),
-			Statistic:   "p10",
-			ValueMbps:   path.P10Mbps,
-			Source:      "lab-world",
-			SampleCount: 1,
-			ObservedAt:  world.Start(),
-			ValidUntil:  world.Start().Add(24 * time.Hour),
-			// How much a host stands behind its own measurement is the fixture's to
-			// state. Stamping certainty here made every published fact one Mercator
-			// had to act on, so no Blueprint could state the machine that publishes
-			// a number its own publisher disowns.
-			Confidence: path.Confidence(),
-		})
-	}
+	offer.Network = world.Paths.PublishedFacts(offerID, world.Start())
 }
 
 // prepareRun is the world learning about a Run it will be asked to execute. An
@@ -1672,7 +1662,7 @@ func (world *simulatedWorld) pullRunImage(execution externalExecution, image str
 	layers := world.images[image].Layers
 	fetchedLayers, bytes := state.missing(image, layers)
 	fetched := fetchedNames(image, state.heldImages[domain.ReferenceDigest(image)], fetchedLayers)
-	completesAt := from.Add(transferDuration(bytes, state.offer.RegistryDownloadMbps()))
+	completesAt := from.Add(transferDuration(bytes, world.linkMbps(execution.OfferID, domain.NetworkScopeRegistry)))
 	world.recordEffect(
 		OperationImagePull,
 		"image-pull/"+execution.LaunchKey+"/"+image,
@@ -1720,6 +1710,26 @@ func fetchedNames(image string, alreadyHeld bool, layers []scenario.LayerSpec) [
 	return names
 }
 
+// unmeasuredLinkMbps is how fast this world moves content over a path no fixture
+// declared. It is this world's own number rather than the scheduler's assumption,
+// deliberately the same figure: an unmeasured path is exactly the case where both
+// halves are guessing about one thing, so a difference here would be a difference
+// no Blueprint asked for. What separates the two halves is a fixture declaring a
+// path, which this world then really spends and Mercator then really reads.
+const unmeasuredLinkMbps = 500.0
+
+// linkMbps is how fast this world moves content of one kind onto one machine. It
+// reads the Blueprint's own declaration rather than the fact the machine
+// published, which is what keeps the prediction and the actual separable: a
+// fixture can state a path a host measured and then disowned, and this world
+// still crosses it at the speed the fixture said it is.
+func (world *simulatedWorld) linkMbps(offerID string, scope domain.NetworkScope) float64 {
+	if declared, stated := world.paths.LinkMbps(offerID, scope); stated {
+		return declared
+	}
+	return unmeasuredLinkMbps
+}
+
 // transferDuration is how long this world takes to move content, which is its
 // own model rather than the scheduler's: a fixture is only worth anything when
 // the actual pull and the predicted pull come from different code.
@@ -1748,7 +1758,7 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 		completesAt := from
 		if !held || !replica.State.Usable() {
 			source = "object_store"
-			completesAt = from.Add(world.store.transferDuration(artifactID))
+			completesAt = from.Add(world.store.transferDuration(artifactID, world.linkMbps(execution.OfferID, domain.NetworkScopeObjectStore)))
 			version, _ := world.store.entry(artifactID)
 			world.replicating = append(world.replicating, pendingReplica{
 				offerID:     execution.OfferID,
@@ -1811,7 +1821,7 @@ func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at tim
 		world.publishing = append(world.publishing, pendingPublication{
 			artifactID:  artifactID,
 			runID:       execution.RunID,
-			completesAt: at.Add(world.store.transferDuration(artifactID)),
+			completesAt: at.Add(world.store.transferDuration(artifactID, world.linkMbps(execution.OfferID, domain.NetworkScopeObjectStore))),
 		})
 	}
 }

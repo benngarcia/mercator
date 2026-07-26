@@ -110,6 +110,12 @@ const (
 	CapabilityInvariants Capability = "invariants"
 	// CapabilityLabUI is the Lab-backed normal HTTP/SSE and console path.
 	CapabilityLabUI Capability = "lab_ui"
+	// CapabilityMeasuredTransferRates is a transfer priced from the throughput
+	// somebody measured on the path it crosses, rather than from one constant per
+	// scope. It names what a fixture declaring paths to an object store is red
+	// for while every Artifact read in the tree costs the same seconds on every
+	// machine in the fleet.
+	CapabilityMeasuredTransferRates Capability = "measured_transfer_rates"
 )
 
 var knownCapabilities = map[Capability]bool{
@@ -129,6 +135,7 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityRunBundle:              true,
 	CapabilityInvariants:             true,
 	CapabilityLabUI:                  true,
+	CapabilityMeasuredTransferRates:  true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued
@@ -163,7 +170,7 @@ type WorldSpec struct {
 	RentalSchedules []RentalScheduleSpec   `json:"rental_schedules,omitempty"`
 	Hosts           []HostSpec             `json:"hosts,omitempty"`
 	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
-	Paths           []PathSpec             `json:"paths,omitempty"`
+	Paths           PathSpecs              `json:"paths,omitempty"`
 	RuntimeModels   []RuntimeModelSpec     `json:"runtime_models,omitempty"`
 	// Prewarm is what this world's control plane is allowed to have in flight
 	// for work it has not admitted. It is stated in the Blueprint because it is
@@ -686,9 +693,18 @@ type BillingSpec struct {
 	MinimumCharge *Duration `json:"minimum_charge,omitempty"`
 }
 
-// PathSpec is one link a machine in this world has published a measurement of.
-// It is the machine's own answer rather than world truth: what a fixture states
-// here is what the host says about itself, which is why it carries a confidence.
+// PathSpec is one path between a machine in this world and infrastructure of one
+// kind, stated once and read twice. The rate is what this world really moves
+// content at over that path, and it is also what the machine publishes about
+// itself, which is why it carries a confidence: how fast the path is and how much
+// its publisher stands behind having measured it are different statements, and a
+// fixture that disowns its own number leaves Mercator predicting from an
+// assumption while the world still spends the seconds the path really costs.
+//
+// One declaration for both halves is deliberate. A simulated world with a
+// transfer model of its own and a fixture-declared publication would let one
+// Blueprint mean two different worlds, and calibration against a world whose
+// rate is Mercator's own constant is calibration against arithmetic.
 type PathSpec struct {
 	From    string  `json:"from"`
 	To      string  `json:"to"`
@@ -709,6 +725,61 @@ func (spec PathSpec) Confidence() float64 {
 		return 1
 	}
 	return *spec.StatedConfidence
+}
+
+// PathSpecs is every path one world declared. It is a type of its own so the
+// lookup below is stated once: two simulated worlds asking the same question two
+// ways is how a declaration reaches one transfer model and misses the other.
+type PathSpecs []PathSpec
+
+// LinkMbps is how fast this world moves content of one kind onto one machine, and
+// whether the fixture said at all.
+//
+// A path nobody declared is not a rate of zero: the caller states what its own
+// world does over a path a fixture said nothing about, which is the one place a
+// simulated world is allowed a constant of its own.
+func (paths PathSpecs) LinkMbps(offerID string, scope domain.NetworkScope) (float64, bool) {
+	for _, path := range paths {
+		if path.From == offerID && domain.NetworkScope(path.Scope) == scope {
+			return path.P10Mbps, true
+		}
+	}
+	return 0, false
+}
+
+// PathFactSource names who measured a path a Blueprint declared. Both simulated
+// worlds publish it, because it is one declaration: a fixture asserting where a
+// rate came from would otherwise be asserting which harness it happened to run
+// in.
+const PathFactSource = "blueprint_path"
+
+// PublishedFacts is what one machine tells Mercator about the paths it crosses.
+// It is built here rather than in each world for the reason LinkMbps is stated
+// here: a declaration that reached one world's offers and not the other's would
+// make one Blueprint two fixtures.
+//
+// How much a publisher stands behind its own measurement is the fixture's to
+// state. Stamping certainty here made every declared path one Mercator had to act
+// on, so no Blueprint could state the machine that publishes a number its own
+// publisher disowns.
+func (paths PathSpecs) PublishedFacts(offerID string, at time.Time) domain.NetworkFacts {
+	facts := domain.NetworkFacts{}
+	for _, path := range paths {
+		if path.From != offerID {
+			continue
+		}
+		facts.Download = append(facts.Download, domain.NetworkFact{
+			Scope:       domain.NetworkScope(path.Scope),
+			Statistic:   "p10",
+			ValueMbps:   path.P10Mbps,
+			Source:      PathFactSource,
+			SampleCount: 1,
+			ObservedAt:  at,
+			ValidUntil:  at.Add(24 * time.Hour),
+			Confidence:  path.Confidence(),
+		})
+	}
+	return facts
 }
 
 type RuntimeModelSpec struct {
@@ -1042,6 +1113,47 @@ type StageExpectation struct {
 	Seconds    *Bound   `json:"seconds,omitempty"`
 	Source     string   `json:"source,omitempty"`
 	Confidence *float64 `json:"confidence,omitempty"`
+	// Rate asserts the throughput a transfer stage was priced at and where that
+	// number came from. It is stated apart from the seconds because the seconds
+	// are a product of two things a fixture cares about separately: a candidate
+	// can owe the right bytes and be charged them at a rate nothing on it ever
+	// reported, and the seconds alone cannot say which of the two a fixture
+	// pinned.
+	Rate *TransferRateExpectation `json:"rate,omitempty"`
+}
+
+// TransferRateExpectation is what one transfer stage's rate has to say. Exactly
+// one of Measurement and Assumption is stated, because a rate is either
+// something somebody measured on this path or the constant Mercator falls back
+// to when nobody did, and a fixture that named both would be asserting a
+// provenance the record cannot hold.
+type TransferRateExpectation struct {
+	Mbps float64 `json:"mbps"`
+	// Measurement names the published fact this rate came from, in the words of
+	// whoever published it.
+	Measurement string `json:"measurement,omitempty"`
+	// Assumption names the stated constant this rate is when nothing measured
+	// the path.
+	Assumption string `json:"assumption,omitempty"`
+}
+
+// validate refuses a rate assertion that could not fail. A fixture stating
+// neither provenance asserts a bare number, which the seconds beside it already
+// pin; a fixture stating both asserts a record no decision can write.
+func (spec *TransferRateExpectation) validate() error {
+	if spec == nil {
+		return nil
+	}
+	switch {
+	case spec.Mbps <= 0:
+		return fmt.Errorf("a transfer rate assertion needs a positive mbps")
+	case spec.Measurement == "" && spec.Assumption == "":
+		return fmt.Errorf("a transfer rate is either a measurement or an assumption, and this names neither")
+	case spec.Measurement != "" && spec.Assumption != "":
+		return fmt.Errorf("a transfer rate names one provenance, and this names both %q and %q", spec.Measurement, spec.Assumption)
+	default:
+		return nil
+	}
 }
 
 type ScheduleEvidenceExpectation struct {
@@ -2210,9 +2322,12 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 		// answers about an unknown stage with a zero Estimate from no source, so a
 		// misspelled key asserted nothing and silently replaced the assertion the
 		// fixture was written for.
-		for stage := range candidate.Stages {
+		for stage, want := range candidate.Stages {
 			if !slices.Contains(domain.LaunchStages, stage) {
 				return fmt.Errorf("candidate %q states stage %q, which is not one of %v", id, stage, domain.LaunchStages)
+			}
+			if err := want.Rate.validate(); err != nil {
+				return fmt.Errorf("candidate %q stage %q: %w", id, stage, err)
 			}
 		}
 		if candidate.Schedule != nil {

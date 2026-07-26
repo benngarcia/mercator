@@ -101,7 +101,7 @@ func (world *simulatedWorld) prefetchImage(item adapter.PrepareItem, operation s
 		return operation
 	}
 	key := prefetchKey(item.OfferSnapshotID, item.Content())
-	completesAt := world.now.Add(transferDuration(bytes, state.offer.RegistryDownloadMbps()))
+	completesAt := world.now.Add(transferDuration(bytes, world.linkMbps(item.OfferSnapshotID, domain.NetworkScopeRegistry)))
 	world.pulls = append(world.pulls, pendingPull{
 		offerID:     item.OfferSnapshotID,
 		runID:       item.RunID,
@@ -134,7 +134,7 @@ func (world *simulatedWorld) prefetchArtifact(item adapter.PrepareItem, operatio
 	}
 	version, _ := world.store.entry(item.ArtifactID)
 	key := prefetchKey(item.OfferSnapshotID, item.Content())
-	completesAt := world.now.Add(world.store.transferDuration(item.ArtifactID))
+	completesAt := world.now.Add(world.store.transferDuration(item.ArtifactID, world.linkMbps(item.OfferSnapshotID, domain.NetworkScopeObjectStore)))
 	world.replicating = append(world.replicating, pendingReplica{
 		offerID:     item.OfferSnapshotID,
 		runID:       item.RunID,
