@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -406,6 +407,173 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 
 	if len(cases) != len(DefaultInvariantRegistry().invariants) {
 		t.Fatalf("deliberate cases = %d, default invariants = %d", len(cases), len(DefaultInvariantRegistry().invariants))
+	}
+}
+
+// TestEveryClauseOfTheCandidateIdentityRuleCanFail is the identity rule read the way
+// every law here has to be readable. The registry's single deliberate case drives one
+// of its clauses, a collision between two capacities the world says are different,
+// and a reviewer showed that two of the others could be broken with the whole tree
+// green. Each clause is shown failing on the one record it exists to catch.
+//
+// The lane clause and the collision clause are also driven through the whole control
+// plane by a-candidate-recurs-through-the-control-plane, where dropping either from
+// the derivation fails this rule on a real Booking Decision. The content clause is
+// only here: no Blueprint states a world where two registries go silent on one
+// machine, so nothing a World Tape can generate reaches it.
+func TestEveryClauseOfTheCandidateIdentityRuleCanFail(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	product := domain.CandidateIdentity{
+		Lane:        domain.LaneEphemeral,
+		Provider:    "simvast",
+		Region:      "US-CA",
+		Accelerator: "nvidia-a100x2",
+		ImageDigest: "sha256:image",
+	}
+	for name, observed := range map[string]struct {
+		offers    []domain.OfferSnapshot
+		workloads map[string]domain.WorkloadRevision
+		decisions []domain.BookingDecision
+	}{
+		// One product a provider sells both ways. The listing that becomes a machine
+		// Mercator enrols a runtime on and the listing that is a one-shot execution are
+		// two things to learn about, and this key is one name over both.
+		"a rental and a one-shot execution of one product under one key": {
+			offers: []domain.OfferSnapshot{
+				gpuOffer("ask-4417", 2),
+				reusable(gpuOffer("ask-4417-rented", 2)),
+			},
+			decisions: []domain.BookingDecision{{
+				RunID: "run-1",
+				Candidates: []domain.CandidateDecision{
+					{OfferSnapshotID: "ask-4417", Candidate: product},
+					{OfferSnapshotID: "ask-4417-rented", Candidate: product},
+				},
+			}},
+		},
+		// Two Runs that asked one machine for different content, filed under one
+		// content key. This is what every image a registry would not name looked like:
+		// the digest was empty, the key carried the emptiness, and one bucket per
+		// machine held every unresolvable image in the fleet.
+		"two Runs that asked one machine for different content under one key": {
+			offers: []domain.OfferSnapshot{gpuOffer("ask-4417", 2)},
+			workloads: map[string]domain.WorkloadRevision{
+				"run-1": workloadAsking("trainer@sha256:aaaa"),
+				"run-2": workloadAsking("scorer@sha256:bbbb"),
+			},
+			decisions: []domain.BookingDecision{
+				{RunID: "run-1", Candidates: []domain.CandidateDecision{{OfferSnapshotID: "ask-4417", Candidate: product}}},
+				{RunID: "run-2", Candidates: []domain.CandidateDecision{{OfferSnapshotID: "ask-4417", Candidate: product}}},
+			},
+		},
+		// A key naming the lease rather than the machine. An operator may invite two
+		// machines against one rental_id, and this is the record that would file the
+		// second machine's first launch under the first machine's pull samples.
+		"a key naming something other than the machine its backend published": {
+			offers: []domain.OfferSnapshot{enrolledOffer("node-1", "rnt_shared")},
+			decisions: []domain.BookingDecision{{
+				RunID: "run-1",
+				Candidates: []domain.CandidateDecision{{
+					OfferSnapshotID: "node-1",
+					Candidate:       domain.CandidateIdentity{Lane: domain.LaneReusable, Provider: "simnode", Machine: "rnt_shared", ImageDigest: "sha256:image"},
+				}},
+			}},
+		},
+		// A key naming the listing a search found. A Vast ask ID is a fresh integer for
+		// a machine that was already there, so this history is a pile of one-sample
+		// keys, each reported as evidence about this exact candidate.
+		"a key naming the listing search found": {
+			offers: []domain.OfferSnapshot{gpuOffer("ask-4417", 2)},
+			decisions: []domain.BookingDecision{{
+				RunID: "run-1",
+				Candidates: []domain.CandidateDecision{{
+					OfferSnapshotID: "ask-4417",
+					Candidate:       domain.CandidateIdentity{Lane: domain.LaneEphemeral, Provider: "simvast", InstanceType: "ask-4417", ImageDigest: "sha256:image"},
+				}},
+			}},
+		},
+		// A key for a one-shot pool that published nothing but its provider. Nothing
+		// about it comes back, so a predictor answering "this exact candidate, one
+		// sample" there is reporting candidate-specific evidence out of a name that
+		// cannot hold a second sample.
+		"a key for capacity with nothing published that outlives its listing": {
+			offers: []domain.OfferSnapshot{oneShotOffer("off_pool_7f3a")},
+			decisions: []domain.BookingDecision{{
+				RunID: "run-1",
+				Candidates: []domain.CandidateDecision{{
+					OfferSnapshotID: "off_pool_7f3a",
+					Candidate:       domain.CandidateIdentity{Lane: domain.LaneEphemeral, Provider: "simpool", Region: "US-CA", ImageDigest: "sha256:image"},
+				}},
+			}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := InvariantObservation{
+				StartedAt:       now,
+				Now:             now,
+				World:           WorldTruthSnapshot{At: now, Offers: observed.offers},
+				Workloads:       observed.workloads,
+				RentalSchedules: map[string]domain.RentalSchedule{},
+				RunRequirements: map[string]RunArrival{},
+				ArtifactCatalog: map[string]domain.ArtifactVersion{},
+				SeededLocality:  map[string]map[string]bool{},
+			}
+			for index, decision := range observed.decisions {
+				observation.MercatorEvents = append(observation.MercatorEvents,
+					bookingDecidedEvent(fmt.Sprintf("decision-%d", index+1), decision))
+			}
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.candidate_identity_recurs",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("%s was reported as a key a launch history may be filed under: %+v", name, result)
+			}
+		})
+	}
+}
+
+// reusable is the same listing in the other lane: capacity Mercator would enrol a
+// runtime on rather than borrow one execution from.
+func reusable(offer domain.OfferSnapshot) domain.OfferSnapshot {
+	offer.Lane = domain.LaneReusable
+	offer.Kind = domain.OfferKindStanding
+	return offer
+}
+
+// enrolledOffer is a machine Mercator keeps, which names itself and holds a lease
+// two machines can share.
+func enrolledOffer(nodeID, rentalID string) domain.OfferSnapshot {
+	return domain.OfferSnapshot{
+		ID:          nodeID,
+		NativeRef:   nodeID,
+		MachineID:   nodeID,
+		RentalID:    rentalID,
+		AdapterType: "simnode",
+		Kind:        domain.OfferKindStanding,
+		Lane:        domain.LaneReusable,
+	}
+}
+
+// oneShotOffer is a provider-native one-shot execution product that publishes no
+// place, no product name, and no cards: its listing ID is the only handle it has.
+func oneShotOffer(offerID string) domain.OfferSnapshot {
+	return domain.OfferSnapshot{
+		ID:          offerID,
+		NativeRef:   offerID,
+		AdapterType: "simpool",
+		Kind:        domain.OfferKindStanding,
+		Lane:        domain.LaneEphemeral,
+	}
+}
+
+// workloadAsking is what Mercator recorded it was asked to run, which is where a rule
+// about content reads the content from.
+func workloadAsking(image string) domain.WorkloadRevision {
+	return domain.WorkloadRevision{
+		Spec: domain.WorkloadSpec{Containers: []domain.ContainerSpec{{Name: "main", Image: image}}},
 	}
 }
 

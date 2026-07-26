@@ -1084,13 +1084,19 @@ func imageAsked(observation InvariantObservation, runID string) string {
 	return workload.Spec.Containers[0].Image
 }
 
-// candidateKeyIsHonest holds the two clauses about one recorded candidate: a key
-// names the machine its backend published and never the listing, and capacity with
-// nothing published that outlives a listing has no key at all.
+// candidateKeyIsHonest holds the clauses about one recorded candidate: capacity with
+// nothing published that outlives its listing has no key at all, and a key names the
+// machine its backend published and never the listing search found.
 func candidateKeyIsHonest(runID string, candidate domain.CandidateDecision, offer domain.OfferSnapshot) error {
 	key := candidate.Candidate.Candidate(true)
 	if key == "" {
 		return nil
+	}
+	if nothingOutlivesTheListing(offer) {
+		return fmt.Errorf(
+			"Run %q filed candidate %q under the key %q, and this world publishes nothing about it that outlives the listing",
+			runID, offer.ID, key,
+		)
 	}
 	if candidate.Candidate.Machine != offer.MachineID {
 		return fmt.Errorf(
@@ -1110,6 +1116,22 @@ func candidateKeyIsHonest(runID string, candidate domain.CandidateDecision, offe
 		}
 	}
 	return nil
+}
+
+// nothingOutlivesTheListing reports whether this world published anything about this
+// capacity that is still true the next time it is offered. A machine handle, a place,
+// a product name, and cards all are; the provider alone is not, because it
+// distinguishes no two of the things it sells from each other.
+//
+// It reads the offer rather than the identity, which is what makes it a rule instead
+// of the derivation agreeing with itself: a Mercator that invented a region, or that
+// kept a key for a one-shot pool naming only its own provider, would be filing
+// history under a name the world never gave it.
+func nothingOutlivesTheListing(offer domain.OfferSnapshot) bool {
+	return offer.MachineID == "" &&
+		offer.Region == "" &&
+		offer.InstanceType == "" &&
+		len(offer.Resources.Accelerators) == 0
 }
 
 // sameCapacity reports whether two offers are the same thing to learn about. It
