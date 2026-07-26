@@ -1,0 +1,115 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One machine with 200GB of room and every Booking position on it taken, and the impossible ask is the oldest wait in the workspace. Nothing here can hold a Run asking for 900GB, so it holds no queue, which means it is itself ordered behind the first Run that outranks it: the experimental Run that arrives a minute later fits this machine, waits for a position on it, and outranks a standard Run that has waited a minute. What Mercator then records about the ask is a wait the queue caused, and the record says what it rests on, which is nothing: no machine was weighed, so nothing was established about capacity at all. That deferral must not be read as an answer about it. Overwriting the fleet's answer with it put the impossible ask straight back in front of the machine it can never use, and the last Run in this fixture is what that costs: it fits the machine, it belongs in the queue behind the work that is there and behind the class that outranks it, and it was told it also waits behind an ask no machine in the fleet can satisfy. The whole set is the assertion. A deferral naming an ask nobody can end is a queue an operator cannot act on, and the exemption that stops one impossible submission from emptying a fleet undoes itself the moment a wait that measured nothing is allowed to take it away.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-only",
+        "version": 5,
+        "running": {
+          "booking": "booking-active",
+          "run": "run-active",
+          "remaining_max_runtime": "5m"
+        },
+        "queued": [
+          {"booking": "booking-q1", "run": "run-q1", "max_runtime": "6m", "expected_runtime": "5m"},
+          {"booking": "booking-q2", "run": "run-q2", "max_runtime": "6m", "expected_runtime": "5m"},
+          {"booking": "booking-q3", "run": "run-q3", "max_runtime": "6m", "expected_runtime": "5m"},
+          {"booking": "booking-q4", "run": "run-q4", "max_runtime": "6m", "expected_runtime": "5m"}
+        ]
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "asks-for-a-machine-nobody-has",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "900GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_CAPACITY_FITS",
+          "behind": [],
+          "weighed": 1,
+          "could_hold": 0,
+          "projected_wait_seconds": 0
+        }
+      }
+    },
+    {
+      "advance": "1m"
+    },
+    {
+      "submit": "the-next-iteration",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "experimental",
+        "resources": {"disk": "100GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_FEASIBLE_OFFER",
+          "behind": ["active", "q1", "q2", "q3", "q4"],
+          "weighed": 1,
+          "could_hold": 1
+        }
+      }
+    },
+    {
+      "reconcile": "asks-for-a-machine-nobody-has",
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "BEHIND_HIGHER_PRIORITY",
+          "behind": ["the-next-iteration"],
+          "weighed": 0,
+          "could_hold": 0
+        }
+      }
+    },
+    {
+      "submit": "fits-and-waits-its-turn",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "100GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "BEHIND_HIGHER_PRIORITY",
+          "behind": ["the-next-iteration"],
+          "weighed": 0,
+          "could_hold": 0
+        }
+      }
+    }
+  ]
+}
