@@ -15,7 +15,22 @@ type WorldTapeSchema string
 
 const WorldTapeSchemaV2 WorldTapeSchema = "mercator.lab/world-tape.v2"
 
-const EventRunArrived = "world.run.arrived.v1"
+const (
+	EventRunArrived = "world.run.arrived.v1"
+	// EventRunCancelled is work withdrawn after it arrived. It is exogenous like
+	// an arrival is: the caller changed its mind, and everything Mercator was
+	// doing on that Run's behalf has to stop.
+	EventRunCancelled = "world.run.cancelled.v1"
+)
+
+// RunCancellation names the Run a caller withdrew.
+type RunCancellation struct {
+	Name string `json:"name"`
+	// Workspace is the Blueprint's label for the tenant the Run belongs to,
+	// carried here so the cancellation reaches the same control plane the
+	// arrival did.
+	Workspace string `json:"workspace,omitempty"`
+}
 
 type WorldTape struct {
 	Schema        WorldTapeSchema      `json:"schema"`
@@ -76,6 +91,15 @@ func (tape WorldTape) Validate() error {
 				if offerID == "" || runtime.Duration() <= 0 {
 					return fmt.Errorf("World Tape Run arrival %q has invalid candidate runtime", event.ID)
 				}
+			}
+		}
+		if event.Kind == EventRunCancelled {
+			var cancellation RunCancellation
+			if err := json.Unmarshal(event.Data, &cancellation); err != nil {
+				return fmt.Errorf("decode World Tape Run cancellation %q: %w", event.ID, err)
+			}
+			if cancellation.Name == "" {
+				return fmt.Errorf("World Tape Run cancellation %q needs a name", event.ID)
 			}
 		}
 		if ids[event.ID] {

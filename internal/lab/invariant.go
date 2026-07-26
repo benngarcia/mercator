@@ -12,6 +12,7 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/scenario"
 )
 
 type InvariantStatus string
@@ -58,7 +59,11 @@ type InvariantObservation struct {
 	// SeededReplicas is the Artifact copies the World Tape put on each host
 	// before any Run executed, keyed by offer. A copy outside it has to be
 	// explained by content the ledger says landed there.
-	SeededReplicas              map[string]map[string]bool
+	SeededReplicas map[string]map[string]bool
+	// Prewarm is what this world allows the control plane to have in flight for
+	// work it has not admitted. A world that states none allows none, and the
+	// concurrency rule has nothing to say about it.
+	Prewarm                     *scenario.PrewarmSpec
 	ProjectionRebuildEquivalent bool
 }
 
@@ -105,6 +110,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
+		invariantRule{id: "safety.prewarm_yields_to_real_work", check: prewarmYieldsToRealWork},
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},
@@ -128,6 +134,15 @@ func DefaultInvariantRegistry() InvariantRegistry {
 			assumptions: []string{"Rental Schedule commits remain available"},
 			bound:       5 * time.Minute,
 			check:       supersededBookingRelease,
+		},
+		invariantRule{
+			id: "liveness.prefetch_converges",
+			assumptions: []string{
+				"virtual time advances",
+				"the registry and object store this content is served from keep answering",
+			},
+			bound: prefetchConvergenceBound,
+			check: prefetchConverges,
 		},
 		invariantRule{
 			id:          "liveness.admitted_run_progress",
@@ -316,6 +331,9 @@ func effectMutatesWorld(operation string) bool {
 	case OperationProviderLaunch,
 		OperationProviderRelease,
 		OperationProviderTerminate,
+		OperationNodePrepareImage,
+		OperationNodePrepareArtifact,
+		OperationNodePrepareAbandoned,
 		OperationImagePull,
 		OperationImageRetained,
 		OperationArtifactRead,

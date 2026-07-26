@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 21 {
-		t.Fatalf("latest invariant results = %d, want 21", len(latest))
+	if len(latest) != 23 {
+		t.Fatalf("latest invariant results = %d, want 23", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -270,6 +270,24 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				}},
 			}
 		},
+		// A speculative fetch running on the same machine, at the same moment,
+		// as the pull a Run already admitted there is waiting for. That Run's
+		// start is now behind content nobody has asked to run.
+		"safety.prewarm_yields_to_real_work": func(observation *InvariantObservation) {
+			observation.Now = now.Add(2 * time.Minute)
+			observation.Effects = []EffectRecord{
+				admittedPullEffect(1, now, "rental-warm", "trainer@sha256:aaaa", now.Add(10*time.Minute)),
+				prefetchEffect(2, now.Add(time.Minute), OperationNodePrepareImage, "rental-warm", "sha256:bbbb", "run-queued"),
+			}
+		},
+		// A preparation that never resolved: the content has not landed, nothing
+		// withdrew it, and the machine has been holding room for it all day.
+		"liveness.prefetch_converges": func(observation *InvariantObservation) {
+			observation.Now = now.Add(prefetchConvergenceBound + time.Hour)
+			observation.Effects = []EffectRecord{
+				prefetchEffect(1, now, OperationNodePrepareArtifact, "rental-warm", "artifact-1", "run-queued"),
+			}
+		},
 		"liveness.admitted_run_progress": func(observation *InvariantObservation) {
 			observation.Now = now.Add(25 * time.Hour)
 			observation.Runs = []domain.RunRecord{{ID: "run-1", Phase: "running"}}
@@ -407,6 +425,38 @@ func cacheMountAccessedUnderSharedIdentity(sequence uint64, workspaceID string) 
 		Command:   EffectCommandAccepted,
 		Response:  EffectResponseDelivered,
 		Request:   request,
+	}
+}
+
+// prefetchEffect is Mercator asking one machine to get content ready for a Run
+// it has not admitted, with bytes still to move.
+func prefetchEffect(sequence uint64, at time.Time, operation, offerID, content, runID string) EffectRecord {
+	return EffectRecord{
+		Sequence:      sequence,
+		At:            at,
+		Operation:     operation,
+		OperationID:   operation + "/" + offerID + "/" + content,
+		Command:       EffectCommandAccepted,
+		Response:      EffectResponseDelivered,
+		CorrelationID: runID,
+		Request:       mustJSON(map[string]any{"offer_id": offerID, "content": content, "run_id": runID}),
+		Consequence:   mustJSON(map[string]any{"ready": false, "fetched_bytes": 1 << 30}),
+	}
+}
+
+// admittedPullEffect is the pull a launch dispatched: content a Run Mercator has
+// already placed here is waiting on before its process can start.
+func admittedPullEffect(sequence uint64, at time.Time, offerID, image string, completesAt time.Time) EffectRecord {
+	return EffectRecord{
+		Sequence:      sequence,
+		At:            at,
+		Operation:     OperationImagePull,
+		OperationID:   "image-pull/" + offerID + "/" + image,
+		Command:       EffectCommandAccepted,
+		Response:      EffectResponseDelivered,
+		CorrelationID: "run-admitted",
+		Request:       mustJSON(map[string]any{"image": image, "offer_id": offerID}),
+		Consequence:   mustJSON(map[string]any{"fetched_bytes": 1 << 30, "completes_at": completesAt}),
 	}
 }
 

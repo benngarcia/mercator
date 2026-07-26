@@ -70,6 +70,11 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 			Data:     data,
 		})
 	}
+	withdrawals, err := cancellationEvents(seed, start, arrivals, blueprint.Arrivals.Cancellations)
+	if err != nil {
+		return WorldTape{}, nil, err
+	}
+	events = append(events, withdrawals...)
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].At.Equal(events[j].At) {
 			return events[i].Sequence < events[j].Sequence
@@ -92,6 +97,41 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 		return WorldTape{}, nil, err
 	}
 	return tape, samples, nil
+}
+
+// cancellationEvents is every withdrawal this Blueprint declared, carrying the
+// workspace its Run arrived into so the cancellation reaches the same tenant.
+// The sequence is offset past every arrival so a withdrawal at the same instant
+// as an arrival is ordered after it; the tape resequences everything once it is
+// sorted by time.
+func cancellationEvents(
+	seed string,
+	start time.Time,
+	arrivals []scenario.RunArrivalSpec,
+	cancellations []scenario.RunCancellationSpec,
+) ([]WorldEvent, error) {
+	workspaces := make(map[string]string, len(arrivals))
+	for _, arrival := range arrivals {
+		workspaces[arrival.Name] = arrival.Workspace
+	}
+	events := make([]WorldEvent, 0, len(cancellations))
+	for index, cancellation := range cancellations {
+		data, err := json.Marshal(RunCancellation{
+			Name:      cancellation.Run,
+			Workspace: workspaces[cancellation.Run],
+		})
+		if err != nil {
+			return nil, fmt.Errorf("encode Run cancellation %q: %w", cancellation.Run, err)
+		}
+		events = append(events, WorldEvent{
+			ID:       DeterministicID(seed, "event", "run-cancellation/"+cancellation.Run),
+			At:       start.Add(cancellation.At.Duration()),
+			Sequence: uint64(len(arrivals) + index + 1),
+			Kind:     EventRunCancelled,
+			Data:     data,
+		})
+	}
+	return events, nil
 }
 
 func sampleActualRuntimes(entropy Entropy, world scenario.WorldSpec, arrival scenario.RunArrivalSpec) (time.Duration, map[string]scenario.Duration, []Sample, error) {

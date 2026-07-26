@@ -303,12 +303,20 @@ type worldOperation struct {
 // The pull is named by the launch that asked for it, because an execution that
 // is released or terminated mid-transfer leaves nothing behind.
 type pendingPull struct {
-	offerID   string
-	runID     string
+	offerID string
+	runID   string
+	// launchKey names the thing waiting on these bytes: an execution for a pull
+	// a launch dispatched, and the prefetch's own identity for one Mercator
+	// asked for speculatively. It is what a cancellation is addressed by.
 	launchKey string
-	image     string
-	layers    []scenario.LayerSpec
-	fetched   []string
+	// source is why this content is moving: a launch that needs it now, or a
+	// prefetch for a Run that has not been admitted. It travels onto the
+	// retention the ledger records, because a host warmed by preparation and a
+	// host warmed by execution are different facts about that machine.
+	source  string
+	image   string
+	layers  []scenario.LayerSpec
+	fetched []string
 	// bytes is the room this pull has already claimed on the host. Content in
 	// flight is not resident and its space is not free either.
 	bytes       int64
@@ -320,9 +328,11 @@ type pendingPull struct {
 // when the launch that wanted it was accepted. Like a pull it is named by the
 // launch, because an execution released mid-transfer leaves nothing behind.
 type pendingReplica struct {
-	offerID    string
-	runID      string
-	launchKey  string
+	offerID   string
+	runID     string
+	launchKey string
+	// source is why these bytes are moving, exactly as it is on a pull.
+	source     string
 	artifactID string
 	// bytes is the room this copy has already claimed on the host, for the same
 	// reason a pull claims its own.
@@ -390,6 +400,18 @@ type simulatedWorld struct {
 	// a thing it cannot express.
 	cacheMounts map[string]map[string]CacheMountState
 
+	// prewarm is what this world lets the control plane have in flight for work
+	// it has not admitted. The world does not enforce it: a machine asked for
+	// six transfers performs six, which is the whole reason the bound is a rule
+	// about Mercator rather than a property of the capacity.
+	prewarm *scenario.PrewarmSpec
+
+	// prepared is every preparation identity this world has already taken on,
+	// so a redelivered desired set changes nothing. It is never cleared: a
+	// prefetch Mercator abandoned was abandoned because it stopped wanting the
+	// content, and content it wants again arrives with the launch that needs it.
+	prepared map[string]bool
+
 	executions  map[string]externalExecution
 	operations  map[string]worldOperation
 	launchCount map[string]int
@@ -413,6 +435,8 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		seededLocality: map[string]map[string]bool{},
 		seededReplicas: map[string]map[string]bool{},
 		cacheMounts:    map[string]map[string]CacheMountState{},
+		prewarm:        tape.InitialWorld.Prewarm,
+		prepared:       map[string]bool{},
 		executions:     map[string]externalExecution{},
 		operations:     map[string]worldOperation{},
 		launchCount:    map[string]int{},
@@ -760,7 +784,7 @@ func (world *simulatedWorld) settlePulls() {
 			pull.runID,
 			pull.launchKey,
 			"",
-			map[string]any{"image": pull.image, "offer_id": pull.offerID},
+			map[string]any{"image": pull.image, "offer_id": pull.offerID, "source": pull.source},
 			map[string]any{"retained_digests": pull.fetched},
 			"",
 		)
@@ -779,7 +803,7 @@ func (world *simulatedWorld) settleReplicas() {
 			remaining = append(remaining, fetch)
 			continue
 		}
-		world.keepReplica(fetch.artifactID, fetch.offerID, fetch.runID, fetch.launchKey, "object_store", fetch.completesAt)
+		world.keepReplica(fetch.artifactID, fetch.offerID, fetch.runID, fetch.launchKey, fetch.source, fetch.completesAt)
 	}
 	world.replicating = remaining
 }
@@ -962,6 +986,8 @@ type worldFacts struct {
 	ArtifactCatalog map[string]domain.ArtifactVersion
 	SeededLocality  map[string]map[string]bool
 	SeededReplicas  map[string]map[string]bool
+	// Prewarm is the bound this world states on speculative preparation.
+	Prewarm *scenario.PrewarmSpec
 }
 
 func (world *simulatedWorld) invariantFacts() worldFacts {
@@ -970,6 +996,7 @@ func (world *simulatedWorld) invariantFacts() worldFacts {
 	facts := worldFacts{
 		Runs:            cloneMap(world.runs),
 		ArtifactCatalog: world.store.versions(),
+		Prewarm:         world.prewarm,
 		SeededLocality:  make(map[string]map[string]bool, len(world.seededLocality)),
 		SeededReplicas:  make(map[string]map[string]bool, len(world.seededReplicas)),
 	}
@@ -1491,6 +1518,7 @@ func (world *simulatedWorld) pullRunImage(execution externalExecution, image str
 			offerID:     execution.OfferID,
 			runID:       execution.RunID,
 			launchKey:   execution.LaunchKey,
+			source:      "launch",
 			image:       image,
 			layers:      layers,
 			fetched:     fetched,
@@ -1547,6 +1575,7 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 				offerID:     execution.OfferID,
 				runID:       execution.RunID,
 				launchKey:   execution.LaunchKey,
+				source:      source,
 				artifactID:  artifactID,
 				bytes:       version.SizeBytes,
 				completesAt: completesAt,

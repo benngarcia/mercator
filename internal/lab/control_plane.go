@@ -26,8 +26,12 @@ type controlPlane struct {
 	// workspaces is every tenant this Blueprint runs work for. One Mercator
 	// serves all of them, which is the point: the machines are shared and the
 	// caches, Artifacts, and Runs on them are not.
-	workspaces    []string
-	orchestrator  *orchestrator.Orchestrator
+	workspaces   []string
+	orchestrator *orchestrator.Orchestrator
+	// prewarm is what this world's Blueprint allows the control plane to have in
+	// flight for work it has not admitted. A Blueprint that states none turns
+	// preparation off, which is every fixture written before it existed.
+	prewarm       orchestrator.PrewarmPolicy
 	restarts      uint64
 	faultPosition eventlog.GlobalPosition
 }
@@ -78,6 +82,7 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		ArtifactCatalog:             facts.ArtifactCatalog,
 		SeededLocality:              facts.SeededLocality,
 		SeededReplicas:              facts.SeededReplicas,
+		Prewarm:                     facts.Prewarm,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
 }
@@ -184,7 +189,12 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 	if err != nil {
 		return closeWith(err)
 	}
-	runtime := &controlPlane{storage: storage, world: world, workspaces: workspaces}
+	runtime := &controlPlane{
+		storage:    storage,
+		world:      world,
+		workspaces: workspaces,
+		prewarm:    prewarmPolicy(tape.InitialWorld.Prewarm),
+	}
 	runtime.restartOrchestrator()
 	return runtime, nil
 }
@@ -194,6 +204,11 @@ func (runtime *controlPlane) handle(ctx context.Context, event WorldEvent) error
 	switch event.Kind {
 	case EventRunArrived:
 		if err := runtime.handleRunArrival(ctx, event); err != nil {
+			return err
+		}
+		return runtime.applyEventFaults(ctx)
+	case EventRunCancelled:
+		if err := runtime.handleRunCancellation(ctx, event); err != nil {
 			return err
 		}
 		return runtime.applyEventFaults(ctx)
@@ -207,7 +222,22 @@ func (runtime *controlPlane) handleRunArrival(ctx context.Context, event WorldEv
 	if err := json.Unmarshal(event.Data, &arrival); err != nil {
 		return fmt.Errorf("decode Run arrival event %q: %w", event.ID, err)
 	}
-	return runtime.admitRun(ctx, arrival)
+	if err := runtime.admitRun(ctx, arrival); err != nil {
+		return err
+	}
+	_, err := runtime.orchestrator.Prewarm(ctx, workspaceID(arrival.Workspace))
+	return err
+}
+
+// prewarmPolicy is the Blueprint's bounds as the control plane's own restraint.
+func prewarmPolicy(spec *scenario.PrewarmSpec) orchestrator.PrewarmPolicy {
+	if spec == nil {
+		return orchestrator.PrewarmPolicy{}
+	}
+	return orchestrator.PrewarmPolicy{
+		MaxConcurrent: spec.MaxConcurrent,
+		MinInterval:   spec.MinInterval.Duration(),
+	}
 }
 
 // admitRun submits the arrival to Mercator. Every Run a Blueprint declares
@@ -216,6 +246,22 @@ func (runtime *controlPlane) handleRunArrival(ctx context.Context, event WorldEv
 // store, and a harness that withheld the Run would be answering that question on
 // Mercator's behalf and hiding the Run from every rule that watches admitted
 // work make progress.
+// handleRunCancellation is the caller withdrawing work it asked for. Mercator
+// answers it the way the public API does, because that is the path an operator
+// takes: the Run is cancelled, its queued Booking is released, and the next
+// reconciliation of the desired preparation set no longer names its content.
+func (runtime *controlPlane) handleRunCancellation(ctx context.Context, event WorldEvent) error {
+	var cancellation RunCancellation
+	if err := json.Unmarshal(event.Data, &cancellation); err != nil {
+		return fmt.Errorf("decode Run cancellation event %q: %w", event.ID, err)
+	}
+	workspace := workspaceID(cancellation.Workspace)
+	if _, err := runtime.orchestrator.CancelRun(ctx, workspace, "run-"+cancellation.Name, nil); err != nil {
+		return fmt.Errorf("cancel Lab Run %q: %w", cancellation.Name, err)
+	}
+	return runtime.advanceWorkspace(ctx, workspace)
+}
+
 func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) error {
 	runID := "run-" + arrival.Name
 	if err := runtime.world.prepareRun(runID, arrival); err != nil {
@@ -256,10 +302,17 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 // response it never got.
 func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace string) error {
 	_, err := runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
-	if !errors.Is(err, adapter.ErrLaunchIndeterminate) {
+	if errors.Is(err, adapter.ErrLaunchIndeterminate) {
+		_, err = runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
+	}
+	if err != nil {
 		return err
 	}
-	_, err = runtime.orchestrator.AdvanceOpenRuns(ctx, workspace)
+	// Preparation is reconciled after the Runs move, because what Mercator wants
+	// prepared is derived from where they ended up: a Booking that was just
+	// dispatched is no longer speculative, and a Run that was just cancelled is
+	// no longer worth a byte.
+	_, err = runtime.orchestrator.Prewarm(ctx, workspace)
 	return err
 }
 
@@ -281,6 +334,7 @@ func (runtime *controlPlane) restartOrchestrator() {
 		orchestrator.WithClock(runtime.world.nowTime),
 		orchestrator.WithImageManifests(runtime.world),
 		orchestrator.WithArtifactCatalog(runtime.world),
+		orchestrator.WithPrewarm(runtime.world, runtime.prewarm),
 		orchestrator.WithRentalSchedules(runtime.storage.RentalSchedules()),
 		orchestrator.WithRunProjection(runtime.storage.Runs()),
 	)

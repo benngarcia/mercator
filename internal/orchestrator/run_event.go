@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -16,6 +17,7 @@ type runState struct {
 	attempt                  *attemptData
 	launchIntent             *adapter.LaunchRequest
 	launchAccepted           bool
+	launchAcceptedAt         time.Time
 	launchFailure            *launchFailureData
 	attemptCount             int
 	excludedOfferSnapshotIDs []string
@@ -111,6 +113,7 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		state.attemptCount++
 		state.launchIntent = nil
 		state.launchAccepted = false
+		state.launchAcceptedAt = time.Time{}
 		state.launchFailure = nil
 
 	case EventLaunchIntentRecorded:
@@ -132,6 +135,13 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 			return invalidRunEvent(stored, reason)
 		}
 		state.launchAccepted = true
+		// When the provider took the launch, which is the only clock Mercator
+		// has for how long this host has been getting ready to run it. Nothing
+		// below the control plane reports "the image is still landing": a
+		// provider says running from the moment it accepts, so what a host is
+		// still doing for admitted work is Mercator's own prediction measured
+		// from here.
+		state.launchAcceptedAt = stored.OccurredAt
 
 	case EventLaunchIndeterminate, EventLaunchFailed:
 		var data launchFailureData

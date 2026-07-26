@@ -97,6 +97,9 @@ type Orchestrator struct {
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
 	runLocks           keyedMutex
+	prewarmer          Prewarmer
+	prewarmPolicy      PrewarmPolicy
+	prewarmed          prewarmMemory
 }
 
 type Adapter interface {

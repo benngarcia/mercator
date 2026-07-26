@@ -90,6 +90,10 @@ const (
 	// Runs: attached by identity, compared against the generation the
 	// application declared, and never shared between workspaces.
 	CapabilityCacheMounts Capability = "cache_mounts"
+	// CapabilityPrewarm is Mercator preparing a host for work it has queued but
+	// not yet admitted: pulling an image, fetching an Artifact, and stopping
+	// when the Run that wanted it goes away.
+	CapabilityPrewarm Capability = "prewarm"
 	// CapabilityLabExecution is deterministic execution beyond one Placement
 	// decision.
 	CapabilityLabExecution Capability = "lab_execution"
@@ -118,6 +122,7 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityArtifacts:              true,
 	CapabilityArtifactEvidence:       true,
 	CapabilityCacheMounts:            true,
+	CapabilityPrewarm:                true,
 	CapabilityLabExecution:           true,
 	CapabilityEffectLedger:           true,
 	CapabilityControlPlaneRestart:    true,
@@ -160,6 +165,38 @@ type WorldSpec struct {
 	Marketplace     []MarketplaceOfferSpec `json:"marketplace,omitempty"`
 	Paths           []PathSpec             `json:"paths,omitempty"`
 	RuntimeModels   []RuntimeModelSpec     `json:"runtime_models,omitempty"`
+	// Prewarm is what this world's control plane is allowed to have in flight
+	// for work it has not admitted. It is stated in the Blueprint because it is
+	// the whole difference between preparation that shortens a queued Run's
+	// start and preparation that starves the Run already running.
+	Prewarm *PrewarmSpec `json:"prewarm,omitempty"`
+}
+
+// PrewarmSpec bounds speculative preparation. Both bounds are the control
+// plane's own restraint rather than anything a machine enforces: a host asked
+// for six transfers at once performs six, and the one that suffers is whatever
+// was already fetching there.
+type PrewarmSpec struct {
+	// MaxConcurrent is how many pieces of content may be arriving speculatively
+	// across the fleet at one moment. One is the honest default for a world of
+	// one machine, because a node runs its commands in order and a second
+	// prefetch would queue behind the first anyway.
+	MaxConcurrent int `json:"max_concurrent"`
+	// MinInterval is the shortest gap between two speculative fetches starting.
+	// It bounds the rate rather than the depth: a control plane that issued a
+	// prepare on every reconcile tick would keep a machine permanently busy with
+	// content nobody has asked to run.
+	MinInterval Duration `json:"min_interval,omitzero"`
+}
+
+func (spec PrewarmSpec) validate() error {
+	if spec.MaxConcurrent < 1 {
+		return fmt.Errorf("prewarm needs a positive max_concurrent, because zero is prewarming turned off rather than bounded")
+	}
+	if spec.MinInterval.Duration() < 0 {
+		return fmt.Errorf("prewarm min_interval cannot run backwards")
+	}
+	return nil
 }
 
 // HostSpec is standing capacity Mercator does not control: a machine that
@@ -1252,6 +1289,11 @@ func (w WorldSpec) validate() error {
 	}
 	if err := w.validateDiffIDReporting(); err != nil {
 		return err
+	}
+	if w.Prewarm != nil {
+		if err := w.Prewarm.validate(); err != nil {
+			return err
+		}
 	}
 	artifacts := map[string]ArtifactSpec{}
 	for _, artifact := range w.Artifacts {

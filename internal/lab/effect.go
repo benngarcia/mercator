@@ -34,7 +34,18 @@ const (
 	// a cross-workspace touch of mutable state something the ledger can be caught
 	// doing, whether or not the workload went on to write anything.
 	OperationCacheMountAttach = "cache_mount.attach"
-	OperationImagePull        = "image.pull"
+	// The three preparation operations are Mercator getting a machine ready for
+	// work it has not admitted. They are separate from the pull a launch
+	// dispatches because they are separate acts with separate justifications: a
+	// launch fetches because a Run is starting here now, and a prefetch fetches
+	// because a Run may start here later. Only one of them may ever be in the
+	// way of the other, which is what the ledger has to be able to show.
+	// OperationNodePrepareAbandoned is Mercator stopping one, which is the only
+	// answer to speculative work whose reason went away.
+	OperationNodePrepareImage     = "node.prepare_image"
+	OperationNodePrepareArtifact  = "node.prepare_artifact"
+	OperationNodePrepareAbandoned = "node.prepare_abandoned"
+	OperationImagePull            = "image.pull"
 	// OperationImageRetained is content a host kept, recorded when the bytes
 	// landed. The pull is a command with a duration; retention is the fact that
 	// outlives it, and only one of the two can explain what a host holds.

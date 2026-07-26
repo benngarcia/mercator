@@ -23,6 +23,17 @@ type ArrivalPlan struct {
 	Runs     []RunArrivalSpec `json:"runs,omitempty"`
 	Periodic *RunFamilySpec   `json:"periodic,omitempty"`
 	Burst    *RunFamilySpec   `json:"burst,omitempty"`
+	// Cancellations is work withdrawn after it arrived. A Run that goes away
+	// before it ever executes is the one world in which speculative preparation
+	// has to stop, and the corpus had no way to write it down: every arrival ran
+	// or waited forever.
+	Cancellations []RunCancellationSpec `json:"cancellations,omitempty"`
+}
+
+// RunCancellationSpec withdraws one declared Run at one moment.
+type RunCancellationSpec struct {
+	Run string   `json:"run"`
+	At  Duration `json:"at"`
 }
 
 type RunArrivalSpec struct {
@@ -171,6 +182,31 @@ func (plan ArrivalPlan) validate(world WorldSpec) error {
 				"Artifact %q names producer %q, and Run %q is what publishes it",
 				artifact.ID, artifact.ProducedBy, producer,
 			)
+		}
+	}
+	return plan.validateCancellations(runs)
+}
+
+// validateCancellations refuses a withdrawal that names work this plan never
+// declared, or that arrives before the Run it withdraws. Both are fixtures that
+// would silently do nothing.
+func (plan ArrivalPlan) validateCancellations(runs []RunArrivalSpec) error {
+	arrivals := make(map[string]Duration, len(runs))
+	for _, arrival := range runs {
+		arrivals[arrival.Name] = arrival.At
+	}
+	withdrawn := map[string]bool{}
+	for _, cancellation := range plan.Cancellations {
+		at, declared := arrivals[cancellation.Run]
+		if !declared {
+			return fmt.Errorf("cancellation names unknown Run %q", cancellation.Run)
+		}
+		if withdrawn[cancellation.Run] {
+			return fmt.Errorf("Run %q is cancelled twice", cancellation.Run)
+		}
+		withdrawn[cancellation.Run] = true
+		if cancellation.At.Duration() < at.Duration() {
+			return fmt.Errorf("Run %q is cancelled before it arrives", cancellation.Run)
 		}
 	}
 	return nil
