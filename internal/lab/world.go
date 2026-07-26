@@ -618,7 +618,11 @@ func applyOfferWorldFacts(offer *domain.OfferSnapshot, world scenario.WorldSpec,
 			SampleCount: 1,
 			ObservedAt:  world.Start(),
 			ValidUntil:  world.Start().Add(24 * time.Hour),
-			Confidence:  1,
+			// How much a host stands behind its own measurement is the fixture's to
+			// state. Stamping certainty here made every published fact one Mercator
+			// had to act on, so no Blueprint could state the machine that publishes
+			// a number its own publisher disowns.
+			Confidence: path.Confidence(),
 		})
 	}
 }

@@ -287,13 +287,13 @@ type LinkSpeed struct {
 // while it is still valid as of the moment this offer was observed: a fact
 // carries its own confidence and its own expiry, and reading the mere existence
 // of one as a measurement is how an unmeasured constant becomes a certainty.
-// Absent a valid fact the answer is the standing assumption, saying so.
+// Absent an answer the reply is the standing assumption, saying so.
 func (offer OfferSnapshot) RegistryDownload() LinkSpeed {
 	for _, fact := range offer.Network.Download {
 		if fact.Scope != NetworkScopeRegistry || fact.Statistic != "p10" || fact.ValueMbps <= 0 {
 			continue
 		}
-		if !fact.ValidUntil.IsZero() && !fact.ValidUntil.After(offer.ObservedAt) {
+		if !fact.Answers(offer.ObservedAt) {
 			continue
 		}
 		return LinkSpeed{Mbps: fact.ValueMbps, Confidence: fact.Confidence}
@@ -388,6 +388,28 @@ type NetworkFact struct {
 	ObservedAt  time.Time    `json:"observed_at"`
 	ValidUntil  time.Time    `json:"valid_until"`
 	Confidence  float64      `json:"confidence"`
+}
+
+// Answers reports whether Mercator may act on this fact as of the moment it is
+// read. Two things stop it, and both are the publisher's own statement about
+// their own measurement.
+//
+// A publisher that puts no confidence in a number has not measured anything, and
+// a fact stated to be worth nothing is not a cheaper answer than no fact at all.
+// Acting on it computed a duration over a speed nobody stands behind and then
+// charged no doubt for it, because a confidence of zero records no doubt: a host
+// publishing 5 Gbps it disowned outranked the host that published 750 Mbps and
+// stood behind it, and satisfied a Run's hard p10 bound on the way past. A
+// confidence outside the unit interval is the same kind of statement and is not
+// an answer either.
+//
+// An expired fact is no answer for the reason it stopped being one: it describes
+// a link as it used to be.
+func (fact NetworkFact) Answers(at time.Time) bool {
+	if fact.Confidence <= 0 || fact.Confidence > 1 {
+		return false
+	}
+	return fact.ValidUntil.IsZero() || fact.ValidUntil.After(at)
 }
 
 type PriceModel struct {

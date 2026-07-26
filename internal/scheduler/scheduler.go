@@ -776,6 +776,12 @@ func pullSource(locality domain.LocalityState, manifest domain.ImageManifest, in
 	}
 }
 
+// downloadRequirementSatisfied is a Run's hard floor on how fast a candidate can
+// reach content, and it is met only by an answer somebody stands behind. The rule
+// that keeps a disowned fact out of the prediction keeps it out of here for the
+// same reason: a bound cleared by a number its own publisher put no confidence in
+// is a bound cleared by nothing, and a Run that states a floor has said it would
+// rather not run than run below it.
 func downloadRequirementSatisfied(now time.Time, req domain.NetworkDownloadRequirement, facts []domain.NetworkFact) bool {
 	if len(facts) == 0 {
 		return req.AllowUnknown
@@ -784,7 +790,7 @@ func downloadRequirementSatisfied(now time.Time, req domain.NetworkDownloadRequi
 		if fact.Scope != req.Scope || fact.Statistic != "p10" {
 			continue
 		}
-		if !fact.ValidUntil.IsZero() && !fact.ValidUntil.After(now) {
+		if !fact.Answers(now) {
 			continue
 		}
 		if req.MaxMeasurementAgeSeconds > 0 && now.Sub(fact.ObservedAt) > time.Duration(req.MaxMeasurementAgeSeconds)*time.Second {

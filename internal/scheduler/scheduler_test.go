@@ -901,3 +901,45 @@ func TestEqualPricesAreDecidedByWhatEachCandidateHolds(t *testing.T) {
 		t.Fatalf("the readier machine did not score lower, so the offer ID decided it: %+v", decision.Candidates)
 	}
 }
+
+// TestARunsDownloadFloorIsNotClearedByADisownedFact is the hard half of the same
+// rule the score follows. A Run that states a floor on how fast a candidate
+// reaches content has said it would rather not run than run below it, and a
+// publisher that puts no confidence in its own number has measured nothing. The
+// two offers here publish the same 5 Gbps: one stands behind it and clears the
+// floor, one disowns it and is refused, which is what a Run asked for when it set
+// AllowUnknown false.
+func TestARunsDownloadFloorIsNotClearedByADisownedFact(t *testing.T) {
+	now := time.Now().UTC()
+	workload := schedulerRevision()
+	stood := schedulerOffer("off_stood", now, 0.0002, 0)
+	stood.Network.Download[0].ValueMbps, stood.Network.Download[0].Confidence = 5000, 0.9
+	disowned := schedulerOffer("off_disowned", now, 0.0001, 0)
+	disowned.Network.Download[0].ValueMbps, disowned.Network.Download[0].Confidence = 5000, 0
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_floor",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{stood, disowned},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	if decision.SelectedOfferSnapshotID != "off_stood" {
+		t.Errorf("the placement chose %q, and the cheaper machine cleared the floor with a number nobody stands behind", decision.SelectedOfferSnapshotID)
+	}
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID != "off_disowned" {
+			continue
+		}
+		if candidate.Feasible {
+			t.Errorf("the disowned publisher is feasible, and its own publisher stated no confidence in the measurement that admitted it")
+		}
+		if len(candidate.Rejections) == 0 || candidate.Rejections[0].Code != "NETWORK_FACT_UNSATISFIED" {
+			t.Errorf("the disowned publisher was refused as %+v, and a Run reading its decision has to see which bound it missed", candidate.Rejections)
+		}
+	}
+}

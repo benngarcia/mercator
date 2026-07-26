@@ -66,7 +66,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		}
 	}
 	for _, offer := range spec.Marketplace {
-		if err := world.AddMachine(&fake.Machine{Offer: simMarketplaceOffer(offer)}); err != nil {
+		if err := world.AddMachine(&fake.Machine{Offer: simMarketplaceOffer(spec, offer)}); err != nil {
 			return nil, err
 		}
 		if len(offer.Facts) > 0 {
@@ -226,7 +226,7 @@ func (seeded *simSeededSchedules) elapsed(ctx context.Context, now time.Time) er
 func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Machine {
 	start := clock.Now()
 	machine := &fake.Machine{
-		Offer:            simRentalOffer(rental),
+		Offer:            simRentalOffer(spec, rental),
 		HeldLayers:       map[string]int64{},
 		HeldDiffIDs:      map[string]bool{},
 		ReportsDiffIDs:   rental.ReportsDiffIDs,
@@ -315,8 +315,8 @@ func simHeldCaches(held []HeldCacheSpec, at time.Time) map[string]domain.CacheMo
 // simRentalOffer builds the offer for a Rental: standing capacity Mercator holds
 // across Runs, which is what makes it reusable and the only thing warmth can
 // accumulate on.
-func simRentalOffer(rental RentalSpec) domain.OfferSnapshot {
-	offer := simOffer(rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
+func simRentalOffer(spec WorldSpec, rental RentalSpec) domain.OfferSnapshot {
+	offer := simOffer(spec, rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneReusable
 	// Whether the capacity is there is answered when the offer is read, because
@@ -331,7 +331,7 @@ func simRentalOffer(rental RentalSpec) domain.OfferSnapshot {
 // offer carries.
 func simHost(spec WorldSpec, host HostSpec, at time.Time) *fake.Machine {
 	machine := &fake.Machine{
-		Offer:            simHostOffer(host),
+		Offer:            simHostOffer(spec, host),
 		HeldLayers:       map[string]int64{},
 		HeldDiffIDs:      map[string]bool{},
 		HeldImages:       map[string]bool{},
@@ -350,8 +350,8 @@ func simHost(spec WorldSpec, host HostSpec, at time.Time) *fake.Machine {
 // machine exists, so the offer is standing and owes no provisioning; nothing on
 // it can hold content or run a second workload for Mercator, so it is in the
 // ephemeral lane and reports an inventory it cannot enumerate.
-func simHostOffer(host HostSpec) domain.OfferSnapshot {
-	offer := simOffer(host.ID, "conn_hosts", host.RatePerHourUSD, host.Resources)
+func simHostOffer(spec WorldSpec, host HostSpec) domain.OfferSnapshot {
+	offer := simOffer(spec, host.ID, "conn_hosts", host.RatePerHourUSD, host.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneEphemeral
 	offer.Pricing.SetupFeeUSD = host.Billing.SetupFeeUSD
@@ -363,8 +363,8 @@ func simHostOffer(host HostSpec) domain.OfferSnapshot {
 
 // simMarketplaceOffer builds the offer for a machine that does not exist yet, so
 // nothing an execution fetches there is anywhere a later Run can see it.
-func simMarketplaceOffer(spec MarketplaceOfferSpec) domain.OfferSnapshot {
-	offer := simOffer(spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Resources)
+func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.OfferSnapshot {
+	offer := simOffer(world, spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Resources)
 	offer.Kind = domain.OfferKindProvisionable
 	provisioning := &domain.Estimate{
 		Expected: spec.Provisioning.Expected.Duration().Seconds(),
@@ -420,7 +420,7 @@ func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 	return inventory
 }
 
-func simOffer(id, connectionID string, ratePerHourUSD float64, resources *ResourcesSpec) domain.OfferSnapshot {
+func simOffer(world WorldSpec, id, connectionID string, ratePerHourUSD float64, resources *ResourcesSpec) domain.OfferSnapshot {
 	inventory := HostInventory(resources)
 	return domain.OfferSnapshot{
 		ID:           id,
@@ -445,7 +445,35 @@ func simOffer(id, connectionID string, ratePerHourUSD float64, resources *Resour
 			RatePerSecondUSD: ratePerHourUSD / 3600,
 			Known:            true,
 		},
+		Network: simPathFacts(world, id),
 	}
+}
+
+// simPathFacts is what this machine has published about the links it crosses. A
+// Blueprint's paths are a statement about the world that has to reach Mercator:
+// this harness dropped them, so a fixture could declare a machine's measured
+// throughput and be scored against the standing assumption instead, with nothing
+// saying its statement went nowhere.
+func simPathFacts(world WorldSpec, offerID string) domain.NetworkFacts {
+	facts := domain.NetworkFacts{}
+	for _, path := range world.Paths {
+		if path.From != offerID {
+			continue
+		}
+		facts.Download = append(facts.Download, domain.NetworkFact{
+			Scope:       domain.NetworkScope(path.Scope),
+			Statistic:   "p10",
+			ValueMbps:   path.P10Mbps,
+			Source:      "scenario-world",
+			SampleCount: 1,
+			ObservedAt:  world.Start(),
+			ValidUntil:  world.Start().Add(24 * time.Hour),
+			// How much the host stands behind its own measurement is the fixture's
+			// to state, and a host that disowns its number has published nothing.
+			Confidence: path.Confidence(),
+		})
+	}
+	return facts
 }
 
 // findLayer resolves a digest a fixture seeds directly onto a Rental back to

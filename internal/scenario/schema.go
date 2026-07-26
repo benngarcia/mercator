@@ -533,11 +533,29 @@ type BillingSpec struct {
 	MinimumCharge *Duration `json:"minimum_charge,omitempty"`
 }
 
+// PathSpec is one link a machine in this world has published a measurement of.
+// It is the machine's own answer rather than world truth: what a fixture states
+// here is what the host says about itself, which is why it carries a confidence.
 type PathSpec struct {
 	From    string  `json:"from"`
 	To      string  `json:"to"`
 	Scope   string  `json:"scope"`
 	P10Mbps float64 `json:"p10_mbps"`
+	// StatedConfidence is how much the publisher of this measurement stands behind
+	// it. Omitted means fully, which is what a simulated host that measured its
+	// own link says. Zero is the case worth stating: a publisher that disowns its
+	// own number has measured nothing, and Mercator has to read that as the
+	// silence it is rather than as a fast answer nobody has to doubt.
+	StatedConfidence *float64 `json:"confidence,omitempty"`
+}
+
+// Confidence is how much this measurement's publisher stands behind it, and
+// certainty where the fixture stated nothing.
+func (spec PathSpec) Confidence() float64 {
+	if spec.StatedConfidence == nil {
+		return 1
+	}
+	return *spec.StatedConfidence
 }
 
 type RuntimeModelSpec struct {
@@ -1487,6 +1505,12 @@ func (w WorldSpec) validate() error {
 	for _, path := range w.Paths {
 		if !ids[path.From] || path.To == "" || path.Scope == "" || path.P10Mbps <= 0 {
 			return fmt.Errorf("paths need a known source, destination, scope, and positive p10_mbps")
+		}
+		// A confidence outside the unit interval is not a statement about how much
+		// a publisher stands behind their measurement, and a fixture that made one
+		// would be asserting about a fact Mercator refuses to read at all.
+		if path.Confidence() < 0 || path.Confidence() > 1 {
+			return fmt.Errorf("path %q states confidence %v, which is not a share of certainty", path.From+"/"+path.To, path.Confidence())
 		}
 		key := path.From + "/" + path.To + "/" + path.Scope
 		if pathIDs[key] {
