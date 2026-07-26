@@ -244,10 +244,77 @@ func assertExpect(session Session, start time.Time, bookings bookingNames, name 
 			fail("expected disposition %q, got %q", expect.Disposition, disposition)
 		}
 	}
+	failures = append(failures, assertStartMoment(events, name, expect)...)
 	for _, id := range sortedKeys(expect.Candidates) {
 		failures = append(failures, assertCandidate(rec, bookings, name, id, expect.Candidates[id])...)
 	}
 	return failures
+}
+
+// assertStartMoment reads the two moments a start latency is the difference
+// between, both out of the Run's own stream: when the provider took the launch,
+// and when the workload was observed beginning. It asserts nothing unless the
+// fixture states one of them, because most fixtures are about a placement decision
+// and never advance far enough for any container to start.
+func assertStartMoment(events []eventlog.StoredEvent, name string, expect ExpectSpec) []string {
+	if expect.StartLatency == nil && !expect.NoStartObserved {
+		return nil
+	}
+	fail := func(format string, args ...any) []string {
+		return []string{fmt.Sprintf("run %q: ", name) + fmt.Sprintf(format, args...)}
+	}
+	accepted, taken := launchAcceptedAt(events)
+	started, observed := executionStartedAt(events)
+	switch {
+	case expect.NoStartObserved && observed:
+		return fail("records a start moment of %s, and the fixture says nobody observed one", started.Format(time.RFC3339))
+	case expect.NoStartObserved:
+		return nil
+	case !taken:
+		return fail("has no accepted launch, so there is no moment to measure a start from")
+	case !observed:
+		return fail("records no start moment, so nothing observed its workload begin")
+	}
+	if problem := expect.StartLatency.Check(started.Sub(accepted).Seconds()); problem != "" {
+		return fail("start_latency_seconds: %s", problem)
+	}
+	return nil
+}
+
+// launchAcceptedAt is the provider's own accepted moment, which is when this
+// machine started getting ready.
+func launchAcceptedAt(events []eventlog.StoredEvent) (time.Time, bool) {
+	for index := len(events) - 1; index >= 0; index-- {
+		if events[index].Type != orchestrator.EventLaunchAccepted {
+			continue
+		}
+		var payload struct {
+			AcceptedAt time.Time `json:"accepted_at"`
+		}
+		if err := json.Unmarshal(events[index].Data, &payload); err != nil {
+			continue
+		}
+		return payload.AcceptedAt, true
+	}
+	return time.Time{}, false
+}
+
+// executionStartedAt is the moment the run stream records the workload beginning,
+// which exists only when something observed one.
+func executionStartedAt(events []eventlog.StoredEvent) (time.Time, bool) {
+	for index := len(events) - 1; index >= 0; index-- {
+		if events[index].Type != orchestrator.EventExecutionStarted {
+			continue
+		}
+		var payload struct {
+			StartedAt time.Time `json:"started_at"`
+		}
+		if err := json.Unmarshal(events[index].Data, &payload); err != nil {
+			continue
+		}
+		return payload.StartedAt, true
+	}
+	return time.Time{}, false
 }
 
 func assertBooking(rec recordedDecision, start time.Time, bookings bookingNames, name string, expect BookingExpectation) []string {

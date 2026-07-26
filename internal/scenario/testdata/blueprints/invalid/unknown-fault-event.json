@@ -59,7 +59,10 @@
         "rate_per_hour_usd": 2.0,
         "provisioning": {
           "expected": "4m",
-          "p90": "8m"
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
         }
       }
     ]

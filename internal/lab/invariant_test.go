@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 26 {
-		t.Fatalf("latest invariant results = %d, want 26", len(latest))
+	if len(latest) != 27 {
+		t.Fatalf("latest invariant results = %d, want 27", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -148,6 +148,25 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 			observation.MercatorEvents = []eventlog.CloudEvent{
 				{Subject: "runs/run-1", Type: "compute.run.closed.v1"},
 				{Subject: "runs/run-1", Type: "compute.run.requested.v1"},
+			}
+		},
+		// The world this exists to catch is the one the tree was in: the machine
+		// reported the moment its container really began, and the record filed the
+		// moment the launch was accepted. Nothing else in the registry reads either
+		// field, so a start derived from acceptance was invisible until this rule.
+		"safety.start_is_observed_not_inferred": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				{
+					Subject: "runs/run-1",
+					Type:    orchestrator.EventExternalStateObserved,
+					Data: []byte(`{"launch_key":"launch-1","phase":"running",` +
+						`"observed_at":"2026-07-24T12:05:00Z","started_at":"2026-07-24T12:04:10Z"}`),
+				},
+				{
+					Subject: "runs/run-1",
+					Type:    orchestrator.EventExecutionStarted,
+					Data:    []byte(`{"launch_key":"launch-1","started_at":"2026-07-24T12:00:00Z"}`),
+				},
 			}
 		},
 		"safety.idempotent_external_commands": func(observation *InvariantObservation) {

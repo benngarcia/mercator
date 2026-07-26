@@ -1,0 +1,79 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One Run, and two machines that would start it at opposite ends of the same ten minutes. The Rental holds the whole image and is a second from ready at 20 USD an hour. The machine that does not exist yet is a dollar an hour, and its provider publishes five minutes of provisioning: thirty seconds acquiring it, four minutes booting it, and thirty seconds enrolling Mercator's runtime on it. The Run is opportunistic work, which values a second of waiting at nothing, so it takes the cheap machine and waits. What this fixture is about is the two moments that then exist. At the moment the launch is accepted, nothing has observed a container, and the record states the start absent rather than stamping the acceptance as one. Ten minutes later the world has spent its three stages and moved 18.04GB of image, and the run stream records a start of 588.64 seconds after the launch was taken, which is the world's own moment and not Mercator's prediction of 300. Shortening the world's boot to nothing collapses the two moments and fails the fixture, which is what proves the start is observed rather than inferred: before this record existed, adapter.ExternalObservation carried no start timestamp at all and started minus accepted was zero for every Run in the log.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 20.0
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-cheap",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {
+          "expected": "5m",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "4m",
+          "agent_ready": "30s"
+        }
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "patient",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "opportunistic",
+        "expected_runtime": "10m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-cheap",
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_OPPORTUNISTIC"],
+        "disposition": "terminate",
+        "no_start_observed": true,
+        "candidates": {
+          "rental-warm": {
+            "feasible": true,
+            "provision_seconds": 0,
+            "pull_seconds": 0,
+            "image_locality": "hot"
+          },
+          "fresh-cheap": {
+            "feasible": true,
+            "provision_seconds": 300,
+            "pull_seconds": {"at_least": 285, "at_most": 292},
+            "image_locality": "unknown"
+          }
+        }
+      }
+    },
+    {
+      "advance": "10m"
+    },
+    {
+      "reconcile": "patient",
+      "expect": {
+        "outcome": "place",
+        "offer": "fresh-cheap",
+        "start_latency_seconds": {"at_least": 588, "at_most": 589}
+      }
+    }
+  ]
+}

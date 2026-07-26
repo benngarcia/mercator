@@ -102,11 +102,11 @@ func TestOpenCatalogPreservesPlacementClassifications(t *testing.T) {
 		counts[entry.Blueprint.Classification]++
 	}
 
-	if regressions != 30 {
-		t.Errorf("regression Blueprints = %d, want 30", regressions)
+	if regressions != 31 {
+		t.Errorf("regression Blueprints = %d, want 31", regressions)
 	}
-	if counts[ClassificationGreen] != 27 {
-		t.Errorf("green Blueprints = %d, want 27", counts[ClassificationGreen])
+	if counts[ClassificationGreen] != 28 {
+		t.Errorf("green Blueprints = %d, want 28", counts[ClassificationGreen])
 	}
 	if counts[ClassificationTarget] != 3 {
 		t.Errorf("target Blueprints = %d, want 3", counts[ClassificationTarget])

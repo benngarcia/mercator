@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -534,4 +535,124 @@ func TestARefusalToStartIsRecordedAndNotPricedAtL1(t *testing.T) {
 		t.Fatalf("the Run landed on %q, and with the two machines priced identically the record has nothing left to rank them by but the offer ID",
 			decision.SelectedOfferSnapshotID)
 	}
+}
+
+// TestTheRunStreamRecordsAStartNobodyInferred is the observed-start claim at L1.
+// The placement corpus can prove that a start latency read off the run stream is
+// the world's own moment; only this proves it through the real orchestrator, event
+// log, and Run projection, and only this can read the Run Bundle the calibration
+// this phase is building would be trained on.
+//
+// The Run takes the machine that does not exist yet. The world spends thirty
+// seconds acquiring it, four minutes booting it, thirty seconds enrolling the
+// runtime, and then 288.64 seconds moving 18.04GB of image onto it, so the
+// container begins 588.64 seconds after the launch was accepted. Mercator's own
+// prediction is a different number over the same content, and the Bundle holds
+// both: a calibration set whose two columns came from one piece of code would
+// teach nothing.
+func TestTheRunStreamRecordsAStartNobodyInferred(t *testing.T) {
+	execution := openConformanceExecution(t, "a-node-reports-when-the-container-really-started")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 6 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	decision := bookingDecisions(t, execution)["run-patient"]
+	if decision.SelectedOfferSnapshotID != "fresh-cheap" {
+		t.Fatalf("the Run landed on %q, and opportunistic work values a second of waiting at nothing", decision.SelectedOfferSnapshotID)
+	}
+
+	record := projectedRun(t, execution, "run-patient")
+	accepted := launchAcceptedMoment(t, execution, "run-patient")
+	if record.StartedAt == nil {
+		t.Fatalf("the Run projection carries no start moment, and its container has been running for minutes")
+	}
+	if !record.StartedAt.After(accepted) {
+		t.Fatalf("the Run started at %s and its launch was accepted at %s, and this machine did not exist when the launch was taken",
+			record.StartedAt.Format(time.RFC3339Nano), accepted.Format(time.RFC3339Nano))
+	}
+	if latency := record.StartedAt.Sub(accepted).Seconds(); latency < 588 || latency > 589 {
+		t.Fatalf("the recorded start is %.2fs after the launch was accepted, want five minutes of provisioning and 288.64s of image", latency)
+	}
+
+	rows := bundlePredictions(t, execution)
+	if len(rows) != 2 {
+		t.Fatalf("the Bundle holds %d predicted-versus-actual records for one Run: %+v", len(rows), rows)
+	}
+	start := rows["start_latency_seconds"]
+	if start.ActualSource != "run_stream.execution_started" {
+		t.Fatalf("the start actual came from %q, and the only admissible source is a moment somebody observed", start.ActualSource)
+	}
+	if start.ActualSeconds < 588 || start.ActualSeconds > 589 {
+		t.Fatalf("the Bundle records a start actual of %.2fs", start.ActualSeconds)
+	}
+	predicted := candidateFor(t, decision, "fresh-cheap").Estimates.StartSeconds.Expected
+	if start.PredictedSeconds != predicted {
+		t.Fatalf("the Bundle predicts %.2fs and the decision it was taken on predicted %.2fs", start.PredictedSeconds, predicted)
+	}
+	if start.PredictedSeconds == start.ActualSeconds {
+		t.Fatalf("the prediction and the actual are both %.2fs, and two numbers from one piece of code calibrate nothing", predicted)
+	}
+}
+
+func projectedRun(t *testing.T, execution *Execution, runID string) domain.RunRecord {
+	t.Helper()
+	records, err := execution.runtime.allRuns(context.Background())
+	if err != nil {
+		t.Fatalf("read Run projection: %v", err)
+	}
+	for _, record := range records {
+		if record.ID == runID {
+			return record
+		}
+	}
+	t.Fatalf("no Run %q in the projection", runID)
+	return domain.RunRecord{}
+}
+
+func launchAcceptedMoment(t *testing.T, execution *Execution, runID string) time.Time {
+	t.Helper()
+	stored, err := execution.runtime.mercatorEvents(context.Background())
+	if err != nil {
+		t.Fatalf("read Mercator events: %v", err)
+	}
+	for _, event := range stored {
+		cloud := event.CloudEvent()
+		if cloud.Type != orchestrator.EventLaunchAccepted || cloud.CorrelationID != runID {
+			continue
+		}
+		var payload struct {
+			AcceptedAt time.Time `json:"accepted_at"`
+		}
+		if err := json.Unmarshal(cloud.Data, &payload); err != nil {
+			t.Fatalf("decode launch receipt: %v", err)
+		}
+		return payload.AcceptedAt
+	}
+	t.Fatalf("Run %q has no accepted launch", runID)
+	return time.Time{}
+}
+
+func bundlePredictions(t *testing.T, execution *Execution) map[string]predictionActualRecord {
+	t.Helper()
+	bundle, err := execution.Export(context.Background())
+	if err != nil {
+		t.Fatalf("export Run Bundle: %v", err)
+	}
+	rows := map[string]predictionActualRecord{}
+	for _, line := range strings.Split(strings.TrimSpace(string(bundleEntryData(t, bundle, "predictions.jsonl"))), "\n") {
+		var record predictionActualRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode prediction record %q: %v", line, err)
+		}
+		rows[record.Metric] = record
+	}
+	return rows
 }

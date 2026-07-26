@@ -799,6 +799,20 @@ type ExpectSpec struct {
 	// Disposition asserts the recorded cleanup intent on the launch intent:
 	// "release" for standing rentals, "terminate" for provisioned hosts.
 	Disposition string `json:"disposition,omitempty"`
+	// StartLatency asserts how long this Run waited between its launch being
+	// accepted and its workload actually beginning, read out of Mercator's own run
+	// stream. It is the only way this corpus can say that a start is a moment
+	// somebody observed rather than the moment the launch was taken: a fixture that
+	// says the world spends five minutes making a machine and then asserts nothing
+	// here would go green against a control plane that recorded the acceptance as
+	// the start.
+	StartLatency *Bound `json:"start_latency_seconds,omitempty"`
+	// NoStartObserved asserts that nothing reported a start moment for this Run, so
+	// the record states the stage absent. It is its own field rather than a bound of
+	// zero because those are different sentences, and the difference is the whole
+	// point: zero is a workload that began the instant its launch was taken, and
+	// this is a workload nobody saw begin.
+	NoStartObserved bool `json:"no_start_observed,omitempty"`
 	// Candidates assert the per-candidate evidence the decision weighed,
 	// keyed by rental or marketplace offer ID.
 	Candidates map[string]CandidateExpectation `json:"candidates,omitempty"`
