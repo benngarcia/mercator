@@ -255,10 +255,15 @@ func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer dom
 // and to a machine whose provider was certain it refuses every start. Doubt about
 // an answer the score does not use prices the absence of a price, and what a
 // refusal is worth belongs to the term that predicts a redo.
+//
+// Which answers those are is declared by domain.ScoredAnswers rather than by this
+// list, and safety.doubt_only_the_answers_the_score_reads holds every recorded
+// decision to the declaration. The rule stated in a comment beside the one
+// producer is the shape the reliability entry survived a phase in.
 func confidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Confidence {
 	var stated []domain.Confidence
 	for _, answer := range []domain.Confidence{
-		{Answer: "capacity", Value: offer.Capacity.Confidence},
+		{Answer: domain.AnswerCapacity, Value: offer.Capacity.Confidence},
 		{Answer: domain.StageImageFetch.ConfidenceAnswer(), Value: estimates.Stages.ImageFetch.Confidence},
 		{Answer: domain.StageUnpack.ConfidenceAnswer(), Value: estimates.Stages.Unpack.Confidence},
 		{Answer: domain.StageArtifactFetch.ConfidenceAnswer(), Value: estimates.Stages.ArtifactFetch.Confidence},

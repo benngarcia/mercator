@@ -177,7 +177,7 @@ func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnaps
 func referenceConfidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Confidence {
 	var stated []domain.Confidence
 	for _, answer := range []domain.Confidence{
-		{Answer: "capacity", Value: offer.Capacity.Confidence},
+		{Answer: domain.AnswerCapacity, Value: offer.Capacity.Confidence},
 		{Answer: domain.StageImageFetch.ConfidenceAnswer(), Value: estimates.Stages.ImageFetch.Confidence},
 		{Answer: domain.StageUnpack.ConfidenceAnswer(), Value: estimates.Stages.Unpack.Confidence},
 		{Answer: domain.StageArtifactFetch.ConfidenceAnswer(), Value: estimates.Stages.ArtifactFetch.Confidence},

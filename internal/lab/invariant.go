@@ -120,6 +120,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.transfer_rate_is_attributed", check: transferRateIsAttributed},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
 		invariantRule{id: "safety.score_is_reproducible_from_the_record", check: scoreIsReproducibleFromTheRecord},
+		invariantRule{id: "safety.doubt_only_the_answers_the_score_reads", check: doubtOnlyTheAnswersTheScoreReads},
 		invariantRule{id: "safety.promised_start_is_still_ahead", check: promisedStartIsStillAhead},
 		invariantRule{id: "safety.prewarm_yields_to_real_work", check: prewarmYieldsToRealWork},
 		invariantRule{id: "safety.prewarm_rate_within_bound", check: prewarmRateWithinBound},
@@ -1559,6 +1560,45 @@ func scoreIsReproducibleFromTheRecord(observation InvariantObservation) error {
 				"Run %q: candidate %q recorded a score of %.6f USD, and the terms recorded beside it at the weights the decision states derive %.6f: %s",
 				decision.RunID, candidate.OfferSnapshotID, candidate.ScoreUSD, derived, describeScoreTerms(decision, candidate),
 			)
+		}
+	}
+	return nil
+}
+
+// doubtOnlyTheAnswersTheScoreReads is the other half of reproducibility. The rule
+// above asks whether the arithmetic in the record adds up; this asks whether the
+// uncertainty term was entitled to charge for what it charged for.
+//
+// Doubt is charged as one minus a stated confidence, and a silence states nothing
+// and is charged nothing. So an answer the score never reads can only ever move a
+// candidate one way: it penalises the publisher that measured its machine and
+// stood behind the result, leaves alone the publisher that said nothing, and
+// leaves alone too the publisher certain its machine refuses every start. The
+// machine nobody has measured comes out ahead of both, which is the inverse of
+// modelling the unknown as uncertainty.
+//
+// A published reliability history sat in that list for a phase, doubted here and
+// priced nowhere, and no arithmetic check could see it: both models charged the
+// same doubt, so the score reproduced from the record exactly. What catches it is
+// asking what the answer was about, and domain.ScoredAnswers is where the score
+// says which questions it reads.
+func doubtOnlyTheAnswersTheScoreReads(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	scored := domain.ScoredAnswers()
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			for _, confidence := range candidate.Confidences {
+				if slices.Contains(scored, confidence.Answer) {
+					continue
+				}
+				return fmt.Errorf(
+					"Run %q: candidate %q was charged %.3f points of doubt about %q, and the score reads no answer to that; it reads %v",
+					decision.RunID, candidate.OfferSnapshotID, 1-confidence.Value, confidence.Answer, scored,
+				)
+			}
 		}
 	}
 	return nil

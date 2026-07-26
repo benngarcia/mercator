@@ -2660,6 +2660,17 @@ Phase 3 added:
   confidences a candidate's answers carried and the other counting facts read
   straight off the offer, and they agreed on every decision only because both were
   multiplied by zero.
+- `safety.doubt_only_the_answers_the_score_reads` (Lab invariant): every answer a
+  candidate recorded a confidence for is one `domain.ScoredAnswers` names, which is
+  the capacity claim and the eight stages of a launch. What it forbids is doubt
+  about a question the score reads no answer to. Such a term can only run one way,
+  because a stated confidence is charged and a silence is not: it penalises the
+  publisher that measured its machine, leaves alone the publisher that said
+  nothing, and leaves alone the publisher certain its machine refuses every start,
+  so the machine nobody measured outranks both. A published reliability history sat
+  in that list for a phase, and the arithmetic rule above could not see it, because
+  both models charged the same doubt and the score reproduced from the record
+  exactly.
 - `a-class-mercator-does-not-know-is-refused` (conformance): one idle Rental
   holding the image, and one Run that says it is urgent. There is no urgent class,
   so the Run has stated no exchange rate at all, and Mercator refuses it where it

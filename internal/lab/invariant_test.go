@@ -35,8 +35,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 34 {
-		t.Fatalf("latest invariant results = %d, want 34", len(latest))
+	if len(latest) != 35 {
+		t.Fatalf("latest invariant results = %d, want 35", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -284,6 +284,14 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		},
 		"safety.score_is_reproducible_from_the_record": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{scoredOnATermReadOffTheOffer()}
+		},
+		// The world this exists to catch is the one the tree was in for a phase: a
+		// candidate charged a tenth of a point for the confidence beside a published
+		// risk history, which the score reads nothing of. The arithmetic rule above
+		// finds nothing wrong with it, because both models charged that doubt and
+		// the score reproduces from the record exactly.
+		"safety.doubt_only_the_answers_the_score_reads": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{doubtedAboutARateNothingPrices()}
 		},
 		// A Run queued behind a Booking with nothing left to project from. The
 		// latest start it was promised is the moment it was promised, so the
@@ -1654,6 +1662,52 @@ func TestAScoreOffTheOfferIsNotReproducibleFromTheRecord(t *testing.T) {
 	}
 }
 
+// TestDoubtIsChargedAboutOnlyWhatTheScoreReads is the doubt rule shown catching
+// the thing it exists for, at the same number the reproducibility rule beside it
+// finds nothing wrong with.
+//
+// Every case here charges one tenth of a point. What separates them is the
+// question that tenth was about: a stage of the launch is a term of the start the
+// score multiplies by a rate, and a published risk history is a fact this model
+// prices nowhere, so charging for the latter is a charge for having answered.
+// The capacity claim is here too, because a rule that only ever fires would be
+// as useless as one that never does.
+func TestDoubtIsChargedAboutOnlyWhatTheScoreReads(t *testing.T) {
+	for _, answer := range []struct {
+		name   string
+		lawful bool
+	}{
+		{domain.AnswerCapacity, true},
+		{domain.StageImageFetch.ConfidenceAnswer(), true},
+		{domain.StageApplicationReady.ConfidenceAnswer(), true},
+		{"reliability", false},
+		{"pull_seconds", false},
+	} {
+		t.Run(answer.name, func(t *testing.T) {
+			observation := InvariantObservation{
+				MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_doubt", domain.BookingDecision{
+					ID:    "dec_doubt",
+					RunID: "run-doubtful",
+					Candidates: []domain.CandidateDecision{{
+						OfferSnapshotID: "ask-steady",
+						Feasible:        true,
+						Confidences:     []domain.Confidence{{Answer: answer.name, Value: 0.9}},
+					}},
+				})},
+			}
+
+			err := doubtOnlyTheAnswersTheScoreReads(observation)
+
+			if answer.lawful && err != nil {
+				t.Fatalf("doubt about %q was called a violation: %v", answer.name, err)
+			}
+			if !answer.lawful && err == nil {
+				t.Fatalf("doubt about %q raised nothing", answer.name)
+			}
+		})
+	}
+}
+
 // borrowedHostScoredAt is one interactive placement on a machine nothing could
 // ask: 0.33 USD of rent, one second of launch at a hundredth of a dollar, and a
 // transfer estimate worth half of certainty.
@@ -1673,8 +1727,8 @@ func borrowedHostScoredAt(scoreUSD float64) eventlog.CloudEvent {
 				CostUSD:      domain.Estimate{Expected: 0.333333},
 			},
 			Confidences: []domain.Confidence{
-				{Answer: "capacity", Value: 1},
-				{Answer: "pull_seconds", Value: 0.5},
+				{Answer: domain.AnswerCapacity, Value: 1},
+				{Answer: domain.StageImageFetch.ConfidenceAnswer(), Value: 0.5},
 			},
 			ScoreUSD: scoreUSD,
 		}},
@@ -1685,6 +1739,33 @@ func borrowedHostScoredAt(scoreUSD float64) eventlog.CloudEvent {
 // scoredOnATermReadOffTheOffer is the decision the reproducibility rule forbids.
 func scoredOnATermReadOffTheOffer() eventlog.CloudEvent {
 	return borrowedHostScoredAt(1.243333)
+}
+
+// doubtedAboutARateNothingPrices is the decision the doubt rule forbids: a
+// machine whose provider published a risk history, charged for the confidence it
+// stated it at, on a model that prices no refusal. The candidate beside it is the
+// same placement with the same doubt about a duration the score does multiply,
+// which is what makes the rule a statement about the answer rather than about the
+// number.
+func doubtedAboutARateNothingPrices() eventlog.CloudEvent {
+	return bookingDecidedEvent("evt_reliability_doubt", domain.BookingDecision{
+		ID:      "dec_reliability_doubt",
+		RunID:   "run-measured",
+		Policy:  domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 600},
+		Weights: domain.ClassStandard.Weights(),
+		Candidates: []domain.CandidateDecision{{
+			OfferSnapshotID: "ask-steady",
+			Feasible:        true,
+			Reliability: domain.ReliabilityEvidence{
+				StartFailures: domain.StatedRate{Rate: 0, Confidence: 0.9},
+			},
+			Confidences: []domain.Confidence{
+				{Answer: domain.AnswerCapacity, Value: 1},
+				{Answer: "reliability", Value: 0.9},
+			},
+		}},
+		SelectionReasonCodes: []string{"FEASIBLE", domain.ClassStandard.SelectionReason()},
+	})
 }
 
 // refusedForHoldingNothing is the decision the locality rule forbids: a machine

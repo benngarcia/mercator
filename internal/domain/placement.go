@@ -76,6 +76,9 @@ func (weights ScoreWeights) ScoreUSD(candidate CandidateDecision, expectedRuntim
 // the less anybody stands behind and improves again when nobody speaks. That is
 // the inverse of modelling the unknown as uncertainty, and it is what happened
 // while the published reliability history was doubted here and priced nowhere.
+// ScoredAnswers is that rule written down, and
+// safety.doubt_only_the_answers_the_score_reads is what holds every recorded
+// decision to it.
 func (candidate CandidateDecision) Uncertainty() float64 {
 	shortfall := 0.0
 	for _, confidence := range candidate.Confidences {
@@ -84,6 +87,35 @@ func (candidate CandidateDecision) Uncertainty() float64 {
 		}
 	}
 	return shortfall
+}
+
+// AnswerCapacity is the claim that this machine can be had at all, named here
+// because the score reads it: an unavailable machine is infeasible and an
+// infeasible candidate is not for sale. It is a constant rather than a word
+// spelled at each site for the reason a stage's answer is derived from the
+// stage, which is that the same answer spelled independently in two places lets
+// a rule stated over one of them pass while the other says something else.
+const AnswerCapacity = "capacity"
+
+// ScoredAnswers is every question this score reads an answer to, and therefore
+// the whole of what Uncertainty may charge doubt about. The capacity claim
+// decides whether a candidate is for sale, and each stage of a launch is a term
+// of the start the two latency rates are multiplied by, so a shortfall in any of
+// them is doubt about a number the score used.
+//
+// Nothing else may appear beside a candidate as a confidence. An answer the score
+// does not read charges its publisher for having answered and charges silence
+// nothing, which ranks the machine nobody measured above the machine measured and
+// never seen to fail. A published reliability history was doubted here for a
+// phase on exactly that footing, and the term was invisible while every weight
+// that multiplied it was zero.
+func ScoredAnswers() []string {
+	answers := make([]string, 0, len(LaunchStages)+1)
+	answers = append(answers, AnswerCapacity)
+	for _, stage := range LaunchStages {
+		answers = append(answers, stage.ConfidenceAnswer())
+	}
+	return answers
 }
 
 // Priced reports whether the dollars in this candidate's cost estimate are a
