@@ -294,7 +294,7 @@ func (generator *blueprintGenerator) request(image string) RequestSpec {
 	maximum := Duration(10 * time.Minute)
 	return RequestSpec{
 		Image:           image,
-		Resources:       generatedResources(0),
+		Resources:       generatedRunResources(),
 		ExpectedRuntime: &expected,
 		MaxRuntime:      &maximum,
 		Objective:       "balanced",
@@ -365,6 +365,17 @@ func generatedResources(ordinal int) *ResourcesSpec {
 			Memory: ByteSize(24_000_000_000 + int64(ordinal%2)*8_000_000_000),
 		},
 	}
+}
+
+// generatedRunResources is what a generated Run asks for. Its disk floor is a
+// share of the machine rather than all of it, because a Run reserving every byte
+// a candidate has leaves nowhere for its own image, its inputs, and the caches it
+// declared, and a generator that produced only such Runs would generate worlds in
+// which nothing can be placed anywhere.
+func generatedRunResources() *ResourcesSpec {
+	resources := generatedResources(0)
+	resources.Disk = ByteSize(50_000_000_000)
+	return resources
 }
 
 func generatedCandidateIDs(rentals []RentalSpec, marketplace []MarketplaceOfferSpec) []string {

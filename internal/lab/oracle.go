@@ -78,8 +78,15 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 	}
 	required := input.Workload.Spec.Resources
 	if offer.Resources.CPUMillis < required.CPU.MinMillis ||
-		offer.Resources.MemoryBytes < required.Memory.MinBytes ||
-		offer.Resources.EphemeralDiskBytes < required.EphemeralDisk.MinBytes {
+		offer.Resources.MemoryBytes < required.Memory.MinBytes {
+		return false
+	}
+	// The room a Run reserved and the room its content takes are one question
+	// about one resource. The reference model asks it because production does: a
+	// model blind to the disk would call a machine with nowhere to put the
+	// dataset the warmest candidate in the world and disagree about the winner
+	// for a reason belonging to neither model.
+	if !referenceDisk(input, offer).Fits() {
 		return false
 	}
 	estimates := referenceEstimates(input, offer)
@@ -151,26 +158,13 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	provision := referenceProvision(offer)
 	work, locality := input.Image.StartWork(offer.Images)
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	// A candidate that cannot hold everything this Run needs gives up content it
-	// holds and fetches it again. The reference model accounts for it because
-	// production does: a model blind to the disk would call a machine with
-	// nowhere to put the dataset the warmest in the world and disagree about the
-	// winner for a reason belonging to neither model.
-	eviction := domain.DiskDemand{
-		FreeBytes:          offer.Resources.EphemeralDiskBytes,
-		ImageHeldBytes:     input.Image.ResidentBytes(work),
-		ArtifactHeldBytes:  domain.ArtifactResidentBytes(input.Artifacts, fetchBytes),
-		ImageFetchBytes:    work.TransferBytes,
-		ArtifactFetchBytes: fetchBytes,
-	}.Eviction()
-	work.TransferBytes += eviction.ImageBytes
 	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
-	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes + eviction.ArtifactBytes))
+	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes))
 	establishedPull := domain.Estimate{}
 	if locality != domain.LocalityUnknown {
 		establishedPull = pull
 	}
-	establishedBytes := eviction.ArtifactBytes
+	establishedBytes := int64(0)
 	for _, found := range evidence {
 		if found.Locality != domain.LocalityUnknown {
 			establishedBytes += found.FetchBytes
@@ -193,6 +187,35 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		StartSeconds:            referenceStart(queue, provision, pull, fetch),
 		EstablishedStartSeconds: referenceStart(queue, provision, establishedPull, establishedFetch),
 		CostUSD:                 domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed},
+	}
+}
+
+// referenceDisk is the reference model's own account of what this Run asks of
+// this candidate's disk. It derives every part from the same published facts the
+// scheduler reads, and asks the domain the same question, because a machine that
+// cannot hold the work is not a machine that costs more: nothing this Run could
+// give up frees a byte it does not need straight back.
+func referenceDisk(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.DiskDemand {
+	work, locality := input.Image.StartWork(offer.Images)
+	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	caches := domain.CacheLandBytes(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches)
+	established := int64(0)
+	for _, found := range evidence {
+		if found.Locality != domain.LocalityUnknown {
+			established += found.FetchBytes
+		}
+	}
+	if locality != domain.LocalityUnknown {
+		established += work.TransferBytes
+	}
+	if offer.Caches.Known {
+		established += caches
+	}
+	return domain.DiskDemand{
+		FreeBytes:            offer.Resources.EphemeralDiskBytes,
+		ReservedBytes:        input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
+		LandBytes:            work.TransferBytes + fetchBytes + caches,
+		EstablishedLandBytes: established,
 	}
 }
 

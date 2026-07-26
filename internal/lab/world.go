@@ -55,6 +55,10 @@ type externalExecution struct {
 	CachesAttached bool      `json:"caches_attached"`
 	CompletesAt    time.Time `json:"completes_at"`
 	OutputsStored  bool      `json:"outputs_stored"`
+	// ReservedDiskBytes is the ephemeral disk this Run declared it needs. The
+	// machine holds it back for as long as the workload is running, because a
+	// floor two Runs were both promised is a floor neither of them has.
+	ReservedDiskBytes int64 `json:"reserved_disk_bytes,omitempty"`
 }
 
 // ArtifactReplica is one host-local copy in World Truth: which machine holds
@@ -715,7 +719,11 @@ func (world *simulatedWorld) settleExecutions() {
 		if execution.OutputsStored || world.now.Before(execution.CompletesAt) {
 			continue
 		}
-		world.storeRunOutputs(execution, execution.CompletesAt)
+		if world.roomForOutputs(execution) {
+			world.storeRunOutputs(execution, execution.CompletesAt)
+		} else {
+			execution.Phase = adapter.ExternalPhaseFailed
+		}
 		execution.OutputsStored = true
 		world.executions[launchKey] = execution
 	}
@@ -1087,18 +1095,19 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		}
 	}
 	execution := externalExecution{
-		ExternalID:     "lab-" + request.AttemptID,
-		RunID:          request.RunID,
-		AttemptID:      request.AttemptID,
-		LaunchKey:      request.LaunchKey,
-		OwnershipToken: request.OwnershipToken,
-		RequestHash:    request.RequestHash,
-		OfferID:        request.SelectedOfferSnapshotID,
-		WorkspaceID:    request.WorkspaceID,
-		CacheMounts:    slices.Clone(request.CacheMounts),
-		Disposition:    request.Disposition,
-		Phase:          adapter.ExternalPhaseRunning,
-		AcceptedAt:     world.now,
+		ExternalID:        "lab-" + request.AttemptID,
+		RunID:             request.RunID,
+		AttemptID:         request.AttemptID,
+		LaunchKey:         request.LaunchKey,
+		OwnershipToken:    request.OwnershipToken,
+		RequestHash:       request.RequestHash,
+		OfferID:           request.SelectedOfferSnapshotID,
+		WorkspaceID:       request.WorkspaceID,
+		CacheMounts:       slices.Clone(request.CacheMounts),
+		Disposition:       request.Disposition,
+		Phase:             adapter.ExternalPhaseRunning,
+		AcceptedAt:        world.now,
+		ReservedDiskBytes: request.Resources.EphemeralDisk.MinBytes,
 	}
 	if offer.offer.Kind == domain.OfferKindStanding {
 		offer.offer.Capacity = domain.CapacityEvidence{Available: false, Confidence: 1}
@@ -1169,7 +1178,7 @@ func (world *simulatedWorld) Observe(_ context.Context, request adapter.ObserveR
 		world.recordObservationEffect(request, EffectCommandRejected, nil)
 		return adapter.ExternalObservation{}, adapter.ErrIdempotencyConflict
 	}
-	if !world.now.Before(execution.CompletesAt) {
+	if !world.now.Before(execution.CompletesAt) && execution.Phase == adapter.ExternalPhaseRunning {
 		execution.Phase = adapter.ExternalPhaseSucceeded
 		world.executions[request.LaunchKey] = execution
 	}
@@ -1182,6 +1191,10 @@ func (world *simulatedWorld) Observe(_ context.Context, request adapter.ObserveR
 	}
 	if observation.Phase == adapter.ExternalPhaseSucceeded {
 		exitCode := 0
+		observation.ExitCode = &exitCode
+	}
+	if observation.Phase == adapter.ExternalPhaseFailed {
+		exitCode := 1
 		observation.ExitCode = &exitCode
 	}
 	world.recordObservationEffect(request, EffectCommandAccepted, observation)
@@ -1391,12 +1404,22 @@ func (world *simulatedWorld) reservedBytes(offerID string) int64 {
 			reserved += fetch.bytes
 		}
 	}
+	// A running workload holds the room it declared it needs, which is what
+	// makes a disk floor a promise rather than a number two Runs can both be
+	// told. It goes back to the machine when the process exits, because what a
+	// workload wrote in its own scratch space goes with it.
+	for _, execution := range world.executions {
+		if execution.OfferID == offerID && !execution.OutputsStored {
+			reserved += execution.ReservedDiskBytes
+		}
+	}
 	return reserved
 }
 
 // launchFitsOnDisk is the machine deciding whether it has anywhere to put what
-// this launch needs: the image bytes it does not hold, the inputs it would have
-// to read out of the object store, and the caches the workload declared. A host
+// this launch needs: the room the Run declared for its own working state, the
+// image bytes the host does not hold, the inputs it would have to read out of
+// the object store, and the caches the workload declared. A host
 // that runs out of disk partway through does not run the workload slowly, it
 // fails with nothing to show, so the world refuses rather than creating content
 // its own ledger cannot hold. Mercator is meant to have priced such a candidate
@@ -1404,6 +1427,7 @@ func (world *simulatedWorld) reservedBytes(offerID string) int64 {
 func (world *simulatedWorld) launchFitsOnDisk(request adapter.LaunchRequest, arrival RunArrival) bool {
 	state := world.truth[request.SelectedOfferSnapshotID]
 	_, needed := state.missing(request.Image, world.images[request.Image].Layers)
+	needed += request.Resources.EphemeralDisk.MinBytes
 	for _, artifactID := range arrival.Request.ConsumesArtifacts {
 		if replica, held := world.replicas[artifactID][state.offer.ID]; !held || !replica.State.Usable() {
 			version, _ := world.store.entry(artifactID)
@@ -1557,6 +1581,25 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 // point: a consumer admitted on the first has been admitted on bytes that live
 // on one machine. Both moments are measured from when the process exited, which
 // is the only clock a workload's output has.
+// roomForOutputs is the machine deciding whether what this workload computed
+// will fit on it. Content a Run produces is content on somebody's disk, and no
+// one else could have accounted for it: a Run declares which Artifacts it
+// publishes and never how large they will be, so the only room it can be given
+// is the room it reserved. A workload that writes past it does not publish a
+// smaller Artifact, it fails with its disk full, which is what this world does
+// rather than creating content its own ledger cannot hold.
+func (world *simulatedWorld) roomForOutputs(execution externalExecution) bool {
+	arrival := world.runs[execution.RunID]
+	produced := int64(0)
+	for _, artifactID := range arrival.Request.ProducesArtifacts {
+		version, _ := world.store.entry(artifactID)
+		produced += version.SizeBytes
+	}
+	// The reservation is released by the same exit that writes the output, so
+	// the room the Run had is the room it still has.
+	return produced <= world.diskLedger(world.truth[execution.OfferID]).FreeBytes()+execution.ReservedDiskBytes
+}
+
 func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at time.Time) {
 	arrival := world.runs[execution.RunID]
 	for _, artifactID := range arrival.Request.ProducesArtifacts {

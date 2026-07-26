@@ -190,7 +190,7 @@ func runtimeBounds(workload domain.WorkloadRevision) (float64, float64) {
 
 func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.CandidateDecision {
 	work := estimateCandidate(input, offer)
-	rejections := feasibilityViolations(input, offer, work.estimates)
+	rejections := feasibilityViolations(input, offer, work)
 	estimates := work.estimates
 	score := estimates.CostUSD.Expected +
 		input.Weights.StartLatencyUSDPerSecond*estimates.StartSeconds.Expected +
@@ -218,12 +218,14 @@ func evaluateOffer(input SchedulingInput, offer domain.OfferSnapshot) domain.Can
 		// a cache of the same name in another workspace is a different cache, and
 		// it must never read as warmth on this Run's record.
 		CacheEvidence: domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
+		Disk:          work.disk,
 		Estimates:     estimates,
 		ScoreUSD:      round(score, 6),
 	}
 }
 
-func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Violation {
+func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, work candidateWork) []domain.Violation {
+	estimates := work.estimates
 	var violations []domain.Violation
 	workload := input.Workload
 	container := workload.Spec.Containers[0]
@@ -275,8 +277,20 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, es
 	if offer.Resources.MemoryBytes < workload.Spec.Resources.Memory.MinBytes {
 		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.memory", Required: workload.Spec.Resources.Memory.MinBytes, Offered: offer.Resources.MemoryBytes, Message: "Offer has insufficient memory."})
 	}
-	if offer.Resources.EphemeralDiskBytes < workload.Spec.Resources.EphemeralDisk.MinBytes {
-		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.ephemeral_disk", Required: workload.Spec.Resources.EphemeralDisk.MinBytes, Offered: offer.Resources.EphemeralDiskBytes, Message: "Offer has insufficient ephemeral disk."})
+	// The disk is one question. A Run's own reservation and the room its content
+	// takes are spent against the same bytes, so asking them separately admits a
+	// Run onto a machine whose whole floor turns out to be its own dataset, and
+	// asking about the floor alone lets a machine with nowhere to put forty
+	// gigabytes be selected and then refuse the launch with nothing in the record
+	// naming disk.
+	if !work.disk.Fits() {
+		violations = append(violations, domain.Violation{
+			Code:     "RESOURCE_INSUFFICIENT",
+			Path:     "resources.ephemeral_disk",
+			Required: work.disk.RequiredBytes(),
+			Offered:  work.disk.FreeBytes,
+			Message:  "Offer has less room left than the Run reserved plus the content it would have to land here.",
+		})
 	}
 	if !acceleratorRequirementsSatisfied(workload.Spec.Resources.Accelerators, offer) {
 		violations = append(violations, domain.Violation{Code: "RESOURCE_INSUFFICIENT", Path: "resources.accelerators", Required: workload.Spec.Resources.Accelerators, Offered: offer.Resources.Accelerators, Message: "Offer has insufficient accelerator inventory."})
@@ -359,6 +373,7 @@ type candidateWork struct {
 	estimates domain.CandidateEstimates
 	image     domain.LocalityState
 	artifacts []domain.ArtifactEvidence
+	disk      domain.DiskDemand
 }
 
 // contentWork is what one kind of content costs this candidate and how much of
@@ -388,40 +403,63 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 		},
 		image:     content.locality,
 		artifacts: content.evidence,
+		disk:      content.disk,
 	}
 }
 
 // candidateContent is everything this Run's content amounts to on one
 // candidate: what each kind of it the host was found holding, what it still
-// owes, and what the room it has left forces it to give up. The three answers
-// are made together because the disk they compete for is one resource, and
-// answered before either estimate prices anything, because what a machine has
-// to delete is not a property of the image or of the Artifact alone.
+// owes, and whether the room the machine has left can take it. The answers are
+// made together because the disk they compete for is one resource, and made
+// before either estimate prices anything, because whether the work fits here is
+// not a property of the image or of the Artifact alone.
 type candidateContent struct {
 	image    domain.ImageWork
 	locality domain.LocalityState
 	fetch    int64
 	evidence []domain.ArtifactEvidence
-	eviction domain.DiskEviction
+	disk     domain.DiskDemand
 }
 
 func contentFor(input SchedulingInput, offer domain.OfferSnapshot) candidateContent {
 	work, locality := input.Image.StartWork(offer.Images)
 	fetch, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	demand := domain.DiskDemand{
-		FreeBytes:          offer.Resources.EphemeralDiskBytes,
-		ImageHeldBytes:     input.Image.ResidentBytes(work),
-		ArtifactHeldBytes:  domain.ArtifactResidentBytes(input.Artifacts, fetch),
-		ImageFetchBytes:    work.TransferBytes,
-		ArtifactFetchBytes: fetch,
-	}
+	caches := domain.CacheLandBytes(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches)
 	return candidateContent{
 		image:    work,
 		locality: locality,
 		fetch:    fetch,
 		evidence: evidence,
-		eviction: demand.Eviction(),
+		disk: domain.DiskDemand{
+			FreeBytes:            offer.Resources.EphemeralDiskBytes,
+			ReservedBytes:        input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
+			LandBytes:            work.TransferBytes + fetch + caches,
+			EstablishedLandBytes: establishedLandBytes(work, locality, evidence, caches, offer.Caches.Known),
+		},
 	}
+}
+
+// establishedLandBytes is the content this candidate was established to still
+// need room for. Each kind is counted only where something enumerated it: a
+// manifest and an image inventory that both spoke, a version some host answered
+// about, a cache store that listed itself. Silence is priced in seconds and
+// never in a refusal, because the bytes a machine cannot describe may already be
+// on its disk.
+func establishedLandBytes(
+	work domain.ImageWork,
+	locality domain.LocalityState,
+	evidence []domain.ArtifactEvidence,
+	caches int64,
+	cachesKnown bool,
+) int64 {
+	bytes := establishedFetchBytes(evidence)
+	if locality != domain.LocalityUnknown {
+		bytes += work.TransferBytes
+	}
+	if cachesKnown {
+		bytes += caches
+	}
+	return bytes
 }
 
 // queueEstimate is how long work arriving now waits behind what is already
@@ -575,16 +613,15 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 // because a host said nothing are not, and neither is a duration over a rate
 // nothing measured, so either one caps the answer at AssumedLinkConfidence.
 //
-// A host too short of disk to hold everything this Run needs is charged for the
-// image content it would have to delete to make room, because content it gives
-// up is content it fetches again. That charge lands here rather than beside the
-// subtraction it corrects, because what a candidate owes before it can start is
-// one number and this is part of it.
+// Room is not priced here, or anywhere. A machine short of it is refused rather
+// than charged, because the only content it could give up to make room is
+// content this Run needs back, and deleting that frees exactly what fetching it
+// again consumes.
 func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, content candidateContent, modelVersion string) contentWork {
 	work, locality := content.image, content.locality
-	transfer := work.TransferBytes + content.eviction.ImageBytes
+	transfer := work.TransferBytes
 	estimate := domain.Estimate{
-		Source:       pullSource(locality, manifest, offer.Images, content.eviction),
+		Source:       pullSource(locality, manifest, offer.Images),
 		ModelVersion: modelVersion,
 	}
 	if transfer == 0 && work.UnpackBytes == 0 {
@@ -630,21 +667,14 @@ func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalitySt
 // Confidence follows the same rule transfers already follow: a host that owes
 // nothing is certainly zero seconds away, and every other answer crosses a link
 // nothing has measured.
-//
-// A host with nowhere to put all of this is charged for the copies it would
-// have to delete, on the same rule the image transfer is: bytes given up are
-// bytes read again. That part of the answer is established wherever the copies
-// it is charged against were, because a machine only gives up content something
-// said was there.
 func artifactEstimate(inventory domain.ArtifactInventory, content candidateContent, modelVersion string) contentWork {
-	evicted := content.eviction.ArtifactBytes
-	source := artifactSource(inventory, content.evidence, content.eviction)
+	source := artifactSource(inventory, content.evidence)
 	if len(content.evidence) == 0 {
 		return contentWork{predicted: domain.Estimate{Source: source, ModelVersion: modelVersion}}
 	}
 	return contentWork{
-		predicted:   objectStoreRead(content.fetch+evicted, source, modelVersion),
-		established: objectStoreRead(establishedFetchBytes(content.evidence)+evicted, source, modelVersion),
+		predicted:   objectStoreRead(content.fetch, source, modelVersion),
+		established: objectStoreRead(establishedFetchBytes(content.evidence), source, modelVersion),
 	}
 }
 
@@ -690,12 +720,10 @@ func objectStoreSeconds(bytes int64) float64 {
 // none, whose silence it was. A host that cannot enumerate its copies and a host
 // that enumerated and holds nothing are priced the same seconds and are
 // different problems for an operator.
-func artifactSource(inventory domain.ArtifactInventory, evidence []domain.ArtifactEvidence, eviction domain.DiskEviction) string {
+func artifactSource(inventory domain.ArtifactInventory, evidence []domain.ArtifactEvidence) string {
 	switch {
 	case len(evidence) == 0:
 		return ""
-	case eviction.ArtifactBytes > 0:
-		return diskEvictionSource
 	case inventory.Known:
 		return "artifact_inventory"
 	default:
@@ -703,21 +731,12 @@ func artifactSource(inventory domain.ArtifactInventory, evidence []domain.Artifa
 	}
 }
 
-// diskEvictionSource names the machine's own free disk as what this answer
-// rests on. It replaces the inventory that produced the subtraction, because a
-// reader who took the inventory at its word could not arrive at this number: the
-// bytes charged are bytes the host holds, and what put them back on the bill is
-// the room it has left rather than anything about the content.
-const diskEvictionSource = "disk_eviction"
-
 // localitySource names where this answer came from, and when there is no
 // answer, which silence it was. "Unknown" alone made a registry Mercator could
 // not read indistinguishable from a host that cannot enumerate itself, and
 // those are fixed by different people.
-func pullSource(locality domain.LocalityState, manifest domain.ImageManifest, inventory domain.ImageInventory, eviction domain.DiskEviction) string {
+func pullSource(locality domain.LocalityState, manifest domain.ImageManifest, inventory domain.ImageInventory) string {
 	switch {
-	case eviction.ImageBytes > 0:
-		return diskEvictionSource
 	case locality != domain.LocalityUnknown:
 		return "image_inventory"
 	case !manifest.Known && manifest.Unreadable != "":

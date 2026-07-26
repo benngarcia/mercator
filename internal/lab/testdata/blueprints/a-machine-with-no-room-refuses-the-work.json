@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "The only Rental in this world has twenty gigabytes of disk, and the Run placed on it needs a ten gigabyte image and a forty gigabyte dataset. The machine refuses the work rather than accepting it and filling up partway through, so nothing lands on that disk and the Run closes without ever executing. It is the Lab's own failing case for disk: a world that let this launch through would be a world whose ledger holds more than the machine does, which is what safety.disk_reservation_respected exists to catch.",
+  "summary": "The only capacity in this world is a machine Mercator borrows a slot on, which says nothing about what it holds, and it has twenty gigabytes of disk against a Run needing a ten gigabyte image and a forty gigabyte dataset. Silence never refuses a candidate, so Placement cannot establish that the content will not fit and selects it. The machine refuses the work rather than accepting it and filling up partway through, so nothing lands on that disk and the Run closes without ever executing. It is the Lab's own failing case for disk: a world that let this launch through would be a world whose ledger holds more than the machine does, which is what safety.disk_reservation_respected exists to catch.",
   "seed": "mercator-lab-no-room-v1",
   "world": {
     "images": {
@@ -22,9 +22,9 @@
         "size": "40GB"
       }
     ],
-    "rentals": [
+    "hosts": [
       {
-        "id": "cramped-rental",
+        "id": "cramped-host",
         "resources": {"disk": "20GB"},
         "rate_per_hour_usd": 2.0
       }

@@ -732,9 +732,16 @@ type CandidateDecision struct {
 	// term of this model has measured that. It is here so the record says what
 	// each candidate held, and so a reader can tell a machine that never did
 	// this work from one holding the generation before the one now asked for.
-	CacheEvidence []CacheEvidence    `json:"cache_evidence,omitempty"`
-	Estimates     CandidateEstimates `json:"estimates"`
-	ScoreUSD      float64            `json:"score_usd,omitempty"`
+	CacheEvidence []CacheEvidence `json:"cache_evidence,omitempty"`
+	// Disk is what this Run asked of this candidate's room and what the machine
+	// had left. It is the one answer in the record that can refuse a candidate
+	// outright, so it is stated rather than left to be inferred from a violation:
+	// a Run that landed nowhere has to be explainable, and a reader who could see
+	// only the seconds could not tell a machine that was passed over from one
+	// with nowhere to put the work.
+	Disk      DiskDemand         `json:"disk,omitzero"`
+	Estimates CandidateEstimates `json:"estimates"`
+	ScoreUSD  float64            `json:"score_usd,omitempty"`
 }
 
 type CandidateDisposition string

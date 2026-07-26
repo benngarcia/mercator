@@ -1,74 +1,64 @@
 package domain
 
-// DiskDemand is what one Run's content asks of one candidate's disk: how much
-// of each kind of content is already on the machine, how much of it still has
-// to arrive, and how much room the machine has left to put it in.
+// DiskDemand is what one Run asks of one candidate's disk: the room the machine
+// says it has left, the room the Run reserved for its own working state, and the
+// content that still has to land here before the workload can start.
 //
 // It is stated as one question over every kind of content at once because the
 // disk is one resource. What an image costs on a host depends on whether the
 // Artifact beside it fits, and pricing the two independently is how a machine
 // with nowhere to put forty gigabytes gets recorded as the warmest candidate in
 // the fleet.
+//
+// What a machine short of room cannot do is make room out of this Run's own
+// content. Deleting a layer this Run needs frees exactly as many bytes as
+// fetching it back consumes, so the disk ends where it began and the workload is
+// no closer to starting: a candidate whose content does not fit is not a
+// candidate that costs more, it is a machine that cannot run this Run. The only
+// content that would help is somebody else's, and Mercator neither observes it
+// nor commands its removal, because no runtime in this tree implements garbage
+// collection. When one does, what it reclaims will be a fact this demand can
+// read rather than a policy the scheduler assumes.
+//
+// It is recorded on the candidate for the same reason the localities are. A Run
+// refused for room has to say so out loud, and a reader who could see only the
+// seconds could not tell a machine that was passed over from one that had
+// nowhere to put the work.
 type DiskDemand struct {
-	// FreeBytes is the room the offer says this machine has. It is what a host
-	// can take without giving anything up, so everything below is measured
-	// against it.
-	FreeBytes int64
-	// ImageHeldBytes and ArtifactHeldBytes are this Run's content that is
-	// already resident here. Content nobody could enumerate is not held: an
-	// unknown inventory establishes nothing about what is on the disk, so it
-	// buys no room and is never charged for losing any.
-	ImageHeldBytes    int64
-	ArtifactHeldBytes int64
-	// ImageFetchBytes and ArtifactFetchBytes are what still has to land before
-	// the Run can start, which is exactly the room that has to be found.
-	ImageFetchBytes    int64
-	ArtifactFetchBytes int64
+	// FreeBytes is the room the offer says this machine has left. A machine
+	// that could not measure its disk offers none, which is the same silence
+	// every other unmeasured fact states, and it costs placements rather than
+	// enrollment.
+	FreeBytes int64 `json:"free_bytes"`
+	// ReservedBytes is the ephemeral disk the workload declared it needs. It is
+	// room for what the Run itself writes, so it is asked for beside the
+	// content rather than out of it: a Run admitted on a fifty gigabyte floor
+	// and then handed a machine whose fifty gigabytes are its own dataset was
+	// promised nothing.
+	ReservedBytes int64 `json:"reserved_bytes,omitempty"`
+	// LandBytes is everything this Run's content still has to put on this disk:
+	// the image bytes it must transfer, the Artifact versions it must read out
+	// of the object store, and the caches it declared that this host does not
+	// hold.
+	LandBytes int64 `json:"land_bytes,omitempty"`
+	// EstablishedLandBytes is the part of that somebody enumerated. A host that
+	// could not say what it holds is charged the whole content in seconds and
+	// establishes none of it here, because nothing said those bytes have to
+	// arrive and refusing a machine for a silence is what turns uncertainty into
+	// infeasibility.
+	EstablishedLandBytes int64 `json:"established_land_bytes,omitempty"`
 }
 
-// DiskEviction is the content a candidate would have to give up to make room
-// for what it still has to fetch. Giving it up is not free: it is content this
-// same Run was credited with holding, so whatever leaves has to be fetched
-// again before the workload can start, and the charge belongs on the estimate
-// beside the fetch it is part of.
-type DiskEviction struct {
-	ImageBytes    int64
-	ArtifactBytes int64
+// RequiredBytes is the room this candidate has to have for the Run to be
+// admitted here: what the Run reserved, plus the content somebody established it
+// would still have to land.
+func (demand DiskDemand) RequiredBytes() int64 {
+	return demand.ReservedBytes + demand.EstablishedLandBytes
 }
 
-// None reports that everything this Run needs fits in the room the machine
-// already has.
-func (eviction DiskEviction) None() bool {
-	return eviction.ImageBytes == 0 && eviction.ArtifactBytes == 0
-}
-
-// Eviction is what this candidate has to delete to fit what it must fetch.
-//
-// A machine short of room makes it by deleting something, and the only content
-// Mercator can say is on that disk is the content it credited this candidate
-// for holding. So a shortfall is charged against that credit and never beyond
-// it: a host may be asked to give up everything it holds of this Run's content,
-// which prices it exactly like a host that holds none of it, and never more.
-// Whatever else is on the machine is somebody else's content, and charging this
-// Run for fetching that back would be inventing an eviction policy Mercator has
-// no way to observe.
-//
-// Which kind of content goes is unknowable in the same way, so each kind gives
-// up the share of the shortfall its own residency represents. A proportion is
-// not an exchange rate: it states that Mercator cannot tell an image layer from
-// a dataset when a disk fills up, rather than presuming one is always the
-// victim.
-func (demand DiskDemand) Eviction() DiskEviction {
-	resident := demand.ImageHeldBytes + demand.ArtifactHeldBytes
-	shortfall := demand.ImageFetchBytes + demand.ArtifactFetchBytes - demand.FreeBytes
-	evicted := min(max(shortfall, 0), resident)
-	if evicted == 0 {
-		return DiskEviction{}
-	}
-	// The share is taken in floating point because these are byte counts: an
-	// eighteen gigabyte image beside three gigabytes of shortfall multiplies
-	// past what an int64 holds, and the wrapped answer prices a warm machine
-	// like a cold one in the other direction.
-	image := min(int64(float64(evicted)*(float64(demand.ImageHeldBytes)/float64(resident))), evicted)
-	return DiskEviction{ImageBytes: image, ArtifactBytes: evicted - image}
+// Fits reports whether this machine has the room the Run needs. It is asked of
+// established bytes only, so a host nobody could enumerate is never refused for
+// content it may well be holding already.
+func (demand DiskDemand) Fits() bool {
+	return demand.RequiredBytes() <= demand.FreeBytes
 }

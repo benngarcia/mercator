@@ -204,3 +204,23 @@ func CacheWarmth(workspaceID string, required []CacheMountRequirement, inventory
 	}
 	return evidence
 }
+
+// CacheLandBytes is the room the caches a Run declared would take on one host:
+// every generation this host does not already hold, at the size the application
+// said it expects it to take. A cache is storage the container runtime creates
+// when it attaches the mount, so a machine that has to make one has to have
+// somewhere to make it.
+//
+// The size is a declaration and never a measurement, because no container
+// runtime prices a volume without walking every volume on the host. A Run that
+// declares nothing asks for nothing, which is the same statement about its own
+// state that a Run declaring no ephemeral disk makes.
+func CacheLandBytes(workspaceID string, required []CacheMountRequirement, inventory CacheInventory) int64 {
+	bytes := int64(0)
+	for _, requirement := range required {
+		if !inventory.Holds(workspaceID, requirement) {
+			bytes += requirement.SizeBytes
+		}
+	}
+	return bytes
+}

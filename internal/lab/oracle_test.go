@@ -113,14 +113,14 @@ func TestTheReferenceModelPricesArtifactLocalityTheSameWayProductionDoes(t *test
 	}
 }
 
-// TestBothModelsChargeAHostForRoomItHasToMake keeps the two models together on
-// the disk. A machine holding 18GB of the image with ten gigabytes free has
-// nowhere to put a 40GB dataset, so it gives up content it holds and fetches it
-// again, and a reference model blind to that would call it the warmest candidate
-// in the world and disagree with production about the winner for a reason
-// belonging to neither model. It stays feasible either way, because locality is
-// never a hard constraint.
-func TestBothModelsChargeAHostForRoomItHasToMake(t *testing.T) {
+// TestBothModelsRefuseAHostTheContentDoesNotFitOn keeps the two models together
+// on the disk. A machine holding 18GB of the image with ten gigabytes free has
+// nowhere to put a 40GB dataset, and nothing it could delete helps: every byte
+// it gave up is a byte this Run needs back. So it is refused rather than priced,
+// and a reference model blind to that would call it the warmest candidate in the
+// world and disagree with production about the winner for a reason belonging to
+// neither model.
+func TestBothModelsRefuseAHostTheContentDoesNotFitOn(t *testing.T) {
 	input := smallSchedulingInput(t)
 	input.Artifacts = []domain.ArtifactVersion{labArtifactVersion(input.EvaluatedAt)}
 	for index := range input.Offers {
@@ -136,24 +136,54 @@ func TestBothModelsChargeAHostForRoomItHasToMake(t *testing.T) {
 		t.Fatalf("evaluate production scheduler: %v", err)
 	}
 	warm := candidateFor(t, production, "rental-warm")
-	reference := referenceEstimates(input, offerFor(t, input, "rental-warm"))
 
-	if !warm.Feasible {
-		t.Fatalf("a machine short of disk was refused outright: %+v", warm.Rejections)
+	if warm.Feasible {
+		t.Fatalf("a machine with 10GB free took a Run reading a 40GB dataset: %+v", warm.Disk)
 	}
-	// The whole 18GB it holds is content it has to give up, on top of the 80MB
-	// layer it never had, so its transfer is the image over again.
-	if want := float64((18_080_000_000)*8) / 1_000_000 / domain.DefaultRegistryDownloadMbps; warm.Estimates.PullSeconds.Expected < want {
-		t.Fatalf("production priced %v seconds of transfer, want at least %v: this host has to refetch what it deletes",
-			warm.Estimates.PullSeconds.Expected, want)
+	if refusal := warm.Rejections[0]; refusal.Code != "RESOURCE_INSUFFICIENT" || refusal.Path != "resources.ephemeral_disk" {
+		t.Fatalf("the machine was refused with %+v, and what it has no room for is content on its disk", refusal)
 	}
-	if reference.PullSeconds.Expected != warm.Estimates.PullSeconds.Expected {
-		t.Fatalf("reference priced %v seconds of image work, production priced %v",
-			reference.PullSeconds.Expected, warm.Estimates.PullSeconds.Expected)
+	if referenceFeasible(input, offerFor(t, input, "rental-warm")) {
+		t.Fatal("the reference model would have run 40GB of content on a machine with ten gigabytes free")
 	}
-	if reference.ArtifactSeconds.Expected != warm.Estimates.ArtifactSeconds.Expected {
-		t.Fatalf("reference priced %v seconds of Artifact fetch, production priced %v",
-			reference.ArtifactSeconds.Expected, warm.Estimates.ArtifactSeconds.Expected)
+	// The machine with room takes it, because nothing about a full neighbour
+	// changes what a candidate with space is worth.
+	if roomy := candidateFor(t, production, "fresh-4090"); !roomy.Feasible {
+		t.Fatalf("a machine with room was refused beside the one without: %+v", roomy.Rejections)
+	}
+}
+
+// TestNeitherModelRefusesAMachineForContentNobodyCouldDescribe is the other half
+// of the same rule, and the architectural one. A host that could not enumerate
+// itself is charged the whole content in seconds and never turned away for it:
+// the bytes nobody could describe may already be on its disk, and refusing a
+// machine for a silence is exactly what unknown locality must never become.
+func TestNeitherModelRefusesAMachineForContentNobodyCouldDescribe(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Artifacts = []domain.ArtifactVersion{labArtifactVersion(input.EvaluatedAt)}
+	for index := range input.Offers {
+		if input.Offers[index].ID != "rental-warm" {
+			continue
+		}
+		input.Offers[index].Images = domain.ImageInventory{}
+		input.Offers[index].Artifacts = domain.ArtifactInventory{}
+		input.Offers[index].Resources.EphemeralDiskBytes = 10_000_000_000
+	}
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	silent := candidateFor(t, production, "rental-warm")
+
+	if !silent.Feasible {
+		t.Fatalf("a machine nobody could enumerate was refused for room: %+v", silent.Rejections)
+	}
+	if !referenceFeasible(input, offerFor(t, input, "rental-warm")) {
+		t.Fatal("the reference model refused a machine for content nobody established it was missing")
+	}
+	if silent.Disk.LandBytes <= silent.Disk.EstablishedLandBytes {
+		t.Fatalf("the decision records %+v, and none of that content was established", silent.Disk)
 	}
 }
 

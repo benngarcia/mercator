@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Two machines hold the same 18GB layer of the same image at the same price, and one of them has nowhere to put the 40GB dataset the Run reads. Locality is never a hard constraint, so the cramped machine stays feasible: what changes is what it is priced. Room it has to make comes out of the content it holds, and content it gives up is content it fetches again, so its transfer estimate carries the eviction and it loses on cost rather than on refusal. The second Run states a disk floor of its own, which is a requirement rather than a preference, and the machine that cannot meet it is struck out with RESOURCE_INSUFFICIENT: until an offer stated real disk, that rejection was unreachable on capacity Mercator controls and every node in the fleet advertised zero bytes.",
+  "summary": "Two machines hold the same 18GB layer of the same image at the same price, and one of them has nowhere to put the 40GB dataset the Run reads. Room is not a preference the scheduler weighs down: nothing the cramped machine could delete helps, because every byte it gave up of this Run's content is a byte the Run needs back, so it is refused with RESOURCE_INSUFFICIENT naming its disk and the decision records the room it had beside what the Run asked of it. What may never refuse a machine is content nobody could enumerate, which is the other half of the same rule and is held in the Lab. The second Run states a disk floor of its own, which is room for what the Run itself writes and is asked for beside its content rather than out of it: until an offer stated real disk, that rejection was unreachable on capacity Mercator controls and every node in the fleet advertised zero bytes.",
   "classification": "green",
   "world": {
     "images": {
@@ -49,12 +49,10 @@
         "disposition": "release",
         "candidates": {
           "rental-cramped": {
-            "feasible": true,
+            "feasible": false,
             "image_locality": "partial",
-            "pull_seconds": {"at_least": 49, "at_most": 51},
-            "pull_source": "disk_eviction",
-            "artifact_seconds": {"at_least": 639, "at_most": 641},
-            "artifact_evidence": {"artifact:imagenet:v2.41": "miss"}
+            "artifact_evidence": {"artifact:imagenet:v2.41": "miss"},
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
           },
           "rental-roomy": {
             "feasible": true,
