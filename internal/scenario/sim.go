@@ -596,6 +596,9 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	if req.MaxStartLatency != nil {
 		spec.Placement.MaxP90StartSeconds = req.MaxStartLatency.Duration().Seconds()
 	}
+	if req.Download != nil {
+		spec.Network.Download = req.Download.Requirement()
+	}
 	spec.Artifacts = domain.ArtifactRequirements{
 		Consumes: slices.Clone(req.ConsumesArtifacts),
 		Produces: slices.Clone(req.ProducesArtifacts),

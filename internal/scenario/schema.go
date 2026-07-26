@@ -620,6 +620,14 @@ type RequestSpec struct {
 	// what makes it the one place a candidate can be struck out for what it was
 	// found to hold.
 	MaxStartLatency *Duration `json:"max_start_latency,omitempty"`
+	// Download is the floor this Run states on how fast a candidate reaches
+	// content over one link, and what it says about running on a machine nobody
+	// measured. The corpus could state no download floor at all, so no Blueprint
+	// could reach the half of that rule which decides feasibility, and a machine
+	// whose measurement its own publisher disowned could be struck out where an
+	// identical silent machine was admitted with nothing in the tree able to
+	// say so.
+	Download *DownloadRequirementSpec `json:"download,omitempty"`
 	// CacheMounts declare mutable, application-owned caches by their
 	// workspace-scoped names.
 	CacheMounts []CacheMountSpec `json:"cache_mounts,omitempty"`
@@ -628,6 +636,29 @@ type RequestSpec struct {
 	ConsumesArtifacts []string            `json:"consumes_artifacts,omitempty"`
 	ProducesArtifacts []string            `json:"produces_artifacts,omitempty"`
 	Phases            []WorkloadPhaseSpec `json:"phases,omitempty"`
+}
+
+// DownloadRequirementSpec is a Run's hard floor on how fast a candidate reaches
+// content over one link, stated in the same terms a host publishes: the scope of
+// the link and its pessimistic quantile.
+type DownloadRequirementSpec struct {
+	Scope      string  `json:"scope"`
+	MinP10Mbps float64 `json:"min_p10_mbps"`
+	// AllowUnknown says this Run would rather run on a machine nobody has
+	// measured than not run at all. It is what a fixture states to put the two
+	// silences beside each other: a host that published nothing and a host whose
+	// published number its own publisher disowned have to buy their publisher the
+	// same thing.
+	AllowUnknown bool `json:"allow_unknown,omitempty"`
+}
+
+// Requirement is this floor in the control plane's own vocabulary.
+func (spec DownloadRequirementSpec) Requirement() *domain.NetworkDownloadRequirement {
+	return &domain.NetworkDownloadRequirement{
+		Scope:        domain.NetworkScope(spec.Scope),
+		MinP10Mbps:   spec.MinP10Mbps,
+		AllowUnknown: spec.AllowUnknown,
+	}
 }
 
 // CacheMountSpec is one mutable cache a Run declares. Its identity is the name,
@@ -1778,6 +1809,11 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 		// disagreeing about where content comes from.
 		if artifacts[artifactID].Prepublished() {
 			return fmt.Errorf("request produces Artifact %q, which the world says was published before it started", artifactID)
+		}
+	}
+	if download := req.Download; download != nil {
+		if download.Scope == "" || download.MinP10Mbps <= 0 {
+			return fmt.Errorf("a download floor names the scope of the link and a positive min_p10_mbps")
 		}
 	}
 	cacheMounts := map[string]bool{}
