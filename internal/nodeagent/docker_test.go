@@ -672,7 +672,14 @@ esac
 	if facts.Host.Disk.TotalBytes != total {
 		t.Errorf("disk total = %d, and the filesystem holding %s has %d", facts.Host.Disk.TotalBytes, root, total)
 	}
-	if facts.Host.Disk.FreeBytes != free {
+	// Free space moves. Anything else on this machine writing to the same
+	// filesystem changes it between the node's read and this one, and on a busy
+	// host that happens within the same millisecond: this case failed on a
+	// twenty-four core Linux box running the rest of the suite beside it, twelve
+	// kilobytes apart. What the case is about is which filesystem was measured,
+	// and the total above establishes that exactly, so the free bytes are held to
+	// the same filesystem's answer rather than to the same instant of it.
+	if drift := facts.Host.Disk.FreeBytes - free; drift < -total/100 || drift > total/100 {
 		t.Errorf("disk free = %d, and the filesystem holding %s has %d available", facts.Host.Disk.FreeBytes, root, free)
 	}
 }
