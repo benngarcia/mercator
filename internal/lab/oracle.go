@@ -54,11 +54,16 @@ func validateSmallWorld(input scheduler.SchedulingInput) error {
 		return fmt.Errorf("small-world oracle requires evaluated_at and exactly one container")
 	}
 	container := input.Workload.Spec.Containers[0]
+	// A world this fleet has already measured is refused rather than modelled.
+	// The generated cases this oracle grades are single decisions in worlds with
+	// no launch behind them, so a history here would mean the generator started
+	// producing a world the reference model has no independent account of, and
+	// the two models would agree because one of them stopped having an opinion.
 	if len(container.Ports) > 0 ||
 		len(input.Workload.Spec.Resources.Accelerators) > 0 ||
 		input.Workload.Spec.Network.Download != nil ||
-		len(input.LatencyEstimates) > 0 {
-		return fmt.Errorf("small-world oracle does not support ports, accelerators, network requirements, or measured latency overrides")
+		!input.History.Empty() {
+		return fmt.Errorf("small-world oracle does not support ports, accelerators, network requirements, or a measured launch history")
 	}
 	return nil
 }

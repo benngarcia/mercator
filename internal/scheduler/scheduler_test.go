@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/prediction"
 )
 
 func TestSchedulerSelectsLowestDeterministicScore(t *testing.T) {
@@ -464,25 +465,66 @@ func TestTheClassPricesTheDoubtInTheAnswersItWasGiven(t *testing.T) {
 	}
 }
 
-func TestSchedulerUsesLatencyEstimateOverrides(t *testing.T) {
+// TestAMeasuredStageIsAnsweredFromTheMachineAndNotFromTheListing is the whole
+// point of keying a history on what recurs, asked of the scheduler directly. The
+// machine was measured under one listing ID and is offered under another, which
+// is what a marketplace search does, and the answer has to arrive anyway.
+func TestAMeasuredStageIsAnsweredFromTheMachineAndNotFromTheListing(t *testing.T) {
 	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
-	offer := schedulerOffer("off_latency", now, 0.00010, 40)
+	measured := schedulerOffer("off_ask_11111", now, 0.00010, 0)
+	measured.MachineID = "machine-77"
+	republished := schedulerOffer("off_ask_99999", now, 0.00010, 0)
+	republished.MachineID = "machine-77"
+	image := schedulerRevision().Spec.Containers[0].Image
+
 	decision, err := New().Evaluate(context.Background(), SchedulingInput{
 		RunID:        "run_1",
 		Workload:     schedulerRevision(),
-		Offers:       []domain.OfferSnapshot{offer},
+		Offers:       []domain.OfferSnapshot{republished},
+		Image:        domain.ImageManifest{Digest: image},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
-		LatencyEstimates: map[string]domain.Estimate{
-			"off_latency": {Expected: 3, P50: 2, P90: 5, Source: "latency_estimator", SampleCount: 2, ModelVersion: "latency-v1"},
-		},
+		History: prediction.NewHistory([]prediction.Observation{{
+			Candidate: domain.CandidateIdentityOf(measured, image),
+			Stage:     domain.StageApplicationReady,
+			Seconds:   42,
+		}}),
 	})
+
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
-	candidate := findCandidate(t, decision, "off_latency")
-	if candidate.Estimates.StartSeconds.Expected != 3 || candidate.Estimates.StartSeconds.Source != "latency_estimator" {
-		t.Fatalf("expected latency override to feed scheduler, got %+v", candidate.Estimates.StartSeconds)
+	ready := findCandidate(t, decision, "off_ask_99999").Estimates.Stages.ApplicationReady
+	if ready.Level != domain.LevelExactCandidate || ready.SampleCount != 1 || ready.Expected != 42 {
+		t.Fatalf("the machine was measured at 42s and its next listing was answered %+v", ready)
+	}
+	if strings.Contains(ready.Key, "off_ask_") {
+		t.Fatalf("the answer names the listing %q, and a listing does not recur", ready.Key)
+	}
+}
+
+// TestAStageNobodyMeasuredNamesThePrior holds the other half: an answer with no
+// history behind it says so, rather than leaving a reader to tell a measurement
+// from an assumption by the seconds.
+func TestAStageNobodyMeasuredNamesThePrior(t *testing.T) {
+	now := time.Date(2026, 6, 20, 18, 31, 22, 0, time.UTC)
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_1",
+		Workload:     schedulerRevision(),
+		Offers:       []domain.OfferSnapshot{schedulerOffer("off_unmeasured", now, 0.00010, 0)},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	candidate := findCandidate(t, decision, "off_unmeasured")
+	for _, stage := range domain.LaunchStages {
+		answered := candidate.Estimates.Stages.Stage(stage)
+		if answered.Level != domain.LevelPrior || answered.SampleCount != 0 || answered.Key != "" {
+			t.Fatalf("nothing has measured this machine and its %s stage answered %+v", stage, answered)
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/gpunorm"
+	"github.com/benngarcia/mercator/internal/prediction"
 )
 
 type Scheduler interface {
@@ -32,8 +33,14 @@ type SchedulingInput struct {
 	// travels with the request for the same reason the manifest does: size and
 	// content digest are properties of the content, and a host that does not
 	// hold something cannot be asked how big it is.
-	Artifacts        []domain.ArtifactVersion
-	LatencyEstimates map[string]domain.Estimate
+	Artifacts []domain.ArtifactVersion
+	// History is what earlier launches of these candidates really spent, indexed
+	// by what recurs about them. It replaces a map of measured estimates keyed by
+	// offer snapshot ID: nothing in production ever wrote that map, and nothing
+	// could have written it honestly, because half the backends in the tree mint a
+	// fresh snapshot ID for every search of one machine and a store keyed on one
+	// would report a key that cannot grow as candidate-specific evidence.
+	History prediction.History
 }
 
 type deterministicScheduler struct{}
@@ -469,18 +476,47 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 	established.ImageFetch = fetch.established
 	established.Unpack = unpack.established
 	established.ArtifactFetch = inputs.established
+	// What this fleet has watched this candidate do, wherever it has watched
+	// anything, replaces what it assumed. Both halves go through the same
+	// predictor: a measurement is established by definition, so a stage answered
+	// from history is as good in the bound as it is in the score.
+	answer := stagePredictor(input, offer)
+	stages, established = stages.Answered(answer), established.Answered(answer)
 	return candidateWork{
 		estimates: domain.CandidateEstimates{
 			QueueSeconds:            queue,
 			Stages:                  stages,
-			StartSeconds:            startEstimate(input, offer, queue, stages),
-			EstablishedStartSeconds: startEstimate(input, offer, queue, established),
+			StartSeconds:            startEstimate(input, queue, stages),
+			EstablishedStartSeconds: startEstimate(input, queue, established),
 			CostUSD:                 costEstimate(input, offer),
 		},
 		image:     content.locality,
 		artifacts: content.evidence,
 		rates:     transferRates(content, registry, storage, store),
 		disk:      content.disk,
+	}
+}
+
+// stagePredictor is this candidate's launch put to the fleet's own history:
+// every stage is answered by the narrowest level holding measured launches of
+// this candidate, of this provider in this place, or of this provider, and a
+// stage nothing has ever measured keeps the answer the rest of this file derived
+// and says that is what it is.
+//
+// The prior is named on the record rather than left blank because it is a real
+// claim about the evidence: a published boot window, a rate over a byte count,
+// and a workload's own declaration are all somebody's prediction, and none of
+// them is a launch anyone watched. A reader cannot tell the two apart from the
+// seconds, and a calibration reading the record has to know which answers it is
+// allowed to grade.
+func stagePredictor(input SchedulingInput, offer domain.OfferSnapshot) func(domain.LaunchStage, domain.Estimate) domain.Estimate {
+	identity := domain.CandidateIdentityOf(offer, input.Image.Digest)
+	return func(stage domain.LaunchStage, prior domain.Estimate) domain.Estimate {
+		if answer := input.History.Predict(identity, stage); answer.Answered() {
+			return answer.Estimate(input.ModelVersion)
+		}
+		prior.Level = domain.LevelPrior
+		return prior
 	}
 }
 
@@ -677,17 +713,14 @@ func orExpected(quantile, expected float64) float64 {
 // stage that happens after it into the same number would compare a prediction
 // with an actual of something else.
 //
-// A measured latency estimate for this offer replaces the derived answer
-// outright, and replaces both halves of it: a sample is a measurement about this
-// machine whatever anyone could enumerate, so there is no unestablished part of
-// it to discount.
-func startEstimate(input SchedulingInput, offer domain.OfferSnapshot, queue domain.Estimate, stages domain.LaunchStageEstimates) domain.Estimate {
-	if measured, ok := input.LatencyEstimates[offer.ID]; ok && measured.SampleCount > 0 {
-		if measured.ModelVersion == "" {
-			measured.ModelVersion = input.ModelVersion
-		}
-		return measured
-	}
+// The sum is the only way this number is ever reached. What replaced it was a
+// measured start for this offer snapshot ID, which nothing ever wrote and which
+// would have been wrong if anything had: a start latency is the sum of seven
+// stages whose costs depend on what the machine happens to hold now, so the
+// measurement of a machine that pulled forty gigabytes last week would be served
+// back as the prediction for the same machine now holding the image. History
+// answers each stage on its own terms instead, and this adds them up.
+func startEstimate(input SchedulingInput, queue domain.Estimate, stages domain.LaunchStageEstimates) domain.Estimate {
 	start := domain.Estimate{Source: "scheduler", ModelVersion: input.ModelVersion}
 	for _, part := range append([]domain.Estimate{queue}, startingStages(stages)...) {
 		start.Expected += part.Expected

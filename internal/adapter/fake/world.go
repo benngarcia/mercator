@@ -152,6 +152,14 @@ type Machine struct {
 	// construction.
 	UnpackSpend         time.Duration
 	ContainerStartSpend time.Duration
+	// ApplicationReadySpend is what a workload takes to report it can do work
+	// once its process is running here, where this machine is not like the rest of
+	// the world. Zero is the world's own answer rather than an instant readiness,
+	// because a world states one figure for its applications and a machine states
+	// a difference from it: a fleet where every machine brings the same
+	// application up in the same time is a fleet where a per-candidate prediction
+	// cannot be told from a fleet-wide one.
+	ApplicationReadySpend time.Duration
 	// ClockAhead is how far this machine's wall clock runs ahead of the control
 	// plane's. It changes nothing about when anything here happens and everything
 	// about the moment this machine states when asked: a host does not know its
@@ -449,6 +457,16 @@ func (m *Machine) inventory(now time.Time) domain.ImageInventory {
 	return inventory
 }
 
+// applicationReadySpend is what a workload takes to come up on this machine: the
+// machine's own answer where it states one, and the world's for every machine
+// that is like the rest of the fleet.
+func (m *Machine) applicationReadySpend(world time.Duration) time.Duration {
+	if m.ApplicationReadySpend > 0 {
+		return m.ApplicationReadySpend
+	}
+	return world
+}
+
 // assemblySpend is what applying this launch's content costs here. A machine with
 // nothing to apply spends nothing: unpacking is work over bytes, and a host
 // holding the image assembled has none of it to do.
@@ -710,7 +728,7 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 		// instant their process exists.
 		return
 	}
-	readyAt := startsAt.Add(w.ApplicationReadySpend)
+	readyAt := startsAt.Add(machine.applicationReadySpend(w.ApplicationReadySpend))
 	w.readyAt[request.LaunchKey] = readyAt
 	w.readiness[request.LaunchKey] = ReadinessReport{
 		WorkspaceID: request.WorkspaceID,

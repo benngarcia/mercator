@@ -116,6 +116,13 @@ const (
 	// for while every Artifact read in the tree costs the same seconds on every
 	// machine in the fleet.
 	CapabilityMeasuredTransferRates Capability = "measured_transfer_rates"
+	// CapabilityLearnedStageHistory is a launch stage predicted from what earlier
+	// launches of the same candidate really spent, answered at a declared level of
+	// a hierarchy and carrying the number of samples behind it. It names what a
+	// fixture about machines this fleet has already measured is red for while
+	// every stage in the tree is predicted from a published claim or a stated
+	// constant, whatever the fleet has watched that exact machine do.
+	CapabilityLearnedStageHistory Capability = "learned_stage_history"
 )
 
 var knownCapabilities = map[Capability]bool{
@@ -136,6 +143,7 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityInvariants:             true,
 	CapabilityLabUI:                  true,
 	CapabilityMeasuredTransferRates:  true,
+	CapabilityLearnedStageHistory:    true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued
@@ -665,8 +673,25 @@ func (p QueuedBookingSpec) expected() Duration {
 }
 
 type MarketplaceOfferSpec struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider,omitempty"`
+	ID string `json:"id"`
+	// Machine is the handle this marketplace has for the hardware behind the
+	// listing, where it publishes one. A marketplace that sells asks against
+	// machines somebody already owns has such a handle and numbers the ask itself
+	// afresh on every search, which is the whole reason a launch history needs a
+	// key of its own: two IDs here naming one machine is a world where filing
+	// history under the listing loses half of it. A catalog selling a product that
+	// does not exist yet states none, which is what every listing in this corpus
+	// said before this field existed.
+	Machine string `json:"machine,omitempty"`
+	// ApplicationReady is how long a workload takes to report that it can do work
+	// on this machine, once its process is running. It overrides the world's own
+	// answer, because a stage predicted per candidate needs a world where two
+	// candidates spend different amounts on it: one figure for the whole fleet
+	// makes every level of a hierarchy answer the same seconds, and a fixture
+	// could then not tell an estimate keyed on the machine from one keyed on
+	// nothing at all.
+	ApplicationReady *Duration `json:"application_ready,omitempty"`
+	Provider         string    `json:"provider,omitempty"`
 	// InstanceType is the product name this listing's provider sells it under, for a
 	// provider that sells named products. A marketplace that sells asks against
 	// individual machines states none and is told apart by its region and its cards,
@@ -1233,6 +1258,17 @@ type StageExpectation struct {
 	Seconds    *Bound   `json:"seconds,omitempty"`
 	Source     string   `json:"source,omitempty"`
 	Confidence *float64 `json:"confidence,omitempty"`
+	// Level asserts which key answered this stage: the exact candidate, the
+	// provider and region, the provider, or the prior Mercator falls back to when
+	// no history exists at all. It is stated beside the seconds because the
+	// seconds alone cannot say where they came from, and the whole point of a
+	// hierarchy is that an answer says how far it had to fall to be found.
+	Level string `json:"level,omitempty"`
+	// Samples asserts how many measured launches stand behind that answer. Zero
+	// is a real assertion and it is the one a prior makes: an answer from nothing
+	// measured and an answer from one launch are different claims, and a record
+	// that stated only the seconds would read the same for both.
+	Samples *int `json:"samples,omitempty"`
 	// Rate asserts the throughput a transfer stage was priced at and where that
 	// number came from. It is stated apart from the seconds because the seconds
 	// are a product of two things a fixture cares about separately: a candidate

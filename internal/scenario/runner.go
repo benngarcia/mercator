@@ -474,6 +474,17 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 		if want.Confidence != nil && recorded.Confidence != *want.Confidence {
 			fail("%s confidence: want %v, got %v", stage, *want.Confidence, recorded.Confidence)
 		}
+		// The level and the count are asserted together with the seconds, because
+		// what a fixture about a hierarchy is pinning is which evidence answered:
+		// the same ninety seconds from this machine's own launches and from a
+		// province of other machines are two different claims, and only these say
+		// which one the record made.
+		if want.Level != "" && string(recorded.Level) != want.Level {
+			fail("%s level: want %q, answered at %q from %d samples", stage, want.Level, recorded.Level, recorded.SampleCount)
+		}
+		if want.Samples != nil && recorded.SampleCount != *want.Samples {
+			fail("%s samples: want %d, answered from %d at level %q", stage, *want.Samples, recorded.SampleCount, recorded.Level)
+		}
 		assertTransferRate(fail, stage, candidate.TransferRates, want.Rate)
 	}
 	if expect.ImageLocality != "" && candidate.ImageLocality != expect.ImageLocality {

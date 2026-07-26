@@ -76,7 +76,10 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 			ProvisionSpend:      offer.Provisioning.Spend(),
 			UnpackSpend:         spec.Launch.UnpackSpend(),
 			ContainerStartSpend: spec.Launch.ContainerStartSpend(),
-			LinkMbps:            simLinkMbps(spec, offer.ID),
+			// What a workload takes to come up here, where this machine says it is
+			// unlike the rest of the fleet.
+			ApplicationReadySpend: stated(offer.ApplicationReady),
+			LinkMbps:              simLinkMbps(spec, offer.ID),
 		}
 		if err := world.AddMachine(machine); err != nil {
 			return nil, err
@@ -420,9 +423,13 @@ func simHostOffer(spec WorldSpec, host HostSpec, machineID string) domain.OfferS
 func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.OfferSnapshot {
 	offer := simOffer(world, spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Resources)
 	offer.Kind = domain.OfferKindProvisionable
-	// A listing names no machine, because the machine does not exist yet. What recurs
-	// about it is the provider, the place, and the product name, and a listing that
-	// publishes none of them cannot recur at all.
+	// The machine behind this listing, where this marketplace publishes one. A
+	// catalog selling a product nobody owns yet names none, and what recurs about
+	// it is then the provider, the place, and the product name. A marketplace
+	// selling asks against machines that already exist names the machine and
+	// renumbers the ask on every search, which is Vast's shape and the reason a
+	// listing ID is the one thing a launch history must never be filed under.
+	offer.MachineID = spec.Machine
 	if spec.Provider != "" {
 		offer.AdapterType = spec.Provider
 	}

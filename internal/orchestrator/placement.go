@@ -114,6 +114,10 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, err
 	}
+	history, err := o.launchHistory(ctx, workload.WorkspaceID)
+	if err != nil {
+		return domain.BookingDecision{}, nil, nil, fmt.Errorf("orchestrator: read the launch history: %w", err)
+	}
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
 		RunID:                    runID,
 		Workload:                 workload,
@@ -122,6 +126,7 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 		Offers:                   offers,
 		Schedules:                schedules,
 		ExcludedOfferSnapshotIDs: excludedOfferSnapshotIDs,
+		History:                  history,
 		ModelVersion:             "latency-v1",
 		EvaluatedAt:              o.now().UTC(),
 	})

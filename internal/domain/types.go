@@ -641,7 +641,48 @@ type Estimate struct {
 	Source       string  `json:"source,omitempty"`
 	SampleCount  int     `json:"sample_count,omitempty"`
 	ModelVersion string  `json:"model_version,omitempty"`
+	// Level is how specific the evidence behind this answer was: measured launches
+	// of this exact candidate, of this provider in this region, of this provider
+	// anywhere, or none at all. Every stage estimate states one, because a
+	// prediction that does not say what it rests on cannot be audited and cannot
+	// be calibrated: two answers of ninety seconds, one from five launches of this
+	// machine and one from a constant, are not the same claim.
+	Level PredictionLevel `json:"level,omitempty"`
+	// Key is the key the samples were read under, where any were. It is recorded
+	// so a reader can check what Mercator took the candidate to be against what it
+	// then learned about, which is the one thing a history keyed on a listing ID
+	// gets wrong: an answer claiming this exact candidate, filed under a number a
+	// marketplace mints per search, is a claim of candidate-specific evidence made
+	// out of a key that cannot have any.
+	Key string `json:"key,omitempty"`
 }
+
+// PredictionLevel is which key answered a stage estimate, from the narrowest
+// evidence to the widest. It is a declared fallback ladder rather than a
+// confidence score, because the two say different things: a level says whose
+// launches this answer is about, and the confidence beside it says how much that
+// evidence is worth.
+type PredictionLevel string
+
+const (
+	// LevelExactCandidate is measured launches of this candidate: the machine
+	// where a backend named one, otherwise the product a provider sells, and the
+	// content it was asked to run for a stage whose duration is a property of the
+	// content.
+	LevelExactCandidate PredictionLevel = "exact_candidate"
+	// LevelProviderAndRegion is measured launches of this provider's capacity in
+	// this place, whatever machine and whatever content. A provider that publishes
+	// no region has no such level and falls straight past it.
+	LevelProviderAndRegion PredictionLevel = "provider_and_region"
+	// LevelProvider is measured launches of everything this provider sells in this
+	// lane.
+	LevelProvider PredictionLevel = "provider"
+	// LevelPrior is nothing measured at all, which is where every stage in this
+	// tree stood before a history existed: a published claim, a stated constant,
+	// or what the workload declared about itself. It is named rather than left
+	// blank so a record can say that nobody has ever watched this happen.
+	LevelPrior PredictionLevel = "prior"
+)
 
 // ImageInventory is what one host SAYS IT HOLDS. It answers "what is here" and
 // never "what is missing", because missing is a function of what is here and
@@ -1278,6 +1319,23 @@ type LaunchStageEstimates struct {
 	// semantics, so a Run that declared nothing is predicted nothing rather than
 	// charged a number this model made up.
 	ApplicationReady Estimate `json:"application_ready_seconds"`
+}
+
+// Answered is every stage put to one predictor, in place. It exists so a
+// predictor cannot answer seven stages and leave the eighth carrying whatever it
+// was built with: the enumeration is here, once, and a stage added to the record
+// cannot be added without passing through it.
+func (stages LaunchStageEstimates) Answered(answer func(LaunchStage, Estimate) Estimate) LaunchStageEstimates {
+	return LaunchStageEstimates{
+		Acquisition:      answer(StageAcquisition, stages.Acquisition),
+		Boot:             answer(StageBoot, stages.Boot),
+		AgentReady:       answer(StageAgentReady, stages.AgentReady),
+		ImageFetch:       answer(StageImageFetch, stages.ImageFetch),
+		Unpack:           answer(StageUnpack, stages.Unpack),
+		ArtifactFetch:    answer(StageArtifactFetch, stages.ArtifactFetch),
+		ContainerStart:   answer(StageContainerStart, stages.ContainerStart),
+		ApplicationReady: answer(StageApplicationReady, stages.ApplicationReady),
+	}
 }
 
 // Stage is one stage's estimate by name, which is what a reader iterating
