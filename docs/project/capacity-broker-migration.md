@@ -2136,10 +2136,10 @@ complete because it works against a live provider.
     `a-fast-machine-far-from-the-data-loses`. It declares no path at all, which is the
     silence itself rather than a rate stated at zero confidence, and it is charged the
     stated prior over forty gigabytes at `assumed_object_store_rate` with the estimate
-    capped at what a guess is worth. It also makes the determinism claim falsifiable
-    at L0: restoring the flat constant prices all three reads at 640 seconds and the
-    placement falls to `rental-far-from-the-data` on the offer-ID tie-break, which is
-    what running it that way reports.
+    capped at what a guess is worth. What it pins is two constants,
+    `DefaultObjectStoreDownloadMbps` and `AssumedLinkConfidence`. This entry also
+    claimed it made the determinism claim falsifiable at L0, and the entry below
+    corrects that: it contributes nothing under that break.
   - The rule's third clause is that an unmeasured transfer is worth at most
     `domain.AssumedLinkConfidence`, asked of the rate and of the stage estimate it
     produced. Naming the assumption truthfully and then stating the duration at full
@@ -2215,6 +2215,59 @@ complete because it works against a live provider.
     floor above what the machine delivered and served the floor below it. The node
     measured 12426.40 Mbps of delivery, and dropping the floor comparison admits it to
     a Run asking for twice that.
+
+- [x] 2026-07-26: Answer the third review of the transfer path. Two reviewers refuted
+  four things about the entry two above. Three were real and one was two claims, one
+  of which is refuted below.
+  - The slice's central claim was false in the production code its fixture certified.
+    A candidate's established start counted every second an inventory could account
+    bytes for, whatever divided them, so a machine that enumerated its copies
+    perfectly and has never measured its path to the object store was charged the
+    fleet-wide prior over forty gigabytes and struck out `LATENCY_SLO_EXCEEDED`. The
+    fixture could not notice because it declares no start bound, and
+    `safety.locality_is_never_infeasibility` could not either, because it measured
+    silence purely in unknown-locality bytes and returned zero here. Established now
+    means both halves of a duration are somebody's: content an inventory answered
+    about, crossing a path some machine published a reading of. Nothing to move is
+    still nothing to wait for at any rate, and a machine that measured its own link
+    and is slow on it is still refusable, which is what a bound is for.
+    `a-start-bound-refuses-only-what-it-can-prove` states it at L0 and
+    `TestAStartBoundRefusesOnlyThePathThisNodeMeasured` states it against a real node
+    reading real content out of MinIO on this host's daemon.
+    `silence-is-not-infeasibility` now publishes a registry reading for the Rental it
+    strikes out, at exactly the rate Mercator would have assumed about it, so the
+    seconds are unchanged and what the fixture turns on is that a machine said them.
+  - The Lab rule reads the transfer rates a decision recorded as well as its
+    localities, and charges a stage priced from an assumption its whole price. A stage
+    that suffered both silences is counted once at the larger share.
+  - The third clause of `safety.transfer_rate_is_attributed` capped the stage
+    estimate's confidence and not `CandidateDecision.Confidences`, which is what
+    `Uncertainty` reads and what the score charges doubt from. The two are built
+    separately, so stating an assumed read as certain in the list while leaving the
+    estimate honest passed the whole `internal/lab` package. The clause now asks all
+    three readings, and `domain.LaunchStage.ConfidenceAnswer` replaces the three
+    strings that spelled the mapping out independently in the scheduler, the reference
+    model, and the rule.
+  - The claim that the third machine made the determinism claim falsifiable at L0 was
+    false and the same commit said so two paragraphs later. Verified on this host:
+    with `DownloadRate` stripped of its fact read, the fixture reports eleven failures
+    and none of them is `rental-nobody-measured-the-path-of`, and the placement fell to
+    `rental-far-from-the-data` before that machine existed. The entry above is
+    corrected in place.
+  - Refuted. A measured path and an unmeasured one were said to be compared as if they
+    were the same statistic, so a host that publishes an honest slow reading is gated
+    out where an identical silent host is admitted. The gating half is the rule
+    directly above and is deliberate: a bound refuses what is known and never what is
+    guessed, and a machine that measured 200 Mbps is known. The statistic half is
+    consistent as stated: `DownloadRate` is documented as the pessimistic quantile and
+    the standing prior answers that same question, so both reach `LinkSpeed.Mbps` as a
+    p10 and nothing in the tree treats them as different statistics. What is open is
+    calibration, not correctness: nothing has yet measured whether 500 Mbps is a
+    pessimistic prior or an optimistic one, and a host whose true p10 is under it is
+    ranked worse for having published it. That is a fleet-wide repricing to be made
+    against measurements the calibration slice will hold, and the counterweight to it
+    is the uncertainty term, which is dead in production for the reason recorded under
+    phase 4: `SchedulingInput.Weights` is never populated.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
@@ -2308,10 +2361,13 @@ Phase 3 added:
   `safety.locality_provenance`, which now reads unassembled content too.
 - `silence-is-not-infeasibility` (green): one Run that refuses to wait more than
   three minutes, and two machines at one price that would both take nearly five.
-  The Rental that enumerated itself and holds none of the image is struck out,
-  because that is a measured fact about a machine and a hard bound is what a Run
-  gets to do with one. The borrowed host beside it is not, because nothing has
-  established that it is slow. Making the bound locality-blind fails it with
+  The Rental that enumerated itself, holds none of the image, and published what
+  its link to the registry delivers is struck out, because both halves of its
+  five minutes are somebody's measurement and a hard bound is what a Run gets to
+  do with those. It publishes the same number Mercator would have assumed about
+  it, so the seconds are the seconds either way and what the fixture turns on is
+  that a machine said them. The borrowed host beside it is not struck out,
+  because nothing has established that it is slow. Making the bound locality-blind fails it with
   `no feasible offers`, which is the Run finding no capacity at all on machines
   that may already hold every byte. The decision records
   `START_SLO_UNVERIFIED` for that placement rather than `WITHIN_START_SLO`,
@@ -2859,6 +2915,19 @@ Phase 4 added:
   and 1600 stated, both record the assumption where a measurement is asserted, and the
   placement lands on `rental-far-from-the-data` because nothing separates the three
   and the tie broke on the offer ID.
+- `a-start-bound-refuses-only-what-it-can-prove` (green): one Run that refuses to wait
+  a quarter of an hour and two machines holding the whole image that both have to read
+  the same 40GB. The one that measured its path at 200 Mbps is struck out, because a
+  Run gets to refuse a machine that is known to be late. The one nobody has measured is
+  taken, priced at the prior over the byte count and recorded `START_SLO_UNVERIFIED`,
+  because a duration over a rate nothing on that machine answered for is a guess and
+  refusing capacity on a guess is silence about a path becoming infeasibility.
+  Restoring the assumed seconds to the established start fails it with `no feasible
+  offers`, which is the Run finding no capacity at all on two machines that may both be
+  a minute from ready. It is a second world beside
+  `a-fast-machine-far-from-the-data-loses` rather than a bound added to it: no single
+  bound can leave a measured slow path feasible for the ranking claim and refuse it for
+  this one.
 - `a-path-somebody-measured-prices-the-read` (conformance): the same world at L1,
   where the bytes really move. The decision prices each read off the machine's own
   published path, and the world then spends eighty seconds reading forty gigabytes
@@ -2995,6 +3064,71 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 the third review of the transfer path
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine. Two reviewers refuted four things about the transfer-path slice.
+Three were real, one was two claims of which the gating half is refuted, and the
+central one was that the slice's own headline claim was false in the production code
+its fixture certified. A concurrent session held its own slice open across
+`internal/domain/types.go`, `internal/scheduler/scheduler.go`, `internal/lab/oracle.go`
+and `internal/scenario/schema.go` in the same worktree, so the suites below were run
+against a `git archive` of the commit rather than against the working tree, and only
+this slice's own files were staged.
+
+What the corpus and the laws could not say, and now can.
+
+- A machine nobody measured the path of could be refused capacity. Adding
+  `"max_start_latency": "15m"` to `a-fast-machine-far-from-the-data-loses` on the
+  reviewed commit reports `rental-nobody-measured-the-path-of`: "expected
+  feasible=true, got false (rejections [LATENCY_SLO_EXCEEDED@placement.max_p90_start_seconds])",
+  on 640 seconds derived entirely from `DefaultObjectStoreDownloadMbps`.
+  `safety.locality_is_never_infeasibility` passed that decision, because the byte count
+  was established and the rule measured silence only in unknown-locality bytes.
+- Restoring those seconds to the established start, by dropping the measured-path test
+  from `establishedOverAMeasuredPath`, fails
+  `a-start-bound-refuses-only-what-it-can-prove` with `no feasible offers`, and fails
+  `TestAStartBoundRefusesOnlyThePathThisNodeMeasured` against real content out of MinIO
+  with "nothing measured this machine's path and a bound struck it out anyway:
+  [LATENCY_SLO_EXCEEDED ... Required:12.51 Offered:961.25]". The node had just
+  delivered 12787 Mbps of real content onto its own disk, and the machine refused
+  beside it had published nothing.
+- The Lab law now sees it. `pricedSilenceSeconds` reads the transfer rates the decision
+  recorded as well as its localities, and the deliberate case is the third row of
+  `TestSilenceIsPricedAndAMeasurementBinds`: a machine that enumerated its copies
+  exactly, refused on 640 seconds priced from `assumed_object_store_rate`. The row
+  below it changes one field, the provenance of the rate, and is lawful.
+- Telling the score an assumed read was certain while leaving the estimate honest is
+  no longer green. Stating `artifact_fetch_seconds` as 1 in `scheduler.confidences`
+  while `Estimates.Stages.ArtifactFetch.Confidence` stays at 0.5 now fails
+  `safety.transfer_rate_is_attributed` through the whole Lab with "the doubt the score
+  charged for it is worth 1.00 where a duration over an unmeasured rate is worth at
+  most 0.50", on every world that reads an Artifact. Before this it was green across
+  the tree except for one unrelated fixture's hard-coded uncertainty.
+- The determinism claim the last entry credited to the third machine is not there.
+  With `OfferSnapshot.DownloadRate` stripped of its fact read, the three-machine
+  fixture reports eleven failures and every one of them names
+  `rental-near-the-data` or `rental-far-from-the-data`. The placement falls to
+  `rental-far-from-the-data`, which is where it fell before the third machine existed.
+
+Suites. The full `go test ./...` is green on the extracted commit, including the live
+half: `TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` all ran against MinIO containers on
+this host's own daemon. `go test -race` is green over `internal/domain`,
+`internal/scheduler`, `internal/lab` and `internal/nodeagent`. The regression corpus is
+39 Blueprints, 36 of them green.
+
+Not done, and why. `DefaultObjectStoreDownloadMbps` is a flat 500 answering the same
+question a node's p10 answers, and nothing has measured whether that is a pessimistic
+prior or an optimistic one. A host whose true p10 is under it is ranked worse for
+having published it, and the term that should counterweight that is the uncertainty
+term, which is multiplied by zero in production. Both belong to the calibration work
+rather than to a locality slice, and repricing the constant here would move every
+fixture in the corpus against no measurement at all.
 
 ### Phase 4 what an unmeasured path costs
 
