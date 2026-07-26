@@ -162,7 +162,7 @@ func TestTwoSearchesOfOneMachineAreOneCandidate(t *testing.T) {
 		t.Fatalf("two searches of one machine keyed differently:\n%s\n%s",
 			earlier.Candidate(true), later.Candidate(true))
 	}
-	if earlier.ProviderAndRegion() != "provider=vast;region=US-CA" {
+	if earlier.ProviderAndRegion() != "lane=ephemeral;provider=vast;region=US-CA" {
 		t.Fatalf("the region rung of the ladder is %q, and Vast published US-CA", earlier.ProviderAndRegion())
 	}
 	for _, ask := range []string{"9001", "12345"} {
@@ -178,5 +178,10 @@ func TestTwoSearchesOfOneMachineAreOneCandidate(t *testing.T) {
 // it yet and the candidate identity it derives has no level above the machine.
 func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
 	offer.AdapterType = "vast"
+	// The Broker also stamps the lane from the Declaration this backend negotiated,
+	// which is ephemeral until an agent is proven to bootstrap on a Vast machine. An
+	// offer nobody classified is capacity nothing can be learned about, so a test
+	// deriving a key from an unstamped offer would be asserting about no key at all.
+	offer.Lane = domain.LaneEphemeral
 	return offer
 }

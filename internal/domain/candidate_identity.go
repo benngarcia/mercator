@@ -39,6 +39,20 @@ import (
 // than anything about the machine: filing history under either would key
 // learned behaviour on how Mercator happened to reach a host.
 type CandidateIdentity struct {
+	// Lane is what this capacity is for: a machine Mercator controls through an
+	// enrolled runtime and can hand successive workloads to, or a provider-native
+	// one-shot execution that holds nothing once its workload exits.
+	//
+	// It is part of the identity because the two are not the same thing to learn
+	// about, however alike the product looks. A reusable launch has an enrolment and
+	// an agent-ready stage and a disk that still holds the image the next Run wants;
+	// a one-shot execution has neither stage and starts cold every time. One key
+	// over both would serve a rental's warm-disk pull samples as exact-candidate
+	// evidence for a one-shot, and the one-shot's cold starts back as evidence for
+	// the rental. A provider selling the same cards both ways states exactly that
+	// difference, and a key that dropped it would be reporting evidence about the
+	// other lane.
+	Lane ExecutionLane `json:"lane,omitempty"`
 	// Machine is the machine this capacity is, named by the handle the backend
 	// states for it. It is set wherever a backend can name one, because that is
 	// exactly where "this exact machine again" is a thing that can happen. For
@@ -82,6 +96,7 @@ type CandidateIdentity struct {
 // than a machine, and the listing IDs are the provider's name for one search.
 func CandidateIdentityOf(offer OfferSnapshot, imageDigest string) CandidateIdentity {
 	return CandidateIdentity{
+		Lane:         offer.Lane,
 		Machine:      offer.MachineID,
 		Provider:     offer.AdapterType,
 		Region:       offer.Region,
@@ -93,6 +108,12 @@ func CandidateIdentityOf(offer OfferSnapshot, imageDigest string) CandidateIdent
 
 // Recurs reports whether this identity can ever hold more than one sample.
 //
+// Capacity nobody classified recurs as nothing at all. The lane is stamped from the
+// backend's negotiated Declaration on every aggregation path, so an offer without
+// one never reached Placement; deriving a key from it anyway would file a machine
+// and a one-shot execution under one name, which is the one thing the lane split
+// exists to prevent.
+//
 // A machine recurs by definition, because it is there to be used again. A
 // product recurs when the provider says something about it that outlives one
 // listing: a region, a product name, or an accelerator. A candidate with none of those is a one-shot
@@ -100,6 +121,9 @@ func CandidateIdentityOf(offer OfferSnapshot, imageDigest string) CandidateIdent
 // unfilable: a predictor that answered "exact candidate, one sample" there would
 // be reporting evidence about a key that cannot grow.
 func (identity CandidateIdentity) Recurs() bool {
+	if identity.Lane == "" {
+		return false
+	}
 	if identity.Machine != "" {
 		return true
 	}
@@ -120,7 +144,7 @@ func (identity CandidateIdentity) Candidate(includeImage bool) string {
 	if !identity.Recurs() {
 		return ""
 	}
-	parts := []string{"provider=" + identity.Provider}
+	parts := []string{"lane=" + string(identity.Lane), "provider=" + identity.Provider}
 	if identity.Machine != "" {
 		parts = append(parts, "machine="+identity.Machine)
 	} else {
@@ -136,23 +160,29 @@ func (identity CandidateIdentity) Candidate(includeImage bool) string {
 	return strings.Join(parts, ";")
 }
 
-// ProviderAndRegion is the key for every candidate of this provider in this
-// region. A provider that states no region has no such key, and says so rather
-// than filing every machine it sells under one blank region: that would make the
-// level indistinguishable from the provider level while claiming to be narrower.
+// ProviderAndRegion is the key for every candidate of this provider, in this
+// lane, in this region. A provider that states no region has no such key, and says
+// so rather than filing every machine it sells under one blank region: that would
+// make the level indistinguishable from the provider level while claiming to be
+// narrower.
+//
+// The lane is carried at every level rather than only at the exact-candidate one.
+// A coarser key exists to answer about capacity that has no history of its own, and
+// answering out of the other lane's history is the same wrong answer made harder to
+// see: the stages a launch has are a property of the lane.
 func (identity CandidateIdentity) ProviderAndRegion() string {
-	if identity.Provider == "" || identity.Region == "" {
+	if identity.Lane == "" || identity.Provider == "" || identity.Region == "" {
 		return ""
 	}
-	return "provider=" + identity.Provider + ";region=" + identity.Region
+	return "lane=" + string(identity.Lane) + ";provider=" + identity.Provider + ";region=" + identity.Region
 }
 
-// ProviderKey is the key for everything this provider sells.
+// ProviderKey is the key for everything this provider sells in this lane.
 func (identity CandidateIdentity) ProviderKey() string {
-	if identity.Provider == "" {
+	if identity.Lane == "" || identity.Provider == "" {
 		return ""
 	}
-	return "provider=" + identity.Provider
+	return "lane=" + string(identity.Lane) + ";provider=" + identity.Provider
 }
 
 // acceleratorKey is how many cards of each accelerator product this machine

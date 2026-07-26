@@ -193,5 +193,10 @@ func TestOneProductInTwoCloudsIsTwoCandidates(t *testing.T) {
 // out of buildOffers does not name its own provider yet.
 func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
 	offer.AdapterType = "runpod"
+	// And the lane from the Declaration this backend negotiated, which is ephemeral
+	// because a pod holds nothing once its workload exits. Capacity nobody classified
+	// has no key at any level, so an unstamped offer would make every assertion here
+	// one about the empty string.
+	offer.Lane = domain.LaneEphemeral
 	return offer
 }

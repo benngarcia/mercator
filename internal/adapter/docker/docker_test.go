@@ -711,8 +711,8 @@ func TestIntegrationOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
 	if direct.ID == labelled.ID {
 		t.Fatalf("this case is about two listings of one machine; both are %q", direct.ID)
 	}
-	directKey := domain.CandidateIdentityOf(direct, "sha256:image").Candidate(true)
-	labelledKey := domain.CandidateIdentityOf(labelled, "sha256:image").Candidate(true)
+	directKey := domain.CandidateIdentityOf(aggregated(direct), "sha256:image").Candidate(true)
+	labelledKey := domain.CandidateIdentityOf(aggregated(labelled), "sha256:image").Candidate(true)
 	if directKey != labelledKey {
 		t.Fatalf("one machine keyed two ways:\n%s\n%s", directKey, labelledKey)
 	}

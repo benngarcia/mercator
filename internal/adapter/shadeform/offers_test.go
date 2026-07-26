@@ -159,7 +159,7 @@ func TestOneRegionNameInTwoCloudsIsTwoPlaces(t *testing.T) {
 	if first.ProviderAndRegion() == second.ProviderAndRegion() {
 		t.Fatalf("two clouds naming one region share the place %q", first.ProviderAndRegion())
 	}
-	if first.ProviderAndRegion() != "provider=shadeform;region=hyperstack/us-east-1" {
+	if first.ProviderAndRegion() != "lane=ephemeral;provider=shadeform;region=hyperstack/us-east-1" {
 		t.Fatalf("the place this offer recurs in is %q", first.ProviderAndRegion())
 	}
 	if first.InstanceType != "A6000" {
@@ -172,5 +172,10 @@ func TestOneRegionNameInTwoCloudsIsTwoPlaces(t *testing.T) {
 // out of the adapter does not name its own provider yet.
 func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
 	offer.AdapterType = "shadeform"
+	// And the lane from the Declaration this backend negotiated, which is ephemeral
+	// until a Shadeform machine is proven to enroll an agent. Capacity nobody
+	// classified has no key at any level, so an unstamped offer would make every
+	// assertion below one about the empty string.
+	offer.Lane = domain.LaneEphemeral
 	return offer
 }

@@ -200,6 +200,43 @@ func TestAOneShotProductWithNothingPublishedCannotRecur(t *testing.T) {
 	}
 }
 
+// TestOneProductInTwoLanesIsTwoCandidates is the collision the lane split exists to
+// prevent, stated about a key. A provider may sell the same cards in the same place
+// both as a machine Mercator enrolls a runtime on and as a one-shot execution that
+// holds nothing once its workload exits. They are not the same thing to learn
+// about: the first has an enrolment stage and a disk that still holds the image the
+// next Run wants, the second has neither and starts cold every time. One key over
+// both serves each lane's samples as exact-candidate evidence about the other.
+func TestOneProductInTwoLanesIsTwoCandidates(t *testing.T) {
+	oneShot := vastListing("off_vast_11111")
+	rented := vastListing("off_vast_11111")
+	rented.Lane = domain.LaneReusable
+
+	if key(oneShot) == key(rented) {
+		t.Fatalf("a one-shot execution and a rental of the same cards share the key %q", key(oneShot))
+	}
+}
+
+// TestCapacityNobodyClassifiedHasNoKey holds the loud half of the same clause. The
+// lane is stamped from the backend's negotiated Declaration on every aggregation
+// path, so an offer arriving here without one never went through Placement, and a
+// key derived from it would be one string over both lanes.
+func TestCapacityNobodyClassifiedHasNoKey(t *testing.T) {
+	unstamped := vastListing("off_vast_11111")
+	unstamped.Lane = ""
+
+	identity := domain.CandidateIdentityOf(unstamped, "sha256:image")
+
+	if identity.Recurs() {
+		t.Fatalf("capacity nobody classified claims to recur: %+v", identity)
+	}
+	for _, level := range []string{identity.Candidate(true), identity.ProviderAndRegion(), identity.ProviderKey()} {
+		if level != "" {
+			t.Fatalf("capacity nobody classified is filed under %q", level)
+		}
+	}
+}
+
 func TestAMachineStageIgnoresTheImageItWasAskedToRun(t *testing.T) {
 	node := enrolledNode("node-1", "rnt_abc")
 

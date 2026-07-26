@@ -261,7 +261,7 @@ func TestACandidateIsWhatRecursThroughTheWholeLabWorld(t *testing.T) {
 	// load-bearing here and not only the relationships between them: a world that
 	// stopped stating its provider or its region would still key its listings
 	// consistently with each other, and consistently wrongly.
-	if want := "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"; keys["ask-4417"] != want {
+	if want := "lane=reusable;provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"; keys["ask-4417"] != want {
 		t.Fatalf("the ask is filed under %q, and this world lists it as %q", keys["ask-4417"], want)
 	}
 	if keys["ask-4417"] != keys["ask-90218"] {
@@ -285,8 +285,15 @@ func TestACandidateIsWhatRecursThroughTheWholeLabWorld(t *testing.T) {
 	// the Rental and the listing, and node-1 is the host. A key derived from either
 	// of the first two is a key about a lease two machines can share or about a
 	// search result, and both used to be this same string.
-	if keys["enrolled-a100"] != "provider=simnode;machine=node-1" {
+	if keys["enrolled-a100"] != "lane=reusable;provider=simnode;machine=node-1" {
 		t.Fatalf("the machine Mercator keeps is filed under %q", keys["enrolled-a100"])
+	}
+	// One provider selling one product both ways. The listing that becomes a machine
+	// with an enrolled runtime and the listing that is a one-shot execution are not
+	// the same thing to learn about: the first holds the image for the next Run and
+	// has an enrolment stage to predict, the second holds nothing and has neither.
+	if keys["ask-4417-oneshot"] == keys["ask-2211"] {
+		t.Fatalf("a one-shot execution and a rental of the same cards share the key %q", keys["ask-2211"])
 	}
 	// The one-shot pool publishes nothing that outlives its listing, so it has no
 	// key: a predictor answering "this exact candidate" there would be reporting

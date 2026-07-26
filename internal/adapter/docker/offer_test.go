@@ -99,8 +99,8 @@ func TestTwoDaemonsOnOneBoxAreTwoMachines(t *testing.T) {
 	if first.ID != second.ID {
 		t.Fatalf("this case is about two endpoints one label cannot tell apart; got %q and %q", first.ID, second.ID)
 	}
-	firstKey := domain.CandidateIdentityOf(first, "sha256:image").Candidate(true)
-	secondKey := domain.CandidateIdentityOf(second, "sha256:image").Candidate(true)
+	firstKey := domain.CandidateIdentityOf(aggregated(first), "sha256:image").Candidate(true)
+	secondKey := domain.CandidateIdentityOf(aggregated(second), "sha256:image").Candidate(true)
 	if firstKey == secondKey {
 		t.Fatalf("two daemons on one box share the candidate key %q", firstKey)
 	}
@@ -118,8 +118,8 @@ func TestOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
 	byHost := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", info, 0, nil, now)
 	byContext := StandingOffer(DeriveIdentity("", "gpu-ws"), "", info, 0, nil, now)
 
-	byHostKey := domain.CandidateIdentityOf(byHost, "sha256:image").Candidate(true)
-	byContextKey := domain.CandidateIdentityOf(byContext, "sha256:image").Candidate(true)
+	byHostKey := domain.CandidateIdentityOf(aggregated(byHost), "sha256:image").Candidate(true)
+	byContextKey := domain.CandidateIdentityOf(aggregated(byContext), "sha256:image").Candidate(true)
 	if byHostKey != byContextKey {
 		t.Fatalf("one machine keyed two ways:\n%s\n%s", byHostKey, byContextKey)
 	}
@@ -137,7 +137,7 @@ func TestAnUnreachableDaemonNamesNoMachine(t *testing.T) {
 	if offer.MachineID != "" {
 		t.Fatalf("an endpoint that answered nothing named the machine %q", offer.MachineID)
 	}
-	if key := domain.CandidateIdentityOf(offer, "sha256:image").Candidate(true); key != "" {
+	if key := domain.CandidateIdentityOf(aggregated(offer), "sha256:image").Candidate(true); key != "" {
 		t.Fatalf("an endpoint that answered nothing produced the key %q", key)
 	}
 }
@@ -372,4 +372,16 @@ func TestStandingOfferPublishesNoThroughputNothingMeasured(t *testing.T) {
 	if link.Confidence != domain.AssumedLinkConfidence {
 		t.Fatalf("registry link = %+v, want the standing assumption at %v confidence", link, domain.AssumedLinkConfidence)
 	}
+}
+
+// aggregated is the offer as a scheduler receives it. The Broker stamps the adapter
+// type from the connection the offer came through and the lane from the Declaration
+// the backend negotiated, which is ephemeral for a Docker endpoint until an agent
+// enrolls on the machine behind it. Capacity nobody classified has no key at any
+// level, so a case deriving a key from an unstamped offer would be comparing two
+// empty strings.
+func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
+	offer.AdapterType = "docker"
+	offer.Lane = domain.LaneEphemeral
+	return offer
 }
