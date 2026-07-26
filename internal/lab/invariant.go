@@ -476,13 +476,18 @@ func artifactReplicaVerified(observation InvariantObservation) error {
 	return artifactReadsWereVerified(observation)
 }
 
-// artifactReadsWereVerified is the read side of the same rule, stated against the
-// catalog rather than against the copy's own state alone. A host reporting a
-// checked copy has said what it checked those bytes against, and only the catalog
-// can say whether that is this version: restoring an older volume snapshot leaves
-// a machine holding a verified copy of the version before under this version's
-// name, and a Run handed those bytes read the wrong content at local-disk speed
-// on a candidate every predicate in the control plane priced at the whole read.
+// artifactReadsWereVerified is the read side of the same rule, stated over every
+// read a Run made and against the catalog rather than against a copy's own state.
+// What a workload was handed has to be the version it asked for however the bytes
+// reached it: restoring an older volume snapshot leaves a machine holding a
+// verified copy of the version before under this version's name, and a Run handed
+// those bytes read the wrong content at local-disk speed on a candidate every
+// predicate in the control plane priced at the whole read.
+//
+// Stating it over reads out of the object store as well is what makes the ledger
+// answerable for them. The durable copy is the authority, so a read from it is the
+// right bytes by construction, and a record that said otherwise would be the world
+// reporting a read it did not perform.
 func artifactReadsWereVerified(observation InvariantObservation) error {
 	for _, effect := range observation.Effects {
 		if effect.Operation != OperationArtifactRead || effect.Command != EffectCommandAccepted {
@@ -492,30 +497,23 @@ func artifactReadsWereVerified(observation InvariantObservation) error {
 			ArtifactID string `json:"artifact_id"`
 			OfferID    string `json:"offer_id"`
 		}
-		var read struct {
-			Source        string                      `json:"source"`
-			State         domain.ArtifactReplicaState `json:"state"`
-			ContentDigest string                      `json:"content_digest"`
-		}
+		var read artifactRead
 		if err := json.Unmarshal(effect.Request, &request); err != nil {
 			return fmt.Errorf("decode Artifact read %s: %w", effect.ID, err)
 		}
 		if err := json.Unmarshal(effect.Consequence, &read); err != nil {
 			return fmt.Errorf("decode Artifact read consequence %s: %w", effect.ID, err)
 		}
-		if read.Source != "replica" {
-			continue
-		}
-		if !read.State.Usable() {
+		if read.Source == "replica" && !read.ReplicaState.Usable() {
 			return fmt.Errorf(
 				"Run %q read Artifact %q from a %q copy on offer %q, which nothing checked against the catalog",
-				effect.CorrelationID, request.ArtifactID, read.State, request.OfferID,
+				effect.CorrelationID, request.ArtifactID, read.ReplicaState, request.OfferID,
 			)
 		}
 		if digest := observation.ArtifactCatalog[request.ArtifactID].ContentDigest; read.ContentDigest != digest {
 			return fmt.Errorf(
-				"Run %q read Artifact %q from a copy on offer %q claiming digest %s, and the catalog says %s",
-				effect.CorrelationID, request.ArtifactID, request.OfferID, read.ContentDigest, digest,
+				"Run %q read Artifact %q from the %s on offer %q and was handed digest %s, and the catalog says %s",
+				effect.CorrelationID, request.ArtifactID, read.Source, request.OfferID, read.ContentDigest, digest,
 			)
 		}
 	}

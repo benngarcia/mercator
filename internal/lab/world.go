@@ -1594,9 +1594,7 @@ func (world *simulatedWorld) readableReplica(artifactID, offerID string) (domain
 // the last of them is readable on the host. A copy this host may read is read
 // where there is one and costs nothing, which is the whole value of a replica;
 // anything else is read out of the object store, because a copy nobody checked
-// against this version is not evidence that the right bytes are here. The ledger
-// records which it was and what the copy claimed, so what a Run read is a fact
-// rather than an inference from world state.
+// against this version is not evidence that the right bytes are here.
 //
 // What the read does not leave behind is a copy. A workload reads its own inputs
 // into its own container: no runtime in this tree attaches a replica to a Run or
@@ -1607,13 +1605,7 @@ func (world *simulatedWorld) readableReplica(artifactID, offerID string) (domain
 func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consumes []string) time.Time {
 	ready := world.now
 	for _, artifactID := range consumes {
-		replica, readable := world.readableReplica(artifactID, execution.OfferID)
-		source := "replica"
-		completesAt := world.now
-		if !readable {
-			source = "object_store"
-			completesAt = world.now.Add(world.store.transferDuration(artifactID))
-		}
+		read := world.artifactRead(artifactID, execution.OfferID)
 		world.recordEffect(
 			OperationArtifactRead,
 			"artifact-read/"+execution.LaunchKey+"/"+artifactID,
@@ -1623,17 +1615,46 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 			execution.LaunchKey,
 			"",
 			map[string]any{"artifact_id": artifactID, "offer_id": execution.OfferID},
-			map[string]any{
-				"source":         source,
-				"state":          replica.State,
-				"content_digest": replica.ContentDigest,
-				"completes_at":   completesAt,
-			},
+			read,
 			"",
 		)
-		ready = later(ready, completesAt)
+		ready = later(ready, read.CompletesAt)
 	}
 	return ready
+}
+
+// artifactRead is what one execution was handed of one input: where the bytes
+// came from, what those bytes are, what the copy behind them was worth if there
+// was one, and when the last of them was readable.
+//
+// The digest is the served content's and never the machine's own bookkeeping. A
+// read out of the object store beside a stale copy's claim states that the
+// workload got another version's content, which is the opposite of what happened
+// and is all a tape reader or a Run Bundle has to go on. So a read from the store
+// carries the digest the catalog names and no replica state at all, because no
+// copy was behind it, and that is what lets one law cover every read a Run made.
+type artifactRead struct {
+	Source        string                      `json:"source"`
+	ContentDigest string                      `json:"content_digest"`
+	ReplicaState  domain.ArtifactReplicaState `json:"replica_state,omitempty"`
+	CompletesAt   time.Time                   `json:"completes_at"`
+}
+
+func (world *simulatedWorld) artifactRead(artifactID, offerID string) artifactRead {
+	if replica, readable := world.readableReplica(artifactID, offerID); readable {
+		return artifactRead{
+			Source:        "replica",
+			ContentDigest: replica.ContentDigest,
+			ReplicaState:  replica.State,
+			CompletesAt:   world.now,
+		}
+	}
+	version, _ := world.store.entry(artifactID)
+	return artifactRead{
+		Source:        "object_store",
+		ContentDigest: version.ContentDigest,
+		CompletesAt:   world.now.Add(world.store.transferDuration(artifactID)),
+	}
 }
 
 // storeRunOutputs is what a finished producer leaves behind: bytes on the host
