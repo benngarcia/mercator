@@ -1304,6 +1304,12 @@ complete because it works against a live provider.
     only ever remove seconds from one candidate, so no Run can be refused
     capacity for it, which is what `safety.locality_is_never_infeasibility`
     exists to guarantee and continues to hold with no new clause.
+  - Preparation still prepares. `orchestrator.alreadyHeld` drops only content a
+    machine established it is holding, so a queued Run whose host was preferred on
+    the record still has the copy fetched and checked there before its turn comes.
+    That is the right interaction rather than a gap: placement may prefer a machine
+    on the strength of a record, and the copy the Run actually reads is one
+    something verified.
   - The two models compute one uncertainty penalty. `internal/lab/oracle.go`
     counted an offer nobody could enumerate and an offer with no price as
     uncertainty and `internal/scheduler/scheduler.go` did not, and they agreed
