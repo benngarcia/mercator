@@ -115,12 +115,15 @@ func TestANodeStillRunningPastItsBoundIsNotQueuedBehind(t *testing.T) {
 		spec["execution"].(map[string]any)["max_runtime_seconds"] = 1
 		return revision
 	})
+	// The runtime Mercator enforces is a bound on a container, so its clock starts
+	// when the machine says there is one running. The daemon has to have heard
+	// that before the Booking has a bound to be past, which is what waiting for
+	// the machine to report itself occupied establishes.
 	fleet.runtime.awaitLaunch(t, stuck)
-	// The runtime Mercator enforces is measured against the container, so the
-	// clock on it starts when the machine says the container is running. There is
-	// no virtual time here: the daemon reads the wall clock, the enforced second
-	// has to pass, and this container never exits.
+	fleet.awaitOccupied(t, fleet.nodeID)
 	fleet.advance(t, stuck)
+	// There is no virtual time here: the daemon reads the wall clock, the enforced
+	// second has to pass, and this container never exits.
 	time.Sleep(1500 * time.Millisecond)
 
 	arriving := fleet.submitRun(t)
@@ -378,6 +381,22 @@ func (f *fleet) enrollAnother(t *testing.T, priceUSDPerHour float64) machine {
 	f.startAgent(t, bootstrap, runtime)
 	f.awaitOffer(t, bootstrap.NodeID)
 	return machine{nodeID: bootstrap.NodeID, runtime: runtime}
+}
+
+// awaitOccupied waits until this machine reports that it is executing a workload.
+// What a node is running is its own fact and it travels by heartbeat, so a case
+// that needs the control plane to know about a container waits for the machine to
+// have said so rather than for the command that asked for it.
+func (f *fleet) awaitOccupied(t *testing.T, nodeID string) {
+	t.Helper()
+	waitFor(t, func() bool {
+		for _, offer := range f.offers(t) {
+			if offer.ID == nodeID {
+				return !offer.Capacity.Available
+			}
+		}
+		return false
+	}, "the machine "+nodeID+" never reported the workload it was asked to run")
 }
 
 // awaitOffer waits until Placement can choose this machine at all. It can only
@@ -704,6 +723,7 @@ type offerSnapshot struct {
 	Resources domain.ResourceInventory `json:"resources"`
 	Images    domain.ImageInventory    `json:"images"`
 	Artifacts domain.ArtifactInventory `json:"artifacts"`
+	Capacity  domain.CapacityEvidence  `json:"capacity"`
 }
 
 func (f *fleet) offers(t *testing.T) []offerSnapshot {

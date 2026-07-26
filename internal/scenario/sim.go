@@ -119,15 +119,22 @@ func simSchedules(spec WorldSpec, log eventlog.WorkspaceEventLog) (*simSeededSch
 }
 
 // simRentalSchedule is one Rental's declared Bookings reserved through the same
-// domain transition production reserves through, so a fixture can only state a
+// domain transitions production reserves through, so a fixture can only state a
 // schedule Mercator could have reached. Runtimes a fixture states are what each
 // Booking has left rather than what its Run declared, so each is seeded as a
-// Booking that took the Rental at the world's start owing exactly that much.
+// Booking owing exactly that much at the world's start.
 //
-// The version is the fixture's own, and it is the one thing Reserve cannot
-// supply: a schedule's version counts every transition it has seen, including
-// the Bookings that have already finished, so a fixture stating five Bookings at
-// version nine is a Rental that has done more work than the world can see.
+// A fixture that says a Rental is running work says its workload is running, which
+// is the moment the runtimes above are measured from and the reason the Booking
+// holding the machine is seeded through Started as well as Reserve. Without it the
+// world would state a machine occupied by a container nothing has launched, and
+// every projection off it would report the whole declared runtime forever.
+//
+// The version is the fixture's own, and it is the one thing these transitions
+// cannot supply: a schedule's version counts every transition it has seen,
+// including the Bookings that have already finished, so a fixture stating five
+// Bookings at version nine is a Rental that has done more work than the world can
+// see.
 func simRentalSchedule(declared RentalScheduleSpec, start time.Time) (domain.RentalSchedule, error) {
 	schedule, _, err := domain.NewRentalSchedule(declared.RentalID).Reserve(domain.BookingRequest{
 		BookingID:              declared.Running.BookingID,
@@ -136,6 +143,10 @@ func simRentalSchedule(declared RentalScheduleSpec, start time.Time) (domain.Ren
 		MaxRuntimeSeconds:      declared.Running.RemainingMaxRuntime.Duration().Seconds(),
 		ReservedAt:             start,
 	})
+	if err != nil {
+		return domain.RentalSchedule{}, err
+	}
+	schedule, err = schedule.Started(declared.Running.BookingID, start)
 	if err != nil {
 		return domain.RentalSchedule{}, err
 	}

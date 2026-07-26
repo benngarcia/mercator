@@ -77,6 +77,10 @@ func TestRentalScheduleDispatchesAndReprojectsAfterActiveBookingCompletes(t *tes
 // half hour of waiting for the whole half hour, so a Rental a minute from free
 // looked exactly as busy as one that had just started, and a Run that refused to
 // wait three minutes was told there was no capacity for it.
+//
+// Where a Booking is is measured from its workload, which is what its declared
+// runtime bounds. This one spent five minutes fetching its image before there was
+// a container at all, and none of that is runtime.
 func TestRentalScheduleProjectsItsWaitFromWhereItsBookingsAre(t *testing.T) {
 	reserved := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
 	schedule, _, err := NewRentalSchedule("rental-warm").Reserve(BookingRequest{
@@ -89,6 +93,14 @@ func TestRentalScheduleProjectsItsWaitFromWhereItsBookingsAre(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserve the running Booking: %v", err)
 	}
+	launched := reserved.Add(5 * time.Minute)
+	if wait := schedule.ExpectedWaitSeconds(launched); wait != 1800 {
+		t.Errorf("five minutes into a pull the Rental is %v seconds from free, want the whole runtime nothing has spent yet", wait)
+	}
+	running, err := schedule.Started("booking-long", launched)
+	if err != nil {
+		t.Fatalf("record the workload running: %v", err)
+	}
 
 	for _, moment := range []struct {
 		elapsed time.Duration
@@ -98,7 +110,7 @@ func TestRentalScheduleProjectsItsWaitFromWhereItsBookingsAre(t *testing.T) {
 		{elapsed: 29 * time.Minute, wait: 60},
 		{elapsed: 45 * time.Minute, wait: 0},
 	} {
-		if wait := schedule.ExpectedWaitSeconds(reserved.Add(moment.elapsed)); wait != moment.wait {
+		if wait := running.ExpectedWaitSeconds(launched.Add(moment.elapsed)); wait != moment.wait {
 			t.Errorf("%v into a half-hour Booking the wait is %v seconds, want %v", moment.elapsed, wait, moment.wait)
 		}
 	}
@@ -144,6 +156,10 @@ func TestAScheduleWhoseBookingIsPastItsBoundPromisesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserve the running Booking: %v", err)
 	}
+	schedule, err = schedule.Started("booking-active", reserved)
+	if err != nil {
+		t.Fatalf("record the workload running: %v", err)
+	}
 	overrun := reserved.Add(50 * time.Minute)
 
 	if !schedule.Exhausted(overrun) {
@@ -165,6 +181,71 @@ func TestAScheduleWhoseBookingIsPastItsBoundPromisesNothing(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("the schedule promised a start behind a Booking it cannot project, at the moment of the reservation itself")
+	}
+}
+
+// TestABookingStillStartingIsNotPastItsBound is the defect that made this clock
+// the workload's. A Booking was recorded as taking its Rental at the moment of the
+// placement decision, and both runtimes it declares bound a container, so
+// provisioning and image pull were spent against a runtime nothing was enforcing
+// yet. A Run declaring twenty minutes behind a fifteen-minute fetch had its
+// Booking read as past its own bound one minute into the workload: the machine was
+// refused to every arriving Run as occupied past what Mercator enforces, nothing
+// could be promised a start behind it for the rest of the Run, and the record
+// published an overrun as a measured fact about a machine running normally.
+func TestABookingStillStartingIsNotPastItsBound(t *testing.T) {
+	reserved := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	schedule, _, err := NewRentalSchedule("rental-fresh").Reserve(BookingRequest{
+		BookingID:              "booking-fetching",
+		RunID:                  "run-fetching",
+		ExpectedRuntimeSeconds: 1080,
+		MaxRuntimeSeconds:      1200,
+		ReservedAt:             reserved,
+	})
+	if err != nil {
+		t.Fatalf("reserve the Booking: %v", err)
+	}
+	fetching := reserved.Add(21 * time.Minute)
+
+	if schedule.Exhausted(fetching) {
+		t.Fatal("a Booking whose workload has not started is past a runtime nothing is enforcing yet")
+	}
+	evidence := schedule.Evidence(fetching)
+	if evidence.Running.OverrunSeconds != 0 {
+		t.Errorf("the record says a machine still fetching has overrun %v seconds", evidence.Running.OverrunSeconds)
+	}
+	if evidence.Running.RemainingMaxRuntimeSeconds != 1200 {
+		t.Errorf("the record says %v enforced seconds are left, want the whole bound the container has not begun to spend",
+			evidence.Running.RemainingMaxRuntimeSeconds)
+	}
+	if _, _, err := schedule.Reserve(BookingRequest{
+		BookingID:              "booking-waiting",
+		RunID:                  "run-waiting",
+		ExpectedRuntimeSeconds: 300,
+		MaxRuntimeSeconds:      600,
+		ReservedAt:             fetching,
+	}); err != nil {
+		t.Fatalf("nothing could be queued behind a machine that is starting normally: %v", err)
+	}
+}
+
+// TestOnlyTheWorkloadHoldingTheRentalCanStart keeps the moment both runtimes are
+// measured from a fact rather than an assumption. A Booking waiting behind the
+// work in front of it has no container, and a second answer about one already
+// running would be Mercator restating a moment it holds.
+func TestOnlyTheWorkloadHoldingTheRentalCanStart(t *testing.T) {
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	schedule := reservedSchedule(t, now)
+
+	if _, err := schedule.Started("booking-first", now); err == nil {
+		t.Fatal("a Booking waiting behind the work in front of it reported a container running")
+	}
+	running, err := schedule.Started("booking-active", now)
+	if err != nil {
+		t.Fatalf("record the workload running: %v", err)
+	}
+	if _, err := running.Started("booking-active", now.Add(time.Minute)); err == nil {
+		t.Fatal("the schedule accepted a second answer about when one container started")
 	}
 }
 

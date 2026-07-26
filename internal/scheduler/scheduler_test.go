@@ -170,6 +170,13 @@ func TestAQueueThatIsNearlyDoneIsAShortWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserve the running Booking: %v", err)
 	}
+	// Its workload started when it was placed. Both runtimes a Booking declares
+	// bound a container, so nothing has elapsed against them until the machine
+	// says there is one.
+	schedule, err = schedule.Started("booking-long", reserved)
+	if err != nil {
+		t.Fatalf("record the workload running: %v", err)
+	}
 	offer := schedulerOffer("off_busy", now, 0.0001, 0)
 	workload := schedulerRevision()
 	workload.Spec.Placement.MaxP90StartSeconds = 180

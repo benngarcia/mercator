@@ -961,13 +961,78 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase {
 		return false, nil
 	}
-	toAppend := []eventlog.NewEvent{
+	request, err := runAppendRequest(nil, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), []eventlog.NewEvent{
 		mustEvent(runID, fmt.Sprintf("external_state_observed_%d", version+1), EventExternalStateObserved, observation, o.now()),
+	})
+	if err != nil {
+		return false, err
 	}
-	if err := o.appendEvents(ctx, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), toAppend); err != nil {
+	if err := o.commitObservation(ctx, workspaceID, request, state, observation); err != nil {
 		return false, err
 	}
 	return isTerminal(observation.Phase), nil
+}
+
+// commitObservation writes the fact, and with it the moment this Run's workload
+// began running when the fact is what establishes it. The two are one append
+// because they are one observation: a schedule that learned the start separately
+// could disagree with the run's own history about when the machine said it.
+func (o *Orchestrator) commitObservation(
+	ctx context.Context,
+	workspaceID string,
+	request eventlog.AppendRequest,
+	state runState,
+	observation adapter.ExternalObservation,
+) error {
+	started, establishes, err := o.workloadStarted(ctx, workspaceID, state, observation)
+	if err != nil {
+		return err
+	}
+	if !establishes {
+		_, err = o.appendRun(ctx, request)
+		return err
+	}
+	_, err = o.commitSchedule(ctx, request, started.Version-1, started)
+	return err
+}
+
+// workloadStarted is this Run's Rental Schedule with the moment its workload
+// began running recorded on it. Both runtimes a Booking declares are bounds on a
+// container, so that moment is the only clock they can be measured from: charging
+// them from the placement decision spent provisioning and image pull against a
+// runtime nothing was enforcing yet, which read a machine still fetching as past
+// its own bound.
+//
+// Three observations establish nothing. One that does not say the container is
+// running has no moment in it. A Rental holding nothing has already finished this
+// Booking, so there is nothing left to start. A Rental holding a Booking for
+// another Run is a machine two Runs are on, which is a reconciliation problem
+// rather than a moment to record, and starting this Booking's clock from another
+// Run's container would bury it.
+func (o *Orchestrator) workloadStarted(
+	ctx context.Context,
+	workspaceID string,
+	state runState,
+	observation adapter.ExternalObservation,
+) (domain.RentalSchedule, bool, error) {
+	if observation.Phase != adapter.ExternalPhaseRunning || state.bookingDecision == nil || state.bookingDecision.Booking == nil {
+		return domain.RentalSchedule{}, false, nil
+	}
+	schedules, err := o.schedules.List(ctx, workspaceID)
+	if err != nil {
+		return domain.RentalSchedule{}, false, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
+	}
+	booking := state.bookingDecision.Booking
+	schedule := schedules[booking.RentalID]
+	holding, held := schedule.Holding()
+	if !held || holding.Booking.ID != booking.ID || !holding.StartedAt.IsZero() {
+		return domain.RentalSchedule{}, false, nil
+	}
+	next, err := schedule.Started(booking.ID, observation.ObservedAt)
+	if err != nil {
+		return domain.RentalSchedule{}, false, err
+	}
+	return next, true, nil
 }
 
 func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, state runState) (adapter.ExternalObservation, error) {

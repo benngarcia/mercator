@@ -19,14 +19,25 @@ type ScheduledBooking struct {
 	Booking                Booking `json:"booking"`
 	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds"`
 	MaxRuntimeSeconds      float64 `json:"max_runtime_seconds"`
-	// StartedAt is when this Booking took the Rental, which is what makes the
-	// runtimes above projectable rather than merely declared. Without it the
+	// StartedAt is when the workload this Booking is for started running, as the
+	// machine that owns its container lifecycle reported it. It is what makes the
+	// runtimes above projectable rather than merely declared: without it the
 	// schedule reports an hour of waiting for a Booking one minute from its own
-	// expected finish, and a Run that refuses to wait three minutes is told
-	// there is no capacity for it. A queued Booking has not started and says so
-	// with the zero time; so does a running one recorded before Mercator kept
-	// this, and both then owe their whole declared runtime, because a schedule
-	// that cannot say how much has elapsed must not assume any of it has.
+	// expected finish, and a Run that refuses to wait three minutes is told there
+	// is no capacity for it.
+	//
+	// Both runtimes above are bounds on a container, so this is the only clock
+	// they can be measured against. It was the moment of the placement decision
+	// until this was corrected, which spent provisioning and image pull against a
+	// runtime nothing was enforcing yet.
+	//
+	// A Booking whose workload has not started says so with the zero time, and one
+	// that has taken the Rental and not yet launched is exactly that: it owes its
+	// whole declared runtime, because a schedule that cannot say how much has
+	// elapsed must not assume any of it has. What it does not say is how much
+	// longer the preparation ahead of the container will take, which nothing here
+	// bounds, so the wait it projects for a Booking still starting is a floor
+	// rather than a promise.
 	StartedAt time.Time `json:"started_at,omitzero"`
 }
 
@@ -44,12 +55,13 @@ func (scheduled ScheduledBooking) RemainingMaxSeconds(now time.Time) float64 {
 	return remainingSeconds(scheduled.MaxRuntimeSeconds, scheduled.StartedAt, now)
 }
 
-// OverrunSeconds is how far past the runtime Mercator enforces this Booking has
-// run. It exists because the projections above bottom out at zero, and zero read
-// as a wait says a machine is a moment from free when what it says is that the
-// arithmetic ran out: enforcement is a reconciliation rather than an instant, so
-// a Booking whose node has gone quiet holds its Rental with nothing left to
-// project from. A Booking inside its bound has overrun nothing.
+// OverrunSeconds is how far past the runtime Mercator enforces this Booking's
+// workload has run. It exists because the projections above bottom out at zero,
+// and zero read as a wait says a machine is a moment from free when what it says
+// is that the arithmetic ran out: enforcement is a reconciliation rather than an
+// instant, so a Booking whose node has gone quiet holds its Rental with nothing
+// left to project from. A Booking inside its bound has overrun nothing, and so
+// has one whose container has not started.
 func (scheduled ScheduledBooking) OverrunSeconds(now time.Time) float64 {
 	if scheduled.StartedAt.IsZero() {
 		return 0
@@ -143,20 +155,42 @@ func (schedule RentalSchedule) Reserve(request BookingRequest) (RentalSchedule, 
 		Booking:                booking,
 		ExpectedRuntimeSeconds: request.ExpectedRuntimeSeconds,
 		MaxRuntimeSeconds:      request.MaxRuntimeSeconds,
-		StartedAt:              tookTheRentalAt(booking, request.ReservedAt),
 	})
 	return next, booking, nil
 }
 
-// tookTheRentalAt is when this Booking began occupying the Rental: the moment it
-// was reserved for one that goes straight to running, and nothing at all for one
-// that waits, because a queued Booking starts when the Booking ahead of it
-// finishes and that moment is recorded when it arrives.
-func tookTheRentalAt(booking Booking, reservedAt time.Time) time.Time {
-	if booking.State != BookingStateRunning {
-		return time.Time{}
+// Started records the moment the workload holding this Rental began running,
+// which is the moment both of its declared runtimes are measured from. It is a
+// fact the machine reports, so it arrives after the reservation rather than with
+// it: a Booking is minted, the content the Run needs is fetched, and only then is
+// there a container for a runtime bound to apply to.
+//
+// Only the Booking holding the Rental can have started, and only once. A schedule
+// asked to start something waiting behind the work in front of it, or to restate a
+// moment it already holds, is being told about a machine it is not the record for.
+func (schedule RentalSchedule) Started(bookingID string, at time.Time) (RentalSchedule, error) {
+	if bookingID == "" || at.IsZero() {
+		return RentalSchedule{}, fmt.Errorf("Rental Schedule start requires Booking identity and time")
 	}
-	return reservedAt
+	if schedule.bookingIndex(bookingID) != 0 {
+		return RentalSchedule{}, fmt.Errorf(
+			"Rental Schedule for Rental %q is not holding Booking %q, so no workload of its own started",
+			schedule.RentalID, bookingID,
+		)
+	}
+	if !schedule.Bookings[0].StartedAt.IsZero() {
+		return RentalSchedule{}, fmt.Errorf(
+			"Rental Schedule already records Booking %q running since %s",
+			bookingID, schedule.Bookings[0].StartedAt.Format(time.RFC3339),
+		)
+	}
+	next := RentalSchedule{
+		RentalID: schedule.RentalID,
+		Version:  schedule.Version + 1,
+		Bookings: append([]ScheduledBooking(nil), schedule.Bookings...),
+	}
+	next.Bookings[0].StartedAt = at
+	return next, nil
 }
 
 func (schedule RentalSchedule) Complete(bookingID string, completedAt time.Time) (RentalSchedule, *Booking, error) {
@@ -181,6 +215,16 @@ func (schedule RentalSchedule) Complete(bookingID string, completedAt time.Time)
 	return next, &dispatched, nil
 }
 
+// Holding is the Booking occupying this Rental and whether anything is. Only the
+// Booking at the head has the machine, so it is the only one that can have a
+// workload running on it.
+func (schedule RentalSchedule) Holding() (ScheduledBooking, bool) {
+	if len(schedule.Bookings) == 0 {
+		return ScheduledBooking{}, false
+	}
+	return schedule.Bookings[0], true
+}
+
 func (schedule RentalSchedule) bookingIndex(bookingID string) int {
 	for index, scheduled := range schedule.Bookings {
 		if scheduled.Booking.ID == bookingID {
@@ -201,12 +245,10 @@ func (schedule RentalSchedule) reproject(now time.Time) RentalSchedule {
 			booking.AfterBookingID = ""
 			booking.ProjectedStartAt = nil
 			booking.LatestStartAt = nil
-			if schedule.Bookings[index].StartedAt.IsZero() {
-				// The Booking ahead of this one just finished, so this is the
-				// moment this one took the Rental. Recording it is what lets
-				// every later projection ask how much of its runtime is left.
-				schedule.Bookings[index].StartedAt = now
-			}
+			// Nothing is recorded as running here. The Booking ahead of this one
+			// just finished, so this one holds the Rental now, and the workload it
+			// is for has not been launched yet: the machine says when that
+			// happened, and until it does this Booking owes its whole runtime.
 		} else {
 			booking.State = BookingStateQueued
 			booking.AfterBookingID = schedule.Bookings[index-1].Booking.ID
