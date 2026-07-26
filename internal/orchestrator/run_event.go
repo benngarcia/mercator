@@ -12,18 +12,18 @@ import (
 )
 
 type runState struct {
-	requested                *runRequestedData
-	bookingDecision          *domain.BookingDecision
-	attempt                  *attemptData
-	launchIntent             *adapter.LaunchRequest
-	launchAccepted           bool
-	launchAcceptedAt         time.Time
+	requested        *runRequestedData
+	bookingDecision  *domain.BookingDecision
+	attempt          *attemptData
+	launchIntent     *adapter.LaunchRequest
+	launchAccepted   bool
+	launchAcceptedAt time.Time
 	// startedAt is when this attempt's workload actually began, as the machine
 	// holding it reported the moment. It is nil until something observed one, and
 	// it is never filled in from launchAcceptedAt: the gap between the two is the
 	// start latency every prediction in phase 4 is calibrated against, and a
 	// derived value would make that subtraction zero for every Run in the log.
-	startedAt *time.Time
+	startedAt                *time.Time
 	launchFailure            *launchFailureData
 	attemptCount             int
 	excludedOfferSnapshotIDs []string
