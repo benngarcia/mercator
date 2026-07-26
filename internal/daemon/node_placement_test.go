@@ -1591,6 +1591,36 @@ func TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout(t *testing.T) {
 	}
 }
 
+// TestAnImpossibleAskLeavesThisFleetRunning is what queueing a Run nothing can
+// place does to the rest of the workspace, end to end through the public API. It
+// is the order that makes the case: the impossible Run is queued first, so it is
+// the older wait and it outranks every later arrival of its own class, and the
+// queue's whole job is to make later work respect a wait like that.
+//
+// It must not respect this one. The Run in front is waiting for a machine with
+// three times this fleet's room to be added, the Run behind it fits the node that
+// is here, and they are not waiting for the same thing. Ordering the second behind
+// the first left the node idle until the first one's class deadline cleared it,
+// four hours later for standard work and never for a class that declares none.
+func TestAnImpossibleAskLeavesThisFleetRunning(t *testing.T) {
+	fleet := startFleet(t)
+
+	oversized := fleet.submitRunNeedingDisk(t, 900<<30)
+	fleet.queueForWantOfCapacity(t, oversized)
+	fits := fleet.submitRunNeedingDisk(t, 100<<30)
+	fleet.completeWorkload(t, fits, 0)
+	fleet.awaitOutcome(t, fits, "succeeded")
+
+	launched := fleet.runtime.launchedRuns()
+	if !slices.Contains(launched, fits) {
+		t.Fatalf("the node sat idle beside a Run needing 100GiB of its 400GiB: %v", launched)
+	}
+	if slices.Contains(launched, oversized) {
+		t.Fatalf("a Run needing 900GiB was sent to a machine with 400GiB free: %v", launched)
+	}
+	fleet.queueForWantOfCapacity(t, oversized)
+}
+
 // TestTheFleetListingReportsTheRoomThisMachineReallyHas is the whole chain
 // against a real container daemon: this host's Docker names the filesystem it
 // keeps content on, the production agent measures it, the node protocol carries
