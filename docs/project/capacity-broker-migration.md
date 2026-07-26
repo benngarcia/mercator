@@ -1482,9 +1482,14 @@ Phase 3 added:
   while carrying it in the projection the entire time. That consumer then lands on
   the very machine the checkpoint was written on and reads the object store
   anyway, priced the full 160 seconds, because nothing of Mercator's fetched,
-  hashed, or filed what a workload wrote inside its own container. A later Run
-  consumes an Artifact whose only copy sat on a Rental whose idle lease has since
-  elapsed, and runs anyway from the object store. That same Run reads a second
+  hashed, or filed what a workload wrote inside its own container. Which machine
+  that is comes out of the ledger rather than out of the fixture: the case reads
+  the producing host off the `artifact.written` effect and requires the consumer's
+  selected offer to be that same host, because an assertion naming
+  `producer-rental` would hold just as well in a world where the producer ran
+  somewhere else. A later Run consumes an Artifact whose only copy sat on a Rental
+  whose idle lease has since elapsed, and runs anyway from the object store. That
+  same Run reads a second
   Artifact whose copy is sitting on the host it landed on and fetches it anyway,
   because nobody ever checked those bytes against the catalog. The Run behind it
   reads what that fetch left and something checked, and is priced no read at all,
@@ -1792,13 +1797,29 @@ What was checked before removing it:
 
 The live half ran, and it is the fact the withdrawal rests on.
 `TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote` starts a MinIO container on
-this machine's own daemon, has the production `DockerRuntime` launch a real
-busybox workload that writes its output inside its own container, and reads the
-node's own Artifact inventory: enumerated, and empty. The same content then
-arrives through `PrepareArtifact` over a presigned GET and is reported verified
-against the digest the bytes produce. What a real node can say about content its
-own workload produced is nothing, so a record of where bytes were written buys a
-consumer nothing either.
+this machine's own daemon and has the production `DockerRuntime` launch a real
+busybox workload that generates its output inside its own container. The test then
+reads those bytes back out of the running container, which is the only way
+anything outside it can see them, and only then asks the node what it holds:
+enumerated, and empty. Every byte of that content is on this machine, under the
+digest a catalog would name it by, and the node reports no copy of it. Those same
+bytes, the ones that came out of the container, are what the object store is
+loaded with, so the content that arrives back through `PrepareArtifact` over a
+presigned GET and is reported verified is the content the workload wrote. The
+upload itself is issued by the test rather than by busybox, which can neither sign
+an S3 request nor reach this host's loopback, and it carries the container's own
+bytes so that both halves are about one piece of content. What a real node can say
+about content its own workload produced is nothing, so a record of where bytes
+were written buys a consumer nothing either.
+
+Three deliberate breaks hold that live case, because the first version of it did
+not have any and a reviewer was right that it could not fail. Sending the
+producer's output to another path fails it with `the workload in
+mercator-run-producer-1 never wrote /checkpoint`, so no container, no write, and
+no daemon means no assertion. Serving the store bytes the container never held
+fails it with an `unverified` replica, so the second half is tied to the first.
+And filing a copy of a workload's own output would fail the enumeration check that
+sits between them.
 
 Two claims survive the withdrawal, each held by a deliberate break:
 
@@ -1812,6 +1833,16 @@ Two claims survive the withdrawal, each held by a deliberate break:
   Artifact "artifact:checkpoint:v1", which nothing published`, through both
   `TestTheMachineThatWroteTheContentStillReadsTheObjectStore` and
   `TestAConsumerReadsTheCopyAFetchLeftBehind`.
+
+The second of those two cases now names no machine either. It reads the producing
+host off the `artifact.written` effect and requires the consumer's selected offer
+to be that host, so what is asserted is that one machine both wrote the content
+and read the object store rather than that a fixture called something
+`producer-rental`. Recording the write against another machine fails it with `the
+checkpoint was written on "some-other-machine" and its consumer was placed on
+"producer-rental"`. Swapping the two Rentals' rates now moves the assertion to
+`doomed-rental`, which is where both the producer and its consumer go in that
+world, instead of leaving the sentence exercised by nothing.
 
 What the review leaves open is one gap, now filed as
 [#171](https://github.com/benngarcia/mercator/issues/171): a verified replica in a

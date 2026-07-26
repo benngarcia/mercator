@@ -180,6 +180,12 @@ func TestAConsumerRunsWhenTheOnlyCopyIsGone(t *testing.T) {
 // daemon reports no copy of what its own workload just wrote, which is what
 // internal/nodeagent proves live, and this is the same fact where Placement can
 // see it.
+//
+// Which machine that is comes out of the ledger rather than out of the fixture's
+// names. The write says where it happened and the decision says where the
+// consumer went, and the case is only about a producing host at all if those two
+// are the same machine: an assertion naming "producer-rental" would hold in a
+// world where the producer ran somewhere else entirely.
 func TestTheMachineThatWroteTheContentStillReadsTheObjectStore(t *testing.T) {
 	execution := openConformanceExecution(t, "artifact-must-be-durable-before-a-consumer-runs")
 	defer func() {
@@ -190,14 +196,18 @@ func TestTheMachineThatWroteTheContentStillReadsTheObjectStore(t *testing.T) {
 
 	driveInMinuteSteps(t, execution, 80)
 
-	written := effectTime(t, execution.runtime.world.effectRecords(), OperationArtifactWritten, checkpointArtifact)
-	if written.IsZero() {
-		t.Fatal("the producer never wrote its output anywhere, so this case is about nothing")
+	producer := effectOffer(t, execution.runtime.world.effectRecords(), OperationArtifactWritten, checkpointArtifact)
+	decision := bookingDecisions(t, execution)["run-checkpoint-consumer"]
+	if decision.SelectedOfferSnapshotID != producer {
+		t.Fatalf(
+			"the checkpoint was written on %q and its consumer was placed on %q, and this case is a Run landing on the machine holding its input",
+			producer, decision.SelectedOfferSnapshotID,
+		)
 	}
 	if source := artifactReadSource(t, execution, "run-checkpoint-consumer", checkpointArtifact); source != "object_store" {
 		t.Fatalf("the consumer read its input from %q on the machine that wrote it, and nothing checked those bytes", source)
 	}
-	candidate := candidateFor(t, bookingDecisions(t, execution)["run-checkpoint-consumer"], "producer-rental")
+	candidate := candidateFor(t, decision, producer)
 	if len(candidate.ArtifactEvidence) != 1 || candidate.ArtifactEvidence[0].Locality != domain.LocalityCold {
 		t.Fatalf("the host that wrote the checkpoint records %+v of it", candidate.ArtifactEvidence)
 	}
@@ -444,6 +454,28 @@ func runEventTime(t *testing.T, execution *Execution, eventType, runID string) t
 
 func effectTime(t *testing.T, effects []EffectRecord, operation, artifactID string) time.Time {
 	t.Helper()
+	return artifactEffect(t, effects, operation, artifactID).At
+}
+
+// effectOffer is the machine an Artifact effect happened on, which is how a test
+// asks the ledger where a workload ran instead of assuming it from a fixture.
+func effectOffer(t *testing.T, effects []EffectRecord, operation, artifactID string) string {
+	t.Helper()
+	var request struct {
+		OfferID string `json:"offer_id"`
+	}
+	effect := artifactEffect(t, effects, operation, artifactID)
+	if err := json.Unmarshal(effect.Request, &request); err != nil {
+		t.Fatalf("decode %s request: %v", operation, err)
+	}
+	if request.OfferID == "" {
+		t.Fatalf("the %s of Artifact %q names no machine: %s", operation, artifactID, effect.Request)
+	}
+	return request.OfferID
+}
+
+func artifactEffect(t *testing.T, effects []EffectRecord, operation, artifactID string) EffectRecord {
+	t.Helper()
 	for _, effect := range effects {
 		if effect.Operation != operation || effect.Command != EffectCommandAccepted {
 			continue
@@ -455,11 +487,11 @@ func effectTime(t *testing.T, effects []EffectRecord, operation, artifactID stri
 			t.Fatalf("decode %s request: %v", operation, err)
 		}
 		if request.ArtifactID == artifactID {
-			return effect.At
+			return effect
 		}
 	}
 	t.Fatalf("the ledger records no %s for Artifact %q", operation, artifactID)
-	return time.Time{}
+	return EffectRecord{}
 }
 
 func artifactReadSource(t *testing.T, execution *Execution, runID, artifactID string) string {
