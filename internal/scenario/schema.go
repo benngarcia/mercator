@@ -42,6 +42,15 @@ type Outcome string
 const (
 	OutcomePlace Outcome = "place"
 	OutcomeFail  Outcome = "fail"
+	// OutcomeDefer is a Run admission told to wait. It is a different sentence
+	// from "fail": a Run nothing would take recorded nothing at all and was
+	// retried for ever, so a corpus that could say only "no offer was selected"
+	// could not tell that apart from a Run that is queued and will run.
+	OutcomeDefer Outcome = "defer"
+	// OutcomeRefuse is a Run admission would not queue, because the moment its
+	// class says it must have started by is already behind the wait in front of
+	// it.
+	OutcomeRefuse Outcome = "refuse"
 )
 
 type BookingState string
@@ -1148,6 +1157,28 @@ type ExpectSpec struct {
 	// Candidates assert the per-candidate evidence the decision weighed,
 	// keyed by rental or marketplace offer ID.
 	Candidates map[string]CandidateExpectation `json:"candidates,omitempty"`
+	// Deferral asserts what admission recorded about this Run waiting. It is
+	// how the corpus states the queue: a Run that waits and never says why is
+	// the state this stage was built to replace.
+	Deferral *DeferralExpectation `json:"deferral,omitempty"`
+}
+
+// DeferralExpectation is one recorded moment a Run was told to wait, or refused
+// the wait.
+type DeferralExpectation struct {
+	// Reason is the code admission recorded: why this Run is not running.
+	Reason string `json:"reason"`
+	// Behind names the Runs the record says this one is waiting behind, by the
+	// fixture's own names for them. It is a whole-set assertion, because a
+	// deferral naming half of what a Run waits for is a queue an operator
+	// cannot read.
+	Behind []string `json:"behind,omitempty"`
+	// Priority asserts what the record says this Run was worth at that moment,
+	// which is the number the ordering was decided on and the only visible
+	// evidence that waiting promoted it at all.
+	Priority *Bound `json:"effective_priority,omitempty"`
+	// QueuedSeconds asserts how long the record says it had been waiting.
+	QueuedSeconds *Bound `json:"queued_seconds,omitempty"`
 }
 
 type BookingExpectation struct {
@@ -2469,8 +2500,18 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 		if expect.Offer != "" || expect.Booking != nil {
 			return fmt.Errorf("outcome \"fail\" selects no offer and creates no Booking")
 		}
+	case OutcomeDefer, OutcomeRefuse:
+		if expect.Offer != "" || expect.Booking != nil {
+			return fmt.Errorf("outcome %q selects no offer and creates no Booking", expect.Outcome)
+		}
+		if expect.Deferral == nil {
+			return fmt.Errorf("outcome %q states what admission recorded, so it needs a deferral", expect.Outcome)
+		}
 	default:
-		return fmt.Errorf("outcome must be \"place\" or \"fail\", got %q", expect.Outcome)
+		return fmt.Errorf("outcome must be \"place\", \"fail\", \"defer\", or \"refuse\", got %q", expect.Outcome)
+	}
+	if expect.Deferral != nil && expect.Deferral.Reason == "" {
+		return fmt.Errorf("a deferral states the reason admission recorded")
 	}
 	if booking := expect.Booking; booking != nil {
 		if booking.BookingID == "" || booking.RentalID == "" || booking.ScheduleVersion == 0 {

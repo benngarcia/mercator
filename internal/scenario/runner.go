@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
@@ -219,6 +220,9 @@ func assertExpect(session Session, start time.Time, bookings bookingNames, name 
 	if err != nil {
 		return []string{fmt.Sprintf("run %q: read events: %v", name, err)}
 	}
+	if expect.Outcome == OutcomeDefer || expect.Outcome == OutcomeRefuse {
+		return assertAdmission(events, name, expect)
+	}
 	rec, ok := latestDecision(events)
 	if !ok {
 		return []string{fmt.Sprintf("run %q: no booking decision recorded", name)}
@@ -256,6 +260,76 @@ func assertExpect(session Session, start time.Time, bookings bookingNames, name 
 		failures = append(failures, assertCandidate(rec, bookings, name, id, expect.Candidates[id])...)
 	}
 	return failures
+}
+
+// assertAdmission reads what admission recorded about a Run that is not running:
+// the last thing it said, and whether it said it as a wait or as a refusal. Both
+// are read off the Run's own stream, which is the only place an operator has to
+// look and the only place this claim can be made from: a Run that waits and
+// records nothing is exactly the state the queue replaced.
+func assertAdmission(events []eventlog.StoredEvent, name string, expect ExpectSpec) []string {
+	var failures []string
+	fail := func(format string, args ...any) {
+		failures = append(failures, fmt.Sprintf("run %q: ", name)+fmt.Sprintf(format, args...))
+	}
+	wanted := orchestrator.EventAdmissionDeferred
+	if expect.Outcome == OutcomeRefuse {
+		wanted = orchestrator.EventAdmissionRefused
+	}
+	deferral, recordedAs, ok := latestAdmission(events)
+	switch {
+	case !ok:
+		fail("expected outcome %q, and admission recorded nothing at all about this Run waiting", expect.Outcome)
+		return failures
+	case recordedAs != wanted:
+		fail("expected outcome %q, and admission recorded %q with reason %q", expect.Outcome, recordedAs, deferral.Reason)
+		return failures
+	}
+	want := *expect.Deferral
+	if deferral.Reason != want.Reason {
+		fail("expected the reason %q, recorded %q", want.Reason, deferral.Reason)
+	}
+	if want.Behind != nil {
+		behind := make([]string, 0, len(deferral.Behind))
+		for _, waiting := range deferral.Behind {
+			behind = append(behind, strings.TrimPrefix(waiting.RunID, "run-"))
+		}
+		slices.Sort(behind)
+		expected := slices.Sorted(slices.Values(want.Behind))
+		if !slices.Equal(behind, expected) {
+			fail("expected to be waiting behind %v, and the record names %v", expected, behind)
+		}
+	}
+	if want.Priority != nil {
+		if problem := want.Priority.Check(deferral.EffectivePriority); problem != "" {
+			fail("effective_priority: %s", problem)
+		}
+	}
+	if want.QueuedSeconds != nil {
+		if problem := want.QueuedSeconds.Check(deferral.QueuedSeconds); problem != "" {
+			fail("queued_seconds: %s", problem)
+		}
+	}
+	return failures
+}
+
+// latestAdmission is the last thing admission said about this Run, and which of
+// the two things it was.
+func latestAdmission(events []eventlog.StoredEvent) (domain.AdmissionDeferral, string, bool) {
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		if event.Type != orchestrator.EventAdmissionDeferred && event.Type != orchestrator.EventAdmissionRefused {
+			continue
+		}
+		var payload struct {
+			Deferral domain.AdmissionDeferral `json:"deferral"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			continue
+		}
+		return payload.Deferral, event.Type, true
+	}
+	return domain.AdmissionDeferral{}, "", false
 }
 
 // assertStartMoment reads the two moments a start latency is the difference

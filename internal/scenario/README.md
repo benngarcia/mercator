@@ -149,6 +149,35 @@ listing IDs.
 that advances virtual time or submits several Runs uses `timeline`; each step
 is exactly one `submit`, `advance`, or `reconcile`.
 
+`outcome` is one of four sentences about one Run. `place` and `fail` are about a
+Booking Decision: an offer was selected, or none was. `defer` and `refuse` are
+about admission, which decides before Placement is asked, and each states a
+`deferral`:
+
+```json
+{
+  "outcome": "defer",
+  "deferral": {
+    "reason": "BEHIND_HIGHER_PRIORITY",
+    "behind": ["watched"],
+    "effective_priority": 50,
+    "queued_seconds": 60
+  }
+}
+```
+
+`reason` is why the Run is not running: `NO_FEASIBLE_OFFER` for a wait on
+capacity to come free, `NO_CAPACITY_FITS` for a wait on capacity to be added
+because every machine the fleet published was weighed against this Run and none
+of them can hold it, `BEHIND_HIGHER_PRIORITY` for a Run the queue in front of it
+outranks, and `DEADLINE_UNREACHABLE` for the one a `refuse` states, where the
+moment the Run's class says it must have started by is already past. `behind`
+names the work the record says is in front of it, by the fixture's own names for
+those Runs, and it is a whole-set assertion: a deferral naming half of what a Run
+waits for is a queue an operator cannot read. `effective_priority` and
+`queued_seconds` are what the record says the Run was worth and how long it had
+been waiting, which is the only visible evidence that waiting promotes anything.
+
 An arrival-driven Lab Blueprint uses:
 
 ```json
