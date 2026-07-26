@@ -243,36 +243,50 @@ func simMarketplaceOffer(spec MarketplaceOfferSpec) domain.OfferSnapshot {
 	return offer
 }
 
-func simOffer(id, connectionID string, ratePerHourUSD float64, resources *ResourcesSpec) domain.OfferSnapshot {
+// HostInventory is the machine a fixture described, defaulting to a generous
+// GPU box wherever it described nothing. Both simulated worlds read it: a
+// Blueprint that meant one machine in the placement corpus and another in the
+// Lab would be two fixtures wearing one name, and the corpus statement about
+// either would say nothing about the other.
+func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 	inventory := domain.ResourceInventory{
 		CPUMillis:          defaultHostCPUMillis,
 		MemoryBytes:        defaultHostMemoryBytes,
 		EphemeralDiskBytes: defaultHostDiskBytes,
 	}
-	if resources != nil {
-		if resources.CPUMillis > 0 {
-			inventory.CPUMillis = resources.CPUMillis
-		}
-		if resources.Memory > 0 {
-			inventory.MemoryBytes = int64(resources.Memory)
-		}
-		if resources.Disk > 0 {
-			inventory.EphemeralDiskBytes = int64(resources.Disk)
-		}
-		if gpu := resources.GPU; gpu != nil {
-			count := gpu.Count
-			if count == 0 {
-				count = 1
-			}
-			inventory.Accelerators = []domain.AcceleratorInventory{{
-				Vendor:         "NVIDIA",
-				Model:          gpu.Model,
-				CanonicalModel: gpunorm.Canonical("NVIDIA", gpu.Model),
-				Count:          count,
-				MemoryBytes:    int64(gpu.Memory),
-			}}
-		}
+	if resources == nil {
+		return inventory
 	}
+	if resources.CPUMillis > 0 {
+		inventory.CPUMillis = resources.CPUMillis
+	}
+	if resources.Memory > 0 {
+		inventory.MemoryBytes = int64(resources.Memory)
+	}
+	// Stated is stated, including zero: a machine with no room is a machine an
+	// offer can carry, and it is what an enrolled node that could not measure
+	// its disk advertises.
+	if resources.Disk != nil {
+		inventory.EphemeralDiskBytes = resources.Disk.Bytes()
+	}
+	if gpu := resources.GPU; gpu != nil {
+		count := gpu.Count
+		if count == 0 {
+			count = 1
+		}
+		inventory.Accelerators = []domain.AcceleratorInventory{{
+			Vendor:         "NVIDIA",
+			Model:          gpu.Model,
+			CanonicalModel: gpunorm.Canonical("NVIDIA", gpu.Model),
+			Count:          count,
+			MemoryBytes:    int64(gpu.Memory),
+		}}
+	}
+	return inventory
+}
+
+func simOffer(id, connectionID string, ratePerHourUSD float64, resources *ResourcesSpec) domain.OfferSnapshot {
+	inventory := HostInventory(resources)
 	return domain.OfferSnapshot{
 		ID:           id,
 		ConnectionID: connectionID,
@@ -383,7 +397,7 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 		spec.Resources = domain.ResourceRequirements{
 			CPU:           domain.CPURequirement{MinMillis: resources.CPUMillis},
 			Memory:        domain.MemoryRequirement{MinBytes: int64(resources.Memory)},
-			EphemeralDisk: domain.DiskRequirement{MinBytes: int64(resources.Disk)},
+			EphemeralDisk: domain.DiskRequirement{MinBytes: resources.Disk.Bytes()},
 		}
 		if gpu := resources.GPU; gpu != nil {
 			count := gpu.Count

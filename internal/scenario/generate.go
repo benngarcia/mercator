@@ -358,7 +358,7 @@ func generatedResources(ordinal int) *ResourcesSpec {
 	return &ResourcesSpec{
 		CPUMillis: 4000,
 		Memory:    ByteSize(16_000_000_000),
-		Disk:      ByteSize(100_000_000_000),
+		Disk:      Bytes(100_000_000_000),
 		GPU: &GPUSpec{
 			Model:  "RTX 4090",
 			Count:  1,
@@ -374,7 +374,7 @@ func generatedResources(ordinal int) *ResourcesSpec {
 // which nothing can be placed anywhere.
 func generatedRunResources() *ResourcesSpec {
 	resources := generatedResources(0)
-	resources.Disk = ByteSize(50_000_000_000)
+	resources.Disk = Bytes(50_000_000_000)
 	return resources
 }
 

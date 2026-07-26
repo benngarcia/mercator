@@ -13,17 +13,13 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
-	"github.com/benngarcia/mercator/internal/gpunorm"
 	"github.com/benngarcia/mercator/internal/ociresolver"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
 const (
-	labWorkspace          = "ws_lab"
-	labConnection         = "connection:lab"
-	defaultLabCPUMillis   = int64(8000)
-	defaultLabMemoryBytes = int64(32e9)
-	defaultLabDiskBytes   = int64(200e9)
+	labWorkspace  = "ws_lab"
+	labConnection = "connection:lab"
 )
 
 type externalExecution struct {
@@ -1927,7 +1923,7 @@ func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, rateP
 		Kind:         kind,
 		Lane:         lane,
 		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
-		Resources:    labResources(resources),
+		Resources:    scenario.HostInventory(resources),
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{
 				MaxContainers:              1,
@@ -1952,40 +1948,6 @@ func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, rateP
 		offer.RentalID = id
 	}
 	return offer
-}
-
-func labResources(resources *scenario.ResourcesSpec) domain.ResourceInventory {
-	inventory := domain.ResourceInventory{
-		CPUMillis:          defaultLabCPUMillis,
-		MemoryBytes:        defaultLabMemoryBytes,
-		EphemeralDiskBytes: defaultLabDiskBytes,
-	}
-	if resources == nil {
-		return inventory
-	}
-	if resources.CPUMillis > 0 {
-		inventory.CPUMillis = resources.CPUMillis
-	}
-	if resources.Memory > 0 {
-		inventory.MemoryBytes = int64(resources.Memory)
-	}
-	if resources.Disk > 0 {
-		inventory.EphemeralDiskBytes = int64(resources.Disk)
-	}
-	if gpu := resources.GPU; gpu != nil {
-		count := gpu.Count
-		if count == 0 {
-			count = 1
-		}
-		inventory.Accelerators = []domain.AcceleratorInventory{{
-			Vendor:         "NVIDIA",
-			Model:          gpu.Model,
-			CanonicalModel: gpunorm.Canonical("NVIDIA", gpu.Model),
-			Count:          count,
-			MemoryBytes:    int64(gpu.Memory),
-		}}
-	}
-	return inventory
 }
 
 // findLayer resolves a digest a fixture seeds directly onto a host back to the

@@ -506,8 +506,15 @@ type ProvisioningSpec struct {
 type ResourcesSpec struct {
 	CPUMillis int64    `json:"cpu_millis,omitempty"`
 	Memory    ByteSize `json:"memory,omitempty"`
-	Disk      ByteSize `json:"disk,omitempty"`
-	GPU       *GPUSpec `json:"gpu,omitempty"`
+	// Disk separates a machine with no room from a machine whose fixture did
+	// not mention its disk, because zero is a state real capacity is in: an
+	// enrolled node that could not measure its disk offers exactly none, and it
+	// is the case an operator most needs the corpus to hold. Read as one value,
+	// a fixture that writes "0GB" to model that machine gets the 200GB default
+	// and states the opposite of what it meant. Zero CPU and zero memory
+	// describe no machine any offer can carry, so they stay a single number.
+	Disk *ByteSize `json:"disk,omitempty"`
+	GPU  *GPUSpec  `json:"gpu,omitempty"`
 }
 
 type GPUSpec struct {
@@ -724,6 +731,23 @@ func (d Duration) Duration() time.Duration { return time.Duration(d) }
 // ByteSize is a JSON string with a decimal unit ("40GB", "512MB", "1.5TB")
 // or a bare number of bytes.
 type ByteSize int64
+
+// Bytes is a size a fixture stated, and zero where it stated none. It reads
+// through a nil pointer on purpose: the caller that wants the difference asks
+// for the pointer, and everything else wants the number.
+func (b *ByteSize) Bytes() int64 {
+	if b == nil {
+		return 0
+	}
+	return int64(*b)
+}
+
+// Bytes builds a stated size, which is how Go code writes a fixture that a
+// Blueprint would write as a string.
+func Bytes(size int64) *ByteSize {
+	stated := ByteSize(size)
+	return &stated
+}
 
 var byteSizePattern = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)\s*(B|KB|MB|GB|TB)$`)
 var ociDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)

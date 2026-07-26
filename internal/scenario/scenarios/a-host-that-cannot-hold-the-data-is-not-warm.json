@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Three machines and one Run at a time. Two of them hold the same 18GB layer of the same image at the same price, and one of those has nowhere to put the 40GB dataset the Run reads: room is not a preference the scheduler weighs down, because nothing the cramped machine could delete helps. Every byte it gave up of this Run's content is a byte the Run needs back, so it is refused with RESOURCE_INSUFFICIENT naming its disk and the decision records the room it had beside what the Run asked of it. What may never refuse a machine is content nobody could enumerate, which is the other half of the same rule and is held in the Lab. The second Run states a disk floor of its own, and the machine that cannot meet it is struck out: until an offer stated real disk, that rejection was unreachable on capacity Mercator controls and every node in the fleet advertised zero bytes. The third Run states a floor the roomy machine could meet on its own and reads a second dataset beside it, and the two are spent against the same bytes, so the Run goes to the only machine with room for both. A floor asked for out of the content rather than beside it is a floor a Run is admitted on and does not get.",
+  "summary": "Four machines and one Run at a time. Two of them hold the same 18GB layer of the same image at the same price, and one of those has nowhere to put the 40GB dataset the Run reads: room is not a preference the scheduler weighs down, because nothing the cramped machine could delete helps. Every byte it gave up of this Run's content is a byte the Run needs back, so it is refused with RESOURCE_INSUFFICIENT naming its disk and the decision records the room it had beside what the Run asked of it. What may never refuse a machine is content nobody could enumerate, which is the other half of the same rule and is held in the Lab. The second Run states a disk floor of its own, and the machine that cannot meet it is struck out: until an offer stated real disk, that rejection was unreachable on capacity Mercator controls and every node in the fleet advertised zero bytes. The third Run states a floor the roomy machine could meet on its own and reads a second dataset beside it, and the two are spent against the same bytes, so the Run goes to the only machine with room for both. A floor asked for out of the content rather than beside it is a floor a Run is admitted on and does not get. The fourth machine is the cheapest in the world and offers no room at all, which is what an enrolled node that could not measure its disk advertises. It is refused on room for every Run, out loud and in the record, which is the whole reason the fleet listing states whether anybody established the number. A world that read a stated zero as a missing one would give that machine 200GB it never claimed and a green fixture would assert the opposite of what it says.",
   "classification": "green",
   "world": {
     "images": {
@@ -40,6 +40,11 @@
         "id": "rental-vast",
         "resources": {"disk": "400GB"},
         "rate_per_hour_usd": 4.0
+      },
+      {
+        "id": "rental-unmeasured",
+        "resources": {"disk": "0GB"},
+        "rate_per_hour_usd": 1.0
       }
     ]
   },
@@ -58,6 +63,10 @@
         "reasons": ["FEASIBLE", "LOWEST_SCORE"],
         "disposition": "release",
         "candidates": {
+          "rental-unmeasured": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
           "rental-cramped": {
             "feasible": false,
             "image_locality": "partial",
@@ -91,6 +100,10 @@
         "offer": "rental-roomy",
         "reasons": ["FEASIBLE", "LOWEST_SCORE"],
         "candidates": {
+          "rental-unmeasured": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
           "rental-cramped": {
             "feasible": false,
             "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
@@ -120,6 +133,10 @@
         "offer": "rental-vast",
         "reasons": ["FEASIBLE", "LOWEST_SCORE"],
         "candidates": {
+          "rental-unmeasured": {
+            "feasible": false,
+            "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
+          },
           "rental-cramped": {
             "feasible": false,
             "rejected": [{"code": "RESOURCE_INSUFFICIENT", "path": "resources.ephemeral_disk"}]
