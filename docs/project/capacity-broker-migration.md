@@ -2605,6 +2605,28 @@ Phase 4 added:
   through. It asserts the record, the absence of any doubt about it, and deliberately
   not the placement.
 
+- `a-candidate-is-what-recurs` (green): what a launch history may be filed under,
+  stated as the five candidates a fleet has to tell apart and put together. Two
+  asks a marketplace numbered differently for one product in one place key as one
+  candidate, a third ask there whose cards hold half the memory keys as another,
+  an enrolled machine keys as itself, and a one-shot pool publishing nothing that
+  outlives its listing has no key at all. The fixture states each whole key, so a
+  world that stopped publishing a region fails it with the region gone from three
+  of them rather than silently dropping a rung of the ladder.
+- `a-candidate-recurs-through-the-control-plane` (conformance): the same five
+  candidates at L1, on the keys the real orchestrator recorded in its Booking
+  Decision. It exists because the placement corpus and the Lab are two different
+  simulated worlds, and a key that agreed in only one of them would be a key about
+  the harness.
+- `safety.candidate_identity_recurs` (Lab invariant): no two capacities the world
+  says are different share one candidate key, a key names the machine its backend
+  published and never the listing that search found, and capacity with nothing
+  published that outlives its listing has no key. It is stated as a collision
+  against World Truth and counts accelerators where the key groups them, which is
+  what keeps it from being the derivation agreeing with itself: restoring the
+  inventory bug where two entries naming one product were deduplicated fails it
+  with an eight-card machine and a four-card machine under one name.
+
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
 none at all, and `internal/scenario` imports nothing from `internal/lab`. Every
@@ -2625,8 +2647,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 30 regression Blueprints: 27 green and 3 target, beside one demo,
-one minimized case, and thirteen conformance Blueprints. The count is read off the
+The corpus is 36 regression Blueprints: 33 green and 3 target, beside one demo,
+one minimized case, and nineteen conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
@@ -2696,6 +2718,56 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 the review of the candidate identity
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
+Docker daemon. Two reviewers refuted the slice that keyed a launch history, and
+every claim below is held by a deliberate break that fails it.
+
+- restoring `slices.Compact` over the sorted inventory fails
+  `TestTwoSpellingsOfOneCardAreOneProduct`, `TestTwiceTheCardsIsNotOneProduct`, and
+  `TestOneModelInTwoMemorySizesIsTwoProducts`, which is the reviewers' case that a
+  four-GPU machine and a two-GPU machine keyed as one exact candidate;
+- naming the machine from the endpoint label again fails
+  `TestTwoDaemonsOnOneBoxAreTwoMachines`, `TestOneDaemonReachedTwoWaysIsOneMachine`,
+  and `TestAnUnreachableDaemonNamesNoMachine`, and fails the live case against this
+  host's own engine with `provider=docker;machine=loopback` beside
+  `provider=docker;machine=mercator-machine-...`;
+- naming the machine from the Rental again fails
+  `TestTwoMachinesOnOneLeaseOfferTwoMachines` in the node registry and
+  `TestTwoMachinesOnOneLeaseAreTwoCandidates` in the domain, which is the case an
+  operator reaches by inviting two machines against one rental_id;
+- deleting `Region: o.Geolocation` fails `TestTwoSearchesOfOneMachineAreOneCandidate`,
+  deleting `InstanceType: cloud + "/" + g.ID` fails
+  `TestOneProductInTwoCloudsIsTwoCandidates`, and deleting either Shadeform fact
+  fails `TestOneRegionNameInTwoCloudsIsTwoPlaces`. All four lines could be deleted
+  with the suite green before this pass;
+- dropping the region from either simulated world fails
+  `a-candidate-is-what-recurs` on three of its five keys and fails
+  `TestACandidateIsWhatRecursThroughTheWholeLabWorld` on the ask it states in full;
+- restoring the inventory bug fails `safety.candidate_identity_recurs` through the
+  whole control plane, which is the rule refusing an eight-card machine and a
+  four-card machine under one name.
+
+The live half ran. `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
+-run TestIntegrationOneDaemonReachedTwoWaysIsOneMachine` reaches this host's Docker
+Engine 29.6.2 twice, once through the ambient socket and once through a docker
+context created for the case, and holds that the daemon's own ID names one machine
+where the endpoint label names two. Mercator issue #165 does not reproduce here and
+was left alone.
+
+One refutation is rejected. The reviewers asked for the node generation in the key.
+It is not there on purpose: the generation exists so a command is never sent to a
+runtime that has been replaced, which is fencing, and a machine that stops and
+resumes is the same disk. Keying on it would leave every launch history one sample
+long by construction, and what a machine currently holds is read from its live
+inventory rather than from its history. The collision the reviewers found in the
+same finding, two machines on one lease, is real and is fixed by naming the node.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+```
 
 ### Phase 4 the second review of the start moment
 
