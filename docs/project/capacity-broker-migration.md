@@ -2118,6 +2118,42 @@ complete because it works against a live provider.
     declaration is enough, and a host that publishes something other than what it
     delivers is stated through the confidence it puts on its own number.
 
+- [x] 2026-07-26: Close the transfer-path slice on the two halves it left open: what
+  the corpus says about a machine nobody measured, and what an admitted assumption is
+  allowed to be worth. The measured half was held at L0 and L1 and the fallback was
+  held by unit tests over the domain rate and by one conformance world about a host
+  that disowned its own reading, so no Blueprint said that silence about a path is
+  priced rather than refused. And `safety.transfer_rate_is_attributed` was a rule about
+  provenance only, which left the shortest route to the outcome it exists to stop
+  wide open.
+  - `rental-nobody-measured-the-path-of` is the third machine in
+    `a-fast-machine-far-from-the-data-loses`. It declares no path at all, which is the
+    silence itself rather than a rate stated at zero confidence, and it is charged the
+    stated prior over forty gigabytes at `assumed_object_store_rate` with the estimate
+    capped at what a guess is worth. It also makes the determinism claim falsifiable
+    at L0: restoring the flat constant prices all three reads at 640 seconds and the
+    placement falls to `rental-far-from-the-data` on the offer-ID tie-break, which is
+    what running it that way reports.
+  - The rule's third clause is that an unmeasured transfer is worth at most
+    `domain.AssumedLinkConfidence`, asked of the rate and of the stage estimate it
+    produced. Naming the assumption truthfully and then stating the duration at full
+    confidence satisfied both existing clauses and bought exactly the ranking a
+    fabricated measurement buys, by the route a prediction slice is likelier to take:
+    raising a confidence reads as tuning a constant rather than as inventing a source.
+    Both halves are asked because they are two mistakes. The rate is what the next
+    caller divides by; the estimate is what this decision's own uncertainty term
+    already charged doubt from.
+  - Deferred, and the reason is the runtime rather than the plan. A node still cannot
+    measure its own unpack rate. `PrepareImage` is `docker pull`, which interleaves
+    downloading and extracting per layer and reports neither the compressed bytes nor
+    a phase duration, so any rate derived from it would be a measurement of fetch plus
+    unpack published under the name of a measurement of unpack. That is the same
+    inference this tree already refuses for the registry path, and `AssumedUnpackMbps`
+    stays the stated assumption until something can separate the two. Adding a
+    per-offer unpack fact with no producer was rejected for the reason the last review
+    gave: `capability.HostFacts.Network` sat declared and unwritten since phase 2, and
+    a reader with no writer is the defect, not the fix.
+
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -2747,16 +2783,20 @@ Phase 4 added:
   fails it on every Blueprint in the corpus, and letting any provider recur fails it
   on the one-shot pool.
 
-- `a-fast-machine-far-from-the-data-loses` (green): two Rentals equally warm on the
-  image at one price, one on a measured 4 Gbps path to the object store and one on
-  200 Mbps, and one Run that reads a 40GB dataset. The slow machine publishes the
-  faster path to the registry, which buys it nothing, because it holds the image
-  already and there is nothing to fetch over that link. It is the first Blueprint to
-  declare a path to an object store, and under one constant per scope it is red three
-  ways: both candidates price the read at 640 seconds against the 80 and 1600 stated,
-  both record the assumption where a measurement is asserted, and the placement lands
-  on `rental-far-from-the-data` because nothing else separates them and the tie broke
-  on the offer ID.
+- `a-fast-machine-far-from-the-data-loses` (green): three Rentals equally warm on the
+  image at one price, one on a measured 4 Gbps path to the object store, one on 200
+  Mbps, and one that has never measured that path at all, and one Run that reads a
+  40GB dataset. The slow machine publishes the faster path to the registry, which buys
+  it nothing, because it holds the image already and there is nothing to fetch over
+  that link. The unmeasured machine is the fallback half of the same claim: it is
+  priced rather than refused, charged the stated prior, capped at what a duration over
+  an unmeasured rate is worth, and its record names `assumed_object_store_rate` rather
+  than presenting 500 Mbps as something a machine reported. It is the first Blueprint
+  to declare a path to an object store, and under one constant per scope it is red
+  three ways: the two measured candidates price the read at 640 seconds against the 80
+  and 1600 stated, both record the assumption where a measurement is asserted, and the
+  placement lands on `rental-far-from-the-data` because nothing separates the three
+  and the tie broke on the offer ID.
 - `a-path-somebody-measured-prices-the-read` (conformance): the same world at L1,
   where the bytes really move. The decision prices each read off the machine's own
   published path, and the world then spends eighty seconds reading forty gigabytes
@@ -2775,7 +2815,11 @@ Phase 4 added:
   from, and never both, and a rate the record presents as measured is a number some
   host or path fact reported at that scope, one its publisher still stands behind. A
   disowned or expired fact is silence for every other reader here and may not become
-  a measurement by being divided by. It is the rate half of
+  a measurement by being divided by. A transfer priced from an assumption is worth at
+  most `domain.AssumedLinkConfidence`, asked of the rate and of the stage estimate it
+  produced, which is the clause that keeps the first two from being bookkeeping: an
+  honestly named assumption charged no doubt ranks an unmeasured machine exactly where
+  a fabricated measurement would. It is the rate half of
   `safety.locality_provenance`, which explains the bytes: seconds are the product of
   the two, and either one can be invented.
 
@@ -2870,6 +2914,54 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 what an unmeasured path costs
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. This pass closes the transfer-path slice on the machine
+nobody measured and on what an admitted assumption may be worth. The full suite, the
+race detector over the five packages touched, and the live half all ran on this host
+against the working tree.
+
+What the corpus and the laws could not say, and now can.
+
+- Restoring the flat constant, by making `OfferSnapshot.DownloadRate` ignore the facts
+  it reads, fails `a-fast-machine-far-from-the-data-loses` on both measured candidates
+  and on the placement: "expected `rental-near-the-data` to win, but the decision
+  placed on `rental-far-from-the-data`", plus the seconds, the confidence and the rate
+  provenance for each. The third machine's own expectations do not move under that
+  break, which is what makes them the fallback half rather than a restatement of the
+  measured half.
+- Raising the object-store assumption's own confidence to 1 in
+  `domain.AssumedDownloadRate` fails
+  `conformance/a-path-a-host-disowned-is-still-the-path` with "priced its
+  artifact_fetch stage from \"assumed_object_store_rate\", which nothing on this
+  machine measured, and the rate itself is worth 1.00 where a duration over an
+  unmeasured rate is worth at most 0.50". Stamping `objectStoreRead` at 1 while leaving
+  the rate honest fails the same world on "the estimate it produced". Both breaks were
+  green before this clause existed.
+- Each clause of the rule fails on the one record it exists to catch in
+  `TestEveryClauseOfTheTransferRateRuleCanFail`, which now carries the two records a
+  guess charged as knowledge looks like.
+
+The live half ran, on this host's own daemon rather than in simulation.
+`go test ./internal/nodeagent -run TestANodeMeasuresTheObjectStorePathItJustCrossed`
+starts MinIO in a container of the native engine, PUTs sixteen megabytes over a
+presigned write, has the node stream it back over a presigned read, and then asserts
+the node published a real throughput it timed itself, named `node_artifact_copy`, dated
+so Mercator may act on it, and that the production scheduler priced the next forty
+gigabyte read off that number rather than off the assumption. Dropping
+`pathMeasurements.record` from `fetchArtifact` fails it with "the node published [],
+and nothing there describes its path to the object store". The two replication cases
+beside it, including the wrong-content case, ran on the same daemon. Mercator issue
+#165 does not reproduce here and was left alone.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/scenario/... ./internal/nodeagent \
+  ./internal/domain ./internal/scheduler
+go test -count=1 ./internal/nodeagent -run 'TestANode|TestACopy'
+```
 
 ### Phase 4 the second review of the candidate identity
 
