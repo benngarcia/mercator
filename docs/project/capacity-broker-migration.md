@@ -2015,6 +2015,61 @@ complete because it works against a live provider.
     `git archive` of the commit under test with only this pass's files overlaid, so the
     evidence is the tree of record rather than a shared working directory.
 
+- [x] 2026-07-26: Price a transfer from the bytes that are missing and the
+  throughput of the path they cross. Every Artifact read in the fleet cost the same
+  seconds on every machine, because both halves of the arithmetic read one constant
+  per scope: reading forty gigabytes was 640 seconds beside the object store and 640
+  seconds across the country from it, and no fact anybody published could change
+  either number, because `domain.NetworkScope` had no object-store scope for a host
+  to speak about that path with.
+  - `NetworkScopeObjectStore` is the scope, and `OfferSnapshot.DownloadRate` answers
+    per path where `RegistryDownload` answered for one. `LinkSpeed` carries where its
+    number came from, exactly one of a measurement or a named assumption, so a reader
+    can tell a machine Mercator measured from one it guessed about. The three
+    assumptions are named constants, so a record says `assumed_object_store_rate`
+    rather than 500.
+  - `CandidateDecision.TransferRates` records the rate every stage that had bytes to
+    move was priced at, with the bytes beside it. The seconds are bytes over a rate,
+    the bytes were already explained by the locality evidence, and the rate was the
+    half no reader could retrace. A stage with nothing to move records nothing,
+    because there was no transfer to have priced.
+  - Both simulated worlds spend the Blueprint's own declared path rate instead of a
+    constant, and read it from the declaration rather than from the fact the offer
+    publishes. That distinction is the point: how fast a path is and how much its
+    publisher stands behind having measured it are different statements, so a fixture
+    can state a path a host disowned and the world still crosses it at the speed the
+    fixture said. `PathSpecs.LinkMbps` and `PathSpecs.PublishedFacts` are the one
+    place each answer is derived, so one declaration cannot mean two transfer models.
+  - An enrolled node measures the path it just crossed. `capability.HostFacts.Network`
+    was declared in phase 2 and written by nothing, so the field the offer projection
+    already carried and Placement already read had no producer. `PrepareArtifact`
+    times its own copy and publishes the slowest reading it has seen as a p10, which
+    is the pessimistic quantile every reader here asks for. Only the object-store path
+    is measured: the daemon pulls images and reports neither the bytes nor the
+    duration, so a registry rate derived from anything available would be an inference
+    dressed as a measurement.
+  - `safety.transfer_rate_is_attributed` is the Lab rule, and it is
+    `safety.locality_provenance` for the other half of the arithmetic. Every transfer
+    a decision recorded names the measurement or the assumption it was priced from,
+    exactly one of the two, and a rate presented as measured has to be a number some
+    host or path fact actually reported at that scope, one its own publisher still
+    stands behind. It is stated over what the decision recorded rather than over the
+    arithmetic: a rule that recomputed the seconds would be a second implementation of
+    the predictor agreeing with the first.
+  - Judgment calls. `AssumedUnpackMBps` became `AssumedUnpackMbps`, the same 250 MB/s
+    restated as 2000 Mbps, so one unit and one arithmetic price every stage and one
+    record holds every rate a candidate was priced at; assembly stays a rate of its
+    own, because a machine on a slow link with fast disks is a real machine. Each
+    simulated world keeps its own unmeasured constant, deliberately the same figure as
+    the scheduler's assumption, because an unmeasured path is the one case where both
+    halves are guessing about one thing; what separates prediction from actual is a
+    fixture declaring a path. `MeasuredLinkConfidence` is a stated 0.9 rather than a
+    function of the sample count, which would be an estimator this slice has not
+    measured. And the two halves are two Blueprints rather than one, because a
+    Blueprint carries exactly one of a placement fixture or an arrival plan and the
+    Lab compiles only the second: `a-fast-machine-far-from-the-data-loses` at L0 and
+    `conformance/a-path-somebody-measured-prices-the-read` at L1, over one world.
+
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -2037,7 +2092,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; the hierarchical estimator, owned economics, and replanning remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; the hierarchical estimator, owned economics, and replanning remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -2627,6 +2682,31 @@ Phase 4 added:
   inventory bug where two entries naming one product were deduplicated fails it
   with an eight-card machine and a four-card machine under one name.
 
+- `a-fast-machine-far-from-the-data-loses` (green): two Rentals equally warm on the
+  image at one price, one on a measured 4 Gbps path to the object store and one on
+  200 Mbps, and one Run that reads a 40GB dataset. The slow machine publishes the
+  faster path to the registry, which buys it nothing, because it holds the image
+  already and there is nothing to fetch over that link. It is the first Blueprint to
+  declare a path to an object store, and under one constant per scope it is red three
+  ways: both candidates price the read at 640 seconds against the 80 and 1600 stated,
+  both record the assumption where a measurement is asserted, and the placement lands
+  on `rental-far-from-the-data` because nothing else separates them and the tie broke
+  on the offer ID.
+- `a-path-somebody-measured-prices-the-read` (conformance): the same world at L1,
+  where the bytes really move. The decision prices each read off the machine's own
+  published path, and the world then spends eighty seconds reading forty gigabytes
+  onto the near one. Both halves come from the one declaration, so the prediction and
+  the actual agree for a reason rather than by construction; dropping the world's
+  reading of paths leaves it spending 640 seconds whatever the fixture declared.
+- `safety.transfer_rate_is_attributed` (Lab invariant): every transfer a Booking
+  Decision recorded names either the measurement or the assumption it was priced
+  from, and never both, and a rate the record presents as measured is a number some
+  host or path fact reported at that scope, one its publisher still stands behind. A
+  disowned or expired fact is silence for every other reader here and may not become
+  a measurement by being divided by. It is the rate half of
+  `safety.locality_provenance`, which explains the bytes: seconds are the product of
+  the two, and either one can be invented.
+
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
 none at all, and `internal/scenario` imports nothing from `internal/lab`. Every
@@ -2718,6 +2798,66 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 transfer rates from a measured path
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
+Docker daemon. A concurrent session shared the worktree throughout and had its own
+slice in flight across several of the same files, so every command was run against a
+`git archive` of the commit under test rather than against the shared working
+directory. Each claim is held by a deliberate break that fails it:
+
+- pinning the scheduler's object-store rate back to `domain.AssumedDownloadRate`
+  fails `a-fast-machine-far-from-the-data-loses` five ways per candidate, with
+  `artifact_fetch_seconds: want exactly 1600, got 640`, `artifact_fetch confidence:
+  want 0.9, got 0.5`, `artifact_fetch rate: want 200 Mbps, priced at 500`, the
+  measurement recorded as the assumption, and the placement on
+  `rental-far-from-the-data`. That is the state the tree shipped in: two machines
+  twenty times apart on the path to their data, priced identically;
+- the same break fails `TestAMeasuredPathPricesTheReadAndThenSpendsIt` with `the
+  decision placed on "rental-far-from-the-data", and the machine beside the data
+  reads the dataset twenty times faster`;
+- dropping the Lab world's reading of the Blueprint's paths fails that same case with
+  `this world spent 640.00s reading forty gigabytes over a 4 Gbps path, and the path
+  says eighty`, which is the tautology the slice exists to remove: the prediction
+  still said eighty;
+- each of the five clauses of `safety.transfer_rate_is_attributed` is driven by a
+  record no code in this tree writes, one case at a time, in
+  `TestEveryClauseOfTheTransferRateRuleCanFail`. The counterpart,
+  `TestARatePricedFromTheStatedAssumptionIsNotAViolation`, holds that an honest
+  assumption passes: nothing measures a host's storage, so every assembly in the
+  fleet is priced from Mercator's own constant, and a rule that failed that could
+  only be satisfied by claiming measurements the tree does not have;
+- raising `minimumMeasuredBytes` past the object's size fails
+  `TestANodeMeasuresTheObjectStorePathItJustCrossed` with `the node published [], and
+  nothing there describes its path to the object store`, and so does dropping
+  `Network` from the reported host facts;
+- publishing the latest reading instead of the slowest fails
+  `TestANodePublishesTheSlowestTransferItHasSeen` with `the node published 2000 Mbps,
+  and the slowest of its three reads was 100`.
+
+The live half ran. `TestANodeMeasuresTheObjectStorePathItJustCrossed` starts MinIO in
+a container of this host's own daemon, writes a sixteen-megabyte object, and has the
+node fetch it over a real presigned GET: the throughput it publishes is one it
+measured over that transfer, and the production scheduler then prices a
+forty-gigabyte read off the reported number rather than the assumption. Docker is
+native here, so the store, the presigned read, and the node's own timing are all
+real. Mercator issue #165 was left alone.
+
+Two limits are worth stating rather than hiding. Each simulated world's constant for
+a path no fixture declared is the same figure as the scheduler's assumption, so an
+undeclared path still has prediction and actual agreeing by construction; what
+separates them is a declaration, which is why the fixture declares one. And
+`MeasuredLinkConfidence` is a stated 0.9: a node's own reading is worth more than a
+fleet-wide guess and less than certainty, and the figure is an assumption about
+assumptions until predicted-versus-actual for the fetch stage can replace it.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race ./internal/domain ./internal/scheduler ./internal/scenario ./internal/lab \
+  ./internal/adapter/fake ./internal/node ./internal/nodeagent ./internal/httpapi ./internal/daemon
+cd web/app && bun run typecheck && bun run test && bun run build
+```
 
 ### Phase 4 the review of the candidate identity
 
