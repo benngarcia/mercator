@@ -338,6 +338,10 @@ export const BookingDecidedData = Schema.Struct({ decision: BookingDecision });
 export const BookingDispatchedData = Schema.Struct({ booking: Booking });
 export const LaunchIntentData = Schema.Struct({ disposition: Schema.String });
 export const ObservedRunData = Schema.Struct({ phase: Schema.String });
+export const ExecutionStartedData = Schema.Struct({
+  launch_key: Schema.String,
+  started_at: Schema.String,
+});
 export const OutcomeData = Schema.Struct({
   outcome: Schema.optionalKey(Schema.String),
 });

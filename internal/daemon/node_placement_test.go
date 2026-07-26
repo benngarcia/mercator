@@ -245,6 +245,36 @@ func TestANodeIsAskedToAttachTheCachesTheWorkloadDeclared(t *testing.T) {
 	}
 }
 
+// TestANodeReportsTheMomentItsContainerReallyStarted is the only path a start
+// moment has from a container runtime to Mercator's record, driven end to end: the
+// node protocol, the Broker's node lane, the orchestrator's observation, and the
+// Run read model an operator sees. This machine says its container began ninety
+// seconds before the heartbeat that reported it, and that is the moment the Run
+// carries; a control plane stamping the moment it looked, or the moment it accepted
+// the launch, would record something within milliseconds of either.
+//
+// It is the end-to-end case because broker.observeOnNode is the whole seam, and
+// this is the fourth defect found at it: node.Registry.offer dropped Artifacts,
+// NodeFacts.Artifacts manufactured Known, and launchOnNode dropped cache mounts,
+// each of them invisible to every test in the tree.
+func TestANodeReportsTheMomentItsContainerReallyStarted(t *testing.T) {
+	fleet := startFleet(t)
+
+	runID := fleet.submitRun(t)
+	fleet.awaitOccupied(t, fleet.nodeID)
+	started := fleet.awaitStartMoment(t, runID)
+
+	reported := fleet.runtime.reportedStart(t, runID)
+	if !started.Equal(reported) {
+		t.Fatalf("the Run records a start of %s and its node's runtime reported %s",
+			started.Format(time.RFC3339Nano), reported.Format(time.RFC3339Nano))
+	}
+	if elapsed := time.Since(started); elapsed < scriptedStartDelay {
+		t.Fatalf("the recorded start is %s old and this machine said its container began %s before the report",
+			elapsed, scriptedStartDelay)
+	}
+}
+
 // TestAWorkloadThatFailsOnANodeClosesTheRunFailed holds the node's authority
 // over the exit: nothing the application says is involved, and the run still
 // reaches a terminal failure.
@@ -555,6 +585,25 @@ func (f *fleet) awaitOutcome(t *testing.T, runID, want string) {
 		f.call(t, http.MethodGet, "/v1/runs/"+runID+"?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
 		return run.Run.Outcome == want
 	}, fmt.Sprintf("Run %s never reached outcome %q (last outcome %q)", runID, want, run.Run.Outcome))
+}
+
+// awaitStartMoment waits until the Run read model carries the moment its workload
+// began, which exists only once something observed one.
+func (f *fleet) awaitStartMoment(t *testing.T, runID string) time.Time {
+	t.Helper()
+	var run struct {
+		Run struct {
+			StartedAt *time.Time `json:"started_at"`
+		} `json:"run"`
+	}
+	waitFor(t, func() bool {
+		// The refresh is an advance, which is what asks the node what its container
+		// is doing. Waiting for the minute reconcile sweep instead would make this a
+		// case about the sweep's cadence.
+		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
+		return run.Run.StartedAt != nil
+	}, "Run "+runID+" never recorded the moment its workload began")
+	return run.Run.StartedAt.UTC()
 }
 
 // workloadRevision is one digest-pinned container the enrolled node can run.
@@ -974,14 +1023,26 @@ func (runtime *scriptedRuntime) LaunchWorkload(_ context.Context, command capabi
 	if !slices.Contains(runtime.held, command.ManifestDigest) {
 		runtime.held = append(runtime.held, command.ManifestDigest)
 	}
+	// A container runtime knows when it gave this workload a process, and that
+	// moment is not the moment anybody later asks. This machine states it a stated
+	// distance in the past, because a scripted runtime that answered "now" on every
+	// read would let a control plane stamping its own poll pass every case.
+	startedAt := time.Now().UTC().Add(-scriptedStartDelay)
 	runtime.observations[command.RunID] = capability.WorkloadObservation{
 		RunID:      command.RunID,
 		AttemptID:  command.AttemptID,
 		Phase:      capability.WorkloadPhaseRunning,
 		ObservedAt: time.Now().UTC(),
+		StartedAt:  &startedAt,
 	}
 	return nil
 }
+
+// scriptedStartDelay is how long before the observation this machine says its
+// container began. It is larger than any plausible gap between a launch and the
+// heartbeat that follows it, so a case can tell the moment the runtime reported
+// from the moment the control plane looked.
+const scriptedStartDelay = 90 * time.Second
 
 func (runtime *scriptedRuntime) StopWorkload(context.Context, capability.StopWorkloadCommand) error {
 	return nil
@@ -1006,6 +1067,20 @@ func (runtime *scriptedRuntime) exit(runID string, code int) {
 	observation.ExitCode = &code
 	observation.ObservedAt = time.Now().UTC()
 	runtime.observations[runID] = observation
+}
+
+// reportedStart is when this machine says it gave one Run's workload a process,
+// read out of the runtime rather than out of Mercator so a case compares two
+// answers rather than one answer with itself.
+func (runtime *scriptedRuntime) reportedStart(t *testing.T, runID string) time.Time {
+	t.Helper()
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	observation, known := runtime.observations[runID]
+	if !known || observation.StartedAt == nil {
+		t.Fatalf("this machine reports no start moment for %q", runID)
+	}
+	return observation.StartedAt.UTC()
 }
 
 // attachedCaches is the mutable state this machine was asked to mount for one

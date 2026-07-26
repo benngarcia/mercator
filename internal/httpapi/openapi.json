@@ -2556,6 +2556,11 @@
 		  "cleanup_error": {
 			"$ref": "#/components/schemas/CleanupError"
 		  },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this Run's workload actually began, as the machine holding it reported the moment. Absent until something observed one, and never the moment the launch was accepted: the difference between those two is what a start-latency prediction is calibrated against."
+          },
           "closed": {
             "type": "boolean"
           },
