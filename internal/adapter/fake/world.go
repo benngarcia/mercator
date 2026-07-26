@@ -115,6 +115,11 @@ type Machine struct {
 	// dependency's authority: what makes an Artifact consumable is its durable
 	// publication in the object store, which no machine owns.
 	ArtifactReplicas map[string]domain.ArtifactReplica
+	// NoArtifactInventory is a machine whose runtime cannot list the Artifact
+	// copies it holds, which is what a node with no replica store reports. It
+	// changes nothing about what the machine holds, only whether an offer can say
+	// so, exactly as borrowing a slot does.
+	NoArtifactInventory bool
 	// HeldCaches is the mutable, application-owned state this machine holds,
 	// keyed by cache identity. The identity carries the workspace, because that
 	// is what makes two tenants naming one cache two caches on one host.
@@ -240,9 +245,11 @@ func (m *Machine) publishedInventory(now time.Time) domain.ImageInventory {
 // publishedArtifacts is the Artifact content an offer for this machine can
 // carry, in version-ID order so one world state produces one offer. It follows
 // the same rule as the image inventory: a machine nothing of Mercator's runs on
-// enumerates nothing, so its silence is never read as an empty disk.
+// enumerates nothing, so its silence is never read as an empty disk. A machine
+// whose runtime has no replica store is silent for its own reason and in the same
+// way.
 func (m *Machine) publishedArtifacts(now time.Time) domain.ArtifactInventory {
-	if !m.Offer.KeepsWhatItRuns() {
+	if !m.Offer.KeepsWhatItRuns() || m.NoArtifactInventory {
 		return domain.ArtifactInventory{}
 	}
 	inventory := domain.ArtifactInventory{Known: true, ObservedAt: now}

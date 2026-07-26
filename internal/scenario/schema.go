@@ -250,6 +250,13 @@ type ArtifactSpec struct {
 	// exists when that Run's publication reaches the object store, and no
 	// machine may be seeded holding a copy of content nothing has produced.
 	ProducedBy string `json:"produced_by,omitempty"`
+	// ProducedOn names the Rental this version's bytes were written on, for
+	// content published before this world's clock started. It is history rather
+	// than a copy: the catalog records where a version was produced, and a
+	// machine that can enumerate its own copies states those separately. A
+	// version whose producer runs inside this Blueprint states nothing here,
+	// because its publication is what establishes the machine.
+	ProducedOn string `json:"produced_on,omitempty"`
 }
 
 // Prepublished reports whether the object store already held this version when
@@ -398,6 +405,12 @@ type RentalSpec struct {
 	// which is what a completed pull leaves behind.
 	Unpacked         *bool                 `json:"unpacked,omitempty"`
 	ArtifactReplicas []ArtifactReplicaSpec `json:"artifact_replicas,omitempty"`
+	// EnumeratesArtifacts states whether this machine's runtime can list the
+	// Artifact copies it holds. Omitted means it can, which is what an enrolled
+	// node with a replica store does. False is a machine that is holding whatever
+	// it is holding and can say none of it, which is the world where Mercator's
+	// own record of where content was produced is the only evidence anybody has.
+	EnumeratesArtifacts *bool `json:"enumerates_artifacts,omitempty"`
 	// CacheMounts is the mutable, application-owned state this machine was
 	// already holding when the world began, each entry under the workspace that
 	// owns it.
@@ -439,6 +452,13 @@ func (spec HeldCacheSpec) Requirement() domain.CacheMountRequirement {
 // with. A fixture that says nothing is describing the ordinary case: a machine
 // whose pulls completed.
 func (spec RentalSpec) IsUnpacked() bool { return spec.Unpacked == nil || *spec.Unpacked }
+
+// ListsArtifacts reports whether this machine's runtime can enumerate the
+// Artifact copies it holds. A fixture that says nothing is describing the
+// ordinary case: a node whose replica store answers.
+func (spec RentalSpec) ListsArtifacts() bool {
+	return spec.EnumeratesArtifacts == nil || *spec.EnumeratesArtifacts
+}
 
 // RentalScheduleSpec is Mercator's ordered sequence of nonterminal Bookings
 // assigned to one Rental. At most one Booking runs; any number may wait.
@@ -681,6 +701,12 @@ type CandidateExpectation struct {
 	// Artifact the Run reads: "hit", "miss", or "unknown" for a machine that
 	// could not enumerate its copies at all.
 	Artifacts map[string]string `json:"artifact_evidence,omitempty"`
+	// ProducedHere asserts which of the Artifacts this Run reads were written on
+	// this candidate, as Mercator's own publication record says. It is a separate
+	// assertion from the locality above rather than a fourth word for it: what a
+	// host says it is holding and where Mercator recorded the bytes being
+	// produced are two facts, and one machine routinely carries both.
+	ProducedHere []string `json:"produced_here,omitempty"`
 	// Caches asserts what this candidate was recorded as holding of each Cache
 	// Mount the Run declares, by name: "hit" for the generation the workload
 	// asked for, "miss" for a machine holding none it can use, and "unknown" for
@@ -1308,6 +1334,9 @@ func (w WorldSpec) validate() error {
 		}
 		artifacts[artifact.ID] = artifact
 	}
+	if err := w.validateArtifactProvenance(); err != nil {
+		return err
+	}
 	layerDigests := w.layerDigests()
 	ids := map[string]bool{}
 	for _, rental := range w.Rentals {
@@ -1441,6 +1470,34 @@ func (w WorldSpec) validate() error {
 // empty: a machine holding every byte, priced a full cold pull at full
 // confidence, with the fixture green either way. That is a world the Lab must
 // not be able to state.
+// validateArtifactProvenance refuses the two things a fixture cannot mean by
+// where content was produced. A version whose producer runs in this Blueprint
+// gets its machine from its own publication, so stating one as well would be two
+// authorities for one fact. And only capacity Mercator keeps can be the machine
+// bytes were written on and still be there afterwards: a borrowed slot and a
+// machine that does not exist yet hold nothing a later Run could prefer.
+func (w WorldSpec) validateArtifactProvenance() error {
+	rentals := map[string]bool{}
+	for _, rental := range w.Rentals {
+		rentals[rental.ID] = true
+	}
+	for _, artifact := range w.Artifacts {
+		if artifact.ProducedOn == "" {
+			continue
+		}
+		if !artifact.Prepublished() {
+			return fmt.Errorf(
+				"Artifact %q names producing host %q and is published by Run %q, which is what establishes the host",
+				artifact.ID, artifact.ProducedOn, artifact.ProducedBy,
+			)
+		}
+		if !rentals[artifact.ProducedOn] {
+			return fmt.Errorf("Artifact %q was produced on %q, which is not a Rental in this world", artifact.ID, artifact.ProducedOn)
+		}
+	}
+	return nil
+}
+
 func (w WorldSpec) validateDiffIDReporting() error {
 	reporter := ""
 	for _, rental := range w.Rentals {

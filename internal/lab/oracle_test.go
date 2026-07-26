@@ -237,6 +237,104 @@ func TestNeitherModelPricesAnUncheckedCopyAsWarmth(t *testing.T) {
 	}
 }
 
+// TestBothModelsPreferTheProducingHostByTheReadItAvoids is producer affinity in
+// both models at once. Two Rentals are silent about their copies and identical in
+// every other respect, and the only thing that separates them is Mercator's
+// record of where the dataset was published. The preference is the 640 second
+// read the consumer would not make there, so a reference model blind to the
+// record would disagree with production about the winner for a reason belonging
+// to neither model, which is the whole job of an independent oracle.
+func TestBothModelsPreferTheProducingHostByTheReadItAvoids(t *testing.T) {
+	input := smallSchedulingInput(t)
+	version := labArtifactVersion(input.EvaluatedAt)
+	producer := offerFor(t, input, "rental-warm")
+	version.ProducedOnRentalID = producer.RentalID
+	input.Artifacts = []domain.ArtifactVersion{version}
+	neighbour := producer
+	neighbour.ID = "rental-neighbour"
+	neighbour.RentalID = neighbour.ID
+	neighbour.NativeRef = neighbour.ID
+	// Neither machine can list its Artifact copies, so nothing either one says
+	// tells them apart.
+	producer.Artifacts = domain.ArtifactInventory{}
+	neighbour.Artifacts = domain.ArtifactInventory{}
+	input.Offers = []domain.OfferSnapshot{producer, neighbour}
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	reference, err := SolveSmallWorld(input)
+	if err != nil {
+		t.Fatalf("solve reference world: %v", err)
+	}
+
+	if production.SelectedOfferSnapshotID != producer.ID {
+		t.Fatalf("production placed the consumer on %q, want the machine its input was written on", production.SelectedOfferSnapshotID)
+	}
+	if reference.SelectedOfferID != production.SelectedOfferSnapshotID {
+		t.Fatalf("reference winner = %q, production winner = %q", reference.SelectedOfferID, production.SelectedOfferSnapshotID)
+	}
+	for _, machine := range []struct {
+		offer domain.OfferSnapshot
+		reads bool
+	}{{producer, false}, {neighbour, true}} {
+		candidate := candidateFor(t, production, machine.offer.ID)
+		if reads := candidate.Estimates.ArtifactSeconds.Expected > 0; reads != machine.reads {
+			t.Errorf("production priced %q %v seconds of read, and owing one should be %v",
+				machine.offer.ID, candidate.Estimates.ArtifactSeconds.Expected, machine.reads)
+		}
+		if got := referenceEstimates(input, machine.offer).ArtifactSeconds.Expected; got != candidate.Estimates.ArtifactSeconds.Expected {
+			t.Errorf("reference priced %q %v seconds of read, production priced %v",
+				machine.offer.ID, got, candidate.Estimates.ArtifactSeconds.Expected)
+		}
+		if candidate.Estimates.ArtifactSeconds.Confidence == 1 && !machine.reads {
+			t.Errorf("%q was priced zero seconds at full confidence on a copy nothing re-checked", machine.offer.ID)
+		}
+		if !candidate.Feasible {
+			t.Errorf("affinity refused %q: %+v", machine.offer.ID, candidate.Rejections)
+		}
+	}
+	producing := candidateFor(t, production, producer.ID)
+	if len(producing.ArtifactEvidence) != 1 || !producing.ArtifactEvidence[0].ProducedHere {
+		t.Fatalf("the decision records %+v and does not name the machine the content was produced on", producing.ArtifactEvidence)
+	}
+}
+
+// TestBothModelsPriceUncertaintyFromTheSameFacts closes a divergence the dead
+// weight was hiding. The reference model counted an offer nobody could enumerate
+// and an offer with no price as uncertainty and the scheduler did not, and the
+// two agreed on the score only because ScoreWeights.UncertaintyPenaltyUSD
+// multiplies the term by zero in every deployment. Phase 4 populates those
+// weights, and a disagreement waiting for that is a disagreement about which
+// machine to use.
+func TestBothModelsPriceUncertaintyFromTheSameFacts(t *testing.T) {
+	input := smallSchedulingInput(t)
+	input.Weights = scheduler.ScoreWeights{UncertaintyPenaltyUSD: 1}
+	// Every kind of not-knowing at once: a capacity claim published at partial
+	// confidence, reliability likewise, no inventory at all, and no price.
+	silent := offerFor(t, input, "rental-warm")
+	silent.Capacity = domain.CapacityEvidence{Available: true, Confidence: 0.4}
+	silent.Reliability = domain.ReliabilityEvidence{Confidence: 0.5}
+	silent.Images = domain.ImageInventory{}
+	silent.Pricing.Known = false
+	input.Workload.Spec.Placement.AllowUnknownPricing = true
+	input.Offers = []domain.OfferSnapshot{silent}
+
+	production, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+	candidate := candidateFor(t, production, silent.ID)
+
+	if penalty := silent.UncertaintyPenalty(); penalty != 3.1 {
+		t.Fatalf("this offer is worth %v of uncertainty, and the case needs every term to fire", penalty)
+	}
+	if got := referenceScore(input, silent); got != candidate.ScoreUSD {
+		t.Fatalf("reference scored %v and production scored %v, so the two models disagree about what nobody knows", got, candidate.ScoreUSD)
+	}
+}
+
 // TestNeitherModelTurnsArtifactSilenceIntoInfeasibility is the Artifact half of
 // the rule below, at the one place a locality answer can strike a candidate out.
 // A machine that cannot enumerate its copies is charged the whole read, which is

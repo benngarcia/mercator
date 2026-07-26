@@ -1,0 +1,65 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "The same world as the affinity fixture, except the machine the dataset was written on is released before the consumer arrives: its idle lease elapses five minutes in and the Run turns up ten minutes in. A preference whose subject is gone is not a Run that cannot be placed. The consumer lands on the only machine left, feasible with no rejection of any kind, and is priced the 640 second object-store read it will actually pay, because the durable copy is what made the content consumable in the first place and a host-local copy was only ever an optimisation over it.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB",
+        "produced_on": "rental-b-producer"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-a-neighbour",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "enumerates_artifacts": false,
+        "rate_per_hour_usd": 2.5
+      },
+      {
+        "id": "rental-b-producer",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "enumerates_artifacts": false,
+        "idle_lease_expires_in": "5m",
+        "rate_per_hour_usd": 2.5
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "advance": "10m"
+    },
+    {
+      "submit": "reads-the-dataset",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "expected_runtime": "20m",
+        "max_runtime": "1h",
+        "consumes_artifacts": ["artifact:imagenet:v2.41"]
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-a-neighbour",
+        "reasons": ["FEASIBLE", "LOWEST_SCORE"],
+        "candidates": {
+          "rental-a-neighbour": {
+            "feasible": true,
+            "image_locality": "hot",
+            "pull_seconds": 0,
+            "artifact_seconds": {"at_least": 639, "at_most": 641},
+            "artifact_evidence": {"artifact:imagenet:v2.41": "unknown"}
+          }
+        }
+      }
+    }
+  ]
+}

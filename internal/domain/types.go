@@ -313,6 +313,38 @@ func (offer OfferSnapshot) RegistryDownloadMbps() float64 {
 	return offer.RegistryDownload().Mbps
 }
 
+// UncertaintyPenalty is how much of this offer nobody stands behind, in
+// comparable units: for a fact published with a confidence, the part of it that
+// is missing, and for a fact nobody published at all, the whole of it. It lives
+// here because it is a property of the offer, and because the predictor and the
+// Lab's reference model both need it: they were computing it separately, they
+// disagreed about two of the four terms, and they agreed on the answer only
+// because ScoreWeights.UncertaintyPenaltyUSD multiplies it by zero in every
+// deployment. Two readings of one quantity is how they drift, and this one had
+// already drifted.
+//
+// It counts what those two implementations were already stated against and
+// nothing more. Whether an offer that could not enumerate its Artifact copies
+// belongs here too is a question for the calibration that will finally read this
+// number: a penalty term nothing multiplies is a claim no test can falsify, so
+// this grows when something measures what it is worth.
+func (offer OfferSnapshot) UncertaintyPenalty() float64 {
+	penalty := 0.0
+	if offer.Capacity.Confidence > 0 && offer.Capacity.Confidence < 1 {
+		penalty += 1 - offer.Capacity.Confidence
+	}
+	if offer.Reliability.Confidence > 0 && offer.Reliability.Confidence < 1 {
+		penalty += 1 - offer.Reliability.Confidence
+	}
+	if !offer.Images.Known {
+		penalty++
+	}
+	if !offer.Pricing.Known {
+		penalty++
+	}
+	return penalty
+}
+
 type ResourceInventory struct {
 	CPUMillis          int64                  `json:"cpu_millis"`
 	MemoryBytes        int64                  `json:"memory_bytes"`

@@ -144,7 +144,7 @@ func referenceScore(input scheduler.SchedulingInput, offer domain.OfferSnapshot)
 		weights.CompletionLatencyUSDPerSecond*(estimates.StartSeconds.Expected+input.Workload.Spec.Placement.ExpectedRuntimeSeconds) +
 		weights.StartFailurePenaltyUSD*offer.Reliability.StartFailureRate +
 		weights.InterruptionPenaltyUSD*offer.Reliability.InterruptionRate +
-		weights.UncertaintyPenaltyUSD*referenceUncertainty(offer)
+		weights.UncertaintyPenaltyUSD*offer.UncertaintyPenalty()
 	return math.Round(score*1_000_000) / 1_000_000
 }
 
@@ -157,7 +157,7 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	queue := referenceQueue(input, offer)
 	provision := referenceProvision(offer)
 	work, locality := input.Image.StartWork(offer.Images)
-	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer)
 	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
 	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes))
 	establishedPull := domain.Estimate{}
@@ -197,7 +197,7 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 // give up frees a byte it does not need straight back.
 func referenceDisk(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.DiskDemand {
 	work, locality := input.Image.StartWork(offer.Images)
-	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
+	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer)
 	caches := domain.CacheLandBytes(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches)
 	established := int64(0)
 	for _, found := range evidence {
@@ -295,23 +295,6 @@ func referenceStartWorkSeconds(work domain.ImageWork, bandwidthMbps float64) flo
 	}
 	return float64(work.TransferBytes*8)/1_000_000/bandwidthMbps +
 		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
-}
-
-func referenceUncertainty(offer domain.OfferSnapshot) float64 {
-	penalty := 0.0
-	if offer.Capacity.Confidence > 0 && offer.Capacity.Confidence < 1 {
-		penalty += 1 - offer.Capacity.Confidence
-	}
-	if offer.Reliability.Confidence > 0 && offer.Reliability.Confidence < 1 {
-		penalty += 1 - offer.Reliability.Confidence
-	}
-	if !offer.Images.Known {
-		penalty++
-	}
-	if !offer.Pricing.Known {
-		penalty++
-	}
-	return penalty
 }
 
 func CheckOfferOrderIndependence(ctx context.Context, production scheduler.Scheduler, input scheduler.SchedulingInput) error {

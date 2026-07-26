@@ -306,6 +306,16 @@ func assertCandidate(rec recordedDecision, name, id string, expect CandidateExpe
 			fail("Artifact %q: expected %q, recorded %q", artifactID, want, found.Locality)
 		}
 	}
+	for _, artifactID := range expect.ProducedHere {
+		found, ok := artifactEvidence(candidate, artifactID)
+		if !ok {
+			fail("records no Artifact evidence for %q", artifactID)
+			continue
+		}
+		if !found.ProducedHere {
+			fail("Artifact %q: the decision does not name this candidate as the machine the content was produced on", artifactID)
+		}
+	}
 	for _, cache := range sortedKeys(expect.Caches) {
 		found, ok := cacheEvidence(candidate, cache)
 		if !ok {
