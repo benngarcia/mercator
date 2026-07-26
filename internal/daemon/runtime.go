@@ -432,7 +432,7 @@ type ReconcileResult struct {
 // returns the provider inventory observed after both paths run.
 func (r *Runtime) ReconcileWorkspace(ctx context.Context, workspaceID string) (ReconcileResult, error) {
 	advanced, advanceErr := r.orch.AdvanceOpenRuns(ctx, workspaceID)
-	_, prewarmErr := r.orch.Prewarm(ctx, workspaceID)
+	_, prewarmErr := r.orch.Prewarm(ctx)
 	swept, sweepErr := r.janitor.Sweep(ctx, workspaceID)
 	owned, inventoryErr := r.ListOwned(ctx, workspaceID)
 	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Released, Owned: owned},
@@ -486,15 +486,6 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 		if advanced.Closed > 0 {
 			log.Printf("run advancement sweep %s: closed %d of %d open runs", workspaceID, advanced.Closed, advanced.Open)
 		}
-		// Preparation is reconciled after the Runs move, because what Mercator
-		// wants prepared is derived from where they ended up. A machine that
-		// refuses it costs the fleet start latency and never correctness, so a
-		// failure here is logged rather than allowed to end the sweep.
-		if prepared, err := orch.Prewarm(ctx, workspaceID); err != nil {
-			log.Printf("prepare capacity sweep %s: %v", workspaceID, err)
-		} else if prepared.Sent {
-			log.Printf("prepare capacity sweep %s: asked for %d pieces of content", workspaceID, prepared.Wanted)
-		}
 		result, err := jan.Sweep(ctx, workspaceID)
 		if err != nil {
 			log.Printf("janitor sweep %s: %v", workspaceID, err)
@@ -503,6 +494,16 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 		if result.Released > 0 {
 			log.Printf("janitor sweep %s: reclaimed %d of %d owned objects", workspaceID, result.Released, result.Found)
 		}
+	}
+	// Preparation is reconciled after every tenant's Runs have moved, because
+	// what Mercator wants prepared is derived from where they ended up, and in
+	// one pass over the fleet, because the bounds it stays inside are the
+	// fleet's. A machine that refuses it costs start latency and never
+	// correctness, so a failure here is logged rather than ending the sweep.
+	if prepared, err := orch.Prewarm(ctx); err != nil {
+		log.Printf("prepare capacity sweep: %v", err)
+	} else if prepared.Stated > 0 {
+		log.Printf("prepare capacity sweep: asked %d workspaces for %d pieces of content", prepared.Stated, prepared.Wanted)
 	}
 }
 
