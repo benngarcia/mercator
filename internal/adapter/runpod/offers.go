@@ -75,8 +75,8 @@ func appendCloudOffer(offers []domain.OfferSnapshot, g gpuType, cloud string, pr
 		InstanceType: cloud + "/" + g.ID,
 		NativeRef:    offerNativeRef(g.ID, cloud),
 		ObservedAt:   now,
-		ExpiresAt:  now.Add(5 * time.Minute),
-		Platform:   domain.Platform{OS: "linux", Architecture: "amd64"},
+		ExpiresAt:    now.Add(5 * time.Minute),
+		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
 		Resources: domain.ResourceInventory{
 			CPUMillis:          8000,
 			MemoryBytes:        16 * gib,

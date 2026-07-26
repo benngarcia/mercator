@@ -23,7 +23,7 @@ type runState struct {
 	// it is never filled in from launchAcceptedAt: the gap between the two is the
 	// start latency every prediction in phase 4 is calibrated against, and a
 	// derived value would make that subtraction zero for every Run in the log.
-	startedAt                *time.Time
+	startedAt *time.Time
 	// readyAt is when this attempt's application reported that it can do work, as
 	// the application stated the moment. It is nil until a report arrives and is
 	// never derived from startedAt: a running process is not a ready one, and only

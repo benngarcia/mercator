@@ -59,8 +59,8 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 		InstanceType: t.ShadeInstanceType,
 		NativeRef:    nativeRef(t.Cloud, region, t.ShadeInstanceType),
 		ObservedAt:   now,
-		ExpiresAt:  now.Add(5 * time.Minute),
-		Platform:   domain.Platform{OS: domain.DefaultPlatformOS, Architecture: hostArchitecture(cfg.GPUType)},
+		ExpiresAt:    now.Add(5 * time.Minute),
+		Platform:     domain.Platform{OS: domain.DefaultPlatformOS, Architecture: hostArchitecture(cfg.GPUType)},
 		Resources: domain.ResourceInventory{
 			CPUMillis:          int64(cfg.VCPUs) * 1000,
 			MemoryBytes:        int64(cfg.MemoryInGB) * gib,
