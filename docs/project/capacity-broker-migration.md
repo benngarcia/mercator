@@ -2082,8 +2082,10 @@ complete because it works against a live provider.
     published 100 Mbps observed at midnight, and the only exits were a full hour of
     moving nothing or restarting the agent. The commit message claimed the opposite
     property. Readings are kept one by one now and the fact is the slowest of the ones
-    still standing, dated and expired by the transfer that took it: a floor cannot be
-    retired, because the transfer that set it is the only thing that dates it.
+    still standing, which is what retires the slow one: each reading serves its own
+    hour and leaves the window whatever the node does afterwards, so a floor nothing
+    can date is no longer what gets published. The date this entry then gave the fact
+    was wrong, and the entry below corrects it.
   - `safety.transfer_rate_is_attributed` judged a historical decision against the
     current fleet. Its second clause read World Truth's offer list, so a machine
     legitimately gone by check time turned a correct placement into a reported safety
@@ -2104,7 +2106,9 @@ complete because it works against a live provider.
     suite green. `conformance/a-path-a-host-disowned-is-still-the-path` is the case
     that can tell them apart: the machine states no confidence in its own 200 Mbps
     path, Mercator prices the read from its fleet-wide assumption at 640 seconds, and
-    this world spends the sixteen hundred the path really costs.
+    this world spends the sixteen hundred the path really costs. That closed the Lab
+    world, and this entry read as though it closed both. The fake adapter was still
+    substitutable, and the entry below closes it.
   - What a node publishes is not the link, and now says so. The reading is timed over
     `io.Copy`, so it is the bytes crossing the path, landing on the disk, and being
     hashed on the way past; it is published as `node_artifact_copy` and
@@ -2112,11 +2116,13 @@ complete because it works against a live provider.
     is the reading of that as a false refusal. A machine on a ten gigabit path whose
     Artifact disk delivers four cannot serve a Run that states a floor of eight, so
     refusing it is the right answer and admitting it was the unmeasured guess this
-    slice replaced; both readers of the fact ask how fast content reaches this host,
-    and landing is part of reaching it. The expressibility half of the same finding
-    goes with it: a fixture's `p10_mbps` is that delivery rate, which is why one
-    declaration is enough, and a host that publishes something other than what it
-    delivers is stated through the confidence it puts on its own number.
+    slice replaced. That semantics was settled here and constrained by nothing, since
+    every download floor in the tree was over a registry; the entry below gives it a
+    case at both fidelities. The rest of the finding stands: both readers of the fact
+    ask how fast content reaches this host, and landing is part of reaching it. The
+    expressibility half goes with it: a fixture's `p10_mbps` is that delivery rate,
+    which is why one declaration is enough, and a host that publishes something other
+    than what it delivers is stated through the confidence it puts on its own number.
 
 - [x] 2026-07-26: Close the transfer-path slice on the two halves it left open: what
   the corpus says about a machine nobody measured, and what an admitted assumption is
@@ -2153,6 +2159,62 @@ complete because it works against a live provider.
     per-offer unpack fact with no producer was rejected for the reason the last review
     gave: `capability.HostFacts.Network` sat declared and unwritten since phase 2, and
     a reader with no writer is the defect, not the fix.
+
+- [x] 2026-07-26: Answer the second review of the measured transfer path. Two
+  reviewers refuted four things about the entry above. All four were real, three in
+  the production code and one in what this document claimed.
+  - Dating a node's published p10 by its slowest reading made the same fact fail the
+    freshness bound it exists to serve. A node that read at 100 Mbps at noon and at a
+    gigabit every minute until one o'clock published a measurement dated noon with
+    sixty samples under it, so a Run stating `max_measurement_age_seconds` of ten
+    minutes read the machine as having published nothing about its link and struck it
+    out on a floor its last fifty-nine reads cleared twenty times over. One fact is a
+    quantile over a window and never one transfer, which is what `SampleCount` has
+    always said, so what dates it is the moment its evidence ends. The value is still
+    the slowest reading standing, the slow reading still retires because each reading
+    serves its own hour, and the fact now expires with the newest reading, which is
+    the moment the window would empty. Expiry and collection are one statement
+    instead of a constant chosen twice.
+  - One published fact was read at two moments. `OfferSnapshot.DownloadRate` priced
+    the transfer as of the offer's observation and `NetworkDownloadRequirement.Answer`
+    decided the Run's floor as of the decision, so a fact its publisher stopped
+    standing behind in between was both things at once: the record refused the
+    candidate because nobody had published a download p10 for its link and priced its
+    pull at 750 Mbps measured by that same publisher. `safety.transfer_rate_is_attributed`
+    then reported a decision taken by the scheduler's own documented rule as a
+    fabricated measurement. The moment is the caller's now and every caller passes the
+    decision's, which is the only one the Booking Decision carries and the honest
+    question anyway. A Run's `max_measurement_age` stays with the floor alone, because
+    it is that Run's policy about what it will be placed on rather than a statement
+    about the fact, and a reading one Run refuses is still the best evidence Mercator
+    holds about how long the transfer takes.
+  - The fake adapter's transfer model was still Mercator's own input. Replacing
+    `simLinkMbps` with a read of the facts the offer publishes left all thirty-six
+    regression Blueprints green, verified on this host, and the two fixtures that
+    declare a disowned path moved their image bytes at the 500 Mbps fleet assumption
+    rather than the 5000 they state. `a-world-crosses-the-path-its-host-disowned` is
+    the fixture that notices: one Rental holding nothing, an 18GB image, and a four
+    gigabit registry path the machine disowns, so Mercator prices the pull at 288
+    seconds and this world spends the thirty-six the path really costs. The start it
+    asserts is the world's own moment, and under the substitution the Run starts 288
+    seconds in.
+  - The delivery semantics the last entry settled had no executable case. Every
+    download floor in the tree was over a registry, so what a Run asking about its own
+    dataset receives was decided by a rule no fixture could reach, and the corpus
+    could not state `max_measurement_age` at all.
+    `a-floor-on-reading-the-data-is-a-floor-on-delivery` states both: three Rentals
+    holding one image at one price, one delivering ten gigabits, one delivering four,
+    and one delivering ten that measured a week ago. A Run needing eight refuses the
+    four and names the four, refuses the week-old reading and says nobody answered,
+    and takes the third. `PathSpec.measured_ago` is what lets one world hold a machine
+    that measured lately beside one that did not; it states no expiry and adds none,
+    because how old a reading a Run will act on is the Run's policy rather than the
+    path's. `TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers` is the same
+    claim against a real node and a real object store: two Artifacts replicated out of
+    MinIO on this host's daemon, a p10 over the two transfers, and a Run refused the
+    floor above what the machine delivered and served the floor below it. The node
+    measured 12426.40 Mbps of delivery, and dropping the floor comparison admits it to
+    a Run asking for twice that.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
@@ -2807,9 +2869,28 @@ Phase 4 added:
   prediction and the actual cannot be the same number. A single Rental reads a 40GB
   dataset over a path this world crosses at 200 Mbps and states no confidence in, so
   Mercator prices the read from its own assumption at 640 seconds and the world spends
-  1600. It is what holds the two halves of the transfer model apart: with the world
-  reading published facts instead of its own declaration, the read costs 640 and the
-  actual is derived from Mercator's own input.
+  1600. It is what holds the two halves apart in the Lab world: with that world reading
+  published facts instead of its own declaration, the read costs 640 and the actual is
+  derived from Mercator's own input. `a-world-crosses-the-path-its-host-disowned` is
+  the same claim about the fake adapter.
+- `a-floor-on-reading-the-data-is-a-floor-on-delivery` (green): the two ways a
+  candidate can miss a Run's floor on reading its dataset, which no fixture could
+  state because every download floor in the tree was over a registry. Three Rentals
+  hold one image at one price. The machine that delivers four gigabits is refused a
+  floor of eight and the record states the four it published; the machine that
+  delivers ten and last measured a week ago is refused as unmeasured, because this Run
+  acts on nothing older than ten minutes; the third is taken. Dropping either rule
+  fails it on that machine alone. It is the fixture that says an object store p10 is
+  delivery and a floor may know it, and the one that makes a node's dating of its own
+  measurements reachable from the corpus.
+- `a-world-crosses-the-path-its-host-disowned` (green): the fake adapter's transfer
+  model, held apart from Mercator's own input. One Rental holding nothing, an 18GB
+  image, and a four gigabit registry path the machine states no confidence in, so the
+  pull is priced from the fleet assumption at 288 seconds and this world spends the
+  thirty-six the path costs. The start it asserts is the world's moment: deriving the
+  world's rates from the published facts leaves the same Run starting 288 seconds in,
+  which is what running it that way reports. Before it, that substitution left the
+  whole suite green.
 - `safety.transfer_rate_is_attributed` (Lab invariant): every transfer a Booking
   Decision recorded names either the measurement or the assumption it was priced
   from, and never both, and a rate the record presents as measured is a number some
