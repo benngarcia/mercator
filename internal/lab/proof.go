@@ -163,13 +163,23 @@ func (facts proofFacts) partialImageReuse(runID string) bool {
 		existing.Estimates.PullSeconds.Expected < fresh.Estimates.PullSeconds.Expected
 }
 
+// comparesQueueAndFresh is the decision weighing capacity Mercator already holds
+// against capacity it would have to create. Either standing disposition is that
+// comparison: a machine free now carries no queue delay to weigh, and a machine
+// with a Run on it carries the delay this checkpoint is named after, so naming
+// only run_now accepted the case with nothing to compare and refused the case
+// with something. What has to be on the record is a standing candidate whose
+// queue delay was established and a fresh candidate priced to provision.
 func (facts proofFacts) comparesQueueAndFresh(runID string) bool {
 	decision := facts.decisions[runID]
-	existing := candidateWithDisposition(decision, domain.CandidateDispositionRunNow)
+	standing := candidateWithDisposition(decision, domain.CandidateDispositionRunNow)
+	if standing == nil {
+		standing = candidateWithDisposition(decision, domain.CandidateDispositionQueue)
+	}
 	fresh := candidateWithDisposition(decision, domain.CandidateDispositionProvision)
-	return existing != nil &&
+	return standing != nil &&
 		fresh != nil &&
-		existing.Estimates.QueueSeconds.Source != "" &&
+		standing.Estimates.QueueSeconds.Source != "" &&
 		fresh.Estimates.ProvisionSeconds.Expected > 0
 }
 
