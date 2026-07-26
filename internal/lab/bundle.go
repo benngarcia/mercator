@@ -254,8 +254,15 @@ func predictionActualRecords(tape WorldTape, effects []EffectRecord, mercatorEve
 // with itself, and there is no other source for six of the eight: Mercator sees a
 // container start and an application report itself ready, and nothing in
 // production tells it when a machine finished booting.
+// launched is separate from actual because the two answer different questions. A
+// Run is in launched when the Effect Ledger accepted a launch for it, whatever the
+// consequence then said, and in actual only where that consequence carried stage
+// durations. Deriving one from the other made a launch that reported no stage at
+// all indistinguishable from a Run that never launched, so the law about launches
+// skipped exactly the launches with nothing to measure.
 type stageWaterfall struct {
 	predicted map[string]domain.LaunchStageEstimates
+	launched  map[string]bool
 	actual    map[string]map[string]float64
 }
 
@@ -266,7 +273,7 @@ type stageWaterfall struct {
 // through instantly.
 func (waterfall stageWaterfall) records(runID string) []predictionActualRecord {
 	predicted, decided := waterfall.predicted[runID]
-	actual, launched := waterfall.actual[runID]
+	actual := waterfall.actual[runID]
 	rows := make([]predictionActualRecord, 0, len(domain.LaunchStages))
 	for _, stage := range domain.LaunchStages {
 		row := predictionActualRecord{
@@ -279,8 +286,14 @@ func (waterfall stageWaterfall) records(runID string) []predictionActualRecord {
 			row.PredictedSeconds = predicted.Stage(stage).Expected
 			row.PredictionSource = "booking_decision.estimates.stages." + string(stage)
 		}
-		if launched {
-			row.ActualSeconds = actual[string(stage)]
+		if waterfall.launched[runID] {
+			// A launch that reported no duration for this stage is named as that
+			// rather than as a measured zero, because a calibration reading zero
+			// seconds off a stage nobody timed would train on it.
+			row.ActualSource = "launch_reported_no_actual"
+		}
+		if seconds, measured := actual[string(stage)]; measured {
+			row.ActualSeconds = seconds
 			row.ActualSource = "effect_ledger.launch.stage_seconds"
 		}
 		rows = append(rows, row)
@@ -291,6 +304,7 @@ func (waterfall stageWaterfall) records(runID string) []predictionActualRecord {
 func stageWaterfalls(effects []EffectRecord, mercatorEvents []eventlog.CloudEvent) (stageWaterfall, error) {
 	waterfall := stageWaterfall{
 		predicted: map[string]domain.LaunchStageEstimates{},
+		launched:  map[string]bool{},
 		actual:    map[string]map[string]float64{},
 	}
 	for _, event := range mercatorEvents {
@@ -309,6 +323,7 @@ func stageWaterfalls(effects []EffectRecord, mercatorEvents []eventlog.CloudEven
 		if effect.Operation != OperationProviderLaunch || effect.Command != EffectCommandAccepted {
 			continue
 		}
+		waterfall.launched[effect.CorrelationID] = true
 		var consequence struct {
 			StageSeconds map[string]float64 `json:"stage_seconds"`
 		}

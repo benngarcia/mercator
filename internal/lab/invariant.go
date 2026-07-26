@@ -301,7 +301,12 @@ func predictionIsRecordedAgainstItsActual(observation InvariantObservation) erro
 	if err != nil {
 		return err
 	}
-	for _, runID := range slices.Sorted(maps.Keys(waterfall.actual)) {
+	// Every launch the ledger accepted, and not only those that reported a duration
+	// for something. Reading the accepted launches off the stage durations they
+	// carried left the rule silent for exactly the launch it exists to catch: one
+	// that measured nothing at all, whose eight predictions are then exported
+	// against nothing while the law says it holds.
+	for _, runID := range slices.Sorted(maps.Keys(waterfall.launched)) {
 		spent := waterfall.actual[runID]
 		predicted, decided := waterfall.predicted[runID]
 		if !decided {

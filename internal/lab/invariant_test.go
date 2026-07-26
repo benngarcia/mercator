@@ -980,6 +980,57 @@ func launchPredictingEveryStage(runID string) eventlog.CloudEvent {
 	})
 }
 
+// TestALaunchThatMeasuredNothingIsNotSilentlyExempt is the launch the rule used to
+// skip. Reading the accepted launches off the durations they reported meant a
+// launch whose consequence carried no stage_seconds at all was not a launch as far
+// as the law was concerned, so the eight predictions Mercator wrote were exported
+// against nothing while every invariant passed. That is the shape a launch path
+// with no stage accounting would take, which is what the node lane and a
+// provisioned agent's bootstrap are.
+func TestALaunchThatMeasuredNothingIsNotSilentlyExempt(t *testing.T) {
+	observation := startRuleObservation([]eventlog.CloudEvent{launchPredictingEveryStage("run-waterfall")})
+	observation.Effects = []EffectRecord{launchSpendingNoStage("run-waterfall")}
+
+	result := invariantResultByID(t,
+		DefaultInvariantRegistry().Evaluate(observation),
+		"safety.prediction_is_recorded_against_its_actual",
+	)
+
+	if result.Status != InvariantFailed || result.Violation == "" {
+		t.Fatalf("a launch that measured no stage at all was reported as recorded against its actual: %+v", result)
+	}
+}
+
+// TestALaunchThatMeasuredNothingNamesTheAbsenceInTheBundle is the record half of
+// the same thing. A row whose actual is zero because nothing timed the stage and a
+// row whose actual is zero because the stage was instant are opposite facts, and a
+// calibration reading the first as a measurement would train on it.
+func TestALaunchThatMeasuredNothingNamesTheAbsenceInTheBundle(t *testing.T) {
+	waterfall, err := stageWaterfalls(
+		[]EffectRecord{launchSpendingNoStage("run-waterfall")},
+		[]eventlog.CloudEvent{launchPredictingEveryStage("run-waterfall")},
+	)
+	if err != nil {
+		t.Fatalf("read the waterfall: %v", err)
+	}
+
+	for _, row := range waterfall.records("run-waterfall") {
+		if row.ActualSource != "launch_reported_no_actual" {
+			t.Fatalf("%s is sourced %q at %.2fs, and this launch reported no stage duration at all",
+				row.Metric, row.ActualSource, row.ActualSeconds)
+		}
+	}
+}
+
+// launchSpendingNoStage is the world's own account of a launch that reported no
+// stage duration at all, which is what a launch path with no stage accounting on it
+// leaves in the ledger.
+func launchSpendingNoStage(runID string) EffectRecord {
+	record := launchSpendingEveryStageBut(runID, "")
+	record.Consequence = mustJSON(map[string]any{"external_id": "lab-" + runID})
+	return record
+}
+
 // launchSpendingEveryStageBut is the world's own account of a launch with one
 // stage left out of it.
 func launchSpendingEveryStageBut(runID string, omitted domain.LaunchStage) EffectRecord {
