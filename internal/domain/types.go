@@ -945,13 +945,24 @@ type CollectionReport struct {
 }
 
 type CandidateDecision struct {
-	OfferSnapshotID string               `json:"offer_snapshot_id"`
-	ConnectionID    string               `json:"connection_id,omitempty"`
-	AdapterType     string               `json:"adapter_type,omitempty"`
-	NativeRef       string               `json:"native_ref,omitempty"`
-	Disposition     CandidateDisposition `json:"disposition"`
-	Feasible        bool                 `json:"feasible"`
-	Rejections      []Violation          `json:"rejections,omitempty"`
+	OfferSnapshotID string `json:"offer_snapshot_id"`
+	ConnectionID    string `json:"connection_id,omitempty"`
+	AdapterType     string `json:"adapter_type,omitempty"`
+	NativeRef       string `json:"native_ref,omitempty"`
+	// Candidate is the recurring thing a launch prediction about this candidate is
+	// filed under: the machine where its backend named one, otherwise the product a
+	// provider sells, and the content it was asked to run. The three identifiers
+	// above are this listing as this search found it, and how much of a listing
+	// recurs differs per backend with nothing in the ID to say which.
+	//
+	// It is recorded because a prediction claiming evidence about this exact
+	// candidate has to say which candidate it meant, and a key nobody wrote down is
+	// one no reader can retrace and no rule can police. A candidate that cannot
+	// recur records a provider and no key, which is that answer said out loud.
+	Candidate   CandidateIdentity    `json:"candidate,omitzero"`
+	Disposition CandidateDisposition `json:"disposition"`
+	Feasible    bool                 `json:"feasible"`
+	Rejections  []Violation          `json:"rejections,omitempty"`
 	// ImageLocality is how much of the Run's image this candidate was found to
 	// have. It is the qualitative half of the pull estimate, and only the
 	// control plane can state it: the host says what it holds, the manifest

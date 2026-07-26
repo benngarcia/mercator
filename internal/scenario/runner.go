@@ -429,6 +429,11 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 		fail("not among the decision's %d candidates", len(rec.decision.Candidates))
 		return failures
 	}
+	if expect.Candidate != nil {
+		if recorded := candidate.Candidate.Candidate(false); recorded != *expect.Candidate {
+			fail("candidate: want %q, got %q", *expect.Candidate, recorded)
+		}
+	}
 	if expect.Feasible != nil && candidate.Feasible != *expect.Feasible {
 		fail("expected feasible=%v, got %v (rejections %s)", *expect.Feasible, candidate.Feasible, describeRejections(candidate.Rejections))
 	}

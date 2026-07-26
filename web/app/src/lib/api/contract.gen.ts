@@ -1105,11 +1105,28 @@ export interface components {
             /** @description What this Run is billed for running here, over the runtime it declared. A machine whose price nobody published has no such number and predicts none: its source reads "unpriced", which is what the ranking reads to place it behind every candidate somebody priced. A rate of zero is a machine somebody says is free, which is a different answer. */
             cost_usd: components["schemas"]["Estimate"];
         };
+        /** @description What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider, which is how the record says no history about it can ever be read again. */
+        CandidateIdentity: {
+            /** @description The machine this capacity is, where its backend can name one. It is never the lease and never the route Mercator took to reach the machine. */
+            machine?: string;
+            /** @description The backend the capacity comes from, which is the coarsest thing worth learning about and the only field every candidate has. */
+            provider?: string;
+            /** @description Where the machine is, in the provider's own vocabulary. Absent for a provider that publishes no geography at all. */
+            region?: string;
+            /** @description The product name the provider sells this capacity under. Absent for a provider that sells asks against individual machines instead of named products. */
+            instance_type?: string;
+            /** @description How many cards of each accelerator product this capacity holds, canonicalized and counted per product so an inventory grouped two ways is one answer. */
+            accelerator?: string;
+            /** @description The content this candidate was asked to run. Stages whose duration is a property of the content are filed with it; stages that are a property of the machine are not. */
+            image_digest?: string;
+        };
         CandidateDecision: {
             offer_snapshot_id: string;
             connection_id?: string;
             adapter_type?: string;
             native_ref?: string;
+            /** @description The recurring thing a launch prediction about this candidate is filed under: the machine where its backend named one, otherwise the product a provider sells, and the content it was asked to run. The identifiers beside it are this listing as this search found it, and how much of a listing recurs differs per backend with nothing in the ID to say which. */
+            candidate?: components["schemas"]["CandidateIdentity"];
             /** @enum {string} */
             disposition: "run_now_existing_rental" | "queue_existing_rental" | "provision_fresh_rental" | "launch_ephemeral";
             feasible: boolean;

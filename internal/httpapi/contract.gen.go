@@ -547,6 +547,9 @@ type CandidateDecision struct {
 	// CacheEvidence What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name.
 	CacheEvidence []CacheEvidence `json:"cache_evidence,omitempty"`
 
+	// Candidate What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider, which is how the record says no history about it can ever be read again.
+	Candidate CandidateIdentity `json:"candidate,omitempty"`
+
 	// Confidences What each answer this candidate was scored on is worth, one entry per source that stated one. It is the whole input to the score's uncertainty term, recorded so score_usd can be re-derived from this record: a scoring term whose input is not here is a term no reader can check. An answer nobody stated a confidence for is absent rather than zero, because stating no opinion is not the same as stating that an answer is worthless.
 	Confidences  []Confidence `json:"confidences,omitempty"`
 	ConnectionId string       `json:"connection_id,omitempty"`
@@ -591,6 +594,27 @@ type CandidateEstimates struct {
 	// Stages What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own.
 	Stages       LaunchStageEstimates `json:"stages"`
 	StartSeconds Estimate             `json:"start_seconds"`
+}
+
+// CandidateIdentity What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider, which is how the record says no history about it can ever be read again.
+type CandidateIdentity struct {
+	// Accelerator How many cards of each accelerator product this capacity holds, canonicalized and counted per product so an inventory grouped two ways is one answer.
+	Accelerator string `json:"accelerator,omitempty"`
+
+	// ImageDigest The content this candidate was asked to run. Stages whose duration is a property of the content are filed with it; stages that are a property of the machine are not.
+	ImageDigest string `json:"image_digest,omitempty"`
+
+	// InstanceType The product name the provider sells this capacity under. Absent for a provider that sells asks against individual machines instead of named products.
+	InstanceType string `json:"instance_type,omitempty"`
+
+	// Machine The machine this capacity is, where its backend can name one. It is never the lease and never the route Mercator took to reach the machine.
+	Machine string `json:"machine,omitempty"`
+
+	// Provider The backend the capacity comes from, which is the coarsest thing worth learning about and the only field every candidate has.
+	Provider string `json:"provider,omitempty"`
+
+	// Region Where the machine is, in the provider's own vocabulary. Absent for a provider that publishes no geography at all.
+	Region string `json:"region,omitempty"`
 }
 
 // CapabilityProfile defines model for CapabilityProfile.

@@ -1,0 +1,73 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Five candidates the fleet has to be able to tell apart and put together: two asks for one marketplace machine that must key as one candidate, a third ask in the same place whose cards hold half the memory and must key as another, an enrolled machine that keys as itself, and a one-shot product publishing nothing that outlives its listing, which has no key at all and about which nothing may ever claim candidate-specific evidence.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "400MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "enrolled-a100",
+        "provider": "simnode",
+        "region": "US-CA",
+        "rate_per_hour_usd": 1.0,
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "ask-4417",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-90218",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "40GB"}}
+      },
+      {
+        "id": "ask-51120",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      },
+      {
+        "id": "oneshot-pool",
+        "provider": "simpool",
+        "lane": "ephemeral",
+        "rate_per_hour_usd": 5.0,
+        "provisioning": {"expected": "1m", "p90": "2m", "acquisition": "6s", "boot": "45s", "agent_ready": "9s"}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+    "expected_runtime": "20m",
+    "max_runtime": "1h"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "enrolled-a100",
+    "candidates": {
+      "enrolled-a100": {"candidate": "provider=simnode;machine=enrolled-a100"},
+      "ask-4417": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
+      "ask-90218": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
+      "ask-51120": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x8"},
+      "oneshot-pool": {"candidate": ""}
+    }
+  }
+}

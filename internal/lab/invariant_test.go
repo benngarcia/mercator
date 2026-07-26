@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 30 {
-		t.Fatalf("latest invariant results = %d, want 30", len(latest))
+	if len(latest) != 31 {
+		t.Fatalf("latest invariant results = %d, want 31", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -348,6 +348,27 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 			observation.Now = now.Add(prefetchConvergenceBound + time.Hour)
 			observation.Effects = []EffectRecord{
 				prefetchEffect(1, now, OperationNodePrepareArtifact, "rental-warm", "artifact-1", "run-queued"),
+			}
+		},
+		// Two machines the world says are different, filed under one key. This is
+		// the state the tree was in twice over: a lease shared by two enrolled
+		// machines named them both, and an inventory grouped one way dropped half a
+		// machine's cards. The rule counts the cards where the key groups them, so
+		// it can see a machine with twice the hardware wearing another's name.
+		"safety.candidate_identity_recurs": func(observation *InvariantObservation) {
+			shared := domain.CandidateIdentity{Provider: "simvast", Region: "US-CA", Accelerator: "nvidia-a100x2"}
+			observation.World.Offers = []domain.OfferSnapshot{
+				gpuOffer("ask-4417", 2),
+				gpuOffer("ask-90218", 4),
+			}
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				bookingDecidedEvent("decision-1", domain.BookingDecision{
+					RunID: "run-1",
+					Candidates: []domain.CandidateDecision{
+						{OfferSnapshotID: "ask-4417", Candidate: shared},
+						{OfferSnapshotID: "ask-90218", Candidate: shared},
+					},
+				}),
 			}
 		},
 		"liveness.admitted_run_progress": func(observation *InvariantObservation) {
@@ -1312,6 +1333,25 @@ func bookingDecidedEvent(id string, decision domain.BookingDecision) eventlog.Cl
 		panic(err)
 	}
 	return eventlog.CloudEvent{ID: id, Type: orchestrator.EventBookingDecided, Data: data}
+}
+
+// gpuOffer is one marketplace ask for a machine holding cards, stated as the world
+// knows it rather than as a key summarises it.
+func gpuOffer(id string, cards int) domain.OfferSnapshot {
+	return domain.OfferSnapshot{
+		ID:          id,
+		NativeRef:   id,
+		AdapterType: "simvast",
+		Region:      "US-CA",
+		Kind:        domain.OfferKindProvisionable,
+		Lane:        domain.LaneEphemeral,
+		Resources: domain.ResourceInventory{
+			Accelerators: []domain.AcceleratorInventory{{
+				Vendor: "NVIDIA", Model: "A100", CanonicalModel: "nvidia-a100",
+				Count: cards, MemoryBytes: 80_000_000_000,
+			}},
+		},
+	}
 }
 
 func invariantResultByID(t *testing.T, results []InvariantResult, id string) InvariantResult {

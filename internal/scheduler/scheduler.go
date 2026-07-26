@@ -192,10 +192,17 @@ func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer dom
 	work := estimateCandidate(input, offer)
 	rejections := feasibilityViolations(input, offer, work)
 	candidate := domain.CandidateDecision{
-		OfferSnapshotID:  offer.ID,
-		ConnectionID:     offer.ConnectionID,
-		AdapterType:      offer.AdapterType,
-		NativeRef:        offer.NativeRef,
+		OfferSnapshotID: offer.ID,
+		ConnectionID:    offer.ConnectionID,
+		AdapterType:     offer.AdapterType,
+		NativeRef:       offer.NativeRef,
+		// What this candidate is, as opposed to what this listing was called. Every
+		// stage below is about to be predicted from what earlier launches of the same
+		// thing spent, and this is the account of what Mercator took the same thing to
+		// be: derived from the facts the backend published rather than from the ID it
+		// numbered the listing with, which recurs for one backend and never for
+		// another.
+		Candidate:        domain.CandidateIdentityOf(offer, input.Image.Digest),
 		Disposition:      candidateDisposition(input, offer),
 		Feasible:         len(rejections) == 0,
 		Rejections:       rejections,

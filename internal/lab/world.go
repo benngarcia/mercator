@@ -20,6 +20,9 @@ import (
 const (
 	labWorkspace  = "ws_lab"
 	labConnection = "connection:lab"
+	// labProvider is the backend a listing comes from when the Blueprint names no
+	// provider for it.
+	labProvider = "lab"
 )
 
 type externalExecution struct {
@@ -520,7 +523,16 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	}
 	for _, rental := range tape.InitialWorld.Rentals {
 		state := hostState{
-			offer:          labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
+			offer: labOffer(
+				rental.ID,
+				domain.OfferKindStanding,
+				domain.LaneReusable,
+				// A Rental is a machine this world keeps, so it names one: the Rental ID is
+				// the host every Booking on it lands on.
+				labCandidate{provider: rental.Provider, region: rental.Region, machine: rental.ID},
+				rental.RatePerHourUSD,
+				rental.Resources,
+			),
 			heldLayers:     map[string]scenario.LayerSpec{},
 			heldImages:     map[string]bool{},
 			packed:         map[string]bool{},
@@ -558,7 +570,16 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	}
 	for _, host := range tape.InitialWorld.Hosts {
 		state := hostState{
-			offer:      labOffer(host.ID, domain.OfferKindStanding, domain.LaneEphemeral, host.RatePerHourUSD, host.Resources),
+			offer: labOffer(
+				host.ID,
+				domain.OfferKindStanding,
+				domain.LaneEphemeral,
+				// A borrowed host holds nothing for Mercator and is the same machine next
+				// time, which is the position an operator's own Docker daemon is in.
+				labCandidate{machine: host.ID},
+				host.RatePerHourUSD,
+				host.Resources,
+			),
 			heldLayers: map[string]scenario.LayerSpec{},
 			heldImages: map[string]bool{},
 			packed:     map[string]bool{},
@@ -580,6 +601,14 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 				marketplace.ID,
 				domain.OfferKindProvisionable,
 				marketplace.ExecutionLane(),
+				// A listing names no machine, because the machine does not exist yet. What
+				// recurs about it is the provider, the place, and the product name, which is
+				// what the Blueprint states and what the identity falls back to.
+				labCandidate{
+					provider:     marketplace.Provider,
+					region:       marketplace.Region,
+					instanceType: marketplace.InstanceType,
+				},
 				marketplace.RatePerHourUSD,
 				marketplace.Resources,
 			),
@@ -2173,12 +2202,52 @@ func (world *simulatedWorld) ResolveManifest(_ context.Context, imageDigest stri
 	return manifest, nil
 }
 
-func labOffer(id string, kind domain.OfferKind, lane domain.ExecutionLane, ratePerHourUSD float64, resources *scenario.ResourcesSpec) domain.OfferSnapshot {
+// labCandidate is what a Blueprint says this capacity is, as opposed to how big it
+// is: the provider selling it, where it sits, the product name it is sold under,
+// and the machine it is wherever the Blueprint names a machine at all.
+//
+// It exists because a simulated fleet that stated none of it had one candidate key
+// for every listing in the world. Two marketplaces in two regions were
+// indistinguishable at every level of the key, so a prediction learned from one
+// provider's launches would be served as evidence about the other's listing and no
+// rule could see it, while the branch for a candidate that cannot recur was
+// reachable only by a CPU-only listing nothing had named.
+type labCandidate struct {
+	provider     string
+	region       string
+	instanceType string
+	// machine is the handle for capacity that is a machine rather than a listing for
+	// one. A Rental and a borrowed host are machines this world keeps; a marketplace
+	// listing describes a machine that does not exist yet and names none.
+	machine string
+}
+
+// providerName is the backend this capacity comes from. A Blueprint that names no
+// provider gets the Lab itself, which is what every simulated listing was before a
+// fixture could say otherwise.
+func (candidate labCandidate) providerName() string {
+	if candidate.provider == "" {
+		return labProvider
+	}
+	return candidate.provider
+}
+
+func labOffer(
+	id string,
+	kind domain.OfferKind,
+	lane domain.ExecutionLane,
+	candidate labCandidate,
+	ratePerHourUSD float64,
+	resources *scenario.ResourcesSpec,
+) domain.OfferSnapshot {
 	offer := domain.OfferSnapshot{
 		ID:           id,
+		MachineID:    candidate.machine,
 		ConnectionID: labConnection,
-		AdapterType:  "lab",
+		AdapterType:  candidate.providerName(),
 		NativeRef:    id,
+		Region:       candidate.region,
+		InstanceType: candidate.instanceType,
 		Kind:         kind,
 		Lane:         lane,
 		Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},

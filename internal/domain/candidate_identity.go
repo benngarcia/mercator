@@ -24,12 +24,14 @@ import (
 //
 // So identity is derived here from typed facts rather than from an ID, and the
 // two cases are told apart by the one thing that actually distinguishes them:
-// whether the capacity survives the workload. ADR 0005 makes that evidence
-// rather than a claim, which is what lets a key rest on it.
+// whether the backend can name the machine behind the listing. A backend that
+// can states it on the offer, and the machine is then the identity; a catalog
+// listing describes a machine that does not exist yet, and the product it sells
+// is the most that can recur about it.
 
 // CandidateIdentity is the recurring thing a launch prediction is filed under:
-// the machine if Mercator holds one, otherwise the product a provider sells,
-// plus the content that machine was asked to run.
+// the machine wherever a backend named one, otherwise the product a provider
+// sells, plus the content that machine was asked to run.
 //
 // It deliberately carries no offer snapshot ID, no native ref, and no
 // connection ID. A native ref is the provider's name for the same
@@ -47,29 +49,29 @@ type CandidateIdentity struct {
 	// against one, and the lease is minted per Booking for capacity that does not
 	// exist yet: keying on it merged one machine's pull history into another's and
 	// filed a fresh machine's under a name holding one sample.
-	Machine string
+	Machine string `json:"machine,omitempty"`
 	// Provider is the backend the capacity comes from, which is the coarsest
 	// thing worth learning about and the only field every candidate has.
-	Provider string
+	Provider string `json:"provider,omitempty"`
 	// Region is where the machine is. It reaches here from the offer, which is
 	// where the adapters now state it: the Blueprint schema has carried a region
 	// on rentals and marketplace listings since it was authored and nothing has
 	// ever read it, because no offer field existed to put it on.
-	Region string
+	Region string `json:"region,omitempty"`
 	// InstanceType is the product name a provider sells, where it sells one.
 	// Vast sells individual asks against machines and has no such name, so it
 	// states none and the accelerator below is what distinguishes its products.
-	InstanceType string
+	InstanceType string `json:"instance_type,omitempty"`
 	// Accelerator is the canonical accelerator inventory, which is what makes
 	// two listings in one region different products. It is canonicalized through
 	// gpunorm at the source, so "RTX 5090" and "nvidia-rtx-5090" are one key
 	// rather than two histories of the same card.
-	Accelerator string
+	Accelerator string `json:"accelerator,omitempty"`
 	// ImageDigest is the content this candidate was asked to run. Stages whose
 	// duration is a property of the content read it; stages that are a property
 	// of the machine do not, so one machine's boot history is not split across
 	// every image the fleet has ever run on it.
-	ImageDigest string
+	ImageDigest string `json:"image_digest,omitempty"`
 }
 
 // CandidateIdentityOf derives what a candidate can be learned about from the
@@ -91,9 +93,9 @@ func CandidateIdentityOf(offer OfferSnapshot, imageDigest string) CandidateIdent
 
 // Recurs reports whether this identity can ever hold more than one sample.
 //
-// A machine Mercator keeps recurs by definition. A product recurs when the
-// provider says something about it that outlives one listing: a region, a
-// product name, or an accelerator. A candidate with none of those is a one-shot
+// A machine recurs by definition, because it is there to be used again. A
+// product recurs when the provider says something about it that outlives one
+// listing: a region, a product name, or an accelerator. A candidate with none of those is a one-shot
 // execution whose only handle was its listing ID, and history about it is
 // unfilable: a predictor that answered "exact candidate, one sample" there would
 // be reporting evidence about a key that cannot grow.

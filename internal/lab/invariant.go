@@ -103,6 +103,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.start_is_observed_not_inferred", check: startIsObservedNotInferred},
 		invariantRule{id: "safety.readiness_is_reported_not_inferred", check: readinessIsReportedNotInferred},
 		invariantRule{id: "safety.prediction_is_recorded_against_its_actual", check: predictionIsRecordedAgainstItsActual},
+		invariantRule{id: "safety.candidate_identity_recurs", check: candidateIdentityRecurs},
 		invariantRule{id: "safety.idempotent_external_commands", check: idempotentExternalCommands},
 		invariantRule{id: "safety.lease_fencing", check: leaseFencing},
 		invariantRule{id: "safety.artifact_dependencies", check: artifactDependencies},
@@ -1005,6 +1006,117 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// candidateIdentityRecurs is the law on what a launch history may be filed under.
+// A prediction that reports evidence about this exact candidate is only worth
+// reading if the key it was filed under is the same thing twice, and every way of
+// getting that wrong is silent: two machines that share a key trade each other's
+// pull samples, and a key nothing can recur under reports a single sample as
+// candidate-specific evidence forever.
+//
+// It is stated as a collision against World Truth rather than as a derivation. The
+// world knows which machine is which and what cards each one holds, and it counts
+// them where the key groups them, so a rule that agreed with the key by
+// construction could not have caught either of the two bugs it was written for: an
+// inventory that dropped cards when a probe grouped them differently, and a Docker
+// machine named by the route Mercator took to reach it.
+func candidateIdentityRecurs(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	published := map[string]domain.OfferSnapshot{}
+	for _, offer := range observation.World.Offers {
+		published[offer.ID] = offer
+	}
+	keyed := map[string]domain.OfferSnapshot{}
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			offer, known := published[candidate.OfferSnapshotID]
+			if !known {
+				continue
+			}
+			if err := candidateKeyIsHonest(decision.RunID, candidate, offer); err != nil {
+				return err
+			}
+			key := candidate.Candidate.Candidate(true)
+			if key == "" {
+				continue
+			}
+			if first, clash := keyed[key]; clash && !sameCapacity(first, offer) {
+				return fmt.Errorf(
+					"Run %q filed candidate %q under the key %q, and %s already holds it: %s",
+					decision.RunID, offer.ID, key, first.ID, describeCapacity(first, offer),
+				)
+			}
+			keyed[key] = offer
+		}
+	}
+	return nil
+}
+
+// candidateKeyIsHonest holds the two clauses about one recorded candidate: a key
+// names the machine its backend published and never the listing, and capacity with
+// nothing published that outlives a listing has no key at all.
+func candidateKeyIsHonest(runID string, candidate domain.CandidateDecision, offer domain.OfferSnapshot) error {
+	key := candidate.Candidate.Candidate(true)
+	if key == "" {
+		return nil
+	}
+	if candidate.Candidate.Machine != offer.MachineID {
+		return fmt.Errorf(
+			"Run %q filed candidate %q under machine %q, and the machine it is is %q",
+			runID, offer.ID, candidate.Candidate.Machine, offer.MachineID,
+		)
+	}
+	for _, listing := range []string{offer.ID, offer.NativeRef} {
+		if listing == "" || listing == offer.MachineID {
+			continue
+		}
+		if strings.Contains(key, listing) {
+			return fmt.Errorf(
+				"Run %q filed candidate %q under the key %q, which names the listing %q rather than what recurs",
+				runID, offer.ID, key, listing,
+			)
+		}
+	}
+	return nil
+}
+
+// sameCapacity reports whether two offers are the same thing to learn about. It
+// compares the facts a candidate key summarizes, counting the accelerators rather
+// than grouping them: a machine with twice the cards, or with the same cards in two
+// memory sizes, is a different product however a probe reported its inventory.
+func sameCapacity(first, second domain.OfferSnapshot) bool {
+	firstCards, firstMemory := acceleratorTotals(first)
+	secondCards, secondMemory := acceleratorTotals(second)
+	return first.MachineID == second.MachineID &&
+		first.AdapterType == second.AdapterType &&
+		first.Region == second.Region &&
+		first.InstanceType == second.InstanceType &&
+		firstCards == secondCards &&
+		firstMemory == secondMemory
+}
+
+// acceleratorTotals is how many cards a machine holds and how much accelerator
+// memory they add up to.
+func acceleratorTotals(offer domain.OfferSnapshot) (cards int, memoryBytes int64) {
+	for _, accelerator := range offer.Resources.Accelerators {
+		cards += accelerator.Count
+		memoryBytes += int64(accelerator.Count) * accelerator.MemoryBytes
+	}
+	return cards, memoryBytes
+}
+
+func describeCapacity(first, second domain.OfferSnapshot) string {
+	firstCards, firstMemory := acceleratorTotals(first)
+	secondCards, secondMemory := acceleratorTotals(second)
+	return fmt.Sprintf(
+		"%s is machine %q on %s/%s/%s with %d cards of %d bytes, and %s is machine %q on %s/%s/%s with %d cards of %d bytes",
+		first.ID, first.MachineID, first.AdapterType, first.Region, first.InstanceType, firstCards, firstMemory,
+		second.ID, second.MachineID, second.AdapterType, second.Region, second.InstanceType, secondCards, secondMemory,
+	)
 }
 
 // recordedDecisions is every Booking Decision Mercator recorded, in event

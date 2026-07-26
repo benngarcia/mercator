@@ -351,6 +351,13 @@ func simRentalOffer(spec WorldSpec, rental RentalSpec) domain.OfferSnapshot {
 	offer := simOffer(spec, rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneReusable
+	// A Rental is a machine this world keeps, so it names one and a history about it
+	// is filed under the machine rather than under a product.
+	offer.MachineID = rental.ID
+	offer.Region = rental.Region
+	if rental.Provider != "" {
+		offer.AdapterType = rental.Provider
+	}
 	// Whether the capacity is there is answered when the offer is read, because
 	// the machine may be busy by then. How sure its publisher is of that answer is
 	// a property of the publisher, so it is stated here and carried through.
@@ -393,6 +400,9 @@ func simHostOffer(spec WorldSpec, host HostSpec) domain.OfferSnapshot {
 	offer := simOffer(spec, host.ID, "conn_hosts", host.RatePerHourUSD, host.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneEphemeral
+	// A borrowed host keeps nothing for Mercator and is the same machine next time,
+	// which is the position an operator's own Docker daemon is in.
+	offer.MachineID = host.ID
 	offer.Pricing.SetupFeeUSD = host.Billing.SetupFeeUSD
 	if host.Billing.MinimumCharge != nil {
 		offer.Pricing.MinimumChargeSeconds = int64(host.Billing.MinimumCharge.Duration().Seconds())
@@ -405,6 +415,14 @@ func simHostOffer(spec WorldSpec, host HostSpec) domain.OfferSnapshot {
 func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.OfferSnapshot {
 	offer := simOffer(world, spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Resources)
 	offer.Kind = domain.OfferKindProvisionable
+	// A listing names no machine, because the machine does not exist yet. What recurs
+	// about it is the provider, the place, and the product name, and a listing that
+	// publishes none of them cannot recur at all.
+	if spec.Provider != "" {
+		offer.AdapterType = spec.Provider
+	}
+	offer.Region = spec.Region
+	offer.InstanceType = spec.InstanceType
 	provisioning := &domain.Estimate{
 		Expected: spec.Provisioning.Expected.Duration().Seconds(),
 		Source:   "scenario",

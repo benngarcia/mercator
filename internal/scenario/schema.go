@@ -440,8 +440,13 @@ type LayerSpec struct {
 // broker state; the machine itself receives only the running Booking through
 // its standard Docker endpoint.
 type RentalSpec struct {
-	ID     string `json:"id"`
-	Region string `json:"region,omitempty"`
+	ID string `json:"id"`
+	// Provider is the backend this machine came from. It is stated where a fixture is
+	// about what a launch history may be filed under, because a candidate key names
+	// the provider and a fixture that let the harness name it would assert a
+	// different key in each simulated world.
+	Provider string `json:"provider,omitempty"`
+	Region   string `json:"region,omitempty"`
 	// IdleLeaseExpiresIn bounds how long the rental survives idle, measured
 	// from the world clock's start. Omitted means the lease outlives the
 	// scenario.
@@ -662,6 +667,13 @@ func (p QueuedBookingSpec) expected() Duration {
 type MarketplaceOfferSpec struct {
 	ID       string `json:"id"`
 	Provider string `json:"provider,omitempty"`
+	// InstanceType is the product name this listing's provider sells it under, for a
+	// provider that sells named products. A marketplace that sells asks against
+	// individual machines states none and is told apart by its region and its cards,
+	// which is the shape Vast has; a catalog naming a product and no place at all is
+	// the shape RunPod has. Both are worlds a fixture has to be able to build,
+	// because a launch history has a different set of levels to fall through in each.
+	InstanceType string `json:"instance_type,omitempty"`
 	// Lane is what this offer becomes once allocated. "reusable" capacity is
 	// held across Runs through an enrolled node; "ephemeral" is a
 	// provider-native one-shot product that holds nothing afterwards.
@@ -1024,7 +1036,17 @@ type BookingExpectation struct {
 }
 
 type CandidateExpectation struct {
-	Feasible *bool `json:"feasible,omitempty"`
+	// Candidate asserts the key a launch history about this candidate is filed
+	// under, as the decision recorded it: the machine where its backend named one,
+	// otherwise the provider, place, product, and cards that recur about the listing.
+	// It carries no image, because a fixture about what recurs is not about content.
+	//
+	// A fixture states the whole key rather than the parts, so a listing whose facts
+	// stopped being published fails here instead of quietly dropping a level. The
+	// empty string is a real assertion, and it says this candidate cannot recur and
+	// nothing may ever claim evidence about it.
+	Candidate *string `json:"candidate,omitempty"`
+	Feasible  *bool   `json:"feasible,omitempty"`
 	// Disposition asserts what Placement recorded this candidate as: reusing,
 	// queueing on, or provisioning a Rental, or launching a one-shot ephemeral
 	// execution that holds nothing afterwards.

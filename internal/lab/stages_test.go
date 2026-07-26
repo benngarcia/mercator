@@ -230,3 +230,69 @@ func assertPricedRead(t *testing.T, candidate domain.CandidateDecision, seconds,
 	}
 	t.Fatalf("candidate %q records no rate for the read it was charged %.2fs for", candidate.OfferSnapshotID, read.Expected)
 }
+
+// TestACandidateIsWhatRecursThroughTheWholeLabWorld drives the corpus fixture
+// through the Lab, because the placement corpus and the Lab are two different
+// simulated worlds and a key that only agreed in one of them would be a key about
+// the harness. It is also what makes safety.candidate_identity_recurs a rule with
+// something to judge: before the world could state a provider, a region, a product
+// name, or a machine, every simulated listing in the fleet derived one key and no
+// collision was expressible.
+func TestACandidateIsWhatRecursThroughTheWholeLabWorld(t *testing.T) {
+	execution := openConformanceExecution(t, "a-candidate-recurs-through-the-control-plane")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 6 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	decision := onlyDecision(t, bookingDecisions(t, execution))
+	keys := map[string]string{}
+	for _, candidate := range decision.Candidates {
+		keys[candidate.OfferSnapshotID] = candidate.Candidate.Candidate(false)
+	}
+	// The whole key of one ask, stated once, so the facts the world publishes are
+	// load-bearing here and not only the relationships between them: a world that
+	// stopped stating its provider or its region would still key its listings
+	// consistently with each other, and consistently wrongly.
+	if want := "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"; keys["ask-4417"] != want {
+		t.Fatalf("the ask is filed under %q, and this world lists it as %q", keys["ask-4417"], want)
+	}
+	if keys["ask-4417"] != keys["ask-90218"] {
+		t.Fatalf("two asks for one product keyed differently:\n%s\n%s", keys["ask-4417"], keys["ask-90218"])
+	}
+	if keys["ask-4417"] == keys["ask-51120"] {
+		t.Fatalf("cards of two memory sizes share the key %q", keys["ask-4417"])
+	}
+	if keys["enrolled-a100"] != "provider=simnode;machine=enrolled-a100" {
+		t.Fatalf("the machine Mercator keeps is filed under %q", keys["enrolled-a100"])
+	}
+	// The one-shot pool publishes nothing that outlives its listing, so it has no
+	// key: a predictor answering "this exact candidate" there would be reporting
+	// candidate-specific evidence out of a name that never comes back.
+	if keys["oneshot-pool"] != "" {
+		t.Fatalf("a listing that cannot recur is filed under %q", keys["oneshot-pool"])
+	}
+	if result := invariantResultByID(t, latestInvariantResults(execution.invariants), "safety.candidate_identity_recurs"); result.Status != InvariantPassed {
+		t.Fatalf("the identity rule failed on a world that states five distinct candidates: %s", result.Violation)
+	}
+}
+
+// onlyDecision is the single placement this fixture takes, so a case about what
+// was recorded does not have to name the Run that recorded it.
+func onlyDecision(t *testing.T, decisions map[string]domain.BookingDecision) domain.BookingDecision {
+	t.Helper()
+	if len(decisions) != 1 {
+		t.Fatalf("this fixture takes one placement and recorded %d", len(decisions))
+	}
+	for _, decision := range decisions {
+		return decision
+	}
+	return domain.BookingDecision{}
+}
