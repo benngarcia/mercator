@@ -1367,6 +1367,93 @@ complete because it works against a live provider.
     finishes depends on when it starts and the world models one busy window per
     machine; a queue that drains further than one Booking is held at L1 by
     `a-queue-drains-as-it-runs`.
+- [x] 2026-07-26: Answer the review of the service-class commit. Two reviewers
+  falsified seven claims on it, five of them distinct once the duplicates are
+  folded together, and all five reproduced.
+  - The class was refused at the door that stores a revision. `CreateRevision`
+    validated the raw body while run intake normalised first, so one body got two
+    answers: `POST /v1/runs` filled an omitted class with standard and returned
+    202, and `POST /v1/workloads/{id}/revisions` refused the same omission 400
+    `SERVICE_CLASS_UNKNOWN`, which the parent commit had accepted and which
+    openapi's own PlacementPolicy says defaults to standard. The door also stored
+    what it validated, which is why a revision could be recorded with no class at
+    all and served back as `service_class:""`. It normalises before validating now,
+    which is the order `NormalizeWorkloadRevision` documents, and the validator
+    says why its class check is deliberately not read as an effective value the
+    way the runtime bound above it is.
+  - The migration missed the objective site that repriced work.
+    `compute.workload.revision_created.v1` stores the whole revision at
+    `$.revision.spec.placement.objective` on the workload stream, and nothing
+    decodes `objective` any more, so an unmigrated revision read back with no class
+    and the next Run created from it was normalised to standard: a caller who
+    stored `fastest_completion` was scored at a tenth of experimental's rate with
+    nothing in the record saying so, and the two doors disagreed about one history.
+    Every site now names the stream it lives on, because the open-Run refusal is
+    about Runs in flight: a workload stream never closes, so listing the new site
+    without that distinction would have refused every database that has a workload.
+    The completeness assertion scanned the same three paths the migration writes,
+    which is a tautology; it scans the whole payload for the word now, and the case
+    reads the migrated revision back through `workload.GetRevision`.
+  - A fact its own publisher disowned was the cheapest answer in the fleet. A
+    published `NetworkFact` with confidence zero had its speed used to predict a
+    duration and its zero dropped from the record, because zero means nobody said,
+    so a host publishing 5 Gbps it disowned was charged 3.7 seconds for a 2GB image
+    and no doubt at all, outranking the host that published 750 Mbps and stood
+    behind it, while the host that published nothing was charged the most of the
+    three. `domain.NetworkFact.Answers` is the one rule both readers of a fact ask,
+    and expiry moved into it because it was the same question asked twice. The hard
+    half mattered more: a Run's `MinP10Mbps` floor with `AllowUnknown` false was
+    cleared by any fact naming a big enough number, its publisher's confidence
+    unread. `PathSpec` carries a stated confidence so a Blueprint can state the
+    machine that disowns its own number, and the fast harness implements paths at
+    all: it dropped them silently, so a fixture could declare a measured throughput
+    and be scored against the standing assumption.
+  - A machine nobody priced was scored as free. Both models predicted zero dollars
+    for an offer with `Pricing.Known` false, so a Run with `allow_unknown_pricing`
+    took the unquoted machine over a quoted one every time, sixty seconds slower to
+    start, and `internal/node/offers.go` is written to publish exactly that offer
+    for a node with no configured shadow price. The absence is stated as the source
+    of the cost estimate, `domain.CostUnpriced`, and `CandidateDecision.Priced`
+    reads it off the record; `Preferred` asks it before it compares dollars, so an
+    unpriced candidate ranks behind every priced one and is taken when the
+    alternative is not running, which is what the policy asked for. A budget is the
+    same absence read as a bound: `max_expected_cost_usd` was cleared by a
+    candidate reporting zero dollars, and is refused `COST_LIMIT_EXCEEDED` with
+    "unpriced" as what was offered. No cost confidence is invented, because a
+    provider quotes a rate and publishes no confidence in it, and the reference
+    model's deleted point for unknown pricing is not restored: a full point of
+    interactive doubt is 0.60 USD against a real price of 0.72, so it never fixed
+    the mispricing it was charged for. The answer is that there is no number.
+  - Three marketplace adapters asserted full confidence in a capacity claim their
+    provider never put a number on. A catalog listing says a machine type is in
+    stock and says nothing about how sure of that it is, so the offers state
+    availability and no confidence, which is what an absent entry has always meant.
+    No score changes: an unstated confidence and a stated certainty are both worth
+    zero points of doubt. The enrolled node and the probed local daemon keep full
+    confidence and say why, because that capacity is Mercator's own observation.
+  - What was rejected. The reviewers wanted a doubt constant for a marketplace
+    capacity claim so the uncertainty term's capacity dimension could fire. A flat
+    0.7 for a listing is the unmeasured number this plan keeps deleting, and the
+    real answer is a measurement: how often provisioning a listing actually
+    succeeds is the slice that prices it. Until then the live sources of doubt are
+    the transfer confidences, which is the honest state of the term. The claim that
+    the `rental-doubted` fixture rests on a value nothing emits is also wrong for
+    the corpus: `internal/adapter/fake` publishes what the Blueprint's
+    `capacity_confidence` states, which is how a simulated external behaviour is
+    supposed to reach Mercator.
+  - Three live cases could not be evaluated on the amd64 Linux host this review ran
+    on, and two reported it as a defect in Mercator. Docker Hub is rate limiting
+    anonymous reads from it, and `requireDockerHubReachable` asked whether `/v2/`
+    answers, which it does: the token is issued and every manifest is then answered
+    429. The guard asks whether the registry will serve this machine now. The
+    private-registry case needed nothing off this host and reuses a copy already on
+    disk, which is what content addressing means. The live Docker adapter case
+    hardcoded `linux/arm64`, the laptop it was written on, so on this host the
+    daemon reported every local image missing and went to the registry for a build
+    it would never run. And the node disk fact was compared to a fresh read for
+    exact equality, which fails whenever anything else writes to the same
+    filesystem; it is held to the filesystem now rather than to the instant.
+
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1778,6 +1865,22 @@ Phase 4 added:
   counts transitions and each Booking took one, so a lower version is a history
   Mercator cannot have had, and the arriving Run's Booking would be minted at a
   version one of the seeded Bookings already consumed.
+
+- `a-disowned-fact-is-not-an-answer` (green): three Rentals at one price with the
+  same 2GB image to fetch. One publishes 750 Mbps to the registry and states nine
+  tenths of a point of confidence in it, one publishes 5 Gbps and states zero, one
+  publishes nothing. The disowned publisher and the silent one are identical, which
+  is the whole claim: a number nobody stands behind buys its publisher exactly what
+  saying nothing buys. Honouring the disowned fact again flips the placement onto
+  it with "pull_seconds: want at least 32.4, got 3.7"; dropping the harness's path
+  facts fails it from the other side, charging the measured machine the assumption
+  it published past.
+- `a-machine-nobody-priced-is-a-last-resort` (green): two Rentals holding the same
+  image, one quoted at 2.00 USD an hour and one nobody quoted, and a Run that
+  allows unknown pricing. The winner has the higher score, which is the point:
+  dollars order the candidates that have dollars, and an unpriced candidate is
+  ranked behind every priced one rather than being the cheapest thing in the fleet.
+  Dropping the priced-first rule places the Run on the unquoted machine.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
