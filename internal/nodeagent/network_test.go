@@ -31,12 +31,47 @@ func TestANodePublishesTheSlowestTransferItHasSeen(t *testing.T) {
 	if facts[0].SampleCount != 3 {
 		t.Fatalf("the node published %d samples, and it has timed three transfers", facts[0].SampleCount)
 	}
-	// Dated by the transfer that measured it, and not by the last one to finish.
-	// A fact carrying one machine's slowest number under a later transfer's clock
-	// asserts a measurement nothing took.
-	if !facts[0].ObservedAt.Equal(at.Add(time.Minute)) {
-		t.Fatalf("the node dated its 100 Mbps reading %s, and it measured 100 Mbps at %s",
-			facts[0].ObservedAt.Format(time.RFC3339), at.Add(time.Minute).Format(time.RFC3339))
+	// Dated by the window it summarises, which ends at the last transfer this node
+	// timed. Three samples under one date is a quantile and not a reading, and what
+	// the date answers is when this machine last measured the path at all.
+	if !facts[0].ObservedAt.Equal(at.Add(2 * time.Minute)) {
+		t.Fatalf("the node dated its p10 over three transfers %s, and it last measured the path at %s",
+			facts[0].ObservedAt.Format(time.RFC3339), at.Add(2*time.Minute).Format(time.RFC3339))
+	}
+}
+
+// TestAMachineStillMeasuringAnswersAFreshnessBound is the reader that date exists
+// to serve. A Run may state how old a measurement it is willing to act on, and
+// what it is asking is whether this machine has measured its path lately.
+//
+// A node reading continuously for an hour has, and what it publishes has to say
+// so. Dated by whichever transfer happened to be slowest, the same machine
+// answered with a measurement fifty-nine minutes old: a Run asking for nothing
+// older than ten minutes was told nobody had published anything about this link,
+// and the machine was struck out on a floor its last fifty-nine reads cleared
+// twenty times over.
+func TestAMachineStillMeasuringAnswersAFreshnessBound(t *testing.T) {
+	at := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	measurements := newPathMeasurements()
+	measurements.record(domain.NetworkScopeObjectStore, 1_000_000_000, 80*time.Second, at)
+	for reading := range 59 {
+		measurements.record(domain.NetworkScopeObjectStore, 1_000_000_000, 8*time.Second, at.Add(time.Duration(reading+1)*time.Minute))
+	}
+	now := at.Add(59*time.Minute + 30*time.Second)
+
+	published := domain.NetworkFacts{Download: measurements.facts(now)}
+	requirement := domain.NetworkDownloadRequirement{
+		Scope:                    domain.NetworkScopeObjectStore,
+		MinP10Mbps:               50,
+		MaxMeasurementAgeSeconds: 600,
+	}
+	fact, answered := requirement.Answer(published, now)
+
+	if !answered {
+		t.Fatalf("the node published %+v, and a Run asking for a reading under ten minutes old was told nobody had measured this path", published)
+	}
+	if fact.ValueMbps != 100 {
+		t.Fatalf("the bound answered with %v Mbps, and the pessimistic reading standing in that window is 100", fact.ValueMbps)
 	}
 }
 

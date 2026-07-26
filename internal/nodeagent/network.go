@@ -62,13 +62,11 @@ const ArtifactCopySource = "node_artifact_copy"
 // containers, and its disk, so without an expiry its oldest reading would be
 // published as a current fact forever.
 //
-// It is the life of a reading and never of the summary over them. A window that
-// expired only when the node stopped transferring would keep the slowest reading
-// this machine ever took alive for as long as it keeps working, which is the
-// opposite of what an expiry is for: the machine that read once at a hundred
-// megabits while a container shared its link would publish that for the rest of
-// its life, and every transfer after it would refresh the date rather than retire
-// the number.
+// It is the life of one reading, and every reading serves it alone. That is what
+// retires the slow one: the machine that read a hundred megabits while a container
+// shared its link stops standing behind that reading an hour later however busy it
+// has been since, because no later transfer can extend a window it was not
+// measured in.
 const MeasuredLinkValidity = time.Hour
 
 // measurableScopes is every kind of path this node can time itself crossing,
@@ -91,20 +89,20 @@ var measurableScopes = []domain.NetworkScope{domain.NetworkScopeObjectStore}
 // would be admitted onto them.
 //
 // The readings are kept one by one rather than reduced to a running floor. A floor
-// cannot be retired: the transfer that set it is the only thing that dates it, and
-// a summary carrying one date for a value some earlier transfer measured is either
-// a number nothing stands behind or a date nothing measured. Keeping the readings
-// is what lets the slow one expire and the fleet see this machine as it is now,
-// and the window bounds the collection for the same reason it bounds the fact.
+// is a number no window contains: the transfer that set it has gone, so nothing
+// can retire it, and every later transfer either overwrites it or leaves it
+// standing forever. Keeping the readings is what lets the slow one expire and the
+// fleet see this machine as it is now, and the window bounds the collection for
+// the same reason it bounds the fact.
 type pathMeasurements struct {
 	mu       sync.Mutex
 	observed map[domain.NetworkScope][]pathReading
 }
 
 // pathReading is one completed transfer: the throughput it moved at, and the
-// moment it finished. The moment travels with the number because it is what the
-// published fact is dated and expired by, and a reading dated by some later
-// transfer that measured something else is a measurement nothing took.
+// moment it finished. The moment travels with the number because it is what this
+// reading's own hour is counted from, and a reading that borrowed a later
+// transfer's clock would be evidence about a path at a time nothing crossed it.
 type pathReading struct {
 	mbps float64
 	at   time.Time
@@ -134,9 +132,9 @@ func (measurements *pathMeasurements) record(scope domain.NetworkScope, bytes in
 // its validity produces nothing either: the node stops standing behind them
 // rather than restating one as current.
 //
-// The fact is the slowest reading still standing, published as the transfer that
-// took it, so what an operator reads is a throughput this machine really moved at
-// and the moment it really moved at it.
+// One fact is a quantile over a window of transfers and never one of them, which
+// is what SampleCount says, and quantileOverTheWindow is where its value and its
+// date come from.
 func (measurements *pathMeasurements) facts(at time.Time) []domain.NetworkFact {
 	measurements.mu.Lock()
 	defer measurements.mu.Unlock()
@@ -147,21 +145,48 @@ func (measurements *pathMeasurements) facts(at time.Time) []domain.NetworkFact {
 		if len(standing) == 0 {
 			continue
 		}
-		slowest := slices.MinFunc(standing, func(left, right pathReading) int {
-			return cmp.Compare(left.mbps, right.mbps)
-		})
-		published = append(published, domain.NetworkFact{
-			Scope:       scope,
-			Statistic:   "p10",
-			ValueMbps:   slowest.mbps,
-			Source:      ArtifactCopySource,
-			SampleCount: len(standing),
-			ObservedAt:  slowest.at,
-			ValidUntil:  slowest.at.Add(MeasuredLinkValidity),
-			Confidence:  MeasuredLinkConfidence,
-		})
+		published = append(published, quantileOverTheWindow(scope, standing))
 	}
 	return published
+}
+
+// quantileOverTheWindow is a window of transfers said as one published fact: the
+// slowest of them for the value, and the newest of them for the date.
+//
+// The two come from different readings on purpose, and reading the date as the
+// value's own timestamp is the mistake this is written against. A p10 over sixty
+// samples is a statement about a window, so what dates it is the moment its
+// evidence ends, which is the last time this machine measured this path at all.
+// Dating it by whichever transfer happened to be slowest published the opposite: a
+// node reading continuously for an hour reported a measurement fifty-nine minutes
+// old, and a Run that will act on nothing older than ten minutes was told this
+// machine had published nothing about its link. That struck out a machine holding
+// fifty-nine fresh readings, every one of them twenty times the floor the Run
+// stated, and it struck it out in the words reserved for a machine that has never
+// measured anything.
+//
+// The slow reading still retires, and this date is not what retires it: each
+// reading serves its own hour, so it leaves the window whatever the node does
+// afterwards. The fact expires with the newest reading because that is the moment
+// the window empties, so the expiry and the collection are one statement rather
+// than a constant chosen twice.
+func quantileOverTheWindow(scope domain.NetworkScope, standing []pathReading) domain.NetworkFact {
+	slowest := slices.MinFunc(standing, func(left, right pathReading) int {
+		return cmp.Compare(left.mbps, right.mbps)
+	})
+	newest := slices.MaxFunc(standing, func(left, right pathReading) int {
+		return left.at.Compare(right.at)
+	})
+	return domain.NetworkFact{
+		Scope:       scope,
+		Statistic:   "p10",
+		ValueMbps:   slowest.mbps,
+		Source:      ArtifactCopySource,
+		SampleCount: len(standing),
+		ObservedAt:  newest.at,
+		ValidUntil:  newest.at.Add(MeasuredLinkValidity),
+		Confidence:  MeasuredLinkConfidence,
+	}
 }
 
 // standing is the readings of one path this node still stands behind as of a
