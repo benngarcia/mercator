@@ -36,11 +36,13 @@ func TestRegistryResolverAgreesWithDockerAboutAPublicImage(t *testing.T) {
 	requireDocker(t)
 	requireImage(t, "busybox:latest")
 	pinned := docker(t, "image", "inspect", "busybox:latest", "--format", "{{index .RepoDigests 0}}")
-	requireDockerHubServes(t, pinned)
 	platform := dockerPlatform(t, "busybox:latest")
 
 	manifest, err := NewRegistryResolver().ResolveManifest(context.Background(), pinned, platform)
 
+	if errors.Is(err, ErrThrottled) {
+		t.Skipf("docker.io is rate limiting this address: %v", err)
+	}
 	if err != nil {
 		t.Fatalf("resolve %s: %v", pinned, err)
 	}
@@ -70,7 +72,7 @@ func platformManifestReference(t *testing.T, pinned string, platform domain.Plat
 			} `json:"platform"`
 		} `json:"manifests"`
 	}
-	if err := json.Unmarshal([]byte(docker(t, "manifest", "inspect", pinned)), &index); err != nil {
+	if err := json.Unmarshal([]byte(dockerHubRead(t, "manifest", "inspect", pinned)), &index); err != nil {
 		t.Fatalf("decode docker manifest inspect %s: %v", pinned, err)
 	}
 	repository, _, _ := strings.Cut(pinned, "@")
@@ -210,7 +212,7 @@ func assertMatchesDockerManifest(t *testing.T, manifest domain.ImageManifest, re
 			Size   int64  `json:"size"`
 		} `json:"layers"`
 	}
-	if err := json.Unmarshal([]byte(docker(t, "manifest", "inspect", reference)), &reported); err != nil {
+	if err := json.Unmarshal([]byte(dockerHubRead(t, "manifest", "inspect", reference)), &reported); err != nil {
 		t.Fatalf("decode docker manifest inspect %s: %v", reference, err)
 	}
 	if len(reported.Layers) != len(manifest.Layers) {
@@ -302,16 +304,26 @@ func requireImage(t *testing.T, reference string) {
 	}
 }
 
-// requireDockerHubServes proves this address may still read one public manifest
-// anonymously, which is the one thing the public-image case cannot substitute
-// for: it exists to compare a read of Docker Hub against the daemon's answer
-// about the same digest. An offline machine answers nothing and an address that
-// has spent Docker Hub's anonymous quota answers 429, and neither says anything
-// about the resolver either way, so both skip rather than report a failure this
-// tree cannot have caused.
-func requireDockerHubServes(t *testing.T, reference string) {
+// dockerHubRead is a docker command that reads a public registry, which answers
+// an address that has spent its anonymous quota with 429. Everything the
+// public-image case compares comes from two readers of the same registry, this
+// resolver and this daemon, and they cross that quota four times between them, so
+// a gate at the top can prove the first read is allowed and can promise nothing
+// about the fourth. The throttle is answered where it appears instead. A skip is
+// the honest answer to it for the same reason it is the honest answer to being
+// offline: a registry that will not serve the manifest says nothing about whether
+// the resolver reads it correctly.
+func dockerHubRead(t *testing.T, args ...string) string {
 	t.Helper()
-	if output, err := exec.Command("docker", "manifest", "inspect", reference).CombinedOutput(); err != nil {
-		t.Skipf("docker.io will not serve %s to this machine: %v\n%s", reference, err, output)
+	var stdout, stderr strings.Builder
+	command := exec.Command("docker", args...)
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		if strings.Contains(stderr.String(), "toomanyrequests") {
+			t.Skipf("docker.io is rate limiting this address: docker %s\n%s", strings.Join(args, " "), stderr.String())
+		}
+		t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
 	}
+	return strings.TrimSpace(stdout.String())
 }
