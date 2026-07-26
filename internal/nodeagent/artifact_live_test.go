@@ -322,6 +322,29 @@ func objectStorePath(t *testing.T, facts []domain.NetworkFact) domain.NetworkFac
 // only the rate says which of the two halves this case is about.
 func pricedArtifactRead(t *testing.T, facts capability.NodeFacts, bytes int64) domain.TransferRate {
 	t.Helper()
+	candidate := placeAReadOfTheCorpus(t, facts, bytes, nil)
+	for _, rate := range candidate.TransferRates {
+		if rate.Stage == domain.StageArtifactFetch {
+			return rate
+		}
+	}
+	t.Fatalf("the decision priced no Artifact read: %+v", candidate)
+	return domain.TransferRate{}
+}
+
+// placeAReadOfTheCorpus runs the production scheduler over this node's own facts
+// and answers what it made of the machine. The Run may state a floor on how fast
+// it reaches the object store, which is the other reader of the same measurement:
+// one asks how long the read takes and the other asks whether this machine may
+// serve the Run at all, and both are asked of the number this node published
+// about itself.
+func placeAReadOfTheCorpus(
+	t *testing.T,
+	facts capability.NodeFacts,
+	bytes int64,
+	download *domain.NetworkDownloadRequirement,
+) domain.CandidateDecision {
+	t.Helper()
 	now := facts.ObservedAt
 	decision, err := scheduler.New().Evaluate(context.Background(), scheduler.SchedulingInput{
 		RunID: "run-reader",
@@ -336,6 +359,7 @@ func pricedArtifactRead(t *testing.T, facts capability.NodeFacts, bytes int64) d
 				Placement: domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 600},
 				Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 3600},
 				Artifacts: domain.ArtifactRequirements{Consumes: []string{"artifact:corpus:v9"}},
+				Network:   domain.NetworkRequirements{Download: download},
 			},
 		},
 		Offers: []domain.OfferSnapshot{{
@@ -369,11 +393,88 @@ func pricedArtifactRead(t *testing.T, facts capability.NodeFacts, bytes int64) d
 	if err != nil {
 		t.Fatalf("evaluate placement over this node's facts: %v", err)
 	}
-	for _, rate := range decision.Candidates[0].TransferRates {
-		if rate.Stage == domain.StageArtifactFetch {
-			return rate
+	return decision.Candidates[0]
+}
+
+// TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers is the conformance half
+// of a Run's hard floor on how fast it reaches its dataset. The corpus states that
+// floor against declared paths; here it is asked of a number this machine really
+// produced, reading real content out of a real object store onto a real disk.
+//
+// Two copies rather than one, because what a node publishes is a quantile over
+// the transfers it still stands behind and never one of them. The date on it says
+// when this machine last measured the path, so it cannot precede the second copy,
+// and a Run that will act on nothing older than ten minutes is served by a machine
+// that has just been reading.
+//
+// The floor is stated on either side of what this host delivered, which is the
+// only way to state one against a rate nobody can predict: no host is refused for
+// its link alone, so a machine whose Artifact disk is slower than its path is
+// refused a floor above what it delivers and served one below it.
+func TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers(t *testing.T) {
+	requireDocker(t)
+	endpoint := startObjectStore(t)
+	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
+	replicate(t, runtime, endpoint, "corpus-v10", 8_000_000)
+	secondCopyBegan := time.Now().UTC()
+	replicate(t, runtime, endpoint, "corpus-v11", 160_000_000)
+
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read the node's facts: %v", err)
+	}
+	measured := objectStorePath(t, facts.Host.Network)
+
+	if measured.SampleCount != 2 {
+		t.Fatalf("the node published %+v after timing two copies, and a p10 is a quantile over the transfers it stands behind", measured)
+	}
+	if measured.ObservedAt.Before(secondCopyBegan) {
+		t.Fatalf("the node dated its p10 %s, and it was still reading this path at %s",
+			measured.ObservedAt.Format(time.RFC3339Nano), secondCopyBegan.Format(time.RFC3339Nano))
+	}
+	refused := placeAReadOfTheCorpus(t, facts, 40_000_000_000, &domain.NetworkDownloadRequirement{
+		Scope:                    domain.NetworkScopeObjectStore,
+		MinP10Mbps:               measured.ValueMbps * 2,
+		MaxMeasurementAgeSeconds: 600,
+	})
+	if refused.Feasible {
+		t.Fatalf("this node delivered %.2f Mbps and was admitted to a Run that states a floor of %.2f", measured.ValueMbps, measured.ValueMbps*2)
+	}
+	if !rejectedFor(refused, "NETWORK_FACT_UNSATISFIED", "network.download") {
+		t.Fatalf("the decision refused this node as %+v, and what it published was measured too slow rather than absent", refused.Rejections)
+	}
+	served := placeAReadOfTheCorpus(t, facts, 40_000_000_000, &domain.NetworkDownloadRequirement{
+		Scope:                    domain.NetworkScopeObjectStore,
+		MinP10Mbps:               measured.ValueMbps / 2,
+		MaxMeasurementAgeSeconds: 600,
+	})
+	if !served.Feasible {
+		t.Fatalf("this node delivered %.2f Mbps a moment ago and was refused a Run asking for half of it: %+v", measured.ValueMbps, served.Rejections)
+	}
+}
+
+// replicate is one Artifact put into the store and read back out by the node,
+// which is one timed transfer over the path this case is about.
+func replicate(t *testing.T, runtime *DockerRuntime, endpoint, key string, size int) {
+	t.Helper()
+	content := []byte(strings.Repeat("mercator delivery conformance 0123456789abcdef\n", size/47+1))
+	digest := sha256.Sum256(content)
+	putObject(t, endpoint, "datasets", key, content)
+	if err := runtime.PrepareArtifact(context.Background(), capability.PrepareArtifactCommand{
+		ArtifactID:    "artifact:" + key,
+		ContentDigest: "sha256:" + hex.EncodeToString(digest[:]),
+		Source:        presign(t, http.MethodGet, endpoint, "datasets", key, time.Hour),
+		SizeBytes:     int64(len(content)),
+	}); err != nil {
+		t.Fatalf("replicate %s: %v", key, err)
+	}
+}
+
+func rejectedFor(candidate domain.CandidateDecision, code, path string) bool {
+	for _, rejection := range candidate.Rejections {
+		if rejection.Code == code && rejection.Path == path {
+			return true
 		}
 	}
-	t.Fatalf("the decision priced no Artifact read: %+v", decision.Candidates[0])
-	return domain.TransferRate{}
+	return false
 }
