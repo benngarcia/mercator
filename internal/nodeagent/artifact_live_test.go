@@ -322,7 +322,7 @@ func objectStorePath(t *testing.T, facts []domain.NetworkFact) domain.NetworkFac
 // only the rate says which of the two halves this case is about.
 func pricedArtifactRead(t *testing.T, facts capability.NodeFacts, bytes int64) domain.TransferRate {
 	t.Helper()
-	candidate := placeAReadOfTheCorpus(t, facts, bytes, nil)
+	candidate := placeAReadOfTheCorpus(t, facts, bytes, runAsking{})
 	for _, rate := range candidate.TransferRates {
 		if rate.Stage == domain.StageArtifactFetch {
 			return rate
@@ -330,6 +330,16 @@ func pricedArtifactRead(t *testing.T, facts capability.NodeFacts, bytes int64) d
 	}
 	t.Fatalf("the decision priced no Artifact read: %+v", candidate)
 	return domain.TransferRate{}
+}
+
+// runAsking is what the Run in these cases refuses to do without: a floor on how
+// fast this machine reaches the object store, and a bound on how long it may take
+// to start. They are the two hard readers of one measurement, stated together
+// because what a case turns on is which of them was allowed to act on the number
+// this node published about itself.
+type runAsking struct {
+	download        *domain.NetworkDownloadRequirement
+	maxStartSeconds float64
 }
 
 // placeAReadOfTheCorpus runs the production scheduler over this node's own facts
@@ -342,7 +352,7 @@ func placeAReadOfTheCorpus(
 	t *testing.T,
 	facts capability.NodeFacts,
 	bytes int64,
-	download *domain.NetworkDownloadRequirement,
+	asks runAsking,
 ) domain.CandidateDecision {
 	t.Helper()
 	now := facts.ObservedAt
@@ -356,10 +366,14 @@ func placeAReadOfTheCorpus(
 					Image:    "trainer@sha256:" + strings.Repeat("cd", 32),
 					Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
 				}},
-				Placement: domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 600},
+				Placement: domain.PlacementPolicy{
+					Class:                  domain.ClassStandard,
+					ExpectedRuntimeSeconds: 600,
+					MaxP90StartSeconds:     asks.maxStartSeconds,
+				},
 				Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 3600},
 				Artifacts: domain.ArtifactRequirements{Consumes: []string{"artifact:corpus:v9"}},
-				Network:   domain.NetworkRequirements{Download: download},
+				Network:   domain.NetworkRequirements{Download: asks.download},
 			},
 		},
 		Offers: []domain.OfferSnapshot{{
@@ -432,24 +446,84 @@ func TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers(t *testing.T) {
 		t.Fatalf("the node dated its p10 %s, and it was still reading this path at %s",
 			measured.ObservedAt.Format(time.RFC3339Nano), secondCopyBegan.Format(time.RFC3339Nano))
 	}
-	refused := placeAReadOfTheCorpus(t, facts, 40_000_000_000, &domain.NetworkDownloadRequirement{
+	refused := placeAReadOfTheCorpus(t, facts, 40_000_000_000, runAsking{download: &domain.NetworkDownloadRequirement{
 		Scope:                    domain.NetworkScopeObjectStore,
 		MinP10Mbps:               measured.ValueMbps * 2,
 		MaxMeasurementAgeSeconds: 600,
-	})
+	}})
 	if refused.Feasible {
 		t.Fatalf("this node delivered %.2f Mbps and was admitted to a Run that states a floor of %.2f", measured.ValueMbps, measured.ValueMbps*2)
 	}
 	if !rejectedFor(refused, "NETWORK_FACT_UNSATISFIED", "network.download") {
 		t.Fatalf("the decision refused this node as %+v, and what it published was measured too slow rather than absent", refused.Rejections)
 	}
-	served := placeAReadOfTheCorpus(t, facts, 40_000_000_000, &domain.NetworkDownloadRequirement{
+	served := placeAReadOfTheCorpus(t, facts, 40_000_000_000, runAsking{download: &domain.NetworkDownloadRequirement{
 		Scope:                    domain.NetworkScopeObjectStore,
 		MinP10Mbps:               measured.ValueMbps / 2,
 		MaxMeasurementAgeSeconds: 600,
-	})
+	}})
 	if !served.Feasible {
 		t.Fatalf("this node delivered %.2f Mbps a moment ago and was refused a Run asking for half of it: %+v", measured.ValueMbps, served.Rejections)
+	}
+}
+
+// TestAStartBoundRefusesOnlyThePathThisNodeMeasured is the conformance half of
+// what a hard start bound is allowed to act on. The corpus states it against
+// declared paths; here one machine has really read content out of a real object
+// store onto a real disk and published what it delivered, and the other is that
+// same machine with nothing to say about the path.
+//
+// Both owe the same forty gigabytes and both are predicted to be late. Only one
+// of them is known to be, and the Run's bound may refuse only that one. What
+// prices the silent machine is Mercator's fleet-wide prior, a number nothing on
+// that host answered for, so a refusal resting on it would refuse capacity for
+// this model's own opinion and turn silence about a path into infeasibility. It
+// stays a price: the prediction still carries every one of those seconds.
+//
+// The bound is stated from what this machine measured rather than as a constant,
+// because no case can predict what a loopback object store delivers. Half of its
+// own reading is a bound this host provably misses and the silent host is priced
+// well past.
+func TestAStartBoundRefusesOnlyThePathThisNodeMeasured(t *testing.T) {
+	requireDocker(t)
+	endpoint := startObjectStore(t)
+	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
+	replicate(t, runtime, endpoint, "corpus-v12", 160_000_000)
+
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read the node's facts: %v", err)
+	}
+	measured := objectStorePath(t, facts.Host.Network)
+	const dataset = 40_000_000_000
+	bound := float64(dataset*8) / 1_000_000 / measured.ValueMbps / 2
+
+	refused := placeAReadOfTheCorpus(t, facts, dataset, runAsking{maxStartSeconds: bound})
+	if refused.Feasible {
+		t.Fatalf("this node measured %.2f Mbps itself, which is twice the %.2fs bound away from the data, and it was admitted",
+			measured.ValueMbps, bound)
+	}
+	if !rejectedFor(refused, "LATENCY_SLO_EXCEEDED", "placement.max_p90_start_seconds") {
+		t.Fatalf("the decision refused this node as %+v, and what it published was a path measured too slow", refused.Rejections)
+	}
+	if refused.Estimates.EstablishedStartSeconds.P90 <= bound {
+		t.Fatalf("this node was refused against a %.2fs bound with %.2fs of its start established, so the refusal rests on something nobody measured",
+			bound, refused.Estimates.EstablishedStartSeconds.P90)
+	}
+
+	silent := facts
+	silent.Host.Network = nil
+	admitted := placeAReadOfTheCorpus(t, silent, dataset, runAsking{maxStartSeconds: bound})
+	if admitted.Estimates.StartSeconds.P90 <= bound {
+		t.Fatalf("the unmeasured machine is predicted to start in %.2fs against a bound of %.2fs, so this case proves nothing",
+			admitted.Estimates.StartSeconds.P90, bound)
+	}
+	if !admitted.Feasible {
+		t.Fatalf("nothing measured this machine's path and a bound struck it out anyway: %+v", admitted.Rejections)
+	}
+	if admitted.Estimates.EstablishedStartSeconds.P90 > bound {
+		t.Fatalf("the unmeasured machine established %.2fs of its start, and the only thing known about it is the byte count",
+			admitted.Estimates.EstablishedStartSeconds.P90)
 	}
 }
 
