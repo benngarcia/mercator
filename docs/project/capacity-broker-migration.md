@@ -1453,6 +1453,76 @@ complete because it works against a live provider.
     it would never run. And the node disk fact was compared to a fresh read for
     exact equality, which fails whenever anything else writes to the same
     filesystem; it is held to the filesystem now rather than to the instant.
+- [x] 2026-07-26: Answer the second review of the service-class commit. Two
+  reviewers falsified five things, four of them distinct, and all four
+  reproduced. Three were the same shape once more: a rule stated in one place and
+  contradicted at the place that answers.
+  - A disowned fact bought its publisher less than silence in the half that
+    decides feasibility. `downloadRequirementSatisfied` consulted `AllowUnknown`
+    only when an offer published no download facts at all, so an offer whose fact
+    its own publisher disowned, or whose fact had expired, was struck out
+    `NETWORK_FACT_UNSATISFIED` while an offer publishing nothing was feasible and
+    selected. `len(facts) == 0` is the wrong test for "nobody answered":
+    `NetworkFact.Answers` skips a disowned fact inside the loop that the empty
+    check has already decided instead of. There are two ways to miss a floor and
+    the record now keeps them apart. A candidate whose fact answers and falls
+    below the floor was measured too slow and the decision states the speed it
+    published; a candidate nobody answered for measured nothing, and AllowUnknown
+    is what decides. `NetworkFacts.DownloadP10` is the one rule for which
+    published fact answers a question about a link, so the bound and the transfer
+    prediction read one measurement rather than two facts that happen to travel
+    together.
+  - No Blueprint could state a download floor, which is why nothing caught it.
+    `RequestSpec.download` is the vocabulary, following `max_start_latency`, and
+    `WorkloadForRun` carries it so both simulators read one translation.
+    `a-floor-refuses-a-measurement-and-not-a-silence` is the L0 fixture and
+    `a-link-nobody-measured-is-not-a-slow-link` is the same claim at L1. The
+    reference model still refuses a world with a network requirement, which is
+    honest rather than convenient: teaching it this rule by calling the same
+    domain method production calls would make the two models agree by
+    construction, which is the "asking the scheduler to confirm its own
+    arithmetic" this plan has rejected twice.
+  - The record priced an absent price at zero and nothing said which rule ranked
+    it. `ScoreUSD` sums the cost estimate, which is zero dollars with source
+    `unpriced`, so the unquoted machine scored 0.0005 against the selected
+    machine's 0.3338, `CandidateTable.tsx` sorted feasible candidates by that
+    number ascending, and an operator reading the Run saw the machine the
+    placement refused ranked first as the cheapest in the fleet. The decision now
+    records `PRICED_BEFORE_UNPRICED` when a priced candidate was taken over a
+    feasible unquoted one and `UNPRICED_LAST_RESORT` when the Run landed on a
+    machine nobody quoted, which is the standard `ServiceClass.SelectionReason`
+    set. `web/app/src/lib/placement.ts` is the domain's own ranking in the view of
+    it, asked before any dollars are compared, and a score with no price in it
+    reads as one rather than as a total.
+  - The revision door published secrets. `workload.CreateRevision` marshalled the
+    whole revision into a public event with no private copy, so an environment
+    value, which is where a caller puts a token, reached every console reader of
+    the workspace over the SSE feed, while `POST /v1/runs` has reduced the same
+    value to `{"kind":"literal"}` for as long as it has had a private payload.
+    `domain.WorkloadRevision.Public` is now the single redaction both doors write
+    through, so a field added to a workload spec cannot reach one public payload
+    and not the other, and the event's private payload is the whole revision,
+    which is the copy a Run is created from.
+    `migrateStoredRevisionSecrets` rewrites the history through that same
+    function, because history is what a console reader reads.
+  - Both Lab world statements the previous review's Blueprints rest on were
+    unfalsifiable. Stamping certainty on a fixture's path measurement again, or
+    publishing the default priced offer for a Rental a fixture says nobody quoted,
+    each left the whole tree green: only `internal/scenario/sim.go` was held to
+    either rule, by two L0 fixtures. `a-link-nobody-measured-is-not-a-slow-link`
+    and `an-unquoted-machine-is-the-last-resort` are the two executions those
+    statements are now falsifiable through, which is development rule step 6 for
+    two capabilities that shipped without it.
+  - Judgment calls. An unpriced candidate's score keeps its number rather than
+    becoming absent. The convention this plan chose for a missing price is the
+    number beside a source that says nobody quoted it, and a second convention for
+    the same absence is the drift `capability.LocalityState` and
+    `capability.ArtifactLocality` were deleted for; what was wrong was that
+    nothing said the number omits a price, and the two reason codes and the
+    console ordering say it. The disowned publisher under `AllowUnknown` false is
+    refused `UNKNOWN_FACT` with "unknown" offered rather than
+    `NETWORK_FACT_UNSATISFIED`, because that machine measured nothing rather than
+    measuring too slow.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
@@ -1837,16 +1907,69 @@ Phase 4 added:
   fails it through `RentalSchedule.Reserve` refusing to promise a start behind a
   Booking it cannot project, rather than through the assertion, which is the two
   layers saying the same thing.
+- An enrolled node publishes the room it has. Every node offer stated
+  `capacity.available` true at full confidence for as long as its lease held,
+  including a machine that had just reported the container it was running, and
+  `feasibilityViolations` only asks `queueable()` of an offer that says it is
+  occupied. So on the only lane that reaches production every queueing rule was
+  unreachable, including the exhausted clause above: a node mid workload was scored
+  idle this instant and won on price and warmth, and the refusal the fixture states
+  could not happen. Worse than a mispriced wait, a machine holding a container past
+  its Booking's bound was selected and `RentalSchedule.Reserve` then refused the
+  reservation, so `stepPlace` returned an error before appending anything: `502
+  REFRESH_RUN_FAILED`, no Booking Decision, no fallback to the idle machine beside
+  it, and the same answer on every reconcile forever. The offer now states how many
+  workloads the machine says it is executing against how many it runs at once, which
+  is the node's own authority over container lifecycle. An orphan therefore blocks
+  placement rather than being placed behind, and a Booking Mercator still holds for
+  a container that has exited blocks nothing.
 - `TestANodeStillRunningPastItsBoundIsNotQueuedBehind` (`internal/daemon`) is the
   same rule where it is not a declaration. Nothing terminates a workload at its
   enforced maximum, so a container that does not exit holds its node with the
   Booking's remaining runtime at zero, and this drives exactly that through the
-  public API, the production storage, and the node protocol: the arriving Run is
-  told there is nowhere to put it rather than queued behind work that should have
-  ended. It lives here rather than in a Blueprint because a Lab world cannot state
-  a workload that outlives the runtime its Run declared: blueprint validation
-  refuses a runtime model beyond `max_runtime`. Lifting that would state a world
-  with nothing to enforce it, which belongs with the enforcement work.
+  public API, the production storage, and the node protocol. The fleet has two
+  machines, and the assertions are the sentence the rule is: the busy machine is
+  refused on its own capacity evidence, the record carries the overrun beside the
+  remainder that ran out, and the Run is placed on the expensive cold machine
+  instead. An earlier version asserted `502` and that nothing was launched, which
+  every orchestrator error satisfies identically, so it held neither layer: it was
+  green with the Placement rule reverted, through the internal failure above.
+  Reverting either half of Placement fails it now. The domain refusal is held by
+  `TestAScheduleWhoseBookingIsPastItsBoundPromisesNothing`, and with Placement
+  correct it changes no answer here, which the commit message that claimed both were
+  required overstated.
+- The runtime Mercator enforces is measured against the container it bounds. A
+  Booking recorded taking its Rental at the moment its decision was evaluated, and
+  both runtimes it declares bound a container, so provisioning and image pull were
+  spent against a runtime nothing was enforcing yet: a Run declaring twenty minutes
+  that waits fifteen for an 18GB fetch had its Booking read as past its own bound
+  one minute into the workload. That refused its machine to every arriving Run,
+  blocked anything from queueing behind it for the rest of the Run, and published an
+  overrun in the auditable record as a measured fact about a machine running
+  normally. `ScheduledBooking.StartedAt` is the moment the machine that owns the
+  container's lifecycle said it was running, recorded by the orchestrator on the
+  first observation whose phase is running and committed with that observation. A
+  Booking that has not launched owes its whole declared runtime, which is what the
+  zero start already meant for a queued one; it understates occupancy while a
+  machine is fetching, and nothing here bounds preparation, so the wait projected for
+  a Booking that has not started is a floor rather than a promise. Manufacturing an
+  overrun out of that gap was the worse of the two answers.
+  `TestABookingStillStartingIsNotPastItsBound` is the case the old clock could not
+  pass. The corpus seeds a running Booking through the same transition, because a
+  fixture saying a Rental is running work is saying its workload is running.
+- There is no Lab Blueprint for the overrun, and the reason recorded before was a
+  non sequitur about the code as it then stood. The rule does not need a workload to
+  outlive its declared runtime, only a Booking to outlive its bound, and with the
+  bound charged from the placement decision a cold Rental with a long pull stated
+  exactly that: an arrival declaring twenty minutes against a validly modelled ten
+  would have been exhausted while its container was still running. That Blueprint
+  would have been a fixture asserting an overrun for a machine running normally,
+  which is the defect above rather than the rule. With the clock on the container,
+  blueprint validation refusing a runtime model beyond `max_runtime` is the whole
+  reason: no Lab world can state a container that outlives what its Run declared,
+  and the only world this rule is about is a container that does not exit. Lifting
+  that validation would state a world with nothing to enforce it, which belongs with
+  the enforcement work.
 - `safety.promised_start_is_still_ahead` (Lab invariant): no Booking Mercator
   commits promises a start no later than the moment the decision that minted it
   was evaluated. It is stated over the decision record, because a promise can only
@@ -1880,7 +2003,26 @@ Phase 4 added:
   allows unknown pricing. The winner has the higher score, which is the point:
   dollars order the candidates that have dollars, and an unpriced candidate is
   ranked behind every priced one rather than being the cheapest thing in the fleet.
-  Dropping the priced-first rule places the Run on the unquoted machine.
+  Dropping the priced-first rule places the Run on the unquoted machine. The
+  decision also records `PRICED_BEFORE_UNPRICED`, because the winner has the higher
+  score and nothing else in the record says why.
+- `a-floor-refuses-a-measurement-and-not-a-silence` (green): the same rule in the
+  half that decides feasibility. A Run states a 500 Mbps floor and allows a link
+  nobody measured, against four Rentals at one price. The machine that published
+  750 Mbps and stands behind it wins, the machine that published 100 and stands
+  behind it is refused with the number it published, and the disowned publisher
+  sits in every column beside the machine that published nothing. Restoring the
+  empty-list test refuses the disowned publisher while the silent machine is
+  selected.
+- `a-link-nobody-measured-is-not-a-slow-link` (conformance): the same world at L1,
+  and the execution the Lab's own path confidence is falsifiable through. Stamping
+  certainty on a fixture's measurement flips the placement onto the machine that
+  disowned 5 Gbps; dropping the world's paths flips it there too, because then
+  nothing separates the four machines.
+- `an-unquoted-machine-is-the-last-resort` (conformance): an unpriced Rental at L1,
+  and the execution the Lab's own unpriced offer is falsifiable through. Publishing
+  the default priced offer for it places the Run on the machine nobody quoted at a
+  rate of zero.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
@@ -1902,8 +2044,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 26 regression Blueprints: 23 green and 3 target, beside one demo,
-one minimized case, and ten conformance Blueprints. The count is read off the
+The corpus is 29 regression Blueprints: 26 green and 3 target, beside one demo,
+one minimized case, and twelve conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
