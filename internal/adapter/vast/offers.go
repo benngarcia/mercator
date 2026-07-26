@@ -98,7 +98,12 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 				InterruptionRate: clamp01(1 - o.Reliability),
 				Confidence:       1,
 			},
-			Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+			// A catalog listing says this machine type can be had. Its publisher states no
+			// confidence in that, and neither does Mercator on their behalf: capacity that
+			// may be gone by launch, asserted certain, is a claim nobody made. What would
+			// state it here is a measurement of how often provisioning this listing
+			// actually succeeds, which nothing collects yet.
+			Capacity: domain.CapacityEvidence{Available: true},
 			// Vast pulls the image on the rented host; cache state is unknown
 			// but the fact must be KNOWN or the scheduler rejects the offer.
 			// A fresh instance reports nothing about what it holds, so its inventory

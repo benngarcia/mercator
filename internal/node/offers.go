@@ -130,7 +130,10 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		// The caches this node holds travel the same way, and for the same
 		// reason: each entry names the workspace that owns it, and only the node
 		// can say what is on its disk.
-		Caches:   record.Facts.Caches,
+		Caches: record.Facts.Caches,
+		// Mercator observed this machine itself, through the heartbeat this
+		// projection is built from, so the confidence is its own and it is full. A
+		// provider catalog listing states none, because nobody published one.
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }

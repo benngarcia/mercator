@@ -229,7 +229,10 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 		// to yet. A silent inventory is the honest answer: claiming it holds
 		// nothing would price every image as a full transfer, and claiming it
 		// holds everything is the error this contract exists to delete.
-		Images:   domain.ImageInventory{Known: false},
+		Images: domain.ImageInventory{Known: false},
+		// This daemon was probed, so the capacity claim is Mercator's own
+		// observation of a machine it can see rather than a catalog listing it was
+		// handed, which is why it carries full confidence.
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 }

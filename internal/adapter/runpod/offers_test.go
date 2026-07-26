@@ -125,3 +125,30 @@ func TestStockAvailable(t *testing.T) {
 		}
 	}
 }
+
+// TestACatalogListingStatesNoConfidenceInItsCapacity is what this adapter may say
+// on its provider's behalf. RunPod's catalog says a GPU type is in stock, which is
+// what the offer carries; it publishes nothing about how sure of that it is, and a
+// listing that may be gone by launch asserted as certain is a claim nobody made.
+// An enrolled node states full confidence because Mercator observed the machine
+// itself. What would state one here is a measurement of how often provisioning
+// this listing succeeds, which nothing collects yet.
+func TestACatalogListingStatesNoConfidenceInItsCapacity(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	gpus := []gpuType{
+		{ID: "NVIDIA RTX A2000", DisplayName: "RTX A2000", MemoryInGb: 6, SecurePrice: pricePtr(0.12), SecureStockStatus: "High"},
+	}
+
+	offers := buildOffers(gpus, []string{"NVIDIA RTX A2000"}, 1, 75, false, now)
+
+	if len(offers) != 1 {
+		t.Fatalf("expected one offer, got %d", len(offers))
+	}
+	capacity := offers[0].Capacity
+	if !capacity.Available {
+		t.Errorf("the catalog says this type is in stock and the offer says %+v", capacity)
+	}
+	if capacity.Confidence != 0 {
+		t.Errorf("the offer states confidence %v in a listing whose publisher stated none", capacity.Confidence)
+	}
+}

@@ -94,7 +94,12 @@ func appendCloudOffer(offers []domain.OfferSnapshot, g gpuType, cloud string, pr
 			GranularitySeconds: 1,
 			Known:              true,
 		},
-		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+		// A catalog listing says this machine type can be had. Its publisher states no
+		// confidence in that, and neither does Mercator on their behalf: capacity that
+		// may be gone by launch, asserted certain, is a claim nobody made. What would
+		// state it here is a measurement of how often provisioning this listing
+		// actually succeeds, which nothing collects yet.
+		Capacity: domain.CapacityEvidence{Available: true},
 		// RunPod pulls the image fresh on the provisioned host. We don't know
 		// the host's cache state, but the fact must be KNOWN (not "unknown")
 		// or the scheduler policy rejects the offer with UNKNOWN_FACT. Report

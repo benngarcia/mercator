@@ -81,7 +81,12 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 			GranularitySeconds: 1,
 			Known:              true,
 		},
-		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
+		// A catalog listing says this machine type can be had. Its publisher states no
+		// confidence in that, and neither does Mercator on their behalf: capacity that
+		// may be gone by launch, asserted certain, is a claim nobody made. What would
+		// state it here is a measurement of how often provisioning this listing
+		// actually succeeds, which nothing collects yet.
+		Capacity: domain.CapacityEvidence{Available: true},
 		// Shadeform pulls the image fresh on the provisioned host, but the
 		// image (and its size) is unknown at offer time and the evidence
 		// contract has no "uncached, size unknown" state: Known:true with
