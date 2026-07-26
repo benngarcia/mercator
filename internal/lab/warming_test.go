@@ -484,11 +484,11 @@ func TestAnUnquotedMachineIsTheLastResortAtL1(t *testing.T) {
 	}
 }
 
-// TestARefusalToStartIsRecordedAndNotPricedAtL1 is the risk history under the
-// real control plane, and the execution the Lab world's own statement about a
-// measured machine is falsifiable through.
+// TestAPublishedRiskHistoryReachesTheRecordAtL1 is the risk history under the
+// real control plane, and the execution the Lab world's own publication of it is
+// falsifiable through.
 //
-// It asserts the record and deliberately not the placement. Three machines whose
+// It asserts the record and deliberately not the placement. Three listings whose
 // only difference is what their providers published about them score to the same
 // dollar, so the winner is whichever offer ID sorts first, and that is the honest
 // state of this model: what a refusal costs is a probability times a predicted
@@ -496,13 +496,17 @@ func TestAnUnquotedMachineIsTheLastResortAtL1(t *testing.T) {
 // be the unmeasured constant this program keeps deleting. The gap is written down
 // where a fixture will fail when somebody closes it.
 //
-// The third machine, the one nobody measured, is what holds the doubt to the same
+// The third listing, the one nobody measured, is what holds the doubt to the same
 // rule. While the published confidence was charged through the uncertainty term
 // and the rate beside it was priced nowhere, the only thing a measured history did
 // to a score was penalise the provider that published it, and this Run went to the
 // machine that had said nothing.
-func TestARefusalToStartIsRecordedAndNotPricedAtL1(t *testing.T) {
-	execution := openConformanceExecution(t, "a-refusal-to-start-is-recorded-and-not-priced")
+//
+// A published history hangs off a marketplace listing here because that is where
+// production reads one: Vast states its uptime score on an unrented ask, and every
+// standing offer in this tree publishes no history at all.
+func TestAPublishedRiskHistoryReachesTheRecordAtL1(t *testing.T) {
+	execution := openConformanceExecution(t, "a-published-risk-history-reaches-the-record")
 	defer func() {
 		if err := execution.Close(); err != nil {
 			t.Fatalf("close execution: %v", err)
@@ -516,38 +520,38 @@ func TestARefusalToStartIsRecordedAndNotPricedAtL1(t *testing.T) {
 	}
 
 	decision := bookingDecisions(t, execution)["run-unbothered"]
-	flaky := candidateFor(t, decision, "rental-flaky")
-	steady := candidateFor(t, decision, "rental-steady")
-	unmeasured := candidateFor(t, decision, "rental-unmeasured")
+	flaky := candidateFor(t, decision, "ask-flaky")
+	steady := candidateFor(t, decision, "ask-steady")
+	unmeasured := candidateFor(t, decision, "ask-unmeasured")
 	for _, candidate := range []domain.CandidateDecision{flaky, steady, unmeasured} {
 		if !candidate.Feasible {
 			t.Fatalf("%s was refused as %+v, and an unreliable machine is not an unusable one", candidate.OfferSnapshotID, candidate.Rejections)
-		}
-		if candidate.Uncertainty() != 0 {
-			t.Fatalf("%s carries %v points of doubt over %+v, and the only answer these three machines differ about is one nothing prices",
-				candidate.OfferSnapshotID, candidate.Uncertainty(), candidate.Confidences)
 		}
 	}
 	if flaky.Reliability != (domain.ReliabilityEvidence{
 		StartFailures: domain.StatedRate{Rate: 0.4, Confidence: 0.9},
 		Interruptions: domain.StatedRate{Rate: 0.25, Confidence: 0.9},
 	}) {
-		t.Fatalf("the decision recorded %+v for the machine that refuses two starts in five", flaky.Reliability)
+		t.Fatalf("the decision recorded %+v for the listing whose provider says it refuses two starts in five", flaky.Reliability)
 	}
 	if steady.Reliability != (domain.ReliabilityEvidence{
 		StartFailures: domain.StatedRate{Rate: 0, Confidence: 0.9},
 		Interruptions: domain.StatedRate{Rate: 0, Confidence: 0.9},
 	}) {
-		t.Fatalf("the decision recorded %+v for the machine that has never failed, and a clean measured record is not silence", steady.Reliability)
+		t.Fatalf("the decision recorded %+v for the machine measured and never seen to fail, and a clean record is not silence", steady.Reliability)
 	}
 	if unmeasured.Reliability != (domain.ReliabilityEvidence{}) {
 		t.Fatalf("the decision recorded %+v for the machine nobody has measured, and silence is not a clean record", unmeasured.Reliability)
+	}
+	if flaky.Uncertainty() != steady.Uncertainty() || flaky.Uncertainty() != unmeasured.Uncertainty() {
+		t.Fatalf("the three machines carry %v, %v and %v points of doubt over %+v, and the only answer they differ about is one nothing prices",
+			flaky.Uncertainty(), steady.Uncertainty(), unmeasured.Uncertainty(), flaky.Confidences)
 	}
 	if flaky.ScoreUSD != steady.ScoreUSD || flaky.ScoreUSD != unmeasured.ScoreUSD {
 		t.Fatalf("the three machines scored %.6f, %.6f and %.6f, and this model neither prices a refusal nor charges a provider for having measured one",
 			flaky.ScoreUSD, steady.ScoreUSD, unmeasured.ScoreUSD)
 	}
-	if decision.SelectedOfferSnapshotID != "rental-flaky" {
+	if decision.SelectedOfferSnapshotID != "ask-flaky" {
 		t.Fatalf("the Run landed on %q, and with the three machines priced identically the record has nothing left to rank them by but the offer ID",
 			decision.SelectedOfferSnapshotID)
 	}

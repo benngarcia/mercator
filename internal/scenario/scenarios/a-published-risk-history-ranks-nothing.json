@@ -1,0 +1,75 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Three marketplace listings for the same machine at the same price, each five minutes of provisioning away from running the same 2GB image, and the only difference between them is what their provider has published about how the machine behaves. ask-flaky has refused two starts in five and been interrupted a quarter of the time, ask-steady has been measured and never done either, and nobody has ever measured ask-unmeasured. The decision records each published history exactly as it was stated, prices none of it, and doubts none of it, so all three candidates score to the same dollar and the placement falls through to the offer ID. Two claims live here. What a refusal is worth is a prediction nobody has made yet, expected redo cost is probability times a predicted start, and a flat penalty invented for it now would be an unmeasured constant: price a refusal and the scores separate and this Blueprint fails. And a provider that measures its machine must never be ranked behind one that says nothing for having said so, which is what ask-unmeasured pins: while the published confidence was charged through the uncertainty term and the rate beside it was priced nowhere, publishing an honest clean record cost 0.003 USD and lost the Run to silence. The history sits on a listing rather than on a Rental because that is where it comes from in production, on an unrented ask, and because a provisioning-dominated start is the only place expected redo cost could ever be large enough to see.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2": {
+        "layers": [
+          {"digest": "sha256:1f5a1b0d90ba2d7c2d1e0f19e4c6a2b9de8fd0c3a6b1e2f4c5d6a7b8c9d0e1f2", "size": "2GB"}
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "ask-flaky",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "reliability": {"start_failure_rate": 0.4, "interruption_rate": 0.25, "confidence": 0.9}
+      },
+      {
+        "id": "ask-steady",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "reliability": {"start_failure_rate": 0, "interruption_rate": 0, "confidence": 0.9}
+      },
+      {
+        "id": "ask-unmeasured",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2",
+    "service_class": "standard",
+    "expected_runtime": "10m",
+    "max_runtime": "30m"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "ask-flaky",
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+    "disposition": "terminate",
+    "candidates": {
+      "ask-flaky": {
+        "feasible": true,
+        "provision_seconds": 300,
+        "start_failure_rate": 0.4,
+        "interruption_rate": 0.25,
+        "risk_confidence": 0.9,
+        "uncertainty": 0.5,
+        "score_usd": {"at_least": 0.5150, "at_most": 0.5151}
+      },
+      "ask-steady": {
+        "feasible": true,
+        "provision_seconds": 300,
+        "start_failure_rate": 0,
+        "interruption_rate": 0,
+        "risk_confidence": 0.9,
+        "uncertainty": 0.5,
+        "score_usd": {"at_least": 0.5150, "at_most": 0.5151}
+      },
+      "ask-unmeasured": {
+        "feasible": true,
+        "provision_seconds": 300,
+        "no_risk_history": true,
+        "uncertainty": 0.5,
+        "score_usd": {"at_least": 0.5150, "at_most": 0.5151}
+      }
+    }
+  }
+}

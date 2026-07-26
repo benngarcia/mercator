@@ -6,9 +6,45 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/scenario"
 )
+
+// TestAStartLatencyRowRefusesToSubtractDisagreeingClocks is the calibration record
+// declining to invent a duration. A holder that dates a start before the moment its
+// own launch was accepted is a clock Mercator does not share, and the difference is
+// not a wait anybody experienced: the row names the pair it could not subtract
+// rather than filing a negative number as a measurement.
+func TestAStartLatencyRowRefusesToSubtractDisagreeingClocks(t *testing.T) {
+	accepted := time.Date(2026, 7, 24, 12, 0, 45, 0, time.UTC)
+	latencies := startLatencies{
+		predicted: map[string]float64{"run-1": 30},
+		accepted:  map[string]time.Time{"run-1": accepted},
+		started:   map[string]time.Time{"run-1": accepted.Add(-45 * time.Second)},
+	}
+
+	record := latencies.record("run-1")
+
+	if record.ActualSource != "start_before_launch_accepted" || record.ActualSeconds != 0 {
+		t.Fatalf("the row files %v seconds sourced %q", record.ActualSeconds, record.ActualSource)
+	}
+}
+
+func TestAStartLatencyRowMeasuresTheWaitItsTwoMomentsBound(t *testing.T) {
+	accepted := time.Date(2026, 7, 24, 12, 0, 45, 0, time.UTC)
+	latencies := startLatencies{
+		predicted: map[string]float64{"run-1": 30},
+		accepted:  map[string]time.Time{"run-1": accepted},
+		started:   map[string]time.Time{"run-1": accepted.Add(42 * time.Second)},
+	}
+
+	record := latencies.record("run-1")
+
+	if record.ActualSource != "run_stream.execution_started" || record.ActualSeconds != 42 {
+		t.Fatalf("the row files %v seconds sourced %q", record.ActualSeconds, record.ActualSource)
+	}
+}
 
 func TestRunBundleIsDeterministicAndReplayable(t *testing.T) {
 	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/demos/artifact-warmth-restart.json")

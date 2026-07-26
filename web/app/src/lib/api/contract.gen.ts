@@ -729,6 +729,11 @@ export interface components {
             max_p90_start_seconds?: number;
             /** Format: double */
             expected_runtime_seconds?: number;
+            /**
+             * Format: double
+             * @description How long this workload takes to become ready for work once its process is running. It is the only prediction of the application-ready stage there is: readiness is the application's own semantics, so the workload is the only authority that can state it, and a Run that states nothing is predicted nothing.
+             */
+            expected_ready_seconds?: number;
             /** Format: double */
             max_expected_cost_usd?: number;
             /** @description Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none. */
@@ -1063,14 +1068,30 @@ export interface components {
             connections_from_cache?: string[];
             excluded_connections?: string[];
         };
+        /** @description What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own. */
+        LaunchStageEstimates: {
+            /** @description The provider allocating the machine. No provider in any catalog publishes it, so its source reads "unpublished" for capacity that has to be allocated and "machine_exists" for capacity that is already there. */
+            acquisition_seconds: components["schemas"]["Estimate"];
+            /** @description The machine reaching a usable operating system. This is where a published provisioning claim is recorded, because that is what its publisher calls it. */
+            boot_seconds: components["schemas"]["Estimate"];
+            /** @description Mercator's node runtime enrolling on the machine. Published by nobody. */
+            agent_ready_seconds: components["schemas"]["Estimate"];
+            /** @description Image bytes this host does not hold crossing the link from a registry. */
+            image_fetch_seconds: components["schemas"]["Estimate"];
+            /** @description Content already on this host's disk becoming a layer chain a container can start on. A host holding every byte of an image it never assembled owes this and no transfer. */
+            unpack_seconds: components["schemas"]["Estimate"];
+            /** @description What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from the image fetch because it is a different transfer over different content from a different authority. */
+            artifact_fetch_seconds: components["schemas"]["Estimate"];
+            /** @description The container runtime creating the container and holding a process in it. */
+            container_start_seconds: components["schemas"]["Estimate"];
+            /** @description How long the workload said it takes to become ready once its process is running. It is predicted from the declaration alone, because readiness is the application's own semantics, and it is not part of start_seconds: a start is the moment the process began and readiness is a later one. */
+            application_ready_seconds: components["schemas"]["Estimate"];
+        };
         CandidateEstimates: {
             queue_seconds: components["schemas"]["Estimate"];
-            provision_seconds: components["schemas"]["Estimate"];
-            pull_seconds: components["schemas"]["Estimate"];
-            /** @description What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from pull_seconds because it is a different transfer over different content from a different authority. */
-            artifact_seconds: components["schemas"]["Estimate"];
+            stages: components["schemas"]["LaunchStageEstimates"];
             start_seconds: components["schemas"]["Estimate"];
-            /** @description The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess. */
+            /** @description The part of the start prediction somebody established: queue and boot, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess. */
             established_start_seconds: components["schemas"]["Estimate"];
             /** @description What this Run is billed for running here, over the runtime it declared. A machine whose price nobody published has no such number and predicts none: its source reads "unpriced", which is what the ranking reads to place it behind every candidate somebody priced. A rate of zero is a machine somebody says is free, which is a different answer. */
             cost_usd: components["schemas"]["Estimate"];

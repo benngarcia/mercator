@@ -267,6 +267,14 @@ func (latencies startLatencies) record(runID string) predictionActualRecord {
 	if !taken || !began {
 		return record
 	}
+	if started.Before(accepted) {
+		// Two clocks that disagree rather than a duration: the holder dated the start
+		// before the moment its own launch was accepted. A negative number here is a
+		// calibration set being taught that work begins before it is asked for, and the
+		// row says which pair of moments could not be subtracted instead.
+		record.ActualSource = "start_before_launch_accepted"
+		return record
+	}
 	record.ActualSeconds = started.Sub(accepted).Seconds()
 	record.ActualSource = "run_stream.execution_started"
 	return record

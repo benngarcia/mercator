@@ -418,12 +418,6 @@ type RentalSpec struct {
 	// different amounts, which is the only way the uncertainty term can be shown
 	// pricing anything.
 	CapacityConfidence *float64 `json:"capacity_confidence,omitempty"`
-	// Reliability is the history this machine's provider publishes about it:
-	// how often it refuses to start, and how often it drops the work it is
-	// running. Omitted means nobody has measured this machine, which is what
-	// every simulated provider but one says today, and what makes silence and a
-	// clean record two different worlds a fixture must be able to tell apart.
-	Reliability *ReliabilitySpec `json:"reliability,omitempty"`
 }
 
 // ReliabilitySpec is a published risk history, in the terms the one production
@@ -431,6 +425,18 @@ type RentalSpec struct {
 // behind them. It is a fact about the machine rather than world truth, which is
 // why it carries a confidence and why a fixture may state a history that is
 // wrong about what the world then does.
+//
+// It hangs off a marketplace listing and not off a Rental, because that is where
+// the fact comes from in production: Vast publishes reliability2 on an unrented
+// ask, before anything is rented, and the two builders of standing reusable
+// offers, an enrolled node's own projection and the local Docker daemon, publish
+// no history at all. A Rental is a machine Mercator holds through a node it
+// enrolled, and how often that machine refuses to start a container is a
+// lifecycle fact the node owns rather than a history its provider published, so
+// it comes back on RentalSpec in the slice that has a writer for it. Stating it
+// here is also the only way the corpus can see a rate matter: expected redo cost
+// is a probability times a predicted start, and a warm Rental's predicted start
+// is about a second.
 //
 // Each rate is stated or omitted, and omitted is what production mostly does: the
 // one publisher in this tree measures interruptions and nothing about refused
@@ -467,12 +473,11 @@ func statedRate(rate *float64, confidence float64) domain.StatedRate {
 	return domain.StatedRate{Rate: *rate, Confidence: confidence}
 }
 
-// Risk is what this machine's provider publishes about how it behaves, and
-// nothing where no fixture stated a history. Silence is not a clean record: a
-// machine nobody has measured has published no rate to read and no confidence to
-// doubt, and reading it as zero failures would be a claim its provider never
-// made.
-func (spec RentalSpec) Risk() domain.ReliabilityEvidence {
+// Risk is what the provider of this listing publishes about how the machine
+// behind it behaves, and nothing where no fixture stated a history. Silence is
+// not a clean record: a machine nobody has measured has published no rate to
+// read, and reading it as zero failures would be a claim its provider never made.
+func (spec MarketplaceOfferSpec) Risk() domain.ReliabilityEvidence {
 	if spec.Reliability == nil {
 		return domain.ReliabilityEvidence{}
 	}
@@ -586,6 +591,13 @@ type MarketplaceOfferSpec struct {
 	Billing        BillingSpec          `json:"billing,omitempty"`
 	Provisioning   ProvisioningSpec     `json:"provisioning"`
 	Resources      *ResourcesSpec       `json:"resources,omitempty"`
+	// Reliability is the history this listing's provider publishes about the
+	// machine behind it: how often it refuses to start the work it is given, and
+	// how often it drops the work it is running. Omitted means nobody has measured
+	// this machine, which is what every simulated provider but one says today, and
+	// what makes silence and a clean record two different worlds a fixture must be
+	// able to tell apart.
+	Reliability *ReliabilitySpec `json:"reliability,omitempty"`
 	// Facts are the hardware facts providers owe on the offer (SSH root
 	// access, working NVIDIA driver). Omitted map entries are unknown facts;
 	// an offer missing or failing one must be rejected loudly. Target
@@ -844,27 +856,20 @@ type CandidateExpectation struct {
 	// Disposition asserts what Placement recorded this candidate as: reusing,
 	// queueing on, or provisioning a Rental, or launching a one-shot ephemeral
 	// execution that holds nothing afterwards.
-	Disposition      domain.CandidateDisposition `json:"disposition,omitempty"`
-	Rejected         []RejectionSpec             `json:"rejected,omitempty"`
-	QueueSeconds     *Bound                      `json:"queue_seconds,omitempty"`
-	ProvisionSeconds *Bound                      `json:"provision_seconds,omitempty"`
-	PullSeconds      *Bound                      `json:"pull_seconds,omitempty"`
-	// PullSource and PullConfidence assert how much the transfer answer is
-	// worth. Zero seconds means "nothing to fetch" when the source is
-	// image_inventory and "nobody could say" when it is unknown, and only
-	// these two fields tell them apart.
-	PullSource     string   `json:"pull_source,omitempty"`
-	PullConfidence *float64 `json:"pull_confidence,omitempty"`
+	Disposition  domain.CandidateDisposition `json:"disposition,omitempty"`
+	Rejected     []RejectionSpec             `json:"rejected,omitempty"`
+	QueueSeconds *Bound                      `json:"queue_seconds,omitempty"`
+	// Stages asserts what this candidate was predicted to spend on each stage of
+	// the launch, named by the stage. One vocabulary replaces the five fields
+	// that stated four quantities between them: a fixture states the stages it is
+	// about and says nothing about the rest, and a stage added to the record
+	// cannot be added without a way to state it.
+	Stages map[string]StageExpectation `json:"stages,omitempty"`
 	// ImageLocality asserts how much of the Run's image this candidate was
 	// found to have: hot, partial, cold, or unknown. It is the qualitative half
-	// of the pull answer, and the only one that separates a machine that has to
+	// of the image answer, and the only one that separates a machine that has to
 	// fetch from one that only has to finish unpacking.
 	ImageLocality domain.LocalityState `json:"image_locality,omitempty"`
-	// ArtifactSeconds asserts what this candidate would still spend reading the
-	// Run's declared inputs out of the object store. It is the quantitative half
-	// of Artifact locality, and the only field that separates a host holding a
-	// checked copy from one that has to read the whole thing.
-	ArtifactSeconds *Bound `json:"artifact_seconds,omitempty"`
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`
@@ -918,6 +923,18 @@ type CandidateExpectation struct {
 	// machine behaves. It is what a fixture states for a machine nobody measured,
 	// and it is not the same claim as two rates of zero.
 	NoRiskHistory bool `json:"no_risk_history,omitempty"`
+}
+
+// StageExpectation is what one launch stage's prediction has to say. Seconds is
+// the answer, Source is whose evidence it rests on, and Confidence is what that
+// evidence is worth. The three travel together because zero seconds means two
+// opposite things: nothing to do when an inventory answered, and nobody could say
+// when it did not, and only the source and the confidence beside it tell them
+// apart.
+type StageExpectation struct {
+	Seconds    *Bound   `json:"seconds,omitempty"`
+	Source     string   `json:"source,omitempty"`
+	Confidence *float64 `json:"confidence,omitempty"`
 }
 
 type ScheduleEvidenceExpectation struct {
@@ -1617,9 +1634,6 @@ func (w WorldSpec) validate() error {
 		if err := rental.Billing.validate("rental " + rental.ID); err != nil {
 			return err
 		}
-		if err := validateReliability("rental "+rental.ID, rental.Reliability); err != nil {
-			return err
-		}
 	}
 	rentalsWithSchedules := map[string]bool{}
 	bookingOwners := map[string]string{}
@@ -1694,6 +1708,9 @@ func (w WorldSpec) validate() error {
 			if spent.Duration() < 0 {
 				return fmt.Errorf("marketplace offer %q spends %v on %s", offer.ID, spent.Duration(), stage)
 			}
+		}
+		if err := validateReliability("marketplace offer "+offer.ID, offer.Reliability); err != nil {
+			return err
 		}
 	}
 	pathIDs := map[string]bool{}

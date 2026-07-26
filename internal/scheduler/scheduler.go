@@ -244,8 +244,9 @@ func confidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates
 	var stated []domain.Confidence
 	for _, answer := range []domain.Confidence{
 		{Answer: "capacity", Value: offer.Capacity.Confidence},
-		{Answer: "pull_seconds", Value: estimates.PullSeconds.Confidence},
-		{Answer: "artifact_seconds", Value: estimates.ArtifactSeconds.Confidence},
+		{Answer: "image_fetch_seconds", Value: estimates.Stages.ImageFetch.Confidence},
+		{Answer: "unpack_seconds", Value: estimates.Stages.Unpack.Confidence},
+		{Answer: "artifact_fetch_seconds", Value: estimates.Stages.ArtifactFetch.Confidence},
 	} {
 		if answer.Value > 0 {
 			stated = append(stated, answer)
@@ -435,24 +436,75 @@ type contentWork struct {
 
 func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candidateWork {
 	queue := queueEstimate(input, offer)
-	provision := provisionEstimate(input, offer)
+	machine := provisionEstimate(input, offer)
 	content := contentFor(input, offer)
-	image := pullEstimate(input.Image, offer, content, input.ModelVersion)
+	fetch, unpack := imageEstimates(input.Image, offer, content, input.ModelVersion)
 	inputs := artifactEstimate(offer.Artifacts, content, input.ModelVersion)
+	container := containerStartEstimate(input.ModelVersion)
+	ready := applicationReadyEstimate(input)
+	stages := domain.LaunchStageEstimates{
+		Acquisition:      machine.acquisition,
+		Boot:             machine.boot,
+		AgentReady:       machine.agentReady,
+		ImageFetch:       fetch.predicted,
+		Unpack:           unpack.predicted,
+		ArtifactFetch:    inputs.predicted,
+		ContainerStart:   container,
+		ApplicationReady: ready,
+	}
+	established := stages
+	established.ImageFetch = fetch.established
+	established.Unpack = unpack.established
+	established.ArtifactFetch = inputs.established
 	return candidateWork{
 		estimates: domain.CandidateEstimates{
 			QueueSeconds:            queue,
-			ProvisionSeconds:        provision,
-			PullSeconds:             image.predicted,
-			ArtifactSeconds:         inputs.predicted,
-			StartSeconds:            startEstimate(input, offer, queue, provision, image.predicted, inputs.predicted),
-			EstablishedStartSeconds: startEstimate(input, offer, queue, provision, image.established, inputs.established),
+			Stages:                  stages,
+			StartSeconds:            startEstimate(input, offer, queue, stages),
+			EstablishedStartSeconds: startEstimate(input, offer, queue, established),
 			CostUSD:                 costEstimate(input, offer),
 		},
 		image:     content.locality,
 		artifacts: content.evidence,
 		disk:      content.disk,
 	}
+}
+
+// containerStartEstimate is what asking this machine's container runtime for a
+// process costs. It is Mercator's own stated assumption rather than anything a
+// provider published, because no offer in any catalog says how long its runtime
+// takes to create a container.
+func containerStartEstimate(modelVersion string) domain.Estimate {
+	return domain.Estimate{
+		Expected:     domain.AssumedContainerStartSeconds,
+		P50:          domain.AssumedContainerStartSeconds,
+		P90:          domain.AssumedContainerStartSeconds * 1.25,
+		Source:       "scheduler",
+		ModelVersion: modelVersion,
+	}
+}
+
+// applicationReadyEstimate is how long the workload said it takes to become
+// ready once its process is running. Only the application knows: readiness is
+// its own semantics, and no machine fact and no provider claim predicts it.
+//
+// A Run that declared nothing is predicted nothing, and the record says which
+// silence that was. A prior of Mercator's here would be a number invented for
+// every workload in the fleet, and unlike a link speed there is no shared
+// physical thing it could be an assumption about.
+func applicationReadyEstimate(input SchedulingInput) domain.Estimate {
+	seconds := input.Workload.Spec.Placement.ExpectedReadySeconds
+	estimate := domain.Estimate{
+		Expected:     seconds,
+		P50:          seconds,
+		P90:          seconds,
+		Source:       "workload.expected_ready",
+		ModelVersion: input.ModelVersion,
+	}
+	if seconds <= 0 {
+		estimate.Source = "workload_states_none"
+	}
+	return estimate
 }
 
 // candidateContent is everything this Run's content amounts to on one
@@ -517,22 +569,60 @@ func queueEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Est
 	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds, Source: "offer", ModelVersion: input.ModelVersion}
 }
 
-// provisionEstimate is what the provider published about bringing this machine
-// up, carried through as published. A quantile the provider did not state is its
-// expectation restated: an unstated p90 is not a promise of a short tail, and
-// replacing a published one with a spread of this model's own would enforce the
-// Run's start bound against a quantile Mercator made up while the provider's own
-// answer sat unread on the offer.
-func provisionEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
-	estimate := domain.Estimate{Source: "offer", ModelVersion: input.ModelVersion}
+// machineEstimates is what this candidate is predicted to spend becoming a
+// machine Mercator can run a container on: the provider allocating it, the
+// machine booting, and Mercator's node runtime enrolling.
+type machineEstimates struct {
+	acquisition domain.Estimate
+	boot        domain.Estimate
+	agentReady  domain.Estimate
+}
+
+// provisionEstimate is what somebody published about each stage of bringing this
+// machine up. A quantile the provider did not state is its expectation restated:
+// an unstated p90 is not a promise of a short tail, and replacing a published one
+// with a spread of this model's own would enforce the Run's start bound against a
+// quantile Mercator made up while the provider's own answer sat unread on the
+// offer.
+//
+// The published claim is read as a claim about boot, because that is what its
+// only publisher in this tree calls it: Shadeform states a min and max
+// boot_in_sec for an instance type and nothing else about getting one. Acquiring
+// the machine and enrolling Mercator's runtime on it are published by nobody, so
+// they are predicted as nothing and the record says whose silence that was. A
+// prior of Mercator's for either would be a number invented for every listing in
+// every catalog, and a share of the published claim would attribute a provider's
+// boot window to stages the provider never mentioned.
+//
+// The consequence is a machine prediction that is short of the truth by whatever
+// acquisition and enrollment really take, which is a gap the record now makes
+// visible rather than hiding inside one number: each stage has its own actual,
+// and the calibration slice reads them.
+func provisionEstimate(input SchedulingInput, offer domain.OfferSnapshot) machineEstimates {
+	// A machine that already exists and already runs Mercator's runtime owes none
+	// of these three stages, which is a different answer from nobody having
+	// published them and reads differently on the record.
+	source := "unpublished"
+	if offer.Kind != domain.OfferKindProvisionable {
+		source = "machine_exists"
+	}
+	machine := machineEstimates{
+		acquisition: domain.Estimate{Source: source, ModelVersion: input.ModelVersion},
+		boot:        domain.Estimate{Source: source, ModelVersion: input.ModelVersion},
+		agentReady:  domain.Estimate{Source: source, ModelVersion: input.ModelVersion},
+	}
 	if offer.Kind != domain.OfferKindProvisionable || offer.Provisioning == nil {
-		return estimate
+		return machine
 	}
 	published := *offer.Provisioning
-	estimate.Expected = published.Expected
-	estimate.P50 = orExpected(published.P50, published.Expected)
-	estimate.P90 = orExpected(published.P90, published.Expected)
-	return estimate
+	machine.boot = domain.Estimate{
+		Expected:     published.Expected,
+		P50:          orExpected(published.P50, published.Expected),
+		P90:          orExpected(published.P90, published.Expected),
+		Source:       "offer",
+		ModelVersion: input.ModelVersion,
+	}
+	return machine
 }
 
 func orExpected(quantile, expected float64) float64 {
@@ -542,38 +632,52 @@ func orExpected(quantile, expected float64) float64 {
 	return quantile
 }
 
-// startEstimate assembles when this candidate is ready out of the parts it is
-// waiting on, plus the second every launch costs whatever it holds. Quantiles
-// add rather than being scaled off the expectation, because each part's tail
-// belongs to whoever published it: a provider that states an eighteen-minute p90
-// provisioning has said what its own tail is. Summing them is deliberately
-// pessimistic about the joint distribution, which nothing here models, and
-// pessimism about a bound the caller set is the safe direction.
+// startEstimate assembles when this candidate's process begins out of the wait
+// in front of it and the stages between the launch being taken and the container
+// holding a process. Quantiles add rather than being scaled off the expectation,
+// because each part's tail belongs to whoever published it: a provider that
+// states an eighteen-minute p90 provisioning has said what its own tail is.
+// Summing them is deliberately pessimistic about the joint distribution, which
+// nothing here models, and pessimism about a bound the caller set is the safe
+// direction.
+//
+// Application readiness is predicted and is not in this sum, because a start is
+// a moment somebody observed and readiness is a later one. The actual this
+// prediction is calibrated against is the container's own start, so folding a
+// stage that happens after it into the same number would compare a prediction
+// with an actual of something else.
 //
 // A measured latency estimate for this offer replaces the derived answer
 // outright, and replaces both halves of it: a sample is a measurement about this
 // machine whatever anyone could enumerate, so there is no unestablished part of
 // it to discount.
-func startEstimate(input SchedulingInput, offer domain.OfferSnapshot, parts ...domain.Estimate) domain.Estimate {
+func startEstimate(input SchedulingInput, offer domain.OfferSnapshot, queue domain.Estimate, stages domain.LaunchStageEstimates) domain.Estimate {
 	if measured, ok := input.LatencyEstimates[offer.ID]; ok && measured.SampleCount > 0 {
 		if measured.ModelVersion == "" {
 			measured.ModelVersion = input.ModelVersion
 		}
 		return measured
 	}
-	start := domain.Estimate{
-		Expected:     domain.LaunchSeconds,
-		P50:          domain.LaunchSeconds,
-		P90:          domain.LaunchSeconds * 1.25,
-		Source:       "scheduler",
-		ModelVersion: input.ModelVersion,
-	}
-	for _, part := range parts {
+	start := domain.Estimate{Source: "scheduler", ModelVersion: input.ModelVersion}
+	for _, part := range append([]domain.Estimate{queue}, startingStages(stages)...) {
 		start.Expected += part.Expected
 		start.P50 += part.P50
 		start.P90 += part.P90
 	}
 	return start
+}
+
+// startingStages are the seven stages a launch goes through before its process
+// is running, which is the moment a start latency is measured to.
+func startingStages(stages domain.LaunchStageEstimates) []domain.Estimate {
+	parts := make([]domain.Estimate, 0, len(domain.LaunchStages)-1)
+	for _, stage := range domain.LaunchStages {
+		if stage == domain.StageApplicationReady {
+			continue
+		}
+		parts = append(parts, stages.Stage(stage))
+	}
+	return parts
 }
 
 // costEstimate is what this Run is billed for running here, over the runtime it
@@ -671,48 +775,76 @@ func selectionReason(disposition domain.CandidateDisposition) string {
 	}
 }
 
-// pullEstimate prices what this candidate still owes before the image can
-// start, and states how much that answer is worth. Zero seconds is reserved for
-// a host an inventory says holds the image, or for an image nothing could
-// resolve, where the same nothing is charged to every candidate and the
-// comparison is unaffected. A host that will not say what it holds is charged
-// the whole image, because the bytes have to come from somewhere and nothing
-// here says they are already there.
+// imageEstimates prices the two stages this candidate still owes before a
+// container can start on the image, and states how much each answer is worth.
+// They are two stages rather than one because they are different work over
+// different resources: fetching crosses a link from a registry, and unpacking
+// turns bytes already on the disk into a layer chain. A host that fetched the
+// image and never assembled it owes the second and none of the first, and
+// charging it a pull would bill the network twice for bytes that are here.
 //
-// A host that fetched the image and has not assembled it owes local work rather
-// than a transfer, over a different resource at a different rate, so the two
-// are added as what they are. Charging that host a pull would bill the network
-// twice for bytes that are already on the machine.
+// Zero seconds is reserved for a host an inventory says holds the image, or for
+// an image nothing could resolve, where the same nothing is charged to every
+// candidate and the comparison is unaffected. A host that will not say what it
+// holds is charged the whole image, because the bytes have to come from
+// somewhere and nothing here says they are already there.
 //
 // Confidence is about the duration, not the bytes. Bytes counted from a
-// manifest and an inventory that both spoke are certain, so a host that holds
-// everything is certainly zero seconds away from starting. Bytes assumed
-// because a host said nothing are not, and neither is a duration over a rate
-// nothing measured, so either one caps the answer at AssumedLinkConfidence.
+// manifest and an inventory that both spoke are certain, so a host with nothing
+// to do at a stage is certainly zero seconds away from finishing it. Bytes
+// assumed because a host said nothing are not, and neither is a duration over a
+// rate nothing measured, so either one caps that stage's answer at
+// AssumedLinkConfidence.
 //
 // Room is not priced here, or anywhere. A machine short of it is refused rather
 // than charged, because the only content it could give up to make room is
 // content this Run needs back, and deleting that frees exactly what fetching it
 // again consumes.
-func pullEstimate(manifest domain.ImageManifest, offer domain.OfferSnapshot, content candidateContent, modelVersion string) contentWork {
+func imageEstimates(manifest domain.ImageManifest, offer domain.OfferSnapshot, content candidateContent, modelVersion string) (fetch, unpack contentWork) {
 	work, locality := content.image, content.locality
-	transfer := work.TransferBytes
-	estimate := domain.Estimate{
-		Source:       pullSource(locality, manifest, offer.Images),
-		ModelVersion: modelVersion,
+	source := pullSource(locality, manifest, offer.Images)
+	link := offer.RegistryDownload()
+	return imageStage(
+			transferSeconds(work.TransferBytes, link.Mbps),
+			work.TransferBytes,
+			link.Confidence,
+			source,
+			locality,
+			modelVersion,
+		),
+		imageStage(
+			float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps,
+			work.UnpackBytes,
+			domain.AssumedLinkConfidence,
+			source,
+			locality,
+			modelVersion,
+		)
+}
+
+// transferSeconds is how long bytes this host does not hold take to arrive over
+// this link, plus the half second a transfer costs before any of them move. A
+// host with nothing to fetch pays neither.
+func transferSeconds(bytes int64, mbps float64) float64 {
+	if bytes == 0 {
+		return 0
 	}
-	if transfer == 0 && work.UnpackBytes == 0 {
+	return float64(bytes*8)/1_000_000/mbps + 0.5
+}
+
+// imageStage is one stage of getting an image ready, priced from the bytes it
+// has to move and the rate they move at.
+func imageStage(seconds float64, bytes int64, rateConfidence float64, source string, locality domain.LocalityState, modelVersion string) contentWork {
+	estimate := domain.Estimate{Source: source, ModelVersion: modelVersion}
+	if bytes == 0 {
 		if locality != domain.LocalityUnknown {
 			estimate.Confidence = 1
 		}
 		return establishedIfDescribed(estimate, locality)
 	}
-	link := offer.RegistryDownload()
-	seconds := float64(transfer*8)/1_000_000/link.Mbps +
-		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
 	estimate.Expected, estimate.P50, estimate.P90 = seconds, seconds, seconds*1.5
-	estimate.Confidence = link.Confidence
-	if work.UnpackBytes > 0 || locality == domain.LocalityUnknown {
+	estimate.Confidence = rateConfidence
+	if locality == domain.LocalityUnknown {
 		estimate.Confidence = min(estimate.Confidence, domain.AssumedLinkConfidence)
 	}
 	return establishedIfDescribed(estimate, locality)

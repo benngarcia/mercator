@@ -1,0 +1,56 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "A published risk history at L1. Three marketplace listings for the same machine cost the same, are five minutes of provisioning from running the same 2GB image, and differ only in what their provider has published about how the machine behaves: one has refused two starts in five and been interrupted a quarter of the time, one has been measured and never done either, and nobody has ever measured the third. Under the real control plane the decision records each history as it was stated and scores all three to the same dollar, so the placement falls through to the offer ID and the listing whose provider says it refuses starts takes the Run. This is the Blueprint the Lab world's own publication of that history is falsifiable through: stop publishing it and every candidate reads as a machine nobody has measured, which is a different world and a quieter one. What a refusal is worth stays unstated, because expected redo cost is a probability times a predicted start and nothing here predicts either yet. What is stated, and what the unmeasured listing is here to hold, is that publishing a measured history costs its publisher nothing.",
+  "seed": "mercator-lab-risk-history-recorded-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2": {
+        "layers": [
+          {
+            "digest": "sha256:1f5a1b0d90ba2d7c2d1e0f19e4c6a2b9de8fd0c3a6b1e2f4c5d6a7b8c9d0e1f2",
+            "size": "2GB"
+          }
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "ask-flaky",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "reliability": {"start_failure_rate": 0.4, "interruption_rate": 0.25, "confidence": 0.9}
+      },
+      {
+        "id": "ask-steady",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "reliability": {"start_failure_rate": 0, "interruption_rate": 0, "confidence": 0.9}
+      },
+      {
+        "id": "ask-unmeasured",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"}
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "unbothered",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2",
+          "service_class": "standard",
+          "expected_runtime": "10m",
+          "max_runtime": "30m"
+        }
+      }
+    ]
+  }
+}

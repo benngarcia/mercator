@@ -176,8 +176,15 @@ type PlacementPolicy struct {
 	Class                  ServiceClass `json:"service_class"`
 	MaxP90StartSeconds     float64      `json:"max_p90_start_seconds,omitempty"`
 	ExpectedRuntimeSeconds float64      `json:"expected_runtime_seconds,omitempty"`
-	MaxExpectedCostUSD     *float64     `json:"max_expected_cost_usd,omitempty"`
-	AllowUnknownPricing    bool         `json:"allow_unknown_pricing,omitempty"`
+	// ExpectedReadySeconds is how long this workload says it takes to become
+	// ready for work once its process is running. It is the only prediction of
+	// the application-ready stage there is: readiness is the application's own
+	// semantics, so the workload is the only authority that can state it, and a
+	// Run that states nothing is predicted nothing rather than charged a prior
+	// this model invented for every workload in the fleet.
+	ExpectedReadySeconds float64  `json:"expected_ready_seconds,omitempty"`
+	MaxExpectedCostUSD   *float64 `json:"max_expected_cost_usd,omitempty"`
+	AllowUnknownPricing  bool     `json:"allow_unknown_pricing,omitempty"`
 }
 
 type ExecutionPolicy struct {
@@ -292,11 +299,18 @@ const DefaultRegistryDownloadMbps = 500.0
 // takes are the guess.
 const AssumedLinkConfidence = 0.5
 
-// LaunchSeconds is what starting a container costs on a machine already holding
+// AssumedContainerStartSeconds is what asking a container runtime to create a
+// container and hold a process in it costs on a machine already holding
 // everything it needs. It is an assumption like the rates beside it, stated once
 // for the same reason: a predictor and a reference model that disagreed about it
 // would disagree about every warm candidate.
-const LaunchSeconds = 1.0
+//
+// It replaces a constant that stood for agent enrollment, container creation,
+// and the application becoming ready all at once. One number for three stages
+// cannot be calibrated: an actual for it would be the sum of three durations
+// with three different causes, and a measurement of any one of them could not
+// replace it without replacing the other two.
+const AssumedContainerStartSeconds = 1.0
 
 // AssumedUnpackMBps is how fast a host is assumed to decompress content it
 // already holds into a runnable layer chain, when nothing has measured its
@@ -951,18 +965,113 @@ const (
 	CandidateDispositionEphemeral CandidateDisposition = "launch_ephemeral"
 )
 
+// LaunchStage is one step between a provider taking a launch and the workload
+// being ready to do work. There are eight of them, and they are eight rather
+// than four because each one is answered by a different authority, fails for a
+// different reason, and has its own actual: a marketplace with no stock, a host
+// that never came up, a machine Mercator cannot reach, a registry, a disk, an
+// object store, a container runtime, and the application itself.
+type LaunchStage string
+
+const (
+	// StageAcquisition is the provider allocating the machine.
+	StageAcquisition LaunchStage = "acquisition"
+	// StageBoot is that machine reaching a usable operating system.
+	StageBoot LaunchStage = "boot"
+	// StageAgentReady is Mercator's node runtime enrolling on it.
+	StageAgentReady LaunchStage = "agent_ready"
+	// StageImageFetch is the image bytes this host does not hold crossing the
+	// link from a registry.
+	StageImageFetch LaunchStage = "image_fetch"
+	// StageUnpack is content already on the disk becoming a layer chain a
+	// container can start on. It is a different stage from the fetch because it
+	// is different work over a different resource: a host holding every byte of
+	// an image it never assembled owes this and no transfer.
+	StageUnpack LaunchStage = "unpack"
+	// StageArtifactFetch is the Run's declared inputs being read out of the
+	// object store.
+	StageArtifactFetch LaunchStage = "artifact_fetch"
+	// StageContainerStart is the container runtime creating the container and
+	// holding a process in it.
+	StageContainerStart LaunchStage = "container_start"
+	// StageApplicationReady is the workload itself reporting that it can do
+	// work. Only the application can state it, which is why nothing before this
+	// slice keyed on it.
+	StageApplicationReady LaunchStage = "application_ready"
+)
+
+// LaunchStages is the eight of them in the order a launch goes through them.
+// Every reader that iterates stages reads this, so a stage cannot be added to
+// the record and left out of a bundle, an invariant, or a console.
+var LaunchStages = []LaunchStage{
+	StageAcquisition,
+	StageBoot,
+	StageAgentReady,
+	StageImageFetch,
+	StageUnpack,
+	StageArtifactFetch,
+	StageContainerStart,
+	StageApplicationReady,
+}
+
+// LaunchStageEstimates is what this candidate is predicted to spend on each
+// stage of a launch. Every stage carries its own distribution, because a
+// prediction that cannot be told apart from the stage beside it cannot be
+// calibrated: the actual for a folded pair is the sum of two durations with two
+// causes, and measuring either one could not replace it.
+type LaunchStageEstimates struct {
+	Acquisition Estimate `json:"acquisition_seconds"`
+	Boot        Estimate `json:"boot_seconds"`
+	AgentReady  Estimate `json:"agent_ready_seconds"`
+	ImageFetch  Estimate `json:"image_fetch_seconds"`
+	Unpack      Estimate `json:"unpack_seconds"`
+	// ArtifactFetch is what this candidate would still spend reading the Run's
+	// declared inputs out of the object store. It is separate from the image
+	// fetch because it is a different transfer over different content from a
+	// different authority, and folding the two together would leave a reader
+	// unable to tell a machine that has to fetch an image from one that has to
+	// fetch a dataset forty times its size.
+	ArtifactFetch  Estimate `json:"artifact_fetch_seconds"`
+	ContainerStart Estimate `json:"container_start_seconds"`
+	// ApplicationReady is how long the workload says it takes to become ready
+	// once its process is running. It is predicted from the declaration and
+	// never from a prior of Mercator's: readiness is the application's own
+	// semantics, so a Run that declared nothing is predicted nothing rather than
+	// charged a number this model made up.
+	ApplicationReady Estimate `json:"application_ready_seconds"`
+}
+
+// Stage is one stage's estimate by name, which is what a reader iterating
+// LaunchStages needs and what keeps the eight from being enumerated twice.
+func (stages LaunchStageEstimates) Stage(stage LaunchStage) Estimate {
+	switch stage {
+	case StageAcquisition:
+		return stages.Acquisition
+	case StageBoot:
+		return stages.Boot
+	case StageAgentReady:
+		return stages.AgentReady
+	case StageImageFetch:
+		return stages.ImageFetch
+	case StageUnpack:
+		return stages.Unpack
+	case StageArtifactFetch:
+		return stages.ArtifactFetch
+	case StageContainerStart:
+		return stages.ContainerStart
+	case StageApplicationReady:
+		return stages.ApplicationReady
+	default:
+		return Estimate{}
+	}
+}
+
 type CandidateEstimates struct {
-	QueueSeconds     Estimate `json:"queue_seconds"`
-	ProvisionSeconds Estimate `json:"provision_seconds"`
-	PullSeconds      Estimate `json:"pull_seconds"`
-	// ArtifactSeconds is what this candidate would still spend reading the
-	// Run's declared inputs out of the object store. It is separate from
-	// PullSeconds because it is a different transfer over different content
-	// from a different authority, and folding the two together would leave a
-	// reader unable to tell a machine that has to fetch an image from one that
-	// has to fetch a dataset forty times its size.
-	ArtifactSeconds Estimate `json:"artifact_seconds"`
-	StartSeconds    Estimate `json:"start_seconds"`
+	QueueSeconds Estimate `json:"queue_seconds"`
+	// Stages is the waterfall this launch is predicted to go through, one
+	// distribution per stage.
+	Stages       LaunchStageEstimates `json:"stages"`
+	StartSeconds Estimate             `json:"start_seconds"`
 	// EstablishedStartSeconds is the part of that prediction somebody
 	// established: provisioning as the provider published it, the wait Mercator
 	// projects from Bookings it holds, and the content an inventory actually

@@ -340,11 +340,6 @@ func simRentalOffer(spec WorldSpec, rental RentalSpec) domain.OfferSnapshot {
 	// the machine may be busy by then. How sure its publisher is of that answer is
 	// a property of the publisher, so it is stated here and carried through.
 	offer.Capacity.Confidence = rental.Confidence()
-	// What this machine's provider has measured about how it behaves is a property
-	// of that history rather than of the moment the offer was read, so it is
-	// stated once here and carried through, exactly as the capacity confidence
-	// above is. A machine no fixture states a history for publishes none.
-	offer.Reliability = rental.Risk()
 	if rental.Unpriced {
 		offer.Pricing = domain.PriceModel{Currency: "USD"}
 		offer.Capabilities.Pricing = domain.PricingCapabilities{}
@@ -400,6 +395,11 @@ func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.Offe
 		provisioning.P90 = spec.Provisioning.P90.Duration().Seconds()
 	}
 	offer.Provisioning = provisioning
+	// What the provider of this listing has measured about the machine behind it is
+	// a property of that history rather than of the moment the offer was read, so
+	// it is stated once here and carried through, exactly as a Rental's capacity
+	// confidence is. A listing no fixture states a history for publishes none.
+	offer.Reliability = spec.Risk()
 	offer.Lane = spec.ExecutionLane()
 	return offer
 }

@@ -393,13 +393,16 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 		}
 	}
 	checkBound("queue_seconds", expect.QueueSeconds, candidate.Estimates.QueueSeconds.Expected)
-	checkBound("provision_seconds", expect.ProvisionSeconds, candidate.Estimates.ProvisionSeconds.Expected)
-	checkBound("pull_seconds", expect.PullSeconds, candidate.Estimates.PullSeconds.Expected)
-	if expect.PullSource != "" && candidate.Estimates.PullSeconds.Source != expect.PullSource {
-		fail("pull_source: want %q, got %q", expect.PullSource, candidate.Estimates.PullSeconds.Source)
-	}
-	if expect.PullConfidence != nil && candidate.Estimates.PullSeconds.Confidence != *expect.PullConfidence {
-		fail("pull_confidence: want %v, got %v", *expect.PullConfidence, candidate.Estimates.PullSeconds.Confidence)
+	for _, stage := range sortedKeys(expect.Stages) {
+		want := expect.Stages[stage]
+		recorded := candidate.Estimates.Stages.Stage(domain.LaunchStage(stage))
+		checkBound(stage+"_seconds", want.Seconds, recorded.Expected)
+		if want.Source != "" && recorded.Source != want.Source {
+			fail("%s source: want %q, got %q", stage, want.Source, recorded.Source)
+		}
+		if want.Confidence != nil && recorded.Confidence != *want.Confidence {
+			fail("%s confidence: want %v, got %v", stage, *want.Confidence, recorded.Confidence)
+		}
 	}
 	if expect.ImageLocality != "" && candidate.ImageLocality != expect.ImageLocality {
 		fail("image_locality: want %q, got %q", expect.ImageLocality, candidate.ImageLocality)
@@ -411,7 +414,6 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 		fail("records a RentalSchedule at version %d with a wait of %.0fs, and there is no queue here to have read",
 			recorded.Version, recorded.ProjectedStartSeconds)
 	}
-	checkBound("artifact_seconds", expect.ArtifactSeconds, candidate.Estimates.ArtifactSeconds.Expected)
 	for _, artifactID := range sortedKeys(expect.Artifacts) {
 		found, ok := artifactEvidence(candidate, artifactID)
 		if !ok {

@@ -518,13 +518,13 @@ type CandidateDecisionImageLocality string
 
 // CandidateEstimates defines model for CandidateEstimates.
 type CandidateEstimates struct {
-	ArtifactSeconds         Estimate `json:"artifact_seconds"`
 	CostUsd                 Estimate `json:"cost_usd"`
 	EstablishedStartSeconds Estimate `json:"established_start_seconds"`
-	ProvisionSeconds        Estimate `json:"provision_seconds"`
-	PullSeconds             Estimate `json:"pull_seconds"`
 	QueueSeconds            Estimate `json:"queue_seconds"`
-	StartSeconds            Estimate `json:"start_seconds"`
+
+	// Stages What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own.
+	Stages       LaunchStageEstimates `json:"stages"`
+	StartSeconds Estimate             `json:"start_seconds"`
 }
 
 // CapabilityProfile defines model for CapabilityProfile.
@@ -757,6 +757,18 @@ type InviteNodeRequest struct {
 	WorkspaceId           string  `json:"workspace_id"`
 }
 
+// LaunchStageEstimates What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own.
+type LaunchStageEstimates struct {
+	AcquisitionSeconds      Estimate `json:"acquisition_seconds"`
+	AgentReadySeconds       Estimate `json:"agent_ready_seconds"`
+	ApplicationReadySeconds Estimate `json:"application_ready_seconds"`
+	ArtifactFetchSeconds    Estimate `json:"artifact_fetch_seconds"`
+	BootSeconds             Estimate `json:"boot_seconds"`
+	ContainerStartSeconds   Estimate `json:"container_start_seconds"`
+	ImageFetchSeconds       Estimate `json:"image_fetch_seconds"`
+	UnpackSeconds           Estimate `json:"unpack_seconds"`
+}
+
 // LifecycleCapabilities defines model for LifecycleCapabilities.
 type LifecycleCapabilities struct {
 	CancelQueued     bool   `json:"cancel_queued"`
@@ -884,7 +896,10 @@ type OfferSnapshot = domain.OfferSnapshot
 // PlacementPolicy defines model for PlacementPolicy.
 type PlacementPolicy struct {
 	// AllowUnknownPricing Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none.
-	AllowUnknownPricing    bool    `json:"allow_unknown_pricing,omitempty"`
+	AllowUnknownPricing bool `json:"allow_unknown_pricing,omitempty"`
+
+	// ExpectedReadySeconds How long this workload takes to become ready for work once its process is running. It is the only prediction of the application-ready stage there is: readiness is the application's own semantics, so the workload is the only authority that can state it, and a Run that states nothing is predicted nothing.
+	ExpectedReadySeconds   float64 `json:"expected_ready_seconds,omitempty"`
 	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds,omitempty"`
 	MaxExpectedCostUsd     float64 `json:"max_expected_cost_usd,omitempty"`
 	MaxP90StartSeconds     float64 `json:"max_p90_start_seconds,omitempty"`

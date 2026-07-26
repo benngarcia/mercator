@@ -168,8 +168,9 @@ func referenceConfidences(offer domain.OfferSnapshot, estimates domain.Candidate
 	var stated []domain.Confidence
 	for _, answer := range []domain.Confidence{
 		{Answer: "capacity", Value: offer.Capacity.Confidence},
-		{Answer: "pull_seconds", Value: estimates.PullSeconds.Confidence},
-		{Answer: "artifact_seconds", Value: estimates.ArtifactSeconds.Confidence},
+		{Answer: "image_fetch_seconds", Value: estimates.Stages.ImageFetch.Confidence},
+		{Answer: "unpack_seconds", Value: estimates.Stages.Unpack.Confidence},
+		{Answer: "artifact_fetch_seconds", Value: estimates.Stages.ArtifactFetch.Confidence},
 	} {
 		if answer.Value > 0 {
 			stated = append(stated, answer)
@@ -185,21 +186,20 @@ func referenceConfidences(offer domain.OfferSnapshot, estimates domain.Candidate
 // rather than about which silences each one happened to notice.
 func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.CandidateEstimates {
 	queue := referenceQueue(input, offer)
-	provision := referenceProvision(offer)
 	work, locality := input.Image.StartWork(offer.Images)
 	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
-	pull := referenceContent(
-		referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()),
-		referenceImageConfidence(work, locality, offer.RegistryDownload()),
+	imageFetch := referenceContent(
+		referenceTransferSeconds(work.TransferBytes, offer.RegistryDownloadMbps()),
+		referenceImageStageConfidence(work.TransferBytes, locality, offer.RegistryDownload().Confidence),
+	)
+	unpack := referenceContent(
+		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps,
+		referenceImageStageConfidence(work.UnpackBytes, locality, domain.AssumedLinkConfidence),
 	)
 	fetch := referenceContent(
 		referenceObjectStoreSeconds(fetchBytes),
 		referenceArtifactConfidence(evidence, fetchBytes),
 	)
-	establishedPull := domain.Estimate{}
-	if locality != domain.LocalityUnknown {
-		establishedPull = pull
-	}
 	establishedBytes := int64(0)
 	for _, found := range evidence {
 		if found.Locality != domain.LocalityUnknown {
@@ -210,6 +210,22 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		referenceObjectStoreSeconds(establishedBytes),
 		referenceArtifactConfidence(evidence, establishedBytes),
 	)
+	stages := domain.LaunchStageEstimates{
+		Boot:             referenceProvision(offer),
+		ImageFetch:       imageFetch,
+		Unpack:           unpack,
+		ArtifactFetch:    fetch,
+		ContainerStart:   referenceContainerStart(),
+		ApplicationReady: referenceApplicationReady(input),
+	}
+	established := stages
+	established.ArtifactFetch = establishedFetch
+	// Content nobody could describe is priced and never established, which is
+	// what stops a start bound striking a candidate out for a silence.
+	if locality == domain.LocalityUnknown {
+		established.ImageFetch = domain.Estimate{}
+		established.Unpack = domain.Estimate{}
+	}
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
 		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
@@ -220,11 +236,9 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	billed := math.Max(runtime, float64(offer.Pricing.MinimumChargeSeconds))
 	return domain.CandidateEstimates{
 		QueueSeconds:            queue,
-		ProvisionSeconds:        provision,
-		PullSeconds:             pull,
-		ArtifactSeconds:         fetch,
-		StartSeconds:            referenceStart(queue, provision, pull, fetch),
-		EstablishedStartSeconds: referenceStart(queue, provision, establishedPull, establishedFetch),
+		Stages:                  stages,
+		StartSeconds:            referenceStart(queue, stages),
+		EstablishedStartSeconds: referenceStart(queue, established),
 		CostUSD:                 referenceCost(offer, billed),
 	}
 }
@@ -309,27 +323,46 @@ func referenceContent(seconds, confidence float64) domain.Estimate {
 	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds * 1.5, Confidence: confidence}
 }
 
-// referenceImageConfidence is what this model thinks its own image answer is
-// worth. Certainty belongs to a host that owes nothing and said so. A host that
-// owes a transfer crosses a link nothing has measured; a host that owes local
-// assembly is being timed against a rate nothing has measured either; and a host
-// that said nothing at all is being charged bytes nobody established. None of
-// those may be worth more than an assumed link.
+// referenceImageStageConfidence is what this model thinks one of its own image
+// answers is worth. Certainty belongs to a stage with nothing to do on a host
+// that said what it holds. Bytes that have to move cross a rate somebody either
+// measured or assumed, and bytes charged because a host said nothing are worth no
+// more than an assumption whatever the rate is worth.
 //
-// An image nothing could resolve gets no confidence at all, because the model
-// stated no opinion rather than a doubtful one: the same nothing is charged to
-// every candidate, so there is nothing to be uncertain between.
-func referenceImageConfidence(work domain.ImageWork, locality domain.LocalityState, link domain.LinkSpeed) float64 {
-	if work.None() {
+// A stage with nothing to do on a host nobody could describe gets no confidence
+// at all, because the model stated no opinion rather than a doubtful one: the
+// same nothing is charged to every candidate, so there is nothing to be uncertain
+// between.
+func referenceImageStageConfidence(bytes int64, locality domain.LocalityState, rateConfidence float64) float64 {
+	if bytes == 0 {
 		if locality == domain.LocalityUnknown {
 			return 0
 		}
 		return 1
 	}
-	if work.UnpackBytes > 0 || locality == domain.LocalityUnknown {
-		return min(link.Confidence, domain.AssumedLinkConfidence)
+	if locality == domain.LocalityUnknown {
+		return min(rateConfidence, domain.AssumedLinkConfidence)
 	}
-	return link.Confidence
+	return rateConfidence
+}
+
+// referenceContainerStart is what this model says asking a container runtime for
+// a process costs on a machine holding everything it needs.
+func referenceContainerStart() domain.Estimate {
+	return domain.Estimate{
+		Expected: domain.AssumedContainerStartSeconds,
+		P50:      domain.AssumedContainerStartSeconds,
+		P90:      domain.AssumedContainerStartSeconds * 1.25,
+	}
+}
+
+// referenceApplicationReady is what this model says the workload's own readiness
+// costs, which is what the workload declared and nothing else. A model with a
+// prior of its own here would disagree with production about every Run that
+// declared nothing, for a reason that is not about either model.
+func referenceApplicationReady(input scheduler.SchedulingInput) domain.Estimate {
+	seconds := input.Workload.Spec.Placement.ExpectedReadySeconds
+	return domain.Estimate{Expected: seconds, P50: seconds, P90: seconds}
 }
 
 // referenceArtifactConfidence is what this model thinks its own Artifact answer
@@ -347,15 +380,18 @@ func referenceArtifactConfidence(evidence []domain.ArtifactEvidence, bytes int64
 	}
 }
 
-// referenceStart assembles a start out of the parts a candidate waits on, plus
-// the second a launch costs whatever it holds.
-func referenceStart(parts ...domain.Estimate) domain.Estimate {
-	start := domain.Estimate{
-		Expected: domain.LaunchSeconds,
-		P50:      domain.LaunchSeconds,
-		P90:      domain.LaunchSeconds * 1.25,
-	}
-	for _, part := range parts {
+// referenceStart assembles a start out of the wait in front of a candidate and
+// every stage before its process is running. Readiness is left out for the reason
+// production leaves it out: the actual a start is calibrated against is the
+// container's own start moment, and readiness happens after it.
+func referenceStart(queue domain.Estimate, stages domain.LaunchStageEstimates) domain.Estimate {
+	start := queue
+	start.Confidence, start.Source, start.SampleCount = 0, "", 0
+	for _, stage := range domain.LaunchStages {
+		if stage == domain.StageApplicationReady {
+			continue
+		}
+		part := stages.Stage(stage)
 		start.Expected += part.Expected
 		start.P50 += part.P50
 		start.P90 += part.P90
@@ -371,18 +407,14 @@ func referenceObjectStoreSeconds(bytes int64) float64 {
 	return float64(bytes*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
 }
 
-// referenceStartWorkSeconds is the reference model's own account of how long a
-// candidate is from starting: bytes over the wire, plus bytes already here that
-// still have to be unpacked. Fetching and unpacking are separate work over
-// separate resources, so an independent model that folded them together would
-// disagree with the scheduler about every half-assembled host for a reason that
-// has nothing to do with either model.
-func referenceStartWorkSeconds(work domain.ImageWork, bandwidthMbps float64) float64 {
-	if work.None() {
+// referenceTransferSeconds is the reference model's own account of bytes crossing
+// a link onto this host, including the half second a transfer costs before any of
+// them move. A host with nothing to fetch pays neither.
+func referenceTransferSeconds(bytes int64, bandwidthMbps float64) float64 {
+	if bytes == 0 {
 		return 0
 	}
-	return float64(work.TransferBytes*8)/1_000_000/bandwidthMbps +
-		float64(work.UnpackBytes)/1_000_000/domain.AssumedUnpackMBps + 0.5
+	return float64(bytes*8)/1_000_000/bandwidthMbps + 0.5
 }
 
 func CheckOfferOrderIndependence(ctx context.Context, production scheduler.Scheduler, input scheduler.SchedulingInput) error {
@@ -450,8 +482,7 @@ func CheckReducedBandwidthDoesNotReduceTransferDuration(bytes int64, fasterMbps,
 	if bytes <= 0 || fasterMbps <= slowerMbps || slowerMbps <= 0 {
 		return fmt.Errorf("bandwidth metamorphism requires positive bytes and faster > slower > 0")
 	}
-	transfer := domain.ImageWork{TransferBytes: bytes}
-	if referenceStartWorkSeconds(transfer, slowerMbps) < referenceStartWorkSeconds(transfer, fasterMbps) {
+	if referenceTransferSeconds(bytes, slowerMbps) < referenceTransferSeconds(bytes, fasterMbps) {
 		return fmt.Errorf("reducing bandwidth reduced transfer duration")
 	}
 	return nil

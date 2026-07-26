@@ -248,11 +248,22 @@ const ScoreWeights = Schema.Struct({
   completion_latency_usd_per_second: Schema.optionalKey(Schema.Number),
   uncertainty_penalty_usd: Schema.optionalKey(Schema.Number),
 });
+// LaunchStageEstimates is the eight stages of a launch, each with its own
+// distribution. They are eight rather than four because each is answered by a
+// different authority and has an actual of its own.
+const LaunchStageEstimates = Schema.Struct({
+  acquisition_seconds: Estimate,
+  boot_seconds: Estimate,
+  agent_ready_seconds: Estimate,
+  image_fetch_seconds: Estimate,
+  unpack_seconds: Estimate,
+  artifact_fetch_seconds: Estimate,
+  container_start_seconds: Estimate,
+  application_ready_seconds: Estimate,
+});
 const CandidateEstimateSet = Schema.Struct({
   queue_seconds: Estimate,
-  provision_seconds: Estimate,
-  pull_seconds: Estimate,
-  artifact_seconds: Estimate,
+  stages: LaunchStageEstimates,
   start_seconds: Estimate,
   established_start_seconds: Estimate,
   cost_usd: Estimate,

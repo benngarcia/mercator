@@ -80,17 +80,58 @@ function EstimateCell({
   );
 }
 
+// ESTIMATE_COLUMNS is the wait in front of a candidate, the eight stages of its
+// launch, the start they add up to, and the price. Every stage is its own column
+// because every stage is its own prediction: a reader who could see only one
+// number for a machine coming up could not tell a marketplace with no stock from
+// a host that never booted.
 const ESTIMATE_COLUMNS: Array<{
-  key: keyof CandidateDecision["estimates"];
+  key: string;
   label: string;
   kind: EstimateKind;
+  read: (estimates: CandidateDecision["estimates"]) => Estimate | undefined;
 }> = [
-  { key: "queue_seconds", label: "Queue", kind: "duration" },
-  { key: "provision_seconds", label: "Provision", kind: "duration" },
-  { key: "pull_seconds", label: "Pull", kind: "duration" },
-  { key: "artifact_seconds", label: "Inputs", kind: "duration" },
-  { key: "start_seconds", label: "Start", kind: "duration" },
-  { key: "cost_usd", label: "Cost", kind: "usd" },
+  { key: "queue", label: "Queue", kind: "duration", read: (e) => e?.queue_seconds },
+  {
+    key: "acquisition",
+    label: "Acquire",
+    kind: "duration",
+    read: (e) => e?.stages?.acquisition_seconds,
+  },
+  { key: "boot", label: "Boot", kind: "duration", read: (e) => e?.stages?.boot_seconds },
+  {
+    key: "agent_ready",
+    label: "Agent",
+    kind: "duration",
+    read: (e) => e?.stages?.agent_ready_seconds,
+  },
+  {
+    key: "image_fetch",
+    label: "Fetch",
+    kind: "duration",
+    read: (e) => e?.stages?.image_fetch_seconds,
+  },
+  { key: "unpack", label: "Unpack", kind: "duration", read: (e) => e?.stages?.unpack_seconds },
+  {
+    key: "artifact_fetch",
+    label: "Inputs",
+    kind: "duration",
+    read: (e) => e?.stages?.artifact_fetch_seconds,
+  },
+  {
+    key: "container_start",
+    label: "Container",
+    kind: "duration",
+    read: (e) => e?.stages?.container_start_seconds,
+  },
+  {
+    key: "application_ready",
+    label: "Ready",
+    kind: "duration",
+    read: (e) => e?.stages?.application_ready_seconds,
+  },
+  { key: "start", label: "Start", kind: "duration", read: (e) => e?.start_seconds },
+  { key: "cost", label: "Cost", kind: "usd", read: (e) => e?.cost_usd },
 ];
 
 // Total column count drives the expansion row's colSpan.
@@ -197,7 +238,7 @@ function CandidateRow({ candidate, selected }: CandidateRowProps) {
         {ESTIMATE_COLUMNS.map((col) => (
           <TableCell key={col.key} className="py-2 text-right">
             <EstimateCell
-              estimate={candidate.estimates?.[col.key]}
+              estimate={col.read(candidate.estimates)}
               kind={col.kind}
             />
           </TableCell>

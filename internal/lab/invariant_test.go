@@ -156,17 +156,8 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// field, so a start derived from acceptance was invisible until this rule.
 		"safety.start_is_observed_not_inferred": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{
-				{
-					Subject: "runs/run-1",
-					Type:    orchestrator.EventExternalStateObserved,
-					Data: []byte(`{"launch_key":"launch-1","phase":"running",` +
-						`"observed_at":"2026-07-24T12:05:00Z","started_at":"2026-07-24T12:04:10Z"}`),
-				},
-				{
-					Subject: "runs/run-1",
-					Type:    orchestrator.EventExecutionStarted,
-					Data:    []byte(`{"launch_key":"launch-1","started_at":"2026-07-24T12:00:00Z"}`),
-				},
+				runStartObserved("running", "2026-07-24T12:04:10Z", "2026-07-24T12:05:00Z"),
+				runStartRecorded("2026-07-24T12:00:00Z"),
 			}
 		},
 		"safety.idempotent_external_commands": func(observation *InvariantObservation) {
@@ -362,6 +353,105 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 
 	if len(cases) != len(DefaultInvariantRegistry().invariants) {
 		t.Fatalf("deliberate cases = %d, default invariants = %d", len(cases), len(DefaultInvariantRegistry().invariants))
+	}
+}
+
+// TestEveryClauseOfTheStartRuleCanFail is the start rule read the way every law
+// here has to be readable. The registry's single deliberate case drives one of its
+// three clauses, and the clause about a moment ahead of the read that carried it
+// could be deleted with the whole tree staying green: neither simulated world can
+// publish a start that has not arrived, so the only inputs that reach it come from
+// a real provider's foreign clock and no World Tape can generate one. Each clause
+// is shown failing on the one record it exists to catch.
+func TestEveryClauseOfTheStartRuleCanFail(t *testing.T) {
+	for name, events := range map[string][]eventlog.CloudEvent{
+		"records a start no observation of it reported": {
+			runStartRecorded("2026-07-24T12:04:10Z"),
+		},
+		"records a moment its observations never stated": {
+			runStartObserved("running", "2026-07-24T12:04:10Z", "2026-07-24T12:05:00Z"),
+			runStartRecorded("2026-07-24T12:00:00Z"),
+		},
+		"records a start its holder published ahead of the read that carried it": {
+			runStartObserved("running", "2026-07-24T12:06:00Z", "2026-07-24T12:05:00Z"),
+			runStartRecorded("2026-07-24T12:06:00Z"),
+		},
+		"records a start its holder published for work it said had not begun": {
+			runStartObserved("queued", "2026-07-24T12:04:10Z", "2026-07-24T12:05:00Z"),
+			runStartRecorded("2026-07-24T12:04:10Z"),
+		},
+		"throws away a start its holder established": {
+			runStartObserved("running", "2026-07-24T12:04:10Z", "2026-07-24T12:05:00Z"),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := startRuleObservation(events)
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.start_is_observed_not_inferred",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("a Run that %s was reported as measuring a start somebody observed: %+v", name, result)
+			}
+		})
+	}
+}
+
+// TestAStartClaimMercatorRefusedIsNotAViolation is the other side of the same law.
+// A host whose clock runs ahead publishes a moment Mercator cannot have observed,
+// the control plane declines to make it this Run's start, and the observation still
+// carries the claim. Blaming Mercator for the refusal would make the rule demand
+// exactly the record it exists to forbid.
+func TestAStartClaimMercatorRefusedIsNotAViolation(t *testing.T) {
+	observation := startRuleObservation([]eventlog.CloudEvent{
+		runStartObserved("running", "2026-07-24T12:06:00Z", "2026-07-24T12:05:00Z"),
+		runStartObserved("queued", "2026-07-24T12:04:10Z", "2026-07-24T12:05:00Z"),
+	})
+
+	result := invariantResultByID(t,
+		DefaultInvariantRegistry().Evaluate(observation),
+		"safety.start_is_observed_not_inferred",
+	)
+
+	if result.Status != InvariantPassed {
+		t.Fatalf("Mercator was blamed for declining a moment it could not defend: %s", result.Violation)
+	}
+}
+
+func startRuleObservation(events []eventlog.CloudEvent) InvariantObservation {
+	now := time.Date(2026, 7, 24, 12, 10, 0, 0, time.UTC)
+	return InvariantObservation{
+		StartedAt:                   now,
+		Now:                         now,
+		World:                       WorldTruthSnapshot{At: now},
+		MercatorEvents:              events,
+		Workloads:                   map[string]domain.WorkloadRevision{},
+		RentalSchedules:             map[string]domain.RentalSchedule{},
+		RunRequirements:             map[string]RunArrival{},
+		ArtifactCatalog:             map[string]domain.ArtifactVersion{},
+		SeededLocality:              map[string]map[string]bool{},
+		ProjectionRebuildEquivalent: true,
+	}
+}
+
+// runStartObserved is one look at run-1 that published a start moment, and
+// runStartRecorded is run-1's stream saying that is when its workload began.
+func runStartObserved(phase, started, observed string) eventlog.CloudEvent {
+	return eventlog.CloudEvent{
+		Subject: "runs/run-1",
+		Type:    orchestrator.EventExternalStateObserved,
+		Data: []byte(`{"launch_key":"launch-1","phase":"` + phase +
+			`","observed_at":"` + observed + `","started_at":"` + started + `"}`),
+	}
+}
+
+func runStartRecorded(started string) eventlog.CloudEvent {
+	return eventlog.CloudEvent{
+		Subject: "runs/run-1",
+		Type:    orchestrator.EventExecutionStarted,
+		Data:    []byte(`{"launch_key":"launch-1","started_at":"` + started + `"}`),
 	}
 }
 

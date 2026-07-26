@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/orchestrator"
@@ -283,12 +284,17 @@ func exclusiveBookingCapacity(observation InvariantObservation) error {
 // itself. What the run stream records as the moment this workload began must be a
 // moment an observation of that same Run reported: not the moment the launch was
 // accepted, which is when the machine started getting ready, and not the moment
-// Mercator predicted, which is the thing being calibrated. It must not be later
-// than the look that carried it, because a holder cannot report a moment that has
-// not arrived and one that is ahead of the read is a prediction wearing an
-// observation's clothes. And a Run whose holder did report a start must have it
-// recorded, because a stage with an actual that reads as absent is a measurement
-// thrown away.
+// Mercator predicted, which is the thing being calibrated. It must be a moment one
+// of those observations established, which is the law the control plane files
+// starts by and adapter.ExternalObservation states: a moment ahead of the read that
+// carried it is a prediction wearing an observation's clothes, and a moment carried
+// by a phase saying the work has not begun is a provider calling a launch a start.
+// And a Run whose holder did establish a start must have it recorded, because a
+// stage with an actual that reads as absent is a measurement thrown away.
+//
+// The published claim Mercator refused is not a violation of anything: the record
+// keeps what the holder said, and the rule reads it exactly as the control plane
+// did rather than blaming Mercator for declining a moment it could not defend.
 //
 // A Run with no start moment at all is not a violation. Acquisition and boot have
 // no production observation until an agent bootstraps on provisioned capacity, and
@@ -307,15 +313,15 @@ func startIsObservedNotInferred(observation InvariantObservation) error {
 				runID, moment.Format(time.RFC3339Nano),
 			)
 		}
-		if !looks.reported(moment) {
+		if !looks.established(moment) {
 			return fmt.Errorf(
-				"Run %q records a start of %s and its observations reported %s",
+				"Run %q records a start of %s and its observations established %s",
 				runID, moment.Format(time.RFC3339Nano), looks.describe(),
 			)
 		}
 	}
 	for runID, looks := range reported {
-		if _, held := recorded[runID]; !held {
+		if _, held := recorded[runID]; !held && looks.establishedAStart() {
 			return fmt.Errorf(
 				"Run %q was observed starting at %s and its run stream records no start moment",
 				runID, looks.describe(),
@@ -325,18 +331,29 @@ func startIsObservedNotInferred(observation InvariantObservation) error {
 	return nil
 }
 
-// observedStarts is every start moment the holders of one Run's workload reported,
-// each with the moment Mercator looked and read it.
-type observedStarts struct {
-	moments []time.Time
-	looks   []time.Time
+// observedStarts is every observation of one Run's workload that published a start
+// moment, kept whole so this rule can ask each one the question the control plane
+// asked it rather than a second copy of the same law.
+type observedStarts []adapter.ExternalObservation
+
+// established answers whether this is a moment one of these observations
+// established: a moment its holder stated, about work it said had begun, by the
+// time Mercator read it.
+func (starts observedStarts) established(moment time.Time) bool {
+	for _, look := range starts {
+		if look.ObservedStart() && look.StartedAt.Equal(moment) {
+			return true
+		}
+	}
+	return false
 }
 
-// reported answers whether this is one of the moments a holder actually said, and
-// said by the time Mercator read it.
-func (starts observedStarts) reported(moment time.Time) bool {
-	for index, reported := range starts.moments {
-		if reported.Equal(moment) && !moment.After(starts.looks[index]) {
+// establishedAStart answers whether any of these looks established one at all,
+// which is what makes a missing record a measurement thrown away instead of a
+// claim Mercator was right to decline.
+func (starts observedStarts) establishedAStart() bool {
+	for _, look := range starts {
+		if look.ObservedStart() {
 			return true
 		}
 	}
@@ -344,11 +361,11 @@ func (starts observedStarts) reported(moment time.Time) bool {
 }
 
 func (starts observedStarts) describe() string {
-	described := make([]string, 0, len(starts.moments))
-	for index, moment := range starts.moments {
+	described := make([]string, 0, len(starts))
+	for _, look := range starts {
 		described = append(described, fmt.Sprintf(
-			"%s (read at %s)",
-			moment.Format(time.RFC3339Nano), starts.looks[index].Format(time.RFC3339Nano),
+			"%s (%s, read at %s)",
+			look.StartedAt.Format(time.RFC3339Nano), look.Phase, look.ObservedAt.Format(time.RFC3339Nano),
 		))
 	}
 	return strings.Join(described, ", ")
@@ -361,20 +378,14 @@ func startMomentsByRun(observation InvariantObservation) (map[string]observedSta
 		runID := strings.TrimPrefix(event.Subject, "runs/")
 		switch event.Type {
 		case orchestrator.EventExternalStateObserved:
-			var payload struct {
-				StartedAt  *time.Time `json:"started_at"`
-				ObservedAt time.Time  `json:"observed_at"`
-			}
-			if err := json.Unmarshal(event.Data, &payload); err != nil {
+			var look adapter.ExternalObservation
+			if err := json.Unmarshal(event.Data, &look); err != nil {
 				return nil, nil, fmt.Errorf("decode Run %q observation: %w", runID, err)
 			}
-			if payload.StartedAt == nil {
+			if look.StartedAt == nil {
 				continue
 			}
-			starts := reported[runID]
-			starts.moments = append(starts.moments, payload.StartedAt.UTC())
-			starts.looks = append(starts.looks, payload.ObservedAt.UTC())
-			reported[runID] = starts
+			reported[runID] = append(reported[runID], look)
 		case orchestrator.EventExecutionStarted:
 			var payload struct {
 				StartedAt time.Time `json:"started_at"`
@@ -849,9 +860,9 @@ func silenceWasTakenBackOut(decision domain.BookingDecision, candidate domain.Ca
 func pricedSilenceSeconds(candidate domain.CandidateDecision) float64 {
 	seconds := 0.0
 	if candidate.ImageLocality == domain.LocalityUnknown {
-		seconds += candidate.Estimates.PullSeconds.Expected
+		seconds += candidate.Estimates.Stages.ImageFetch.Expected + candidate.Estimates.Stages.Unpack.Expected
 	}
-	return seconds + candidate.Estimates.ArtifactSeconds.Expected*unreadableShare(candidate.ArtifactEvidence)
+	return seconds + candidate.Estimates.Stages.ArtifactFetch.Expected*unreadableShare(candidate.ArtifactEvidence)
 }
 
 // unreadableShare is how much of what this candidate owes on its declared inputs

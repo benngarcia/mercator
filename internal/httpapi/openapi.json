@@ -3356,6 +3356,11 @@
             "type": "number",
             "format": "double"
           },
+          "expected_ready_seconds": {
+            "type": "number",
+            "format": "double",
+            "description": "How long this workload takes to become ready for work once its process is running. It is the only prediction of the application-ready stage there is: readiness is the application's own semantics, so the workload is the only authority that can state it, and a Run that states nothing is predicted nothing."
+          },
           "max_expected_cost_usd": {
             "type": "number",
             "format": "double"
@@ -4288,13 +4293,59 @@
           }
         }
       },
+      "LaunchStageEstimates": {
+        "type": "object",
+        "description": "What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own.",
+        "required": [
+          "acquisition_seconds",
+          "boot_seconds",
+          "agent_ready_seconds",
+          "image_fetch_seconds",
+          "unpack_seconds",
+          "artifact_fetch_seconds",
+          "container_start_seconds",
+          "application_ready_seconds"
+        ],
+        "properties": {
+          "acquisition_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "The provider allocating the machine. No provider in any catalog publishes it, so its source reads \"unpublished\" for capacity that has to be allocated and \"machine_exists\" for capacity that is already there."
+          },
+          "boot_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "The machine reaching a usable operating system. This is where a published provisioning claim is recorded, because that is what its publisher calls it."
+          },
+          "agent_ready_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "Mercator's node runtime enrolling on the machine. Published by nobody."
+          },
+          "image_fetch_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "Image bytes this host does not hold crossing the link from a registry."
+          },
+          "unpack_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "Content already on this host's disk becoming a layer chain a container can start on. A host holding every byte of an image it never assembled owes this and no transfer."
+          },
+          "artifact_fetch_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from the image fetch because it is a different transfer over different content from a different authority."
+          },
+          "container_start_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "The container runtime creating the container and holding a process in it."
+          },
+          "application_ready_seconds": {
+            "$ref": "#/components/schemas/Estimate",
+            "description": "How long the workload said it takes to become ready once its process is running. It is predicted from the declaration alone, because readiness is the application's own semantics, and it is not part of start_seconds: a start is the moment the process began and readiness is a later one."
+          }
+        }
+      },
       "CandidateEstimates": {
         "type": "object",
         "required": [
           "queue_seconds",
-          "provision_seconds",
-          "pull_seconds",
-          "artifact_seconds",
+          "stages",
           "start_seconds",
           "established_start_seconds",
           "cost_usd"
@@ -4303,22 +4354,15 @@
           "queue_seconds": {
             "$ref": "#/components/schemas/Estimate"
           },
-          "provision_seconds": {
-            "$ref": "#/components/schemas/Estimate"
-          },
-          "pull_seconds": {
-            "$ref": "#/components/schemas/Estimate"
-          },
-          "artifact_seconds": {
-            "$ref": "#/components/schemas/Estimate",
-            "description": "What this candidate would still spend reading the Run's declared inputs out of the object store. It is separate from pull_seconds because it is a different transfer over different content from a different authority."
+          "stages": {
+            "$ref": "#/components/schemas/LaunchStageEstimates"
           },
           "start_seconds": {
             "$ref": "#/components/schemas/Estimate"
           },
           "established_start_seconds": {
             "$ref": "#/components/schemas/Estimate",
-            "description": "The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess."
+            "description": "The part of the start prediction somebody established: queue and boot, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess."
           },
           "cost_usd": {
             "$ref": "#/components/schemas/Estimate",
