@@ -298,7 +298,17 @@ func (o *Orchestrator) tenantDesire(ctx context.Context, workspaceID string) ([]
 	var wanted []prewarmWant
 	seen := map[string]bool{}
 	for _, placement := range queued {
-		if preparing[placement.offer.ID] {
+		// A machine absent from the current listing is one Mercator can say
+		// nothing about: not what it holds, not whether it is still there, and
+		// not whether a command would reach it. An offer is the only thing
+		// capacity is learned from, so this is a different state from a machine
+		// on offer that cannot enumerate its content, and it wants nothing. The
+		// reusable lane makes that concrete: a node leaves the catalog through
+		// the same predicate that makes the registry refuse to hand out its
+		// address, so a desire naming one is a command the Broker refuses and a
+		// fleet pass that ends before any other tenant is told anything.
+		offer, onOffer := catalog[placement.offer.ID]
+		if !onOffer || preparing[placement.offer.ID] {
 			continue
 		}
 		items, err := o.prewarmItems(ctx, workspaceID, placement)
@@ -307,7 +317,7 @@ func (o *Orchestrator) tenantDesire(ctx context.Context, workspaceID string) ([]
 		}
 		for rank, item := range items {
 			key := prewarmItemKey(item)
-			if seen[key] || alreadyHeld(catalog[item.OfferSnapshotID], item) {
+			if seen[key] || alreadyHeld(offer, item) {
 				continue
 			}
 			seen[key] = true
@@ -492,10 +502,13 @@ func (o *Orchestrator) prewarmItems(ctx context.Context, workspaceID string, pla
 	return items, nil
 }
 
-// alreadyHeld drops content this machine has established it is holding. Silence
-// is not absence and is not presence either: a host that cannot enumerate is
-// asked to prepare, and the answer costs one command on a machine that may
-// already be ready.
+// alreadyHeld drops content this machine has established it is holding. It is
+// asked of an offer, so the machine is one Mercator can currently see, and the
+// only silence left is a machine on offer whose runtime cannot enumerate what it
+// holds. That silence is not absence and is not presence either: such a host is
+// asked to prepare, and the answer costs one command on a machine that may already
+// be ready. A node reports that silence whenever it keeps no replica store, and it
+// is why the branch exists.
 func alreadyHeld(offer domain.OfferSnapshot, item adapter.PrepareItem) bool {
 	if item.Kind == adapter.PrepareImage {
 		return offer.Images.Known && offer.Images.Holds(domain.ReferenceDigest(item.Image))
