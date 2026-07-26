@@ -3429,6 +3429,67 @@ the launch.
 
 ## Verification evidence
 
+### Phase 4 the transfer path, held under the slices that landed on top of it
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2, against the working tree of
+`beng/prediction-and-service-classes` at `4dead6a`. No code changed. The four entries
+above closed the transfer-path slice, and what this pass adds is evidence rather than
+behaviour: it is the first run of the slice's own breaks with the hierarchical
+estimator, the queue slices and the wait classification sitting on top of it, and the
+earlier passes ran against a `git archive` of their commit because a concurrent session
+shared the worktree.
+
+Both acceptance breaks were reproduced here.
+
+- The Blueprint is still red under the flat constant. Dropping the fact read from
+  `OfferSnapshot.DownloadRate`, so every path answers `AssumedDownloadRate`, fails
+  `a-fast-machine-far-from-the-data-loses` with `expected "rental-near-the-data" to
+  win, but the decision placed on "rental-far-from-the-data"`, and beside it
+  `artifact_fetch_seconds: want exactly 1600, got 640`, `artifact_fetch confidence:
+  want 0.9, got 0.5`, `artifact_fetch rate: want 200 Mbps, priced at 500`, and the
+  measurement `blueprint_path` recorded as the assumption `assumed_object_store_rate`.
+  Five more fixtures fail with it: `a-disowned-fact-is-not-an-answer`,
+  `a-floor-on-reading-the-data-is-a-floor-on-delivery`,
+  `a-floor-refuses-a-measurement-and-not-a-silence`,
+  `a-start-bound-refuses-only-what-it-can-prove` and `silence-is-not-infeasibility`.
+- A rate no host reported, presented as measured, is still a violation. Naming
+  `nodeagent.ArtifactCopySource` as the measurement on the object-store assumption
+  fails `safety.transfer_rate_is_attributed` throughout `internal/lab` with `candidate
+  "doomed-rental" priced its artifact_fetch stage at 500.00 Mbps measured by
+  "node_artifact_copy", and nothing its publisher stood behind was published about its
+  "object_store" path when the decision was taken`.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` all pass against MinIO containers
+of the native engine, so the store, the presigned reads and the node's own timing are
+real. Mercator issue #165 does not reproduce here and was left alone.
+
+One observation is recorded rather than claimed. The first `go test ./...` of this pass
+reported a failure in `internal/daemon`, in a shell where `docker` was not on `PATH`,
+and the failing case's name was lost with the output. It has not recurred: three later
+full-suite runs, five runs of that package with `docker` present, and five with it
+absent from `PATH` entirely are all green, including four in one process. Nothing is
+changed on it, and it is written down so a second sighting is a second sighting.
+
+Open, unchanged, and named in the entries above: whether
+`DefaultObjectStoreDownloadMbps` is a pessimistic prior or an optimistic one, whether
+0.03 USD a point is the right price for doubt, and a measured unpack rate. All three
+are calibration against measurements this tree does not yet hold.
+
+The root corpus is 45 Blueprints, 42 of them green.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario/... ./internal/adapter/fake ./internal/capability ./internal/node \
+  ./internal/nodeagent
+```
+
 ### Phase 4 a hierarchical estimator keyed on what recurs
 
 On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
