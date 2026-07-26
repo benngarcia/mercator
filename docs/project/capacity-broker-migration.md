@@ -1543,8 +1543,11 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 23 regression Blueprints: 15 green and 8 target, beside one demo,
-one minimized case, and seven conformance Blueprints.
+The corpus is 24 regression Blueprints: 16 green and 8 target, beside one demo,
+one minimized case, and nine conformance Blueprints. The count is read off the
+tree rather than remembered: `internal/scenario/scenarios/*.json` is the
+regression corpus, `conformance/` is driven through the Lab, and the two
+subdirectories beside them hold the demo and the one minimized case.
 
 ## What phase 2 does not yet do
 
