@@ -445,10 +445,15 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 		}
 	}
 	checkBound("queue_seconds", expect.QueueSeconds, candidate.Estimates.QueueSeconds.Expected)
-	for _, stage := range sortedKeys(expect.Stages) {
-		want := expect.Stages[stage]
-		recorded := candidate.Estimates.Stages.Stage(domain.LaunchStage(stage))
-		checkBound(stage+"_seconds", want.Seconds, recorded.Expected)
+	// In the order a launch goes through the stages, so a fixture stating several
+	// of them reads its failures as a waterfall rather than alphabetically.
+	for _, stage := range domain.LaunchStages {
+		want, stated := expect.Stages[stage]
+		if !stated {
+			continue
+		}
+		recorded := candidate.Estimates.Stages.Stage(stage)
+		checkBound(string(stage)+"_seconds", want.Seconds, recorded.Expected)
 		if want.Source != "" && recorded.Source != want.Source {
 			fail("%s source: want %q, got %q", stage, want.Source, recorded.Source)
 		}

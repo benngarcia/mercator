@@ -1841,6 +1841,96 @@ complete because it works against a live provider.
     take zero time was written before the observed-start slice landed: three did, and
     the three are the ones this commit makes cost time.
 
+- [x] 2026-07-26: Answer the second review of the start-moment commit. Two reviewers
+  refuted parts of it, and the blocking one was a law with two readers where only one
+  of them asked.
+  - `bookingStartedAt` adopted any moment that was not nil, in the same append forty
+    lines below the one that refuses a moment Mercator cannot defend. So an ephemeral
+    host an hour ahead had its start correctly kept off the run stream and stamped
+    straight onto the Booking's runtime clock: `RemainingMaxSeconds` stayed positive
+    for an extra hour, `OverrunSeconds` read zero for the whole real runtime,
+    `Expired` never fired, and the schedule reported the machine busy while the
+    container burned paid capacity. `ExternalObservation.EstablishedStart` replaces
+    `ObservedStart` and returns the moment with the answer, so there is nothing left
+    for a caller to adopt on its own.
+  - The clause about a moment ahead of its read was structurally unreachable on the
+    reusable lane, because the node supplied both moments it compares: its runtime
+    stamps ObservedAt from its own wall clock and reads State.StartedAt off the same
+    daemon, and the Broker copied both through. Two moments from one foreign clock
+    agree with each other whatever that clock reads.
+    `capability.WorkloadObservation.ReceivedAt` is when the control plane accepted the
+    report, stamped where a node's report enters the control plane and never by the
+    node, and the Broker reads it as the observation's read moment. It is at or after
+    the node's own look in real time, so a start dated ahead of it is a start ahead of
+    Mercator, which is the only comparison available without a shared clock. A stored
+    report with no receipt moment is refused loudly.
+  - Neither ephemeral provider could establish the moment it was publishing. RunPod
+    stamps `lastStartedAt` when it places a pod, minutes before the image has landed,
+    and the value does not move when the process begins: a pod placed at 11:00:05 and
+    running at 11:04:10 filed five seconds as a measured start latency. Vast's
+    `start_date` is when it started the instance's contract. The phase gate postpones
+    adopting a stale moment rather than correcting it, and a failed pull reaches EXITED
+    still carrying it, which `Exited()` accepts. Both adapters publish no start moment
+    now, which is what Shadeform already did and said why. The Vast half is a judgment
+    call from the same argument rather than from a captured transcript: the cost of
+    being wrong that way is one stage recorded as unobserved, and the cost the other
+    way is every start latency on that lane filed as a measurement of nothing.
+  - The reusable lane still read `State.StartedAt` with the parse error dropped, which
+    is the silent degradation the Docker adapter had just been corrected for, in the
+    one lane that will measure a start latency after phase 2. A runtime whose compat
+    inspect prints Go's default time form reported every container with no start.
+    `parseStartMoment` now answers three things rather than two: a line that names no
+    container is a container pruned between the two calls and is skipped, the epoch is
+    a container that never ran, and any other form fails the read. The Docker adapter's
+    own guard on `Created` had no case that could break it, which matters more than the
+    half that did, because `Launch` returns that moment as the launch's acceptance and
+    `invalidLaunchReceipt` wedges every reduce of the stream without one.
+  - The Lab rule stopped delegating. It had been changed to call the production
+    predicate it exists to constrain, so deleting the clause about a moment ahead of
+    its read left the rule agreeing with the mutation, which is the shape
+    `safety.locality_is_never_infeasibility` was corrected for two entries earlier.
+    The rule states the three clauses itself, and it reads the Rental Schedule now: a
+    Booking's clock must be a start one of that Run's observations established or the
+    read that carried one of them. That clause is the one no rule in the corpus had,
+    which is how the blocking defect stayed green.
+  - The corpus can state the world. `RentalSpec.clock_ahead` makes a host read the
+    moment it states off its own clock while both simulated worlds keep the truth on
+    Mercator's, which no fixture could say before, so the law was held only by
+    hand-built records. `a-clock-nobody-shares-is-not-a-start` is the placement fixture
+    and `conformance/a-clock-nobody-shares-measures-nothing` drives the same world
+    through the real orchestrator, event log, schedule, and Run Bundle, where the
+    start-latency row reads `start_not_observed`. Publishing the truth instead of the
+    machine's own reading fails the conformance case at 20 seconds.
+  - `TestANodeWithASkewedClockDoesNotSetMercatorsOwn` is the production half, against
+    the real daemon, the real node protocol, and a machine whose clock runs an hour
+    ahead. Its workload declares a one second bound and does not exit: copying the
+    node's own read moment through records a start an hour in Mercator's future, and
+    adopting any non-nil moment for the Booking leaves 3509 seconds of enforced runtime
+    on a container already past its bound, so the daemon queues an arriving Run behind
+    work that will never finish. Every scripted runtime in that file dated both moments
+    from the control plane's clock, which is why nothing there could see either defect.
+  - The record of the previous pass was wrong about what it could prove. At 588b66f
+    the test trees of internal/lab, internal/orchestrator, internal/scheduler, and
+    internal/daemon did not compile and the Blueprint corpus did not load, because
+    6858429 replaced the `CandidateEstimates` stage fields without updating four test
+    packages and 22 fixtures. `go build ./...` passed and `go vet ./...` did not, so
+    every case that entry named as holding was runnable only in a concurrent session's
+    uncommitted working tree. b8bca95 was the last commit that vetted clean, and the
+    tree of record was green again at 33707f6. The entry recorded the pass as complete
+    while naming the concurrent session, which is the part to not repeat: a commit that
+    cannot run its own evidence is not evidence, whoever else is in the worktree.
+  - Judgment calls. `EstablishedStart` still accepts a terminal phase, because a
+    container observed only after it exited has a real start moment from a runtime that
+    owns its lifecycle, and refusing exited phases would throw away every fast
+    workload's measurement to compensate for a provider publishing the wrong field.
+    The fix for that belongs where the wrong field is read. A node whose clock runs
+    behind still hands over a start earlier than the truth; nothing here can detect it,
+    and the start-latency row already names the pair it could not subtract. And the
+    Booking clock's fallback reaches the Lab world only as the positive case, because
+    that provider says running from the moment it accepts, so the first observation
+    carries no start at all: the lane where a start arrives with the first running
+    observation is the reusable one, and that is where the fleet case drives it.
+
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -2112,15 +2202,33 @@ Phase 3 added:
   predictor agreeing with itself. It is deliberately not accuracy: that is a
   calibration metric, and a rule of that shape would fail on a fixture whose world is
   simply slow.
+- `a-clock-nobody-shares-is-not-a-start` (green): one Run, one Rental holding the
+  image assembled and idle, and a host whose wall clock runs an hour ahead. Its
+  runtime hands back a process twenty seconds after the launch is taken and then
+  states that moment on the clock it has, an hour in Mercator's future, beside its own
+  read of now on the same clock. The record says the stage is unobserved, which is the
+  only honest answer: nothing observed this container start on a clock Mercator
+  shares. It is the first fixture in the corpus whose machine does not keep the
+  control plane's clock.
+- `a-clock-nobody-shares-measures-nothing` (conformance): the same world at L1,
+  through the real orchestrator, event log, Rental Schedule, and Run Bundle. The
+  start-latency row reads `start_not_observed` rather than filing an hour as a
+  measurement, and every standing law still passes, which is the second half of the
+  claim: refusing a moment is not a violation of the rule that a start be observed.
+  Publishing the world's own truth instead of the machine's reading fails it at 20
+  seconds.
 - `safety.start_is_observed_not_inferred` (Lab invariant): no adjudicated Run
-  carries a start moment Mercator derived. Every moment the run stream records is
-  one an observation of that Run reported, no moment is later than the look that
-  carried it, and a moment a holder did report is never dropped. The three clauses
-  read independent halves of the record, so none can be satisfied by Mercator
-  agreeing with itself, and a Run with no start moment at all is not a violation:
-  acquisition and boot have no production observation until an agent bootstraps on
-  provisioned capacity, and what the record must then say is that the stage is
-  unobserved rather than that it took no time.
+  carries a start moment Mercator derived, and no Rental Schedule measures a
+  Booking's runtime from one. Every moment the run stream records is one an
+  observation of that Run reported, no moment is later than the look that carried it,
+  a moment a holder did report is never dropped, and a Booking's clock is either a
+  start an observation established or the read that carried one. The clauses are
+  stated in the rule's own terms rather than delegated to the production predicate
+  they exist to constrain, and they read independent halves of the record, so none can
+  be satisfied by Mercator agreeing with itself. A Run with no start moment at all is
+  not a violation: acquisition and boot have no production observation until an agent
+  bootstraps on provisioned capacity, and what the record must then say is that the
+  stage is unobserved rather than that it took no time.
 - `safety.score_is_reproducible_from_the_record` (Lab invariant): for every
   candidate of every Booking Decision Mercator recorded, ScoreUSD is the arithmetic
   over the terms that decision itself carries, at the weights it says it used. What

@@ -120,6 +120,20 @@ func TestLoadRejectsFixtureMistakes(t *testing.T) {
 			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`, `"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}], "rental_schedules": [{"rental": "rental-a", "version": 1, "queued": [{"booking": "p1", "run": "r1", "max_runtime": "5m"}]}]`, "require a RunningBooking"},
 		"winning offer missing from world": {`"offer": "rental-a"`, `"offer": "rental-z"`, "not in the world"},
 		"unknown outcome":                  {`"outcome": "place"`, `"outcome": "defer"`, "outcome must"},
+		// A stage nobody named is the assertion that cannot fail. The record answers
+		// about an unknown stage with a zero Estimate from no source, so a fixture
+		// naming the record's own JSON key, or inventing a stage, used to assert zero
+		// seconds and pass while the assertion it was written for was gone.
+		"stage named by its record key": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "candidates": {"rental-a": {"stages": {"boot_seconds": {"seconds": 0}}}}`,
+			`stage "boot_seconds"`,
+		},
+		"stage that does not exist": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "candidates": {"rental-a": {"stages": {"agent_enrolled": {"seconds": 0}}}}`,
+			`stage "agent_enrolled"`,
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

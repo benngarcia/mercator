@@ -950,7 +950,13 @@ type CandidateExpectation struct {
 	// that stated four quantities between them: a fixture states the stages it is
 	// about and says nothing about the rest, and a stage added to the record
 	// cannot be added without a way to state it.
-	Stages map[string]StageExpectation `json:"stages,omitempty"`
+	//
+	// The key is the domain's own stage type and is checked against the eight at
+	// load. An unchecked key was worse than no assertion: LaunchStageEstimates
+	// answers about a stage nobody named with a zero Estimate, so a misspelled
+	// stage asserted zero seconds from no source and passed, taking the assertion
+	// the fixture was written for with it.
+	Stages map[domain.LaunchStage]StageExpectation `json:"stages,omitempty"`
 	// ImageLocality asserts how much of the Run's image this candidate was
 	// found to have: hot, partial, cold, or unknown. It is the qualitative half
 	// of the image answer, and the only one that separates a machine that has to
@@ -2177,6 +2183,15 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 		for name, want := range candidate.Caches {
 			if _, stated := CacheExpectations[want]; !stated {
 				return fmt.Errorf("candidate %q cache %q expects \"hit\", \"miss\", or \"unknown\", got %q", id, name, want)
+			}
+		}
+		// A stage nobody named is the one assertion that could not fail: the record
+		// answers about an unknown stage with a zero Estimate from no source, so a
+		// misspelled key asserted nothing and silently replaced the assertion the
+		// fixture was written for.
+		for stage := range candidate.Stages {
+			if !slices.Contains(domain.LaunchStages, stage) {
+				return fmt.Errorf("candidate %q states stage %q, which is not one of %v", id, stage, domain.LaunchStages)
 			}
 		}
 		if candidate.Schedule != nil {
