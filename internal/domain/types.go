@@ -171,8 +171,14 @@ type NetworkDownloadRequirement struct {
 // striking a candidate out where an identical silent one is admitted.
 //
 // It is the same fact OfferSnapshot.DownloadRate prices the transfer from, asked
-// at the same moment, so the bound and the prediction are one reading of one
-// measurement rather than two questions that happen to be put to the same host.
+// at the same moment, so what a publisher stands behind is one reading rather
+// than two questions that happen to be put to the same host.
+//
+// The age is the exception and belongs here alone. It is this Run's own policy
+// about what it will be placed on and not a statement about the fact, so another
+// Run in the same evaluation may act on the same reading. A reading this Run
+// refuses is still the best evidence Mercator holds about how long the transfer
+// takes, and pricing the stage from it asserts nothing this Run turned down.
 func (req NetworkDownloadRequirement) Answer(facts NetworkFacts, at time.Time) (NetworkFact, bool) {
 	fact, answered := facts.DownloadP10(req.Scope, at)
 	if !answered {

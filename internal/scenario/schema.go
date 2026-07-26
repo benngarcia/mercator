@@ -728,6 +728,16 @@ type PathSpec struct {
 	// own number has measured nothing, and Mercator has to read that as the
 	// silence it is rather than as a fast answer nobody has to doubt.
 	StatedConfidence *float64 `json:"confidence,omitempty"`
+	// MeasuredAgo is how long before this world began the machine last crossed
+	// this path. Omitted means as this world began, which is every machine that
+	// has no reason to say otherwise.
+	//
+	// It is what lets one Blueprint hold a machine that measured lately beside one
+	// that measured a week ago, which is the only thing a Run's
+	// max_measurement_age can tell apart. It states no expiry and adds none: the
+	// publisher stands behind the number either way, and how old a reading a Run
+	// will act on is the Run's own policy rather than the path's.
+	MeasuredAgo Duration `json:"measured_ago,omitempty"`
 }
 
 // Confidence is how much this measurement's publisher stands behind it, and
@@ -796,7 +806,7 @@ func (paths PathSpecs) PublishedFacts(offerID string, at time.Time) domain.Netwo
 			ValueMbps:   path.P10Mbps,
 			Source:      PathFactSource,
 			SampleCount: 1,
-			ObservedAt:  at,
+			ObservedAt:  at.Add(-path.MeasuredAgo.Duration()),
 			Confidence:  path.Confidence(),
 		})
 	}
@@ -992,6 +1002,17 @@ type RequestSpec struct {
 type DownloadRequirementSpec struct {
 	Scope      string  `json:"scope"`
 	MinP10Mbps float64 `json:"min_p10_mbps"`
+	// MaxMeasurementAge is how old a reading this Run will act on. The API has
+	// carried it since the floor existed and no Blueprint could state it, so the
+	// half of the rule that asks when a machine last measured its path was
+	// reachable only from Go: a node that summarised a window of transfers under
+	// the wrong date answered every fixture in this corpus and failed the one
+	// reader the date is for.
+	//
+	// A world's declared paths are dated at its start, so a fixture states this
+	// bound and then advances past it. That is the machine it describes: one that
+	// measured its link when this world began and has measured nothing since.
+	MaxMeasurementAge Duration `json:"max_measurement_age,omitempty"`
 	// AllowUnknown says this Run would rather run on a machine nobody has
 	// measured than not run at all. It is what a fixture states to put the two
 	// silences beside each other: a host that published nothing and a host whose
@@ -1003,9 +1024,10 @@ type DownloadRequirementSpec struct {
 // Requirement is this floor in the control plane's own vocabulary.
 func (spec DownloadRequirementSpec) Requirement() *domain.NetworkDownloadRequirement {
 	return &domain.NetworkDownloadRequirement{
-		Scope:        domain.NetworkScope(spec.Scope),
-		MinP10Mbps:   spec.MinP10Mbps,
-		AllowUnknown: spec.AllowUnknown,
+		Scope:                    domain.NetworkScope(spec.Scope),
+		MinP10Mbps:               spec.MinP10Mbps,
+		MaxMeasurementAgeSeconds: int64(spec.MaxMeasurementAge.Duration().Seconds()),
+		AllowUnknown:             spec.AllowUnknown,
 	}
 }
 
@@ -2053,6 +2075,9 @@ func (w WorldSpec) validate() error {
 		// A confidence outside the unit interval is not a statement about how much
 		// a publisher stands behind their measurement, and a fixture that made one
 		// would be asserting about a fact Mercator refuses to read at all.
+		if path.MeasuredAgo.Duration() < 0 {
+			return fmt.Errorf("path %q was measured %s before this world began, and a world begins after its own machines have run", path.From+"/"+path.To, path.MeasuredAgo.Duration())
+		}
 		if path.Confidence() < 0 || path.Confidence() > 1 {
 			return fmt.Errorf("path %q states confidence %v, which is not a share of certainty", path.From+"/"+path.To, path.Confidence())
 		}
@@ -2354,6 +2379,9 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 	if download := req.Download; download != nil {
 		if download.Scope == "" || download.MinP10Mbps <= 0 {
 			return fmt.Errorf("a download floor names the scope of the link and a positive min_p10_mbps")
+		}
+		if download.MaxMeasurementAge.Duration() < 0 {
+			return fmt.Errorf("a download floor states a positive max_measurement_age or none at all")
 		}
 	}
 	cacheMounts := map[string]bool{}
