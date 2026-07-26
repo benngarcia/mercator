@@ -969,6 +969,34 @@ esac
 	}
 }
 
+// TestARuntimeThatStatesAnUnreadableStartMomentFailsTheRead is the other half of
+// the case above, and the two are different worlds. A container the daemon will not
+// describe at all is one line missing from a read that answered for everything
+// else. A container whose moment is stated in a form this agent cannot parse is a
+// runtime whose moments Mercator does not understand, and every container on that
+// machine has the same problem: reading it as absent published no start for the
+// whole node, degraded every start-latency row on the only reusable lane there is,
+// and failed nothing. This daemon states Go's default time form, which is what some
+// compat runtimes emit and what `docker inspect -f {{.Created}}` prints for other
+// object shapes.
+func TestARuntimeThatStatesAnUnreadableStartMomentFailsTheRead(t *testing.T) {
+	daemon := standInDaemon(t, `#!/bin/sh
+case "$1 $2" in
+  "ps --all") echo '{"Names":"mercator-run-alpha-1","State":"running","Status":"Up 2 minutes","Labels":"mercator.run=run-alpha,mercator.attempt=1","Mounts":""}' ;;
+  "inspect --format") echo '"/mercator-run-alpha-1" "2026-07-26 12:27:41.876718458 +0000 UTC"' ;;
+esac
+`)
+
+	_, err := NewDockerRuntime(daemon).Observe(context.Background())
+
+	if err == nil {
+		t.Fatal("a runtime stating a moment this agent cannot read was read anyway, and every start on it reported absent")
+	}
+	if !strings.Contains(err.Error(), "State.StartedAt") {
+		t.Fatalf("the error does not name the field the runtime stated unreadably: %v", err)
+	}
+}
+
 func observationFor(t *testing.T, runtime *DockerRuntime, runID string) capability.WorkloadObservation {
 	t.Helper()
 	observations, err := runtime.Observe(context.Background())
