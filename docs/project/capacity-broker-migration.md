@@ -2287,8 +2287,55 @@ complete because it works against a live provider.
     pessimistic prior or an optimistic one, and a host whose true p10 is under it is
     ranked worse for having published it. That is a fleet-wide repricing to be made
     against measurements the calibration slice will hold, and the counterweight to it
-    is the uncertainty term, which is dead in production for the reason recorded under
-    phase 4: `SchedulingInput.Weights` is never populated.
+    is already charging. `scheduler.Evaluate` sets `Weights` from the Run's class and
+    `ServiceClass.Weights` prices doubt at sixty seconds of that class's own waiting
+    rate, so a standard Run pays 0.03 USD for every point of confidence shortfall a
+    candidate carries, and an unmeasured link is half a point of it on every stage it
+    priced. Whether 0.03 is the right price is the same open calibration question as
+    the 500.
+
+- [x] 2026-07-26: Answer the fourth review of the transfer path. Two findings, both
+  real, and both in this document rather than in the code it describes.
+  - The entry above rested twice on the uncertainty term being dead, and this same
+    document records the slice that turned it on. `scheduler.Evaluate` has set
+    `Weights` from the Run's class since the service class landed, and
+    `ServiceClass.Weights` prices doubt at sixty seconds of the class's own waiting
+    rate. Verified here by zeroing `UncertaintyPenaltyUSD` alone: four green
+    Blueprints fail on their recorded scores, `uncertainty-is-priced-once`,
+    `the-service-class-decides-what-wins`, `a-published-risk-history-ranks-nothing`
+    and `a-disowned-fact-is-not-an-answer`, and so does the Lab law that reproduces a
+    score from the record. Both sentences are corrected in place. The three earlier
+    mentions of terms multiplied by zero are histories of what the class replaced and
+    are left alone.
+  - `silence-is-not-infeasibility` claimed both halves of the struck-out Rental's five
+    minutes were somebody's measurement. A fifth of them is assembly, priced over
+    `AssumedUnpackMbps`, which `UnpackRate` stamps as an assumption because nothing in
+    the fleet measures a host's storage, so `establishedOverAMeasuredPath` takes every
+    unpack second out of what a bound may refuse. Measured here: the Rental is charged
+    289.14 seconds of fetch over its published 500 Mbps and 72.16 of assembly over the
+    constant, and its established p90 start is 434.71 against a whole prediction of
+    542.95. The fixture passed at three minutes on the fetch half alone.
+  - That is the rule working rather than the bug the entry above reports fixing, so
+    the code is unchanged. Refusing a Run's only capacity for seconds derived from a
+    constant of Mercator's own is exactly what the slice stopped doing for registry
+    links, and assembly is that same guess made about every machine at once. The
+    candidate still pays those seconds in the score, so it never outranks a machine
+    that will really be faster, and the decision records `START_SLO_UNVERIFIED` rather
+    than a promise. `stagePredictor` already puts a measured launch into both halves,
+    so the stage becomes refusable the moment anything has watched it.
+  - What was missing is that nothing said so. The Blueprint gained a second Run at
+    seven and a half minutes, where the measured fetch is inside the bound and the
+    whole prediction is not, asserting the Rental feasible, the placement
+    `START_SLO_UNVERIFIED`, the fetch rate as a measurement and the unpack rate as
+    `assumed_unpack_rate`. Two breaks fail it, each of which strikes the Rental out on
+    a constant of Mercator's own: stating the unpack rate as a measurement, and making
+    `establishedOverAMeasuredPath` return what it was given, which is what the tree
+    did before the slice above.
+  - Open, and named rather than fixed. No hard start bound can act on assembly for a
+    candidate the fleet has never watched, whatever the image size, so a Run whose
+    start budget is mostly unpacking is admitted unverified rather than refused. The
+    answer is a measured unpack rate, which is a node slice and a calibration
+    question, not a constant promoted to a measurement here.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
@@ -2383,18 +2430,29 @@ Phase 3 added:
 - `silence-is-not-infeasibility` (green): one Run that refuses to wait more than
   three minutes, and two machines at one price that would both take nearly five.
   The Rental that enumerated itself, holds none of the image, and published what
-  its link to the registry delivers is struck out, because both halves of its
-  five minutes are somebody's measurement and a hard bound is what a Run gets to
-  do with those. It publishes the same number Mercator would have assumed about
-  it, so the seconds are the seconds either way and what the fixture turns on is
-  that a machine said them. The borrowed host beside it is not struck out,
-  because nothing has established that it is slow. Making the bound locality-blind fails it with
-  `no feasible offers`, which is the Run finding no capacity at all on machines
-  that may already hold every byte. The decision records
+  its link to the registry delivers is struck out on the fetch half of its five
+  minutes, which is 433.71 p90 seconds over a link it measured and over the bound
+  on its own. It publishes the same number Mercator would have assumed about it,
+  so the seconds are the seconds either way and what the fixture turns on is that
+  a machine said them. The borrowed host beside it is not struck out, because
+  nothing has established that it is slow. Making the bound locality-blind fails
+  it with `no feasible offers`, which is the Run finding no capacity at all on
+  machines that may already hold every byte. The decision records
   `START_SLO_UNVERIFIED` for that placement rather than `WITHIN_START_SLO`,
   which the scheduler used to append whenever a bound existed at all: admitting
   a candidate because nobody could describe it is not the same as promising it
   will start in time, and the fixture fails if the two are conflated.
+  The second Run states the other half of the same rule, and is why the first
+  says fetch rather than five minutes. The Rental's remaining 108.24 p90 seconds
+  are assembly, priced over `AssumedUnpackMbps`, and `UnpackRate` stamps that as
+  an assumption because nothing in the fleet measures a host's storage. No bound
+  may act on it, so at seven and a half minutes the Rental is admitted
+  `START_SLO_UNVERIFIED` with its whole prediction at 542.95 seconds and its
+  established start at 434.71. That is every machine in the fleet until a
+  measured launch answers the stage, which `stagePredictor` puts into both halves
+  when one exists. Two breaks fail it: stating the unpack rate as a measurement,
+  and making `establishedOverAMeasuredPath` return what it was given, each of
+  which strikes the Rental out on a constant of Mercator's own.
 - `borrowed-warmth-is-invisible` (conformance): a machine Mercator has not
   enrolled holding the whole image before the Run arrives. World Truth says it
   holds it, the offer carries no inventory, and the Run is priced the whole
@@ -3266,10 +3324,11 @@ this host's own daemon. `go test -race` is green over `internal/domain`,
 Not done, and why. `DefaultObjectStoreDownloadMbps` is a flat 500 answering the same
 question a node's p10 answers, and nothing has measured whether that is a pessimistic
 prior or an optimistic one. A host whose true p10 is under it is ranked worse for
-having published it, and the term that should counterweight that is the uncertainty
-term, which is multiplied by zero in production. Both belong to the calibration work
-rather than to a locality slice, and repricing the constant here would move every
-fixture in the corpus against no measurement at all.
+having published it. The uncertainty term does counterweight it and has since the
+service class landed, at 0.03 USD a point for a standard Run, so what is open is
+whether 500 and 0.03 are the right numbers rather than whether either is charged.
+Both belong to the calibration work rather than to a locality slice, and repricing
+either here would move every fixture in the corpus against no measurement at all.
 
 ### Phase 4 what an unmeasured path costs
 
