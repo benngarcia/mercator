@@ -1729,20 +1729,77 @@ Phase 4 added:
 - `queued-booking-deadline-expiry` (target, missing `schedule_advancement`): the
   Run takes a queued Booking with a latest start six minutes out, and the Booking
   ahead of it runs for thirty. At seven minutes nothing expires it. Its first two
-  steps are green, which is what makes the one declaration it keeps precise.
+  steps are green, which is what makes the one declaration it keeps precise. That
+  diagnosis was a step short until the overrun rule landed: at seven minutes the
+  Booking ahead is a minute past the runtime Mercator enforces, so a re-decision
+  read a wait of nothing and would have chosen the same machine, and expiry alone
+  would have produced a placement, an expiry, and the same placement again.
 - `a-queue-drains-as-it-runs` (conformance) gained the record beside the seconds.
   The Booking ahead is twenty-nine minutes into a declared half hour, so this is
   the one execution in the tree where what a Booking has left and what its caller
   asked for are different numbers, and the recorded evidence has to say the
   first: restating the declared runtimes fails it with "the record says the
   Booking ahead has 1800.00s left".
-- No new Lab invariant. Seeding a schedule is fixture construction rather than
-  external behaviour, and the two laws that police queueing,
-  `safety.exclusive_booking_capacity` and
-  `safety.ephemeral_capacity_not_reused`, now read seeded schedules at L0 as well
-  as schedules the Broker committed.
+- `an-overrun-booking-is-not-an-empty-queue` (green): the Rental's Booking declared
+  forty-five minutes, fifty have passed, and the machine is occupied for another
+  forty. Both remaining runtimes bottom out at zero, which is what an idle Rental
+  reports, so the Rental was a feasible candidate priced at no waiting at all and
+  the Run took a Booking whose latest acceptable start was the moment it was minted.
+  It is refused on the machine's own capacity evidence now, and the record carries
+  the overrun beside the two remainders that ran out. Reverting the queueing rule
+  fails it through `RentalSchedule.Reserve` refusing to promise a start behind a
+  Booking it cannot project, rather than through the assertion, which is the two
+  layers saying the same thing.
+- `TestANodeStillRunningPastItsBoundIsNotQueuedBehind` (`internal/daemon`) is the
+  same rule where it is not a declaration. Nothing terminates a workload at its
+  enforced maximum, so a container that does not exit holds its node with the
+  Booking's remaining runtime at zero, and this drives exactly that through the
+  public API, the production storage, and the node protocol: the arriving Run is
+  told there is nowhere to put it rather than queued behind work that should have
+  ended. It lives here rather than in a Blueprint because a Lab world cannot state
+  a workload that outlives the runtime its Run declared: blueprint validation
+  refuses a runtime model beyond `max_runtime`. Lifting that would state a world
+  with nothing to enforce it, which belongs with the enforcement work.
+- `safety.promised_start_is_still_ahead` (Lab invariant): no Booking Mercator
+  commits promises a start no later than the moment the decision that minted it
+  was evaluated. It is stated over the decision record, because a promise can only
+  be judged against the moment it was made, and it says nothing about a deadline
+  that passes afterwards: waiting longer than promised is what expiry exists to
+  answer. Its deliberate failure is a decision whose queued Booking carries a
+  latest start equal to its own evaluation time.
+- `warm-idle-rental-wins` and `no-rentals-provisions-fresh` (green) gained
+  `no_rental_schedule`, which is what turns "a Rental nothing is assigned to
+  records nothing" from an unbreakable guard into a rule. Deleting the guard
+  publishes a schedule at version zero with a wait of nothing for every candidate,
+  including machines that do not exist yet and have no Rental at all, and both
+  fixtures now say so.
+- A seeded schedule states a version at least as large as the number of Bookings it
+  holds, checked in the Blueprint validator and again in the store. A version
+  counts transitions and each Booking took one, so a lower version is a history
+  Mercator cannot have had, and the arriving Run's Booking would be minted at a
+  version one of the seeded Bookings already consumed.
 
-The corpus is 25 regression Blueprints: 22 green and 3 target, beside one demo,
+No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
+only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
+none at all, and `internal/scenario` imports nothing from `internal/lab`. Every
+queue these laws have seen was committed by the Broker for a Run the Lab itself
+created, which is what `a-queue-drains-as-it-runs` drives. An earlier version of
+this section claimed `safety.exclusive_booking_capacity` and
+`safety.ephemeral_capacity_not_reused` had begun reading seeded schedules at L0.
+That was false in both halves, and it was offered as the reason the seeding work
+needed no invariant of its own.
+
+Seeding at L1 is a gap rather than a decision, and the Lab refuses the Blueprint
+now instead of dropping the statement: `Compile` fails on a world stating
+`rental_schedules`, because nothing loads them into the control plane's own
+storage and the world would otherwise be built with every Rental idle while the
+fixture said a machine was occupied for the next forty-five minutes. Two things
+have to arrive before the Lab can hold a seeded queue. The Broker's storage needs
+a seam a fixture may write through, and `liveness.superseded_booking_release`
+refuses any Booking whose Run has no record, which is true of every seeded Booking
+by construction.
+
+The corpus is 26 regression Blueprints: 23 green and 3 target, beside one demo,
 one minimized case, and ten conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two

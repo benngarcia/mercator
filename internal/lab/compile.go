@@ -27,6 +27,19 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 	if blueprint.Arrivals == nil {
 		return WorldTape{}, nil, fmt.Errorf("Lab compilation requires an arrival-driven Blueprint")
 	}
+	// A seeded Rental Schedule is Broker state, and the Lab drives the real
+	// control plane against its own storage: this world builds the machines and
+	// the Bookings on them belong to Runs no event log here ever saw. Nothing
+	// loads them, so a Blueprint stating one would be compiled into a world with
+	// every Rental idle, and the fixture would pass while asserting the opposite
+	// of what it says. Refusing is the honest answer until the Lab can seed the
+	// Broker; every queue in this world is made by Runs it created itself.
+	if len(blueprint.World.RentalSchedules) > 0 {
+		return WorldTape{}, nil, fmt.Errorf(
+			"Lab compilation cannot seed Broker Rental Schedule state, and Blueprint %q states %d",
+			blueprint.Name, len(blueprint.World.RentalSchedules),
+		)
+	}
 	seed := options.Seed
 	if seed == "" {
 		seed = blueprint.Seed

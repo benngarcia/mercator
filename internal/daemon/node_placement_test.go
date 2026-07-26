@@ -86,6 +86,41 @@ func TestOneEnrolledNodeRunsTwoWorkloadsInSequence(t *testing.T) {
 	}
 }
 
+// TestANodeStillRunningPastItsBoundIsNotQueuedBehind is the overrun rule against
+// the production daemon, and this is the world that makes the rule real: nothing
+// terminates a workload at its enforced maximum, so a container that does not exit
+// holds its node while the Booking's remaining runtime reads zero. The corpus
+// states such a world by declaring it; here the node is genuinely still running the
+// first Run when the second arrives, through the real API, the real storage, and
+// the real node protocol.
+//
+// A zero remainder is what an idle Rental reports, so the daemon read this node as
+// free this instant, queued the arriving Run behind a Booking with nothing left to
+// project from, and promised it a start it had already missed. There is no other
+// capacity in this fleet, so the honest answer is that there is nowhere to put it.
+func TestANodeStillRunningPastItsBoundIsNotQueuedBehind(t *testing.T) {
+	fleet := startFleet(t)
+
+	stuck := fleet.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, fleet.image)
+		spec := revision["spec"].(map[string]any)
+		spec["placement"].(map[string]any)["expected_runtime_seconds"] = 1
+		spec["execution"].(map[string]any)["max_runtime_seconds"] = 1
+		return revision
+	})
+	fleet.runtime.awaitLaunch(t, stuck)
+	// The enforced second has to pass, and there is no virtual time here: the
+	// daemon reads the wall clock, and this container never exits.
+	time.Sleep(1500 * time.Millisecond)
+
+	arriving := fleet.submitRun(t)
+	fleet.refuseToPlace(t, arriving)
+
+	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, arriving) {
+		t.Fatalf("a Run was sent to a node still running work past the runtime Mercator enforces: %v", launched)
+	}
+}
+
 // TestANodeHoldsTheImageItRan is the production half of what the corpus proves
 // under simulation: running a workload is what makes a machine warm, and the
 // offer catalog Placement reads says so. Nothing seeds this node; the only way
