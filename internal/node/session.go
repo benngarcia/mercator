@@ -99,6 +99,11 @@ func (registry *Registry) RecordEvents(ctx context.Context, nodeID, sessionToken
 		if err := event.Validate(); err != nil {
 			return err
 		}
+		// Everything in the event is dated by the node. This is the moment Mercator
+		// learned it, on Mercator's clock, and it is the only moment in a node's
+		// report that a rule about the control plane's own frame can compare with:
+		// a container start read off a host an hour ahead is an hour after this.
+		event.receive(registry.now().UTC())
 		fresh, err := registry.store.RecordEvent(ctx, event)
 		if err != nil {
 			return err

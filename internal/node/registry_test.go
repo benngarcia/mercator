@@ -204,6 +204,70 @@ func TestAWorkloadTheNodeNeverMentionedIsAbsentRatherThanExited(t *testing.T) {
 	}
 }
 
+// TestAReportedWorkloadIsDatedByTheClockMercatorKeeps is the moment that makes a
+// node's report comparable with anything. Every moment in the report is the node's
+// own clock, and this machine's is an hour ahead: it says it looked at 13:00 and
+// that its container started at 12:59, which are consistent with each other and
+// with nothing the control plane knows. The registry stamps when it accepted the
+// report, so a rule downstream has one moment in Mercator's frame to measure the
+// node's claims against.
+//
+// The node's own stamp is replaced rather than kept where it is absent, because a
+// moment a machine can set is a moment a machine can set wrong.
+func TestAReportedWorkloadIsDatedByTheClockMercatorKeeps(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	ahead := clock.Now().Add(time.Hour)
+	startedAhead := ahead.Add(-time.Minute)
+
+	report(t, registry, bootstrap.NodeID, enrollment.SessionToken, node.Event{
+		ID:         "evt-running",
+		Kind:       node.EventWorkload,
+		ObservedAt: ahead,
+		Workload: &capability.WorkloadObservation{
+			RunID: "run-1", AttemptID: "attempt-1", Phase: capability.WorkloadPhaseRunning,
+			ObservedAt: ahead, StartedAt: &startedAhead, ReceivedAt: ahead,
+		},
+	})
+
+	observation, err := registry.ObserveWorkload(context.Background(), capability.WorkloadRef{
+		NodeRef: nodeRef(bootstrap), RunID: "run-1", AttemptID: "attempt-1",
+	})
+	if err != nil {
+		t.Fatalf("observe workload: %v", err)
+	}
+	if !observation.ReceivedAt.Equal(clock.Now()) {
+		t.Fatalf("the stored report says Mercator received it at %s, and Mercator's clock read %s",
+			observation.ReceivedAt.Format(time.RFC3339Nano), clock.Now().Format(time.RFC3339Nano))
+	}
+	if !observation.ObservedAt.Equal(ahead) {
+		t.Fatalf("the node said it looked at %s and the record kept %s",
+			ahead.Format(time.RFC3339Nano), observation.ObservedAt.Format(time.RFC3339Nano))
+	}
+}
+
+// TestAnAbsentWorkloadIsDatedByTheRegistryThatLooked keeps the one observation the
+// control plane makes for itself inside the same rule. Nothing was reported, so
+// both moments are Mercator's own: it looked now, and it learned now.
+func TestAnAbsentWorkloadIsDatedByTheRegistryThatLooked(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enroll(t, registry, bootstrap)
+
+	observation, err := registry.ObserveWorkload(context.Background(), capability.WorkloadRef{
+		NodeRef: nodeRef(bootstrap), RunID: "run-unknown", AttemptID: "attempt-1",
+	})
+	if err != nil {
+		t.Fatalf("observe workload: %v", err)
+	}
+
+	if !observation.ReceivedAt.Equal(clock.Now()) {
+		t.Fatalf("an absence Mercator observed itself is dated %s, and its clock read %s",
+			observation.ReceivedAt.Format(time.RFC3339Nano), clock.Now().Format(time.RFC3339Nano))
+	}
+}
+
 func TestASupersededSessionIsClosedWhenTheNodeEnrollsAgain(t *testing.T) {
 	registry, _ := newRegistry(t)
 	bootstrap := invite(t, registry)

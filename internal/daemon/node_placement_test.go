@@ -275,6 +275,56 @@ func TestANodeReportsTheMomentItsContainerReallyStarted(t *testing.T) {
 	}
 }
 
+// TestANodeWithASkewedClockDoesNotSetMercatorsOwn is the same seam under the one
+// world it could not survive: a machine whose wall clock runs an hour ahead. Its
+// runtime reads its container's start and its own observation moment off that
+// clock, so the two agree with each other, and the Broker used to copy both into
+// the observation. The start rule then compared a foreign clock against itself,
+// found the start no later than the read, and Mercator adopted a moment an hour in
+// its own future twice over: once as the Run's start, and once as the clock this
+// Booking's enforced runtime is measured from.
+//
+// The consequence this case asserts is the expensive one. The workload declares a
+// one second bound and does not exit. A Booking measured from the machine's own
+// clock has an hour of enforced runtime left, so the daemon reads a machine that is
+// still running work as having capacity to spare, and the arriving Run is queued
+// behind a container that will never finish. Measured from the moment Mercator
+// received the report, the bound is past, the overrun is recorded, and the Run goes
+// to the rest of the fleet.
+//
+// The Run's own start is absent, and that is the honest record: nothing observed
+// this container start on a clock Mercator shares, so the stage has no actual
+// rather than an hour of invented start latency.
+func TestANodeWithASkewedClockDoesNotSetMercatorsOwn(t *testing.T) {
+	fleet := startFleet(t, keepingAClockAhead(time.Hour))
+	spare := fleet.enrollAnother(t, 9.00)
+
+	stuck := fleet.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, fleet.image)
+		spec := revision["spec"].(map[string]any)
+		spec["placement"].(map[string]any)["expected_runtime_seconds"] = 1
+		spec["execution"].(map[string]any)["max_runtime_seconds"] = 1
+		return revision
+	})
+	fleet.runtime.awaitLaunch(t, stuck)
+	fleet.awaitOccupied(t, fleet.nodeID)
+	fleet.advance(t, stuck)
+	time.Sleep(1500 * time.Millisecond)
+
+	arriving := fleet.submitRun(t)
+	fleet.advance(t, arriving)
+
+	if started := fleet.startMoment(t, stuck); started != nil {
+		t.Fatalf("the Run records a start of %s, and its machine's clock is an hour ahead of the control plane's",
+			started.Format(time.RFC3339Nano))
+	}
+	decision := fleet.decision(t, arriving)
+	assertOverrunRecorded(t, decision.candidate(t, fleet.nodeID))
+	if decision.SelectedOfferSnapshotID != spare.nodeID {
+		t.Fatalf("the Run landed on %q, want the rest of the fleet at %q", decision.SelectedOfferSnapshotID, spare.nodeID)
+	}
+}
+
 // TestAWorkloadThatFailsOnANodeClosesTheRunFailed holds the node's authority
 // over the exit: nothing the application says is involved, and the run still
 // reaches a terminal failure.
@@ -349,6 +399,13 @@ func reporting(disk capability.DiskFacts) fleetOption {
 // one, at a heartbeat a machine can keep up with: reading a whole daemon's
 // image inventory fifty times a second is a load test of Docker rather than a
 // case about Mercator.
+// keepingAClockAhead makes this fleet's machine read a wall clock ahead of the
+// control plane's, which is what a host with a skewed clock is. Every moment it
+// states, its container's start and its own read alike, comes off that clock.
+func keepingAClockAhead(offset time.Duration) fleetOption {
+	return func(f *fleet) { f.runtime.clockAhead = offset }
+}
+
 func runningOn(runtime nodeagent.Runtime) fleetOption {
 	return func(f *fleet) {
 		f.agentRuntime = runtime
@@ -604,6 +661,20 @@ func (f *fleet) awaitStartMoment(t *testing.T, runID string) time.Time {
 		return run.Run.StartedAt != nil
 	}, "Run "+runID+" never recorded the moment its workload began")
 	return run.Run.StartedAt.UTC()
+}
+
+// startMoment is what this Run's record says about when its workload began, right
+// now, including saying nothing. It is how a case asserts an absence: awaitStartMoment
+// above can only wait for a moment to arrive.
+func (f *fleet) startMoment(t *testing.T, runID string) *time.Time {
+	t.Helper()
+	var run struct {
+		Run struct {
+			StartedAt *time.Time `json:"started_at"`
+		} `json:"run"`
+	}
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
+	return run.Run.StartedAt
 }
 
 // workloadRevision is one digest-pinned container the enrolled node can run.
@@ -893,6 +964,13 @@ type scriptedRuntime struct {
 	// leaves the two cases an operator most needs told apart, a full machine
 	// and an unmeasurable one, unreachable from any fixture.
 	disk capability.DiskFacts
+	// clockAhead is how far this machine's clock runs ahead of the control plane's.
+	// It moves both moments this runtime states, because a host with a skewed clock
+	// reads its container's start and its own wall clock off the same clock: two
+	// moments that agree with each other and with nothing Mercator knows. Every
+	// other runtime in this file dates both from the control plane's own clock, so
+	// nothing here could state the world the Broker's read moment exists for.
+	clockAhead time.Duration
 }
 
 func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
@@ -1037,16 +1115,24 @@ func (runtime *scriptedRuntime) LaunchWorkload(_ context.Context, command capabi
 	// A container runtime knows when it gave this workload a process, and that
 	// moment is not the moment anybody later asks. This machine states it a stated
 	// distance in the past, because a scripted runtime that answered "now" on every
-	// read would let a control plane stamping its own poll pass every case.
-	startedAt := time.Now().UTC().Add(-scriptedStartDelay)
+	// read would let a control plane stamping its own poll pass every case. Both
+	// moments carry this machine's own clock offset, because a real one has no other
+	// clock to read them off.
+	startedAt := runtime.clock().Add(-scriptedStartDelay)
 	runtime.observations[command.RunID] = capability.WorkloadObservation{
 		RunID:      command.RunID,
 		AttemptID:  command.AttemptID,
 		Phase:      capability.WorkloadPhaseRunning,
-		ObservedAt: time.Now().UTC(),
+		ObservedAt: runtime.clock(),
 		StartedAt:  &startedAt,
 	}
 	return nil
+}
+
+// clock is this machine's own wall clock, which is the control plane's plus
+// whatever this host's is out by.
+func (runtime *scriptedRuntime) clock() time.Time {
+	return time.Now().UTC().Add(runtime.clockAhead)
 }
 
 // scriptedStartDelay is how long before the observation this machine says its
@@ -1076,7 +1162,7 @@ func (runtime *scriptedRuntime) exit(runID string, code int) {
 	observation.RunID = runID
 	observation.Phase = capability.WorkloadPhaseExited
 	observation.ExitCode = &code
-	observation.ObservedAt = time.Now().UTC()
+	observation.ObservedAt = runtime.clock()
 	runtime.observations[runID] = observation
 }
 

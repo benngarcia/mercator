@@ -354,10 +354,22 @@ const (
 func (phase WorkloadPhase) Exited() bool { return phase == WorkloadPhaseExited }
 
 type WorkloadObservation struct {
-	RunID      string        `json:"run_id"`
-	AttemptID  string        `json:"attempt_id"`
-	Phase      WorkloadPhase `json:"phase"`
-	ObservedAt time.Time     `json:"observed_at"`
+	RunID     string        `json:"run_id"`
+	AttemptID string        `json:"attempt_id"`
+	Phase     WorkloadPhase `json:"phase"`
+	// ObservedAt is when the node looked, and StartedAt below is what its runtime
+	// said about the container. Both are the node's own clock, which is the one
+	// thing a control plane cannot check: two moments off one foreign clock agree
+	// with each other whatever that clock reads.
+	ObservedAt time.Time `json:"observed_at"`
+	// ReceivedAt is when Mercator accepted this report, on Mercator's own clock. It
+	// is the only moment here that can be compared with anything the control plane
+	// knows: a start the node dates an hour ahead is an hour ahead of this, and a
+	// start latency is this report's start minus an acceptance the control plane
+	// stamped. It is written where a node's report enters the control plane and
+	// never by the node, which is why it carries no omitempty: a stored observation
+	// without one is a report that reached the registry by some other door.
+	ReceivedAt time.Time `json:"received_at"`
 	// ExitCode is meaningful only when Phase.Exited() holds.
 	ExitCode *int `json:"exit_code,omitempty"`
 	// OOMKilled and FailureReason are resource-level facts the node owns,

@@ -259,11 +259,15 @@ func (registry *Registry) ObserveWorkload(ctx context.Context, ref capability.Wo
 		return capability.WorkloadObservation{}, err
 	}
 	if !found {
+		// Absence is the registry's own observation and not the node's, so both
+		// moments are the control plane's clock: it looked now, and it learned now.
+		now := registry.now().UTC()
 		return capability.WorkloadObservation{
 			RunID:      ref.RunID,
 			AttemptID:  ref.AttemptID,
 			Phase:      capability.WorkloadPhaseAbsent,
-			ObservedAt: registry.now().UTC(),
+			ObservedAt: now,
+			ReceivedAt: now,
 		}, nil
 	}
 	return observation, nil

@@ -246,6 +246,23 @@ const (
 	EventWorkload EventKind = "workload"
 )
 
+// receive stamps the moment the control plane accepted this report onto the
+// workload observation it carries, replacing whatever a node put there: the stamp
+// is Mercator's own clock and a node has no standing to state it. The observation
+// is copied rather than written through, so the sender's own record of what it
+// reported stays what it reported.
+//
+// A heartbeat needs no stamp. The registry dates the lease it renews with its own
+// clock already, and no rule compares a fact against Mercator's frame.
+func (event *Event) receive(at time.Time) {
+	if event.Workload == nil {
+		return
+	}
+	received := *event.Workload
+	received.ReceivedAt = at
+	event.Workload = &received
+}
+
 func (event Event) Validate() error {
 	switch {
 	case event.ID == "":
