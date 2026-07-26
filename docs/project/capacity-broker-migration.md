@@ -2473,6 +2473,11 @@ complete because it works against a live provider.
     `a-queue-restates-what-it-waits-behind` are green regression Blueprints, and
     `conformance/an-impossible-ask-empties-no-fleet` drives the same world through the
     real control plane in the Lab.
+  - `TestAnImpossibleAskLeavesThisFleetRunning` is the same claim through the public
+    API against the daemon's own fleet, and the order is what makes it: the impossible
+    Run is submitted first, so it is the older wait and outranks every later arrival of
+    its own class. The existing case submits them the other way round and never had a
+    wait for a later Run to be ordered behind.
   - `safety.nothing_waits_behind_an_impossible_ask` is the law: Mercator never tells a
     Run it waits behind a Run the record already said no machine in the fleet can take.
     It is replayed out of the public log, it has its deliberate failing case in the
