@@ -45,13 +45,13 @@ type SchedulingInput struct {
 // weights, because ranking a Run that asked for the earliest start on a blended
 // dollar score would answer a question it did not ask.
 //
-// It gains no field for locality, warmth, or producer affinity, and none should
-// be added until the weights are populated at the source. Four of these five
-// terms are multiplied by zero in every deployment, so a preference expressed as
-// a sixth would be a capability that provably changes no placement, and one
-// expressed as a hardcoded bonus outside them would be a hard constraint wearing
-// a preference's clothes. What a locality answer is worth belongs in the seconds
-// it costs, which every objective already ranks on.
+// It gains no field for locality or warmth, and none should be added until the
+// weights are populated at the source. Four of these five terms are multiplied by
+// zero in every deployment, so a preference expressed as a sixth would be a
+// capability that provably changes no placement, and one expressed as a hardcoded
+// bonus outside them would be a hard constraint wearing a preference's clothes.
+// What a locality answer is worth belongs in the seconds it costs, which every
+// objective already ranks on.
 type ScoreWeights struct {
 	StartLatencyUSDPerSecond      float64
 	CompletionLatencyUSDPerSecond float64
@@ -431,7 +431,7 @@ type candidateContent struct {
 
 func contentFor(input SchedulingInput, offer domain.OfferSnapshot) candidateContent {
 	work, locality := input.Image.StartWork(offer.Images)
-	fetch, evidence := domain.ArtifactFetchWork(input.Artifacts, offer)
+	fetch, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
 	caches := domain.CacheLandBytes(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches)
 	return candidateContent{
 		image:    work,
@@ -657,13 +657,13 @@ func establishedIfDescribed(estimate domain.Estimate, locality domain.LocalitySt
 // copy only ever changes how long getting to it takes.
 //
 // The answer reaches the score through this estimate, the start estimate it
-// feeds, and the objective that ranks candidates on it. That is also the whole of
-// how a consumer prefers the machine its input was produced on: the preference is
-// the read it would not make there, priced where every other locality answer is
-// priced. Nothing populates SchedulingInput.Weights in production, so an
-// affinity term routed through ScoreWeights would be multiplied by zero for every
-// Run, and a bonus subtracted from the score would be a number nobody measured
-// deciding placements. Populating the weights is phase 4 work at the source.
+// feeds, and the objective that ranks candidates on it. Nothing populates
+// SchedulingInput.Weights in production, so a locality term routed through
+// ScoreWeights would be multiplied by zero for every Run.
+//
+// Confidence follows the same rule transfers already follow: a host that owes
+// nothing is certainly zero seconds away, and every other answer crosses a link
+// nothing has measured.
 func artifactEstimate(inventory domain.ArtifactInventory, content candidateContent, modelVersion string) contentWork {
 	source := artifactSource(inventory, content.evidence)
 	if len(content.evidence) == 0 {
@@ -675,36 +675,24 @@ func artifactEstimate(inventory domain.ArtifactInventory, content candidateConte
 	}
 }
 
-// objectStoreRead is what reading these bytes out of the object store costs, and
-// what that answer is worth.
+// objectStoreRead is what reading these bytes out of the object store costs.
+// Bytes that do not have to move cost nothing and there is no doubt about it;
+// bytes that do cross a link nothing has measured, which is what caps the
+// answer's confidence however exactly the arithmetic on it reads.
 func objectStoreRead(bytes int64, source, modelVersion string) domain.Estimate {
 	seconds := objectStoreSeconds(bytes)
-	return domain.Estimate{
+	estimate := domain.Estimate{
 		Expected:     seconds,
 		P50:          seconds,
 		P90:          seconds * 1.5,
-		Confidence:   readConfidence(bytes, source),
+		Confidence:   domain.AssumedLinkConfidence,
 		Source:       source,
 		ModelVersion: modelVersion,
 	}
-}
-
-// readConfidence is how much this read's duration is worth. Bytes that have to
-// move cross a link nothing has measured. Bytes that do not have to move because
-// an inventory said the copy is here are certain, and zero seconds is zero
-// seconds. Bytes taken off because Mercator recorded the content being produced
-// on this machine state no confidence whatsoever: nothing has re-checked that
-// the copy outlived the Run that wrote it, which is exactly why affinity may
-// lower a price and may never refuse a candidate.
-func readConfidence(bytes int64, source string) float64 {
-	switch {
-	case source == sourceProducedHere:
-		return 0
-	case bytes == 0:
-		return 1
-	default:
-		return domain.AssumedLinkConfidence
+	if bytes == 0 {
+		estimate.Confidence = 1
 	}
+	return estimate
 }
 
 // establishedFetchBytes is the content this candidate owes that some inventory
@@ -725,36 +713,19 @@ func objectStoreSeconds(bytes int64) float64 {
 	return float64(bytes*8) / 1_000_000 / domain.DefaultObjectStoreDownloadMbps
 }
 
-// sourceProducedHere is the answer that rests on Mercator's own record of where
-// content was published rather than on anything a machine said about itself.
-const sourceProducedHere = "produced_here"
-
 // artifactSource names whose evidence this answer rests on, and when it rests on
 // none, whose silence it was. A host that cannot enumerate its copies and a host
 // that enumerated and holds nothing are priced the same seconds and are
 // different problems for an operator.
-//
-// Where a silence was discounted because this is the machine the content was
-// produced on, the source names that record, because that is the fact that
-// changed the answer. A candidate silent about several inputs of which one was
-// produced here says so once and states the rest per input, in the evidence.
 func artifactSource(inventory domain.ArtifactInventory, evidence []domain.ArtifactEvidence) string {
 	switch {
 	case len(evidence) == 0:
 		return ""
 	case inventory.Known:
 		return "artifact_inventory"
-	case producedAnyHere(evidence):
-		return sourceProducedHere
 	default:
 		return "inventory_unknown"
 	}
-}
-
-func producedAnyHere(evidence []domain.ArtifactEvidence) bool {
-	return slices.ContainsFunc(evidence, func(found domain.ArtifactEvidence) bool {
-		return found.ProducedHere
-	})
 }
 
 // localitySource names where this answer came from, and when there is no

@@ -53,14 +53,6 @@ type ArtifactVersion struct {
 	// ProducedByRunID is the Run that published this version. Empty on content
 	// that existed before Mercator saw it.
 	ProducedByRunID string `json:"produced_by_run_id,omitempty"`
-	// ProducedOnRentalID is the reusable capacity those bytes were written on,
-	// recorded when the version was published and never afterwards. It is the
-	// only record of it: the ledger that says where a Run ran is scanned past,
-	// and a machine cannot be asked about content nothing of Mercator's filed
-	// there. Empty is the honest answer for a version published from capacity
-	// that keeps nothing, because a one-shot execution's host is gone the moment
-	// its workload exits and there is nothing left to prefer.
-	ProducedOnRentalID string `json:"produced_on_rental_id,omitempty"`
 	// PublishedAt is when the durable copy landed. A version with no
 	// publication is a name for content nothing can yet read.
 	PublishedAt time.Time `json:"published_at,omitzero"`
@@ -71,14 +63,6 @@ type ArtifactVersion struct {
 // optimisation over this and never a replacement for it.
 func (version ArtifactVersion) Durable() bool {
 	return version.Location != "" && !version.PublishedAt.IsZero()
-}
-
-// ProducedOn reports whether this version's bytes were written on one piece of
-// capacity. An unstated producing host matches nobody: capacity that keeps
-// nothing carries no Rental identity, so comparing two empty strings would make
-// every such offer the producer of every version nothing recorded a machine for.
-func (version ArtifactVersion) ProducedOn(rentalID string) bool {
-	return rentalID != "" && version.ProducedOnRentalID == rentalID
 }
 
 // ArtifactReplicaState is what one host-local copy of an Artifact is worth.
@@ -157,74 +141,41 @@ type ArtifactEvidence struct {
 	ArtifactID string        `json:"artifact_id"`
 	Locality   LocalityState `json:"locality"`
 	FetchBytes int64         `json:"fetch_bytes,omitempty"`
-	// ProducedHere is Mercator's own record saying this version's bytes were
-	// written on this candidate. It is stated beside the locality rather than
-	// folded into it because they are answers from different authorities: the
-	// locality is what the machine said about itself, and this is what the
-	// catalog recorded when the content was published. One host routinely
-	// carries both, and an operator reading a placement needs to know which of
-	// the two put the Run there.
-	ProducedHere bool `json:"produced_here,omitempty"`
 }
 
-// ArtifactFetchWork is what this candidate still owes on the content a Run
-// declared reading, and what was found of each version. Silence costs what
-// absence costs, exactly as it does for images: a host that cannot enumerate its
-// copies is not a host with nothing to fetch, and pricing it at zero would score
-// a machine nobody can describe like one provably holding every byte.
+// ArtifactFetchWork is what this host still owes on the content a Run declared
+// reading, and what was found of each version. Silence costs what absence costs,
+// exactly as it does for images: a host that cannot enumerate its copies is not
+// a host with nothing to fetch, and pricing it at zero would score a machine
+// nobody can describe like one provably holding every byte.
 //
-// Where nothing was enumerated, the machine the bytes were produced on is the
-// only evidence anybody has, and it is better than none: the workload that wrote
-// this version wrote it there. So the read that machine would not have to make
-// is taken off its price, which is the whole of what producer affinity is. It is
-// a preference by construction rather than by restraint: it can only ever remove
-// seconds from a candidate, so no Run is refused capacity for it and no locality
-// answer becomes a permission.
-//
-// A host that did enumerate is taken at its word, in both directions. It says it
-// holds a checked copy and the read costs nothing; it says it holds none and the
-// read costs everything, whatever Mercator remembers about where the content came
-// from. What a machine reports about itself now is worth more than a record of
-// what was true when the content was published, and a consumer sent to a machine
-// that has already said the copy is gone would pay a transfer this estimate
-// promised it would not.
-func ArtifactFetchWork(versions []ArtifactVersion, offer OfferSnapshot) (int64, []ArtifactEvidence) {
+// One host's replica store is the only place a copy a Run may read can be, which
+// is why the inventory is the whole answer and a record of where content was
+// produced is not part of it. The machine a version's bytes were written on is
+// not thereby a machine holding a readable copy of them: a workload writes its
+// output inside its own container, nothing files that content as a replica, and
+// bytes no verification ever touched are bytes no consumer may be sent to read.
+// A host that enumerated and found no copy of this version has answered about
+// every copy anybody could use, and charging it the whole read is that answer
+// taken at its word.
+func ArtifactFetchWork(versions []ArtifactVersion, inventory ArtifactInventory) (int64, []ArtifactEvidence) {
 	if len(versions) == 0 {
 		return 0, nil
 	}
 	fetch := int64(0)
 	evidence := make([]ArtifactEvidence, 0, len(versions))
 	for _, version := range versions {
-		found := artifactEvidenceFor(version, offer)
+		found := ArtifactEvidence{ArtifactID: version.ID, Locality: LocalityCold, FetchBytes: version.SizeBytes}
+		switch {
+		case !inventory.Known:
+			found.Locality = LocalityUnknown
+		case inventory.Holds(version):
+			found.Locality, found.FetchBytes = LocalityHot, 0
+		}
 		fetch += found.FetchBytes
 		evidence = append(evidence, found)
 	}
 	return fetch, evidence
-}
-
-// artifactEvidenceFor is one candidate's answer about one version: what its own
-// inventory said, whether Mercator's record puts the content's production here,
-// and what reading it costs given both.
-func artifactEvidenceFor(version ArtifactVersion, offer OfferSnapshot) ArtifactEvidence {
-	found := ArtifactEvidence{
-		ArtifactID:   version.ID,
-		Locality:     LocalityCold,
-		FetchBytes:   version.SizeBytes,
-		ProducedHere: version.ProducedOn(offer.RentalID),
-	}
-	switch {
-	case offer.Artifacts.Known && offer.Artifacts.Holds(version):
-		found.Locality, found.FetchBytes = LocalityHot, 0
-	case offer.Artifacts.Known:
-		// This machine enumerated its copies and has none it may read. That is
-		// its own answer about itself now, and it stands over anything Mercator
-		// recorded about where the bytes were written.
-	case found.ProducedHere:
-		found.Locality, found.FetchBytes = LocalityUnknown, 0
-	default:
-		found.Locality = LocalityUnknown
-	}
-	return found
 }
 
 // ArtifactRequirements is what a workload reads and what it publishes, by

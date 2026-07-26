@@ -372,7 +372,7 @@ func TestANodeOffersTheCopiesItHolds(t *testing.T) {
 			if inventory.Holds(version) != (testCase.wantLocality == domain.LocalityHot) {
 				t.Errorf("holds a readable copy = %v, want %v", inventory.Holds(version), testCase.wantLocality == domain.LocalityHot)
 			}
-			fetch, evidence := domain.ArtifactFetchWork([]domain.ArtifactVersion{version}, offers[0])
+			fetch, evidence := domain.ArtifactFetchWork([]domain.ArtifactVersion{version}, inventory)
 			wantFetch := version.SizeBytes
 			if testCase.wantLocality == domain.LocalityHot {
 				wantFetch = 0

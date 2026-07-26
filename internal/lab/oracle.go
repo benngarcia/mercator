@@ -157,7 +157,7 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	queue := referenceQueue(input, offer)
 	provision := referenceProvision(offer)
 	work, locality := input.Image.StartWork(offer.Images)
-	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer)
+	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
 	pull := referenceContent(referenceStartWorkSeconds(work, offer.RegistryDownloadMbps()))
 	fetch := referenceContent(referenceObjectStoreSeconds(fetchBytes))
 	establishedPull := domain.Estimate{}
@@ -197,7 +197,7 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 // give up frees a byte it does not need straight back.
 func referenceDisk(input scheduler.SchedulingInput, offer domain.OfferSnapshot) domain.DiskDemand {
 	work, locality := input.Image.StartWork(offer.Images)
-	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer)
+	fetchBytes, evidence := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
 	caches := domain.CacheLandBytes(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches)
 	established := int64(0)
 	for _, found := range evidence {

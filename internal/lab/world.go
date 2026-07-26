@@ -193,11 +193,6 @@ type hostState struct {
 	// reportsDiffIDs makes this host enumerate its layers the way a Docker
 	// daemon does: uncompressed diff IDs, never compressed blob digests.
 	reportsDiffIDs bool
-	// noArtifactInventory is a machine whose runtime cannot list the Artifact
-	// copies it holds, which is what a node with no replica store reports. What
-	// it holds stays World Truth; what an offer for it may say is decided at
-	// publication, exactly as it is for a slot Mercator borrows.
-	noArtifactInventory bool
 	// leaseExpiresAt is when this machine's idle lease ends and the Rental stops
 	// existing. Zero means the lease outlives the scenario.
 	leaseExpiresAt time.Time
@@ -350,12 +345,8 @@ type pendingReplica struct {
 // what a consumer may not be admitted on. It survives the producing execution's
 // release, because an upload in flight is not the machine's business.
 type pendingPublication struct {
-	artifactID string
-	// from is the Run that computed this content and the machine it ran on. It
-	// travels with the upload rather than being looked up when the upload lands,
-	// because by then the Rental may be gone and where the bytes were written is
-	// a fact about the past.
-	from        publication
+	artifactID  string
+	runID       string
 	completesAt time.Time
 }
 
@@ -467,12 +458,11 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 	}
 	for _, rental := range tape.InitialWorld.Rentals {
 		state := hostState{
-			offer:               labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
-			heldLayers:          map[string]scenario.LayerSpec{},
-			heldImages:          map[string]bool{},
-			packed:              map[string]bool{},
-			reportsDiffIDs:      rental.ReportsDiffIDs,
-			noArtifactInventory: !rental.ListsArtifacts(),
+			offer:          labOffer(rental.ID, domain.OfferKindStanding, domain.LaneReusable, rental.RatePerHourUSD, rental.Resources),
+			heldLayers:     map[string]scenario.LayerSpec{},
+			heldImages:     map[string]bool{},
+			packed:         map[string]bool{},
+			reportsDiffIDs: rental.ReportsDiffIDs,
 		}
 		if rental.IdleLeaseExpiresIn != nil {
 			state.leaseExpiresAt = tape.Start.Add(rental.IdleLeaseExpiresIn.Duration())
@@ -835,21 +825,20 @@ func (world *simulatedWorld) settlePublications() {
 			remaining = append(remaining, upload)
 			continue
 		}
-		version := world.store.publish(upload.artifactID, upload.from, upload.completesAt)
+		version := world.store.publish(upload.artifactID, upload.runID, upload.completesAt)
 		world.recordEffect(
 			OperationArtifactPublished,
 			"artifact-published/"+upload.artifactID,
 			EffectCommandAccepted,
 			EffectResponseDelivered,
-			upload.from.byRunID,
+			upload.runID,
 			"publish",
 			"",
 			map[string]any{"artifact_id": version.ID, "workspace_id": version.WorkspaceID},
 			map[string]any{
-				"location":           version.Location,
-				"content_digest":     version.ContentDigest,
-				"size_bytes":         version.SizeBytes,
-				"produced_on_rental": version.ProducedOnRentalID,
+				"location":       version.Location,
+				"content_digest": version.ContentDigest,
+				"size_bytes":     version.SizeBytes,
 			},
 			"",
 		)
@@ -1499,16 +1488,6 @@ func (world *simulatedWorld) publishedOffers() []domain.OfferSnapshot {
 			offers[index].Images = domain.ImageInventory{}
 			offers[index].Artifacts = domain.ArtifactInventory{}
 			offers[index].Caches = domain.CacheInventory{}
-			continue
-		}
-		// A machine Mercator does control can still have a runtime that cannot
-		// list its Artifact copies, and then the copies it holds are World Truth
-		// no offer states. It is the same suppression for a different reason, and
-		// it belongs here for the same one: erasing the copy where truth is built
-		// would leave the laws about what capacity accumulates reading an empty
-		// inventory whatever the world did.
-		if world.observed[offer.ID].noArtifactInventory {
-			offers[index].Artifacts = domain.ArtifactInventory{}
 		}
 	}
 	return offers
@@ -1658,14 +1637,8 @@ func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at tim
 	for _, artifactID := range arrival.Request.ProducesArtifacts {
 		world.keepReplica(artifactID, execution.OfferID, execution.RunID, execution.LaunchKey, "run_output", at)
 		world.publishing = append(world.publishing, pendingPublication{
-			artifactID: artifactID,
-			from: publication{
-				byRunID: execution.RunID,
-				// The machine is the Rental this execution ran on, which only
-				// capacity Mercator keeps has: a one-shot product publishes the
-				// content and leaves no host behind to have produced it on.
-				onRentalID: world.truth[execution.OfferID].offer.RentalID,
-			},
+			artifactID:  artifactID,
+			runID:       execution.RunID,
 			completesAt: at.Add(world.store.transferDuration(artifactID)),
 		})
 	}
@@ -2029,13 +2002,12 @@ func findLayer(world scenario.WorldSpec, digest string) scenario.LayerSpec {
 
 func cloneHostState(state hostState) hostState {
 	return hostState{
-		offer:               state.offer,
-		heldLayers:          cloneMap(state.heldLayers),
-		heldImages:          cloneMap(state.heldImages),
-		packed:              cloneMap(state.packed),
-		reportsDiffIDs:      state.reportsDiffIDs,
-		noArtifactInventory: state.noArtifactInventory,
-		leaseExpiresAt:      state.leaseExpiresAt,
+		offer:          state.offer,
+		heldLayers:     cloneMap(state.heldLayers),
+		heldImages:     cloneMap(state.heldImages),
+		packed:         cloneMap(state.packed),
+		reportsDiffIDs: state.reportsDiffIDs,
+		leaseExpiresAt: state.leaseExpiresAt,
 	}
 }
 

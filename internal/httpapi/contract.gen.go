@@ -366,9 +366,6 @@ type ArtifactEvidence struct {
 
 	// Locality Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility.
 	Locality ArtifactEvidenceLocality `json:"locality"`
-
-	// ProducedHere Whether Mercator's own record says this version's bytes were written on this candidate. It is stated beside the locality rather than folded into it because the two come from different authorities: the locality is what the machine said about itself, and this is what the catalog recorded when the content was published. Where a machine could not enumerate its copies, this is the only evidence there is, and the read it would avoid is taken off its price as a preference that can lower a candidate's cost and never refuse one.
-	ProducedHere bool `json:"produced_here,omitempty"`
 }
 
 // ArtifactEvidenceLocality Hot is a checked copy of exactly this version on this host. Cold is no such copy, which includes a copy nobody verified. Unknown is a host that could not enumerate its copies at all, which is uncertainty to price and never infeasibility.

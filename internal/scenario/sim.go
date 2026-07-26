@@ -48,11 +48,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	for _, artifact := range spec.Artifacts {
 		version := artifact.Version(simWorkspace)
 		if artifact.Prepublished() {
-			// A publication is what records where content was produced, so a
-			// version this world starts out holding was published from whatever
-			// machine the fixture says wrote it, before the clock started.
 			version.PublishedAt = spec.Start()
-			version.ProducedOnRentalID = artifact.ProducedOn
 		} else {
 			session.note("Artifact %q waits on Run %q to publish it, and a placement world has no publication moment", artifact.ID, artifact.ProducedBy)
 		}
@@ -99,14 +95,13 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Machine {
 	start := clock.Now()
 	machine := &fake.Machine{
-		Offer:               simRentalOffer(rental),
-		HeldLayers:          map[string]int64{},
-		HeldDiffIDs:         map[string]bool{},
-		ReportsDiffIDs:      rental.ReportsDiffIDs,
-		HeldImages:          map[string]bool{},
-		ArtifactReplicas:    simArtifactReplicas(spec, rental.ArtifactReplicas, start),
-		NoArtifactInventory: !rental.ListsArtifacts(),
-		HeldCaches:          simHeldCaches(rental.CacheMounts, start),
+		Offer:            simRentalOffer(rental),
+		HeldLayers:       map[string]int64{},
+		HeldDiffIDs:      map[string]bool{},
+		ReportsDiffIDs:   rental.ReportsDiffIDs,
+		HeldImages:       map[string]bool{},
+		ArtifactReplicas: simArtifactReplicas(spec, rental.ArtifactReplicas, start),
+		HeldCaches:       simHeldCaches(rental.CacheMounts, start),
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {

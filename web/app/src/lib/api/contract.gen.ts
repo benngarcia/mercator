@@ -835,8 +835,6 @@ export interface components {
              * @description What this host still has to read out of the object store for this version.
              */
             fetch_bytes?: number;
-            /** @description Whether Mercator's own record says this version's bytes were written on this candidate. It is stated beside the locality rather than folded into it because the two come from different authorities: the locality is what the machine said about itself, and this is what the catalog recorded when the content was published. Where a machine could not enumerate its copies, this is the only evidence there is, and the read it would avoid is taken off its price as a preference that can lower a candidate's cost and never refuse one. */
-            produced_here?: boolean;
         };
         /** @description The Artifact content this host says it holds. Like the image inventory it answers what is here, and separately whether anyone enumerated at all: capacity Mercator runs nothing of its own on reports none of it, and that silence is not absence. */
         ArtifactInventory: {

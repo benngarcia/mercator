@@ -38,12 +38,8 @@ func newObjectStore(workspaceID string, artifacts []scenario.ArtifactSpec, start
 		store.catalog[artifact.ID] = artifact.Version(workspaceID)
 		// An Artifact no Run in this Blueprint produces is content that existed
 		// before the world started, which is what makes it consumable at once.
-		// It goes in through the same publication as everything else, because
-		// where content was produced is part of publishing it: a fixture stating
-		// the machine is stating history, and history reaches the catalog the one
-		// way anything reaches it.
 		if artifact.Prepublished() {
-			store.publish(artifact.ID, publication{onRentalID: artifact.ProducedOn}, start)
+			store.publish(artifact.ID, "", start)
 		}
 	}
 	return store
@@ -64,25 +60,14 @@ func (store *objectStore) entry(artifactID string) (domain.ArtifactVersion, bool
 	return version, true
 }
 
-// publication is who a version came from: the Run that wrote it and the reusable
-// capacity it was written on. The machine is empty for content published from
-// capacity that keeps nothing, because a one-shot execution's host is gone once
-// its workload exits and no later Run can be sent there.
-type publication struct {
-	byRunID    string
-	onRentalID string
-}
-
-// publish records that a version's bytes reached the object store, and where they
-// came from. A version is immutable, so the first publication is the only one and
-// a second is ignored rather than allowed to rewrite when the content became
-// readable or which machine wrote it.
-func (store *objectStore) publish(artifactID string, from publication, at time.Time) domain.ArtifactVersion {
+// publish records that a version's bytes reached the object store. A version is
+// immutable, so the first publication is the only one and a second is ignored
+// rather than allowed to rewrite when the content became readable.
+func (store *objectStore) publish(artifactID, runID string, at time.Time) domain.ArtifactVersion {
 	version := store.catalog[artifactID]
 	if _, published := store.publishedAt[artifactID]; !published {
 		store.publishedAt[artifactID] = at
-		version.ProducedByRunID = from.byRunID
-		version.ProducedOnRentalID = from.onRentalID
+		version.ProducedByRunID = runID
 		store.catalog[artifactID] = version
 	}
 	entry, _ := store.entry(artifactID)

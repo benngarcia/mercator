@@ -1,8 +1,6 @@
 package scenario
 
 import (
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -104,11 +102,11 @@ func TestOpenCatalogPreservesPlacementClassifications(t *testing.T) {
 		counts[entry.Blueprint.Classification]++
 	}
 
-	if regressions != 26 {
-		t.Errorf("regression Blueprints = %d, want 26", regressions)
+	if regressions != 24 {
+		t.Errorf("regression Blueprints = %d, want 24", regressions)
 	}
-	if counts[ClassificationGreen] != 18 {
-		t.Errorf("green Blueprints = %d, want 18", counts[ClassificationGreen])
+	if counts[ClassificationGreen] != 16 {
+		t.Errorf("green Blueprints = %d, want 16", counts[ClassificationGreen])
 	}
 	if counts[ClassificationTarget] != 8 {
 		t.Errorf("target Blueprints = %d, want 8", counts[ClassificationTarget])
@@ -129,49 +127,6 @@ func TestLoadBlueprintModelsImmutableArtifactsSeparatelyFromCacheMounts(t *testi
 	}
 	if blueprint.Request.CacheMounts[0].Name == blueprint.Request.ConsumesArtifacts[0] {
 		t.Errorf("Cache Mount name must not become immutable Artifact identity")
-	}
-}
-
-// TestABlueprintCannotStateAProducingHostTwoWays refuses the two things a
-// fixture cannot mean by where content was produced. A version whose producer
-// runs in this Blueprint gets its machine from its own publication, so stating
-// one as well is two authorities for one fact; and only capacity Mercator keeps
-// can be the machine bytes were written on and still be there when a consumer
-// arrives, so a name that is not a Rental in this world is a preference pointing
-// at nothing.
-func TestABlueprintCannotStateAProducingHostTwoWays(t *testing.T) {
-	for name, testCase := range map[string]struct{ from, to, want string }{
-		"a producing host beside a producing Run": {
-			`"produced_by": "run"`,
-			`"produced_by": "run", "produced_on": "rental-a"`,
-			"which is what establishes the host",
-		},
-		"a producing host no machine in this world answers to": {
-			`"size": "40GB"`,
-			`"size": "40GB", "produced_on": "rental-z"`,
-			"not a Rental in this world",
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			original, err := os.ReadFile("testdata/blueprints/v1/artifact-locality.json")
-			if err != nil {
-				t.Fatalf("read the fixture: %v", err)
-			}
-			path := filepath.Join(t.TempDir(), "fixture.json")
-			mutated := strings.Replace(string(original), testCase.from, testCase.to, 1)
-			if mutated == string(original) {
-				t.Fatalf("the fixture no longer contains %q, so this case changes nothing", testCase.from)
-			}
-			if err := os.WriteFile(path, []byte(mutated), 0o644); err != nil {
-				t.Fatalf("write the fixture: %v", err)
-			}
-
-			_, err = LoadBlueprint(path)
-
-			if err == nil || !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("expected a refusal mentioning %q, got %v", testCase.want, err)
-			}
-		})
 	}
 }
 
