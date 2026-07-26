@@ -50,14 +50,14 @@
         "stages": {
           "image_fetch": {"seconds": {"at_least": 32.4, "at_most": 32.6}, "confidence": 0.5}
         },
-        "uncertainty": 0.5
+        "uncertainty": 1
       },
       "rental-silent": {
         "feasible": true,
         "stages": {
           "image_fetch": {"seconds": {"at_least": 32.4, "at_most": 32.6}, "confidence": 0.5}
         },
-        "uncertainty": 0.5
+        "uncertainty": 1
       }
     }
   }

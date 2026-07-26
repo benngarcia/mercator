@@ -53,8 +53,8 @@
         "start_failure_rate": 0.4,
         "interruption_rate": 0.25,
         "risk_confidence": 0.9,
-        "uncertainty": 0.5,
-        "score_usd": {"at_least": 0.5150, "at_most": 0.5151}
+        "uncertainty": 1,
+        "score_usd": {"at_least": 0.5340, "at_most": 0.5341}
       },
       "ask-steady": {
         "feasible": true,
@@ -64,8 +64,8 @@
         "start_failure_rate": 0,
         "interruption_rate": 0,
         "risk_confidence": 0.9,
-        "uncertainty": 0.5,
-        "score_usd": {"at_least": 0.5150, "at_most": 0.5151}
+        "uncertainty": 1,
+        "score_usd": {"at_least": 0.5340, "at_most": 0.5341}
       },
       "ask-unmeasured": {
         "feasible": true,
@@ -73,8 +73,8 @@
           "boot": {"seconds": 300}
         },
         "no_risk_history": true,
-        "uncertainty": 0.5,
-        "score_usd": {"at_least": 0.5150, "at_most": 0.5151}
+        "uncertainty": 1,
+        "score_usd": {"at_least": 0.5340, "at_most": 0.5341}
       }
     }
   }

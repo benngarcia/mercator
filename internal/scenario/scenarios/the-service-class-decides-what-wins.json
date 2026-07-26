@@ -62,8 +62,8 @@
               "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
             },
             "artifact_evidence": {"artifact:imagenet:v2.41": "miss"},
-            "uncertainty": 1,
-            "score_usd": {"at_least": 0.88, "at_most": 0.89}
+            "uncertainty": 1.5,
+            "score_usd": {"at_least": 0.89, "at_most": 0.90}
           }
         }
       }
@@ -103,8 +103,8 @@
               "artifact_fetch": {"seconds": {"at_least": 639, "at_most": 641}}
             },
             "artifact_evidence": {"artifact:imagenet:v2.41": "miss"},
-            "uncertainty": 1,
-            "score_usd": {"at_least": 21.9, "at_most": 22.0}
+            "uncertainty": 1.5,
+            "score_usd": {"at_least": 22.9, "at_most": 23.0}
           }
         }
       }

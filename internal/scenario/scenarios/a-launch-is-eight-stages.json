@@ -77,7 +77,7 @@
               "boot": {"seconds": 600, "source": "offer"},
               "agent_ready": {"seconds": 0, "source": "unpublished"},
               "image_fetch": {"seconds": {"at_least": 8, "at_most": 9}, "source": "inventory_unknown", "confidence": 0.5},
-              "unpack": {"seconds": 0, "source": "inventory_unknown"},
+              "unpack": {"seconds": 2, "source": "inventory_unknown", "confidence": 0.5},
               "artifact_fetch": {"seconds": 0, "source": "workload_reads_nothing"},
               "container_start": {"seconds": 1, "source": "scheduler"},
               "application_ready": {"seconds": 120, "source": "workload.expected_ready"}

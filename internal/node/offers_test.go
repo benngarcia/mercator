@@ -201,9 +201,12 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 			inventory:    domain.ImageInventory{Known: true, ImageDigests: []string{trainerV2}},
 			wantLocality: domain.LocalityHot,
 		},
-		"a host holding the shared base fetches only the top layer": {
+		// The top layer has to arrive and then be applied, so a partial host owes
+		// both over the same bytes. Charging the transfer alone said a machine about
+		// to fetch a layer owed no assembly of it.
+		"a host holding the shared base fetches the top layer and applies it": {
 			inventory:    domain.ImageInventory{Known: true, LayerDigests: []string{baseLayer}},
-			wantWork:     domain.ImageWork{TransferBytes: 80_000_000},
+			wantWork:     domain.ImageWork{TransferBytes: 80_000_000, UnpackBytes: 80_000_000},
 			wantLocality: domain.LocalityPartial,
 		},
 		"a host that fetched the image and never assembled it unpacks and fetches nothing": {
@@ -220,9 +223,9 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 			wantWork:     domain.ImageWork{UnpackBytes: 80_000_000},
 			wantLocality: domain.LocalityPartial,
 		},
-		"a host holding nothing fetches all of it": {
+		"a host holding nothing fetches all of it and applies all of it": {
 			inventory:    domain.ImageInventory{Known: true},
-			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000},
+			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000, UnpackBytes: 18_080_000_000},
 			wantLocality: domain.LocalityCold,
 		},
 		// Silence is not warmth. The image has to arrive from somewhere and
@@ -230,7 +233,7 @@ func TestWhatANodeHoldsDecidesWhatItStillHasToDo(t *testing.T) {
 		// nobody can describe owes what a host holding nothing owes.
 		"a host that cannot say owes the whole image rather than nothing": {
 			inventory:    domain.ImageInventory{Known: false},
-			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000},
+			wantWork:     domain.ImageWork{TransferBytes: 18_080_000_000, UnpackBytes: 18_080_000_000},
 			wantLocality: domain.LocalityUnknown,
 		},
 	}

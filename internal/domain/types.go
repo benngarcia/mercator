@@ -620,11 +620,17 @@ type ImageManifest struct {
 }
 
 // ImageWork is what one host still owes before this image can run: bytes to
-// fetch from a registry, and bytes already on the machine that are not yet
-// unpacked into a layer chain a container can be started on. The two are
-// separate because they are different work over different resources, and
-// because a host that already paid the network is not cold however much local
-// assembly is left.
+// fetch from a registry, and bytes that have to be unpacked into a layer chain a
+// container can be started on. The two are separate because they are different
+// work over different resources, and because a host that already paid the
+// network is not cold however much local assembly is left.
+//
+// Bytes counted in both are the normal case rather than double counting. A layer
+// that has to be fetched has to be applied afterwards, and both simulated worlds
+// spend the assembly of anything a launch fetched. Charging a transfer alone said
+// a machine fetching eighteen gigabytes owed no assembly at all, and said it at
+// full confidence, so the stage the launch was about to spend most of its time in
+// was structurally missing from the number a start bound is enforced against.
 type ImageWork struct {
 	TransferBytes int64
 	UnpackBytes   int64
@@ -659,12 +665,19 @@ func (manifest ImageManifest) StartWork(inventory ImageInventory) (ImageWork, Lo
 		return ImageWork{}, LocalityUnknown
 	}
 	if !inventory.Known {
-		return ImageWork{TransferBytes: manifest.compressedBytes()}, LocalityUnknown
+		whole := manifest.compressedBytes()
+		return ImageWork{TransferBytes: whole, UnpackBytes: whole}, LocalityUnknown
 	}
 	// A host that says it pulled this image and cannot run it holds the bytes
 	// of every layer it did not enumerate as unpacked: what it owes on those is
 	// assembly, not a transfer. Charging it the network again would price a
 	// machine sitting on 18GB exactly like one that has never seen the image.
+	//
+	// A layer this host has neither pulled nor unpacked owes both, because bytes
+	// that arrive still have to be applied before a container can be started on
+	// them. That is what makes the fetch and the assembly separate stages rather
+	// than two names for the same answer: the same layer set can owe one, the
+	// other, or both.
 	pulled := inventory.Pulled(manifest.Digest)
 	work, here := ImageWork{}, 0
 	for _, layer := range manifest.Layers {
@@ -676,6 +689,7 @@ func (manifest ImageManifest) StartWork(inventory ImageInventory) (ImageWork, Lo
 			here++
 		default:
 			work.TransferBytes += layer.CompressedBytes
+			work.UnpackBytes += layer.CompressedBytes
 		}
 	}
 	switch {

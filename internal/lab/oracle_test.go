@@ -274,7 +274,8 @@ func TestBothModelsRefuseAHostTheContentDoesNotFitOn(t *testing.T) {
 // Every candidate here is a machine with something to be unsure about: one that
 // cannot be asked what it holds, one whose publisher is 70 percent sure of its
 // capacity, and one that answered and owes a transfer over a link nothing has
-// measured. The Run is interactive, so a point of doubt is 0.60 USD and a term
+// measured plus the assembly of what it fetches over a rate nothing has measured
+// either. The Run is interactive, so a point of doubt is 0.60 USD and a term
 // deleted from either model shows up in the dollars.
 func TestBothModelsPriceDoubtTheSameWay(t *testing.T) {
 	input := smallSchedulingInput(t)
@@ -314,9 +315,14 @@ func TestBothModelsPriceDoubtTheSameWay(t *testing.T) {
 		t.Fatalf("only %d of %d candidates carry any doubt, so agreeing about it proves less than it should",
 			doubtful, len(production.Candidates))
 	}
+	// A machine nobody can ask owes the whole image and the assembly of it, and
+	// neither the link nor the unpack rate has been measured, so it carries half a
+	// point for each. It is the same point the machine beside it would carry for
+	// having answered and held nothing, which is the rule: silence costs what
+	// absence costs and never more.
 	borrowedCandidate := candidateFor(t, production, "borrowed-host")
-	if borrowedCandidate.Uncertainty() != domain.AssumedLinkConfidence {
-		t.Fatalf("the machine nobody can ask carries %v points of doubt, and the only unsure answer it has is a transfer over an unmeasured link: %+v",
+	if borrowedCandidate.Uncertainty() != 2*domain.AssumedLinkConfidence {
+		t.Fatalf("the machine nobody can ask carries %v points of doubt, and the answers it is unsure of are a transfer and an assembly over two unmeasured rates: %+v",
 			borrowedCandidate.Uncertainty(), borrowedCandidate.Confidences)
 	}
 }

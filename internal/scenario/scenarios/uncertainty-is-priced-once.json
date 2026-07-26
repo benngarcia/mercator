@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Three machines at one price for one 18.04GB image, so nothing but what each answer is worth can decide the placement. The first is a Rental that enumerated itself and holds the image: nothing to fetch, and it is certain of that. The second is a machine Mercator has not enrolled, which World Truth says is sitting on the whole image while nothing there can be asked: it is charged the whole fetch and half a point of doubt, because the seconds it owes cross a link nothing has measured. That half point is the entire uncertainty term for it. Pricing the whole image AND capping the estimate's confidence AND adding a point for the unenumerated inventory was charging one silence three times, and the reference model did exactly that while the production scheduler did not, which nothing noticed because both were multiplied by zero. The third Rental holds the image too and publishes a capacity claim it is 70 percent sure of, which is three tenths of a point and the only thing separating it from the first. An interactive Run prices a point of doubt at 0.60 USD, so the doubted machine is 0.18 USD dearer and the unaskable one is dearer by its seconds.",
+  "summary": "Three machines at one price for one 18.04GB image, so nothing but what each answer is worth can decide the placement. The first is a Rental that enumerated itself and holds the image: nothing to fetch, and it is certain of that. The second is a machine Mercator has not enrolled, which World Truth says is sitting on the whole image while nothing there can be asked: it is charged the whole fetch, the assembly of every byte it fetches, and one point of doubt: half because those seconds cross a link nothing has measured, and half because applying the bytes afterwards is a duration over an unpack rate nothing has measured either. That one point is the entire uncertainty term for it, and it is the same point an enrolled machine that answered and holds nothing is charged, which is what makes silence cost what absence costs here as well. Pricing the whole image AND capping the estimate's confidence AND adding a point for the unenumerated inventory was charging one silence three times, and the reference model did exactly that while the production scheduler did not, which nothing noticed because both were multiplied by zero. The third Rental holds the image too and publishes a capacity claim it is 70 percent sure of, which is three tenths of a point and the only thing separating it from the first. An interactive Run prices a point of doubt at 0.60 USD, so the doubted machine is 0.18 USD dearer and the unaskable one is dearer by its seconds.",
   "classification": "green",
   "world": {
     "images": {
@@ -68,8 +68,8 @@
           "image_fetch": {"seconds": {"at_least": 285, "at_most": 292}, "source": "inventory_unknown", "confidence": 0.5}
         },
         "image_locality": "unknown",
-        "uncertainty": 0.5,
-        "score_usd": {"at_least": 3.53, "at_most": 3.54}
+        "uncertainty": 1,
+        "score_usd": {"at_least": 4.55, "at_most": 4.56}
       }
     }
   }
