@@ -88,18 +88,25 @@ func TestOneEnrolledNodeRunsTwoWorkloadsInSequence(t *testing.T) {
 
 // TestANodeStillRunningPastItsBoundIsNotQueuedBehind is the overrun rule against
 // the production daemon, and this is the world that makes the rule real: nothing
-// terminates a workload at its enforced maximum, so a container that does not exit
-// holds its node while the Booking's remaining runtime reads zero. The corpus
-// states such a world by declaring it; here the node is genuinely still running the
-// first Run when the second arrives, through the real API, the real storage, and
-// the real node protocol.
+// terminates a workload at its enforced maximum, so a container that does not
+// exit holds its node while the Booking's remaining runtime reads zero. The
+// corpus states such a world by declaring it; here the machine is genuinely still
+// running the first Run when the second arrives, through the real API, the real
+// storage, and the real node protocol.
 //
-// A zero remainder is what an idle Rental reports, so the daemon read this node as
-// free this instant, queued the arriving Run behind a Booking with nothing left to
-// project from, and promised it a start it had already missed. There is no other
-// capacity in this fleet, so the honest answer is that there is nowhere to put it.
+// A zero remainder is what an idle Rental reports, so the daemon read this node
+// as free this instant, queued the arriving Run behind a Booking with nothing
+// left to project from, and promised it a start it had already missed. What the
+// arriving Run gets instead is the rest of the fleet, and this is the assertion
+// the rule needs: an answer of 502 is what an internal placement failure produces
+// too, and that is exactly what the domain refusal alone would leave. Placement
+// has to reach a decision, refuse the busy machine on its own capacity evidence,
+// record the overrun beside the remainder that ran out, and put the Run on the
+// expensive cold machine next to it. That is the same sentence
+// an-overrun-booking-is-not-an-empty-queue states at L0.
 func TestANodeStillRunningPastItsBoundIsNotQueuedBehind(t *testing.T) {
 	fleet := startFleet(t)
+	spare := fleet.enrollAnother(t, 9.00)
 
 	stuck := fleet.submitWorkload(t, func(name string) map[string]any {
 		revision := workloadRevision(name, fleet.image)
@@ -109,16 +116,58 @@ func TestANodeStillRunningPastItsBoundIsNotQueuedBehind(t *testing.T) {
 		return revision
 	})
 	fleet.runtime.awaitLaunch(t, stuck)
-	// The enforced second has to pass, and there is no virtual time here: the
-	// daemon reads the wall clock, and this container never exits.
+	// The runtime Mercator enforces is measured against the container, so the
+	// clock on it starts when the machine says the container is running. There is
+	// no virtual time here: the daemon reads the wall clock, the enforced second
+	// has to pass, and this container never exits.
+	fleet.advance(t, stuck)
 	time.Sleep(1500 * time.Millisecond)
 
 	arriving := fleet.submitRun(t)
-	fleet.refuseToPlace(t, arriving)
+	fleet.advance(t, arriving)
 
+	decision := fleet.decision(t, arriving)
+	busy := decision.candidate(t, fleet.nodeID)
+	if busy.Feasible {
+		t.Fatal("the machine still running work past the runtime Mercator enforces was offered as feasible capacity")
+	}
+	if !refusedAs(busy, "CAPACITY_UNAVAILABLE") {
+		t.Fatalf("the busy machine was refused as %+v, want its own capacity evidence", busy.Rejections)
+	}
+	assertOverrunRecorded(t, busy)
+	if decision.SelectedOfferSnapshotID != spare.nodeID {
+		t.Fatalf("the Run landed on %q, want the rest of the fleet at %q", decision.SelectedOfferSnapshotID, spare.nodeID)
+	}
 	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, arriving) {
 		t.Fatalf("a Run was sent to a node still running work past the runtime Mercator enforces: %v", launched)
 	}
+	spare.runtime.awaitLaunch(t, arriving)
+}
+
+// assertOverrunRecorded reads the schedule the decision refused this candidate
+// on. The remainder that ran out is the number that made a busy machine look
+// idle, and the overrun beside it is what tells an operator which of the two a
+// zero is.
+func assertOverrunRecorded(t *testing.T, candidate domain.CandidateDecision) {
+	t.Helper()
+	evidence := candidate.RentalSchedule
+	if evidence == nil || evidence.Running == nil {
+		t.Fatalf("the decision refused this machine and recorded no schedule saying why: %+v", evidence)
+	}
+	if evidence.Running.RemainingMaxRuntimeSeconds != 0 {
+		t.Fatalf("the record says the Booking has %.2fs of enforced runtime left, and it ran out",
+			evidence.Running.RemainingMaxRuntimeSeconds)
+	}
+	if evidence.Running.OverrunSeconds <= 0 {
+		t.Fatalf("the record says the Booking has overrun nothing, and its container is still going past its bound: %+v",
+			evidence.Running)
+	}
+}
+
+func refusedAs(candidate domain.CandidateDecision, code string) bool {
+	return slices.ContainsFunc(candidate.Rejections, func(rejection domain.Violation) bool {
+		return rejection.Code == code
+	})
 }
 
 // TestANodeHoldsTheImageItRan is the production half of what the corpus proves
@@ -300,23 +349,53 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 	for _, option := range options {
 		option(harness)
 	}
-	bootstrap := harness.invite(t)
+	bootstrap := harness.invite(t, 1.25)
 	harness.nodeID = bootstrap.NodeID
-	harness.startAgent(t, bootstrap)
-	// Placement can only choose a node it has facts for, so the fleet is not
-	// ready until the first heartbeat lands.
+	harness.stop = harness.startAgent(t, bootstrap, harness.agentRuntime)
+	harness.awaitOffer(t, harness.nodeID)
+	return harness
+}
+
+// machine is one enrolled node: the identity the control plane holds it under
+// and the runtime its agent drives. A fleet with more than one machine is how a
+// case says what Mercator does with the rest of the fleet when one of them
+// cannot take the work.
+type machine struct {
+	nodeID  string
+	runtime *scriptedRuntime
+}
+
+// enrollAnother adds a machine to this fleet at its own shadow price, with its
+// own runtime and its own agent over the same node protocol. It holds none of
+// the fleet's image, which is what makes it the expensive cold alternative to
+// the warm machine every case starts with.
+func (f *fleet) enrollAnother(t *testing.T, priceUSDPerHour float64) machine {
+	t.Helper()
+	runtime := newScriptedRuntime(map[string][]string{
+		trainerIndexDigest: {trainerBaseDiffID, trainerTopDiffID},
+	})
+	bootstrap := f.invite(t, priceUSDPerHour)
+	f.startAgent(t, bootstrap, runtime)
+	f.awaitOffer(t, bootstrap.NodeID)
+	return machine{nodeID: bootstrap.NodeID, runtime: runtime}
+}
+
+// awaitOffer waits until Placement can choose this machine at all. It can only
+// choose a node it has facts for, so a fleet is not ready until the first
+// heartbeat lands.
+func (f *fleet) awaitOffer(t *testing.T, nodeID string) {
+	t.Helper()
 	waitFor(t, func() bool {
-		for _, offer := range harness.offers(t) {
-			if offer.ID == harness.nodeID {
+		for _, offer := range f.offers(t) {
+			if offer.ID == nodeID {
 				return true
 			}
 		}
 		return false
-	}, "the enrolled node never appeared as placeable capacity")
-	return harness
+	}, "the enrolled node "+nodeID+" never appeared as placeable capacity")
 }
 
-func (f *fleet) invite(t *testing.T) capability.NodeBootstrap {
+func (f *fleet) invite(t *testing.T, priceUSDPerHour float64) capability.NodeBootstrap {
 	t.Helper()
 	var response struct {
 		ControlPlaneURL string `json:"control_plane_url"`
@@ -328,7 +407,7 @@ func (f *fleet) invite(t *testing.T) capability.NodeBootstrap {
 	}
 	f.call(t, http.MethodPost, "/v1/nodes", map[string]any{
 		"workspace_id":              daemon.DefaultWorkspaceID,
-		"shadow_price_usd_per_hour": 1.25,
+		"shadow_price_usd_per_hour": priceUSDPerHour,
 	}, &response, http.StatusCreated)
 	if response.EnrollmentToken == "" {
 		t.Fatal("an invitation must return enrollment material exactly once")
@@ -343,7 +422,7 @@ func (f *fleet) invite(t *testing.T) capability.NodeBootstrap {
 	}
 }
 
-func (f *fleet) startAgent(t *testing.T, bootstrap capability.NodeBootstrap) {
+func (f *fleet) startAgent(t *testing.T, bootstrap capability.NodeBootstrap, runtime nodeagent.Runtime) context.CancelFunc {
 	t.Helper()
 	state, err := nodeagent.OpenState(filepath.Join(t.TempDir(), "node-state.json"), bootstrap.NodeID)
 	if err != nil {
@@ -358,16 +437,16 @@ func (f *fleet) startAgent(t *testing.T, bootstrap capability.NodeBootstrap) {
 			EnrollmentToken: bootstrap.EnrollmentToken,
 			AgentVersion:    "test",
 		},
-		f.agentRuntime,
+		runtime,
 		nodeagent.NewHTTPTransport(bootstrap.ControlPlaneURL, nil),
 		state,
 		nodeagent.WithHeartbeat(f.heartbeat),
 		nodeagent.WithReconnectBackoff(5*time.Millisecond),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
-	f.stop = cancel
 	t.Cleanup(cancel)
 	go func() { _ = agent.Run(ctx) }()
+	return cancel
 }
 
 func (f *fleet) stopAgent() { f.stop() }
@@ -487,14 +566,23 @@ func workloadRevision(name, image string) map[string]any {
 	}
 }
 
+// bookingDecision is the record the daemon published, read as the type the
+// daemon published it as. A case that only needs the winner reads the accessors
+// below; a case about why a machine was passed over reads the candidate itself.
 type bookingDecision struct {
-	SelectedOfferSnapshotID string `json:"selected_offer_snapshot_id"`
-	Candidates              []struct {
-		OfferSnapshotID string                    `json:"offer_snapshot_id"`
-		Disposition     string                    `json:"disposition"`
-		ImageLocality   domain.LocalityState      `json:"image_locality"`
-		Estimates       domain.CandidateEstimates `json:"estimates"`
-	} `json:"candidates"`
+	SelectedOfferSnapshotID string                     `json:"selected_offer_snapshot_id"`
+	Candidates              []domain.CandidateDecision `json:"candidates"`
+}
+
+func (decision bookingDecision) candidate(t *testing.T, offerID string) domain.CandidateDecision {
+	t.Helper()
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == offerID {
+			return candidate
+		}
+	}
+	t.Fatalf("the decision weighed %d candidates and none of them was %q", len(decision.Candidates), offerID)
+	return domain.CandidateDecision{}
 }
 
 func (decision bookingDecision) imageLocality() domain.LocalityState {
@@ -506,7 +594,7 @@ func (decision bookingDecision) imageLocality() domain.LocalityState {
 	return ""
 }
 
-func (decision bookingDecision) disposition() string {
+func (decision bookingDecision) disposition() domain.CandidateDisposition {
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID == decision.SelectedOfferSnapshotID {
 			return candidate.Disposition
@@ -522,6 +610,13 @@ func (decision bookingDecision) pullEstimate() domain.Estimate {
 		}
 	}
 	return domain.Estimate{}
+}
+
+// advance drives one Run forward the way the reconcile sweep does, one step, and
+// expects the daemon to have taken it.
+func (f *fleet) advance(t *testing.T, runID string) {
+	t.Helper()
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusOK)
 }
 
 // refuseToPlace drives one Run forward the way the reconcile sweep does and
@@ -1208,7 +1303,7 @@ func TestTheNodeListingStatesTheRoomOnAMachineThatIsFull(t *testing.T) {
 // apart either.
 func TestTheNodeListingTellsAnUnmeasurableDiskFromANodeNobodyHasHeardFrom(t *testing.T) {
 	fleet := startFleet(t, reporting(capability.DiskFacts{}))
-	silent := fleet.invite(t)
+	silent := fleet.invite(t, 1.25)
 
 	unmeasurable := fleet.summaryFor(t, fleet.nodeID)
 	unheard := fleet.summaryFor(t, silent.NodeID)
