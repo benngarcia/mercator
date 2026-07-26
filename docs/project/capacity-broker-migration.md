@@ -2061,6 +2061,66 @@ are momentarily stale is prepared for on the next sweep rather than on its own
 arrival, so the interval an operator states bounds how often preparation may
 begin and the sweep still bounds how late it may be.
 
+CI then failed the Console job three times running, and that one was no flake. It
+is the most valuable thing this close-out found, because it is a defect an operator
+would have met and no Go test can see.
+
+`TestLabConsoleUsesNormalAPIAndSSE` timed out waiting for the consumer's `Booking
+decided` row. The row was in the document and visible the whole time. What was
+wrong was the canvas: it positioned every block and every column against
+`Date.now()` while every moment it reads comes out of the workspace's own event
+stream. Those are two clocks. A Lab execution runs on virtual time in 2030, so the
+moment one of its Bookings was queued behind another Run, `workspaceHorizon` was
+asked to reach a projected start three and a half years out and `tickMinutes` built
+a column per ten minutes of it: 723,040 elements, and a main thread held for
+seventy seconds. The feed was not slow, the tab was unusable, and the fifteen
+second wait expired inside that freeze.
+
+This host cannot launch the browser those checkpoints need. Playwright's Chromium
+wants nine system libraries that are not installed here and installing them is not
+this branch's business, so the flow was driven inside a
+`mcr.microsoft.com/playwright` container with `--network host`, the host's own
+browser cache mounted in, and `mercator lab serve` running the real console on
+loopback. That reproduced CI exactly, three times, and it is how each fix was
+checked. Anyone can repeat it without a display.
+
+Three things changed, each with its own reason:
+
+- the canvas reads the workspace's clock, which is the moment it last said
+  something. In production that is seconds old and nothing moves. In the Lab it is
+  the virtual moment every projection on the screen was computed from, which is
+  what makes the axis mean anything there at all.
+- the horizon is bounded at two days, 289 columns. Every term in it is a difference
+  between two clocks, and a renderer that draws whatever that difference says is a
+  hazard on its own: a wrong projection, a skewed server clock, or an absurd
+  maximum runtime now costs a clipped axis rather than a frozen tab.
+- the flow advances until the console shows the Run closed instead of advancing a
+  fixed thirty minutes. Thirty was enough while a consumer read nothing and is ten
+  minutes short now that reading an Artifact costs what it costs, so the number was
+  asserting today's physics as a deadline without saying so.
+
+The vertical proof needed one correction to accept what the world now does.
+`queue_vs_fresh_compared` required a `run_now_existing_rental` candidate beside the
+fresh one, which is the case where standing capacity has no queue delay to weigh,
+and refused the case the checkpoint is named after. It takes either standing
+disposition now and still requires the evidence: a standing candidate whose queue
+delay was established, and a fresh candidate priced to provision.
+
+That correction uncovered something worse, and it is filed rather than fixed here.
+The same Blueprint, the same World Tape and the same policy record
+`queue_existing_rental` for that candidate when driven by successive advances and
+`run_now_existing_rental` when driven to completion. One world, two answers,
+decided by how the caller drove it. ADR 0004 makes determinism the Lab's central
+promise, the corpus drives conformance Blueprints in one-minute advances while the
+vertical proof drives to completion, and a Run Bundle that depends on its driver is
+a record of the driver as well as of the world. The `queue` answer is the honest
+one: the consumer is placed when its input becomes durable, which is while the
+producer is still on the machine.
+[#182](https://github.com/benngarcia/mercator/issues/182) owes the fix and an L1
+case driving one Blueprint two ways to the same decision. Widening the checkpoint
+made CI green and also stopped CI noticing this, which is why it is written down
+here and in known limitations rather than left in a commit message.
+
 ### Phase 3 producer affinity, withdrawn under review
 
 On 2026-07-25, on a Linux workstation against Docker Engine 29.6.2 on the

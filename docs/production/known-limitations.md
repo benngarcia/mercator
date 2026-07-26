@@ -158,6 +158,20 @@ limits.
 - Embedded UI is compact and read-oriented.
 - Deeper connection, offer, and sink management workflows are not built into the
   UI.
+- The Workspace canvas draws at most two days ahead, 289 columns. A Booking whose
+  projected start is further out than that is listed in its machine's queue and
+  has no block on the timeline. The bound exists because the axis is built from
+  the difference between a projected start and the moment the workspace last said
+  something: asked for a start years away it built 723,040 elements and held the
+  browser's main thread for seventy seconds, so an unbounded axis is a hazard
+  whatever produced the timestamp.
+- The Lab can record a different Booking Decision for one Blueprint depending on
+  how a caller drove the execution: successive advances and a drive to completion
+  disagree about whether a consumer's candidate was queued or free
+  ([#182](https://github.com/benngarcia/mercator/issues/182)). Nothing in
+  production reads a Run Bundle, so this costs an operator nothing today. It costs
+  the executable specification its central promise, and it means a claim proven
+  under one drive shape is not established under the other.
 
 ## What A Developer Workstation Cannot Prove
 
