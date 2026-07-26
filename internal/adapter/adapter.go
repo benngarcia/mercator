@@ -139,12 +139,13 @@ type ExternalObservation struct {
 	Phase      ExternalPhase `json:"phase"`
 	ObservedAt time.Time     `json:"observed_at"`
 	// StartedAt is when the workload's process actually began, as the thing
-	// holding it reports the moment: a container runtime's own start time, or the
-	// provider's for a one-shot product. It is not ObservedAt, which is when
-	// Mercator looked, and it is not the moment the launch was accepted, which is
-	// when the machine started getting ready. The whole point of predicting a
-	// start latency is that it is calibrated against started minus accepted, and
-	// nothing could subtract those until this field existed.
+	// holding it reports the moment: a container runtime's own start time, or a
+	// provider's where that provider publishes a moment about the process rather
+	// than about the machine. It is not ObservedAt, which is when Mercator looked,
+	// and it is not the moment the launch was accepted, which is when the machine
+	// started getting ready. The whole point of predicting a start latency is that
+	// it is calibrated against started minus accepted, and nothing could subtract
+	// those until this field existed.
 	//
 	// It is a pointer because a holder that cannot say is common and must stay
 	// distinguishable from one that says now. A provider whose API publishes no
@@ -155,27 +156,44 @@ type ExternalObservation struct {
 	NativeJSON string     `json:"native_json,omitempty"`
 }
 
-// ObservedStart answers whether this observation establishes when the workload
-// began. It does when the holder said the work had begun and said when, by the
-// moment Mercator read it. Two moments a holder can publish are not that.
+// EstablishedStart is the moment this observation establishes the workload began,
+// and whether it establishes one at all. It is the single place a foreign moment
+// becomes a moment Mercator will act on: the run stream's start and the Booking's
+// runtime clock both read it, because a law with two adoption sites is a law one
+// of them will be missing.
+//
+// An observation establishes a start when the holder said the work had begun and
+// said when, by the moment Mercator read it. Two moments a holder can publish are
+// not that.
 //
 // A moment later than the read that carried it is a clock Mercator does not share
 // rather than anything it saw: a host running an hour ahead publishes a start an
 // hour in the future, and Mercator recording it would file a start latency an hour
-// too large as a measurement and trip the Lab's own start rule for a moment it only
-// passed through. A moment carried by a phase saying the work has not begun is the
-// claim every provider in this tree makes from the moment it accepts a launch:
-// RunPod says RUNNING and publishes lastStartedAt while the image is still landing,
-// which is why an address is what makes a pod running here, and the same distrust
-// has to reach the moment or the phase gate buys nothing.
+// too large as a measurement, and stamp a Booking's runtime clock an hour into
+// Mercator's own future, where the bound it enforces expires an hour after the
+// capacity was really spent. The comparison only means something because ObservedAt
+// is Mercator's own clock on every seam that fills it in, which is what
+// broker.observeOnNode had to be corrected to do: the node published both moments
+// off its own clock, so the two agreed with each other and neither agreed with
+// Mercator.
+//
+// A moment carried by a phase saying the work has not begun is the claim every
+// provider in this tree makes from the moment it accepts a launch. What the phase
+// cannot do is repair a moment that was never about the process: a provider that
+// dates a pod when it places it publishes the same stale moment once the pod is
+// running, so the field itself has to be absent where the holder cannot see the
+// process, which is why the RunPod and Vast adapters publish none.
 //
 // The observation still carries what the holder said either way. This decides what
 // Mercator adopts as the Run's own start, not what the provider is recorded saying.
-func (o ExternalObservation) ObservedStart() bool {
+func (o ExternalObservation) EstablishedStart() (time.Time, bool) {
 	if o.StartedAt == nil || o.StartedAt.IsZero() || o.StartedAt.After(o.ObservedAt) {
-		return false
+		return time.Time{}, false
 	}
-	return o.Phase == ExternalPhaseRunning || o.Phase.Exited()
+	if o.Phase != ExternalPhaseRunning && !o.Phase.Exited() {
+		return time.Time{}, false
+	}
+	return o.StartedAt.UTC(), true
 }
 
 type ReleaseRequest struct {

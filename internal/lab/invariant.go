@@ -278,30 +278,6 @@ func exclusiveBookingCapacity(observation InvariantObservation) error {
 	return nil
 }
 
-// startIsObservedNotInferred is the standing guard on the one thing that makes a
-// stage duration learnable: its actual has to be a moment somebody observed.
-//
-// Three things hold of every Run in the log, and each is read from a different
-// half of the record so no clause can be satisfied by Mercator agreeing with
-// itself. What the run stream records as the moment this workload began must be a
-// moment an observation of that same Run reported: not the moment the launch was
-// accepted, which is when the machine started getting ready, and not the moment
-// Mercator predicted, which is the thing being calibrated. It must be a moment one
-// of those observations established, which is the law the control plane files
-// starts by and adapter.ExternalObservation states: a moment ahead of the read that
-// carried it is a prediction wearing an observation's clothes, and a moment carried
-// by a phase saying the work has not begun is a provider calling a launch a start.
-// And a Run whose holder did establish a start must have it recorded, because a
-// stage with an actual that reads as absent is a measurement thrown away.
-//
-// The published claim Mercator refused is not a violation of anything: the record
-// keeps what the holder said, and the rule reads it exactly as the control plane
-// did rather than blaming Mercator for declining a moment it could not defend.
-//
-// A Run with no start moment at all is not a violation. Acquisition and boot have
-// no production observation until an agent bootstraps on provisioned capacity, and
-// what the record must then say is that the stage is unobserved rather than that
-// it took no time.
 // predictionIsRecordedAgainstItsActual is ADR 0004's calibration requirement read
 // over the whole launch waterfall rather than over one number. A launch the
 // Effect Ledger accepted spent time on eight stages, and the record has to carry
@@ -349,13 +325,48 @@ func predictionIsRecordedAgainstItsActual(observation InvariantObservation) erro
 	return nil
 }
 
+// startIsObservedNotInferred is the standing guard on the one thing that makes a
+// stage duration learnable: its actual has to be a moment somebody observed.
+//
+// Four things hold of every Run in the log, and each is read from a different half
+// of the record so no clause can be satisfied by Mercator agreeing with itself.
+// What the run stream records as the moment this workload began must be a moment an
+// observation of that same Run reported: not the moment the launch was accepted,
+// which is when the machine started getting ready, and not the moment Mercator
+// predicted, which is the thing being calibrated. It must be a moment one of those
+// observations established, and this rule decides what that means in its own terms
+// rather than by asking the production predicate: a moment ahead of the read that
+// carried it is a prediction wearing an observation's clothes, and a moment carried
+// by a phase saying the work has not begun is a provider calling a launch a start.
+// A Run whose holder did establish a start must have it recorded, because a stage
+// with an actual that reads as absent is a measurement thrown away. And the clock a
+// Booking's runtime bounds are enforced from must be one of the same two things,
+// because that clock decides when Mercator believes paid capacity came free.
+//
+// Restating the clauses is the point. Delegating them to
+// adapter.ExternalObservation.EstablishedStart made this rule agree with whatever
+// the control plane happened to decide, which is the shape
+// safety.locality_is_never_infeasibility was already corrected for: an
+// executable specification that asks production to confirm its own arithmetic
+// constrains nothing. Deleting the clause about a moment ahead of its read now
+// fails the world that publishes one.
+//
+// The published claim Mercator refused is not a violation of anything: the record
+// keeps what the holder said, and this rule reads it the way the control plane was
+// supposed to rather than blaming Mercator for declining a moment it could not
+// defend.
+//
+// A Run with no start moment at all is not a violation. Acquisition and boot have
+// no production observation until an agent bootstraps on provisioned capacity, and
+// what the record must then say is that the stage is unobserved rather than that it
+// took no time.
 func startIsObservedNotInferred(observation InvariantObservation) error {
-	reported, recorded, err := startMomentsByRun(observation)
+	looked, recorded, err := startMomentsByRun(observation)
 	if err != nil {
 		return err
 	}
 	for runID, moment := range recorded {
-		looks, held := reported[runID]
+		looks, held := looked[runID]
 		if !held {
 			return fmt.Errorf(
 				"Run %q records a start of %s that no observation of it reported",
@@ -369,7 +380,7 @@ func startIsObservedNotInferred(observation InvariantObservation) error {
 			)
 		}
 	}
-	for runID, looks := range reported {
+	for runID, looks := range looked {
 		if _, held := recorded[runID]; !held && looks.establishedAStart() {
 			return fmt.Errorf(
 				"Run %q was observed starting at %s and its run stream records no start moment",
@@ -377,20 +388,55 @@ func startIsObservedNotInferred(observation InvariantObservation) error {
 			)
 		}
 	}
+	return bookingClocksAreObserved(observation.RentalSchedules, looked)
+}
+
+// bookingClocksAreObserved holds the Rental Schedule to the same law as the run
+// stream. A Booking's StartedAt is what its declared runtimes are measured from, so
+// it decides when Mercator thinks a machine came free and when it thinks a workload
+// has overrun: a moment from a host an hour ahead leaves the bound unexpired an
+// hour after the capacity was really spent, with the schedule saying the machine is
+// busy the whole time.
+//
+// Two moments are defensible. The container's own start where an observation
+// established one, and the read that carried an observation of that Run, which is
+// the last instant Mercator can prove the container was up. Anything else is a
+// clock nobody here shares. This is the clause the run stream's version of the law
+// was missing: the same append recorded no start and stamped this field from the
+// same refused moment, and no rule in the corpus read the schedule.
+func bookingClocksAreObserved(schedules map[string]domain.RentalSchedule, looked map[string]runLooks) error {
+	for _, rentalID := range slices.Sorted(maps.Keys(schedules)) {
+		for _, scheduled := range schedules[rentalID].Bookings {
+			if scheduled.StartedAt.IsZero() {
+				continue
+			}
+			runID := scheduled.Booking.RunID
+			looks := looked[runID]
+			if looks.established(scheduled.StartedAt.UTC()) || looks.read(scheduled.StartedAt.UTC()) {
+				continue
+			}
+			return fmt.Errorf(
+				"Rental %q measures Booking %q for Run %q from %s, and that Run's observations established %s",
+				rentalID, scheduled.Booking.ID, runID,
+				scheduled.StartedAt.Format(time.RFC3339Nano), looks.describe(),
+			)
+		}
+	}
 	return nil
 }
 
-// observedStarts is every observation of one Run's workload that published a start
-// moment, kept whole so this rule can ask each one the question the control plane
-// asked it rather than a second copy of the same law.
-type observedStarts []adapter.ExternalObservation
+// runLooks is every observation of one Run's workload the run stream recorded,
+// kept whole so this rule can ask each one the question the control plane was
+// supposed to ask it.
+type runLooks []adapter.ExternalObservation
 
 // established answers whether this is a moment one of these observations
-// established: a moment its holder stated, about work it said had begun, by the
-// time Mercator read it.
-func (starts observedStarts) established(moment time.Time) bool {
-	for _, look := range starts {
-		if look.ObservedStart() && look.StartedAt.Equal(moment) {
+// established. The three clauses are stated here, in the Lab's own terms, because
+// a standing law that called the production predicate would pass whenever
+// production and production agreed.
+func (looks runLooks) established(moment time.Time) bool {
+	for _, look := range looks {
+		if established, ok := establishedStart(look); ok && established.Equal(moment) {
 			return true
 		}
 	}
@@ -400,28 +446,72 @@ func (starts observedStarts) established(moment time.Time) bool {
 // establishedAStart answers whether any of these looks established one at all,
 // which is what makes a missing record a measurement thrown away instead of a
 // claim Mercator was right to decline.
-func (starts observedStarts) establishedAStart() bool {
-	for _, look := range starts {
-		if look.ObservedStart() {
+func (looks runLooks) establishedAStart() bool {
+	for _, look := range looks {
+		if _, ok := establishedStart(look); ok {
 			return true
 		}
 	}
 	return false
 }
 
-func (starts observedStarts) describe() string {
-	described := make([]string, 0, len(starts))
-	for _, look := range starts {
+// read answers whether this moment is one of the reads that carried these
+// observations. It is the only moment other than an established start that a
+// projection may be measured from, and it is Mercator's own clock on every seam
+// that fills it in.
+func (looks runLooks) read(moment time.Time) bool {
+	for _, look := range looks {
+		if look.ObservedAt.UTC().Equal(moment) {
+			return true
+		}
+	}
+	return false
+}
+
+func (looks runLooks) describe() string {
+	if len(looks) == 0 {
+		return "nothing"
+	}
+	described := make([]string, 0, len(looks))
+	for _, look := range looks {
 		described = append(described, fmt.Sprintf(
 			"%s (%s, read at %s)",
-			look.StartedAt.Format(time.RFC3339Nano), look.Phase, look.ObservedAt.Format(time.RFC3339Nano),
+			startedOrAbsent(look), look.Phase, look.ObservedAt.Format(time.RFC3339Nano),
 		))
 	}
 	return strings.Join(described, ", ")
 }
 
-func startMomentsByRun(observation InvariantObservation) (map[string]observedStarts, map[string]time.Time, error) {
-	reported := map[string]observedStarts{}
+func startedOrAbsent(look adapter.ExternalObservation) string {
+	if look.StartedAt == nil {
+		return "no start"
+	}
+	return look.StartedAt.Format(time.RFC3339Nano)
+}
+
+// establishedStart is what this Lab holds a start moment to, spelled out rather
+// than delegated: a moment the holder stated, about work it said had begun, no
+// later than the read that carried it. The phases are named one by one for the same
+// reason the comparison is written out here.
+func establishedStart(look adapter.ExternalObservation) (time.Time, bool) {
+	if look.StartedAt == nil || look.StartedAt.IsZero() || look.StartedAt.After(look.ObservedAt) {
+		return time.Time{}, false
+	}
+	switch look.Phase {
+	case adapter.ExternalPhaseRunning, adapter.ExternalPhaseSucceeded, adapter.ExternalPhaseFailed:
+		return look.StartedAt.UTC(), true
+	default:
+		return time.Time{}, false
+	}
+}
+
+// startMomentsByRun is every observation the run stream carried for each Run, and
+// the start each Run's stream recorded. Observations that published no start moment
+// are kept: the read that carried one is what a Booking's clock may fall back to,
+// and a rule that dropped them could not tell that fallback from an invented
+// moment.
+func startMomentsByRun(observation InvariantObservation) (map[string]runLooks, map[string]time.Time, error) {
+	looked := map[string]runLooks{}
 	recorded := map[string]time.Time{}
 	for _, event := range observation.MercatorEvents {
 		runID := strings.TrimPrefix(event.Subject, "runs/")
@@ -431,10 +521,7 @@ func startMomentsByRun(observation InvariantObservation) (map[string]observedSta
 			if err := json.Unmarshal(event.Data, &look); err != nil {
 				return nil, nil, fmt.Errorf("decode Run %q observation: %w", runID, err)
 			}
-			if look.StartedAt == nil {
-				continue
-			}
-			reported[runID] = append(reported[runID], look)
+			looked[runID] = append(looked[runID], look)
 		case orchestrator.EventExecutionStarted:
 			var payload struct {
 				StartedAt time.Time `json:"started_at"`
@@ -445,7 +532,7 @@ func startMomentsByRun(observation InvariantObservation) (map[string]observedSta
 			recorded[runID] = payload.StartedAt.UTC()
 		}
 	}
-	return reported, recorded, nil
+	return looked, recorded, nil
 }
 
 func monotonicTerminalState(observation InvariantObservation) error {

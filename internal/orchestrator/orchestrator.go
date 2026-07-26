@@ -1000,10 +1000,10 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 // pod started before it has run anything are refused here rather than three times
 // in three adapters.
 func startMoment(state runState, observation adapter.ExternalObservation) *time.Time {
-	if state.startedAt != nil || !observation.ObservedStart() {
+	moment, established := observation.EstablishedStart()
+	if state.startedAt != nil || !established {
 		return nil
 	}
-	moment := observation.StartedAt.UTC()
 	return &moment
 }
 
@@ -1070,16 +1070,23 @@ func (o *Orchestrator) workloadStarted(
 }
 
 // bookingStartedAt is the moment this Booking's runtime bounds are measured from.
-// It is the container's own start where the holder reported one, because that is
-// the process the bounds are about. Where nobody reported one it is the moment
-// Mercator saw it running, which is the latest instant the container is known to
+// It is the container's own start where an observation established one, because
+// that is the process the bounds are about. Where none did it is the moment
+// Mercator read it running, which is the latest instant the container is known to
 // have been up: a schedule needs a clock to project a remaining runtime from, and
 // the honest fallback is the last thing Mercator can prove rather than the
 // earliest thing it could guess. Nothing derives the RUN's start moment this way,
 // because a projection may be conservative and a record may not be invented.
+//
+// It asks the same law the run stream does, and asking anything else was the
+// defect: a bound is enforced against Mercator's clock, so a moment from a host an
+// hour ahead put this Booking's expiry an hour into Mercator's future while the
+// container burned paid capacity and the schedule reported the machine busy. The
+// fallback is honest only because ObservedAt is Mercator's own clock on every seam
+// that fills it in.
 func bookingStartedAt(observation adapter.ExternalObservation) time.Time {
-	if observation.StartedAt != nil && !observation.StartedAt.IsZero() {
-		return observation.StartedAt.UTC()
+	if moment, established := observation.EstablishedStart(); established {
+		return moment
 	}
 	return observation.ObservedAt
 }
