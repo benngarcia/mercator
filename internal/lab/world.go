@@ -411,6 +411,12 @@ type simulatedWorld struct {
 	// prefetch Mercator abandoned was abandoned because it stopped wanting the
 	// content, and content it wants again arrives with the launch that needs it.
 	prepared map[string]bool
+	// desired is the last thing each tenant said it wanted prepared, keyed by
+	// workspace. A desired set speaks for one workspace, and a machine's link is
+	// shared by all of them, so what a host keeps fetching is the union: a
+	// transfer stops when no tenant wants it any more, and one tenant's set
+	// saying nothing about another's content is not that tenant withdrawing it.
+	desired map[string]map[string]bool
 
 	executions  map[string]externalExecution
 	operations  map[string]worldOperation
@@ -437,6 +443,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		cacheMounts:    map[string]map[string]CacheMountState{},
 		prewarm:        tape.InitialWorld.Prewarm,
 		prepared:       map[string]bool{},
+		desired:        map[string]map[string]bool{},
 		executions:     map[string]externalExecution{},
 		operations:     map[string]worldOperation{},
 		launchCount:    map[string]int{},
