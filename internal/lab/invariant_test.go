@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,9 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/prediction"
 	"github.com/benngarcia/mercator/internal/scenario"
+	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
 func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
@@ -1240,6 +1243,99 @@ func TestARatePricedFromTheStatedAssumptionIsNotAViolation(t *testing.T) {
 
 	if result.Status != InvariantPassed {
 		t.Fatalf("assembly priced from the assumption every host in the fleet is assumed to unpack at was reported as a violation: %s", result.Violation)
+	}
+}
+
+// TestAStageAnsweredFromHistoryIsNotPricedFromAPathAtAll is the law read against
+// the estimator that landed on top of it, which is the one reader the earlier
+// cases could not have: they all state the record by hand, and this collision is
+// between two things production writes.
+//
+// The hierarchical estimator replaces a stage's seconds with what measured
+// launches of this candidate really spent, artifact_fetch included, and the
+// confidence it carries is what those launches are worth rather than what a guess
+// is worth. The rate this rule reads is the throughput a stage was priced at. A
+// decision that answered the stage from history and then recorded the link speed
+// beside it anyway would be saying that an assumption produced seconds
+// measurements produced, and this law would adjudicate a lawful prediction as a
+// fabricated guess over a number the decision never divided by.
+//
+// So the record states no rate for a stage nothing priced from a rate, and the
+// law is left exactly as strong for every stage that was. It is driven through the
+// production scheduler rather than a stated decision, because the two halves of
+// the contradiction live in two packages and a fixture writing the record itself
+// would agree with whatever it wrote.
+func TestAStageAnsweredFromHistoryIsNotPricedFromAPathAtAll(t *testing.T) {
+	input := historyAnsweredFetch()
+
+	decision, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
+	}
+
+	fetch := candidateFor(t, decision, "rental-far").Estimates.Stages.ArtifactFetch
+	if fetch.Source != prediction.Source || fetch.Confidence <= domain.AssumedLinkConfidence {
+		t.Fatalf("this case needs a fetch answered from history and worth more than a guess, and the decision answered %+v", fetch)
+	}
+	result := invariantResultByID(t,
+		DefaultInvariantRegistry().Evaluate(InvariantObservation{
+			StartedAt:      input.EvaluatedAt,
+			Now:            input.EvaluatedAt,
+			World:          WorldTruthSnapshot{At: input.EvaluatedAt},
+			MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_history_fetch", decision)},
+		}),
+		"safety.transfer_rate_is_attributed",
+	)
+
+	if result.Status != InvariantPassed {
+		t.Fatalf("a fetch answered from measured launches was reported as a rate nobody measured: %s", result.Violation)
+	}
+}
+
+// historyAnsweredFetch is one machine with two launches of exactly this candidate
+// behind its fetch stage, asked to read forty gigabytes it does not hold, and
+// publishing nothing about the path to the object store. Every part of that is
+// load bearing: an unmeasured path is what makes the rate an assumption, bytes to
+// read are what make there be a rate at all, and launches of this exact candidate
+// are what make the seconds worth more than a guess.
+func historyAnsweredFetch() scheduler.SchedulingInput {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	image := "sha256:" + strings.Repeat("a", 64)
+	dataset := domain.ArtifactVersion{
+		ID:            "art_dataset",
+		WorkspaceID:   labWorkspace,
+		ContentDigest: "sha256:" + strings.Repeat("d", 64),
+		SizeBytes:     40_000_000_000,
+		Location:      "s3://mercator-lab/dataset",
+		PublishedAt:   now.Add(-24 * time.Hour),
+	}
+	offer := labOffer("rental-far", domain.OfferKindStanding, domain.LaneReusable,
+		labCandidate{provider: "simvast", region: "US-CA", machine: "machine-far"}, 2.5, nil)
+	offer.ObservedAt = now
+	offer.ExpiresAt = now.Add(time.Minute)
+	offer.Images = domain.ImageInventory{Known: true, ObservedAt: now}
+	offer.Artifacts = domain.ArtifactInventory{Known: true, ObservedAt: now}
+	identity := domain.CandidateIdentityOf(offer, image)
+	return scheduler.SchedulingInput{
+		RunID: "run-history-fetch",
+		Workload: domain.WorkloadRevision{
+			Digest: "sha256:" + strings.Repeat("w", 64),
+			Spec: domain.WorkloadSpec{
+				Containers: []domain.ContainerSpec{{Image: image, Platform: offer.Platform}},
+				Placement:  domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 600},
+				Artifacts:  domain.ArtifactRequirements{Consumes: []string{dataset.ID}},
+			},
+		},
+		Image:        domain.ImageManifest{Known: true, Digest: image},
+		Artifacts:    []domain.ArtifactVersion{dataset},
+		Offers:       []domain.OfferSnapshot{offer},
+		Schedules:    map[string]domain.RentalSchedule{},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+		History: prediction.NewHistory([]prediction.Observation{
+			{Candidate: identity, Stage: domain.StageArtifactFetch, Seconds: 320, ObservedAt: now.Add(-2 * time.Hour)},
+			{Candidate: identity, Stage: domain.StageArtifactFetch, Seconds: 340, ObservedAt: now.Add(-time.Hour)},
+		}),
 	}
 }
 

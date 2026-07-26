@@ -500,7 +500,7 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 		},
 		image:     content.locality,
 		artifacts: content.evidence,
-		rates:     transferRates(content, registry, storage, store),
+		rates:     transferRates(content, stages, registry, storage, store),
 		disk:      content.disk,
 	}
 }
@@ -529,10 +529,18 @@ func stagePredictor(input SchedulingInput, offer domain.OfferSnapshot) func(doma
 }
 
 // transferRates is what every stage of this launch that had bytes to move was
-// priced at, in the order a launch moves them. A stage with nothing to move
-// records nothing: there was no transfer, so there is no rate it was priced from,
-// and an entry would name a number the decision never divided by.
-func transferRates(content candidateContent, registry, storage, store domain.LinkSpeed) []domain.TransferRate {
+// priced at, in the order a launch moves them.
+//
+// Two kinds of stage record nothing, and both for the same reason: the entry
+// would name a number this decision never divided by. A stage with nothing to
+// move performed no transfer, so there is no rate behind its zero seconds. And a
+// stage the fleet's own history answered was not priced from a throughput at all:
+// its seconds are what measured launches of this candidate really spent, and the
+// link speed sitting on the offer beside them explains none of it. Recording the
+// speed anyway would put an assumption's name on seconds measurements produced,
+// which a rule about who says so has to read as a fabricated guess and which a
+// calibration would then try to correct by clamping the measurement.
+func transferRates(content candidateContent, answered domain.LaunchStageEstimates, registry, storage, store domain.LinkSpeed) []domain.TransferRate {
 	priced := []domain.TransferRate{
 		domain.TransferRateFor(domain.StageImageFetch, domain.NetworkScopeRegistry, content.image.TransferBytes, registry),
 		// Assembly crosses no link, so it names no scope: the rate is a storage
@@ -541,7 +549,9 @@ func transferRates(content candidateContent, registry, storage, store domain.Lin
 		domain.TransferRateFor(domain.StageUnpack, "", content.image.UnpackBytes, storage),
 		domain.TransferRateFor(domain.StageArtifactFetch, domain.NetworkScopeObjectStore, content.fetch, store),
 	}
-	return slices.DeleteFunc(priced, func(rate domain.TransferRate) bool { return rate.Bytes == 0 })
+	return slices.DeleteFunc(priced, func(rate domain.TransferRate) bool {
+		return rate.Bytes == 0 || answered.Stage(rate.Stage).Level != domain.LevelPrior
+	})
 }
 
 // containerStartEstimate is what asking this machine's container runtime for a
