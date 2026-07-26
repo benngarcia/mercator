@@ -340,6 +340,10 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 	if expect.Schedule != nil {
 		failures = append(failures, assertScheduleEvidence(rec, bookings, name, id, *expect.Schedule)...)
 	}
+	if recorded, ok := candidateScheduleEvidence(rec, id); expect.NoSchedule && ok {
+		fail("records a RentalSchedule at version %d with a wait of %.0fs, and there is no queue here to have read",
+			recorded.Version, recorded.ProjectedStartSeconds)
+	}
 	checkBound("artifact_seconds", expect.ArtifactSeconds, candidate.Estimates.ArtifactSeconds.Expected)
 	for _, artifactID := range sortedKeys(expect.Artifacts) {
 		found, ok := artifactEvidence(candidate, artifactID)

@@ -697,6 +697,15 @@ type CandidateExpectation struct {
 	// Schedule asserts the ordered broker-owned schedule evidence weighed for
 	// this Rental candidate.
 	Schedule *ScheduleEvidenceExpectation `json:"rental_schedule,omitempty"`
+	// NoSchedule asserts this candidate recorded no schedule at all, which is what
+	// capacity with nothing assigned to it must record: a machine that does not
+	// exist yet has no Rental to hold a queue, and a Rental nothing is waiting for
+	// has no queue to have been read. Recording an empty schedule for either would
+	// publish a version of zero and a wait of nothing as a queue that was measured.
+	// It is a field of its own rather than an empty Schedule because a fixture that
+	// says nothing about the schedule asserts nothing about it, and this asserts
+	// the absence.
+	NoSchedule bool `json:"no_rental_schedule,omitempty"`
 	// Artifacts asserts what this candidate was recorded as holding of each
 	// Artifact the Run reads: "hit", "miss", or "unknown" for a machine that
 	// could not enumerate its copies at all.
@@ -1074,10 +1083,7 @@ func (sc Scenario) validateScheduleTimeline() error {
 			request = &original
 		}
 		for rentalID, candidate := range step.Expect.Candidates {
-			if candidate.Schedule == nil {
-				continue
-			}
-			if err := validateScheduleEvidence(schedules[rentalID], elapsed, *candidate.Schedule); err != nil {
+			if err := validateCandidateSchedule(schedules[rentalID], elapsed, candidate); err != nil {
 				return fmt.Errorf("timeline[%d]: candidate %q: %w", i, rentalID, err)
 			}
 		}
@@ -1163,6 +1169,23 @@ func validateBookingDecision(schedule RentalScheduleSpec, elapsed time.Duration,
 		return fmt.Errorf("QueuedBooking %q projected_start_in is %v, want %v from preceding expected runtimes", booking.BookingID, durationValue(booking.ProjectedStart), wait)
 	}
 	return nil
+}
+
+// validateCandidateSchedule proves the fixture's two schedule claims about one
+// candidate are the ones its own world supports: evidence has to match the
+// schedule this Rental holds at this point in the timeline, and an assertion that
+// nothing was recorded has to be made about a Rental holding nothing.
+func validateCandidateSchedule(schedule RentalScheduleSpec, elapsed time.Duration, candidate CandidateExpectation) error {
+	if candidate.NoSchedule && candidate.Schedule != nil {
+		return fmt.Errorf("a candidate cannot both record a schedule and record none")
+	}
+	if candidate.NoSchedule && schedule.Running != nil {
+		return fmt.Errorf("no schedule is expected, and this Rental holds Booking %q", schedule.Running.BookingID)
+	}
+	if candidate.Schedule == nil {
+		return nil
+	}
+	return validateScheduleEvidence(schedule, elapsed, *candidate.Schedule)
 }
 
 func validateScheduleEvidence(schedule RentalScheduleSpec, elapsed time.Duration, expect ScheduleEvidenceExpectation) error {

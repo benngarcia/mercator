@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "A warm idle rental holding the full image beats provisioning fresh capacity, because the fresh offer pays boot time plus an 18GB pull.",
+  "summary": "A warm idle rental holding the full image beats provisioning fresh capacity, because the fresh offer pays boot time plus an 18GB pull. Neither candidate records a Rental Schedule: the idle Rental has no queue to have been read and the fresh offer has no Rental at all, and an empty schedule published as evidence would state a version of zero and a wait of nothing as a queue that was measured.",
   "classification": "green",
   "world": {
     "images": {
@@ -39,9 +39,10 @@
     "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
     "disposition": "release",
     "candidates": {
-      "rental-warm": {"feasible": true, "pull_seconds": 0},
+      "rental-warm": {"feasible": true, "pull_seconds": 0, "no_rental_schedule": true},
       "fresh-4090": {
         "feasible": true,
+        "no_rental_schedule": true,
         "provision_seconds": {"at_least": 240},
         "pull_seconds": {"at_least": 200}
       }
