@@ -120,10 +120,16 @@ launch, by the stage's own name: `acquisition`, `boot`, `agent_ready`,
 `image_fetch`, `unpack`, `artifact_fetch`, `container_start`, and
 `application_ready`. Each states any of `seconds`, `source`, and `confidence`,
 and the three belong together because zero seconds means two opposite things:
-nothing to do where somebody answered, and nobody could say where nothing did.
+nothing to do where somebody answered, and nobody could say where nothing did. A
+name outside those eight is refused at load, because the record answers about an
+unknown stage with a zero estimate from no source, so a misspelled key would assert
+nothing and quietly replace the assertion the fixture was written for.
 What the world then spends on the last three is `world.launch`, stated separately
 from any of this so that no actual is derived from the prediction it is measured
-against.
+against. `world.launch.application_never_ready` is the world where the process runs
+and the application behind it never reports that it can do work, which has to be
+stated because an omitted `application_ready` already means a world that spends
+nothing on the stage.
 
 `request` and `expect` are the single-decision shorthand. A Placement fixture
 that advances virtual time or submits several Runs uses `timeline`; each step
