@@ -799,6 +799,29 @@ export interface components {
             /** @description The generation this host actually holds under the name, when it holds one. It separates the two ways a cache is cold: a machine that has never done this work, and one holding the generation before the one now asked for. */
             held_compatibility_key?: string;
         };
+        /** @description What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else. */
+        DiskDemand: {
+            /**
+             * Format: int64
+             * @description The room the offer said this machine had left. A machine that could not measure its disk offers none.
+             */
+            free_bytes: number;
+            /**
+             * Format: int64
+             * @description The ephemeral disk the workload declared it needs. It is asked for beside the content rather than out of it, because a Run admitted on a fifty gigabyte floor whose fifty gigabytes turn out to be its own dataset was promised nothing.
+             */
+            reserved_bytes?: number;
+            /**
+             * Format: int64
+             * @description Everything this Run's content still had to put on this disk: the image bytes it must transfer, the Artifact versions it must read out of the object store, and the caches it declared that this host does not hold.
+             */
+            land_bytes?: number;
+            /**
+             * Format: int64
+             * @description The part of that somebody enumerated. Content nobody could describe is priced in seconds and never refuses a machine, because those bytes may already be on its disk.
+             */
+            established_land_bytes?: number;
+        };
         /** @description What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object. */
         ArtifactEvidence: {
             artifact_id: string;
@@ -1054,6 +1077,7 @@ export interface components {
             artifact_evidence?: components["schemas"]["ArtifactEvidence"][];
             /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name. */
             cache_evidence?: components["schemas"]["CacheEvidence"][];
+            disk?: components["schemas"]["DiskDemand"];
             estimates: components["schemas"]["CandidateEstimates"];
             /** Format: double */
             score_usd?: number;

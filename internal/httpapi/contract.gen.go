@@ -455,11 +455,14 @@ type CandidateDecision struct {
 	ArtifactEvidence []ArtifactEvidence `json:"artifact_evidence,omitempty"`
 
 	// CacheEvidence What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name.
-	CacheEvidence []CacheEvidence              `json:"cache_evidence,omitempty"`
-	ConnectionId  string                       `json:"connection_id,omitempty"`
-	Disposition   CandidateDecisionDisposition `json:"disposition"`
-	Estimates     CandidateEstimates           `json:"estimates"`
-	Feasible      bool                         `json:"feasible"`
+	CacheEvidence []CacheEvidence `json:"cache_evidence,omitempty"`
+	ConnectionId  string          `json:"connection_id,omitempty"`
+
+	// Disk What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else.
+	Disk        DiskDemand                   `json:"disk,omitempty"`
+	Disposition CandidateDecisionDisposition `json:"disposition"`
+	Estimates   CandidateEstimates           `json:"estimates"`
+	Feasible    bool                         `json:"feasible"`
 
 	// ImageLocality How much of the Run's image this candidate was found to have. It is the qualitative half of the pull estimate, and only the control plane can state it: the host says what it holds, the manifest says what the image is, and the answer is the subtraction. Unknown means nobody could look, which is uncertainty to price and never infeasibility.
 	ImageLocality   CandidateDecisionImageLocality `json:"image_locality,omitempty"`
@@ -619,6 +622,21 @@ type CreateWorkspaceRequest struct {
 
 // Credential defines model for Credential.
 type Credential = credential.Credential
+
+// DiskDemand What one Run asked of one candidate's disk: the room the machine said it had left, the room the Run reserved for its own working state, and the content that still had to land there. It is one question over every kind of content at once because the disk is one resource, and a candidate short of room is refused rather than priced: nothing this Run could give up frees a byte it does not need straight back, and the only content that would make room belongs to somebody else.
+type DiskDemand struct {
+	// EstablishedLandBytes The part of that somebody enumerated. Content nobody could describe is priced in seconds and never refuses a machine, because those bytes may already be on its disk.
+	EstablishedLandBytes int64 `json:"established_land_bytes,omitempty"`
+
+	// FreeBytes The room the offer said this machine had left. A machine that could not measure its disk offers none.
+	FreeBytes int64 `json:"free_bytes"`
+
+	// LandBytes Everything this Run's content still had to put on this disk: the image bytes it must transfer, the Artifact versions it must read out of the object store, and the caches it declared that this host does not hold.
+	LandBytes int64 `json:"land_bytes,omitempty"`
+
+	// ReservedBytes The ephemeral disk the workload declared it needs. It is asked for beside the content rather than out of it, because a Run admitted on a fifty gigabyte floor whose fifty gigabytes turn out to be its own dataset was promised nothing.
+	ReservedBytes int64 `json:"reserved_bytes,omitempty"`
+}
 
 // DiskRequirement defines model for DiskRequirement.
 type DiskRequirement struct {
