@@ -35,6 +35,35 @@ func NewMemory(log eventlog.WorkspaceEventLog) *Memory {
 	}
 }
 
+// Seed installs one Rental's whole schedule without the event a commit records.
+// Only a fixture owns Bookings with no history behind them: production reaches
+// every schedule through Commit, and the Bookings a simulated world starts with
+// belong to Runs no event log ever saw. It writes the schedule whole rather than
+// merging, so a caller changing seeded state reads the current schedule first
+// and hands back what it should now be.
+func (store *Memory) Seed(workspaceID string, schedule domain.RentalSchedule) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := validSeed(workspaceID, schedule); err != nil {
+		return err
+	}
+	if store.schedules[workspaceID] == nil {
+		store.schedules[workspaceID] = map[string]domain.RentalSchedule{}
+	}
+	store.schedules[workspaceID][schedule.RentalID] = cloneSchedule(schedule)
+	return nil
+}
+
+func validSeed(workspaceID string, schedule domain.RentalSchedule) error {
+	if workspaceID == "" || schedule.RentalID == "" {
+		return fmt.Errorf("Rental Schedule seed requires Workspace and Rental identity")
+	}
+	if len(schedule.Bookings) > 0 && schedule.Version == 0 {
+		return fmt.Errorf("Rental Schedule seed for Rental %q holds Bookings at version zero", schedule.RentalID)
+	}
+	return nil
+}
+
 func (store *Memory) List(_ context.Context, workspaceID string) (map[string]domain.RentalSchedule, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

@@ -13,6 +13,7 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/gpunorm"
 	"github.com/benngarcia/mercator/internal/orchestrator"
+	"github.com/benngarcia/mercator/internal/rentalschedule"
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
@@ -55,12 +56,8 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		world.DefineArtifact(version)
 	}
 	for _, rental := range spec.Rentals {
-		schedule := spec.rentalSchedule(rental.ID)
-		if err := world.AddMachine(simMachine(spec, rental, schedule, clock)); err != nil {
+		if err := world.AddMachine(simMachine(spec, rental, spec.rentalSchedule(rental.ID), clock)); err != nil {
 			return nil, err
-		}
-		if len(schedule.Queued) > 0 {
-			session.note("rental %q starts with QueuedBookings, but the scenario backend cannot seed Broker RentalSchedule state yet", rental.ID)
 		}
 	}
 	for _, host := range spec.Hosts {
@@ -81,6 +78,11 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		return nil, err
 	}
 	session.log = log
+	schedules, err := simSchedules(spec, alwaysActiveWorkspaceLog{log})
+	if err != nil {
+		return nil, err
+	}
+	session.schedules = schedules
 	session.orch = orchestrator.New(
 		alwaysActiveWorkspaceLog{log},
 		scheduler.New(),
@@ -88,8 +90,137 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		orchestrator.WithClock(clock.Now),
 		orchestrator.WithImageManifests(world),
 		orchestrator.WithArtifactCatalog(world),
+		orchestrator.WithRentalSchedules(schedules.store),
 	)
 	return session, nil
+}
+
+// simSchedules is the Broker state this world starts with: the Bookings a
+// fixture says are already assigned to each Rental, in the store Placement and
+// dispatch read. A world whose Rentals hold nothing seeds an empty store, which
+// is the same store, so a scenario about queueing and one about idle capacity
+// read Broker state through one path.
+func simSchedules(spec WorldSpec, log eventlog.WorkspaceEventLog) (*simSeededSchedules, error) {
+	seeded := &simSeededSchedules{store: rentalschedule.NewMemory(log)}
+	for _, rental := range spec.Rentals {
+		declared := spec.rentalSchedule(rental.ID)
+		if declared.Running == nil {
+			continue
+		}
+		schedule, err := simRentalSchedule(declared, spec.Start())
+		if err != nil {
+			return nil, fmt.Errorf("seed Rental Schedule for %q: %w", rental.ID, err)
+		}
+		if err := seeded.seed(schedule, simSeededBookingEnd(declared, spec.Start())); err != nil {
+			return nil, err
+		}
+	}
+	return seeded, nil
+}
+
+// simRentalSchedule is one Rental's declared Bookings reserved through the same
+// domain transition production reserves through, so a fixture can only state a
+// schedule Mercator could have reached. Runtimes a fixture states are what each
+// Booking has left rather than what its Run declared, so each is seeded as a
+// Booking that took the Rental at the world's start owing exactly that much.
+//
+// The version is the fixture's own, and it is the one thing Reserve cannot
+// supply: a schedule's version counts every transition it has seen, including
+// the Bookings that have already finished, so a fixture stating five Bookings at
+// version nine is a Rental that has done more work than the world can see.
+func simRentalSchedule(declared RentalScheduleSpec, start time.Time) (domain.RentalSchedule, error) {
+	schedule, _, err := domain.NewRentalSchedule(declared.RentalID).Reserve(domain.BookingRequest{
+		BookingID:              declared.Running.BookingID,
+		RunID:                  declared.Running.RunID,
+		ExpectedRuntimeSeconds: declared.Running.expectedRemaining().Duration().Seconds(),
+		MaxRuntimeSeconds:      declared.Running.RemainingMaxRuntime.Duration().Seconds(),
+		ReservedAt:             start,
+	})
+	if err != nil {
+		return domain.RentalSchedule{}, err
+	}
+	for _, queued := range declared.Queued {
+		schedule, _, err = schedule.Reserve(domain.BookingRequest{
+			BookingID:              queued.BookingID,
+			RunID:                  queued.RunID,
+			ExpectedRuntimeSeconds: queued.expected().Duration().Seconds(),
+			MaxRuntimeSeconds:      queued.MaxRuntime.Duration().Seconds(),
+			ReservedAt:             start,
+		})
+		if err != nil {
+			return domain.RentalSchedule{}, err
+		}
+	}
+	schedule.Version = declared.Version
+	return schedule, nil
+}
+
+// simSeededSchedules is the Broker's store plus the one thing a placement world
+// owes it about Bookings it did not commit. A seeded Booking belongs to a Run
+// this harness never created, so nothing here observes that Run exit and the
+// Booking would otherwise hold its Rental for the whole scenario. The fixture
+// states when it ends, and the store learns it the moment the scripted clock
+// passes that point, which is the same moment the world frees the machine.
+type simSeededSchedules struct {
+	store *rentalschedule.Memory
+	ends  []simBookingEnd
+}
+
+// simBookingEnd is one seeded Booking finishing.
+type simBookingEnd struct {
+	rentalID  string
+	bookingID string
+	at        time.Time
+}
+
+// simSeededBookingEnd is when the Booking a fixture says is running ends: the moment
+// completion is observed, defaulting to the expected remaining runtime, exactly
+// as the world reads it when deciding the machine is free again. Only the
+// running Booking states one. When a waiting Booking would finish depends on
+// when it starts, and a world whose queue drains further than one Booking is a
+// world neither simulator can state: the machine has one busy window.
+func simSeededBookingEnd(declared RentalScheduleSpec, start time.Time) simBookingEnd {
+	over := declared.Running.expectedRemaining()
+	if declared.Running.CompletesAfter != nil {
+		over = *declared.Running.CompletesAfter
+	}
+	return simBookingEnd{
+		rentalID:  declared.RentalID,
+		bookingID: declared.Running.BookingID,
+		at:        start.Add(over.Duration()),
+	}
+}
+
+func (seeded *simSeededSchedules) seed(schedule domain.RentalSchedule, end simBookingEnd) error {
+	if err := seeded.store.Seed(simWorkspace, schedule); err != nil {
+		return err
+	}
+	seeded.ends = append(seeded.ends, end)
+	slices.SortFunc(seeded.ends, func(a, b simBookingEnd) int { return a.at.Compare(b.at) })
+	return nil
+}
+
+// elapsed completes every seeded Booking the clock has now passed, oldest
+// first, and promotes whatever was waiting behind it. Dispatching that promoted
+// Booking stays the Broker's own work on its Run's next advancement; what
+// happens here is only the Rental coming free.
+func (seeded *simSeededSchedules) elapsed(ctx context.Context, now time.Time) error {
+	for len(seeded.ends) > 0 && !now.Before(seeded.ends[0].at) {
+		end := seeded.ends[0]
+		seeded.ends = seeded.ends[1:]
+		schedules, err := seeded.store.List(ctx, simWorkspace)
+		if err != nil {
+			return err
+		}
+		next, _, err := schedules[end.rentalID].Complete(end.bookingID, end.at)
+		if err != nil {
+			return fmt.Errorf("complete seeded Booking %q: %w", end.bookingID, err)
+		}
+		if err := seeded.store.Seed(simWorkspace, next); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, clock *fake.Clock) *fake.Machine {
@@ -328,11 +459,12 @@ func findLayer(spec WorldSpec, digest string) fake.Layer {
 }
 
 type simSession struct {
-	world *fake.World
-	log   *eventlog.SQLiteEventLog
-	orch  *orchestrator.Orchestrator
-	runs  map[string]string
-	notes []string
+	world     *fake.World
+	log       *eventlog.SQLiteEventLog
+	orch      *orchestrator.Orchestrator
+	schedules *simSeededSchedules
+	runs      map[string]string
+	notes     []string
 }
 
 func (s *simSession) note(format string, args ...any) {
@@ -365,8 +497,9 @@ func (s *simSession) Reconcile(name string) error {
 	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
 }
 
-func (s *simSession) AdvanceClock(d time.Duration) {
+func (s *simSession) AdvanceClock(d time.Duration) error {
 	s.world.Clock().Advance(d)
+	return s.schedules.elapsed(context.Background(), s.world.Clock().Now())
 }
 
 func (s *simSession) RunEvents(name string) ([]eventlog.StoredEvent, error) {

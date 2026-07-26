@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "The warm rental is busy for another 45 minutes; provisioning fresh takes under 10. The run provisions fresh, and the decision records why the rental lost: its capacity is busy, with the remaining runtime as evidence.",
+  "summary": "The warm rental is busy for another 45 minutes; provisioning fresh takes under 10. The run provisions fresh, and the decision records why the rental lost: not that it was refused, but that waiting for it costs 45 minutes. A Rental with a Booking on it is a candidate a Run may queue behind, so what strikes it out here is the score rather than a rejection.",
   "classification": "green",
   "world": {
     "images": {
@@ -49,8 +49,8 @@
     "disposition": "terminate",
     "candidates": {
       "rental-warm": {
-        "feasible": false,
-        "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
+        "feasible": true,
+        "disposition": "queue_existing_rental",
         "queue_seconds": 2700
       },
       "fresh-4090": {"feasible": true}

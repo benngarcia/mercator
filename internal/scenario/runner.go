@@ -26,8 +26,9 @@ type Session interface {
 	// Reconcile drives Broker advancement for a named Run after relevant world
 	// state or time changed.
 	Reconcile(name string) error
-	// AdvanceClock moves the scripted clock forward.
-	AdvanceClock(d time.Duration)
+	// AdvanceClock moves the scripted clock forward, carrying whatever the
+	// world owed the control plane at the moments it passed.
+	AdvanceClock(d time.Duration) error
 	// RunEvents returns the named run's recorded event stream.
 	RunEvents(name string) ([]eventlog.StoredEvent, error)
 	// Notes reports world or request ontology the backend could not express,
@@ -61,7 +62,9 @@ func Run(backend Backend, sc Scenario) (Result, error) {
 			}
 			failures = append(failures, assertExpect(session, start, step.Submit, *step.Expect)...)
 		case step.Advance != nil:
-			session.AdvanceClock(step.Advance.Duration())
+			if err := session.AdvanceClock(step.Advance.Duration()); err != nil {
+				failures = append(failures, fmt.Sprintf("step %d: advance %s: %v", i+1, step.Advance.Duration(), err))
+			}
 		case step.Reconcile != "":
 			if err := session.Reconcile(step.Reconcile); err != nil {
 				failures = append(failures, fmt.Sprintf("step %d: reconcile %q: %v", i+1, step.Reconcile, err))

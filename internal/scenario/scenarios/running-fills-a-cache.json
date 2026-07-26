@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Two Rentals holding the same image, one of them a nickel an hour dearer and free, the other cheaper and busy for another five minutes. The first Run takes the free one and finds nothing under its cache's name, because no workload has ever opened it here. Fifteen minutes later the busy machine is idle again and a second Run declaring the same generation finds that cache on the machine that ran the first and finds none of it on the machine beside it. Running is what fills a cache, exactly as running is what warms a host, and a fixture that seeded the cache at construction could not tell the two apart. The second Run goes to the cheaper machine all the same, because a cache is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured. The two machines differ by less than half a cent over this Run, and they are equally warm on its image, so a scheduler that turned this cache into either dollars or seconds would send the Run to the machine holding it and this fixture would say so.",
+  "summary": "Two Rentals holding the same image, one of them a nickel an hour dearer and free, the other cheaper and busy for another five minutes, which is five minutes of waiting rather than a refusal. The first Run takes the free one and finds nothing under its cache's name, because no workload has ever opened it here. Fifteen minutes later the busy machine is idle again and a second Run declaring the same generation finds that cache on the machine that ran the first and finds none of it on the machine beside it. Running is what fills a cache, exactly as running is what warms a host, and a fixture that seeded the cache at construction could not tell the two apart. The second Run goes to the cheaper machine all the same, because a cache is recorded and never priced: what a warm cache saves is work inside the application, which nothing here has measured. The two machines differ by less than half a cent over this Run, and they are equally warm on its image, so a scheduler that turned this cache into either dollars or seconds would send the Run to the machine holding it and this fixture would say so.",
   "classification": "green",
   "world": {
     "images": {
@@ -62,7 +62,9 @@
             "cache_evidence": {"build-cache": "miss"}
           },
           "builder-b": {
-            "feasible": false,
+            "feasible": true,
+            "disposition": "queue_existing_rental",
+            "queue_seconds": 300,
             "cache_evidence": {"build-cache": "miss"}
           }
         }
