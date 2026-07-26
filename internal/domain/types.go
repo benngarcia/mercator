@@ -1229,6 +1229,16 @@ const (
 	StageApplicationReady LaunchStage = "application_ready"
 )
 
+// ConfidenceAnswer is what a stage's duration is called in the list of answers a
+// placement was scored on. It is derived rather than written out beside each
+// stage, because the score charges doubt from that list and a reader checking
+// what a stage was worth has to be able to find the entry from the stage: the
+// two were spelled independently in three places, so a rule stated over one of
+// them could be satisfied while the other said something else entirely.
+func (stage LaunchStage) ConfidenceAnswer() string {
+	return string(stage) + "_seconds"
+}
+
 // LaunchStages is the eight of them in the order a launch goes through them.
 // Every reader that iterates stages reads this, so a stage cannot be added to
 // the record and left out of a bundle, an invariant, or a console.

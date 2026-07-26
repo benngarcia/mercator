@@ -173,9 +173,9 @@ func referenceConfidences(offer domain.OfferSnapshot, estimates domain.Candidate
 	var stated []domain.Confidence
 	for _, answer := range []domain.Confidence{
 		{Answer: "capacity", Value: offer.Capacity.Confidence},
-		{Answer: "image_fetch_seconds", Value: estimates.Stages.ImageFetch.Confidence},
-		{Answer: "unpack_seconds", Value: estimates.Stages.Unpack.Confidence},
-		{Answer: "artifact_fetch_seconds", Value: estimates.Stages.ArtifactFetch.Confidence},
+		{Answer: domain.StageImageFetch.ConfidenceAnswer(), Value: estimates.Stages.ImageFetch.Confidence},
+		{Answer: domain.StageUnpack.ConfidenceAnswer(), Value: estimates.Stages.Unpack.Confidence},
+		{Answer: domain.StageArtifactFetch.ConfidenceAnswer(), Value: estimates.Stages.ArtifactFetch.Confidence},
 	} {
 		if answer.Value > 0 {
 			stated = append(stated, answer)

@@ -277,7 +277,7 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		// seconds read like every other prediction in the record, and there is
 		// nobody at all behind the number they were divided by.
 		"safety.transfer_rate_is_attributed": func(observation *InvariantObservation) {
-			observation.MercatorEvents = []eventlog.CloudEvent{pricedAtARate(observation.Now, measuredByNobody(), domain.Estimate{Expected: 80, P50: 80, P90: 120, Confidence: 0.9})}
+			observation.MercatorEvents = []eventlog.CloudEvent{pricedAtARate(observation.Now, measuredByNobody(), domain.Estimate{Expected: 80, P50: 80, P90: 120, Confidence: 0.9}, 0.9)}
 		},
 		"safety.locality_is_never_infeasibility": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{refusedForHoldingNothing()}
@@ -868,6 +868,11 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 		// point: the rule reads provenance, and a record that names nothing is
 		// unattributed whatever it predicted.
 		read domain.Estimate
+		// scored is what the decision told its own score that answer was worth,
+		// which is the number the ranking charges doubt from. It is stated on its
+		// own because the record carries it separately from the estimate, so a
+		// decision can be honest in one of them and not in the other.
+		scored float64
 	}{
 		"priced a transfer from nothing it names": {
 			published: measured,
@@ -923,7 +928,8 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 				Confidence: 1,
 				Assumption: domain.AssumptionObjectStoreRate,
 			},
-			read: domain.Estimate{Expected: 640, P50: 640, P90: 960, Confidence: 1},
+			read:   domain.Estimate{Expected: 640, P50: 640, P90: 960, Confidence: 1},
+			scored: 1,
 		},
 		"named its assumption and then answered as if it had measured": {
 			published: nil,
@@ -935,7 +941,26 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 				Confidence: domain.AssumedLinkConfidence,
 				Assumption: domain.AssumptionObjectStoreRate,
 			},
-			read: domain.Estimate{Expected: 640, P50: 640, P90: 960, Confidence: 0.95},
+			read:   domain.Estimate{Expected: 640, P50: 640, P90: 960, Confidence: 0.95},
+			scored: 0.95,
+		},
+		// The same lie told to the only reader that matters. The rate names its
+		// assumption, the estimate is worth exactly what a guess is worth, and the
+		// list the ranking charges doubt from says the read was certain. It is
+		// reached by editing the function named for the score's own input, which is
+		// nearer to hand than either of the other two.
+		"charged the score no doubt for an answer it admits is a guess": {
+			published: nil,
+			rate: domain.TransferRate{
+				Stage:      domain.StageArtifactFetch,
+				Scope:      domain.NetworkScopeObjectStore,
+				Mbps:       domain.DefaultObjectStoreDownloadMbps,
+				Bytes:      40_000_000_000,
+				Confidence: domain.AssumedLinkConfidence,
+				Assumption: domain.AssumptionObjectStoreRate,
+			},
+			read:   domain.Estimate{Expected: 640, P50: 640, P90: 960, Confidence: domain.AssumedLinkConfidence},
+			scored: 1,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -946,7 +971,7 @@ func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
 					At:             now,
 					PublishedPaths: map[string][]domain.NetworkFact{"rental-warm": observed.published},
 				},
-				MercatorEvents: []eventlog.CloudEvent{pricedAtARate(now, observed.rate, observed.read)},
+				MercatorEvents: []eventlog.CloudEvent{pricedAtARate(now, observed.rate, observed.read, observed.scored)},
 			}
 
 			result := invariantResultByID(t,
@@ -974,7 +999,7 @@ func TestARatePricedFromTheStatedAssumptionIsNotAViolation(t *testing.T) {
 		World:     WorldTruthSnapshot{At: now},
 		MercatorEvents: []eventlog.CloudEvent{pricedAtARate(now, domain.TransferRateFor(
 			domain.StageUnpack, "", 2_000_000_000, domain.UnpackRate(),
-		), domain.Estimate{Expected: 8, P50: 8, P90: 12, Confidence: domain.AssumedLinkConfidence})},
+		), domain.Estimate{Expected: 8, P50: 8, P90: 12, Confidence: domain.AssumedLinkConfidence}, domain.AssumedLinkConfidence)},
 	}
 
 	result := invariantResultByID(t,
@@ -1019,7 +1044,7 @@ func TestARateMeasuredOnCapacitySinceRetiredIsNotAViolation(t *testing.T) {
 			Bytes:       40_000_000_000,
 			Confidence:  0.9,
 			Measurement: "node_probe",
-		}, domain.Estimate{Expected: 1600, P50: 1600, P90: 2400, Confidence: 0.9})},
+		}, domain.Estimate{Expected: 1600, P50: 1600, P90: 2400, Confidence: 0.9}, 0.9)},
 	}
 
 	result := invariantResultByID(t,
@@ -1595,14 +1620,26 @@ func launchSpendingEveryStageBut(runID string, omitted domain.LaunchStage) Effec
 }
 
 // pricedAtARate is a Booking Decision whose one candidate was charged a transfer
-// at one rate and answered one estimate over it. It is the whole input to the
-// attribution rule: the rule reads what a decision recorded about where a rate
-// came from and what it then claimed the answer was worth, and nothing else.
+// at one rate, answered one estimate over it, and told its own score what that
+// answer was worth. It is the whole input to the attribution rule: the rule reads
+// what a decision recorded about where a rate came from and what it then claimed
+// the answer was worth, and nothing else.
 //
 // The estimate is filed under the read, because that is the stage the cases about
 // what a guess is worth price, and a decision recording a rate for one stage and
 // an answer for another would be a record the scheduler cannot write.
-func pricedAtARate(at time.Time, rate domain.TransferRate, read domain.Estimate) eventlog.CloudEvent {
+//
+// The doubt the score was charged is stated separately from the estimate rather
+// than copied off it, because production states it separately: the two are built
+// by different code and a case that could not tell them apart could not reach the
+// route where only the second one lies. A confidence of zero is left out of the
+// list entirely, which is what production does with an answer nobody stated one
+// for.
+func pricedAtARate(at time.Time, rate domain.TransferRate, read domain.Estimate, scored float64) eventlog.CloudEvent {
+	var charged []domain.Confidence
+	if scored > 0 {
+		charged = []domain.Confidence{{Answer: rate.Stage.ConfidenceAnswer(), Value: scored}}
+	}
 	return bookingDecidedEvent("evt_transfer_rate", domain.BookingDecision{
 		ID:          "dec_transfer_rate",
 		RunID:       "run-reader",
@@ -1614,6 +1651,7 @@ func pricedAtARate(at time.Time, rate domain.TransferRate, read domain.Estimate)
 			Estimates: domain.CandidateEstimates{
 				Stages: domain.LaunchStageEstimates{ArtifactFetch: read},
 			},
+			Confidences: charged,
 		}},
 		SelectedOfferSnapshotID: "rental-warm",
 		SelectionReasonCodes:    []string{"FEASIBLE"},

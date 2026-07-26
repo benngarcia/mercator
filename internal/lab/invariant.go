@@ -1616,18 +1616,22 @@ func measuredRateWasReported(
 }
 
 // assumedRateIsWorthAGuess holds the third clause: a transfer nobody measured is
-// worth at most domain.AssumedLinkConfidence, and so is the stage estimate it
-// produced. Nothing on the path answered, so the seconds are the fleet-wide
-// constant divided into bytes, and confidence is the one field that says so.
+// worth at most domain.AssumedLinkConfidence, and so is every reading of it the
+// decision published. Nothing on the path answered, so the seconds are the
+// fleet-wide constant divided into bytes, and confidence is the one field that
+// says so.
 //
-// It is the clause that gives the other two teeth. The score charges doubt from
-// the stage estimate's confidence, so a prediction that named its assumption
-// truthfully and then presented the duration as certain would rank an unmeasured
-// machine exactly where a machine that measured a gigabit path ranks, which is
-// the outcome a fabricated measurement buys and the one the whole slice exists to
-// stop. A prediction reaching for that is far likelier to arrive by raising an
-// assumption's confidence than by inventing a source, because raising it looks
-// like a tuning constant.
+// It is the clause that gives the other two teeth. A prediction that named its
+// assumption truthfully and then presented the duration as certain would rank an
+// unmeasured machine exactly where a machine that measured a gigabit path ranks,
+// which is the outcome a fabricated measurement buys and the one the whole slice
+// exists to stop. A prediction reaching for that is far likelier to arrive by
+// raising an assumption's confidence than by inventing a source, because raising
+// it looks like a tuning constant.
+//
+// The doubt the score charged is asked about by name rather than inferred from
+// the estimate, because the decision carries the two separately and only one of
+// them is what the ranking reads.
 //
 // Zero bytes is not judged here and cannot be: a stage with nothing to move
 // records no rate at all, and a host an inventory says holds the content is
@@ -1636,7 +1640,7 @@ func assumedRateIsWorthAGuess(decision domain.BookingDecision, candidate domain.
 	if rate.Assumption == "" {
 		return nil
 	}
-	part, worth, overconfident := overconfidentGuess(rate, candidate.Estimates.Stages.Stage(rate.Stage))
+	part, worth, overconfident := overconfidentGuess(rate, candidate, rate.Stage)
 	if !overconfident {
 		return nil
 	}
@@ -1646,20 +1650,43 @@ func assumedRateIsWorthAGuess(decision domain.BookingDecision, candidate domain.
 	)
 }
 
-// overconfidentGuess names which half of an unmeasured transfer claims more than
-// a guess is worth. The two are separate mistakes: the rate is what a future
-// caller of this model will divide by, and the stage estimate is what this
-// decision's own score already charged doubt from, so a rule that read only one
-// of them would pass a tree that had stopped carrying the rate's own confidence
-// onto the answer.
-func overconfidentGuess(rate domain.TransferRate, stage domain.Estimate) (string, float64, bool) {
+// overconfidentGuess names which reading of an unmeasured transfer claims more
+// than a guess is worth. There are three of them and they are three separate
+// mistakes.
+//
+// The rate is what a future caller of this model will divide by. The stage
+// estimate is the answer this decision published about the duration, and a tree
+// that stopped carrying the rate's confidence onto it would pass a rule that read
+// only the rate. And the confidence the decision listed for that stage is what
+// the score itself charges doubt from: domain.CandidateDecision.Confidences is
+// what Uncertainty reads, it is built separately from the estimate rather than
+// derived from it, and a rule stated over the estimate alone leaves the ranking
+// reachable by editing the one function named for the score's own input.
+func overconfidentGuess(rate domain.TransferRate, candidate domain.CandidateDecision, stage domain.LaunchStage) (string, float64, bool) {
 	if rate.Confidence > domain.AssumedLinkConfidence {
 		return "the rate itself", rate.Confidence, true
 	}
-	if stage.Confidence > domain.AssumedLinkConfidence {
-		return "the estimate it produced", stage.Confidence, true
+	if estimate := candidate.Estimates.Stages.Stage(stage); estimate.Confidence > domain.AssumedLinkConfidence {
+		return "the estimate it produced", estimate.Confidence, true
+	}
+	if scored := scoredConfidence(candidate, stage); scored > domain.AssumedLinkConfidence {
+		return "the doubt the score charged for it", scored, true
 	}
 	return "", 0, false
+}
+
+// scoredConfidence is what this decision told its own score one stage's duration
+// was worth. An answer nobody stated a confidence for is not listed at all and is
+// charged no doubt, which is a silence rather than a claim of certainty, so it is
+// not judged here: what a stage costs when nothing answered about it is the
+// business of the rules about locality.
+func scoredConfidence(candidate domain.CandidateDecision, stage domain.LaunchStage) float64 {
+	for _, confidence := range candidate.Confidences {
+		if confidence.Answer == stage.ConfidenceAnswer() {
+			return confidence.Value
+		}
+	}
+	return 0
 }
 
 func describeRateProvenance(rate domain.TransferRate) string {
