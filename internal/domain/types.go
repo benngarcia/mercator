@@ -825,7 +825,14 @@ type CandidateDecision struct {
 	// which is how two definitions of uncertainty came to disagree about every
 	// borrowed host while both were multiplied by zero.
 	Confidences []Confidence `json:"confidences,omitempty"`
-	ScoreUSD    float64      `json:"score_usd,omitempty"`
+	// ScoreUSD is the dollars this candidate is known to be worth to this Run,
+	// lowest first, and it is never the whole ranking on its own. A candidate
+	// nobody quoted has no price to put in it, so its score states only the
+	// waiting and the doubt: read as a total it makes the unquoted machine the
+	// cheapest thing in the fleet, which is the inverse of how it is ranked.
+	// CandidateDecision.Preferred is the order, it asks Priced before it compares
+	// any dollars, and the decision names that rule in its selection reasons.
+	ScoreUSD float64 `json:"score_usd,omitempty"`
 }
 
 // Confidence is one answer a placement rested on and what its source said it was

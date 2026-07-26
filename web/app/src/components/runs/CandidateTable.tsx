@@ -7,6 +7,7 @@ import type {
 } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { duration, usd } from "@/lib/format";
+import { orderCandidates, priced } from "@/lib/placement";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -176,9 +177,19 @@ function CandidateRow({ candidate, selected }: CandidateRowProps) {
             className={cn(
               "font-mono text-[0.8125rem] tabular",
               selected ? "font-semibold text-primary" : "text-foreground",
+              // A score with no price in it is not a total. It states the waiting
+              // and the doubt, and the machine it belongs to was ranked behind
+              // every machine somebody quoted whatever it adds up to.
+              !priced(candidate) && "text-muted-foreground",
             )}
+            title={
+              priced(candidate)
+                ? undefined
+                : "no price: waiting and doubt only, ranked behind every priced candidate"
+            }
           >
             {candidate.score_usd === undefined ? "—" : usd(candidate.score_usd)}
+            {priced(candidate) ? null : "*"}
           </span>
         </TableCell>
 
@@ -220,18 +231,12 @@ export function CandidateTable({
   selectedOfferId,
   className,
 }: CandidateTableProps) {
-  // Order: selected first, then feasible by score ascending (cheapest best),
-  // then infeasible last.
-  const ordered = React.useMemo(() => {
-    return [...candidates].sort((a, b) => {
-      if (a.offer_snapshot_id === selectedOfferId) return -1;
-      if (b.offer_snapshot_id === selectedOfferId) return 1;
-      if (a.feasible !== b.feasible) return a.feasible ? -1 : 1;
-      const as = a.score_usd ?? Number.POSITIVE_INFINITY;
-      const bs = b.score_usd ?? Number.POSITIVE_INFINITY;
-      return as - bs;
-    });
-  }, [candidates, selectedOfferId]);
+  // Order: the placement's own ranking, which asks whether a candidate has
+  // dollars before it compares any. See lib/placement.
+  const ordered = React.useMemo(
+    () => orderCandidates(candidates, selectedOfferId),
+    [candidates, selectedOfferId],
+  );
 
   return (
     <div

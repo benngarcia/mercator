@@ -88,6 +88,9 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		decision.SelectedOfferSnapshotID = decision.Candidates[bestIndex].OfferSnapshotID
 		decision.SelectionReasonCodes = []string{"FEASIBLE", class.SelectionReason()}
 		decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, selectionReason(decision.Candidates[bestIndex].Disposition))
+		if code := pricedRankingReason(decision.Candidates, bestIndex); code != "" {
+			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, code)
+		}
 		if code := startSLOReason(input.Workload.Spec.Placement.MaxP90StartSeconds, decision.Candidates[bestIndex]); code != "" {
 			decision.SelectionReasonCodes = append(decision.SelectionReasonCodes, code)
 		}
@@ -610,6 +613,29 @@ func candidateDisposition(input SchedulingInput, offer domain.OfferSnapshot) dom
 		return domain.CandidateDispositionQueue
 	}
 	return domain.CandidateDispositionRunNow
+}
+
+// pricedRankingReason is the decision saying that a price, or the absence of one,
+// decided this placement.
+//
+// The ranking asks whether a candidate has dollars before it compares any, so a
+// machine nobody quoted ranks behind every machine somebody did. That rule is
+// invisible in the score: the score is in dollars and an unpriced candidate has
+// none of the only term that would separate it, so it reads as the cheapest thing
+// in the fleet, and a reader ranking candidates on the number the ranking is
+// stated in sees the winner beaten by the machine that lost. This is the record
+// saying which rule it lost to, exactly as the class states why the costliest
+// machine can win.
+func pricedRankingReason(candidates []domain.CandidateDecision, bestIndex int) string {
+	if !candidates[bestIndex].Priced() {
+		return "UNPRICED_LAST_RESORT"
+	}
+	for _, candidate := range candidates {
+		if candidate.Feasible && !candidate.Priced() {
+			return "PRICED_BEFORE_UNPRICED"
+		}
+	}
+	return ""
 }
 
 func selectionReason(disposition domain.CandidateDisposition) string {

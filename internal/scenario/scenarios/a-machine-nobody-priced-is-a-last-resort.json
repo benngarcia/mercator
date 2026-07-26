@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Two Rentals, both holding the whole image, both ready to start in a second. One is quoted at 2.00 USD an hour and the other is a machine nobody has quoted at all, which is what an enrolled node whose operator configured no shadow price publishes. The Run allows unknown pricing, so the unpriced machine is a candidate rather than a refusal. It still loses. The score is in dollars and the unpriced candidate has none: an absent price was read as zero dollars, which made the machine Mercator would actually pay for the cheapest thing in the fleet and won it every placement a Run was willing to accept it for. Allowing unknown pricing says a caller would rather run on an unquoted machine than not run, so it is ranked behind every machine somebody priced and taken only when nothing priced will do. The winning candidate here has the higher score, which is the whole point: dollars order the candidates that have dollars.",
+  "summary": "Two Rentals, both holding the whole image, both ready to start in a second. One is quoted at 2.00 USD an hour and the other is a machine nobody has quoted at all, which is what an enrolled node whose operator configured no shadow price publishes. The Run allows unknown pricing, so the unpriced machine is a candidate rather than a refusal. It still loses. The score is in dollars and the unpriced candidate has none: an absent price was read as zero dollars, which made the machine Mercator would actually pay for the cheapest thing in the fleet and won it every placement a Run was willing to accept it for. Allowing unknown pricing says a caller would rather run on an unquoted machine than not run, so it is ranked behind every machine somebody priced and taken only when nothing priced will do. The winning candidate here has the higher score, which is the whole point: dollars order the candidates that have dollars. The decision records PRICED_BEFORE_UNPRICED because nothing else in it would say so, and a reader ranking the rows on the number the ranking is stated in sees the winner beaten by the machine that lost.",
   "classification": "green",
   "world": {
     "images": {
@@ -33,7 +33,7 @@
   "expect": {
     "outcome": "place",
     "offer": "rental-quoted",
-    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD", "PRICED_BEFORE_UNPRICED"],
     "disposition": "release",
     "candidates": {
       "rental-quoted": {

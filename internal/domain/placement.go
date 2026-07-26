@@ -39,6 +39,11 @@ type ScoreWeights struct {
 //
 // An infeasible candidate scores nothing. It has no price because it is not for
 // sale, and ranking it beside the others would have the cheapest refusal win.
+//
+// A candidate nobody quoted scores its waiting and its doubt and no dollars,
+// because there are none to state and inventing a zero would price the absence.
+// That number is not comparable with a priced candidate's, which is why Preferred
+// asks Priced first and the decision records which rule ranked them.
 func (weights ScoreWeights) ScoreUSD(candidate CandidateDecision, expectedRuntimeSeconds float64) float64 {
 	if !candidate.Feasible {
 		return 0

@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import type { BookingDecision, CandidateDecision, CloudEvent } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { humanizeEventType, usd } from "@/lib/format";
+import { priced } from "@/lib/placement";
 import { JsonViewer, RelativeTime, EmptyState, CopyButton } from "@/components/common";
 import { BookingDecidedData } from "@/lib/workspace/contracts";
 
@@ -160,7 +161,7 @@ function SelectedDecision({ decision }: { decision: BookingDecision }) {
         {dispositionLabel(selected.disposition)}
       </span>
       <span className="font-mono text-muted-foreground">
-        {selected.score_usd === undefined ? "no score" : `${usd(selected.score_usd)} score`}
+        {scoreLabel(selected)}
       </span>
       <span className="text-muted-foreground">
         {decision.candidates.length} candidates
@@ -189,14 +190,21 @@ function CandidateEvidence({ candidates }: { candidates: CandidateDecision[] }) 
             </div>
           </div>
           <div className="self-center font-mono tabular text-muted-foreground">
-            {candidate.feasible && candidate.score_usd !== undefined
-              ? usd(candidate.score_usd)
-              : "rejected"}
+            {candidate.feasible ? scoreLabel(candidate) : "rejected"}
           </div>
         </div>
       ))}
     </div>
   );
+}
+
+// scoreLabel is what one candidate's score reads as. A candidate nobody quoted
+// has no dollars in its score, so stating the number alone offers a total that
+// omits the only term a reader would compare on.
+function scoreLabel(candidate: CandidateDecision): string {
+  if (candidate.score_usd === undefined) return "no score";
+  if (!priced(candidate)) return `${usd(candidate.score_usd)} score, unpriced`;
+  return `${usd(candidate.score_usd)} score`;
 }
 
 function dispositionLabel(disposition: CandidateDecision["disposition"]): string {

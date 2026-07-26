@@ -1023,6 +1023,13 @@ func TestAnUnpricedCandidateIsTakenOnlyWhenNothingPricedWillDo(t *testing.T) {
 	if decision.SelectedOfferSnapshotID != "off_priced" {
 		t.Errorf("the placement chose %q over a machine somebody quoted", decision.SelectedOfferSnapshotID)
 	}
+	// The winner has the higher score, because the score is in dollars and the
+	// loser has none of them. Nothing else in the record says which rule ranked
+	// them, so a reader comparing scores sees the selected machine beaten by the
+	// one it beat.
+	if !slices.Contains(decision.SelectionReasonCodes, "PRICED_BEFORE_UNPRICED") {
+		t.Errorf("the decision recorded %v, and it took the costlier machine because the cheaper one had no price", decision.SelectionReasonCodes)
+	}
 	for _, candidate := range decision.Candidates {
 		if candidate.OfferSnapshotID != "off_unpriced" {
 			continue
@@ -1049,6 +1056,9 @@ func TestAnUnpricedCandidateIsTakenOnlyWhenNothingPricedWillDo(t *testing.T) {
 	}
 	if fallback.SelectedOfferSnapshotID != "off_unpriced" {
 		t.Errorf("with nothing priced left to take, the placement chose %q, and a last resort that is never taken is a refusal", fallback.SelectedOfferSnapshotID)
+	}
+	if !slices.Contains(fallback.SelectionReasonCodes, "UNPRICED_LAST_RESORT") {
+		t.Errorf("the decision recorded %v for a Run placed on a machine nobody has quoted", fallback.SelectionReasonCodes)
 	}
 }
 
