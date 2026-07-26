@@ -137,7 +137,35 @@ type NetworkDownloadRequirement struct {
 	Scope                    NetworkScope `json:"scope"`
 	MinP10Mbps               float64      `json:"min_p10_mbps"`
 	MaxMeasurementAgeSeconds int64        `json:"max_measurement_age_seconds"`
-	AllowUnknown             bool         `json:"allow_unknown"`
+	// AllowUnknown says this Run would rather run on a machine that has published
+	// nothing about the link than not run at all. It is asked when nobody
+	// answered, and never instead of a comparison: a candidate whose published
+	// fact answers and falls below the floor is refused whatever this says.
+	AllowUnknown bool `json:"allow_unknown"`
+}
+
+// Answer is what this candidate's published facts say about the floor this
+// requirement states, and whether anything said it.
+//
+// A fact answers when its publisher stands behind it (NetworkFact.Answers), it
+// describes the link the Run asked about, and it is fresh enough for the Run that
+// asked. Nothing else is an answer, which is what makes a number its own
+// publisher disowned worth exactly what saying nothing is worth: the caller then
+// decides what silence buys through AllowUnknown, rather than a disowned fact
+// striking a candidate out where an identical silent one is admitted.
+//
+// It is the same fact OfferSnapshot.RegistryDownload prices the transfer from, so
+// the bound and the prediction are asked of one measurement rather than of two
+// facts that happen to be published together.
+func (req NetworkDownloadRequirement) Answer(facts NetworkFacts, at time.Time) (NetworkFact, bool) {
+	fact, answered := facts.DownloadP10(req.Scope, at)
+	if !answered {
+		return NetworkFact{}, false
+	}
+	if req.MaxMeasurementAgeSeconds > 0 && at.Sub(fact.ObservedAt) > time.Duration(req.MaxMeasurementAgeSeconds)*time.Second {
+		return NetworkFact{}, false
+	}
+	return fact, true
 }
 
 type PlacementPolicy struct {
@@ -289,13 +317,7 @@ type LinkSpeed struct {
 // of one as a measurement is how an unmeasured constant becomes a certainty.
 // Absent an answer the reply is the standing assumption, saying so.
 func (offer OfferSnapshot) RegistryDownload() LinkSpeed {
-	for _, fact := range offer.Network.Download {
-		if fact.Scope != NetworkScopeRegistry || fact.Statistic != "p10" || fact.ValueMbps <= 0 {
-			continue
-		}
-		if !fact.Answers(offer.ObservedAt) {
-			continue
-		}
+	if fact, answered := offer.Network.DownloadP10(NetworkScopeRegistry, offer.ObservedAt); answered {
 		return LinkSpeed{Mbps: fact.ValueMbps, Confidence: fact.Confidence}
 	}
 	return LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence}
@@ -377,6 +399,25 @@ type ObservabilityCapabilities struct {
 
 type NetworkFacts struct {
 	Download []NetworkFact `json:"download,omitempty"`
+}
+
+// DownloadP10 is the one rule for which published fact answers a question about
+// how fast content reaches this host over one link. A fact answers when it
+// describes that link, states the pessimistic quantile every reader here asks
+// for, names a speed, and is one its own publisher stands behind as of the moment
+// it is read. Everything else is silence, and every reader of a fact asks this
+// rather than deciding for itself what counts.
+func (facts NetworkFacts) DownloadP10(scope NetworkScope, at time.Time) (NetworkFact, bool) {
+	for _, fact := range facts.Download {
+		if fact.Scope != scope || fact.Statistic != "p10" || fact.ValueMbps <= 0 {
+			continue
+		}
+		if !fact.Answers(at) {
+			continue
+		}
+		return fact, true
+	}
+	return NetworkFact{}, false
 }
 
 type NetworkFact struct {

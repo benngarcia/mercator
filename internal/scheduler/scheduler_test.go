@@ -902,13 +902,62 @@ func TestEqualPricesAreDecidedByWhatEachCandidateHolds(t *testing.T) {
 	}
 }
 
+// TestADownloadFloorRefusesOnlyWhatWasMeasuredTooSlow is the difference between the
+// two ways a candidate can miss a floor, which the record has to keep apart. The
+// machine that published 100 Mbps was measured too slow and is refused with the
+// number it published. The machines nobody answered for measured nothing, and this
+// Run allows an unmeasured link, so each is admitted exactly as the machine that
+// published nothing at all is: a number its own publisher disowned and an expired
+// one are the silence AllowUnknown was asked about, and a disowned fact that struck
+// a candidate out where an identical silence was admitted made publishing a number
+// you disown strictly worse than saying nothing.
+func TestADownloadFloorRefusesOnlyWhatWasMeasuredTooSlow(t *testing.T) {
+	now := time.Now().UTC()
+	workload := schedulerRevision()
+	workload.Spec.Network.Download.AllowUnknown = true
+	slow := schedulerOffer("off_slow", now, 0.0002, 0)
+	slow.Network.Download[0].ValueMbps = 100
+	disowned := schedulerOffer("off_disowned", now, 0.0002, 0)
+	disowned.Network.Download[0].ValueMbps, disowned.Network.Download[0].Confidence = 5000, 0
+	expired := schedulerOffer("off_expired", now, 0.0002, 0)
+	expired.Network.Download[0].ValidUntil = now.Add(-time.Minute)
+	silent := schedulerOffer("off_silent", now, 0.0002, 0)
+	silent.Network.Download = nil
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run_floor_allowed",
+		Workload:     workload,
+		Offers:       []domain.OfferSnapshot{slow, disowned, expired, silent},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	for _, id := range []string{"off_disowned", "off_expired", "off_silent"} {
+		candidate := findCandidate(t, decision, id)
+		if !candidate.Feasible {
+			t.Errorf("%s was refused as %+v, and nobody measured its link: this Run allows that, and the machine that published nothing is feasible", id, candidate.Rejections)
+		}
+	}
+	refused := findCandidate(t, decision, "off_slow")
+	if refused.Feasible {
+		t.Fatalf("the machine that published 100 Mbps cleared a 500 Mbps floor")
+	}
+	rejection := refused.Rejections[0]
+	if rejection.Code != "NETWORK_FACT_UNSATISFIED" || rejection.Offered != 100.0 {
+		t.Fatalf("the record says %+v, and an operator reading it has to see the speed the machine published", rejection)
+	}
+}
+
 // TestARunsDownloadFloorIsNotClearedByADisownedFact is the hard half of the same
 // rule the score follows. A Run that states a floor on how fast a candidate
 // reaches content has said it would rather not run than run below it, and a
 // publisher that puts no confidence in its own number has measured nothing. The
 // two offers here publish the same 5 Gbps: one stands behind it and clears the
-// floor, one disowns it and is refused, which is what a Run asked for when it set
-// AllowUnknown false.
+// floor, one disowns it and is refused as the silence it is, which is what a Run
+// asked for when it set AllowUnknown false.
 func TestARunsDownloadFloorIsNotClearedByADisownedFact(t *testing.T) {
 	now := time.Now().UTC()
 	workload := schedulerRevision()
@@ -938,8 +987,8 @@ func TestARunsDownloadFloorIsNotClearedByADisownedFact(t *testing.T) {
 		if candidate.Feasible {
 			t.Errorf("the disowned publisher is feasible, and its own publisher stated no confidence in the measurement that admitted it")
 		}
-		if len(candidate.Rejections) == 0 || candidate.Rejections[0].Code != "NETWORK_FACT_UNSATISFIED" {
-			t.Errorf("the disowned publisher was refused as %+v, and a Run reading its decision has to see which bound it missed", candidate.Rejections)
+		if len(candidate.Rejections) == 0 || candidate.Rejections[0].Code != "UNKNOWN_FACT" || candidate.Rejections[0].Offered != "unknown" {
+			t.Errorf("the disowned publisher was refused as %+v, and its machine measured nothing rather than measuring too slow", candidate.Rejections)
 		}
 	}
 }

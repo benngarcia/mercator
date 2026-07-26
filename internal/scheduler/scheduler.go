@@ -325,13 +325,7 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	// mistaken for a hard constraint. The transfer estimate records the silence
 	// with no confidence, so the decision says which it was.
 	if req := workload.Spec.Network.Download; req != nil {
-		if !downloadRequirementSatisfied(input.EvaluatedAt, *req, offer.Network.Download) {
-			code := "NETWORK_FACT_UNSATISFIED"
-			if len(offer.Network.Download) == 0 && !req.AllowUnknown {
-				code = "UNKNOWN_FACT"
-			}
-			violations = append(violations, domain.Violation{Code: code, Path: "network.download", Required: req.MinP10Mbps, Offered: "unknown_or_insufficient", Message: "Offer lacks a compatible registry download p10 fact."})
-		}
+		violations = append(violations, downloadFloorViolations(input.EvaluatedAt, *req, offer.Network)...)
 	}
 	if !offer.Pricing.Known && !workload.Spec.Placement.AllowUnknownPricing {
 		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "pricing", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown pricing."})
@@ -794,31 +788,39 @@ func pullSource(locality domain.LocalityState, manifest domain.ImageManifest, in
 	}
 }
 
-// downloadRequirementSatisfied is a Run's hard floor on how fast a candidate can
-// reach content, and it is met only by an answer somebody stands behind. The rule
-// that keeps a disowned fact out of the prediction keeps it out of here for the
-// same reason: a bound cleared by a number its own publisher put no confidence in
-// is a bound cleared by nothing, and a Run that states a floor has said it would
-// rather not run than run below it.
-func downloadRequirementSatisfied(now time.Time, req domain.NetworkDownloadRequirement, facts []domain.NetworkFact) bool {
-	if len(facts) == 0 {
-		return req.AllowUnknown
+// downloadFloorViolations is a Run's hard floor on how fast a candidate can reach
+// content, and there are two ways to miss it that a decision must never state as
+// one.
+//
+// A candidate whose published fact answers and falls below the floor was measured
+// too slow, and the record says the number it published. A candidate nobody
+// answered for measured nothing, and what that buys is the Run's own to decide:
+// an unmeasured link is uncertainty, so AllowUnknown admits it, and the record
+// says nobody answered rather than naming a speed nothing published. A number its
+// own publisher disowned and an expired one are silence for that purpose, which is
+// exactly what publishing nothing is, and the two must buy their publisher the
+// same thing.
+func downloadFloorViolations(now time.Time, req domain.NetworkDownloadRequirement, facts domain.NetworkFacts) []domain.Violation {
+	fact, answered := req.Answer(facts, now)
+	switch {
+	case !answered && !req.AllowUnknown:
+		return []domain.Violation{{
+			Code:     "UNKNOWN_FACT",
+			Path:     "network.download",
+			Required: req.MinP10Mbps,
+			Offered:  "unknown",
+			Message:  "Nobody has published a download p10 for this offer's link that its own publisher stands behind, and this Run does not allow an unmeasured link.",
+		}}
+	case answered && fact.ValueMbps < req.MinP10Mbps:
+		return []domain.Violation{{
+			Code:     "NETWORK_FACT_UNSATISFIED",
+			Path:     "network.download",
+			Required: req.MinP10Mbps,
+			Offered:  fact.ValueMbps,
+			Message:  "Offer published a download p10 below the floor this Run states.",
+		}}
 	}
-	for _, fact := range facts {
-		if fact.Scope != req.Scope || fact.Statistic != "p10" {
-			continue
-		}
-		if !fact.Answers(now) {
-			continue
-		}
-		if req.MaxMeasurementAgeSeconds > 0 && now.Sub(fact.ObservedAt) > time.Duration(req.MaxMeasurementAgeSeconds)*time.Second {
-			continue
-		}
-		if fact.ValueMbps >= req.MinP10Mbps {
-			return true
-		}
-	}
-	return false
+	return nil
 }
 
 func requiresPublicInbound(container domain.ContainerSpec) bool {
