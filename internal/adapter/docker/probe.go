@@ -17,9 +17,16 @@ import (
 // Docker endpoint, whether that endpoint is the loopback socket or a remote
 // host reached over tcp:// or ssh://.
 type HostInfo struct {
-	Architecture  string
-	OSType        string
-	NCPU          int
+	Architecture string
+	OSType       string
+	NCPU         int
+	// ID is the daemon's own identifier, which the engine generates once for its
+	// data root and then keeps. It is the only fact this adapter reads that names
+	// the machine rather than the route Mercator took to it: two daemons on one box
+	// (a rootful one and a rootless one) answer on different sockets with different
+	// image stores and different IDs, and one daemon keeps its ID when an operator
+	// moves Mercator from a DOCKER_HOST to a docker context.
+	ID            string
 	MemTotalBytes int64
 	ServerVersion string
 	Name          string
@@ -63,6 +70,7 @@ func parseDockerInfo(raw []byte) (HostInfo, error) {
 		Architecture  string                     `json:"Architecture"`
 		OSType        string                     `json:"OSType"`
 		NCPU          int                        `json:"NCPU"`
+		ID            string                     `json:"ID"`
 		MemTotal      int64                      `json:"MemTotal"`
 		ServerVersion string                     `json:"ServerVersion"`
 		Name          string                     `json:"Name"`
@@ -75,6 +83,7 @@ func parseDockerInfo(raw []byte) (HostInfo, error) {
 		Architecture:  doc.Architecture,
 		OSType:        doc.OSType,
 		NCPU:          doc.NCPU,
+		ID:            doc.ID,
 		MemTotalBytes: doc.MemTotal,
 		ServerVersion: doc.ServerVersion,
 		Name:          doc.Name,

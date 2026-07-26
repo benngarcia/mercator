@@ -674,3 +674,69 @@ func TestLaunchGrantsNoGPUAccessWithoutAcceleratorRequirement(t *testing.T) {
 		t.Fatalf("GPUCount = %d, want 0 (no GPU access unless the workload asked)", client.created[0].GPUCount)
 	}
 }
+
+// TestIntegrationOneDaemonReachedTwoWaysIsOneMachine is the live half of the
+// machine handle, and it is a live case because the fact it rests on is one only
+// an engine can state. It reaches this host's daemon twice, once through the
+// ambient endpoint and once through a docker context created for the test, and
+// the two routes have to name one machine: the endpoint identity calls them
+// "loopback" and the context name, so anything derived from the endpoint says
+// they are two machines, and a launch history keyed that way orphans this host's
+// samples the moment an operator changes how Mercator reaches it.
+func TestIntegrationOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
+	if os.Getenv("MERCATOR_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set MERCATOR_DOCKER_INTEGRATION=1 to run live Docker adapter integration")
+	}
+	now := time.Now().UTC()
+	ambient := NewCLIClient("")
+	info, err := ambient.Info(context.Background())
+	if err != nil {
+		t.Fatalf("live docker info: %v", err)
+	}
+	if info.ID == "" {
+		t.Fatalf("this engine states no ID, so nothing in its answer names the machine: %+v", info)
+	}
+
+	viaContext := &CLIClient{Binary: "docker", Context: liveContextTo(t, ambient)}
+	relabelled, err := viaContext.Info(context.Background())
+	if err != nil {
+		t.Fatalf("live docker info through a context: %v", err)
+	}
+
+	if relabelled.ID != info.ID {
+		t.Fatalf("one daemon named two machines, %q and %q", info.ID, relabelled.ID)
+	}
+	direct := StandingOffer(DeriveIdentity("", ""), "", info, 0, nil, now)
+	labelled := StandingOffer(DeriveIdentity("", viaContext.Context), "", relabelled, 0, nil, now)
+	if direct.ID == labelled.ID {
+		t.Fatalf("this case is about two listings of one machine; both are %q", direct.ID)
+	}
+	directKey := domain.CandidateIdentityOf(direct, "sha256:image").Candidate(true)
+	labelledKey := domain.CandidateIdentityOf(labelled, "sha256:image").Candidate(true)
+	if directKey != labelledKey {
+		t.Fatalf("one machine keyed two ways:\n%s\n%s", directKey, labelledKey)
+	}
+	if strings.Contains(directKey, viaContext.Context) || strings.Contains(directKey, "loopback") {
+		t.Fatalf("key %q names how Mercator reached the machine", directKey)
+	}
+}
+
+// liveContextTo is a second route to the daemon the ambient endpoint reaches: a
+// docker context pointing at the same socket, which is the change an operator
+// makes when a host stops being reachable the way it was.
+func liveContextTo(t *testing.T, ambient *CLIClient) string {
+	t.Helper()
+	endpoint, err := ambient.run(context.Background(), "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+	if err != nil {
+		t.Fatalf("read the ambient endpoint: %v: %s", err, endpoint)
+	}
+	name := "mercator-machine-" + time.Now().UTC().Format("20060102150405")
+	if output, err := ambient.run(context.Background(),
+		"context", "create", name, "--docker", "host="+strings.TrimSpace(endpoint)); err != nil {
+		t.Fatalf("create a second route to this daemon: %v: %s", err, output)
+	}
+	t.Cleanup(func() {
+		_, _ = ambient.run(context.Background(), "context", "rm", "-f", name)
+	})
+	return name
+}

@@ -81,6 +81,67 @@ func TestStandingOfferUsesProbedCapacity(t *testing.T) {
 	}
 }
 
+// TestTwoDaemonsOnOneBoxAreTwoMachines is why the offer states the daemon's own
+// ID. A rootful daemon on /var/run/docker.sock and a rootless one on
+// /run/user/1000/docker.sock are two machines with two image stores, and every
+// identifier derived from the endpoint calls them both "loopback": so does every
+// pair of ports on one host, because the label drops the port. A launch history
+// keyed on that label served one daemon's warm-pull timings as evidence about the
+// other, which holds none of those layers.
+func TestTwoDaemonsOnOneBoxAreTwoMachines(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	rootful := HostInfo{ID: "daemon-rootful", NCPU: 4, MemTotalBytes: 1 << 30}
+	rootless := HostInfo{ID: "daemon-rootless", NCPU: 4, MemTotalBytes: 1 << 30}
+
+	first := StandingOffer(DeriveIdentity("unix:///var/run/docker.sock", ""), "", rootful, 0, nil, now)
+	second := StandingOffer(DeriveIdentity("unix:///run/user/1000/docker.sock", ""), "", rootless, 0, nil, now)
+
+	if first.ID != second.ID {
+		t.Fatalf("this case is about two endpoints one label cannot tell apart; got %q and %q", first.ID, second.ID)
+	}
+	firstKey := domain.CandidateIdentityOf(first, "sha256:image").Candidate(true)
+	secondKey := domain.CandidateIdentityOf(second, "sha256:image").Candidate(true)
+	if firstKey == secondKey {
+		t.Fatalf("two daemons on one box share the candidate key %q", firstKey)
+	}
+}
+
+// TestOneDaemonReachedTwoWaysIsOneMachine is the other direction, and the reason
+// no identifier built from the endpoint may stand in for the machine: an operator
+// who moves this host from a DOCKER_HOST URL to a docker context has changed
+// nothing about it, and a key that changed with them would orphan every sample the
+// machine had accumulated.
+func TestOneDaemonReachedTwoWaysIsOneMachine(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	info := HostInfo{ID: "daemon-a", NCPU: 4, MemTotalBytes: 1 << 30}
+
+	byHost := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", info, 0, nil, now)
+	byContext := StandingOffer(DeriveIdentity("", "gpu-ws"), "", info, 0, nil, now)
+
+	byHostKey := domain.CandidateIdentityOf(byHost, "sha256:image").Candidate(true)
+	byContextKey := domain.CandidateIdentityOf(byContext, "sha256:image").Candidate(true)
+	if byHostKey != byContextKey {
+		t.Fatalf("one machine keyed two ways:\n%s\n%s", byHostKey, byContextKey)
+	}
+}
+
+// TestAnUnreachableDaemonNamesNoMachine holds the loud half. A probe that failed
+// yields a zero HostInfo, and an endpoint Mercator could not ask has nothing to
+// file a history under: inventing one from the endpoint label is exactly the
+// collision above.
+func TestAnUnreachableDaemonNamesNoMachine(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+
+	offer := StandingOffer(DeriveIdentity("tcp://10.0.0.5:2375", ""), "", HostInfo{}, 0, nil, now)
+
+	if offer.MachineID != "" {
+		t.Fatalf("an endpoint that answered nothing named the machine %q", offer.MachineID)
+	}
+	if key := domain.CandidateIdentityOf(offer, "sha256:image").Candidate(true); key != "" {
+		t.Fatalf("an endpoint that answered nothing produced the key %q", key)
+	}
+}
+
 func TestStandingOfferAdvertisesProbedFreeDisk(t *testing.T) {
 	// A workload asking for 25 GiB must be able to schedule on a host that
 	// really has that much free disk: the offer advertises the measured free
@@ -307,7 +368,7 @@ func TestStandingOfferPublishesNoThroughputNothingMeasured(t *testing.T) {
 	if len(offer.Network.Download) != 0 {
 		t.Fatalf("offer publishes %+v, want no throughput fact until something measures this link", offer.Network.Download)
 	}
-	link := offer.RegistryDownload()
+	link := offer.DownloadRate(domain.NetworkScopeRegistry)
 	if link.Confidence != domain.AssumedLinkConfidence {
 		t.Fatalf("registry link = %+v, want the standing assumption at %v confidence", link, domain.AssumedLinkConfidence)
 	}

@@ -186,17 +186,24 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 		ConnectionID: id.ConnectionID,
 		AdapterType:  "docker",
 		Kind:         domain.OfferKindStanding,
-		// The product a Docker endpoint offers is the host itself, named the way
-		// the endpoint identity names it. It is stated as a typed fact rather than
-		// left to be read off the offer ID: this ID does happen to recur, because
-		// the label is derived from the host, and a provider's listing ID beside it
-		// does not. Nothing about either ID says which, so a launch history that
-		// keyed on the ID would be right here and silently wrong there.
-		InstanceType: id.NativeRef,
-		NativeRef:    id.NativeRef,
-		ObservedAt:   now,
-		ExpiresAt:    now.Add(time.Hour),
-		Platform:     domain.Platform{OS: "linux", Architecture: arch},
+		// What a Docker endpoint offers is one machine, and the machine is the
+		// daemon: its image store is what a second Run finds warm, so it is the
+		// machine a launch history belongs to. The daemon says which one it is, and
+		// nothing derived from the endpoint can. Every identifier in EndpointIdentity
+		// is built from the label, which is a DOCKER_HOST hostname or a context name:
+		// a rootful and a rootless daemon on this box are both "loopback", two ports
+		// on one host are both its hostname, and moving from a host URL to a context
+		// renames the machine without touching it.
+		//
+		// A daemon that could not be reached states no machine, which is the honest
+		// answer: an endpoint Mercator cannot ask has nothing to file a history
+		// under, and inventing one from the label is how two machines came to share
+		// a history.
+		MachineID:  info.ID,
+		NativeRef:  id.NativeRef,
+		ObservedAt: now,
+		ExpiresAt:  now.Add(time.Hour),
+		Platform:   domain.Platform{OS: "linux", Architecture: arch},
 		Resources: domain.ResourceInventory{
 			CPUMillis:          cpuMillis,
 			MemoryBytes:        memoryBytes,

@@ -29,16 +29,33 @@ func vastListing(askID string) domain.OfferSnapshot {
 	}
 }
 
-// enrolledNode is capacity Mercator keeps: the same Rental every heartbeat, with
-// nothing published about where it is or what product it is.
+// enrolledNode is capacity Mercator keeps: the machine names itself every
+// heartbeat, holds a lease that may be shared, and publishes nothing about where
+// it is or what product it is.
 func enrolledNode(nodeID, rentalID string) domain.OfferSnapshot {
 	return domain.OfferSnapshot{
 		ID:          nodeID,
+		MachineID:   nodeID,
 		RentalID:    rentalID,
 		AdapterType: "node",
 		Kind:        domain.OfferKindStanding,
 		Lane:        domain.LaneReusable,
 		NativeRef:   nodeID,
+	}
+}
+
+// dockerDaemon is one Docker endpoint as the adapter states it: a machine that
+// names itself, reached through a label that says nothing about which machine it
+// is. Two daemons on one box answer to the same label, and one daemon answers to
+// a different label as soon as an operator changes how Mercator reaches it.
+func dockerDaemon(daemonID, label string) domain.OfferSnapshot {
+	return domain.OfferSnapshot{
+		ID:          "offer_docker_" + label,
+		MachineID:   daemonID,
+		AdapterType: "docker",
+		Kind:        domain.OfferKindStanding,
+		Lane:        domain.LaneEphemeral,
+		NativeRef:   label,
 	}
 }
 
@@ -68,18 +85,32 @@ func TestTwoListingsOfOneProductShareOneIdentity(t *testing.T) {
 	}
 }
 
-func TestAnIdentityNamesNoOfferSnapshotID(t *testing.T) {
-	offer := vastListing("off_vast_11111")
+// TestAnIdentityNamesNoListing is the law over every kind of candidate in the
+// tree, because a law asserted about one fixture is a law about that fixture. A
+// key may name what a backend stated the machine to be, and nothing else about
+// how the listing was numbered or reached: an ask ID is a fresh integer per
+// search, and an endpoint label is how Mercator got there.
+func TestAnIdentityNamesNoListing(t *testing.T) {
+	for name, offer := range map[string]domain.OfferSnapshot{
+		"a marketplace ask":  vastListing("off_vast_11111"),
+		"a Docker endpoint":  dockerDaemon("daemon-a", "10.0.0.5"),
+		"an enrolled node":   enrolledNode("node-1", "rnt_abc"),
+		"a one-shot product": oneShotPool("off_pool_7f3a"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			identity := domain.CandidateIdentityOf(offer, "sha256:image")
 
-	identity := domain.CandidateIdentityOf(offer, "sha256:image")
-
-	for _, key := range []string{identity.Candidate(true), identity.ProviderAndRegion(), identity.ProviderKey()} {
-		if key == "" {
-			continue
-		}
-		if strings.Contains(key, offer.ID) || strings.Contains(key, offer.NativeRef) {
-			t.Fatalf("key %q names the listing %q, which never recurs", key, offer.ID)
-		}
+			for _, key := range []string{identity.Candidate(true), identity.ProviderAndRegion(), identity.ProviderKey()} {
+				for _, listing := range []string{offer.ID, offer.NativeRef} {
+					if key == "" || listing == offer.MachineID {
+						continue
+					}
+					if strings.Contains(key, listing) {
+						t.Fatalf("key %q names the listing %q, which never recurs", key, listing)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -96,11 +127,26 @@ func TestAMachineMercatorKeepsIsItsOwnCandidate(t *testing.T) {
 	}
 }
 
-// TestAProvisionableRentalIdentityIsNeverTheBookingsRental is the clause that
-// keeps the machine level honest. A provisionable offer's Rental is minted per
-// Booking, so reading it here would file every fresh machine under a key holding
-// exactly one sample and report it as this exact candidate again.
-func TestAProvisionableRentalIdentityIsNeverTheBookingsRental(t *testing.T) {
+// TestTwoMachinesOnOneLeaseAreTwoCandidates is the case a Rental could not tell
+// apart. An operator may invite two machines against one rental_id, and the node
+// registry enforces uniqueness on the node rather than on the lease, so both
+// enroll and both publish that Rental. Keying on the lease predicted the second
+// machine's very first launch from the first machine's pull samples and called it
+// evidence about this exact machine.
+func TestTwoMachinesOnOneLeaseAreTwoCandidates(t *testing.T) {
+	first := domain.CandidateIdentityOf(enrolledNode("node-1", "rnt_shared"), "sha256:image")
+	second := domain.CandidateIdentityOf(enrolledNode("node-2", "rnt_shared"), "sha256:image")
+
+	if first.Candidate(true) == second.Candidate(true) {
+		t.Fatalf("two machines sharing a lease share the key %q", first.Candidate(true))
+	}
+}
+
+// TestALeaseIsNeverAMachine is the clause that keeps the machine level honest. A
+// provisionable offer's Rental is minted per Booking, so reading it here would
+// file every fresh machine under a key holding exactly one sample and report it
+// as this exact candidate again.
+func TestALeaseIsNeverAMachine(t *testing.T) {
 	listing := vastListing("off_vast_11111")
 	listing.RentalID = "rnt_minted_for_this_booking"
 
@@ -108,6 +154,35 @@ func TestAProvisionableRentalIdentityIsNeverTheBookingsRental(t *testing.T) {
 
 	if identity.Machine != "" {
 		t.Fatalf("a machine that does not exist yet claims to be Rental %q", identity.Machine)
+	}
+	if strings.Contains(identity.Candidate(true), listing.RentalID) {
+		t.Fatalf("key %q names a lease minted for one Booking", identity.Candidate(true))
+	}
+}
+
+// TestTwoDaemonsOnOneBoxAreTwoCandidates is the collision the endpoint label
+// could not see. A rootful and a rootless daemon on this host answer on different
+// sockets, hold separate image stores, and are both labelled "loopback"; so are
+// two ports of one host, because the label drops the port.
+func TestTwoDaemonsOnOneBoxAreTwoCandidates(t *testing.T) {
+	rootful := domain.CandidateIdentityOf(dockerDaemon("daemon-rootful", "loopback"), "sha256:image")
+	rootless := domain.CandidateIdentityOf(dockerDaemon("daemon-rootless", "loopback"), "sha256:image")
+
+	if rootful.Candidate(true) == rootless.Candidate(true) {
+		t.Fatalf("two daemons on one box share the key %q", rootful.Candidate(true))
+	}
+}
+
+// TestAMachineKeepsItsHistoryWhenTheRouteToItChanges is the other direction. An
+// operator who moves this host from a DOCKER_HOST URL to a docker context has
+// changed nothing about the machine, and a key derived from the route would
+// orphan every sample the machine had accumulated.
+func TestAMachineKeepsItsHistoryWhenTheRouteToItChanges(t *testing.T) {
+	byHost := domain.CandidateIdentityOf(dockerDaemon("daemon-a", "10.0.0.5"), "sha256:image")
+	byContext := domain.CandidateIdentityOf(dockerDaemon("daemon-a", "gpu-ws"), "sha256:image")
+
+	if byHost.Candidate(true) != byContext.Candidate(true) {
+		t.Fatalf("one machine keyed two ways:\n%s\n%s", byHost.Candidate(true), byContext.Candidate(true))
 	}
 }
 

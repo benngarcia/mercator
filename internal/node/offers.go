@@ -116,11 +116,15 @@ func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapsho
 		Kind:         domain.OfferKindStanding,
 		Lane:         domain.LaneReusable,
 		// A node is the one candidate whose identity is the machine rather than a
-		// product, and it needs no region or instance type to say so: this offer
-		// keeps what it runs, so its Rental is what a second Run lands on and what
-		// a launch history is filed under. The region a machine sits in is its
-		// operator's to state and nothing enrolls one today, which is why it is
-		// left unstated here rather than guessed from the endpoint.
+		// product, and it needs no region or instance type to say so. The machine is
+		// the node, named by the node ID: that is the handle this registry resolves a
+		// machine by, and it is the only one that is one machine. The Rental beside it
+		// is the lease, an operator may invite two machines against one, and a launch
+		// history filed under it would predict a cold disk from another machine's
+		// pull. The region a machine sits in is its operator's to state and nothing
+		// enrolls one today, which is why it is left unstated here rather than guessed
+		// from the endpoint.
+		MachineID:  record.ID,
 		NativeRef:  record.ID,
 		ObservedAt: record.Facts.ObservedAt,
 		// An offer built from facts is only as good as the facts. Expiring it

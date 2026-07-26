@@ -4199,6 +4199,10 @@
           "rental_id": {
             "type": "string"
           },
+          "machine_id": {
+            "type": "string",
+            "description": "The machine behind this capacity, named by the handle its backend has for the machine itself. An enrolled node states its node ID and a Docker endpoint states the daemon's own ID; a provider catalog listing states none, because the machine it describes does not exist yet. It is neither the lease nor anything about the route Mercator took to reach the machine: two machines can be invited against one lease, and one machine's endpoint changes whenever an operator changes how Mercator reaches it."
+          },
           "connection_id": {
             "type": "string"
           },

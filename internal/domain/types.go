@@ -235,8 +235,22 @@ func (lane ExecutionLane) Valid() bool {
 func (lane ExecutionLane) Reusable() bool { return lane == LaneReusable }
 
 type OfferSnapshot struct {
-	ID           string    `json:"id"`
-	RentalID     string    `json:"rental_id,omitempty"`
+	ID       string `json:"id"`
+	RentalID string `json:"rental_id,omitempty"`
+	// MachineID is the machine behind this capacity, named by the handle the
+	// backend has for the machine itself. It is stated only by a backend that can
+	// name one: an enrolled node states its node ID, a Docker endpoint states the
+	// daemon's own ID, and a provider catalog listing states none, because the
+	// machine it describes does not exist yet.
+	//
+	// It is what a launch history is filed under wherever it exists, which is why
+	// it is neither the Rental nor anything about the route Mercator took to reach
+	// the machine. A Rental is a lease and two machines can be invited against
+	// one; an endpoint label is derived from a DOCKER_HOST or a context name, so
+	// two daemons on one box share it and one daemon changes it whenever an
+	// operator changes how Mercator reaches it. Either would merge two machines'
+	// histories or orphan a machine from its own.
+	MachineID    string    `json:"machine_id,omitempty"`
 	ConnectionID string    `json:"connection_id"`
 	AdapterType  string    `json:"adapter_type"`
 	Kind         OfferKind `json:"kind"`
@@ -282,7 +296,7 @@ type OfferSnapshot struct {
 	// Caches is the mutable, application-owned state this host says it holds.
 	// Every entry names the workspace that owns it, because a cache's identity
 	// is workspace-scoped and an offer is read by every workspace's Runs.
-	Caches      CacheInventory      `json:"caches,omitzero"`
+	Caches   CacheInventory   `json:"caches,omitzero"`
 	Capacity CapacityEvidence `json:"capacity"`
 	// Reliability is what this machine's publisher has measured about how it
 	// behaves. A machine nobody measured carries none of it, and omitzero is what

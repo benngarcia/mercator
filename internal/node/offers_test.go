@@ -297,6 +297,55 @@ const nodeWorkspace = "ws_offers"
 //
 // This runtime runs one workload at a time, so one container is the whole
 // machine.
+func TestTwoMachinesOnOneLeaseOfferTwoMachines(t *testing.T) {
+	registry, clock := newRegistry(t)
+	enrollOn(t, registry, clock, "nod_first", "rnt_shared")
+	enrollOn(t, registry, clock, "nod_second", "rnt_shared")
+
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("offers: %v", err)
+	}
+
+	if len(offers) != 2 {
+		t.Fatalf("the workspace offered %d machines, want the two enrolled nodes", len(offers))
+	}
+	first := domain.CandidateIdentityOf(offers[0], "sha256:image")
+	second := domain.CandidateIdentityOf(offers[1], "sha256:image")
+	if first.Machine != offers[0].ID || second.Machine != offers[1].ID {
+		t.Fatalf("a node offer named a machine that is not the node: %q and %q", first.Machine, second.Machine)
+	}
+	if first.Candidate(true) == second.Candidate(true) {
+		t.Fatalf("two machines sharing a lease share the key %q", first.Candidate(true))
+	}
+}
+
+// enrollOn brings one named machine up on a stated lease, which is what makes two
+// machines on one lease a world a test can build.
+func enrollOn(t *testing.T, registry *node.Registry, clock *testClock, nodeID, rentalID string) {
+	t.Helper()
+	bootstrap, err := registry.Invite(context.Background(), node.Invitation{
+		WorkspaceID: nodeWorkspace, NodeID: nodeID, RentalID: rentalID, Generation: 1,
+		ShadowPriceUSDPerHour: 2,
+	})
+	if err != nil {
+		t.Fatalf("invite %s: %v", nodeID, err)
+	}
+	if _, err := registry.Enroll(context.Background(), capability.EnrollmentRequest{
+		NodeID:          bootstrap.NodeID,
+		RentalID:        bootstrap.RentalID,
+		Generation:      bootstrap.Generation,
+		EnrollmentToken: bootstrap.EnrollmentToken,
+		AgentVersion:    "test",
+		Facts: capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host:       capability.HostFacts{OS: "linux", Architecture: "amd64", ContainerRuntime: "docker"},
+		},
+	}); err != nil {
+		t.Fatalf("enroll %s: %v", nodeID, err)
+	}
+}
+
 func TestANodeOffersTheRoomItActuallyHas(t *testing.T) {
 	registry, session := readyNodeReporting(t, nil, domain.ArtifactInventory{}, domain.CacheInventory{})
 	if !capacityOf(t, registry).Available {

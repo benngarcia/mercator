@@ -37,11 +37,16 @@ import (
 // than anything about the machine: filing history under either would key
 // learned behaviour on how Mercator happened to reach a host.
 type CandidateIdentity struct {
-	// Machine is the capacity Mercator keeps, named by its Rental. It is set
-	// only for an offer that survives its workload, because that is the only
-	// case where "this exact machine again" is a thing that can happen. For
+	// Machine is the machine this capacity is, named by the handle the backend
+	// states for it. It is set wherever a backend can name one, because that is
+	// exactly where "this exact machine again" is a thing that can happen. For
 	// everything else it is empty and the product fields below carry the
 	// identity.
+	//
+	// It is never a Rental. A Rental is a lease, two machines can be invited
+	// against one, and the lease is minted per Booking for capacity that does not
+	// exist yet: keying on it merged one machine's pull history into another's and
+	// filed a fresh machine's under a name holding one sample.
 	Machine string
 	// Provider is the backend the capacity comes from, which is the coarsest
 	// thing worth learning about and the only field every candidate has.
@@ -70,22 +75,18 @@ type CandidateIdentity struct {
 // CandidateIdentityOf derives what a candidate can be learned about from the
 // offer as it was found and the image the Run asked for.
 //
-// The Rental is read only from capacity that keeps what it runs. Reading it from
-// anything else would key history on an identity minted per Booking, which is a
-// fresh string for every launch and therefore a sample set that can only ever
-// hold one sample.
+// The machine is whatever the backend named as the machine, and nothing else in
+// the offer is allowed to stand in for it. The Rental beside it is a lease rather
+// than a machine, and the listing IDs are the provider's name for one search.
 func CandidateIdentityOf(offer OfferSnapshot, imageDigest string) CandidateIdentity {
-	identity := CandidateIdentity{
+	return CandidateIdentity{
+		Machine:      offer.MachineID,
 		Provider:     offer.AdapterType,
 		Region:       offer.Region,
 		InstanceType: offer.InstanceType,
 		Accelerator:  acceleratorKey(offer.Resources.Accelerators),
 		ImageDigest:  imageDigest,
 	}
-	if offer.KeepsWhatItRuns() {
-		identity.Machine = offer.RentalID
-	}
-	return identity
 }
 
 // Recurs reports whether this identity can ever hold more than one sample.
