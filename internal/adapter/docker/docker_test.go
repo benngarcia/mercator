@@ -292,6 +292,50 @@ func TestObserveOmitsExitCodeUntilExited(t *testing.T) {
 	}
 }
 
+// TestObserveReportsWhenTheDaemonGaveTheContainerAProcess is the observation's
+// start moment. A provider reports running from the moment it accepts a launch, so
+// the phase can never establish when a workload began, and predicted start latency
+// is calibrated against started minus accepted: this is the only field that
+// subtraction can be made from. A container the daemon created and never ran
+// carries no start, because zero is the epoch and not an instant a workload began.
+func TestObserveReportsWhenTheDaemonGaveTheContainerAProcess(t *testing.T) {
+	client := newFakeClient()
+	ad := New(client)
+	req := launchRequest()
+	if _, err := ad.Launch(context.Background(), req); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	observe := adapter.ObserveRequest{LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, RequestHash: req.RequestHash}
+
+	observation, err := ad.Observe(context.Background(), observe)
+
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	started := client.objects[req.LaunchKey].StartedAt
+	if observation.StartedAt == nil || !observation.StartedAt.Equal(started) {
+		t.Fatalf("the observation reports %v as the start and the daemon says %s", observation.StartedAt, started.Format(time.RFC3339Nano))
+	}
+	if !observation.StartedAt.Before(observation.ObservedAt) {
+		t.Fatalf("the reported start %s is not before the moment of the read %s, so it is the read",
+			observation.StartedAt.Format(time.RFC3339Nano), observation.ObservedAt.Format(time.RFC3339Nano))
+	}
+
+	created := client.objects[req.LaunchKey]
+	created.State = "created"
+	created.StartedAt = time.Time{}
+	client.objects[req.LaunchKey] = created
+
+	observation, err = ad.Observe(context.Background(), observe)
+
+	if err != nil {
+		t.Fatalf("observe a created container: %v", err)
+	}
+	if observation.StartedAt != nil {
+		t.Fatalf("a container that never ran reports a start of %s", observation.StartedAt.Format(time.RFC3339Nano))
+	}
+}
+
 func TestPhaseFromStateUsesExitCode(t *testing.T) {
 	if phase := phaseFromState("exited", intPtr(0)); phase != adapter.ExternalPhaseSucceeded {
 		t.Fatalf("exit 0 should succeed, got %s", phase)
@@ -345,7 +389,10 @@ func (f *fakeClient) CreateContainer(_ context.Context, req CreateContainerReque
 	if existing, ok := f.objects[req.Name]; ok {
 		return existing.ID, ErrAlreadyExists
 	}
-	container := Container{ID: "docker-" + req.Name, Name: req.Name, Labels: req.Labels, State: "created", CreatedAt: time.Now().UTC()}
+	// A container this daemon made a second ago, so the moment it was then given a
+	// process is in the past by the time anything observes it. A fake that created
+	// everything "now" would let an observation reporting its own read moment pass.
+	container := Container{ID: "docker-" + req.Name, Name: req.Name, Labels: req.Labels, State: "created", CreatedAt: time.Now().UTC().Add(-time.Second)}
 	f.objects[req.Name] = container
 	f.created = append(f.created, req)
 	return container.ID, nil
@@ -360,6 +407,9 @@ func (f *fakeClient) StartContainer(_ context.Context, name string) error {
 		return ErrNotFound
 	}
 	container.State = "running"
+	// Starting a container is when the daemon gives it a process, which is the
+	// moment State.StartedAt records and a moment later than its creation.
+	container.StartedAt = container.CreatedAt.Add(200 * time.Millisecond)
 	f.objects[name] = container
 	f.started = append(f.started, name)
 	return nil

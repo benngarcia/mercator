@@ -273,6 +273,43 @@ func TestObserveMapsStatusAndVerifiesOwnership(t *testing.T) {
 	}
 }
 
+// TestObserveReportsThePodsOwnStartMoment is the calibration seam. A predicted
+// start latency is measured against started minus accepted, and RunPod publishes
+// exactly one moment about the workload rather than the request: the moment it
+// last gave the pod a process. A pod it has never started publishes none, and the
+// observation then states the start absent rather than deriving one from the
+// launch, which would make every start latency in the log zero.
+func TestObserveReportsThePodsOwnStartMoment(t *testing.T) {
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","lastStartedAt":"2026-07-26T11:00:00Z","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
+	})
+
+	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
+
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	want := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
+	if obs.StartedAt == nil || !obs.StartedAt.Equal(want) {
+		t.Fatalf("the observation reports %v as this pod's start and RunPod said %s", obs.StartedAt, want.Format(time.RFC3339))
+	}
+}
+
+func TestObserveReportsNoStartForAPodRunPodNeverStarted(t *testing.T) {
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"RUNNING","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil
+	})
+
+	obs, err := a.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: "lk1", OwnershipToken: "own1"})
+
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if obs.StartedAt != nil {
+		t.Fatalf("a pod RunPod published no start moment for reports %s", obs.StartedAt.Format(time.RFC3339Nano))
+	}
+}
+
 func TestObserveExitedMapsToFailed(t *testing.T) {
 	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
 		return jsonResponse(200, `[{"id":"pod_1","name":"mercator-lk1","desiredStatus":"EXITED","env":{"MERCATOR_OWNERSHIP_TOKEN":"own1"}}]`), nil

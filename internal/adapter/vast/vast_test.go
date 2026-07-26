@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 )
@@ -290,6 +291,46 @@ func TestObserveMapsRunningStatus(t *testing.T) {
 	}
 	if obs.Phase != "running" || obs.ExternalID != "777" {
 		t.Fatalf("obs = %+v", obs)
+	}
+}
+
+// TestObserveReportsTheInstancesOwnStartMoment is the calibration seam. Vast
+// publishes one moment about the workload rather than the request, start_date in
+// epoch seconds, and that is what a predicted start latency is measured against.
+// An instance it published none for leaves the moment absent, because a start
+// derived from the launch's acceptance is a zero this model would then learn from.
+func TestObserveReportsTheInstancesOwnStartMoment(t *testing.T) {
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"instances":[
+			{"id":777,"label":"mercator-lk1","actual_status":"running","start_date":1785110400.5,"extra_env":[["MERCATOR_OWNERSHIP_TOKEN","own1"]]}
+		]}`), nil
+	})
+
+	obs, err := a.Observe(context.Background(), observeRequest())
+
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	want := time.Unix(1785110400, int64(500*time.Millisecond)).UTC()
+	if obs.StartedAt == nil || !obs.StartedAt.Equal(want) {
+		t.Fatalf("the observation reports %v as this instance's start and Vast said %s", obs.StartedAt, want.Format(time.RFC3339Nano))
+	}
+}
+
+func TestObserveReportsNoStartForAnInstanceVastNeverDated(t *testing.T) {
+	a := newTestAdapter(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"instances":[
+			{"id":777,"label":"mercator-lk1","actual_status":"running","extra_env":[["MERCATOR_OWNERSHIP_TOKEN","own1"]]}
+		]}`), nil
+	})
+
+	obs, err := a.Observe(context.Background(), observeRequest())
+
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+	if obs.StartedAt != nil {
+		t.Fatalf("an instance Vast published no start date for reports %s", obs.StartedAt.Format(time.RFC3339Nano))
 	}
 }
 
