@@ -45,6 +45,7 @@ export type Estimate = ContractSchemas["Estimate"];
 export type ImageInventory = ContractSchemas["ImageInventory"];
 export type CapacityEvidence = ContractSchemas["CapacityEvidence"];
 export type ReliabilityEvidence = ContractSchemas["ReliabilityEvidence"];
+export type StatedRate = ContractSchemas["StatedRate"];
 export type OfferSnapshot = ContractSchemas["OfferSnapshot"];
 export type OfferKind = OfferSnapshot["kind"];
 

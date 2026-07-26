@@ -26,7 +26,7 @@
         "id": "rental-steady",
         "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
         "rate_per_hour_usd": 2.0,
-        "reliability": {"confidence": 0.9}
+        "reliability": {"start_failure_rate": 0, "interruption_rate": 0, "confidence": 0.9}
       },
       {
         "id": "rental-unmeasured",

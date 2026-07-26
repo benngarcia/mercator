@@ -43,7 +43,7 @@ func TestBuildOffersMapsMarketplaceFacts(t *testing.T) {
 	offers := []offer{{
 		ID: 9001, GPUName: "RTX 4090", GPUArch: "nvidia", NumGPUs: 2, GPURAMMb: 24576,
 		CPUCoresEffective: 16, CPURAMMb: 65536, DiskSpaceGB: 500,
-		DPHTotal: pricePtr(0.72), Reliability: 0.98, Verification: "verified",
+		DPHTotal: pricePtr(0.72), Reliability: pricePtr(0.98), Verification: "verified",
 	}}
 	got := buildOffers(offers, 2, 75, now)
 	if len(got) != 1 {
@@ -76,9 +76,17 @@ func TestBuildOffersMapsMarketplaceFacts(t *testing.T) {
 	if o.Resources.EphemeralDiskBytes != 75*gib {
 		t.Errorf("disk = %d", o.Resources.EphemeralDiskBytes)
 	}
-	// reliability2=0.98 => interruption rate 0.02, so placement can rank on it.
-	if o.Reliability.InterruptionRate < 0.019 || o.Reliability.InterruptionRate > 0.021 {
-		t.Errorf("interruption rate = %v", o.Reliability.InterruptionRate)
+	// reliability2=0.98 => interruption rate 0.02, stated at full confidence
+	// because Mercator read it off the publisher's own catalog.
+	if o.Reliability.Interruptions.Rate < 0.019 || o.Reliability.Interruptions.Rate > 0.021 || o.Reliability.Interruptions.Confidence != 1 {
+		t.Errorf("interruption history = %+v", o.Reliability.Interruptions)
+	}
+	// Vast measures nothing about refused starts, so the history states none. A
+	// rate of zero at full confidence here would put "this machine has never
+	// refused a start" into every Vast candidate's decision record as a fact its
+	// publisher stated.
+	if o.Reliability.StartFailures.Stated() {
+		t.Errorf("start failure history = %+v, and Vast publishes no such measurement", o.Reliability.StartFailures)
 	}
 	if !o.Pricing.Known || !o.Capacity.Available {
 		t.Errorf("price and capacity facts must be known: %+v", o)
@@ -100,5 +108,28 @@ func TestBuildOffersDropsNonSecureUnpricedAndWrongSizeOffers(t *testing.T) {
 	}
 	if got := buildOffers(offers, 1, 20, now); len(got) != 0 {
 		t.Fatalf("expected all offers dropped, got %+v", got)
+	}
+}
+
+// TestAnAskThatPublishesNoUptimeScorePublishesNoHistory is silence read as
+// silence. reliability2 is a share of the machine's uptime, so an ask that omits
+// it decoded as zero says this machine drops every run it is given, and Mercator
+// stated that at full confidence on the publisher's behalf: the worst answer in
+// the catalog, invented out of a missing field, on a machine that may be perfect.
+func TestAnAskThatPublishesNoUptimeScorePublishesNoHistory(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	offers := []offer{{
+		ID: 9002, GPUName: "RTX 4090", GPUArch: "nvidia", NumGPUs: 1, GPURAMMb: 24576,
+		CPUCoresEffective: 8, CPURAMMb: 32768, DiskSpaceGB: 500,
+		DPHTotal: pricePtr(0.35), Verification: "verified",
+	}}
+
+	got := buildOffers(offers, 1, 75, now)
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 offer, got %d: %+v", len(got), got)
+	}
+	if got[0].Reliability.Measured() {
+		t.Fatalf("recorded the history %+v for an ask that published no uptime score", got[0].Reliability)
 	}
 }

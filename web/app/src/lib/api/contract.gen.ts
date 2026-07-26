@@ -499,6 +499,11 @@ export interface components {
             /** @enum {string} */
             disposition?: "release" | "terminate";
             cleanup_error?: components["schemas"]["CleanupError"];
+            /**
+             * Format: date-time
+             * @description When this Run's workload actually began, as the machine holding it reported the moment. Absent until something observed one, and never the moment the launch was accepted: the difference between those two is what a start-latency prediction is calibrated against.
+             */
+            started_at?: string;
             closed: boolean;
             created_by?: string;
             cancelled_by?: string;
@@ -1006,13 +1011,19 @@ export interface components {
             /** Format: double */
             confidence: number;
         };
+        /** @description One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence. */
+        StatedRate: {
+            /** Format: double */
+            rate: number;
+            /** Format: double */
+            confidence: number;
+        };
+        /** @description The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. */
         ReliabilityEvidence: {
-            /** Format: double */
-            start_failure_rate?: number;
-            /** Format: double */
-            interruption_rate?: number;
-            /** Format: double */
-            confidence?: number;
+            /** @description How often this machine refuses to start the work it is given. Absent means nobody has measured that, which is what every provider in this tree publishes today. */
+            start_failures?: components["schemas"]["StatedRate"];
+            /** @description How often this machine drops the work it is already running. Absent means nobody has measured that. */
+            interruptions?: components["schemas"]["StatedRate"];
         };
         OfferSnapshot: {
             id: string;
@@ -1083,7 +1094,7 @@ export interface components {
             /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name. */
             cache_evidence?: components["schemas"]["CacheEvidence"][];
             disk?: components["schemas"]["DiskDemand"];
-            /** @description The risk history this candidate's publisher stated: how often this machine refuses to start, and how often it drops the work it is running. It is recorded and never priced. What a refusal is worth is a probability times a predicted start, nothing here predicts either yet, and a flat penalty invented for it would be an exchange rate this model made up. It is recorded all the same, because the confidence beside it is one of the answers the uncertainty term already charges for: a score derived from this record is only re-derivable if every answer it doubts is in it. */
+            /** @description The risk history this candidate's publisher stated: how often this machine refuses to start, and how often it drops the work it is running. It is recorded, never priced, and never doubted. What a refusal is worth is a probability times a predicted start, nothing here predicts either yet, and a flat penalty invented for it would be an exchange rate this model made up. It is recorded so the account of what was known when the placement was taken is complete. The confidence beside it is deliberately absent from confidences: doubt about an answer the score never reads charges a publisher for having measured its machine, and it made a machine measured and never seen to fail lose to an identical machine nobody had measured. */
             reliability?: components["schemas"]["ReliabilityEvidence"];
             /** @description The Broker state this candidate was weighed against, present only for a Rental that has Bookings on it. The queue estimate beside it is the projection; this is what the projection was read from. A Rental nothing is assigned to records none, because an empty schedule offered as evidence reads as a queue that was measured rather than one that does not exist. */
             rental_schedule?: components["schemas"]["ScheduleEvidence"];

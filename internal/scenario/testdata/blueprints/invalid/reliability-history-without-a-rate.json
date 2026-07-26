@@ -1,0 +1,31 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "summary": "A machine whose provider publishes a confidence and no rate has measured nothing, and the world must not be statable: read as two rates of zero it becomes a machine measured and never seen to fail, which is a different world from the one nobody looked at.",
+  "world": {
+    "images": {
+      "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "layers": [
+          {
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": "1GB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-a",
+        "rate_per_hour_usd": 1.0,
+        "reliability": {"confidence": 0.9}
+      }
+    ]
+  },
+  "request": {
+    "image": "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-a"
+  }
+}

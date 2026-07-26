@@ -21,7 +21,7 @@
         "id": "rental-steady",
         "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
         "rate_per_hour_usd": 2.0,
-        "reliability": {"confidence": 0.9}
+        "reliability": {"start_failure_rate": 0, "interruption_rate": 0, "confidence": 0.9}
       },
       {
         "id": "rental-unmeasured",
@@ -49,6 +49,7 @@
         "pull_confidence": 1,
         "start_failure_rate": 0.4,
         "interruption_rate": 0.25,
+        "risk_confidence": 0.9,
         "uncertainty": 0,
         "score_usd": {"at_least": 0.3338, "at_most": 0.3339}
       },
@@ -59,6 +60,7 @@
         "pull_confidence": 1,
         "start_failure_rate": 0,
         "interruption_rate": 0,
+        "risk_confidence": 0.9,
         "uncertainty": 0,
         "score_usd": {"at_least": 0.3338, "at_most": 0.3339}
       },
@@ -67,6 +69,7 @@
         "image_locality": "hot",
         "pull_seconds": 0,
         "pull_confidence": 1,
+        "no_risk_history": true,
         "uncertainty": 0,
         "score_usd": {"at_least": 0.3338, "at_most": 0.3339}
       }

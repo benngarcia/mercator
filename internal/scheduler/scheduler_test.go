@@ -619,9 +619,8 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 		Images:   domain.ImageInventory{Known: true},
 		Reliability: domain.ReliabilityEvidence{
-			StartFailureRate: 0.01,
-			InterruptionRate: 0.01,
-			Confidence:       1,
+			StartFailures: domain.StatedRate{Rate: 0.01, Confidence: 1},
+			Interruptions: domain.StatedRate{Rate: 0.01, Confidence: 1},
 		},
 	}
 }

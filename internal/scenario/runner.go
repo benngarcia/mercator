@@ -442,14 +442,26 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 	// that published it. A rate reaches a placement through the offer, so reading
 	// the fixture's own declaration back would assert that the fixture says what
 	// it says.
-	checkRate := func(field string, want *float64, recorded float64) {
-		if want == nil || *want == recorded {
+	checkRate := func(field string, want *float64, recorded domain.StatedRate) {
+		if want == nil {
 			return
 		}
-		fail("%s: want %v, recorded %v", field, *want, recorded)
+		if !recorded.Stated() {
+			fail("%s: want %v, and the record states no such measurement", field, *want)
+			return
+		}
+		if *want != recorded.Rate {
+			fail("%s: want %v, recorded %v", field, *want, recorded.Rate)
+		}
+		if expect.RiskConfidence != nil && *expect.RiskConfidence != recorded.Confidence {
+			fail("%s: want its publisher standing %v behind it, recorded %v", field, *expect.RiskConfidence, recorded.Confidence)
+		}
 	}
-	checkRate("start_failure_rate", expect.StartFailureRate, candidate.Reliability.StartFailureRate)
-	checkRate("interruption_rate", expect.InterruptionRate, candidate.Reliability.InterruptionRate)
+	checkRate("start_failure_rate", expect.StartFailureRate, candidate.Reliability.StartFailures)
+	checkRate("interruption_rate", expect.InterruptionRate, candidate.Reliability.Interruptions)
+	if expect.NoRiskHistory && candidate.Reliability.Measured() {
+		fail("records the risk history %+v, and nobody has measured this machine", candidate.Reliability)
+	}
 	return failures
 }
 

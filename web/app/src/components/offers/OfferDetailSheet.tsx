@@ -19,6 +19,7 @@ import type {
   NetworkFact,
   OfferSnapshot,
   ReliabilityEvidence,
+  StatedRate,
 } from "@/lib/api/types";
 import { PriceTag } from "./PriceTag";
 import { ResourceSummary } from "./ResourceSummary";
@@ -82,28 +83,32 @@ function NetworkFactRow({ fact }: { fact: NetworkFact }) {
   );
 }
 
+/**
+ * One measured rate, or the absence of one. A rate nobody measured is absent from
+ * the history rather than zero, so it reads as unmeasured here and never as a
+ * machine that has never failed.
+ */
+function MeasuredRate({
+  label,
+  rate,
+}: {
+  label: string;
+  rate: StatedRate | undefined;
+}) {
+  return (
+    <StatBlock
+      label={label}
+      value={rate ? `${pct(rate.rate)} conf ${rate.confidence.toFixed(2)}` : "unmeasured"}
+      mono
+    />
+  );
+}
+
 function Reliability({ reliability }: { reliability: ReliabilityEvidence }) {
   return (
-    <div className="grid grid-cols-3 gap-3">
-      <StatBlock
-        label="Start failure"
-        value={pct(reliability.start_failure_rate)}
-        mono
-      />
-      <StatBlock
-        label="Interruption"
-        value={pct(reliability.interruption_rate)}
-        mono
-      />
-      <StatBlock
-        label="Confidence"
-        value={
-          typeof reliability.confidence === "number"
-            ? reliability.confidence.toFixed(2)
-            : "—"
-        }
-        mono
-      />
+    <div className="grid grid-cols-2 gap-3">
+      <MeasuredRate label="Start failure" rate={reliability.start_failures} />
+      <MeasuredRate label="Interruption" rate={reliability.interruptions} />
     </div>
   );
 }

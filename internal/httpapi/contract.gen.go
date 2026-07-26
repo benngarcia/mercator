@@ -499,7 +499,9 @@ type CandidateDecision struct {
 	NativeRef       string                         `json:"native_ref,omitempty"`
 	OfferSnapshotId string                         `json:"offer_snapshot_id"`
 	Rejections      []Violation                    `json:"rejections,omitempty"`
-	Reliability     ReliabilityEvidence            `json:"reliability,omitempty"`
+
+	// Reliability The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero.
+	Reliability ReliabilityEvidence `json:"reliability,omitempty"`
 
 	// RentalSchedule One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them.
 	RentalSchedule ScheduleEvidence `json:"rental_schedule,omitempty"`
@@ -944,11 +946,13 @@ type QueueSnapshot struct {
 	QueuedWorkSeconds float64 `json:"queued_work_seconds"`
 }
 
-// ReliabilityEvidence defines model for ReliabilityEvidence.
+// ReliabilityEvidence The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero.
 type ReliabilityEvidence struct {
-	Confidence       float64 `json:"confidence,omitempty"`
-	InterruptionRate float64 `json:"interruption_rate,omitempty"`
-	StartFailureRate float64 `json:"start_failure_rate,omitempty"`
+	// Interruptions One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence.
+	Interruptions StatedRate `json:"interruptions,omitempty"`
+
+	// StartFailures One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence.
+	StartFailures StatedRate `json:"start_failures,omitempty"`
 }
 
 // ReplaySinkRequest defines model for ReplaySinkRequest.
@@ -1072,6 +1076,12 @@ type SinkResult = sinks.Result
 
 // SinkStatus defines model for SinkStatus.
 type SinkStatus = sinks.Status
+
+// StatedRate One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence.
+type StatedRate struct {
+	Confidence float64 `json:"confidence"`
+	Rate       float64 `json:"rate"`
+}
 
 // Violation defines model for Violation.
 type Violation = domain.Violation

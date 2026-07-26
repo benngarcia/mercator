@@ -256,8 +256,13 @@ type OfferSnapshot struct {
 	// Every entry names the workspace that owns it, because a cache's identity
 	// is workspace-scoped and an offer is read by every workspace's Runs.
 	Caches      CacheInventory      `json:"caches,omitzero"`
-	Capacity    CapacityEvidence    `json:"capacity"`
-	Reliability ReliabilityEvidence `json:"reliability,omitempty"`
+	Capacity CapacityEvidence `json:"capacity"`
+	// Reliability is what this machine's publisher has measured about how it
+	// behaves. A machine nobody measured carries none of it, and omitzero is what
+	// keeps that off the wire: omitempty never drops a struct, so every offer in the
+	// fleet used to publish an empty history and a reader could not tell the
+	// unmeasured machines from the ones whose rates happened to be zero.
+	Reliability ReliabilityEvidence `json:"reliability,omitzero"`
 }
 
 // KeepsWhatItRuns answers whether content a workload fetches here is still here
@@ -723,10 +728,41 @@ type CapacityEvidence struct {
 	Confidence float64 `json:"confidence"`
 }
 
+// StatedRate is one share of a machine's history somebody measured, and how much
+// the publisher of that measurement stands behind it. The confidence is what says
+// the measurement happened at all: a rate nobody stands behind is silence, which
+// is the reading a disowned network measurement already gets here. A rate of zero
+// at a confidence somebody stated is a machine measured and never seen to fail; a
+// zero with no confidence beside it is a machine nobody measured.
+type StatedRate struct {
+	Rate       float64 `json:"rate"`
+	Confidence float64 `json:"confidence"`
+}
+
+// Stated reports whether anybody published this rate.
+func (rate StatedRate) Stated() bool {
+	return rate.Confidence > 0
+}
+
+// ReliabilityEvidence is the risk history a machine's publisher states about it:
+// how often it refuses to start the work it is given, and how often it drops the
+// work it is already running.
+//
+// Each rate stands on its own measurement, because a publisher measures what it
+// measures. Vast states an uptime score and says nothing about refused starts,
+// and while the two rates shared one confidence, every Vast candidate's decision
+// record carried a start failure rate of zero asserted at full confidence, which
+// is a claim its publisher never made. An unmeasured rate is absent here, because
+// absence is the only honest reading of a measurement nobody took.
 type ReliabilityEvidence struct {
-	StartFailureRate float64 `json:"start_failure_rate,omitempty"`
-	InterruptionRate float64 `json:"interruption_rate,omitempty"`
-	Confidence       float64 `json:"confidence,omitempty"`
+	StartFailures StatedRate `json:"start_failures,omitzero"`
+	Interruptions StatedRate `json:"interruptions,omitzero"`
+}
+
+// Measured reports whether anybody has published anything about how this machine
+// behaves.
+func (evidence ReliabilityEvidence) Measured() bool {
+	return evidence.StartFailures.Stated() || evidence.Interruptions.Stated()
 }
 
 type BookingState string

@@ -528,10 +528,16 @@ func TestARefusalToStartIsRecordedAndNotPricedAtL1(t *testing.T) {
 				candidate.OfferSnapshotID, candidate.Uncertainty(), candidate.Confidences)
 		}
 	}
-	if flaky.Reliability != (domain.ReliabilityEvidence{StartFailureRate: 0.4, InterruptionRate: 0.25, Confidence: 0.9}) {
+	if flaky.Reliability != (domain.ReliabilityEvidence{
+		StartFailures: domain.StatedRate{Rate: 0.4, Confidence: 0.9},
+		Interruptions: domain.StatedRate{Rate: 0.25, Confidence: 0.9},
+	}) {
 		t.Fatalf("the decision recorded %+v for the machine that refuses two starts in five", flaky.Reliability)
 	}
-	if steady.Reliability != (domain.ReliabilityEvidence{Confidence: 0.9}) {
+	if steady.Reliability != (domain.ReliabilityEvidence{
+		StartFailures: domain.StatedRate{Rate: 0, Confidence: 0.9},
+		Interruptions: domain.StatedRate{Rate: 0, Confidence: 0.9},
+	}) {
 		t.Fatalf("the decision recorded %+v for the machine that has never failed, and a clean measured record is not silence", steady.Reliability)
 	}
 	if unmeasured.Reliability != (domain.ReliabilityEvidence{}) {

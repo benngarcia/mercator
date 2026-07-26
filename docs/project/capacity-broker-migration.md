@@ -1685,6 +1685,26 @@ complete because it works against a live provider.
     confidence to either model separates the two measured machines from the silent one
     by 0.003 USD and fails the Blueprint on the doubt, the score, and the winner, and
     fails `TestARefusalToStartIsRecordedAndNotPricedAtL1` on the doubt.
+  - A rate nobody measured is absent rather than zero. `ReliabilityEvidence` held two
+    rates under one confidence, so the only production publisher of it recorded
+    `start_failure_rate: 0` at `confidence: 1` for every Vast candidate in the fleet:
+    Vast measures an uptime score and nothing about refused starts, and the record
+    said its publisher had measured this machine and never seen it refuse one. That
+    is the claim `internal/scenario/schema.go` already refuses to let a fixture make.
+    Each rate is now a `domain.StatedRate` that stands on its own measurement, and the
+    confidence beside it is what says the measurement happened, which is the reading a
+    disowned network measurement already gets in this tree. `RentalSpec.reliability`
+    states each rate or omits it, a history that states no rate at all is refused at
+    load by `reliability-history-without-a-rate.json`, and the offer field is
+    `omitzero` so an unmeasured machine publishes no history on the wire rather than an
+    empty one.
+  - Vast's `reliability2` is a pointer, for the reason `dph_total` beside it is. The
+    field was a bare float64, so an ask that omitted or nulled it decoded as an uptime
+    score of zero and Mercator published "drops every run, certain" on the publisher's
+    behalf: the worst answer in the catalog, invented out of a missing field.
+    `buildOffers` had no test over its reliability output at all; two now cover the
+    measured ask and the silent one, and mutating `interruptionHistory` to state a
+    start failure rate or to read silence as zero fails both.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`

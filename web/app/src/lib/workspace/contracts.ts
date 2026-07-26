@@ -83,6 +83,13 @@ const ArtifactReplica = Schema.Struct({
   state: Schema.Literals(["verified", "unverified"]),
   verified_at: Schema.optionalKey(Schema.String),
 });
+// One share of a machine's history somebody measured, and how much the publisher
+// of that measurement stands behind it. An unmeasured rate is absent rather than
+// zero, which is why each one is an optional key of the history.
+const StatedRate = Schema.Struct({
+  rate: Schema.Number,
+  confidence: Schema.Number,
+});
 const WorkloadRevision = Schema.Struct({
   id: Schema.String,
   workspace_id: Schema.String,
@@ -214,9 +221,8 @@ export const OfferSnapshot = Schema.Struct({
     confidence: Schema.Number,
   }),
   reliability: Schema.Struct({
-    start_failure_rate: Schema.optionalKey(Schema.Number),
-    interruption_rate: Schema.optionalKey(Schema.Number),
-    confidence: Schema.optionalKey(Schema.Number),
+    start_failures: Schema.optionalKey(StatedRate),
+    interruptions: Schema.optionalKey(StatedRate),
   }),
 });
 

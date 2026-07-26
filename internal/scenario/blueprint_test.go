@@ -312,6 +312,19 @@ func TestLoadBlueprintRejectsTaggedImageIdentity(t *testing.T) {
 	}
 }
 
+// TestLoadBlueprintRejectsARiskHistoryThatStatesNoRate keeps silence and a clean
+// record two worlds a fixture cannot confuse. A history is a measurement, and a
+// confidence with no rate under it measured nothing: read as two rates of zero it
+// would state a machine measured and never seen to fail, which is the claim its
+// provider never made.
+func TestLoadBlueprintRejectsARiskHistoryThatStatesNoRate(t *testing.T) {
+	_, err := LoadBlueprint("testdata/blueprints/invalid/reliability-history-without-a-rate.json")
+
+	if err == nil || !strings.Contains(err.Error(), "states no rate") {
+		t.Fatalf("a published history with nothing measured in it must fail loudly, got %v", err)
+	}
+}
+
 func TestLoadBlueprintRejectsFaultsTriggeringOnUnrecordedEvents(t *testing.T) {
 	_, err := LoadBlueprint("testdata/blueprints/invalid/unknown-fault-event.json")
 

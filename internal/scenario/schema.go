@@ -432,28 +432,39 @@ type RentalSpec struct {
 // why it carries a confidence and why a fixture may state a history that is
 // wrong about what the world then does.
 //
-// Nothing prices either rate yet. They are here because a decision that records
-// no risk at all cannot be the input to a slice that prices one, and because the
-// confidence beside them already reaches the score through the uncertainty term,
-// so the corpus needed a way to say which answer that doubt was about.
+// Each rate is stated or omitted, and omitted is what production mostly does: the
+// one publisher in this tree measures interruptions and nothing about refused
+// starts. A rate a fixture leaves out is unmeasured, and a rate it states as zero
+// is a machine measured and never seen to fail, which are two different worlds a
+// fixture has to be able to tell apart.
+//
+// Nothing prices either rate yet. They are here because a decision that records no
+// risk at all cannot be the input to a slice that prices one.
 type ReliabilitySpec struct {
-	StartFailureRate float64 `json:"start_failure_rate,omitempty"`
-	InterruptionRate float64 `json:"interruption_rate,omitempty"`
-	// Confidence is how much the publisher stands behind this history. A fixture
-	// states it because a measurement over three starts and one over three
-	// thousand are different answers, and because an omitted confidence would
-	// make a published history indistinguishable from no history at all.
+	StartFailureRate *float64 `json:"start_failure_rate,omitempty"`
+	InterruptionRate *float64 `json:"interruption_rate,omitempty"`
+	// Confidence is how much the publisher stands behind the rates it stated. A
+	// fixture states it because a measurement over three starts and one over three
+	// thousand are different answers, and because it is what carries a stated rate
+	// of zero as a measurement rather than as an absence.
 	Confidence float64 `json:"confidence"`
 }
 
 // Evidence is the risk record this declaration states, in the vocabulary an
-// offer carries it in.
+// offer carries it in. Whichever rates the fixture stated are stated at the
+// confidence it declared, and the rest are silence.
 func (spec ReliabilitySpec) Evidence() domain.ReliabilityEvidence {
 	return domain.ReliabilityEvidence{
-		StartFailureRate: spec.StartFailureRate,
-		InterruptionRate: spec.InterruptionRate,
-		Confidence:       spec.Confidence,
+		StartFailures: statedRate(spec.StartFailureRate, spec.Confidence),
+		Interruptions: statedRate(spec.InterruptionRate, spec.Confidence),
 	}
+}
+
+func statedRate(rate *float64, confidence float64) domain.StatedRate {
+	if rate == nil {
+		return domain.StatedRate{}
+	}
+	return domain.StatedRate{Rate: *rate, Confidence: confidence}
 }
 
 // Risk is what this machine's provider publishes about how it behaves, and
@@ -898,6 +909,15 @@ type CandidateExpectation struct {
 	// nobody has measured states nothing at all.
 	StartFailureRate *float64 `json:"start_failure_rate,omitempty"`
 	InterruptionRate *float64 `json:"interruption_rate,omitempty"`
+	// RiskConfidence asserts how much the publisher of that history stands behind
+	// it, and it is asked of every rate the record states. It is the one part of the
+	// history the score used to read, and a corpus that asserted the rates and not
+	// the confidence beside them left the number that mattered unpinned.
+	RiskConfidence *float64 `json:"risk_confidence,omitempty"`
+	// NoRiskHistory asserts that the decision recorded nothing about how this
+	// machine behaves. It is what a fixture states for a machine nobody measured,
+	// and it is not the same claim as two rates of zero.
+	NoRiskHistory bool `json:"no_risk_history,omitempty"`
 }
 
 type ScheduleEvidenceExpectation struct {
@@ -1707,23 +1727,26 @@ func (w WorldSpec) validate() error {
 	return nil
 }
 
-// validateReliability refuses a history no provider could publish. A rate
-// outside the unit interval is not a share of this machine's starts, and a
-// history nobody stands behind is not a measurement: a published rate at zero
-// confidence would reach the record as a fact and reach the score as nothing,
-// which is the disowned measurement this corpus already refuses to state for a
-// link.
+// validateReliability refuses a history no provider could publish. A rate outside
+// the unit interval is not a share of this machine's starts; a history nobody
+// stands behind is not a measurement, because a rate at zero confidence would
+// reach the record as a fact nobody owns, which is the disowned measurement this
+// corpus already refuses to state for a link; and a history that states no rate at
+// all measured nothing, so a fixture that means silence omits the whole block.
 func validateReliability(owner string, spec *ReliabilitySpec) error {
 	if spec == nil {
 		return nil
 	}
-	for answer, rate := range map[string]float64{
+	for answer, rate := range map[string]*float64{
 		"start_failure_rate": spec.StartFailureRate,
 		"interruption_rate":  spec.InterruptionRate,
 	} {
-		if rate < 0 || rate > 1 {
-			return fmt.Errorf("%s states %s %v, which is not a share of its starts", owner, answer, rate)
+		if rate != nil && (*rate < 0 || *rate > 1) {
+			return fmt.Errorf("%s states %s %v, which is not a share of its starts", owner, answer, *rate)
 		}
+	}
+	if spec.StartFailureRate == nil && spec.InterruptionRate == nil {
+		return fmt.Errorf("%s publishes a reliability history that states no rate, and a machine nobody measured publishes no history at all", owner)
 	}
 	if spec.Confidence <= 0 || spec.Confidence > 1 {
 		return fmt.Errorf("%s publishes a reliability history at confidence %v, and a history nobody stands behind is not one", owner, spec.Confidence)

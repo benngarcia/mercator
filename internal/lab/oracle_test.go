@@ -35,9 +35,8 @@ func TestSmallWorldReferenceSolverAgreesWithProductionOnEveryCandidate(t *testin
 	for index := range input.Offers {
 		if input.Offers[index].ID == "fresh-4090" {
 			input.Offers[index].Reliability = domain.ReliabilityEvidence{
-				StartFailureRate: 0.4,
-				InterruptionRate: 0.25,
-				Confidence:       0.9,
+				StartFailures: domain.StatedRate{Rate: 0.4, Confidence: 0.9},
+				Interruptions: domain.StatedRate{Rate: 0.25, Confidence: 0.9},
 			}
 		}
 	}

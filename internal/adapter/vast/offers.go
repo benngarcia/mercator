@@ -91,15 +91,11 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 				GranularitySeconds: 1,
 				Known:              true,
 			},
-			// reliability2 is Vast's empirical machine uptime score in [0,1]; its
-			// complement is the chance the host drops out mid-run. The decision
+			// What Vast has measured about this machine, and only that. The decision
 			// records it and nothing prices it: what an interruption costs is a
 			// probability times a predicted start, and the flat weight this comment
 			// used to name was deleted for being an invented exchange rate.
-			Reliability: domain.ReliabilityEvidence{
-				InterruptionRate: clamp01(1 - o.Reliability),
-				Confidence:       1,
-			},
+			Reliability: interruptionHistory(o.Reliability),
 			// A catalog listing says this machine type can be had. Its publisher states no
 			// confidence in that, and neither does Mercator on their behalf: capacity that
 			// may be gone by launch, asserted certain, is a claim nobody made. What would
@@ -114,6 +110,24 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 		})
 	}
 	return snapshots
+}
+
+// interruptionHistory is what Vast publishes about how a machine behaves.
+// reliability2 is its empirical uptime score in [0,1] and its complement is the
+// chance the host drops out mid-run, so this history states one rate and not two:
+// Vast measures nothing about how often a machine refuses to start, and a zero
+// stated at full confidence for that is a claim its publisher never made.
+//
+// An ask that reports no score at all publishes no history. Silence decoded as a
+// score of zero says this machine drops every run and is certain of it, which is
+// the worst answer in the catalog invented out of a missing field.
+func interruptionHistory(uptimeScore *float64) domain.ReliabilityEvidence {
+	if uptimeScore == nil {
+		return domain.ReliabilityEvidence{}
+	}
+	return domain.ReliabilityEvidence{
+		Interruptions: domain.StatedRate{Rate: clamp01(1 - *uptimeScore), Confidence: 1},
+	}
 }
 
 // gpuVendor maps Vast's gpu_arch ("nvidia", "amd") onto the inventory vendor
