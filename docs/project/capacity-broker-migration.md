@@ -2424,6 +2424,79 @@ complete because it works against a live provider.
     the worktree. They are recorded here because they were found while verifying the
     launch waterfall, and a branch whose suite cannot finish cannot verify anything.
     The uncommitted scenario work was left exactly as it was found.
+  - Refuted, and repaired in the entry below. Two reviewers showed that the claim held
+    only for a workspace with one Run in it, that the queue it ratified stalls a fleet
+    with room for other work, and that the corpus could state none of it.
+
+- [x] 2026-07-26: Make a wait admission records answerable and passable. Two reviewers
+  refuted the entry above. Each defect is one the record could have been read for and
+  nothing read it, and each is fixed at the stage that produces it.
+  - The command a deferral was appended under was named after the reason alone, so it
+    was spent on the first Run that reason applied to. The second time admission said
+    the same thing about a changed queue, the append replayed that key with a different
+    request hash, the event log refused it as an idempotency conflict, and `AdvanceRun`
+    returned that error to every caller for as long as the state held: the refresh
+    answered 502, the reconcile sweep logged it every tick, `stepAdmit` never reached
+    `stepPlace`, and the Run's own record stayed frozen at the stale answer. Recording
+    the nth admission decision about a Run is a distinct command from recording the
+    (n-1)th, so the key now carries the number the event ID already did.
+  - The queue ordered each Run against every wait worth more than its own and never
+    asked whether the work in front of it was waiting for anything that can arrive, so
+    one Run asking for more room than any machine in the fleet has emptied the fleet.
+    A Run refused by every candidate is now recorded in one of two waits.
+    `NO_FEASIBLE_OFFER` is a wait for capacity to come free, and the record points at
+    what holds it. `NO_CAPACITY_FITS` is a wait for capacity to be added, where every
+    machine the fleet published was weighed against this Run and none of them holds a
+    queue it could be waiting on. Work behind the first waits for the same machine.
+    Work behind the second is only stopped by it, and it is admitted past it.
+  - A fleet that published nothing at all is the first wait and not the second. Nothing
+    was weighed, so nothing has been established about what would hold the Run, and the
+    order the classes declare is what should decide the first machine to arrive.
+  - The two waits are separate reasons rather than a flag beside one reason. It is what
+    an operator acts on, "add capacity" against "wait", it is what the queue reads, and
+    the existing suppression already appends a fact when the reason changes. The flip
+    is also what makes the rule self-correcting: a machine that is both occupied and
+    too small holds the queue only while the record can project when it comes free.
+  - `BEHIND_HIGHER_CLASS` is now `BEHIND_HIGHER_PRIORITY`. The ordering was always on
+    effective priority, so a Run held behind older work of its own class was told it
+    was behind a higher class, which is not what the record said.
+  - The deadline is now asked of every wait rather than only of the wait Placement
+    causes. A Run held behind work that outranks it was told to wait again every tick
+    for ever, past the moment its own class says the answer stopped being worth having,
+    and the queue in front of it was the one thing that could keep it there. An
+    interactive Run behind an experimental one is where the aging curves cross, and
+    that is the case the new test states it against.
+  - The executable specification now constrains all of it, which is what the reviewers
+    found missing. `internal/scenario` can state a `defer` and a `refuse` outcome with
+    the reason, the whole set of work the Run waits behind, its effective priority, and
+    how long it has waited. `an-impossible-ask-holds-no-queue` and
+    `a-queue-restates-what-it-waits-behind` are green regression Blueprints, and
+    `conformance/an-impossible-ask-empties-no-fleet` drives the same world through the
+    real control plane in the Lab.
+  - `safety.nothing_waits_behind_an_impossible_ask` is the law: Mercator never tells a
+    Run it waits behind a Run the record already said no machine in the fleet can take.
+    It is replayed out of the public log, it has its deliberate failing case in the
+    registry, and reverting the queue fix fails the conformance execution on it.
+  - `safety.service_class_admission_order` had to be amended rather than left alone,
+    which is the Lab refusing the fix until the law was stated properly. It forbade
+    admitting the Run that fits while the impossible Run outranked it, and
+    `liveness.aging_prevents_starvation` forbids leaving that machine idle, so the two
+    laws contradicted each other on exactly this world. The ordering is over Runs
+    waiting for capacity, and a Run waiting for capacity to be added is not in that
+    queue.
+  - Judgment call. The corpus entry lands with the repair rather than before it. This
+    is a refutation response to a committed slice, and a Blueprint committed first
+    would have been a red commit stating a law the branch did not hold yet. Every claim
+    here has a case that fails without its fix, verified one at a time: the changed
+    wait as an idempotency conflict, the impossible ask as an idle machine beside a Run
+    that fits it, the deadline as a Run still queued ten minutes past it, and the
+    suppression as two identical facts over two advances.
+  - Still open, and deliberately not smuggled in here. A Run nothing in the fleet can
+    hold stays queued past its class's maximum queue delay until its deadline refuses
+    it, and `liveness.aging_prevents_starvation` calls that starvation on any execution
+    that observes it inside that window. What admission should do at that bound is a
+    decision about refusal policy rather than about the queue's order, and it needs its
+    own slice.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what

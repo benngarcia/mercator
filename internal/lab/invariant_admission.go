@@ -13,8 +13,9 @@ import (
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
-// This file is the two laws the admission queue has to hold: that waiting ends,
-// and that it ends in the order the classes declared.
+// This file is the three laws the admission queue has to hold: that waiting ends,
+// that it ends in the order the classes declared, and that nothing is made to wait
+// behind a wait nobody can end.
 //
 // They are stated over the public record rather than over the control plane's
 // own bookkeeping. The queue Mercator orders against is built inside a
@@ -79,9 +80,19 @@ func describeQueuedAhead(ahead []domain.QueuedAhead) string {
 
 // serviceClassAdmissionOrder is the ordering the classes declare, checked against
 // what Mercator actually admitted. No Run is placed while work worth more than it
-// is sits in the queue, and the one exemption is the admitted Run's own class
-// declaring itself eligible to backfill: capacity going spare may be taken, and a
-// Run already kept waiting longer than its class allows is not spare capacity.
+// is sits in the queue waiting for capacity, and the one exemption is the admitted
+// Run's own class declaring itself eligible to backfill: capacity going spare may be
+// taken, and a Run already kept waiting longer than its class allows is not spare
+// capacity.
+//
+// Waiting for capacity is what the ordering is over, and it is why the queue this
+// replays holds only the Runs whose wait something can end. A Run every machine in
+// the fleet was weighed against and none of them could take is waiting for capacity
+// to be added, and nothing that fits the fleet as it stands is being admitted past
+// it: they are not waiting for the same thing. A rule that counted it would forbid
+// running work on an idle machine, and liveness.aging_prevents_starvation forbids
+// leaving it there, so the two laws would contradict each other on the one world
+// where a fleet holds a Run it can never place.
 //
 // The queue is replayed out of the public log rather than read off the read
 // model, because the question is about a moment that has passed. What matters is
@@ -101,9 +112,20 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 			if err != nil {
 				return err
 			}
-			if _, waiting := queue[runID]; !waiting {
-				queue[runID] = queuedRun{class: deferral.Class, since: at}
+			if !waitsForCapacity(deferral) {
+				delete(queue, runID)
+				continue
 			}
+			// The moment a wait began never moves, and what the Run is waiting for
+			// does: a Run whose fleet filled up while it waited is waiting for
+			// something the ordering has to respect, and one whose fleet emptied is
+			// not.
+			held := queue[runID]
+			if held.since.IsZero() {
+				held.since = at
+			}
+			held.class = deferral.Class
+			queue[runID] = held
 		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
 			delete(queue, runID)
 		case orchestrator.EventBookingDecided:
@@ -138,6 +160,12 @@ type queuedRun struct {
 	since time.Time
 }
 
+// waitsForCapacity reports whether this wait is one the ordering is over: a wait for
+// capacity to come free rather than for capacity to be added.
+func waitsForCapacity(deferral domain.AdmissionDeferral) bool {
+	return deferral.Reason != domain.DeferredNoCapacityFits
+}
+
 func admittedInClassOrder(observation InvariantObservation, queue map[string]queuedRun, runID string, at time.Time) error {
 	class := observation.Workloads[runID].Spec.Placement.Class
 	policy := class.Admission()
@@ -163,6 +191,63 @@ func admittedInClassOrder(observation InvariantObservation, queue map[string]que
 		return fmt.Errorf(
 			"Run %q of class %q was admitted at effective priority %.2f while %q of class %q had waited %.0fs to %.2f",
 			runID, class, priority, other, held.class, waited, otherPriority,
+		)
+	}
+	return nil
+}
+
+// nothingWaitsBehindAnImpossibleAsk is the other half of what the queue is for.
+// Work is ordered behind work that outranks it, and never behind a wait nobody can
+// end: a Run every machine in the fleet was weighed against and none of them could
+// take is waiting for capacity to be added, and work that fits the fleet as it
+// stands is not competing with it for anything.
+//
+// Without it one impossible submission empties a workspace. The Run that fits is
+// ordered behind an ask nothing can satisfy, and it stays there until the
+// impossible Run's own class deadline clears it, which for a class that declares no
+// deadline is never.
+//
+// It is replayed out of the public log rather than read off the read model because
+// it is a rule about the moment a decision was taken: what matters is what Mercator
+// had already recorded about the Run it named as ahead, and the projection only
+// says what is true now.
+func nothingWaitsBehindAnImpossibleAsk(observation InvariantObservation) error {
+	waiting := map[string]bool{}
+	for _, event := range observation.MercatorEvents {
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		switch event.Type {
+		case orchestrator.EventAdmissionDeferred:
+			deferral, err := recordedDeferral(event)
+			if err != nil {
+				return err
+			}
+			if err := heldByNothingImpossible(waiting, runID, deferral); err != nil {
+				return err
+			}
+			waiting[runID] = !waitsForCapacity(deferral)
+		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
+			delete(waiting, runID)
+		case orchestrator.EventBookingDecided:
+			decision, err := recordedDecision(event)
+			if err != nil {
+				return err
+			}
+			if decision.SelectedOfferSnapshotID != "" {
+				delete(waiting, decision.RunID)
+			}
+		}
+	}
+	return nil
+}
+
+func heldByNothingImpossible(waiting map[string]bool, runID string, deferral domain.AdmissionDeferral) error {
+	for _, ahead := range deferral.Behind {
+		if !waiting[ahead.RunID] {
+			continue
+		}
+		return fmt.Errorf(
+			"Run %q of class %q was told it waits behind %q, and the record already said no machine in this fleet can take %q at all",
+			runID, deferral.Class, ahead.RunID, ahead.RunID,
 		)
 	}
 	return nil

@@ -35,8 +35,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 35 {
-		t.Fatalf("latest invariant results = %d, want 35", len(latest))
+	if len(latest) != 36 {
+		t.Fatalf("latest invariant results = %d, want 36", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -437,6 +437,17 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 			observation.MercatorEvents = []eventlog.CloudEvent{
 				admissionDeferredEvent("run-patient", now, domain.ClassExperimental),
 				admittedDecisionEvent("run-urgent", now.Add(10*time.Minute)),
+			}
+		},
+		// One impossible submission emptying a workspace: a Run asking for more room
+		// than any machine in the fleet has is queued, and the Run that does fit the
+		// fleet is then told it is waiting behind it. The machine stands idle beside
+		// work it could run, and nothing frees it, because the wait the queue is
+		// respecting is a wait for capacity nobody has.
+		"safety.nothing_waits_behind_an_impossible_ask": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				deferredForEvent("run-impossible", now, domain.ClassStandard, domain.DeferredNoCapacityFits),
+				deferredForEvent("run-fits", now.Add(time.Minute), domain.ClassStandard, domain.DeferredBehindHigherPriority, "run-impossible"),
 			}
 		},
 	}
@@ -1957,12 +1968,22 @@ func classedWorkload(class domain.ServiceClass) domain.WorkloadRevision {
 	return domain.WorkloadRevision{Spec: domain.WorkloadSpec{Placement: domain.PlacementPolicy{Class: class}}}
 }
 
-// admissionDeferredEvent is Mercator telling a Run to wait, as the public log
-// carries it.
+// admissionDeferredEvent is Mercator telling a Run to wait for want of any offer,
+// as the public log carries it.
 func admissionDeferredEvent(runID string, at time.Time, class domain.ServiceClass) eventlog.CloudEvent {
+	return deferredForEvent(runID, at, class, domain.DeferredNoFeasibleOffer)
+}
+
+// deferredForEvent is Mercator telling a Run to wait for a stated reason, naming
+// the work it says is in front of it.
+func deferredForEvent(runID string, at time.Time, class domain.ServiceClass, reason string, behind ...string) eventlog.CloudEvent {
+	deferral := domain.AdmissionDeferral{Reason: reason, Class: class}
+	for _, ahead := range behind {
+		deferral.Behind = append(deferral.Behind, domain.QueuedAhead{RunID: ahead})
+	}
 	data, err := json.Marshal(struct {
 		Deferral domain.AdmissionDeferral `json:"deferral"`
-	}{domain.AdmissionDeferral{Reason: domain.DeferredNoFeasibleOffer, Class: class}})
+	}{deferral})
 	if err != nil {
 		panic(err)
 	}

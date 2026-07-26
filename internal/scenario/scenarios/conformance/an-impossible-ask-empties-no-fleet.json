@@ -1,0 +1,58 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One machine with 200GB of room under the real control plane, and the first Run asks for 900GB. No machine in this fleet can hold it, so admission queues it: the wait is for capacity to be added and not for capacity to come free, and nothing in the fleet as it stands is what the Run is competing for. A minute later a Run asking for 100GB arrives, and it runs. That minute is what makes the case: the impossible Run has aged past a fresh arrival of its own class, so the queue has every reason to order the second Run behind it. Ordering it there is what emptied a workspace, because the wait it would be respecting is one nothing that can arrive ends, and the Run holding it up is not waiting for the machine the second Run would take. This is the placement corpus's claim asserted at L1, where the queue is replayed out of the public log and safety.nothing_waits_behind_an_impossible_ask is what adjudicates it.",
+  "seed": "mercator-lab-impossible-ask-v1",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {
+            "digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55",
+            "size": "4GB"
+          },
+          {
+            "digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee",
+            "size": "20MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "impossible",
+        "at": "0s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "standard",
+          "resources": {"disk": "900GB"},
+          "expected_runtime": "5m",
+          "max_runtime": "10m"
+        }
+      },
+      {
+        "name": "fits",
+        "at": "1m",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "standard",
+          "resources": {"disk": "100GB"},
+          "expected_runtime": "5m",
+          "max_runtime": "10m"
+        }
+      }
+    ]
+  }
+}

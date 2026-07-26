@@ -1,0 +1,79 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "A workspace whose fleet published nothing at all, and three Runs arriving into it. Nothing was weighed against any of them, so nothing has been established about what would hold them: this is a wait for capacity to come free and not for capacity to be added, and the order the classes declare is what should decide the first machine to arrive. The watched Run is told to wait for want of any offer. The quiet Run could have gone next and may not, because interactive work Mercator already owes an answer to outranks it, and the record names it. The second watched Run arrives worth exactly what the first one is, so it passes nothing and waits on its own account. Then the quiet Run is asked again, and what it waits behind has changed from one Run to two. That last step is the whole fixture. Each deferral used to be appended under a command named after its reason alone, so the second time admission said the same thing about a changed queue the append replayed a spent key against a different request hash, the event log refused it as an idempotency conflict, and AdvanceRun returned that error to every caller for as long as the state held: the refresh answered 502, the reconcile sweep logged it every tick, admission never reached placement on those ticks, and the Run's own record stayed frozen naming only the first Run ahead of it. The reason is also stated as the ordering really is. It is effective priority and not the class, because waiting promotes a Run past classes that start above it, and a Run held behind older work of its own class was being told it was behind a higher class.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    }
+  },
+  "timeline": [
+    {
+      "submit": "watched",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "interactive",
+        "expected_runtime": "5m",
+        "max_runtime": "10m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_FEASIBLE_OFFER",
+          "behind": [],
+          "effective_priority": 100
+        }
+      }
+    },
+    {
+      "submit": "quiet",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "expected_runtime": "5m",
+        "max_runtime": "10m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "BEHIND_HIGHER_PRIORITY",
+          "behind": ["watched"],
+          "effective_priority": 50
+        }
+      }
+    },
+    {
+      "submit": "watched-too",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "interactive",
+        "expected_runtime": "5m",
+        "max_runtime": "10m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_FEASIBLE_OFFER",
+          "behind": [],
+          "effective_priority": 100
+        }
+      }
+    },
+    {
+      "reconcile": "quiet",
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "BEHIND_HIGHER_PRIORITY",
+          "behind": ["watched", "watched-too"],
+          "effective_priority": 50
+        }
+      }
+    }
+  ]
+}

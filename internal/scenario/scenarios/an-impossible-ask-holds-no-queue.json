@@ -1,0 +1,80 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One machine with 200GB of room, and the first Run asks for 900GB. Nothing in this fleet can hold it, so admission queues it and says which of the two waits it is in: NO_CAPACITY_FITS is a wait for capacity to be added, because every machine the fleet published was weighed against this Run and none of them holds a queue it could be waiting on. A minute later the second Run asks for 100GB and takes the machine, which a minute of the first Run's waiting is what makes worth stating: the impossible Run now outranks a fresh arrival of its own class, so the queue has every reason to order the fitting Run behind it and must not. That is the whole claim: a wait nobody can end holds no queue, and until the queue read the difference one impossible submission emptied the fleet, because the Run that fitted was ordered behind an ask nothing could satisfy until the impossible Run's own class deadline cleared it, four hours later for standard work and never for a class that declares no deadline. The third step is the same Run asked again once the machine is busy, and the answer moves: the record can now project when that machine comes free, so the wait becomes NO_FEASIBLE_OFFER and names the work holding it. Two things are stated there. The queue reading a machine that is both occupied and too small as worth waiting behind lasts exactly as long as the projection does. And a second deferral of one Run is a fact Mercator can actually write: the command each one is appended under used to be named after the reason alone, so the second time admission said the same thing about a changed queue the append replayed a spent key against a different hash and every refresh of that Run answered 502 for as long as the state held.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "asks-for-a-machine-nobody-has",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "900GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_CAPACITY_FITS",
+          "behind": [],
+          "effective_priority": 50,
+          "queued_seconds": 0
+        }
+      }
+    },
+    {
+      "advance": "1m"
+    },
+    {
+      "submit": "fits-what-is-there",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "100GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-only",
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+        "candidates": {
+          "rental-only": {
+            "feasible": true,
+            "image_locality": "hot"
+          }
+        }
+      }
+    },
+    {
+      "reconcile": "asks-for-a-machine-nobody-has",
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_FEASIBLE_OFFER",
+          "behind": ["fits-what-is-there"],
+          "effective_priority": {"at_least": 53, "at_most": 54},
+          "queued_seconds": 60
+        }
+      }
+    }
+  ]
+}
