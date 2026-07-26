@@ -924,10 +924,19 @@ func (spec GPUSpec) validate(owner string) error {
 	if spec.Entries < 0 {
 		return fmt.Errorf("%s reports its cards across %d entries", owner, spec.Entries)
 	}
-	if spec.Entries > 1 && spec.Count%spec.Entries != 0 {
+	if spec.Entries <= 1 {
+		return nil
+	}
+	if spec.Count%spec.Entries != 0 {
 		return fmt.Errorf(
 			"%s splits %d cards across %d entries, and no machine reports a fraction of a card",
 			owner, spec.Count, spec.Entries,
+		)
+	}
+	if spec.Count == 0 {
+		return fmt.Errorf(
+			"%s splits its cards across %d entries without saying how many it holds",
+			owner, spec.Entries,
 		)
 	}
 	return nil

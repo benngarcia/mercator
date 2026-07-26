@@ -131,6 +131,18 @@ func TestLoadRejectsFixtureMistakes(t *testing.T) {
 			`"offer": "rental-a", "candidates": {"rental-a": {"stages": {"boot_seconds": {"seconds": 0}}}}`,
 			`stage "boot_seconds"`,
 		},
+		// A machine that splits its cards across entries is stating how its probe
+		// reported them, and cards that do not divide evenly describe no machine.
+		"cards that do not divide across the entries reporting them": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "resources": {"gpu": {"model": "A100", "count": 3, "memory": "80GB", "entries": 2}}}]`,
+			"fraction of a card",
+		},
+		"a request stating how a machine grouped its cards": {
+			`"request": {"image": "app:v1"}`,
+			`"request": {"image": "app:v1", "resources": {"gpu": {"model": "A100", "count": 2, "entries": 2}}}`,
+			"what it needs rather than how a machine reported it",
+		},
 		"stage that does not exist": {
 			`"offer": "rental-a"`,
 			`"offer": "rental-a", "candidates": {"rental-a": {"stages": {"agent_enrolled": {"seconds": 0}}}}`,
