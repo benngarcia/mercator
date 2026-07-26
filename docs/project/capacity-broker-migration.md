@@ -2116,6 +2116,31 @@ the launch.
 
 ## Verification evidence
 
+### Phase 3 the second review of the service class
+
+On 2026-07-26, on the amd64 Linux workstation, `go build ./...` and `go test
+./internal/...` pass, and `bun run typecheck` and `bun run test` pass in
+`web/app`. Each fix is held by a break that fails it:
+
+- restoring the empty-fact-list test in `downloadFloorViolations` refuses
+  `rental-disowned` with `NETWORK_FACT_UNSATISFIED` while `rental-silent` is
+  selected, which fails `a-floor-refuses-a-measurement-and-not-a-silence`,
+  `a-link-nobody-measured-is-not-a-slow-link` at L1, and
+  `TestADownloadFloorRefusesOnlyWhatWasMeasuredTooSlow`;
+- `Confidence: 1` in `applyOfferWorldFacts` places the Run on the machine that
+  disowned 5 Gbps, and so does dropping the world's paths altogether, each failing
+  `TestADisownedLinkFactBuysWhatSilenceBuysAtL1`. Both mutations left the whole
+  tree green before this Blueprint existed;
+- deleting the `Unpriced` block in `newSimulatedWorld` places the Run on the
+  machine nobody quoted at a rate of zero, failing
+  `TestAnUnquotedMachineIsTheLastResortAtL1`. That mutation also left the whole
+  tree green before;
+- not wiring `migrateStoredRevisionSecrets` leaves `hf_live_SECRETVALUE` in the
+  public payload of the fixture database, failing
+  `TestOpenMovesAStoredRevisionsSecretsOutOfThePublicPayload`, and reverting the
+  door leaves the token in the event
+  `TestAStoredRevisionKeepsItsSecretsOutOfThePublicEvent` reads.
+
 ### Phase 3 controlled prewarming
 
 On 2026-07-25, `prewarming-never-starves-real-work` was written against the
