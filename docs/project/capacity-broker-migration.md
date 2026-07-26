@@ -1642,7 +1642,8 @@ complete because it works against a live provider.
     container launched through the production runtime, its start moment read back
     and compared against an independent `docker inspect
     {{.State.StartedAt}}`. `TestANodeReportsTheMomentItsContainerReallyStarted` is
-    the end-to-end seam over the public API, which is the fourth defect found at
+    the end-to-end seam over the public API, against a scripted runtime rather than
+    a live daemon, and it is the fourth defect found at
     `broker.observeOnNode` after Artifacts, `NodeFacts.Artifacts`, and cache
     mounts: deleting the one line that carries the moment leaves the Run with no
     start and every other test green.
@@ -1930,6 +1931,89 @@ complete because it works against a live provider.
     that provider says running from the moment it accepts, so the first observation
     carries no start at all: the lane where a start arrives with the first running
     observation is the reusable one, and that is where the fleet case drives it.
+- [x] 2026-07-26: Answer the review of the launch-waterfall commit. Two reviewers
+  refuted parts of it. Six of the seven findings were real and are fixed at the
+  source; the seventh is rejected below with the reason.
+  - The readiness moment had no law. It was adopted from the workload verbatim: no
+    bound against Mercator's clock, no relation to the container it is about, and no
+    rule about which of two reports stands, so a report could file a readiness three
+    and a half years in the future for a Run whose container nothing had observed
+    starting, and a second report moved it backwards. That is the same foreign-clock
+    defect `EstablishedStart` was written for one stage earlier, and it was not
+    carried over. `runReportedData.establishedReady` refuses a moment later than the
+    read that carried it and a moment before the recorded start, the ordering is
+    checked at both events because the two moments come from two authorities and the
+    workload's arrives first as often as not, and the first defensible moment stands.
+    The report stays in the log whatever the rule answers.
+  - Nothing could state the world where it fires, in three separate places. Both
+    simulated worlds stated readiness on Mercator's clock even for the one machine
+    whose clock is not Mercator's, so no fixture could produce an indefensible
+    readiness; the corpus asserted readiness by reading the report rather than the
+    record, so `no_ready_reported` meant no workload spoke rather than Mercator
+    refused; and no invariant read readiness at all.
+    `safety.readiness_is_reported_not_inferred` is the start rule over the last stage,
+    four clauses written out rather than delegated, and `Session.RunRecord` makes the
+    corpus assert what Mercator adopted. `a-clock-nobody-shares-is-not-a-start` now
+    states that the readiness off the same wrong clock is refused too.
+  - `ImageManifest.StartWork` charged a transfer and no assembly for bytes a host
+    does not hold, so `imageStage` took its zero-bytes path and recorded the assembly
+    as zero seconds at confidence 1.0. A Rental about to pull 18GB stated at full
+    confidence that it owed no assembly, while the host beside it holding those same
+    bytes unassembled was charged the 72 seconds, and both worlds contradict it: each
+    spends its unpack whenever a launch fetched anything. A layer that has to arrive
+    has to be applied, so a layer nothing holds owes both. Two consequences beyond the
+    record were the reason to fix it at the source: a fetching candidate now carries
+    half a point of doubt for the link and half for the unpack rate, which is the same
+    point an enrolled machine that answered and holds nothing carries, and
+    `max_p90_start_seconds` is enforced against a number that includes the assembly
+    rather than structurally omitting it. `unpacked-is-not-the-same-as-pulled` states
+    the whole rule in one world.
+  - The per-stage fixture vocabulary was unvalidated. `LaunchStageEstimates` answers
+    about an unknown stage with a zero `Estimate` from no source, so a misspelled key
+    asserted zero seconds against a stage that does not exist and passed green, taking
+    the assertion the fixture was written for with it: replacing this corpus's own
+    600-second boot claim with the record's JSON key `boot_seconds` left the tree
+    green. The key is `domain.LaunchStage` now and the same validation that checks
+    artifact and cache vocabulary checks it against the eight.
+  - `safety.prediction_is_recorded_against_its_actual` read the set of accepted
+    launches off the stage durations those launches reported, so a launch that
+    reported none was not a launch as far as the law was concerned. Deleting the
+    world's stage accounting left the canonical execution green with all its
+    invariants passing. The waterfall records which Runs had a launch accepted
+    separately from which reported a duration, and the Bundle names the difference:
+    `launch_reported_no_actual` rather than a measured zero.
+  - Both worlds modelled only the happy path of readiness. Every started execution
+    reported ready, and a fixture that declared no readiness spend got a report at the
+    same instant its container started, so thirty Blueprints asserted by default that
+    a running process is a serving one and the failure mode the stage exists to expose
+    was unstatable. `application_never_ready` states it, the ledger says which stages
+    a launch reached rather than leaving it to be read off a missing number, and
+    `a-running-process-is-not-a-serving-one` plus
+    `conformance/a-workload-that-never-becomes-ready` hold it at both levels.
+  - Rejected: that an omitted `application_ready` should mean the world says nothing
+    about readiness. Omission already means something in that block. Every other stage
+    reads a missing duration as a world that spends nothing on it, which is how a
+    Rental spends no acquisition and no boot, and a readiness of zero is a legitimate
+    world where a process serves the instant it exists. Reading one field's silence as
+    absence and its siblings' silence as zero would make a fixture's own sentence
+    undecidable, and it would leave eight-stage completeness unstatable. What was
+    missing was a way to say the opposite thing, which is what
+    `application_never_ready` is.
+  - The live-evidence list for the previous pass named
+    `TestANodeReportsTheMomentItsContainerReallyStarted`, which runs against a
+    scripted runtime with `PATH` emptied so no Docker is reachable, and would pass with
+    the daemon uninstalled. The correction is in the phase 4 verification section
+    beside the claim.
+  - Judgment calls. The refused readiness is dropped rather than raised, for the same
+    reason the refused start is: the report still records what the workload said, and
+    failing a Run because its host keeps a skewed clock would take capacity out of
+    service over a stage nobody can measure. Readiness gets no event of its own like
+    `compute.run.execution_started.v1`, because the report is already an event and the
+    adopted moment is a projection of it, so the invariant reads the projection. And
+    this pass again ran beside a concurrent session in the same worktree, which had the
+    tree non-compiling for stretches of it; every command below was run against a
+    `git archive` of the commit under test with only this pass's files overlaid, so the
+    evidence is the tree of record rather than a shared working directory.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
@@ -2659,6 +2743,46 @@ the rule has to allow rather than the case it exists to catch. The lane where a 
 arrives with the first running observation is the one an enrolled node serves, and
 that is where the fleet case drives it.
 
+### Phase 4 the review of the launch waterfall
+
+On 2026-07-26, on the amd64 Linux workstation. Every command was run against a `git
+archive` of the commit under test with only this pass's files overlaid, because a
+concurrent session shared the worktree and had it non-compiling for stretches of the
+work. Each fix is held by a break that fails it:
+
+- restoring the unconditional assignment of `RunRecord.ReadyAt` fails three of the
+  four readiness cases in `internal/orchestrator`: a moment an hour ahead of the read
+  is recorded, a moment a minute before the container start is recorded, and a second
+  report moves a readiness already taken;
+- publishing the world's own readiness truth instead of the machine's reading leaves
+  `a-clock-nobody-shares-is-not-a-start` unable to say anything about a refused
+  readiness, and reverting `Session.RunRecord` to read the report makes the same
+  fixture assert that no workload spoke rather than that Mercator refused;
+- deleting any one clause of `safety.readiness_is_reported_not_inferred` leaves the
+  record it exists to catch passing, which is what
+  `TestEveryClauseOfTheReadinessRuleCanFail` drives one case at a time;
+- restoring `UnpackBytes: 0` for bytes a host has to fetch fails
+  `unpacked-is-not-the-same-as-pulled` with `unpack_seconds: want at least 70, got 0`
+  and `unpack confidence: want 0.5, got 1`, and fails
+  `TestBothModelsPriceDoubtTheSameWay` on the doubt a cold candidate carries;
+- replacing a fixture's `boot` stage assertion with the record's own JSON key
+  `boot_seconds` now fails at load with `stage "boot_seconds", which is not one of
+  [...]`, where before it silently asserted zero seconds and passed;
+- deleting `"stage_seconds": world.stageSeconds(execution)` now fails
+  `safety.prediction_is_recorded_against_its_actual`, which it did not before;
+- restoring the worlds that always report ready fails
+  `a-running-process-is-not-a-serving-one` with `records its application ready at
+  2030-01-01T00:00:20Z, and the fixture says it has not said so` and fails
+  `TestAWorkloadThatNeverBecomesReadyMeasuresNoReadiness` with a readiness row sourced
+  `effect_ledger.launch.stage_seconds` at 0.00s.
+
+The six live Docker cases named in the section below were re-run unskipped on this
+host against Docker Engine 29.6.2 with the overlayfs storage driver.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+```
+
 ### Phase 4 the launch waterfall
 
 On 2026-07-26, on the amd64 Linux workstation, the eight-stage record was written
@@ -2713,9 +2837,22 @@ overlayfs storage driver: `TestTheNodeReportsWhenTheContainerStarted`,
 `TestDockerRuntimeReportsTheLayersItUnpacked`,
 `TestEveryImageThisDaemonHoldsIsAssembled`,
 `TestALaunchThatNeverRunsLeavesNoCacheBehind`,
-`TestAContainerThatNeverStartsIsNotACacheThisNodeHolds`,
-`TestANodeReportsTheMomentItsContainerReallyStarted`, and
-`TestTheFleetListingReportsTheRoomThisMachineReallyHas`, none of them skipped.
+`TestAContainerThatNeverStartsIsNotACacheThisNodeHolds`, and
+`TestTheFleetListingReportsTheRoomThisMachineReallyHas`, none of them skipped. Each
+of those either gates on `requireDocker` or is handed
+`nodeagent.NewDockerRuntime`, which is what makes the daemon version and the storage
+driver mean anything about it.
+
+This list first named `TestANodeReportsTheMomentItsContainerReallyStarted` as well,
+and that was wrong. `startFleet` sets `PATH` to an empty directory precisely so the
+daemon seeds no local connection, and the case takes no `runningOn` option, so the
+runtime under it is `scriptedRuntime` and the start moment it compares is one that
+fake fabricated as `time.Now().Add(-scriptedStartDelay)`. The case is worth having
+and it holds the end-to-end seam over the public API, but it would pass with the
+Docker daemon stopped or uninstalled, so nothing about Docker Engine 29.6.2 or
+overlayfs is established by it. The container-start stage's live evidence is
+`TestTheNodeReportsWhenTheContainerStarted`, which reads `State.StartedAt` back off a
+container this machine's own daemon really ran.
 
 Nothing in production predicts acquisition or agent enrollment, and nothing
 measures either. Both are recorded as unpublished, which is honest and is a
