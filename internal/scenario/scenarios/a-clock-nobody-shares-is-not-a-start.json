@@ -1,0 +1,55 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One Run, one machine, and one wrong clock. The Rental holds the whole image assembled and idle, so nothing here has to be acquired, booted, fetched, or applied: the only stages left are the container starting and the application coming up. What makes this world different from every other in the corpus is that this host's wall clock runs an hour ahead of Mercator's, and a host does not know that. It reads its container's start off the clock it has, so twenty seconds after the launch is taken it publishes a start an hour in Mercator's future while saying, on the same clock, that it looked an hour in Mercator's future too. Both moments agree with each other and neither agrees with anything the control plane knows. Mercator refuses the moment and the record says the stage is unobserved, which is the honest answer: nothing observed this container start on a clock Mercator shares, and an hour of invented start latency would be a measurement of nothing. The Booking's runtime clock is the second place the same moment could have landed, and it is measured from the read that carried the observation instead, so the machine's declared runtime still expires when the capacity is really spent rather than an hour later.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "200MB"}
+        ]
+      }
+    },
+    "launch": {
+      "container_start": "20s",
+      "application_ready": "1m"
+    },
+    "rentals": [
+      {
+        "id": "rental-ahead",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 12.0,
+        "clock_ahead": "1h"
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "skewed",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-ahead",
+        "reasons": ["FEASIBLE"],
+        "disposition": "release",
+        "no_start_observed": true
+      }
+    },
+    {
+      "advance": "2m"
+    },
+    {
+      "reconcile": "skewed",
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-ahead",
+        "no_start_observed": true
+      }
+    }
+  ]
+}

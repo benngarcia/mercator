@@ -150,6 +150,11 @@ type Machine struct {
 	// construction.
 	UnpackSpend         time.Duration
 	ContainerStartSpend time.Duration
+	// ClockAhead is how far this machine's wall clock runs ahead of the control
+	// plane's. It changes nothing about when anything here happens and everything
+	// about the moment this machine states when asked: a host does not know its
+	// clock is wrong, so it reads its container's start off the clock it has.
+	ClockAhead time.Duration
 
 	// fetching is content this machine is still pulling. A host holds an image
 	// when its bytes have arrived, not when the container was dispatched.
@@ -501,6 +506,12 @@ type World struct {
 	// the moment a process began and the only thing an observation can report it
 	// from once it has arrived.
 	startsAt map[string]time.Time
+	// statedStarts is the same moment as each machine holding it would report it,
+	// which is world truth read on that host's own clock. The two are one map for
+	// every machine that keeps Mercator's clock and two for a machine that does
+	// not, and a world that held only the truth could not state the case where a
+	// host publishes a moment Mercator has not reached.
+	statedStarts map[string]time.Time
 	// ApplicationReadySpend is how long after its process starts a workload here
 	// reports that it can do work. It is a fact about the applications in this
 	// world rather than about any machine: a runtime that started a container
@@ -526,13 +537,14 @@ type ReadinessReport struct {
 func NewWorld(clock *Clock, options ...Option) *World {
 	options = append([]Option{WithNow(clock.Now)}, options...)
 	return &World{
-		Adapter:   New(options...),
-		clock:     clock,
-		images:    map[string]Image{},
-		artifacts: map[string]domain.ArtifactVersion{},
-		machines:  map[string]*Machine{},
-		startsAt:  map[string]time.Time{},
-		readiness: map[string]ReadinessReport{},
+		Adapter:      New(options...),
+		clock:        clock,
+		images:       map[string]Image{},
+		artifacts:    map[string]domain.ArtifactVersion{},
+		machines:     map[string]*Machine{},
+		startsAt:     map[string]time.Time{},
+		statedStarts: map[string]time.Time{},
+		readiness:    map[string]ReadinessReport{},
 	}
 }
 
@@ -661,6 +673,10 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 		request.Image, w.images[request.Image].Layers, declaredCaches(request), now,
 	)
 	w.startsAt[request.LaunchKey] = startsAt
+	// What the machine will say when asked, which is the moment above read on its
+	// own clock. World truth stays above: this world knows when the container
+	// really began, and the host reporting it does not know its clock is wrong.
+	w.statedStarts[request.LaunchKey] = startsAt.Add(machine.ClockAhead)
 	w.readiness[request.LaunchKey] = ReadinessReport{
 		WorkspaceID: request.WorkspaceID,
 		RunID:       request.RunID,
@@ -703,7 +719,12 @@ func (w *World) Observe(ctx context.Context, request adapter.ObserveRequest) (ad
 	if !launched || w.clock.Now().Before(startsAt) {
 		return observation, nil
 	}
-	observation.StartedAt = &startsAt
+	// The machine states the moment on its own clock. That is the same clock the
+	// control plane keeps for every machine in this corpus but one, and the
+	// exception is the point: a host running ahead publishes a start that has
+	// arrived here and not there.
+	stated := w.statedStarts[request.LaunchKey]
+	observation.StartedAt = &stated
 	return observation, nil
 }
 

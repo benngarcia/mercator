@@ -228,6 +228,11 @@ type hostState struct {
 	// each stage has its own prediction to be measured against. Standing capacity
 	// spends none of it, because the machine is already there.
 	provisioning scenario.ProvisioningSpec
+	// clockAhead is how far this machine's wall clock runs ahead of Mercator's. It
+	// changes nothing about when anything here happens and everything about the
+	// moment this machine states when asked: a host does not know its clock is
+	// wrong, so it reports its container's start off the clock it has.
+	clockAhead time.Duration
 }
 
 // missing is what launching this image here would still have to fetch, and how
@@ -512,6 +517,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			heldImages:     map[string]bool{},
 			packed:         map[string]bool{},
 			reportsDiffIDs: rental.ReportsDiffIDs,
+			clockAhead:     rental.Skew(),
 		}
 		if rental.IdleLeaseExpiresIn != nil {
 			state.leaseExpiresAt = tape.Start.Add(rental.IdleLeaseExpiresIn.Duration())
@@ -1359,8 +1365,13 @@ func (world *simulatedWorld) Observe(_ context.Context, request adapter.ObserveR
 	// phase. What it can say is when the container actually began, and only once it
 	// has: a moment that has not arrived is reported as the absence it is rather
 	// than as the moment the launch was taken.
+	//
+	// The moment is stated on the machine's own clock. That is the same clock for
+	// every host in this corpus but one, and the exception is the whole point: a
+	// machine running ahead publishes a start that has arrived here and not there,
+	// which Mercator has to refuse rather than adopt as a fact about its own future.
 	if !world.now.Before(execution.StartedAt) {
-		startedAt := execution.StartedAt
+		startedAt := execution.StartedAt.Add(world.truth[execution.OfferID].clockAhead)
 		observation.StartedAt = &startedAt
 	}
 	if observation.Phase == adapter.ExternalPhaseSucceeded {
@@ -2188,6 +2199,7 @@ func cloneHostState(state hostState) hostState {
 		reportsDiffIDs: state.reportsDiffIDs,
 		leaseExpiresAt: state.leaseExpiresAt,
 		provisioning:   state.provisioning,
+		clockAhead:     state.clockAhead,
 	}
 }
 

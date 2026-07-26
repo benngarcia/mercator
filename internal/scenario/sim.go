@@ -257,6 +257,9 @@ func simMachine(spec WorldSpec, rental RentalSpec, schedule RentalScheduleSpec, 
 		// owes no provisioning and still owes both of these.
 		UnpackSpend:         spec.Launch.UnpackSpend(),
 		ContainerStartSpend: spec.Launch.ContainerStartSpend(),
+		// How far this host's own clock runs ahead of the control plane's, which is
+		// nothing for every machine no fixture says otherwise about.
+		ClockAhead: rental.Skew(),
 	}
 	for _, ref := range rental.CachedImages {
 		for _, layer := range spec.Images[ref].Layers {

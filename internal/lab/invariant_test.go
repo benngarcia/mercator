@@ -408,6 +408,84 @@ func TestEveryClauseOfTheStartRuleCanFail(t *testing.T) {
 	}
 }
 
+// TestABookingClockIsHeldToTheSameLawAsTheRunStream is the clause the run stream's
+// half of this rule was missing. A Booking's declared runtimes are enforced from its
+// StartedAt, so a moment Mercator refused as this Run's start is a moment it must
+// refuse as this Booking's clock too: adopting it leaves the bound unexpired long
+// after the capacity was really spent, with the schedule reporting the machine busy
+// the whole time. Two moments are defensible, and each wrong one is its own case.
+func TestABookingClockIsHeldToTheSameLawAsTheRunStream(t *testing.T) {
+	looks := []eventlog.CloudEvent{
+		runStartObserved("running", "2026-07-24T13:04:10Z", "2026-07-24T12:05:00Z"),
+	}
+	for name, clock := range map[string]string{
+		"a moment its holder published ahead of the read that carried it": "2026-07-24T13:04:10Z",
+		"a moment nothing in its record ever stated":                      "2026-07-24T11:00:00Z",
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := startRuleObservation(looks)
+			observation.RentalSchedules = map[string]domain.RentalSchedule{
+				"rental-ahead": bookingMeasuredFrom("run-1", clock),
+			}
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.start_is_observed_not_inferred",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("a Booking measured from %s was reported as measuring from a moment somebody observed: %+v", name, result)
+			}
+		})
+	}
+}
+
+// TestABookingMeasuredFromTheReadThatCarriedItHolds is the fallback the clause has
+// to allow. Nothing established this container's start, so the schedule projects
+// from the last instant Mercator can prove the container was up, which is the moment
+// it read the observation. That is a projection and never a record: it reaches no
+// run stream and no calibration.
+func TestABookingMeasuredFromTheReadThatCarriedItHolds(t *testing.T) {
+	observation := startRuleObservation([]eventlog.CloudEvent{
+		runStartObserved("running", "2026-07-24T13:04:10Z", "2026-07-24T12:05:00Z"),
+	})
+	observation.RentalSchedules = map[string]domain.RentalSchedule{
+		"rental-ahead": bookingMeasuredFrom("run-1", "2026-07-24T12:05:00Z"),
+	}
+
+	result := invariantResultByID(t,
+		DefaultInvariantRegistry().Evaluate(observation),
+		"safety.start_is_observed_not_inferred",
+	)
+
+	if result.Status != InvariantPassed {
+		t.Fatalf("a Booking measured from the read that carried its observation was refused: %s", result.Violation)
+	}
+}
+
+// bookingMeasuredFrom is one Rental holding one Run's Booking, with the moment that
+// Booking's enforced runtime is measured from.
+func bookingMeasuredFrom(runID, from string) domain.RentalSchedule {
+	startedAt, err := time.Parse(time.RFC3339Nano, from)
+	if err != nil {
+		panic(err)
+	}
+	return domain.RentalSchedule{
+		RentalID: "rental-ahead",
+		Bookings: []domain.ScheduledBooking{{
+			Booking: domain.Booking{
+				ID:       "booking-1",
+				RunID:    runID,
+				RentalID: "rental-ahead",
+				State:    domain.BookingStateRunning,
+			},
+			ExpectedRuntimeSeconds: 600,
+			MaxRuntimeSeconds:      1200,
+			StartedAt:              startedAt,
+		}},
+	}
+}
+
 // TestAStartClaimMercatorRefusedIsNotAViolation is the other side of the same law.
 // A host whose clock runs ahead publishes a moment Mercator cannot have observed,
 // the control plane declines to make it this Run's start, and the observation still
@@ -955,4 +1033,78 @@ func demoInputs(t *testing.T) (scenario.Blueprint, WorldTape, []Sample) {
 		t.Fatalf("compile Blueprint: %v", err)
 	}
 	return blueprint, tape, samples
+}
+
+// TestAHostRunningAheadIsRefusedThroughTheWholeLabWorld drives the skewed-clock
+// Blueprint through the Lab's own world rather than through hand-built events. It is
+// the half the unit cases above cannot cover: those state a record and ask the rule
+// about it, and this one puts a machine whose clock runs an hour ahead into a world,
+// lets the control plane observe it, and asks what the record then says.
+//
+// Nothing observed this container start on a clock Mercator shares, so the run
+// stream records no start and the start-latency row names the absence rather than
+// filing an hour as a measurement. Every standing law still holds, which is the
+// second assertion: refusing a moment is not a violation of the rule that a start
+// must be observed.
+//
+// The Booking's clock reaches this world only as the fallback. This provider says
+// running from the moment it accepts a launch, so the first observation the control
+// plane gets carries no start moment at all and the schedule is measured from that
+// read, which is the case the rule has to allow. The lane where a start arrives with
+// the first running observation is the reusable one, and the fleet case
+// TestANodeWithASkewedClockDoesNotSetMercatorsOwn is where adopting it is shown to
+// cost an hour of paid capacity.
+func TestAHostRunningAheadIsRefusedThroughTheWholeLabWorld(t *testing.T) {
+	execution := openBlueprintExecution(t, "../scenario/scenarios/conformance/a-clock-nobody-shares-measures-nothing.json", testLimits())
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	if _, err := execution.Drive(context.Background(), Quiesce()); err != nil {
+		t.Fatalf("drive arrivals: %v", err)
+	}
+	if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+		t.Fatalf("advance execution: %v", err)
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("check invariants: %v", err)
+	}
+
+	for _, result := range latestInvariantResults(execution.invariants) {
+		if result.Status != InvariantPassed {
+			t.Fatalf("a host with a skewed clock made a law fail: %+v", result)
+		}
+	}
+	for _, record := range startLatencyRows(t, execution) {
+		if record.ActualSource != "start_not_observed" {
+			t.Fatalf("the start-latency row is sourced %q with %.2fs, and this host's clock is an hour ahead of Mercator's",
+				record.ActualSource, record.ActualSeconds)
+		}
+	}
+}
+
+// startLatencyRows is every Run's start-latency row in this execution's Run
+// Bundle, which is the record a calibration would read.
+func startLatencyRows(t *testing.T, execution *Execution) []predictionActualRecord {
+	t.Helper()
+	mercatorEvents, effects, _, err := execution.bundleRuntimeData(context.Background())
+	if err != nil {
+		t.Fatalf("read bundle data: %v", err)
+	}
+	records, err := predictionActualRecords(execution.config.Tape, effects, mercatorEvents)
+	if err != nil {
+		t.Fatalf("build prediction records: %v", err)
+	}
+	rows := make([]predictionActualRecord, 0, len(records))
+	for _, record := range records {
+		if record.Metric == "start_latency_seconds" {
+			rows = append(rows, record)
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatal("this execution recorded no start-latency row at all")
+	}
+	return rows
 }

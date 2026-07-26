@@ -461,7 +461,25 @@ type RentalSpec struct {
 	// different amounts, which is the only way the uncertainty term can be shown
 	// pricing anything.
 	CapacityConfidence *float64 `json:"capacity_confidence,omitempty"`
+	// ClockAhead is how far this machine's wall clock runs ahead of the control
+	// plane's. It is the one world fact that makes a moment a machine states
+	// uncheckable: the host reads its container's start off the same clock it reads
+	// its own now from, so the two agree with each other and with nothing Mercator
+	// knows. Omitted means the machine keeps Mercator's clock, which is what every
+	// other machine in this corpus does and why no fixture could state the world
+	// where a start moment arrives ahead of the read that carried it.
+	//
+	// It is stated in one direction on purpose. A clock behind Mercator's hands over
+	// a start earlier than the truth, which nothing can detect and the record already
+	// names where it lands (start_before_launch_accepted); a clock ahead hands over a
+	// moment in Mercator's future, which is refusable and has to be refused twice, on
+	// the run stream and on the Booking's runtime clock.
+	ClockAhead *Duration `json:"clock_ahead,omitempty"`
 }
+
+// Skew is how far ahead of Mercator this machine's clock reads, and nothing where
+// the fixture said the machine keeps the same clock.
+func (spec RentalSpec) Skew() time.Duration { return stated(spec.ClockAhead) }
 
 // ReliabilitySpec is a published risk history, in the terms the one production
 // publisher of it states: rates in [0,1] and how much their publisher stands
