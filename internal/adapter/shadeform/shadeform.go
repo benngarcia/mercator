@@ -331,6 +331,13 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	if err := verifyOwnership(inst, req.OwnershipToken); err != nil {
 		return adapter.ExternalObservation{}, err
 	}
+	// The observation carries no start moment, and that absence is deliberate. The
+	// only moment a Shadeform instance record holds is created_at, which is when
+	// the instance was asked for rather than when anything ran on it: reporting it
+	// as a workload's start would put a whole acquisition and boot inside the
+	// runtime and would make the start latency this adapter is measured on read as
+	// zero. Shadeform is the phase 5 conformance provider, and what makes a start
+	// observable there is Mercator's own agent on the machine it provisioned.
 	return adapter.ExternalObservation{
 		ExternalID: inst.ID,
 		LaunchKey:  req.LaunchKey,

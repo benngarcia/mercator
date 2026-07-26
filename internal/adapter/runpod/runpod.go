@@ -142,7 +142,24 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	if !found {
 		return adapter.ExternalObservation{LaunchKey: req.LaunchKey, Phase: adapter.ExternalPhaseReleased, ObservedAt: a.now().UTC()}, nil
 	}
-	return adapter.ExternalObservation{ExternalID: p.ID, LaunchKey: req.LaunchKey, Phase: phaseFromPod(p), ObservedAt: a.now().UTC()}, nil
+	return adapter.ExternalObservation{
+		ExternalID: p.ID,
+		LaunchKey:  req.LaunchKey,
+		Phase:      phaseFromPod(p),
+		// When RunPod says it last gave this pod a process. A pod it has never
+		// started omits the field, and the observation then carries no start moment
+		// rather than one derived from when the launch was taken.
+		StartedAt:  podStartMoment(p),
+		ObservedAt: a.now().UTC(),
+	}, nil
+}
+
+func podStartMoment(p pod) *time.Time {
+	if p.LastStartedAt == nil || p.LastStartedAt.IsZero() {
+		return nil
+	}
+	startedAt := p.LastStartedAt.UTC()
+	return &startedAt
 }
 
 func (a *Adapter) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {

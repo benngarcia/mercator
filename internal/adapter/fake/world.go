@@ -135,6 +135,13 @@ type Machine struct {
 	// lease bound. An expired machine stops being offered, standing in for
 	// janitor termination until the rental lifecycle exists.
 	LeaseExpiresAt time.Time
+	// ProvisionSpend is what this world takes to turn a listing into a machine
+	// that can run a container: acquisition, boot, and agent enrollment together.
+	// It is deliberately not the estimate the offer publishes, which is a claim
+	// the scheduler predicts from; a world that spent its own published
+	// expectation would make that expectation right by construction. Standing
+	// capacity spends none of it, because the machine is already there.
+	ProvisionSpend time.Duration
 
 	// fetching is content this machine is still pulling. A host holds an image
 	// when its bytes have arrived, not when the container was dispatched.
@@ -168,23 +175,33 @@ type transfer struct {
 // evidence, so all three say a machine holds a cache from when a workload of
 // that tenant and generation started here: one cancelled halfway leaves the
 // cache it was attached to, and one that never started leaves nothing.
-func (m *Machine) startExecution(image string, layers []Layer, caches []domain.CacheMount, now time.Time) {
-	if !m.Offer.KeepsWhatItRuns() {
-		return
-	}
+// It answers when the container starts, which is when the machine exists and the
+// bytes it needs have landed on it. That answer is made for every machine,
+// including the ones that keep nothing: what such a machine does not do is hold
+// the content afterwards, and that is a different question from when its workload
+// began.
+func (m *Machine) startExecution(image string, layers []Layer, caches []domain.CacheMount, now time.Time) time.Time {
 	var bytes int64
 	for _, layer := range layers {
 		if _, held := m.HeldLayers[layer.Digest]; !held {
 			bytes += layer.Bytes
 		}
 	}
+	// Nothing can be fetched onto a machine that does not exist yet, so the world
+	// spends acquisition, boot, and agent enrollment before the pull begins.
+	readyAt := now.Add(m.ProvisionSpend)
+	startsAt := readyAt.Add(transferDuration(bytes))
+	if !m.Offer.KeepsWhatItRuns() {
+		return startsAt
+	}
 	m.fetching = append(m.fetching, transfer{
 		image:       image,
 		layers:      layers,
 		caches:      caches,
 		bytes:       bytes,
-		completesAt: now.Add(transferDuration(bytes)),
+		completesAt: startsAt,
 	})
+	return startsAt
 }
 
 // settle applies every execution whose bytes have arrived by now. Until then the
@@ -449,6 +466,12 @@ type World struct {
 	// and a marketplace offer are the same kind of entry: what separates them
 	// is whether the offer names capacity Mercator keeps.
 	machines map[string]*Machine
+	// startsAt is when each launch's container actually begins, keyed by launch
+	// key. The provider reports running from the moment it accepts, exactly as
+	// every provider in the tree does, so this is the only place the world holds
+	// the moment a process began and the only thing an observation can report it
+	// from once it has arrived.
+	startsAt map[string]time.Time
 }
 
 func NewWorld(clock *Clock, options ...Option) *World {
@@ -459,6 +482,7 @@ func NewWorld(clock *Clock, options ...Option) *World {
 		images:    map[string]Image{},
 		artifacts: map[string]domain.ArtifactVersion{},
 		machines:  map[string]*Machine{},
+		startsAt:  map[string]time.Time{},
 	}
 }
 
@@ -570,6 +594,10 @@ func (w *World) Launch(ctx context.Context, request adapter.LaunchRequest) (adap
 // recordExecution starts the pull the launch implies and declares the caches it
 // will open. What the machine keeps afterwards is its own answer: only capacity
 // Mercator keeps is still holding any of it when the next Run asks.
+//
+// It also records when the container will begin, which is what makes the world's
+// own start moment a fact an observation can report rather than something a
+// reader has to infer from the launch being accepted.
 func (w *World) recordExecution(request adapter.LaunchRequest) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -579,7 +607,29 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 	}
 	now := w.clock.Now()
 	machine.settle(now)
-	machine.startExecution(request.Image, w.images[request.Image].Layers, declaredCaches(request), now)
+	w.startsAt[request.LaunchKey] = machine.startExecution(
+		request.Image, w.images[request.Image].Layers, declaredCaches(request), now,
+	)
+}
+
+// Observe is the embedded adapter's answer with the world's own start moment on
+// it. The phase says running from the moment the launch was accepted, which is
+// what every provider in this tree does and why a phase can never establish a
+// start; the moment the container began is a separate fact, reported once it has
+// happened and left absent until then.
+func (w *World) Observe(ctx context.Context, request adapter.ObserveRequest) (adapter.ExternalObservation, error) {
+	observation, err := w.Adapter.Observe(ctx, request)
+	if err != nil {
+		return observation, err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	startsAt, launched := w.startsAt[request.LaunchKey]
+	if !launched || w.clock.Now().Before(startsAt) {
+		return observation, nil
+	}
+	observation.StartedAt = &startsAt
+	return observation, nil
 }
 
 // declaredCaches is the mutable state this launch asks its host to attach, named

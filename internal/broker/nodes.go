@@ -198,7 +198,12 @@ func (b *Broker) observeOnNode(ctx context.Context, req adapter.ObserveRequest, 
 		LaunchKey:  req.LaunchKey,
 		Phase:      externalPhase(observation),
 		ObservedAt: observation.ObservedAt,
-		ExitCode:   observation.ExitCode,
+		// The node owns container lifecycle, so the moment its runtime says the
+		// process began is the authority on when this workload started. It was
+		// written by the contract and read by nobody until now, which left the run
+		// stream with no start moment on the only reusable lane there is.
+		StartedAt: observation.StartedAt,
+		ExitCode:  observation.ExitCode,
 	}, nil
 }
 

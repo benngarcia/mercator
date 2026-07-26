@@ -66,7 +66,13 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		}
 	}
 	for _, offer := range spec.Marketplace {
-		if err := world.AddMachine(&fake.Machine{Offer: simMarketplaceOffer(spec, offer)}); err != nil {
+		machine := &fake.Machine{
+			Offer: simMarketplaceOffer(spec, offer),
+			// What this world spends making the machine, read from the stages the
+			// Blueprint states rather than from the estimate the offer publishes.
+			ProvisionSpend: offer.Provisioning.Spend(),
+		}
+		if err := world.AddMachine(machine); err != nil {
 			return nil, err
 		}
 		if len(offer.Facts) > 0 {

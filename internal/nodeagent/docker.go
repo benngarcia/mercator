@@ -185,13 +185,20 @@ func (docker *DockerRuntime) StopWorkload(ctx context.Context, command capabilit
 }
 
 // Observe reports every Mercator container this daemon knows about, running or
-// exited. It is the node's own authority: the control plane learns that a
-// process ended here, whatever the application did or did not report.
+// exited, and when each of them really started. It is the node's own authority:
+// the control plane learns that a process began and ended here, whatever the
+// application did or did not report.
+//
+// The start moment is a second read, because `docker ps` does not carry it in any
+// format: the daemon reports `State.StartedAt` only on inspect. It is one inspect
+// for the whole list rather than one per container, and a container the daemon
+// will not describe is reported with no start moment rather than with a guess.
 func (docker *DockerRuntime) Observe(ctx context.Context) ([]capability.WorkloadObservation, error) {
 	containers, err := docker.containers(ctx)
 	if err != nil {
 		return nil, err
 	}
+	started := docker.startMoments(ctx, containers)
 	observations := make([]capability.WorkloadObservation, 0, len(containers))
 	for _, container := range containers {
 		observation := capability.WorkloadObservation{
@@ -200,6 +207,9 @@ func (docker *DockerRuntime) Observe(ctx context.Context) ([]capability.Workload
 			Phase:      dockerPhase(container.State),
 			ObservedAt: docker.now().UTC(),
 		}
+		if moment, known := started[container.Names]; known {
+			observation.StartedAt = &moment
+		}
 		if observation.Phase.Exited() {
 			code := container.exitCode()
 			observation.ExitCode = &code
@@ -207,6 +217,55 @@ func (docker *DockerRuntime) Observe(ctx context.Context) ([]capability.Workload
 		observations = append(observations, observation)
 	}
 	return observations, nil
+}
+
+// startMoments is when each of these containers began, keyed by the name the
+// listing gave it. It is the one fact in this report that has to come from
+// inspect, and it is asked once for the whole list.
+//
+// A read that answers for some containers and not others keeps what came back:
+// the daemon prints the objects it could describe and exits non-zero for the rest,
+// which is the same shape the cache volume read has, and a container pruned
+// between the two calls must not cost Mercator the exits of every other workload
+// on this machine. A container with no start moment is reported without one, which
+// is what an absent stage is: nothing here invents a moment from the launch.
+func (docker *DockerRuntime) startMoments(ctx context.Context, containers []dockerContainer) map[string]time.Time {
+	if len(containers) == 0 {
+		return nil
+	}
+	args := []string{"inspect", "--format", `{{json .Name}} {{json .State.StartedAt}}`}
+	for _, container := range containers {
+		args = append(args, container.Names)
+	}
+	out, _ := docker.run(ctx, args...)
+	moments := make(map[string]time.Time, len(containers))
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		name, moment, found := parseStartMoment(line)
+		if !found {
+			continue
+		}
+		moments[name] = moment
+	}
+	return moments
+}
+
+// parseStartMoment reads one line of the inspect above. Docker writes
+// "0001-01-01T00:00:00Z" for a container that was created and never ran, which is
+// the absence of a start rather than a start at the beginning of the epoch.
+func parseStartMoment(line string) (string, time.Time, bool) {
+	rawName, rawMoment, found := strings.Cut(strings.TrimSpace(line), " ")
+	if !found {
+		return "", time.Time{}, false
+	}
+	var name, moment string
+	if json.Unmarshal([]byte(rawName), &name) != nil || json.Unmarshal([]byte(rawMoment), &moment) != nil {
+		return "", time.Time{}, false
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, moment)
+	if err != nil || startedAt.IsZero() {
+		return "", time.Time{}, false
+	}
+	return strings.TrimPrefix(name, "/"), startedAt.UTC(), true
 }
 
 // cacheLabel names one part of a cache's identity in the daemon's own label

@@ -16,13 +16,25 @@
         "id": "fresh-quick",
         "provider": "simcloud",
         "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "4m", "p90": "8m"}
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
+        }
       },
       {
         "id": "fresh-cheap",
         "provider": "simcloud",
         "rate_per_hour_usd": 1.8,
-        "provisioning": {"expected": "10m", "p90": "18m"}
+        "provisioning": {
+          "expected": "10m",
+          "p90": "18m",
+          "acquisition": "1m",
+          "boot": "7m30s",
+          "agent_ready": "1m30s"
+        }
       }
     ]
   },

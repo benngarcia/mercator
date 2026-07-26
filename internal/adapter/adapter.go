@@ -138,8 +138,21 @@ type ExternalObservation struct {
 	LaunchKey  string        `json:"launch_key"`
 	Phase      ExternalPhase `json:"phase"`
 	ObservedAt time.Time     `json:"observed_at"`
-	ExitCode   *int          `json:"exit_code,omitempty"`
-	NativeJSON string        `json:"native_json,omitempty"`
+	// StartedAt is when the workload's process actually began, as the thing
+	// holding it reports the moment: a container runtime's own start time, or the
+	// provider's for a one-shot product. It is not ObservedAt, which is when
+	// Mercator looked, and it is not the moment the launch was accepted, which is
+	// when the machine started getting ready. The whole point of predicting a
+	// start latency is that it is calibrated against started minus accepted, and
+	// nothing could subtract those until this field existed.
+	//
+	// It is a pointer because a holder that cannot say is common and must stay
+	// distinguishable from one that says now. A provider whose API publishes no
+	// start moment leaves it nil, and the record states the moment absent rather
+	// than deriving one from acceptance.
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	ExitCode   *int       `json:"exit_code,omitempty"`
+	NativeJSON string     `json:"native_json,omitempty"`
 }
 
 type ReleaseRequest struct {

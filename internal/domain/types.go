@@ -1062,7 +1062,14 @@ type RunRecord struct {
 	// or merely release a borrowed slot. Empty until a launch intent is recorded.
 	Disposition  Disposition   `json:"disposition,omitempty"`
 	CleanupError *CleanupError `json:"cleanup_error,omitempty"`
-	Closed       bool          `json:"closed"`
+	// StartedAt is when this Run's workload actually began, as the machine holding
+	// it reported the moment. It is absent until something observed one, and it is
+	// never the moment the launch was accepted: the difference between those two is
+	// what a start-latency prediction is calibrated against, so a Run whose holder
+	// publishes no start moment reads as a stage with no actual rather than as one
+	// that took no time.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	Closed    bool       `json:"closed"`
 	// CreatedBy and CancelledBy are the audited principals of the create and
 	// cancel commands: a signed-in operator's email, or "bearer" for
 	// machine-token calls. Empty on runs recorded before auditing existed or

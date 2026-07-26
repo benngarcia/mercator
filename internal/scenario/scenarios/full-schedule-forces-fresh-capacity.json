@@ -40,7 +40,13 @@
         "id": "fresh-slow",
         "provider": "simcloud",
         "rate_per_hour_usd": 2.0,
-        "provisioning": {"expected": "30m", "p90": "45m"}
+        "provisioning": {
+          "expected": "30m",
+          "p90": "45m",
+          "acquisition": "3m",
+          "boot": "22m30s",
+          "agent_ready": "4m30s"
+        }
       }
     ]
   },

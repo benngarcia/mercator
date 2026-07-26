@@ -118,8 +118,9 @@ func (c *CLIClient) InspectContainer(ctx context.Context, name string) (Containe
 			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
 		State struct {
-			Status   string `json:"Status"`
-			ExitCode int    `json:"ExitCode"`
+			Status    string `json:"Status"`
+			ExitCode  int    `json:"ExitCode"`
+			StartedAt string `json:"StartedAt"`
 		} `json:"State"`
 	}
 	if err := json.Unmarshal([]byte(output), &raw); err != nil {
@@ -129,8 +130,20 @@ func (c *CLIClient) InspectContainer(ctx context.Context, name string) (Containe
 		return Container{}, ErrNotFound
 	}
 	created, _ := time.Parse(time.RFC3339Nano, raw[0].Created)
+	// The daemon writes "0001-01-01T00:00:00Z" for a container it has never given a
+	// process, so an unparseable or zero moment leaves the start absent rather than
+	// reporting the epoch as the instant a workload began.
+	started, _ := time.Parse(time.RFC3339Nano, raw[0].State.StartedAt)
 	exitCode := raw[0].State.ExitCode
-	return Container{ID: raw[0].ID, Name: strings.TrimPrefix(raw[0].Name, "/"), Labels: raw[0].Config.Labels, State: raw[0].State.Status, ExitCode: &exitCode, CreatedAt: created}, nil
+	return Container{
+		ID:        raw[0].ID,
+		Name:      strings.TrimPrefix(raw[0].Name, "/"),
+		Labels:    raw[0].Config.Labels,
+		State:     raw[0].State.Status,
+		ExitCode:  &exitCode,
+		CreatedAt: created,
+		StartedAt: started.UTC(),
+	}, nil
 }
 
 func (c *CLIClient) RemoveContainer(ctx context.Context, name string) error {

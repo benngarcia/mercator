@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -40,6 +41,16 @@ type launchReferenceData struct {
 
 type runOutcomeRecordedData struct {
 	Outcome domain.RunOutcome `json:"outcome"`
+}
+
+// executionStartedData is the moment somebody observed this workload's process
+// begin. It is its own event rather than a field on the observation because it is
+// a different fact from a phase: a provider reports running from the moment it
+// accepts a launch, so the phase says only that Mercator asked, while this says
+// when the container actually started and is written once per attempt.
+type executionStartedData struct {
+	LaunchKey string    `json:"launch_key"`
+	StartedAt time.Time `json:"started_at"`
 }
 
 type cleanupConfirmedData struct {
@@ -216,6 +227,19 @@ func invalidLaunchFailure(data launchFailureData) string {
 	}
 	return ""
 }
+func invalidExecutionStarted(data executionStartedData) string {
+	switch {
+	case data.LaunchKey == "":
+		return "launch_key is required"
+	case data.StartedAt.IsZero():
+		// A start moment nobody observed is recorded as an absent stage rather than
+		// as a zero one, so this event exists only when there is a moment in it.
+		return "started_at is required"
+	default:
+		return ""
+	}
+}
+
 func invalidExternalObservation(data adapter.ExternalObservation) string {
 	switch {
 	case data.LaunchKey == "":

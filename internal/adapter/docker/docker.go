@@ -38,12 +38,19 @@ type CreateContainerRequest struct {
 }
 
 type Container struct {
-	ID        string
-	Name      string
-	Labels    map[string]string
-	State     string
-	ExitCode  *int
+	ID     string
+	Name   string
+	Labels map[string]string
+	State  string
+	// ExitCode is meaningful only once the container exited.
+	ExitCode *int
+	// CreatedAt is when the daemon made the container. StartedAt is when it gave
+	// it a process, which is a later and different moment: the daemon resolves the
+	// image, makes the mount points, and only then asks the runtime to run. Zero
+	// means this container never ran, which is the absence of a start rather than
+	// a start at the epoch.
 	CreatedAt time.Time
+	StartedAt time.Time
 }
 
 type Adapter struct {
@@ -152,7 +159,25 @@ func (a *Adapter) Observe(ctx context.Context, req adapter.ObserveRequest) (adap
 	if phase.Exited() {
 		exitCode = container.ExitCode
 	}
-	return adapter.ExternalObservation{ExternalID: container.ID, LaunchKey: req.LaunchKey, Phase: phase, ExitCode: exitCode, ObservedAt: a.now().UTC()}, nil
+	return adapter.ExternalObservation{
+		ExternalID: container.ID,
+		LaunchKey:  req.LaunchKey,
+		Phase:      phase,
+		ExitCode:   exitCode,
+		// When the daemon gave this container a process, which is the actual every
+		// start-latency prediction is measured against. A container the daemon has
+		// created and not run carries no start, and this reports that absence.
+		StartedAt:  startMoment(container),
+		ObservedAt: a.now().UTC(),
+	}, nil
+}
+
+func startMoment(container Container) *time.Time {
+	if container.StartedAt.IsZero() {
+		return nil
+	}
+	startedAt := container.StartedAt
+	return &startedAt
 }
 
 func (a *Adapter) Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error) {

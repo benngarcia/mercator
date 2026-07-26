@@ -37,11 +37,16 @@ type externalExecution struct {
 	// is taken from the launch command rather than from the arrival, so what the
 	// world reads and writes is what the control plane actually declared.
 	CacheMounts []domain.CacheMountRequirement `json:"cache_mounts,omitempty"`
-	// AcceptedAt is when the provider took the launch. StartedAt is when the
-	// container actually began, which cannot precede the arrival of the image it
-	// runs: a process cannot execute bytes that have not landed. The gap between
-	// them is the start latency Mercator predicted and now has an actual for.
+	// AcceptedAt is when the provider took the launch. ReadyAt is when there was a
+	// machine here able to run a container, which for a machine that did not exist
+	// yet is after the world has spent acquisition, boot, and agent enrollment on
+	// making one. StartedAt is when the container actually began, which cannot
+	// precede either that machine existing or the arrival of the image it runs: a
+	// process cannot execute bytes that have not landed, and it cannot execute on
+	// a host nobody has built. The gap between accepted and started is the start
+	// latency Mercator predicted and now has an actual for.
 	AcceptedAt time.Time `json:"accepted_at"`
+	ReadyAt    time.Time `json:"ready_at"`
 	StartedAt  time.Time `json:"started_at"`
 	// CachesAttached is whether the container was created and its caches opened
 	// with it. It happens at StartedAt rather than at the end, because creating
@@ -196,6 +201,12 @@ type hostState struct {
 	// leaseExpiresAt is when this machine's idle lease ends and the Rental stops
 	// existing. Zero means the lease outlives the scenario.
 	leaseExpiresAt time.Time
+	// provisionSpend is what this world really takes to turn a listing into a
+	// machine that can run a container: acquisition, boot, and agent enrollment
+	// added together. It is World Truth and never the estimate the offer
+	// publishes, which is a claim the scheduler predicts from. Standing capacity
+	// spends none of it, because the machine is already there.
+	provisionSpend time.Duration
 }
 
 // missing is what launching this image here would still have to fetch, and how
@@ -520,6 +531,11 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			),
 			heldLayers: map[string]scenario.LayerSpec{},
 			heldImages: map[string]bool{},
+			// What this world spends turning the listing into a machine. It is read
+			// from the stages the Blueprint states rather than from the estimate
+			// published below, because a world that spent its provider's own
+			// expectation would make that expectation right by construction.
+			provisionSpend: marketplace.Provisioning.Spend(),
 		}
 		applyOfferWorldFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, marketplace.Billing)
 		world.seededLocality[marketplace.ID] = state.seededDigests()
@@ -1150,6 +1166,7 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		Disposition:       request.Disposition,
 		Phase:             adapter.ExternalPhaseRunning,
 		AcceptedAt:        world.now,
+		ReadyAt:           world.now.Add(offer.provisionSpend),
 		ReservedDiskBytes: request.Resources.EphemeralDisk.MinBytes,
 	}
 	if offer.offer.Kind == domain.OfferKindStanding {
@@ -1157,10 +1174,12 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		world.truth[request.SelectedOfferSnapshotID] = offer
 	}
 	// A process cannot execute bytes that have not landed, and that is as true
-	// of the Artifacts it reads as of the image it runs.
+	// of the Artifacts it reads as of the image it runs. Neither can be fetched
+	// before there is a machine to fetch them onto, so both transfers start when
+	// the world has finished acquiring, booting, and enrolling this host.
 	execution.StartedAt = later(
-		world.pullRunImage(execution, request.Image),
-		world.readRunArtifacts(execution, arrival.Request.ConsumesArtifacts),
+		world.pullRunImage(execution, request.Image, execution.ReadyAt),
+		world.readRunArtifacts(execution, arrival.Request.ConsumesArtifacts, execution.ReadyAt),
 	)
 	execution.CompletesAt = execution.StartedAt.Add(actualRuntimeForOffer(arrival, request.SelectedOfferSnapshotID))
 	world.executions[request.LaunchKey] = execution
@@ -1231,6 +1250,15 @@ func (world *simulatedWorld) Observe(_ context.Context, request adapter.ObserveR
 		Phase:      execution.Phase,
 		ObservedAt: world.now,
 		NativeJSON: fmt.Sprintf(`{"adapter":"lab","external_id":%q}`, execution.ExternalID),
+	}
+	// This provider says running from the moment it accepts a launch, which is what
+	// every provider in the tree does and why Mercator cannot learn a start from a
+	// phase. What it can say is when the container actually began, and only once it
+	// has: a moment that has not arrived is reported as the absence it is rather
+	// than as the moment the launch was taken.
+	if !world.now.Before(execution.StartedAt) {
+		startedAt := execution.StartedAt
+		observation.StartedAt = &startedAt
 	}
 	if observation.Phase == adapter.ExternalPhaseSucceeded {
 		exitCode := 0
@@ -1511,12 +1539,15 @@ func (world *simulatedWorld) publishedOffers() []domain.OfferSnapshot {
 // bytes has landed. The ledger records what the pull fetched, which is nothing at
 // all on a host that already holds the image; what the host keeps is recorded
 // separately, when it keeps it.
-func (world *simulatedWorld) pullRunImage(execution externalExecution, image string) time.Time {
+//
+// The pull starts at from rather than now, because bytes land on a machine and a
+// machine that does not exist yet has to be made first.
+func (world *simulatedWorld) pullRunImage(execution externalExecution, image string, from time.Time) time.Time {
 	state := world.truth[execution.OfferID]
 	layers := world.images[image].Layers
 	fetchedLayers, bytes := state.missing(image, layers)
 	fetched := fetchedNames(image, state.heldImages[domain.ReferenceDigest(image)], fetchedLayers)
-	completesAt := world.now.Add(transferDuration(bytes, state.offer.RegistryDownloadMbps()))
+	completesAt := from.Add(transferDuration(bytes, state.offer.RegistryDownloadMbps()))
 	world.recordEffect(
 		OperationImagePull,
 		"image-pull/"+execution.LaunchKey+"/"+image,
@@ -1581,15 +1612,18 @@ func transferDuration(bytes int64, bandwidthMbps float64) time.Duration {
 // else is fetched from the object store, because a copy nobody checked is not
 // evidence that the right bytes are here. The ledger records which it was, so
 // what a Run read is a fact rather than an inference from world state.
-func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consumes []string) time.Time {
-	ready := world.now
+//
+// Reads start at from for the same reason a pull does: there is nowhere to read
+// them onto until the machine exists.
+func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consumes []string, from time.Time) time.Time {
+	ready := from
 	for _, artifactID := range consumes {
 		replica, held := world.replicas[artifactID][execution.OfferID]
 		source := "replica"
-		completesAt := world.now
+		completesAt := from
 		if !held || !replica.State.Usable() {
 			source = "object_store"
-			completesAt = world.now.Add(world.store.transferDuration(artifactID))
+			completesAt = from.Add(world.store.transferDuration(artifactID))
 			version, _ := world.store.entry(artifactID)
 			world.replicating = append(world.replicating, pendingReplica{
 				offerID:     execution.OfferID,
@@ -2021,6 +2055,7 @@ func cloneHostState(state hostState) hostState {
 		packed:         cloneMap(state.packed),
 		reportsDiffIDs: state.reportsDiffIDs,
 		leaseExpiresAt: state.leaseExpiresAt,
+		provisionSpend: state.provisionSpend,
 	}
 }
 

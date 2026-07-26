@@ -98,6 +98,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.no_duplicate_active_execution", check: noDuplicateActiveExecution},
 		invariantRule{id: "safety.exclusive_booking_capacity", check: exclusiveBookingCapacity},
 		invariantRule{id: "safety.monotonic_terminal_state", check: monotonicTerminalState},
+		invariantRule{id: "safety.start_is_observed_not_inferred", check: startIsObservedNotInferred},
 		invariantRule{id: "safety.idempotent_external_commands", check: idempotentExternalCommands},
 		invariantRule{id: "safety.lease_fencing", check: leaseFencing},
 		invariantRule{id: "safety.artifact_dependencies", check: artifactDependencies},
@@ -272,6 +273,119 @@ func exclusiveBookingCapacity(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// startIsObservedNotInferred is the standing guard on the one thing that makes a
+// stage duration learnable: its actual has to be a moment somebody observed.
+//
+// Three things hold of every Run in the log, and each is read from a different
+// half of the record so no clause can be satisfied by Mercator agreeing with
+// itself. What the run stream records as the moment this workload began must be a
+// moment an observation of that same Run reported: not the moment the launch was
+// accepted, which is when the machine started getting ready, and not the moment
+// Mercator predicted, which is the thing being calibrated. It must not be later
+// than the look that carried it, because a holder cannot report a moment that has
+// not arrived and one that is ahead of the read is a prediction wearing an
+// observation's clothes. And a Run whose holder did report a start must have it
+// recorded, because a stage with an actual that reads as absent is a measurement
+// thrown away.
+//
+// A Run with no start moment at all is not a violation. Acquisition and boot have
+// no production observation until an agent bootstraps on provisioned capacity, and
+// what the record must then say is that the stage is unobserved rather than that
+// it took no time.
+func startIsObservedNotInferred(observation InvariantObservation) error {
+	reported, recorded, err := startMomentsByRun(observation)
+	if err != nil {
+		return err
+	}
+	for runID, moment := range recorded {
+		looks, held := reported[runID]
+		if !held {
+			return fmt.Errorf(
+				"Run %q records a start of %s that no observation of it reported",
+				runID, moment.Format(time.RFC3339Nano),
+			)
+		}
+		if !looks.reported(moment) {
+			return fmt.Errorf(
+				"Run %q records a start of %s and its observations reported %s",
+				runID, moment.Format(time.RFC3339Nano), looks.describe(),
+			)
+		}
+	}
+	for runID, looks := range reported {
+		if _, held := recorded[runID]; !held {
+			return fmt.Errorf(
+				"Run %q was observed starting at %s and its run stream records no start moment",
+				runID, looks.describe(),
+			)
+		}
+	}
+	return nil
+}
+
+// observedStarts is every start moment the holders of one Run's workload reported,
+// each with the moment Mercator looked and read it.
+type observedStarts struct {
+	moments []time.Time
+	looks   []time.Time
+}
+
+// reported answers whether this is one of the moments a holder actually said, and
+// said by the time Mercator read it.
+func (starts observedStarts) reported(moment time.Time) bool {
+	for index, reported := range starts.moments {
+		if reported.Equal(moment) && !moment.After(starts.looks[index]) {
+			return true
+		}
+	}
+	return false
+}
+
+func (starts observedStarts) describe() string {
+	described := make([]string, 0, len(starts.moments))
+	for index, moment := range starts.moments {
+		described = append(described, fmt.Sprintf(
+			"%s (read at %s)",
+			moment.Format(time.RFC3339Nano), starts.looks[index].Format(time.RFC3339Nano),
+		))
+	}
+	return strings.Join(described, ", ")
+}
+
+func startMomentsByRun(observation InvariantObservation) (map[string]observedStarts, map[string]time.Time, error) {
+	reported := map[string]observedStarts{}
+	recorded := map[string]time.Time{}
+	for _, event := range observation.MercatorEvents {
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		switch event.Type {
+		case orchestrator.EventExternalStateObserved:
+			var payload struct {
+				StartedAt  *time.Time `json:"started_at"`
+				ObservedAt time.Time  `json:"observed_at"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return nil, nil, fmt.Errorf("decode Run %q observation: %w", runID, err)
+			}
+			if payload.StartedAt == nil {
+				continue
+			}
+			starts := reported[runID]
+			starts.moments = append(starts.moments, payload.StartedAt.UTC())
+			starts.looks = append(starts.looks, payload.ObservedAt.UTC())
+			reported[runID] = starts
+		case orchestrator.EventExecutionStarted:
+			var payload struct {
+				StartedAt time.Time `json:"started_at"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return nil, nil, fmt.Errorf("decode Run %q start moment: %w", runID, err)
+			}
+			recorded[runID] = payload.StartedAt.UTC()
+		}
+	}
+	return reported, recorded, nil
 }
 
 func monotonicTerminalState(observation InvariantObservation) error {

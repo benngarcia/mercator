@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 const defaultRESTBaseURL = "https://rest.runpod.io/v1"
@@ -86,6 +87,12 @@ type pod struct {
 	Env           flexEnv     `json:"env"`
 	CostPerHr     float64     `json:"costPerHr"`
 	Machine       *podMachine `json:"machine"`
+	// LastStartedAt is when RunPod last gave this pod a process. It is the only
+	// moment in the pod record that is about the workload rather than about the
+	// request, and it is a pointer because a pod that has never run omits it: an
+	// absent start is the stage having no actual, which is a different fact from a
+	// start at the moment the launch was accepted.
+	LastStartedAt *time.Time `json:"lastStartedAt,omitempty"`
 }
 
 // podMachine carries the placement facts RunPod reports for the host backing a

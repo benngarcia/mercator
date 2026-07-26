@@ -16,7 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
 
@@ -151,7 +153,7 @@ func (execution *Execution) Export(ctx context.Context) (RunBundle, error) {
 	if err != nil {
 		return RunBundle{}, err
 	}
-	predictions, err := predictionActualRecords(execution.config.Tape, effects)
+	predictions, err := predictionActualRecords(execution.config.Tape, effects, mercatorEvents)
 	if err != nil {
 		return RunBundle{}, err
 	}
@@ -200,9 +202,13 @@ func (execution *Execution) bundleRuntimeData(ctx context.Context) ([]eventlog.C
 	return events, execution.runtime.world.effectRecords(), execution.runtime.restarts, nil
 }
 
-func predictionActualRecords(tape WorldTape, effects []EffectRecord) ([]predictionActualRecord, error) {
+func predictionActualRecords(tape WorldTape, effects []EffectRecord, mercatorEvents []eventlog.CloudEvent) ([]predictionActualRecord, error) {
 	actuals := acceptedActualRuntimes(effects)
-	records := make([]predictionActualRecord, 0, len(tape.Events))
+	starts, err := recordedStartLatencies(mercatorEvents)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]predictionActualRecord, 0, 2*len(tape.Events))
 	for _, event := range tape.Events {
 		if event.Kind != EventRunArrived {
 			continue
@@ -216,19 +222,106 @@ func predictionActualRecords(tape WorldTape, effects []EffectRecord) ([]predicti
 			predicted = arrival.Request.ExpectedRuntime.Duration().Seconds()
 		}
 		actual := arrival.ActualRuntime.Duration().Seconds()
-		if observed, exists := actuals["run-"+arrival.Name]; exists {
+		runID := "run-" + arrival.Name
+		if observed, exists := actuals[runID]; exists {
 			actual = observed
 		}
 		records = append(records, predictionActualRecord{
-			RunID:            "run-" + arrival.Name,
+			RunID:            runID,
 			Metric:           "runtime_seconds",
 			PredictedSeconds: predicted,
 			ActualSeconds:    actual,
 			PredictionSource: "workload.expected_runtime",
 			ActualSource:     "world_tape.actual_runtime",
 		})
+		records = append(records, starts.record(runID))
 	}
 	return records, nil
+}
+
+// startLatencies is what Mercator predicted each Run's start would cost and what
+// it then observed, read entirely out of Mercator's own event log. Both halves
+// come from the same place on purpose: this is the record a calibration reads, and
+// a record whose actual came from World Truth would be measuring the world against
+// itself rather than measuring Mercator's prediction.
+type startLatencies struct {
+	predicted map[string]float64
+	accepted  map[string]time.Time
+	started   map[string]time.Time
+}
+
+// record is one Run's start-latency row. A Run whose holder reported no start
+// moment gets a row with the prediction and no actual, because a stage nobody
+// observed has none: subtracting the accepted moment from itself would put a zero
+// in the calibration set and teach it that every start is instant.
+func (latencies startLatencies) record(runID string) predictionActualRecord {
+	record := predictionActualRecord{
+		RunID:            runID,
+		Metric:           "start_latency_seconds",
+		PredictedSeconds: latencies.predicted[runID],
+		PredictionSource: "booking_decision.estimates.start_seconds",
+		ActualSource:     "start_not_observed",
+	}
+	accepted, taken := latencies.accepted[runID]
+	started, began := latencies.started[runID]
+	if !taken || !began {
+		return record
+	}
+	record.ActualSeconds = started.Sub(accepted).Seconds()
+	record.ActualSource = "run_stream.execution_started"
+	return record
+}
+
+func recordedStartLatencies(events []eventlog.CloudEvent) (startLatencies, error) {
+	latencies := startLatencies{
+		predicted: map[string]float64{},
+		accepted:  map[string]time.Time{},
+		started:   map[string]time.Time{},
+	}
+	for _, event := range events {
+		switch event.Type {
+		case orchestrator.EventBookingDecided:
+			var payload struct {
+				Decision domain.BookingDecision `json:"decision"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return startLatencies{}, fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
+			}
+			latencies.predicted[payload.Decision.RunID] = selectedStartSeconds(payload.Decision)
+		case orchestrator.EventLaunchAccepted:
+			// The provider's own accepted moment rather than when Mercator wrote the
+			// event down, because the machine started getting ready when the launch was
+			// taken and not when the control plane finished its append.
+			var payload struct {
+				AcceptedAt time.Time `json:"accepted_at"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return startLatencies{}, fmt.Errorf("decode launch receipt from %s: %w", event.ID, err)
+			}
+			latencies.accepted[event.CorrelationID] = payload.AcceptedAt
+		case orchestrator.EventExecutionStarted:
+			var payload struct {
+				StartedAt time.Time `json:"started_at"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				return startLatencies{}, fmt.Errorf("decode start moment from %s: %w", event.ID, err)
+			}
+			latencies.started[event.CorrelationID] = payload.StartedAt
+		}
+	}
+	return latencies, nil
+}
+
+// selectedStartSeconds is what Mercator predicted the machine it chose would take
+// to start, which is the only candidate's prediction an actual can be compared
+// with.
+func selectedStartSeconds(decision domain.BookingDecision) float64 {
+	for _, candidate := range decision.Candidates {
+		if candidate.OfferSnapshotID == decision.SelectedOfferSnapshotID {
+			return candidate.Estimates.StartSeconds.Expected
+		}
+	}
+	return 0
 }
 
 func acceptedActualRuntimes(effects []EffectRecord) map[string]float64 {

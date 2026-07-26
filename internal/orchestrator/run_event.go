@@ -18,6 +18,12 @@ type runState struct {
 	launchIntent             *adapter.LaunchRequest
 	launchAccepted           bool
 	launchAcceptedAt         time.Time
+	// startedAt is when this attempt's workload actually began, as the machine
+	// holding it reported the moment. It is nil until something observed one, and
+	// it is never filled in from launchAcceptedAt: the gap between the two is the
+	// start latency every prediction in phase 4 is calibrated against, and a
+	// derived value would make that subtraction zero for every Run in the log.
+	startedAt *time.Time
 	launchFailure            *launchFailureData
 	attemptCount             int
 	excludedOfferSnapshotIDs []string
@@ -114,6 +120,9 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		state.launchIntent = nil
 		state.launchAccepted = false
 		state.launchAcceptedAt = time.Time{}
+		// A new attempt is a new container, so the moment the previous one started
+		// says nothing about this one and is cleared with the launch it belonged to.
+		state.startedAt = nil
 		state.launchFailure = nil
 
 	case EventLaunchIntentRecorded:
@@ -198,6 +207,17 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if isTerminal(data.Phase) && state.firstTerminal == nil {
 			state.firstTerminal = &terminalFact{Outcome: outcomeForPhase(data.Phase)}
 		}
+
+	case EventExecutionStarted:
+		var data executionStartedData
+		if err := decodePublicRunPayload(stored, &data); err != nil {
+			return err
+		}
+		if reason := invalidExecutionStarted(data); reason != "" {
+			return invalidRunEvent(stored, reason)
+		}
+		startedAt := data.StartedAt.UTC()
+		state.startedAt = &startedAt
 
 	case EventRunReported:
 		var data runReportedData
@@ -380,6 +400,10 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 	if state.launchAccepted || state.launchIndeterminate() {
 		record.Phase = "running"
 		record.Cleanup = domain.CleanupPending
+	}
+	if state.startedAt != nil {
+		startedAt := *state.startedAt
+		record.StartedAt = &startedAt
 	}
 	if state.cleanupRequested {
 		record.Phase = "cleaning_up"

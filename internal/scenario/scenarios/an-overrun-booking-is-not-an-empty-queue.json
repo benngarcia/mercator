@@ -35,7 +35,13 @@
         "id": "fresh-4090",
         "provider": "simcloud",
         "rate_per_hour_usd": 2.5,
-        "provisioning": {"expected": "5m", "p90": "9m"}
+        "provisioning": {
+          "expected": "5m",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "3m45s",
+          "agent_ready": "45s"
+        }
       }
     ]
   },

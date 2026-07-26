@@ -46,6 +46,7 @@ const (
 	EventCancelRequested         = "compute.run.cancel_requested.v1"
 	EventCancelAccepted          = "compute.run.cancel_accepted.v1"
 	EventExternalStateObserved   = "compute.run.external_state_observed.v1"
+	EventExecutionStarted        = "compute.run.execution_started.v1"
 	EventRunOutcomeRecorded      = "compute.run.outcome_recorded.v1"
 	EventCleanupRequested        = "compute.run.cleanup_requested.v1"
 	EventCleanupFailed           = "compute.run.cleanup_failed.v1"
@@ -71,6 +72,7 @@ var runEventTypes = map[string]bool{
 	EventCancelRequested:       true,
 	EventCancelAccepted:        true,
 	EventExternalStateObserved: true,
+	EventExecutionStarted:      true,
 	EventRunOutcomeRecorded:    true,
 	EventCleanupRequested:      true,
 	EventCleanupFailed:         true,
@@ -958,12 +960,20 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 // non-terminal phase carries no new information, so it is not appended on
 // every poll.
 func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID string, version uint64, state runState, observation adapter.ExternalObservation) (bool, error) {
-	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase {
+	started := startMoment(state, observation)
+	if !isTerminal(observation.Phase) && observation.Phase == state.lastObservedPhase && started == nil {
 		return false, nil
 	}
-	request, err := runAppendRequest(nil, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), []eventlog.NewEvent{
+	events := []eventlog.NewEvent{
 		mustEvent(runID, fmt.Sprintf("external_state_observed_%d", version+1), EventExternalStateObserved, observation, o.now()),
-	})
+	}
+	if started != nil {
+		events = append(events, mustEvent(runID, fmt.Sprintf("execution_started_%d", version+1), EventExecutionStarted, executionStartedData{
+			LaunchKey: observation.LaunchKey,
+			StartedAt: *started,
+		}, o.now()))
+	}
+	request, err := runAppendRequest(nil, workspaceID, runID, version, fmt.Sprintf("advance:observe:%d", version), events)
 	if err != nil {
 		return false, err
 	}
@@ -971,6 +981,24 @@ func (o *Orchestrator) recordObservation(ctx context.Context, workspaceID, runID
 		return false, err
 	}
 	return isTerminal(observation.Phase), nil
+}
+
+// startMoment is the moment this Run's workload began, taken from an observation
+// that carries one and only the first time. It is nil for every other
+// observation, which is what makes the run stream hold one start moment per
+// attempt rather than restating the same fact on every poll.
+//
+// Mercator never fills this in for itself. A holder that publishes no start
+// moment leaves the stage without an actual, and the record says so: acquisition
+// and boot have no production observation at all until an agent bootstraps on
+// provisioned capacity, and deriving them from when the launch was accepted would
+// put Mercator's own arithmetic into the log as though somebody had measured it.
+func startMoment(state runState, observation adapter.ExternalObservation) *time.Time {
+	if observation.StartedAt == nil || observation.StartedAt.IsZero() || state.startedAt != nil {
+		return nil
+	}
+	moment := observation.StartedAt.UTC()
+	return &moment
 }
 
 // commitObservation writes the fact, and with it the moment this Run's workload
@@ -1028,11 +1056,26 @@ func (o *Orchestrator) workloadStarted(
 	if !held || holding.Booking.ID != booking.ID || !holding.StartedAt.IsZero() {
 		return domain.RentalSchedule{}, false, nil
 	}
-	next, err := schedule.Started(booking.ID, observation.ObservedAt)
+	next, err := schedule.Started(booking.ID, bookingStartedAt(observation))
 	if err != nil {
 		return domain.RentalSchedule{}, false, err
 	}
 	return next, true, nil
+}
+
+// bookingStartedAt is the moment this Booking's runtime bounds are measured from.
+// It is the container's own start where the holder reported one, because that is
+// the process the bounds are about. Where nobody reported one it is the moment
+// Mercator saw it running, which is the latest instant the container is known to
+// have been up: a schedule needs a clock to project a remaining runtime from, and
+// the honest fallback is the last thing Mercator can prove rather than the
+// earliest thing it could guess. Nothing derives the RUN's start moment this way,
+// because a projection may be conservative and a record may not be invented.
+func bookingStartedAt(observation adapter.ExternalObservation) time.Time {
+	if observation.StartedAt != nil && !observation.StartedAt.IsZero() {
+		return observation.StartedAt.UTC()
+	}
+	return observation.ObservedAt
 }
 
 func (o *Orchestrator) observeLaunch(ctx context.Context, workspaceID string, state runState) (adapter.ExternalObservation, error) {

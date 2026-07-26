@@ -619,9 +619,47 @@ type RuntimeModelSpec struct {
 	Maximum   Duration `json:"maximum"`
 }
 
+// ProvisioningSpec is bringing one machine up, said twice on purpose. Expected
+// and P90 are what the provider published about it, which is a claim Mercator
+// predicts from. The three stages are what the world spends doing it, which is
+// what a prediction is calibrated against. They are stated separately because a
+// fixture whose actual is derived from the published claim proves nothing about
+// either: this offer's provisioning was a claim the world never spent at all, so
+// every stage before a container existed cost zero seconds and the three
+// earliest stages of a launch had no ground truth to be predicted against.
 type ProvisioningSpec struct {
 	Expected Duration  `json:"expected"`
 	P90      *Duration `json:"p90,omitempty"`
+	// Acquisition is the provider allocating the machine, Boot is it reaching a
+	// usable operating system, and AgentReady is Mercator's node runtime
+	// enrolling on it. They are three stages rather than one number because each
+	// is a separate prediction with its own fallback level, and because they fail
+	// for different reasons: a marketplace with no stock, a host that never came
+	// up, and a machine Mercator cannot reach.
+	//
+	// Each is a pointer because a stage a fixture did not mention and a stage a
+	// fixture says costs nothing are different sentences, and the second is the
+	// one this whole record exists to catch: a machine that boots instantly
+	// collapses the observed start onto the accepted launch. Read as one value,
+	// silence would restore the world the stages were added to end.
+	Acquisition *Duration `json:"acquisition,omitempty"`
+	Boot        *Duration `json:"boot,omitempty"`
+	AgentReady  *Duration `json:"agent_ready,omitempty"`
+}
+
+// Spend is how long this world takes to make the machine, which is the sum of
+// the stages it goes through. It is deliberately not derived from Expected: the
+// provider's expectation is a claim, and a world that spent exactly what was
+// claimed would make the prediction right by construction.
+func (spec ProvisioningSpec) Spend() time.Duration {
+	return stated(spec.Acquisition) + stated(spec.Boot) + stated(spec.AgentReady)
+}
+
+func stated(duration *Duration) time.Duration {
+	if duration == nil {
+		return 0
+	}
+	return duration.Duration()
 }
 
 // ResourcesSpec describes machine inventory (rentals, marketplace offers) or
@@ -1604,6 +1642,24 @@ func (w WorldSpec) validate() error {
 		}
 		if offer.Provisioning.Expected.Duration() <= 0 {
 			return fmt.Errorf("marketplace offer %q needs a provisioning estimate", offer.ID)
+		}
+		// Every stage is stated, including a stage this fixture wants to cost
+		// nothing. Zero is a world worth writing down and silence is how the whole
+		// of provisioning came to be free: an offer publishing ten minutes of
+		// provisioning that the world spent none of put its execution straight into
+		// running, so a Run's start was the moment its launch was accepted and the
+		// three earliest stages of every launch had no actual at all.
+		for stage, spent := range map[string]*Duration{
+			"acquisition": offer.Provisioning.Acquisition,
+			"boot":        offer.Provisioning.Boot,
+			"agent_ready": offer.Provisioning.AgentReady,
+		} {
+			if spent == nil {
+				return fmt.Errorf("marketplace offer %q does not say what it spends on %s", offer.ID, stage)
+			}
+			if spent.Duration() < 0 {
+				return fmt.Errorf("marketplace offer %q spends %v on %s", offer.ID, spent.Duration(), stage)
+			}
 		}
 	}
 	pathIDs := map[string]bool{}
