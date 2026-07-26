@@ -3429,6 +3429,106 @@ the launch.
 
 ## Verification evidence
 
+### Phase 4 three defects two reviewers found under the transfer-path pass
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2, against the working tree of
+`beng/prediction-and-service-classes`. Two independent reviewers refuted parts of the
+entry below it, all three findings were real, and each was fixed at its source rather
+than restated. Production code changed in two of the three.
+
+**The daemon was intermittently red, and it was two defects rather than a sighting.**
+`go test ./internal/daemon -count=1`, run 48 times against the tree the entry below
+describes, failed twice, both at `node_protocol_test.go:105` with `shutdown runtime:
+context deadline exceeded`, under two unrelated case names. The same site is where the
+sighting the entry wrote down as unreproducible had landed.
+
+The first cause is production. A node session is a long-lived read: the machine holds
+the connection open and the control plane writes commands down it, so the request stays
+active for as long as the node is healthy. `http.Server.Shutdown` waits for active
+requests and cancels none of them, and nothing in the tree ended a session, so the
+drain could only finish if the agent's own connection happened to drop first. In the
+suite that is a flake. In `mercator serve` it is not a race at all: the binary gives
+`Shutdown` fifteen seconds, so a control plane with one enrolled machine burned all
+fifteen and then exited 1 on a deadline it could never have met.
+`Registry.Drain` now ends every open session and refuses to open another, registered
+through `RegisterOnShutdown` so it runs while the drain waits rather than before it or
+after it. `TestADaemonDrainsWhileANodeHoldsItsSessionOpen` fails at the deadline
+without it and returns in 0.076s with it. A drained node loses nothing, because a
+command is durable before it reaches a session.
+
+The second cause is the case's own bound. `net/http` keeps a connection that was
+accepted and has sent nothing out of its quiescent set for five seconds, so a client
+slow with its first header is not cut off, and an `http.Transport` dials
+speculatively: an agent reporting every twenty milliseconds routinely leaves one
+behind. A goroutine dump taken at the failing site showed exactly that, one connection
+parked in `conn.serve` on the first `Peek` of a request that never came. Away from
+Mercator entirely, a bare `http.Server` with one silent connection fails `Shutdown` at
+a two second budget and returns in 3.2s at eight. The cases now give the daemon the
+window the production binary gives it. With both fixes, 80 runs of the package are
+green.
+
+**The transfer law and the hierarchical estimator contradicted each other.** The
+estimator replaces a stage's seconds with what measured launches of this candidate
+really spent, `artifact_fetch` included, and the confidence it carries is what those
+launches are worth. The record went on stating the offer's link speed beside them, so
+`safety.transfer_rate_is_attributed` read an assumption's name over seconds an
+assumption did not produce: `candidate "rental-far" priced its artifact_fetch stage
+from "assumed_object_store_rate", which nothing on this machine measured, and the
+estimate it produced is worth 0.60 where a duration over an unmeasured rate is worth at
+most 0.50`. Neither acceptance break of the slice below could reach it, because both
+mutate the rate rather than the answer.
+
+The record was the half that was lying. A `TransferRate` is the provenance of a
+duration, and a stage answered out of history was not priced from a throughput at all,
+so it now records none, for the same reason a stage with nothing to move records none.
+The law is untouched and is exactly as strong for every stage a rate really did price.
+`TestAStageAnsweredFromHistoryIsNotPricedFromAPathAtAll` drives the production
+scheduler with two `artifact_fetch` observations of one candidate and an offer
+publishing nothing about its path, and reports the violation above without the fix.
+
+It was invisible because `prediction.Launch.Observations` emits `application_ready`
+alone and that stage carries no rate. Nothing pinned that, and the estimator already
+declares `artifact_fetch` a content stage, so the collision arrives with the first node
+that reports a fetch it timed, and routinely after: a measured link is valid for an
+hour while launch history is unbounded, so a machine that fetched yesterday answers the
+stage from history with nothing standing about its path.
+
+**A conformance case asserted the rest of the machine was quiet.**
+`TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt` asserted that writing 512MiB
+moved this host's global docker-root free space by between 400 and 700MiB, which fails
+whenever anything else keeps more than 188MiB during the same 0.7 seconds. Reproduced
+on demand with one neighbouring container retaining 300MiB chunks: the room fell by
+851554304 bytes, and by 1480986624 on a second run. The suite pulls images in another
+package beside this one, which is what took a full-suite run down. The lower bound is
+what the case is about and stays. Which filesystem the number describes is already
+pinned by the total size beside it and by a container's own root in the case before it,
+so the upper bound caught nothing the rest of the file does not.
+
+The live half ran on this host's own daemon again rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet` and the disk case above all pass
+against MinIO containers and busybox writes of the native engine, so the store, the
+presigned reads, the node's own timing and the filesystem it reports are real rather
+than scripted. The full suite is green three times, and the race detector is green over
+the packages this pass touched, `internal/lab` at 77s among them. The root corpus is
+unchanged at 45 Blueprints, 42 of them green: no fixture moved, because no fixture in
+the corpus answers a rate-carrying stage out of history.
+
+Named and not fixed here. The operator console's event stream is the same shape of
+long-lived read as a node session, and `Runtime.Shutdown` still waits for one: ending
+it needs a signal that stops streaming while requests can still write events, which is
+its own change with its own regression test. Mercator issue #165 still does not
+reproduce on this host and was left alone.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/scheduler ./internal/lab \
+  ./internal/scenario/... ./internal/node ./internal/nodeagent ./internal/daemon
+```
+
 ### Phase 4 the transfer path, held under the slices that landed on top of it
 
 On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
@@ -3469,12 +3569,14 @@ The live half ran on this host's own daemon rather than in simulation.
 of the native engine, so the store, the presigned reads and the node's own timing are
 real. Mercator issue #165 does not reproduce here and was left alone.
 
-One observation is recorded rather than claimed. The first `go test ./...` of this pass
-reported a failure in `internal/daemon`, in a shell where `docker` was not on `PATH`,
-and the failing case's name was lost with the output. It has not recurred: three later
-full-suite runs, five runs of that package with `docker` present, and five with it
-absent from `PATH` entirely are all green, including four in one process. Nothing is
-changed on it, and it is written down so a second sighting is a second sighting.
+Two paragraphs of this entry were refuted by review and are corrected in the entry
+below, which is where the reader should go. The failure this pass recorded as an
+unreproducible sighting in `internal/daemon` reproduces on this tree at about one run
+in twenty-four, and it was two defects rather than none. `go test ./... -count=1` was
+not the deterministic gate this entry presents it as either, for a reason in
+`internal/nodeagent` rather than the package the sighting was attributed to. And the
+two breaks above, which still reproduce, cannot reach the one place this slice's law
+and the estimator that landed on top of it contradicted each other.
 
 Open, unchanged, and named in the entries above: whether
 `DefaultObjectStoreDownloadMbps` is a pessimistic prior or an optimistic one, whether
