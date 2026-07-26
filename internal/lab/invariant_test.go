@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -299,6 +300,88 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 
 	if len(cases) != len(DefaultInvariantRegistry().invariants) {
 		t.Fatalf("deliberate cases = %d, default invariants = %d", len(cases), len(DefaultInvariantRegistry().invariants))
+	}
+}
+
+// TestEveryClauseOfTheDiskRuleCanFail is the disk rule read the way every law
+// here has to be readable: a promise nothing can break is not a promise. The
+// rule makes four, and the capacity one is the only one the registry's single
+// deliberate case drives, so each of the others is shown failing on the one
+// world it exists to catch. The rule this replaced was deleted for exactly this,
+// and rebuilding it with three clauses driven by nothing would have been the
+// same defect under a better name.
+func TestEveryClauseOfTheDiskRuleCanFail(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	held := ArtifactReplica{
+		OfferID: "rental-warm",
+		ArtifactReplica: domain.ArtifactReplica{
+			ArtifactID:    "artifact-1",
+			ContentDigest: "sha256:aaaa",
+			SizeBytes:     10 << 30,
+			State:         domain.ArtifactReplicaVerified,
+		},
+	}
+	accounted := DiskLedger{
+		OfferID:       "rental-warm",
+		CapacityBytes: 100 << 30,
+		Resident:      []ResidentContent{{Kind: ResidentArtifact, Name: "artifact-1", SizeBytes: 10 << 30}},
+	}
+
+	for name, world := range map[string]WorldTruthSnapshot{
+		"accounts for one machine's disk twice": {
+			Disk: []DiskLedger{accounted, accounted}, ArtifactReplicas: []ArtifactReplica{held},
+		},
+		"holds content this world cannot size": {
+			Disk: []DiskLedger{{
+				OfferID:       "rental-warm",
+				CapacityBytes: 100 << 30,
+				Resident:      []ResidentContent{{Kind: ResidentArtifact, Name: "artifact-1"}},
+			}},
+			ArtifactReplicas: []ArtifactReplica{held},
+		},
+		"counts the same content twice": {
+			Disk: []DiskLedger{{
+				OfferID:       "rental-warm",
+				CapacityBytes: 100 << 30,
+				Resident:      append(slices.Clone(accounted.Resident), accounted.Resident[0]),
+			}},
+			ArtifactReplicas: []ArtifactReplica{held},
+		},
+		"holds a copy it accounts for no room for": {
+			Disk:             []DiskLedger{{OfferID: "rental-warm", CapacityBytes: 100 << 30}},
+			ArtifactReplicas: []ArtifactReplica{held},
+		},
+		"holds a cache it accounts for no room for": {
+			Disk:        []DiskLedger{{OfferID: "rental-warm", CapacityBytes: 100 << 30}},
+			CacheMounts: []CacheMountState{{OfferID: "rental-warm", Identity: "ws_lab/build-cache/v1"}},
+		},
+		"reserves room for content no machine holds": {
+			Disk: []DiskLedger{accounted},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			world.At = now
+			observation := InvariantObservation{
+				StartedAt:                   now,
+				Now:                         now,
+				World:                       world,
+				Workloads:                   map[string]domain.WorkloadRevision{},
+				RentalSchedules:             map[string]domain.RentalSchedule{},
+				RunRequirements:             map[string]RunArrival{},
+				ArtifactCatalog:             map[string]domain.ArtifactVersion{"artifact-1": {ID: "artifact-1", ContentDigest: "sha256:aaaa"}},
+				SeededLocality:              map[string]map[string]bool{},
+				ProjectionRebuildEquivalent: true,
+			}
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.disk_reservation_respected",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("a machine that %s was reported as keeping an account that adds up: %+v", name, result)
+			}
+		})
 	}
 }
 

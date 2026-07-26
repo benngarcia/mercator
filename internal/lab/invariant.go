@@ -1001,14 +1001,14 @@ func diskReservationRespected(observation InvariantObservation) error {
 }
 
 // residentContentIsAccountable is one machine's items read on their own terms.
-// A machine with no disk cannot be holding anything, an item nothing names is an
-// item nothing can be checked against, an item of no size is content this world
-// cannot account for, and the same content listed twice is a disk that looks
-// fuller than it is.
+// An item nothing names is an item nothing can be checked against, an item of no
+// size is content this world cannot account for, and the same content listed
+// twice is a disk that looks fuller than it is.
+//
+// There is no clause here about a machine with no disk holding content, because
+// there is no world it would be the one to catch: every item has a size, so a
+// machine holding anything at all on no disk is already over its capacity.
 func residentContentIsAccountable(ledger DiskLedger) error {
-	if ledger.CapacityBytes <= 0 {
-		return fmt.Errorf("machine %q has no disk and is holding %d items", ledger.OfferID, len(ledger.Resident))
-	}
 	seen := map[string]bool{}
 	for _, item := range ledger.Resident {
 		key := string(item.Kind) + "/" + item.Name
