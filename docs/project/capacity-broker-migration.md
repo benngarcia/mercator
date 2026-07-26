@@ -1089,6 +1089,79 @@ complete because it works against a live provider.
     it. A Run that finds no feasible offer still records no Booking Decision, so
     the corpus states the double spend as a placement onto the machine with room
     rather than as a world with none; that gap is older than this slice.
+- [x] 2026-07-25: Say in the fleet listing what is known about a node's disk,
+  and answer the review of it. A node that established no room wins no placement
+  that declares a floor, which every Run does, so the listing showed a ready
+  machine that quietly never runs and an operator had nowhere to read why. Two
+  reviewers falsified the first attempt at saying so, and every finding was the
+  same shape one layer up from the disk facts themselves: an answer published
+  more narrowly than the question it answers.
+  - The report has three values, because the question does. A boolean carried
+    "measured" and "not measured", so a node that answered and could not measure
+    its disk read identically to an identity nobody has ever heard from. Those
+    send an operator to different places, one to a daemon its agent cannot see
+    and one to a machine to go and start an agent on, and every invited node was
+    published as the first from the moment it was created, which states a fact
+    about a host Mercator has never been told anything about. `node.Record.Disk`
+    answers `never_reported`, `unmeasurable`, or `measured` from the node's own
+    observation time and its own claim.
+  - `disk_free_bytes` is always stated. It was optional, so a machine that
+    measured its disk and found it full omitted the number entirely: zero free
+    bytes is the machine an operator is looking for, and it was the one value at
+    which the field disappeared and a reader could not tell a full disk from a
+    server that said nothing. A generated client typed it `number | undefined`
+    for exactly the case it exists to report.
+  - The two halves of one report can no longer disagree. Nothing stopped a node
+    from stating 400GiB beside "I did not measure this", and both readers in the
+    tree, the offer projection and the listing, took the bytes without
+    consulting the claim: an out-of-tree agent carrying a previous measurement
+    forward would have had room nobody established advertised to Placement, a
+    Run with a floor admitted onto it, and the contradiction stated back to the
+    operator. `capability.NodeFacts.Established` keeps the half the machine
+    stands behind, applied where a report crosses into the control plane, which
+    is enrollment and the heartbeat.
+  - Nothing held the negative direction of any of it. The listing had one
+    assertion, in its affirmative direction, fed by one fixture that hardcoded a
+    measured 400GiB, so wiring the field to a constant left the suite green. The
+    scripted runtime now reports the disk a case asks for, and the three
+    answers, the full machine, and the placement an unmeasurable node wins none
+    of are each held. Verified by making each reversion in turn: dropping the
+    normalization advertises 400GiB nobody measured, restoring `omitempty` loses
+    the full machine's zero, and pinning the report to `measured` mislabels both
+    the unmeasurable node and the invited one.
+  - A Blueprint could not state a machine with no room. Both simulated worlds
+    read a stated `"0GB"` as an unstated disk and handed it the 200GB default,
+    so a fixture written to model the machine this whole slice is about would
+    have gone green asserting the opposite. `ResourcesSpec.Disk` is a pointer,
+    so a fixture that mentions disk and one that does not are different
+    sentences, and the corpus now carries the cheapest machine in its world
+    offering no room and refused on room for every Run. Verified by restoring
+    the swallow: that machine takes two of the three Runs. Zero CPU and zero
+    memory describe no machine any offer can carry and stay single numbers.
+  - The two worlds derive a host from one function rather than two copies of the
+    same fifteen lines with their own constants. One Blueprint meaning one
+    machine in the placement corpus and another in the Lab is two fixtures
+    wearing one name, and a corpus statement about either would have said
+    nothing about the other.
+  - The conformance case runs the production agent against the Docker daemon on
+    the machine the suite is on and reads the answer back over the public API,
+    compared against an independent statfs of the daemon's own root. Every other
+    case scripts the machine it lists, so the path from a kernel measurement to
+    the number an operator acts on could have been broken anywhere along it. Ran
+    green on a Linux workstation against Docker Engine 29.6.2 on the containerd
+    snapshotter, which is the first time any of this slice has run on amd64: the
+    disk work was built and verified on arm64 macOS. The whole Go suite and the
+    node agent's live Docker cases run green there too.
+  - Judgment calls. No Lab invariant accompanies this. The fleet listing is an
+    operator read model that no Lab execution observes, and the three-valued
+    report is a fact about an enrolled node's agent, which the Blueprint
+    vocabulary has no way to describe at all:
+    `enrolled-node-survives-its-first-run` is still a target scenario. What the
+    corpus can state is the placement consequence, a machine offering no room,
+    and it now does. And the reachability probe's missing timeout, issue #165,
+    is deliberately untouched: it does not reproduce on this host, it is a
+    separate filed defect with its own regression test to write, and folding it
+    into a locality slice would hide it.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1982,9 +2055,16 @@ overlay2 store:
 
 Three limits are worth stating rather than hiding.
 
-The content-store arm has no live daemon behind it here. This machine runs the
-overlay2 graph driver, and standing up a daemon on the containerd image store
-needs a privileged container this environment refuses, so that arm is held by
+The content-store arm has no live daemon behind it here, and now has one
+elsewhere. On 2026-07-25 the whole suite ran on an amd64 Linux workstation whose
+Docker Engine 29.6.2 keeps its images in the containerd content store
+(`driver-type: io.containerd.snapshotter.v1`), which is the arm this paragraph
+says nothing had exercised: `openImageStore` selects `contentStore` there, and
+`TestEveryImageThisDaemonHoldsIsAssembled` and
+`TestDockerRuntimeReportsTheLayersItUnpacked` pass against it. The limit below
+describes the machine the arm was written on, which runs the
+overlay2 graph driver, where standing up a daemon on the containerd image store
+needs a privileged container that environment refuses, so that arm is held by
 moby's source and by a scripted daemon whose API answers the shapes moby
 documents (`api/types/image/manifest.go`). What was verified live is the graph
 driver arm, on every image this machine holds, plus the two facts the
@@ -1997,10 +2077,12 @@ The naming defect that arm shipped with is the cost of that limit: no test and
 no live daemon covered it, and it took a reading of `singlePlatformImage` to
 find that this store prints a name no Run is ever pinned to.
 
-The agent does not stat the daemon's storage root. A node agent may run beside a
-daemon whose filesystem it cannot see, which is true of every Docker Desktop and
-OrbStack install, so statting storage paths would report every image on such a
-host as unassembled.
+The agent takes no assembly evidence from the daemon's storage root. A node
+agent may run beside a daemon whose filesystem it cannot see, which is true of
+every Docker Desktop and OrbStack install, so statting storage paths would
+report every image on such a host as unassembled. The disk fact does statfs that
+root, and it says nothing about images: a machine whose room the agent cannot
+measure reports no disk fact at all, and its inventory is unaffected.
 
 Neither simulated world models the time assembly takes. A fixture's `unpacked`
 flag says what a host reports, and the world's own transfer model is unchanged,
