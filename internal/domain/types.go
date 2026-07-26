@@ -812,16 +812,17 @@ type CandidateDecision struct {
 	Disk DiskDemand `json:"disk,omitzero"`
 	// Reliability is the risk history this candidate's publisher stated: how often
 	// this machine refuses to start, and how often it drops what it is running. It
-	// is recorded and never priced. What a refusal costs is a probability times a
-	// predicted start, nothing here predicts either yet, and a flat penalty
-	// invented for it would be an exchange rate this model made up.
+	// is recorded and never priced, and it is never doubted either. What a refusal
+	// costs is a probability times a predicted start, nothing here predicts either
+	// yet, and a flat penalty invented for it would be an exchange rate this model
+	// made up.
 	//
-	// Recording it is not deferred along with pricing it, because the doubt about
-	// this history already reaches the score. Confidences carries what the
-	// publisher stood behind, so before this the record charged a candidate a
-	// tenth of a point with no sign anywhere of which answer that doubt was
-	// about, and a score derived from the record is only re-derivable if every
-	// answer it doubts is in it.
+	// It is recorded for the reason the cache warmth above is: this is the account
+	// of what was known when the placement was taken, and a fact no record carries
+	// is one the slice that prices it cannot be held to. Charging the confidence
+	// beside it through Confidences was tried and was worse than not pricing the
+	// history at all, because a doubt about an answer the score never reads is a
+	// charge for having answered; see Uncertainty.
 	Reliability ReliabilityEvidence `json:"reliability,omitzero"`
 	// RentalSchedule is the Broker state this candidate was weighed against,
 	// recorded only for a Rental that has Bookings on it. The queue seconds
@@ -853,8 +854,9 @@ type CandidateDecision struct {
 // opinion, which is different from an answer stated to be worthless.
 type Confidence struct {
 	// Answer names what was being answered, in the vocabulary of the thing that
-	// answered: the capacity claim, the reliability history, the image transfer,
-	// the Artifact read.
+	// answered: the capacity claim, the image transfer, the Artifact read. Only an
+	// answer the score itself reads belongs here, because this list is what the
+	// uncertainty term charges for.
 	Answer string  `json:"answer"`
 	Value  float64 `json:"value"`
 }

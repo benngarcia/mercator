@@ -148,11 +148,10 @@ func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		Feasible:        true,
 		Estimates:       estimates,
 		Confidences:     referenceConfidences(offer, estimates),
-		// The risk history this model was given, carried through unpriced. It is
-		// here so the two records hold the same answers: a term added to one model
-		// and not the other is the drift an independent model exists to catch, and
-		// the doubt about this history is already in the score through the
-		// confidence beside it.
+		// The risk history this model was given, carried through unpriced and
+		// undoubted. It is here so the two records hold the same answers: a term
+		// added to one model and not the other is the drift an independent model
+		// exists to catch.
 		Reliability: offer.Reliability,
 	}
 	weights := input.Workload.Spec.Placement.Class.Weights()
@@ -161,13 +160,14 @@ func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnaps
 }
 
 // referenceConfidences is what this model says each of its own answers is worth.
-// A published capacity or reliability confidence is worth what its publisher said;
-// a transfer duration is worth what the reference content estimate concluded.
+// A published capacity confidence is worth what its publisher said; a transfer
+// duration is worth what the reference content estimate concluded. The published
+// risk history is worth nothing here, because this model prices no refusal and a
+// doubt about an answer the score never reads is a charge for having answered.
 func referenceConfidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Confidence {
 	var stated []domain.Confidence
 	for _, answer := range []domain.Confidence{
 		{Answer: "capacity", Value: offer.Capacity.Confidence},
-		{Answer: "reliability", Value: offer.Reliability.Confidence},
 		{Answer: "pull_seconds", Value: estimates.PullSeconds.Confidence},
 		{Answer: "artifact_seconds", Value: estimates.ArtifactSeconds.Confidence},
 	} {

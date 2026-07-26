@@ -68,6 +68,14 @@ func (weights ScoreWeights) ScoreUSD(candidate CandidateDecision, expectedRuntim
 // An answer nobody stated a confidence for states no opinion and counts nothing.
 // Zero is silence rather than worthlessness, and a doubt about a silence is not
 // two doubts.
+//
+// Which means an answer may only be doubted here if the score reads the answer
+// itself. Otherwise the term runs backwards: a publisher that measures a machine
+// and states its own confidence is charged, a publisher that says nothing is not,
+// and a publisher certain of the worst news is not either, so the score improves
+// the less anybody stands behind and improves again when nobody speaks. That is
+// the inverse of modelling the unknown as uncertainty, and it is what happened
+// while the published reliability history was doubted here and priced nowhere.
 func (candidate CandidateDecision) Uncertainty() float64 {
 	shortfall := 0.0
 	for _, confidence := range candidate.Confidences {

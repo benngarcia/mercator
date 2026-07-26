@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "A published risk history at L1. Two Rentals hold the whole 2GB image, cost the same, are a second from ready, and both stand behind a history their provider measured. One has refused two starts in five and been interrupted a quarter of the time; the other has never done either. Under the real control plane the decision records both rates on both candidates and scores the two machines to the same dollar, so the placement falls through to the offer ID and the machine known to refuse starts takes the Run. This is the Blueprint the Lab world's own statement about a measured machine is falsifiable through: stop publishing the history and both candidates read as capacity nobody has measured, which is a different world and a quieter one. What a refusal is worth stays unstated, because expected redo cost is a probability times a predicted start and nothing here predicts either yet.",
+  "summary": "A published risk history at L1. Three Rentals hold the whole 2GB image, cost the same, and are a second from ready. Two stand behind a history their provider measured, one having refused two starts in five and been interrupted a quarter of the time and the other never having done either; nobody has ever measured the third. Under the real control plane the decision records each published history and scores all three machines to the same dollar, so the placement falls through to the offer ID and the machine known to refuse starts takes the Run. This is the Blueprint the Lab world's own statement about a measured machine is falsifiable through: stop publishing the history and every candidate reads as capacity nobody has measured, which is a different world and a quieter one. What a refusal is worth stays unstated, because expected redo cost is a probability times a predicted start and nothing here predicts either yet. What is stated, and what the unmeasured machine is here to hold, is that publishing a measured history costs its publisher nothing.",
   "seed": "mercator-lab-refusal-recorded-v1",
   "world": {
     "images": {
@@ -27,6 +27,11 @@
         "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
         "rate_per_hour_usd": 2.0,
         "reliability": {"confidence": 0.9}
+      },
+      {
+        "id": "rental-unmeasured",
+        "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
+        "rate_per_hour_usd": 2.0
       }
     ]
   },

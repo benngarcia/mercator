@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Two Rentals at one price, both holding the whole 2GB image, both a second from ready, and both standing behind a measured reliability history their provider published. The only difference between them is what that history says: rental-flaky has refused two starts in five and been interrupted a quarter of the time, and rental-steady has never done either. The decision records both rates on both candidates and prices neither, so the two candidates score to the same dollar and the placement falls through to the offer ID, which is how the machine known to refuse starts takes the Run. That is the whole claim: what a refusal is worth is a prediction nobody has made yet, expected redo cost is probability times a predicted start, and a flat penalty invented for it here would be an unmeasured constant. Until then the fixture states the gap rather than hiding it, and it is what makes the gap falsifiable: price a refusal and the two scores separate and this Blueprint fails. The doubt each machine carries is the tenth of a point its provider withheld from its own measurement, which is the same for both and therefore ranks neither.",
+  "summary": "Three Rentals at one price, all holding the whole 2GB image, all a second from ready. Two stand behind a reliability history their provider measured: rental-flaky has refused two starts in five and been interrupted a quarter of the time, rental-steady has never done either, and both publishers withheld a tenth of a point from their own record. Nobody has ever measured rental-unmeasured. The decision records each published history and prices none of them, and it doubts none of them either, so all three candidates score to the same dollar and the placement falls through to the offer ID. That is the whole claim, in two halves. What a refusal is worth is a prediction nobody has made yet, expected redo cost is probability times a predicted start, and a flat penalty invented for it here would be an unmeasured constant: price a refusal and the scores separate and this Blueprint fails. And a machine whose provider measured it must never be ranked behind a machine nobody measured for having said so, which is what rental-unmeasured pins: while the published confidence was charged through the uncertainty term and the rate beside it was priced nowhere, publishing an honest clean record cost 0.003 USD and lost this Run to the machine that said nothing.",
   "classification": "green",
   "world": {
     "images": {
@@ -22,6 +22,11 @@
         "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
         "rate_per_hour_usd": 2.0,
         "reliability": {"confidence": 0.9}
+      },
+      {
+        "id": "rental-unmeasured",
+        "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
+        "rate_per_hour_usd": 2.0
       }
     ]
   },
@@ -44,8 +49,8 @@
         "pull_confidence": 1,
         "start_failure_rate": 0.4,
         "interruption_rate": 0.25,
-        "uncertainty": 0.1,
-        "score_usd": {"at_least": 0.3368, "at_most": 0.3369}
+        "uncertainty": 0,
+        "score_usd": {"at_least": 0.3338, "at_most": 0.3339}
       },
       "rental-steady": {
         "feasible": true,
@@ -54,8 +59,16 @@
         "pull_confidence": 1,
         "start_failure_rate": 0,
         "interruption_rate": 0,
-        "uncertainty": 0.1,
-        "score_usd": {"at_least": 0.3368, "at_most": 0.3369}
+        "uncertainty": 0,
+        "score_usd": {"at_least": 0.3338, "at_most": 0.3339}
+      },
+      "rental-unmeasured": {
+        "feasible": true,
+        "image_locality": "hot",
+        "pull_seconds": 0,
+        "pull_confidence": 1,
+        "uncertainty": 0,
+        "score_usd": {"at_least": 0.3338, "at_most": 0.3339}
       }
     }
   }

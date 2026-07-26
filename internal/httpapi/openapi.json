@@ -4379,7 +4379,7 @@
           },
           "reliability": {
             "$ref": "#/components/schemas/ReliabilityEvidence",
-            "description": "The risk history this candidate's publisher stated: how often this machine refuses to start, and how often it drops the work it is running. It is recorded and never priced. What a refusal is worth is a probability times a predicted start, nothing here predicts either yet, and a flat penalty invented for it would be an exchange rate this model made up. It is recorded all the same, because the confidence beside it is one of the answers the uncertainty term already charges for: a score derived from this record is only re-derivable if every answer it doubts is in it."
+            "description": "The risk history this candidate's publisher stated: how often this machine refuses to start, and how often it drops the work it is running. It is recorded, never priced, and never doubted. What a refusal is worth is a probability times a predicted start, nothing here predicts either yet, and a flat penalty invented for it would be an exchange rate this model made up. It is recorded so the account of what was known when the placement was taken is complete. The confidence beside it is deliberately absent from confidences: doubt about an answer the score never reads charges a publisher for having measured its machine, and it made a machine measured and never seen to fail lose to an identical machine nobody had measured."
           },
           "rental_schedule": {
             "$ref": "#/components/schemas/ScheduleEvidence",

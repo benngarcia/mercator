@@ -211,8 +211,10 @@ func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer dom
 		// What this machine's publisher says it does to work: refuse to start it,
 		// or drop it once it is running. Recorded and not scored, because pricing a
 		// refusal needs a probability times a predicted start and nothing here
-		// predicts either. It is recorded all the same, because the confidence
-		// beside it is already one of the answers the uncertainty term charges for.
+		// predicts either. It is recorded for the same reason the cache warmth above
+		// is: this is the account of what was known when the placement was taken,
+		// and a fact the record omits is one the slice that prices it cannot be
+		// held to.
 		Reliability:    offer.Reliability,
 		Disk:           work.disk,
 		RentalSchedule: scheduleEvidence(input, offer),
@@ -227,11 +229,21 @@ func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer dom
 // order the placement asked the questions. Only an answer whose source stated a
 // confidence is recorded: zero means nobody said, and recording a silence as
 // worthlessness would charge every candidate for questions this Run never asked.
+//
+// Every answer here is one the score reads: the capacity claim decides whether
+// this machine is for sale at all, and the two transfer durations are terms of
+// the start it is priced on. The reliability history is read by nothing, and the
+// doubt about it was listed here anyway. Because a stated confidence is charged
+// and a silence is not, the only thing a published history could do to a score
+// was penalise its publisher for having published one: a machine measured and
+// never seen to fail lost the Run to an identical machine nobody had measured,
+// and to a machine whose provider was certain it refuses every start. Doubt about
+// an answer the score does not use prices the absence of a price, and what a
+// refusal is worth belongs to the term that predicts a redo.
 func confidences(offer domain.OfferSnapshot, estimates domain.CandidateEstimates) []domain.Confidence {
 	var stated []domain.Confidence
 	for _, answer := range []domain.Confidence{
 		{Answer: "capacity", Value: offer.Capacity.Confidence},
-		{Answer: "reliability", Value: offer.Reliability.Confidence},
 		{Answer: "pull_seconds", Value: estimates.PullSeconds.Confidence},
 		{Answer: "artifact_seconds", Value: estimates.ArtifactSeconds.Confidence},
 	} {

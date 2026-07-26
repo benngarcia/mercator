@@ -1659,6 +1659,32 @@ complete because it works against a live provider.
     something else. And the whole slice was built beside a concurrent session in
     the same worktree; the reliability entry above landed from that session and
     the two changes are separate commits.
+- [x] 2026-07-26: Answer the review of the risk-history commit. Two reviewers
+  refuted parts of it, and the central one reproduced immediately: the term that
+  commit relied on to justify recording a published history ran backwards.
+  - The score doubts only the answers the score reads. `Confidences` carried a
+    `reliability` entry, `Uncertainty` charges `1 - value` for a confidence strictly
+    between zero and one, and nothing anywhere prices either rate. So the only thing
+    a published history could do to a placement was penalise the provider that
+    published one: a machine measured and never seen to fail carried a tenth of a
+    point at 0.03 USD and lost the Run to an identical machine nobody had measured,
+    while a machine whose provider was certain it refuses every start carried no
+    doubt at all and won. Adding a third Rental with no history to
+    `a-machine-that-fails-to-start-says-so` demonstrated it, at 0.333833 USD against
+    the two measured machines' 0.336833. The entry above defended recording the rates
+    with "the doubt about this history already reaches the score"; what reached the
+    score was a charge for having answered, which is the inverse of modelling the
+    unknown as uncertainty. Both models drop the entry, `Uncertainty` states the rule
+    that produced the inversion, and the history is recorded, unpriced, and undoubted,
+    for the reason the cache warmth beside it is recorded: it is the account of what
+    was known when the placement was taken, and a fact no record carries is one the
+    slice that prices it cannot be held to.
+  - The machine nobody measured is now in both fixtures, at L0 and at L1, which is
+    what makes the rule falsifiable rather than merely stated. All three candidates
+    score to the same dollar and carry no doubt, so restoring the reliability
+    confidence to either model separates the two measured machines from the silent one
+    by 0.003 USD and fails the Blueprint on the doubt, the score, and the winner, and
+    fails `TestARefusalToStartIsRecordedAndNotPricedAtL1` on the doubt.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -2187,20 +2213,24 @@ Phase 4 added:
   and the execution the Lab's own unpriced offer is falsifiable through. Publishing
   the default priced offer for it places the Run on the machine nobody quoted at a
   rate of zero.
-- `a-machine-that-fails-to-start-says-so` (green): two Rentals at one price and one
-  warmth, both standing behind a reliability history their provider measured. One
-  has refused two starts in five and been interrupted a quarter of the time, and the
-  other has never done either. The decision records both rates on both candidates
-  and prices neither, so the two score to the same dollar and the placement falls
-  through to the offer ID, which is how the machine known to refuse starts takes the
-  Run. That is the honest state of this model, written where a fixture will fail when
-  somebody closes the gap: what a refusal is worth is a probability times a predicted
-  start, and a flat penalty invented for it now would be the unmeasured constant this
-  plan keeps deleting. Deleting the L0 world's reliability projection fails it in
-  four columns at once, the two rates, the doubt, and the score.
+- `a-machine-that-fails-to-start-says-so` (green): three Rentals at one price and one
+  warmth. Two stand behind a reliability history their provider measured, one having
+  refused two starts in five and been interrupted a quarter of the time and the other
+  never having done either, and nobody has ever measured the third. The decision
+  records each published history, prices none of them, and doubts none of them, so all
+  three score to the same dollar and the placement falls through to the offer ID, which
+  is how the machine known to refuse starts takes the Run. That is the honest state of
+  this model, written where a fixture will fail when somebody closes the gap: what a
+  refusal is worth is a probability times a predicted start, and a flat penalty
+  invented for it now would be the unmeasured constant this plan keeps deleting.
+  Deleting the L0 world's reliability projection fails it on both rates. Charging the
+  published confidence as doubt again, which is what this fixture was first written
+  against, fails it on the doubt, the score, and the winner, because the machine nobody
+  measured becomes 0.003 USD cheaper than the two that were.
 - `a-refusal-to-start-is-recorded-and-not-priced` (conformance): the same world at
   L1, and the execution the Lab world's own reliability projection is falsifiable
-  through. It asserts the record and deliberately not the placement.
+  through. It asserts the record, the absence of any doubt about it, and deliberately
+  not the placement.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
