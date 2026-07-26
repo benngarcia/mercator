@@ -2028,6 +2028,39 @@ and the outcome is the record above with the two skip corrections already applie
   (3 artifacts) all pass, and `TestBuiltIndexReferencesAbsoluteAssets` passes once
   that build has run.
 
+CI then failed the branch where this workstation could not, on
+`TestAQueuedRunIsPreparedForWithoutWaitingForASweep`, and it was a flake rather
+than a regression: the Go job passed on the commit before a documentation-only
+change and failed on it. The mechanism was reproduced rather than retried.
+
+A node offer stays selectable for a third of the lease, and the daemon fleet
+harness leased its one machine for 900 milliseconds, so 300 milliseconds without a
+report is a machine Mercator can say nothing about. Stalling the scripted
+runtime's `Facts` call for 500 milliseconds as the second Run arrives fails that
+case three runs out of three, with the message CI reported and within a quarter of
+a second of its duration. The case gets one trigger, the Booking that names the
+machine, and a trigger that lands while the machine is off the catalog states
+nothing, because the sweep is what restates it and this case deliberately never
+sweeps. A loaded two-core runner executing the whole suite stalls a goroutine past
+300 milliseconds with nothing wrong.
+
+The lease is the fleet's own parameter now, 30 seconds by default, and
+`TestANodeThatGoesQuietStopsBeingOffered` states the 900 milliseconds it is
+measured in. That raises the threshold rather than removing it: the same stall
+passes, and a machine genuinely gone for twelve seconds still fails the case. The
+case also asserts the Booking before the prefetch, so a Run that was never given
+the machine reports that instead of reporting a preparation that never came, and
+`awaitPredictedStart` reads both halves of the restraint off the ledger rather
+than sleeping a margin from a clock the rule does not use. Both probes were
+removed. The daemon package is green 3 times under `-race`, and 3 times pinned to
+two cores against 30 spinning processes.
+
+What that leaves standing in production is a real consequence and it is recorded
+in `docs/production/known-limitations.md`: a Run queued while its machine's facts
+are momentarily stale is prepared for on the next sweep rather than on its own
+arrival, so the interval an operator states bounds how often preparation may
+begin and the sweep still bounds how late it may be.
+
 ### Phase 3 producer affinity, withdrawn under review
 
 On 2026-07-25, on a Linux workstation against Docker Engine 29.6.2 on the

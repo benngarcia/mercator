@@ -98,6 +98,13 @@ limits.
   has one command per piece of content and no way to say stop, so cancelling a
   queued Run stops Mercator asking and leaves the transfer already in flight
   holding that node's link and disk until it completes.
+- Preparation for a Run whose machine is momentarily stale waits for the sweep.
+  A node offer is selectable for a third of the node lease, so a machine that has
+  not reported inside that window is one Mercator states no desire for, and the
+  Booking that arrived during it was the only wake-up that Run gets. The Run still
+  runs and still fetches at launch. What it loses is the head start, by up to the
+  reconcile cadence, which is a minute. Operators who care about that should keep
+  the node heartbeat comfortably inside a third of the lease.
 - A control-plane restart forgets which content it has already asked for. The
   moment preparation last began is durable, and the desired sets are in process,
   so a restarted Mercator restates a desire it may already have sent and delays
