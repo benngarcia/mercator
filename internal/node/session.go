@@ -31,6 +31,19 @@ func (session *Session) Commands() <-chan Command { return session.commands }
 // the transport's signal to close the connection.
 func (session *Session) Done() <-chan struct{} { return session.closed }
 
+// end closes this session's signal once. A session is ended by the node dropping
+// its connection, by a newer session of the same node superseding it, by the
+// lease elapsing, and by the control plane draining, and any of those can arrive
+// after another already has. Every caller holds the registry's lock, which is
+// what makes the check and the close one decision rather than two.
+func (session *Session) end() {
+	select {
+	case <-session.closed:
+	default:
+		close(session.closed)
+	}
+}
+
 // OpenSession authenticates a node's outbound connection and returns its
 // command stream, beginning with every command it has not acknowledged. A node
 // that was disconnected, or that reconnected to a restarted control plane,
@@ -55,12 +68,38 @@ func (registry *Registry) OpenSession(ctx context.Context, nodeID, sessionToken 
 		session.commands <- commandFrom(operation)
 	}
 	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if registry.draining {
+		return nil, fmt.Errorf("node: this control plane is shutting down and holds no session open")
+	}
 	if previous, open := registry.sessions[nodeKey(record.WorkspaceID, record.ID)]; open {
-		close(previous.closed)
+		previous.end()
 	}
 	registry.sessions[nodeKey(record.WorkspaceID, record.ID)] = session
-	registry.mu.Unlock()
 	return session, nil
+}
+
+// Drain ends every open session and refuses to open another. It is what a
+// control plane shutting down says to the object that owns the sessions.
+//
+// It exists because a session is a long-lived read: the node holds the
+// connection open and the control plane writes commands down it, so the request
+// is active for as long as the machine is healthy. http.Server.Shutdown waits
+// for active requests and cancels none of them, which means a control plane with
+// one enrolled machine had nothing in the tree that could end the read and
+// waited out its whole shutdown window on a drain that could never finish.
+//
+// A drained node loses nothing. Commands are durable before they reach a
+// session, so the machine reconnects to whatever control plane comes back and is
+// told again about everything it never acknowledged.
+func (registry *Registry) Drain() {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.draining = true
+	for key, session := range registry.sessions {
+		delete(registry.sessions, key)
+		session.end()
+	}
 }
 
 // CloseSession ends one node's session, which a transport calls when its
@@ -76,11 +115,7 @@ func (registry *Registry) CloseSession(session *Session) {
 		return
 	}
 	delete(registry.sessions, nodeKey(session.WorkspaceID, session.NodeID))
-	select {
-	case <-session.closed:
-	default:
-		close(session.closed)
-	}
+	session.end()
 }
 
 // RecordEvents accepts facts a node reports on its own authority: its liveness
@@ -197,11 +232,7 @@ func (registry *Registry) closeSession(workspaceID, nodeID string) {
 		return
 	}
 	delete(registry.sessions, nodeKey(workspaceID, nodeID))
-	select {
-	case <-session.closed:
-	default:
-		close(session.closed)
-	}
+	session.end()
 }
 
 // LeaseWindow is how long the registry believes a node absent a heartbeat.

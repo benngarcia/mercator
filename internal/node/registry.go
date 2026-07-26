@@ -47,6 +47,11 @@ type Registry struct {
 
 	mu       sync.Mutex
 	sessions map[string]*Session
+	// draining is set once this control plane has begun shutting down, and it is
+	// what makes Drain final. An agent redials every few milliseconds, so a drain
+	// that only ended the sessions it happened to find would be raced by the next
+	// one and the shutdown it was called for would wait on that instead.
+	draining bool
 }
 
 // Option configures a Registry.

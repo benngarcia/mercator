@@ -110,3 +110,26 @@ func startRuntimeWithLease(t *testing.T, lease time.Duration) (string, *daemon.R
 	})
 	return listener.Addr().String(), runtime
 }
+
+// TestADaemonDrainsWhileANodeHoldsItsSessionOpen holds the shutdown the
+// production binary depends on. A node session is a long-lived read the node
+// holds open and the control plane writes down, and http.Server.Shutdown waits
+// for active requests rather than cancelling them, so nothing in the tree ever
+// ended one: a control plane with a single enrolled machine burned its whole
+// fifteen second shutdown window and then exited on a deadline it could not have
+// met. The same read is what made this package intermittently red, because an
+// agent cancelled a moment before the sweep still raced the drain.
+//
+// The bound here is the production window's own order of magnitude rather than
+// the whole of it. A drain that has to be waited for is the defect.
+func TestADaemonDrainsWhileANodeHoldsItsSessionOpen(t *testing.T) {
+	fleet := startFleet(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := fleet.control.Shutdown(ctx)
+
+	if err != nil {
+		t.Fatalf("a control plane holding one node's session did not drain: %v", err)
+	}
+}

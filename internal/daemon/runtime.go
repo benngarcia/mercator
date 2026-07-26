@@ -270,6 +270,13 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		reconcileDone: make(chan struct{}),
 		nodes:         nodes,
 	}
+	// Draining the node sessions is registered with the server rather than
+	// sequenced by Shutdown, because it has to happen while the drain is waiting
+	// and not before it or after it. A session is the one route here that is
+	// active for as long as its machine is healthy, and http.Server.Shutdown waits
+	// for active requests without cancelling any: every other route finishes on
+	// its own and is left to.
+	runtime.server.RegisterOnShutdown(nodes.Drain)
 	go runtime.reconcile(reconcileCtx)
 	return runtime, nil
 }
