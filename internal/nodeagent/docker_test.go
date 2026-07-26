@@ -727,6 +727,58 @@ func TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet(t *testing.T) {
 	}
 }
 
+// TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt is the measurement
+// answering to the thing it is a measurement of, against the daemon on this
+// machine. A node reports free disk so Placement can decide what will fit on it,
+// which is worth nothing if the number does not move when a workload of this
+// node's fills the machine up. A container writing half a gigabyte into its own
+// writable layer is the cheapest way to make that happen for real.
+func TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt(t *testing.T) {
+	requireDocker(t)
+	pull(t, "busybox:1.37")
+	runtime := NewDockerRuntime("")
+	before, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read node facts: %v", err)
+	}
+
+	writeHalfAGigabyte(t)
+
+	after, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read node facts after the write: %v", err)
+	}
+	if after.Host.Disk.TotalBytes != before.Host.Disk.TotalBytes {
+		t.Fatalf("the filesystem changed size under the case: %d then %d", before.Host.Disk.TotalBytes, after.Host.Disk.TotalBytes)
+	}
+	// Other things write to a working machine while a case runs, so this asserts
+	// that the room fell by roughly what the workload wrote rather than by
+	// exactly it.
+	taken := before.Host.Disk.FreeBytes - after.Host.Disk.FreeBytes
+	if taken < 400<<20 || taken > 700<<20 {
+		t.Fatalf("a workload wrote 512MiB and the room this node reports fell by %d bytes", taken)
+	}
+}
+
+// writeHalfAGigabyte is one container of this daemon's filling its own writable
+// layer, left behind until the case ends so the bytes are still there to be
+// measured.
+func writeHalfAGigabyte(t *testing.T) {
+	t.Helper()
+	name := "mercator-disk-conformance"
+	_ = exec.Command("docker", "rm", "--force", name).Run()
+	t.Cleanup(func() {
+		if output, err := exec.Command("docker", "rm", "--force", name).CombinedOutput(); err != nil {
+			t.Errorf("remove the probe container: %v\n%s", err, output)
+		}
+	})
+	output, err := exec.Command("docker", "run", "--name", name, "--network=none", "busybox:1.37",
+		"dd", "if=/dev/zero", "of=/half-a-gigabyte", "bs=1M", "count=512").CombinedOutput()
+	if err != nil {
+		t.Fatalf("fill a container's writable layer: %v\n%s", err, output)
+	}
+}
+
 // filesystemHolding is what the kernel says about the filesystem a path is on,
 // read here so a case can state the answer it expects rather than restating the
 // runtime's own arithmetic.
