@@ -9,10 +9,12 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -202,6 +204,11 @@ type fleet struct {
 	image        string
 	rebuiltImage string
 	runtime      *scriptedRuntime
+	// agentRuntime is what the agent actually drives, which is the scripted
+	// machine for every case about where a Run lands and this host's own Docker
+	// daemon for the one case about what a real machine reports.
+	agentRuntime nodeagent.Runtime
+	heartbeat    time.Duration
 	stop         context.CancelFunc
 	submitted    int
 }
@@ -216,6 +223,17 @@ type fleetOption func(*fleet)
 // at all when it cannot see it.
 func reporting(disk capability.DiskFacts) fleetOption {
 	return func(f *fleet) { f.runtime.disk = disk }
+}
+
+// runningOn hands the agent a real container runtime instead of the scripted
+// one, at a heartbeat a machine can keep up with: reading a whole daemon's
+// image inventory fifty times a second is a load test of Docker rather than a
+// case about Mercator.
+func runningOn(runtime nodeagent.Runtime) fleetOption {
+	return func(f *fleet) {
+		f.agentRuntime = runtime
+		f.heartbeat = 250 * time.Millisecond
+	}
 }
 
 func startFleet(t *testing.T, options ...fleetOption) *fleet {
@@ -237,7 +255,9 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 			trainerIndexDigest: {trainerBaseDiffID, trainerTopDiffID},
 			rebuiltIndexDigest: {trainerBaseDiffID, rebuiltTopDiffID},
 		}),
+		heartbeat: 20 * time.Millisecond,
 	}
+	harness.agentRuntime = harness.runtime
 	for _, option := range options {
 		option(harness)
 	}
@@ -299,10 +319,10 @@ func (f *fleet) startAgent(t *testing.T, bootstrap capability.NodeBootstrap) {
 			EnrollmentToken: bootstrap.EnrollmentToken,
 			AgentVersion:    "test",
 		},
-		f.runtime,
+		f.agentRuntime,
 		nodeagent.NewHTTPTransport(bootstrap.ControlPlaneURL, nil),
 		state,
-		nodeagent.WithHeartbeat(20*time.Millisecond),
+		nodeagent.WithHeartbeat(f.heartbeat),
 		nodeagent.WithReconnectBackoff(5*time.Millisecond),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1194,4 +1214,64 @@ func TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout(t *testing.T) {
 	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, oversized) {
 		t.Fatalf("a Run needing 900GiB was sent to a machine with 400GiB free: %v", launched)
 	}
+}
+
+// TestTheFleetListingReportsTheRoomThisMachineReallyHas is the whole chain
+// against a real container daemon: this host's Docker names the filesystem it
+// keeps content on, the production agent measures it, the node protocol carries
+// it, the registry stores it, and an operator reads it over the public API. Every
+// case above scripts the machine, so all of them would stay green with the
+// measurement dropped anywhere between the kernel and the listing, and the number
+// an operator acts on is worth exactly what that path is.
+//
+// It is stated as a range because free disk moves under a working machine. What
+// is being held is the room this filesystem has, not the instant it was read.
+func TestTheFleetListingReportsTheRoomThisMachineReallyHas(t *testing.T) {
+	docker := requireDockerBinary(t)
+	fleet := startFleet(t, runningOn(nodeagent.NewDockerRuntime(docker)))
+
+	summary := fleet.summaryFor(t, fleet.nodeID)
+
+	if summary.DiskReport != "measured" {
+		t.Fatalf("a node on this machine's own Docker daemon is listed %q: %+v", summary.DiskReport, summary)
+	}
+	total, free := dockerRootFilesystem(t, docker)
+	if summary.DiskFreeBytes <= 0 || summary.DiskFreeBytes > total {
+		t.Fatalf("the listing reports %d bytes free on a %d byte filesystem", summary.DiskFreeBytes, total)
+	}
+	if drift := summary.DiskFreeBytes - free; drift > total/1000 || drift < -total/1000 {
+		t.Fatalf("the listing reports %d bytes free, and the daemon's own filesystem has %d", summary.DiskFreeBytes, free)
+	}
+}
+
+// requireDockerBinary resolves Docker before the fleet clears PATH, and skips
+// where there is no daemon to answer.
+func requireDockerBinary(t *testing.T) string {
+	t.Helper()
+	binary, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skipf("no Docker client on this machine: %v", err)
+	}
+	if output, err := exec.Command(binary, "info").CombinedOutput(); err != nil {
+		t.Skipf("no reachable Docker daemon to report a node's disk from: %v\n%s", err, output)
+	}
+	return binary
+}
+
+// dockerRootFilesystem is the independent answer: the daemon says which
+// directory it keeps content in, and the kernel says how big that filesystem is
+// and how much of it a workload of this node's could still use.
+func dockerRootFilesystem(t *testing.T, docker string) (total, free int64) {
+	t.Helper()
+	output, err := exec.Command(docker, "info", "--format", "{{.DockerRootDir}}").Output()
+	if err != nil {
+		t.Fatalf("ask the daemon where it keeps its content: %v", err)
+	}
+	root := strings.TrimSpace(string(output))
+	var filesystem syscall.Statfs_t
+	if err := syscall.Statfs(root, &filesystem); err != nil {
+		t.Fatalf("measure the filesystem holding %s: %v", root, err)
+	}
+	block := int64(filesystem.Bsize)
+	return int64(filesystem.Blocks) * block, int64(filesystem.Bavail) * block
 }
