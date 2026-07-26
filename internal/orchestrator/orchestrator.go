@@ -288,7 +288,7 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	if err != nil {
 		return CreateRunResult{}, err
 	}
-	data, err := json.Marshal(publicRunRequestedData{RunID: req.RunID, Workload: publicWorkload(req.Workload)})
+	data, err := json.Marshal(publicRunRequestedData{RunID: req.RunID, Workload: req.Workload.Public()})
 	if err != nil {
 		return CreateRunResult{}, err
 	}

@@ -638,3 +638,73 @@ func waitForDatabaseWaiter(t *testing.T, db *sql.DB, after int64) {
 		runtime.Gosched()
 	}
 }
+
+// TestOpenMovesAStoredRevisionsSecretsOutOfThePublicPayload is the history half of
+// the revision door's redaction. The door wrote the whole revision, environment
+// values included, into a public event, and the console streams every public event
+// of a workspace to every reader of it, so fixing the door leaves the tokens in the
+// records those readers read. Opening the database rewrites them: the public
+// payload states each value's kind, the private payload is the revision, and the
+// revision a Run would be created from is unchanged.
+func TestOpenMovesAStoredRevisionsSecretsOutOfThePublicPayload(t *testing.T) {
+	ctx, db := openStoredRevisionSecretFixture(t)
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	defer func() { _ = storage.Close() }()
+
+	events, err := storage.EventLog().ReadStream(ctx, eventlog.StreamKey{
+		WorkspaceID: "ws_1",
+		Type:        "workload",
+		ID:          "wrk_1",
+	}, 0, 10)
+	if err != nil {
+		t.Fatalf("read the migrated workload: %v", err)
+	}
+	var migrated eventlog.StoredEvent
+	for _, event := range events {
+		if event.Type == "compute.workload.revision_created.v1" {
+			migrated = event
+		}
+	}
+	if migrated.ID == "" {
+		t.Fatalf("the migrated stream has no revision event: %+v", events)
+	}
+	if strings.Contains(string(migrated.Data), "hf_live_SECRETVALUE") {
+		t.Fatalf("the public payload still carries the token: %s", migrated.Data)
+	}
+	if !strings.Contains(string(migrated.Data), `"kind":"literal"`) || !strings.Contains(string(migrated.Data), `"kind":"empty"`) {
+		t.Fatalf("the public payload says nothing about the variables at all: %s", migrated.Data)
+	}
+	if !strings.Contains(string(migrated.PrivateData), "hf_live_SECRETVALUE") {
+		t.Fatalf("the private payload lost the value the caller stored: %s", migrated.PrivateData)
+	}
+
+	revision, err := workload.New(storage.EventLog()).GetRevision(ctx, "ws_1", "wrk_1", "wrev_1")
+	if err != nil {
+		t.Fatalf("read the migrated revision back: %v", err)
+	}
+	value := revision.Spec.Containers[0].Env["HF_TOKEN"].Value
+	if value == nil || *value != "hf_live_SECRETVALUE" {
+		t.Fatalf("the migrated revision reads back with %v, and a Run created from it would run with that", value)
+	}
+}
+
+func openStoredRevisionSecretFixture(t *testing.T) (context.Context, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mercator.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	fixture, err := os.ReadFile("testdata/stored_revision_secret.sql")
+	if err != nil {
+		t.Fatalf("read the stored revision fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(fixture)); err != nil {
+		t.Fatalf("load the stored revision fixture: %v", err)
+	}
+	return ctx, db
+}

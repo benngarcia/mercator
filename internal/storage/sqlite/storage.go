@@ -52,6 +52,10 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
+	if err := migrateStoredRevisionSecrets(ctx, db); err != nil {
+		_ = log.Close()
+		return nil, err
+	}
 	if err := migrateRentalSchedules(ctx, db); err != nil {
 		_ = log.Close()
 		return nil, err

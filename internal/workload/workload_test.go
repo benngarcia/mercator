@@ -2,6 +2,7 @@ package workload
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/benngarcia/mercator/internal/domain"
@@ -107,5 +108,50 @@ func validRevision() domain.WorkloadRevision {
 			Placement: domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 60},
 			Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 120, MaxPreStartAttempts: 3},
 		},
+	}
+}
+
+// TestAStoredRevisionKeepsItsSecretsOutOfThePublicEvent is the door that stores a
+// revision held to the rule the run door has always held. An environment value is
+// where a caller puts a token, this event is public, and the console streams every
+// public event of a workspace to every reader of it, so writing the whole revision
+// into the public payload published the token. The private payload is the copy a
+// Run is created from, so the value has to survive there and nowhere else.
+func TestAStoredRevisionKeepsItsSecretsOutOfThePublicEvent(t *testing.T) {
+	ctx := context.Background()
+	log := openWorkloadTestLog(t)
+	svc := New(log)
+	if err := svc.CreateWorkload(ctx, CreateWorkloadRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Name: "trainer"}); err != nil {
+		t.Fatalf("create workload: %v", err)
+	}
+	secret := "hf_live_SECRETVALUE"
+	revision := validRevision()
+	revision.Spec.Containers[0].Env = map[string]domain.EnvBinding{"HF_TOKEN": {Value: &secret}}
+
+	if _, err := svc.CreateRevision(ctx, CreateRevisionRequest{WorkspaceID: "ws_1", WorkloadID: "wrk_1", Revision: revision}); err != nil {
+		t.Fatalf("create revision: %v", err)
+	}
+
+	history, err := eventlog.ReadFullStream(ctx, log, workloadStream("ws_1", "wrk_1"))
+	if err != nil {
+		t.Fatalf("read the workload stream: %v", err)
+	}
+	for _, event := range history.Events {
+		if event.Type != EventWorkloadRevisionCreated {
+			continue
+		}
+		if strings.Contains(string(event.Data), secret) {
+			t.Fatalf("the public payload of %s carries the token verbatim: %s", event.ID, event.Data)
+		}
+		if !strings.Contains(string(event.Data), `"kind":"literal"`) {
+			t.Fatalf("the public payload of %s says nothing about the variable at all: %s", event.ID, event.Data)
+		}
+	}
+	stored, err := svc.GetRevision(ctx, "ws_1", "wrk_1", "wrev_1")
+	if err != nil {
+		t.Fatalf("get revision: %v", err)
+	}
+	if value := stored.Spec.Containers[0].Env["HF_TOKEN"].Value; value == nil || *value != secret {
+		t.Fatalf("the stored revision reads back with %v for a value the caller set, and a Run created from it would run with that", value)
 	}
 }
