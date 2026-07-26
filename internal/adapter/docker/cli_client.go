@@ -110,6 +110,20 @@ func (c *CLIClient) InspectContainer(ctx context.Context, name string) (Containe
 		}
 		return Container{}, fmt.Errorf("%w: %s", err, strings.TrimSpace(output))
 	}
+	return containerFromInspect([]byte(output))
+}
+
+// containerFromInspect is one `docker inspect` payload read as the container this
+// daemon holds, including the two moments only the daemon knows: when it made the
+// container and when it gave it a process. Both are the accounting a start latency
+// is measured with, so a moment this daemon states in a form Go cannot read is a
+// daemon Mercator does not understand and says so. Reading it as the zero moment
+// would report a container as never started, publish no start for the whole docker
+// lane, and degrade every start-latency row to unobserved without one failing test.
+//
+// The daemon says "never given a process" with the epoch itself: it writes
+// "0001-01-01T00:00:00Z", which parses and leaves the start absent.
+func containerFromInspect(payload []byte) (Container, error) {
 	var raw []struct {
 		ID      string `json:"Id"`
 		Name    string `json:"Name"`
@@ -123,17 +137,20 @@ func (c *CLIClient) InspectContainer(ctx context.Context, name string) (Containe
 			StartedAt string `json:"StartedAt"`
 		} `json:"State"`
 	}
-	if err := json.Unmarshal([]byte(output), &raw); err != nil {
+	if err := json.Unmarshal(payload, &raw); err != nil {
 		return Container{}, err
 	}
 	if len(raw) == 0 {
 		return Container{}, ErrNotFound
 	}
-	created, _ := time.Parse(time.RFC3339Nano, raw[0].Created)
-	// The daemon writes "0001-01-01T00:00:00Z" for a container it has never given a
-	// process, so an unparseable or zero moment leaves the start absent rather than
-	// reporting the epoch as the instant a workload began.
-	started, _ := time.Parse(time.RFC3339Nano, raw[0].State.StartedAt)
+	created, err := daemonMoment("Created", raw[0].Created)
+	if err != nil {
+		return Container{}, err
+	}
+	started, err := daemonMoment("State.StartedAt", raw[0].State.StartedAt)
+	if err != nil {
+		return Container{}, err
+	}
 	exitCode := raw[0].State.ExitCode
 	return Container{
 		ID:        raw[0].ID,
@@ -142,8 +159,16 @@ func (c *CLIClient) InspectContainer(ctx context.Context, name string) (Containe
 		State:     raw[0].State.Status,
 		ExitCode:  &exitCode,
 		CreatedAt: created,
-		StartedAt: started.UTC(),
+		StartedAt: started,
 	}, nil
+}
+
+func daemonMoment(field, stated string) (time.Time, error) {
+	moment, err := time.Parse(time.RFC3339Nano, stated)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("docker inspect: %s is %q, which is not a moment this adapter can read: %w", field, stated, err)
+	}
+	return moment.UTC(), nil
 }
 
 func (c *CLIClient) RemoveContainer(ctx context.Context, name string) error {

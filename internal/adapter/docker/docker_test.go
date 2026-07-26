@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -106,6 +107,29 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	if observation.Phase != adapter.ExternalPhaseRunning {
 		t.Fatalf("expected running live container after launch, got %+v", observation)
 	}
+	// The two moments a start latency is the difference between, both off a real
+	// daemon and neither of them Mercator's. A test double agreeing with itself
+	// about a field it writes proves nothing about the line that parses what this
+	// engine actually printed.
+	if observation.StartedAt == nil {
+		t.Fatalf("the live daemon gave this container a process and the observation reports no start: %+v", observation)
+	}
+	if observation.StartedAt.After(observation.ObservedAt) {
+		t.Fatalf("the live start %s is after the read %s that carried it",
+			observation.StartedAt.Format(time.RFC3339Nano), observation.ObservedAt.Format(time.RFC3339Nano))
+	}
+	if observation.StartedAt.Before(receipt.AcceptedAt) {
+		t.Fatalf("the live start %s is before the launch was accepted at %s, so its start latency is negative",
+			observation.StartedAt.Format(time.RFC3339Nano), receipt.AcceptedAt.Format(time.RFC3339Nano))
+	}
+	if stated := inspectField(t, req.LaunchKey, "{{.State.StartedAt}}"); !observation.StartedAt.Equal(momentStated(t, stated)) {
+		t.Fatalf("the observation reports %s and this daemon says %s",
+			observation.StartedAt.Format(time.RFC3339Nano), stated)
+	}
+	if stated := inspectField(t, req.LaunchKey, "{{.Created}}"); !receipt.AcceptedAt.Equal(momentStated(t, stated)) {
+		t.Fatalf("the receipt was accepted at %s and this daemon made the container at %s",
+			receipt.AcceptedAt.Format(time.RFC3339Nano), stated)
+	}
 	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: req.WorkspaceID})
 	if err != nil {
 		t.Fatalf("list owned: %v", err)
@@ -120,6 +144,27 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	if !released.Released {
 		t.Fatalf("expected release receipt: %+v", released)
 	}
+}
+
+// inspectField and momentStated ask the daemon directly, so the live case compares
+// the adapter's answer against the engine's own words rather than against another
+// copy of the adapter's parsing.
+func inspectField(t *testing.T, name, format string) string {
+	t.Helper()
+	output, err := exec.Command("docker", "inspect", "-f", format, name).Output()
+	if err != nil {
+		t.Fatalf("docker inspect -f %s %s: %v", format, name, err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func momentStated(t *testing.T, stated string) time.Time {
+	t.Helper()
+	moment, err := time.Parse(time.RFC3339Nano, stated)
+	if err != nil {
+		t.Fatalf("this daemon states %q, which is not a moment: %v", stated, err)
+	}
+	return moment.UTC()
 }
 
 func TestAdapterLaunchIsIdempotentByDeterministicName(t *testing.T) {
@@ -316,8 +361,8 @@ func TestObserveReportsWhenTheDaemonGaveTheContainerAProcess(t *testing.T) {
 	if observation.StartedAt == nil || !observation.StartedAt.Equal(started) {
 		t.Fatalf("the observation reports %v as the start and the daemon says %s", observation.StartedAt, started.Format(time.RFC3339Nano))
 	}
-	if !observation.StartedAt.Before(observation.ObservedAt) {
-		t.Fatalf("the reported start %s is not before the moment of the read %s, so it is the read",
+	if observation.StartedAt.After(observation.ObservedAt) {
+		t.Fatalf("the reported start %s is after the moment of the read %s, so nothing observed it",
 			observation.StartedAt.Format(time.RFC3339Nano), observation.ObservedAt.Format(time.RFC3339Nano))
 	}
 
@@ -335,6 +380,136 @@ func TestObserveReportsWhenTheDaemonGaveTheContainerAProcess(t *testing.T) {
 		t.Fatalf("a container that never ran reports a start of %s", observation.StartedAt.Format(time.RFC3339Nano))
 	}
 }
+
+// TestLaunchReportsTheMomentTheDaemonTookTheLaunch is the other half of the
+// subtraction. A start latency is started minus accepted, so an accepted moment
+// stamped with Mercator's clock after the call returned is later than the start
+// the same daemon reports, and the measurement is negative for every container in
+// this lane. It is negative by the whole retry gap for a launch that resolves as a
+// duplicate: the container was made and given a process by the first attempt, and
+// only the accepted moment would move.
+func TestLaunchReportsTheMomentTheDaemonTookTheLaunch(t *testing.T) {
+	client := newFakeClient()
+	ad := New(client)
+	req := launchRequest()
+
+	receipt, err := ad.Launch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	observation, err := ad.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: req.LaunchKey, OwnershipToken: req.OwnershipToken, RequestHash: req.RequestHash})
+	if err != nil {
+		t.Fatalf("observe: %v", err)
+	}
+
+	made := client.objects[req.LaunchKey].CreatedAt
+	if !receipt.AcceptedAt.Equal(made) {
+		t.Fatalf("the receipt was accepted at %s and the daemon made the container at %s",
+			receipt.AcceptedAt.Format(time.RFC3339Nano), made.Format(time.RFC3339Nano))
+	}
+	if observation.StartedAt.Before(receipt.AcceptedAt) {
+		t.Fatalf("the container started at %s, before the launch was accepted at %s, so its start latency is negative",
+			observation.StartedAt.Format(time.RFC3339Nano), receipt.AcceptedAt.Format(time.RFC3339Nano))
+	}
+
+	retried, err := ad.Launch(context.Background(), req)
+
+	if err != nil {
+		t.Fatalf("retry the same launch: %v", err)
+	}
+	if !retried.Duplicate {
+		t.Fatalf("the second launch of %q resolved as a new container: %+v", req.LaunchKey, retried)
+	}
+	if !retried.AcceptedAt.Equal(receipt.AcceptedAt) {
+		t.Fatalf("the retry re-dated the acceptance to %s, and the container it resolved to was taken at %s",
+			retried.AcceptedAt.Format(time.RFC3339Nano), receipt.AcceptedAt.Format(time.RFC3339Nano))
+	}
+}
+
+// TestContainerFromInspectReadsTheDaemonsOwnMoments reads a payload this host's
+// Docker Engine actually produced. The moments in it are the only place a start
+// latency can come from in this lane, and they arrive as strings: a daemon that
+// states one in a form this adapter cannot read is a daemon it does not
+// understand, not a container that never started. Reading it as the zero moment
+// would publish no start for the whole lane and degrade every start-latency row to
+// unobserved silently.
+func TestContainerFromInspectReadsTheDaemonsOwnMoments(t *testing.T) {
+	container, err := containerFromInspect([]byte(runningContainerInspectPayload))
+
+	if err != nil {
+		t.Fatalf("read a running container: %v", err)
+	}
+	made := time.Date(2026, 7, 26, 11, 56, 20, 618952831, time.UTC)
+	given := time.Date(2026, 7, 26, 11, 56, 20, 807652173, time.UTC)
+	if !container.CreatedAt.Equal(made) || !container.StartedAt.Equal(given) {
+		t.Fatalf("the daemon made the container at %s and gave it a process at %s, and this reads %s and %s",
+			made.Format(time.RFC3339Nano), given.Format(time.RFC3339Nano),
+			container.CreatedAt.Format(time.RFC3339Nano), container.StartedAt.Format(time.RFC3339Nano))
+	}
+	if container.Name != "mercator-fixture-probe" || container.State != "running" || container.Labels["mercator.launch_key"] != "lk1" {
+		t.Fatalf("unexpected container: %+v", container)
+	}
+}
+
+func TestContainerFromInspectSaysTheEpochIsNoStartAtAll(t *testing.T) {
+	container, err := containerFromInspect([]byte(createdContainerInspectPayload))
+
+	if err != nil {
+		t.Fatalf("read a created container: %v", err)
+	}
+	if !container.StartedAt.IsZero() {
+		t.Fatalf("a container the daemon never ran reports a start of %s", container.StartedAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestContainerFromInspectRefusesAMomentItCannotRead(t *testing.T) {
+	unreadable := strings.Replace(runningContainerInspectPayload, `"2026-07-26T11:56:20.807652173Z"`, `"Sun Jul 26 11:56:20 2026"`, 1)
+
+	_, err := containerFromInspect([]byte(unreadable))
+
+	if err == nil {
+		t.Fatalf("a daemon whose start moment this adapter cannot read was read anyway")
+	}
+	if !strings.Contains(err.Error(), "State.StartedAt") {
+		t.Fatalf("the error does not name the field the daemon stated unreadably: %v", err)
+	}
+}
+
+// runningContainerInspectPayload and createdContainerInspectPayload are trimmed
+// captures of `docker inspect` from Docker Engine 29.6.2: one container the daemon
+// gave a process 188ms after making it, and one it made and never ran. The epoch is
+// how the daemon says a container has never started.
+const runningContainerInspectPayload = `[
+  {
+    "Id": "c2265cf568f5ff81c470d39a6ae35742881e2e86ad969f15f46238ed7c5386a6",
+    "Created": "2026-07-26T11:56:20.618952831Z",
+    "Name": "/mercator-fixture-probe",
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "StartedAt": "2026-07-26T11:56:20.807652173Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "Config": {"Labels": {"mercator.launch_key": "lk1"}}
+  }
+]`
+
+const createdContainerInspectPayload = `[
+  {
+    "Id": "f1d3e1e0a1b24c4f8f5a6d7c8b9a0e1f2d3c4b5a69788796a5b4c3d2e1f00112",
+    "Created": "2026-07-26T11:56:29.784471331Z",
+    "Name": "/mercator-created-probe",
+    "State": {
+      "Status": "created",
+      "Running": false,
+      "ExitCode": 0,
+      "StartedAt": "0001-01-01T00:00:00Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "Config": {"Labels": {"mercator.launch_key": "lk1"}}
+  }
+]`
 
 func TestPhaseFromStateUsesExitCode(t *testing.T) {
 	if phase := phaseFromState("exited", intPtr(0)); phase != adapter.ExternalPhaseSucceeded {

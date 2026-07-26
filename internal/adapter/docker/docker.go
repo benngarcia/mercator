@@ -131,8 +131,15 @@ func (a *Adapter) Launch(ctx context.Context, req adapter.LaunchRequest) (adapte
 		OwnershipToken: req.OwnershipToken,
 		CleanupLocator: req.CleanupLocator,
 		Phase:          phaseFromState(container.State, container.ExitCode),
-		AcceptedAt:     a.now().UTC(),
-		Duplicate:      duplicate,
+		// When the daemon took this launch, which is when it made the container, on
+		// the daemon's own clock. Mercator's clock at the end of the call is later
+		// than the moment the same daemon then reports the container was given a
+		// process, so a start latency measured from it was negative for every
+		// container in this lane, and negative by the whole retry gap for a launch
+		// resolved as a duplicate: the retry re-dated an acceptance that had already
+		// happened while the start moment stayed the first attempt's.
+		AcceptedAt: container.CreatedAt,
+		Duplicate:  duplicate,
 	}, nil
 }
 
