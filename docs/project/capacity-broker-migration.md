@@ -2709,26 +2709,43 @@ Phase 4 added:
   not the placement.
 
 - `a-candidate-is-what-recurs` (green): what a launch history may be filed under,
-  stated as the five candidates a fleet has to tell apart and put together. Two
-  asks a marketplace numbered differently for one product in one place key as one
-  candidate, a third ask there whose cards hold half the memory keys as another,
-  an enrolled machine keys as itself, and a one-shot pool publishing nothing that
-  outlives its listing has no key at all. The fixture states each whole key, so a
-  world that stopped publishing a region fails it with the region gone from three
-  of them rather than silently dropping a rung of the ladder.
-- `a-candidate-recurs-through-the-control-plane` (conformance): the same five
-  candidates at L1, on the keys the real orchestrator recorded in its Booking
-  Decision. It exists because the placement corpus and the Lab are two different
-  simulated worlds, and a key that agreed in only one of them would be a key about
-  the harness.
-- `safety.candidate_identity_recurs` (Lab invariant): no two capacities the world
-  says are different share one candidate key, a key names the machine its backend
-  published and never the listing that search found, and capacity with nothing
-  published that outlives its listing has no key. It is stated as a collision
-  against World Truth and counts accelerators where the key groups them, which is
-  what keeps it from being the derivation agreeing with itself: restoring the
-  inventory bug where two entries naming one product were deduplicated fails it
-  with an eight-card machine and a four-card machine under one name.
+  stated as the candidates a fleet has to tell apart and put together. Two asks a
+  marketplace numbered differently for one product in one place key as one candidate,
+  a third ask there whose cards hold half the memory keys as another, a fourth whose
+  probe reported its eight cards as two entries of four keys as the same product as
+  the ask that reported them whole, a fifth holding four of that product keys as
+  another, a sixth that the same provider sells as a one-shot execution rather than as
+  a machine keys as another again, an enrolled machine keys as the machine its backend
+  named and never as the lease or the listing this fixture named it by, and a one-shot
+  pool publishing nothing that outlives its listing has no key at all. The fixture
+  states each whole key, so a world that stopped publishing a region fails it with the
+  region gone rather than silently dropping a rung of the ladder, and it states the
+  enrolled machine's content key as well as its machine key, because what a pull costs
+  is a property of the content and what a boot costs is not.
+- `registry-silence-has-a-name` (green): also states, since the second review, that
+  neither Run has a content key at all. A registry that will not answer leaves
+  Mercator unable to name what it is about to run, and a content key naming no content
+  filed a 900MB image and a 40GB one under one name per machine.
+- `a-candidate-recurs-through-the-control-plane` (conformance): the same candidates at
+  L1, on the keys the real orchestrator recorded in its Booking Decision. It exists
+  because the placement corpus and the Lab are two different simulated worlds, and a
+  key that agreed in only one of them would be a key about the harness.
+- `safety.candidate_identity_recurs` (Lab invariant): no two capacities the world says
+  are different share one candidate key, two Runs that asked one machine for different
+  content do not share one content key, a key names the machine its backend published
+  and never the lease or the listing that search found, and capacity the world
+  publishes nothing recurring about has no key. It is stated against World Truth
+  rather than against the derivation: the collision counts accelerators where the key
+  groups them, the content clause reads the image out of Mercator's own workload
+  record, and the honesty clauses read the offer. Each clause has a case that fails
+  it, one at a time, in `TestEveryClauseOfTheCandidateIdentityRuleCanFail`, and the
+  registry's permanent deliberate failure drives the collision. Through the whole
+  control plane on the conformance Blueprint: restoring the inventory bug where two
+  entries naming one product were deduplicated fails it with an eight-card machine and
+  a four-card machine under one name, dropping the lane fails it with a rental and a
+  one-shot execution of one product under one name, naming the machine from the Rental
+  fails it on every Blueprint in the corpus, and letting any provider recur fails it
+  on the one-shot pool.
 
 - `a-fast-machine-far-from-the-data-loses` (green): two Rentals equally warm on the
   image at one price, one on a measured 4 Gbps path to the object store and one on
@@ -2854,6 +2871,72 @@ the launch.
 
 ## Verification evidence
 
+### Phase 4 the second review of the candidate identity
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. Two reviewers refuted the first review of the identity,
+and six of their findings were real: four defects in what the specification could
+express and two false claims in this plan. A concurrent session held its own slice
+open across `internal/lab/world.go`, `internal/lab/invariant.go` and
+`internal/scenario/schema.go` in the same worktree, so every suite below was run
+against a `git archive` of the commit rather than against the working tree, and only
+this slice's own hunks were staged.
+
+What the worlds could not say, and now can.
+
+- A machine reports its cards the way its probe grouped them. Restoring the
+  deduplication fails `safety.candidate_identity_recurs` through the whole control
+  plane with "ask-2211 is reusable machine "" on simvast/US-CA/ with 8 cards of
+  640000000000 bytes, and ask-2212 is ... 4 cards of 320000000000 bytes", and fails
+  `a-candidate-is-what-recurs` on ask-2211's key. Before this, that break failed two
+  domain unit tests and nothing else: no Blueprint could state a machine whose
+  inventory arrived split, which is the only shape the bug has.
+- A simulated machine is named something its lease and its listing are not. Naming
+  the machine from the Rental, which is the production defect the derivation exists
+  to prevent, now fails the rule on every Blueprint the Lab drives, including the
+  generated ones, with "filed candidate "rental-quoted" under machine
+  "rental-quoted", and the machine it is is "node-1"". Before this it was green
+  everywhere: both worlds used one string as the offer ID, the Rental ID and the
+  machine, so the honesty clause had nothing to compare against.
+- One product a provider sells in both lanes is two candidates. Dropping the lane
+  fails the rule with "ask-2211 is reusable ... and ask-4417-oneshot is ephemeral
+  ...", fails the corpus, and fails `TestOneProductInTwoLanesIsTwoCandidates`.
+  `capability.Declare` refuses a backend implementing both `NodeRuntime` and
+  `EphemeralExecutor`, so this is a world the specification can state and production
+  cannot yet reach; it becomes reachable when RunPod's lane migration lands.
+- Unknown content has no content key. `registry-silence-has-a-name` states that
+  neither Run has one, and without the fix it fails with
+  `lane=reusable;provider=fake;machine=node-1;image=` on all four candidates, which
+  is every unresolvable image in a fleet sharing one key per machine.
+- The rule holds the converse of its own third clause. Letting any provider recur
+  fails it on the one-shot pool with "this world publishes nothing about it that
+  outlives the listing"; before this, capacity that wrongly acquired a key was never
+  judged at all.
+- Every clause has a case that fails it, one at a time, in
+  `TestEveryClauseOfTheCandidateIdentityRuleCanFail`. The content clause is only
+  there: no Blueprint states a world where two registries go silent on one machine.
+
+Two claims in this plan were false and are corrected in place, in the first review's
+section above: the break said to prove the rule has bite did not fail it, and the
+justification for keeping the node generation out of the key was arithmetic the
+codebase contradicts, because `internal/httpapi/nodes.go` hardcodes `Generation: 1`
+and nothing in `internal/` increments one. The rejection itself stands on the reason
+that a machine which stops and resumes is the same hardware.
+
+The live half ran. `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
+-run TestIntegration` launches, observes and releases a real container on this host's
+engine and reaches the same daemon twice, once through the ambient socket and once
+through a docker context, and both cases now check that the key names the engine's
+own ID before comparing two keys: an unstamped offer produces no key at all, and two
+keys that name nothing are equal. Mercator issue #165 does not reproduce here and was
+left alone.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+cd web/app && bun run typecheck && bun run test
+```
+
 ### Phase 4 the review of the measured transfer path
 
 On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
@@ -2975,29 +3058,36 @@ Docker daemon. Two reviewers refuted the slice that keyed a launch history, and
 every claim below is held by a deliberate break that fails it.
 
 - restoring `slices.Compact` over the sorted inventory fails
-  `TestTwoSpellingsOfOneCardAreOneProduct`, `TestTwiceTheCardsIsNotOneProduct`, and
-  `TestOneModelInTwoMemorySizesIsTwoProducts`, which is the reviewers' case that a
-  four-GPU machine and a two-GPU machine keyed as one exact candidate;
+  `TestTwoSpellingsOfOneCardAreOneProduct` and `TestTwiceTheCardsIsNotOneProduct`,
+  which is the reviewers' case that a four-GPU machine and a two-GPU machine keyed as
+  one exact candidate. It does not fail `TestOneModelInTwoMemorySizesIsTwoProducts`,
+  which this section claimed until the second review measured it: that test holds the
+  memory half of the product and is broken by dropping the memory, not by the
+  grouping;
 - naming the machine from the endpoint label again fails
   `TestTwoDaemonsOnOneBoxAreTwoMachines`, `TestOneDaemonReachedTwoWaysIsOneMachine`,
   and `TestAnUnreachableDaemonNamesNoMachine`, and fails the live case against this
-  host's own engine with `provider=docker;machine=loopback` beside
-  `provider=docker;machine=mercator-machine-...`;
+  host's own engine with `lane=ephemeral;provider=docker;machine=loopback` beside
+  `lane=ephemeral;provider=docker;machine=mercator-machine-...`, the lane having
+  joined the key in the second review;
 - naming the machine from the Rental again fails
   `TestTwoMachinesOnOneLeaseOfferTwoMachines` in the node registry and
   `TestTwoMachinesOnOneLeaseAreTwoCandidates` in the domain, which is the case an
-  operator reaches by inviting two machines against one rental_id;
+  operator reaches by inviting two machines against one rental_id. Since the second
+  review it also fails `safety.candidate_identity_recurs` on every Blueprint, which
+  it did not when this was written;
 - deleting `Region: o.Geolocation` fails `TestTwoSearchesOfOneMachineAreOneCandidate`,
   deleting `InstanceType: cloud + "/" + g.ID` fails
   `TestOneProductInTwoCloudsIsTwoCandidates`, and deleting either Shadeform fact
   fails `TestOneRegionNameInTwoCloudsIsTwoPlaces`. All four lines could be deleted
   with the suite green before this pass;
 - dropping the region from either simulated world fails
-  `a-candidate-is-what-recurs` on three of its five keys and fails
+  `a-candidate-is-what-recurs` on every key that states one and fails
   `TestACandidateIsWhatRecursThroughTheWholeLabWorld` on the ask it states in full;
-- restoring the inventory bug fails `safety.candidate_identity_recurs` through the
-  whole control plane, which is the rule refusing an eight-card machine and a
-  four-card machine under one name.
+- dropping the accelerator memory from the product fails
+  `safety.candidate_identity_recurs` through the whole control plane, with `ask-4417`
+  and `ask-51120` under one name at eight cards each. This is the break that fires the
+  rule, and until the second review this section named a different one.
 
 The live half ran. `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
 -run TestIntegrationOneDaemonReachedTwoWaysIsOneMachine` reaches this host's Docker
@@ -3008,11 +3098,24 @@ was left alone.
 
 One refutation is rejected. The reviewers asked for the node generation in the key.
 It is not there on purpose: the generation exists so a command is never sent to a
-runtime that has been replaced, which is fencing, and a machine that stops and
-resumes is the same disk. Keying on it would leave every launch history one sample
-long by construction, and what a machine currently holds is read from its live
-inventory rather than from its history. The collision the reviewers found in the
-same finding, two machines on one lease, is real and is fixed by naming the node.
+runtime that has been replaced, which is fencing, and a machine that stops and resumes
+is the same disk and the same hardware, so what it spends pulling and booting is the
+same thing to learn about across the boundary. Keying on it would split one machine's
+launch history at every stop and resume while nothing about the machine changed, and
+what a machine currently holds is read from its live inventory rather than from its
+history. The collision the reviewers found in the same finding, two machines on one
+lease, is real and is fixed by naming the node.
+
+This paragraph first justified the rejection by claiming that keying on the
+generation would leave every launch history one sample long, and the second review
+established that the codebase says otherwise. `internal/httpapi/nodes.go` is the only
+production construction of a `node.Invitation` and sets `Generation: 1`
+unconditionally from a request body with no generation field, and nothing in
+`internal/` increments one, so a key carrying it would partition nothing at all
+today. On the definition in `internal/node/node.go` it changes on stop and resume, so
+a machine running fifty launches between two resumes would hold fifty samples and not
+one. The rejection stands on the reason above; the arithmetic it was first argued
+from was wrong.
 
 ```text
 go build ./... && go vet ./... && go test ./... -count=1
