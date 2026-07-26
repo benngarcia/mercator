@@ -252,6 +252,7 @@ func TestDispositionForOfferKind(t *testing.T) {
 // enrolled nodes honestly recording an assumption.
 func TestARegistryLinkIsWorthWhatItsPublisherSaid(t *testing.T) {
 	observed := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	decided := observed.Add(time.Minute)
 	fact := func(mbps, confidence float64, validUntil time.Time) NetworkFact {
 		return NetworkFact{
 			Scope:      NetworkScopeRegistry,
@@ -270,11 +271,20 @@ func TestARegistryLinkIsWorthWhatItsPublisherSaid(t *testing.T) {
 			want: LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionRegistryRate},
 		},
 		"a valid measurement is worth what it says it is": {
-			facts: []NetworkFact{fact(250, 0.9, observed.Add(time.Hour))},
+			facts: []NetworkFact{fact(250, 0.9, decided.Add(time.Hour))},
 			want:  LinkSpeed{Mbps: 250, Confidence: 0.9},
 		},
 		"a measurement that expired before this offer was observed is not one": {
 			facts: []NetworkFact{fact(250, 0.9, observed.Add(-time.Hour))},
+			want:  LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionRegistryRate},
+		},
+		// The moment that decides is the one the placement is taken at and never
+		// the one the offer was collected at. A fact its publisher stopped
+		// standing behind while the offer sat in the collection is silence here
+		// for the same reason it is silence to the Run's floor over it, and
+		// pricing it as a measurement recorded two answers about one host.
+		"a measurement that lapsed between the collection and the decision is not one": {
+			facts: []NetworkFact{fact(250, 0.9, decided.Add(-time.Second))},
 			want:  LinkSpeed{Mbps: DefaultRegistryDownloadMbps, Confidence: AssumedLinkConfidence, Assumption: AssumptionRegistryRate},
 		},
 		"a fact about another link says nothing about this one": {
@@ -286,7 +296,7 @@ func TestARegistryLinkIsWorthWhatItsPublisherSaid(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			offer := OfferSnapshot{ObservedAt: observed, Network: NetworkFacts{Download: testCase.facts}}
 
-			if got := offer.DownloadRate(NetworkScopeRegistry); got != testCase.want {
+			if got := offer.DownloadRate(NetworkScopeRegistry, decided); got != testCase.want {
 				t.Fatalf("registry link = %+v, want %+v", got, testCase.want)
 			}
 		})

@@ -450,7 +450,7 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 	queue := queueEstimate(input, offer)
 	machine := provisionEstimate(input, offer)
 	content := contentFor(input, offer)
-	registry, store, storage := offer.DownloadRate(domain.NetworkScopeRegistry), offer.DownloadRate(domain.NetworkScopeObjectStore), domain.UnpackRate()
+	registry, store, storage := offer.DownloadRate(domain.NetworkScopeRegistry, input.EvaluatedAt), offer.DownloadRate(domain.NetworkScopeObjectStore, input.EvaluatedAt), domain.UnpackRate()
 	fetch, unpack := imageEstimates(input.Image, offer, content, registry, storage, input.ModelVersion)
 	inputs := artifactEstimate(offer.Artifacts, content, store, input.ModelVersion)
 	container := containerStartEstimate(input.ModelVersion)

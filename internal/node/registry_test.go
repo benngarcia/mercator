@@ -684,14 +684,14 @@ func TestAPathANodeMeasuredReachesTheOfferItPrices(t *testing.T) {
 	if len(offers) != 1 {
 		t.Fatalf("offers = %d, want the one enrolled node", len(offers))
 	}
-	rate := offers[0].DownloadRate(domain.NetworkScopeObjectStore)
+	rate := offers[0].DownloadRate(domain.NetworkScopeObjectStore, offers[0].ObservedAt)
 	if rate.Mbps != 1750 || rate.Measurement != nodeagent.ArtifactCopySource {
 		t.Fatalf("the offer prices an Artifact read at %+v, and this node measured 1750 Mbps itself", rate)
 	}
 	// The registry path this node never crossed. A node that measured one link is
 	// not a node that measured them all, and the answer for the other is the
 	// standing assumption saying so.
-	if registryRate := offers[0].DownloadRate(domain.NetworkScopeRegistry); registryRate.Assumption != domain.AssumptionRegistryRate {
+	if registryRate := offers[0].DownloadRate(domain.NetworkScopeRegistry, offers[0].ObservedAt); registryRate.Assumption != domain.AssumptionRegistryRate {
 		t.Fatalf("the offer prices an image pull at %+v, and nothing has measured this node's link to a registry", registryRate)
 	}
 }

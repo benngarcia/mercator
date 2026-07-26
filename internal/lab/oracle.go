@@ -191,9 +191,9 @@ func referenceTransferRates(input scheduler.SchedulingInput, offer domain.OfferS
 	work, _ := input.Image.StartWork(offer.Images)
 	fetchBytes, _ := domain.ArtifactFetchWork(input.Artifacts, offer.Artifacts)
 	stated := []domain.TransferRate{
-		domain.TransferRateFor(domain.StageImageFetch, domain.NetworkScopeRegistry, work.TransferBytes, offer.DownloadRate(domain.NetworkScopeRegistry)),
+		domain.TransferRateFor(domain.StageImageFetch, domain.NetworkScopeRegistry, work.TransferBytes, offer.DownloadRate(domain.NetworkScopeRegistry, input.EvaluatedAt)),
 		domain.TransferRateFor(domain.StageUnpack, "", work.UnpackBytes, domain.UnpackRate()),
-		domain.TransferRateFor(domain.StageArtifactFetch, domain.NetworkScopeObjectStore, fetchBytes, offer.DownloadRate(domain.NetworkScopeObjectStore)),
+		domain.TransferRateFor(domain.StageArtifactFetch, domain.NetworkScopeObjectStore, fetchBytes, offer.DownloadRate(domain.NetworkScopeObjectStore, input.EvaluatedAt)),
 	}
 	return slices.DeleteFunc(stated, func(rate domain.TransferRate) bool { return rate.Bytes == 0 })
 }
@@ -212,8 +212,8 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	// than one across the country from it, and a model that priced both at one
 	// constant would disagree with production about every machine that published a
 	// measurement of its own.
-	registry := offer.DownloadRate(domain.NetworkScopeRegistry)
-	store := offer.DownloadRate(domain.NetworkScopeObjectStore)
+	registry := offer.DownloadRate(domain.NetworkScopeRegistry, input.EvaluatedAt)
+	store := offer.DownloadRate(domain.NetworkScopeObjectStore, input.EvaluatedAt)
 	storage := domain.UnpackRate()
 	imageFetch := referenceContent(
 		referenceTransferSeconds(work.TransferBytes, registry.Mbps),

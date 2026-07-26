@@ -1102,3 +1102,59 @@ func TestABudgetIsNotClearedByACandidateWithNoPrice(t *testing.T) {
 		t.Errorf("the refusal is %+v, and the caller has to see which bound the candidate missed", candidate.Rejections)
 	}
 }
+
+// TestAFactThatLapsedBeforeTheDecisionIsSilenceToBothItsReaders holds the rate
+// and the floor to one moment. A published fact is read twice on the way to one
+// placement: once to price the transfer and once to answer the Run's floor over
+// the same link. Asking the first at the offer's observation moment and the second
+// at the decision's made a lapsed fact both things at once, and the record then
+// said this candidate was refused because nobody had published a download p10 and
+// priced its image pull at 750 Mbps measured by that same publisher.
+//
+// It is not a record an operator can act on, and it is the record the Lab's
+// attribution rule reports as a fabricated measurement, in the words it exists to
+// say about a prediction that invented a number.
+func TestAFactThatLapsedBeforeTheDecisionIsSilenceToBothItsReaders(t *testing.T) {
+	collected := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	decided := collected.Add(15 * time.Second)
+	offer := schedulerOffer("offer-lapsed", decided, 0.0001, 0)
+	offer.ObservedAt = collected
+	offer.Network.Download[0].Source = "node_artifact_copy"
+	offer.Network.Download[0].ValidUntil = decided.Add(-time.Second)
+
+	decision, err := New().Evaluate(context.Background(), SchedulingInput{
+		RunID:        "run-lapsed",
+		Workload:     schedulerRevision(),
+		Offers:       []domain.OfferSnapshot{offer},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  decided,
+		Image: domain.ImageManifest{
+			Known:  true,
+			Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			Layers: []domain.ImageLayer{{Digest: "sha256:aa", CompressedBytes: 2 << 30}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+
+	assertCandidateRejected(t, decision, "offer-lapsed", "UNKNOWN_FACT", "network.download")
+	rate := findTransferRate(t, findCandidate(t, decision, "offer-lapsed"), domain.StageImageFetch)
+	if rate.Measurement != "" {
+		t.Fatalf("the decision priced the image pull at %+v as a measurement, and it refused the same candidate because nobody had published one", rate)
+	}
+	if rate.Assumption != domain.AssumptionRegistryRate {
+		t.Fatalf("the decision priced the image pull at %+v, and a link nothing standing describes is priced from the stated assumption", rate)
+	}
+}
+
+func findTransferRate(t *testing.T, candidate domain.CandidateDecision, stage domain.LaunchStage) domain.TransferRate {
+	t.Helper()
+	for _, rate := range candidate.TransferRates {
+		if rate.Stage == stage {
+			return rate
+		}
+	}
+	t.Fatalf("candidate %s recorded no rate for its %s stage: %+v", candidate.OfferSnapshotID, stage, candidate.TransferRates)
+	return domain.TransferRate{}
+}

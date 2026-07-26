@@ -170,9 +170,9 @@ type NetworkDownloadRequirement struct {
 // decides what silence buys through AllowUnknown, rather than a disowned fact
 // striking a candidate out where an identical silent one is admitted.
 //
-// It is the same fact OfferSnapshot.DownloadRate prices the transfer from, so
-// the bound and the prediction are asked of one measurement rather than of two
-// facts that happen to be published together.
+// It is the same fact OfferSnapshot.DownloadRate prices the transfer from, asked
+// at the same moment, so the bound and the prediction are one reading of one
+// measurement rather than two questions that happen to be put to the same host.
 func (req NetworkDownloadRequirement) Answer(facts NetworkFacts, at time.Time) (NetworkFact, bool) {
 	fact, answered := facts.DownloadP10(req.Scope, at)
 	if !answered {
@@ -409,16 +409,25 @@ type LinkSpeed struct {
 
 // DownloadRate is this host's pessimistic (p10) throughput over one kind of
 // path. A published fact is only worth what its publisher said it was worth, and
-// only while it is still valid as of the moment this offer was observed: a fact
-// carries its own confidence and its own expiry, and reading the mere existence
-// of one as a measurement is how an unmeasured constant becomes a certainty.
-// Absent an answer the reply is the standing assumption for that path, saying so.
+// only while its publisher still stands behind it: a fact carries its own
+// confidence and its own expiry, and reading the mere existence of one as a
+// measurement is how an unmeasured constant becomes a certainty. Absent an answer
+// the reply is the standing assumption for that path, saying so.
+//
+// The moment is the caller's and is always the moment the decision is being
+// taken. It was the offer's own observation moment, and one question asked at two
+// moments is what that bought: NetworkDownloadRequirement.Answer asks at the
+// decision's, so a fact that lapsed between the collection and the placement
+// priced the transfer as a measurement while the Run's floor over the same fact
+// recorded that nobody had published anything. The record then said both things
+// about one candidate, and the Lab's attribution rule reported the scheduler's own
+// documented answer as a fabricated measurement.
 //
 // It is asked per scope rather than once, because an image crosses a link to a
 // registry and a dataset crosses a link to an object store, and one number for
 // both cannot tell a machine beside the data from a machine beside the images.
-func (offer OfferSnapshot) DownloadRate(scope NetworkScope) LinkSpeed {
-	if fact, answered := offer.Network.DownloadP10(scope, offer.ObservedAt); answered {
+func (offer OfferSnapshot) DownloadRate(scope NetworkScope, at time.Time) LinkSpeed {
+	if fact, answered := offer.Network.DownloadP10(scope, at); answered {
 		return LinkSpeed{Mbps: fact.ValueMbps, Confidence: fact.Confidence, Measurement: fact.Source}
 	}
 	return AssumedDownloadRate(scope)

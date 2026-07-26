@@ -374,7 +374,7 @@ func TestStandingOfferPublishesNoThroughputNothingMeasured(t *testing.T) {
 	if len(offer.Network.Download) != 0 {
 		t.Fatalf("offer publishes %+v, want no throughput fact until something measures this link", offer.Network.Download)
 	}
-	link := offer.DownloadRate(domain.NetworkScopeRegistry)
+	link := offer.DownloadRate(domain.NetworkScopeRegistry, now)
 	if link.Confidence != domain.AssumedLinkConfidence {
 		t.Fatalf("registry link = %+v, want the standing assumption at %v confidence", link, domain.AssumedLinkConfidence)
 	}

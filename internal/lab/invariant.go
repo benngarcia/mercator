@@ -1532,13 +1532,19 @@ func ratePricedFromSomething(decision domain.BookingDecision, candidate domain.C
 // it may not become a measurement by being divided by.
 //
 // It is asked of what the world published and at the decision's own moment, which
-// is the only question the record can answer. Capacity is retired while the
-// decisions taken about it stay written down, so a rule stated against the fleet
-// as it stands now would turn a correct placement into a violation the moment the
-// losing machine's lease elapsed, and would report it in the words of the thing it
-// exists to catch. A measurement nobody ever published still fails here, because
-// this world remembers every fact it handed to Mercator and no machine's silence
-// becomes a publication by being forgotten.
+// is both the only moment the record carries and the moment production priced the
+// rate at. OfferSnapshot.DownloadRate takes it from the same field, so a rate this
+// finds unpublished is one the scheduler had no standing fact for either. It read
+// the offer's observation moment instead for a while, and a fact that lapsed in
+// between was priced as a measurement here and reported as a fabrication there,
+// against a decision taken by the scheduler's own documented rule.
+//
+// Capacity is retired while the decisions taken about it stay written down, so a
+// rule stated against the fleet as it stands now would turn a correct placement
+// into a violation the moment the losing machine's lease elapsed, and would report
+// it in the words of the thing it exists to catch. A measurement nobody ever
+// published still fails here, because this world remembers every fact it handed to
+// Mercator and no machine's silence becomes a publication by being forgotten.
 func measuredRateWasReported(
 	decision domain.BookingDecision,
 	candidate domain.CandidateDecision,
