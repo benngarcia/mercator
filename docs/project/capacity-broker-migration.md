@@ -1266,69 +1266,66 @@ complete because it works against a live provider.
   as the whole fleet's, which had made the concurrency bound unfailable in the
   only world where it matters. Evidence and the deliberate breaks are under
   "Phase 3 prewarming, the second review".
-- [x] 2026-07-25: Let a consumer prefer the machine its input was written on.
-  Nothing recorded which host produced an Artifact. The ledger that says where a
-  Run ran is scanned past, a node enumerates only the copies its own replica
-  store fetched, and a workload publishes its output itself, so the one machine
-  most likely to still be holding a 40GB dataset was scored exactly like every
-  other machine that could not say what it holds. Verified against the daemon on
-  this workstation: a real workload writes its output inside its own container,
-  the production runtime reports no copy of that version, and the same content
-  fetched from a real MinIO through `PrepareArtifact` is reported at once. Silence
-  about produced content is the real state of a real node, which is why the
-  producing host has to be recorded where the publication happens.
-  - `domain.ArtifactVersion.ProducedOnRentalID` is the record, stamped by the
-    publication beside the Run that made it. Only reusable capacity can carry it:
-    a one-shot execution's host is gone once its workload exits, so the honest
-    value there is empty, and an empty producing host matches no candidate,
-    because capacity that keeps nothing carries no Rental identity either and
-    comparing the two silences would make every such offer the producer of
-    everything.
-  - The preference is the read the consumer would not make. It reaches the score
-    through `ArtifactSeconds` and the objective that ranks candidates on it,
-    which is where every other locality answer is already priced. `ScoreWeights`
-    gains no field: four of its five terms are multiplied by zero in every
-    deployment, so a weighted affinity term would provably change no placement,
-    and a bonus subtracted from the score outside them would be a hard constraint
-    wearing a preference's clothes. Populating those weights is phase 4 work at
-    the source, and both the struct and this entry say so.
-  - The record answers only where the machine said nothing about the version. A
-    host that enumerated its copies and holds none it may read has made a
-    stronger claim, about itself, now, than anything Mercator remembers about
-    where bytes were written, and a consumer sent there on the record would pay a
-    transfer the estimate promised it would not. Zero seconds resting on the
-    record states no confidence at all, where an inventory saying the copy is here
-    states certainty: nothing re-checked that the copy outlived the Run that wrote
-    it.
-  - It is a preference by construction rather than by restraint. Affinity can
-    only ever remove seconds from one candidate, so no Run can be refused
-    capacity for it, which is what `safety.locality_is_never_infeasibility`
-    exists to guarantee and continues to hold with no new clause.
-  - Preparation still prepares. `orchestrator.alreadyHeld` drops only content a
-    machine established it is holding, so a queued Run whose host was preferred on
-    the record still has the copy fetched and checked there before its turn comes.
-    That is the right interaction rather than a gap: placement may prefer a machine
-    on the strength of a record, and the copy the Run actually reads is one
-    something verified.
-  - The two models compute one uncertainty penalty. `internal/lab/oracle.go`
-    counted an offer nobody could enumerate and an offer with no price as
-    uncertainty and `internal/scheduler/scheduler.go` did not, and they agreed
-    only because the weight that reads the term is zero everywhere. It is
-    `OfferSnapshot.UncertaintyPenalty` now, said once, on the offer that owns the
-    facts, keeping the four terms those two implementations were already stated
-    against and gaining none: whether an offer that could not enumerate its
-    Artifact copies belongs there is a question for the calibration that will
-    finally read the number, because a penalty term nothing multiplies is a claim
-    no test can falsify.
-  - Judgment calls. `RentalSpec.enumerates_artifacts` is the world any of this
-    matters in: a machine Mercator controls whose runtime has no replica store.
-    What such a machine holds stays World Truth and no offer says it, suppressed
-    at publication in both simulators exactly as a borrowed slot's inventory is.
-    `produced_here` is an optional field on the public evidence rather than a
-    required one, unlike `artifact_seconds` before it, because false is the answer
-    for nearly every candidate of nearly every Run and a field that says "no"
-    everywhere is noise in the one place an operator reads for a reason.
-    `ArtifactResidentBytes` is deleted, having had no callers.
+- [x] 2026-07-25: Withdraw producer affinity, and stop the Lab keeping a copy of
+  a Run's own output. Two reviewers refuted the affinity slice and both were
+  right, so it is gone rather than argued for. The discount fired only where a
+  machine had said nothing about its Artifact copies, and no machine Mercator runs
+  says nothing: `cmd/mercator-node` always builds the runtime with an artifact
+  root, so `nodeagent.artifacts` reports an enumerated inventory, and
+  `internal/node` is the only source of reusable-lane offers. The producing host
+  therefore took the enumerated-and-holds-none branch and was charged the full
+  read exactly like a machine that never saw the bytes. A preference that provably
+  changes no placement is the dead-weights failure in another costume, and this
+  plan had recorded it as delivered.
+  - The precedence was not the bug, so reordering it would have been worse. One
+    host's replica store is the only place a copy a Run may read can be. A
+    workload writes its output inside its own container, nothing files that
+    content as a replica, and bytes no verification ever touched are bytes no
+    consumer may be sent to read. So a host that enumerated and found no copy has
+    answered about every copy anybody could use. When a publication does file a
+    producing host's own output as a checked copy, that machine will be warm on
+    its own inventory and will need no record to be preferred.
+  - Deleted: `ProducedOnRentalID`, `ProducedOn`, `ArtifactEvidence.ProducedHere`
+    and its public field, the `produced_here` estimate source and its zero
+    confidence, the Blueprint `produced_on` and `produced_here` expectations with
+    their validation, the `enumerates_artifacts` knob in both simulators, and the
+    three fixtures and two tests that existed to make the discount fire.
+    `ArtifactFetchWork` takes an inventory again, because that is all it reads.
+  - The simulated world was keeping a verified replica of every Run's output on
+    the host that computed it, which is what let the affinity conformance report a
+    saving at all, and which a real node contradicts: this slice's own live test
+    on this workstation asserts a node reports zero replicas after a real
+    container wrote its output. A workload's output is now `artifact.written`, the
+    fourth Artifact operation beside read, replicated, and published, and it is
+    what the durability gap is measured from. Only a fetch Mercator issued leaves
+    a replica, so `safety.artifact_replica_verified` drops its second shape and
+    reads simply: a copy of a version nothing published is content from nowhere.
+  - The corpus keeps both halves of what a copy is worth, on copies that can
+    exist. `artifact-must-be-durable-before-a-consumer-runs` gains a fourth Run
+    that reads what the previous Run's fetch left and checked, and the vertical
+    demo's consumer now reads two inputs, a dataset a fetch put there before the
+    world started and the checkpoint its own producer wrote, so
+    `warmth_observed` asserts no read for the first and the whole read for the
+    second. A checkpoint that asked only for warmth would pass on a decision that
+    had invented some.
+  - What survives from the withdrawn slice is what was true.
+    `OfferSnapshot.UncertaintyPenalty` is still one quantity said once, because
+    the oracle and the scheduler had drifted on two of its four terms and agreed
+    only through a weight that is zero everywhere. The live test survives as the
+    fact the withdrawal rests on. `ScoreWeights` still gains no field, for the
+    reason it gained none before.
+  - What this leaves owed, and it is the one gap under everything above: a
+    verified replica in a node's replica store is not reachable from inside the
+    container a Run executes in.
+    `LaunchWorkloadCommand.ArtifactMounts` declared the attachment and was
+    populated by nothing and read by nothing, so it is deleted rather than left as
+    a promise. The zero seconds Placement prices for a host holding a checked copy
+    is therefore a specification ahead of its implementation, exercised at L1 and
+    not collectible by any production workload, and
+    [#171](https://github.com/benngarcia/mercator/issues/171) owes the attachment,
+    the way a workload learns which of its inputs are local, and a live
+    conformance test on a real daemon. No entry here may call artifact locality a
+    saving a Run collects until that lands.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1350,7 +1347,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a consumer prefers the machine its input was published from, as the read it would not make there and never as a constraint; a production object-store client remains |
+| 3 | Exact OCI and artifact locality; prefetch | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -1436,26 +1433,34 @@ Phase 3 added:
   holds it, the offer carries no inventory, and the Run is priced the whole
   fetch. Publishing what such a machine holds fails it with `pull source
   "image_inventory" for a machine nothing of Mercator's runs on`.
-- `artifact-must-be-durable-before-a-consumer-runs` (conformance): four claims
-  about what makes an Artifact consumable, driven through the real orchestrator,
-  event log, and Run projection. A producer writes its 10GB checkpoint onto the
-  host it ran on and the object store takes it 160 seconds later, and Mercator
-  holds its consumer unplaced across that whole gap while carrying it in the
-  projection the entire time. A later Run consumes an Artifact whose only copy
-  sat on a Rental whose idle lease has since elapsed, and runs anyway from the
-  object store. That same Run reads a second Artifact whose copy is sitting on
-  the host it landed on and fetches it anyway, because nobody ever checked those
-  bytes against the catalog. Driven twice at cadences ten minutes apart, the two
-  executions agree on when the checkpoint was written and when it became
-  durable, because those are facts about the world rather than about the
+- `artifact-must-be-durable-before-a-consumer-runs` (conformance): five claims
+  about what makes an Artifact consumable and what a local copy is worth, driven
+  through the real orchestrator, event log, and Run projection. A producer writes
+  its 10GB checkpoint on the host it ran on and the object store takes it 160
+  seconds later, and Mercator holds its consumer unplaced across that whole gap
+  while carrying it in the projection the entire time. That consumer then lands on
+  the very machine the checkpoint was written on and reads the object store
+  anyway, priced the full 160 seconds, because nothing of Mercator's fetched,
+  hashed, or filed what a workload wrote inside its own container. A later Run
+  consumes an Artifact whose only copy sat on a Rental whose idle lease has since
+  elapsed, and runs anyway from the object store. That same Run reads a second
+  Artifact whose copy is sitting on the host it landed on and fetches it anyway,
+  because nobody ever checked those bytes against the catalog. The Run behind it
+  reads what that fetch left and something checked, and is priced no read at all,
+  which is the one thing a local copy buys. Driven twice at cadences ten minutes
+  apart, the two executions agree on when the checkpoint was written and when it
+  became durable, because those are facts about the world rather than about the
   observer.
 - `safety.artifact_replica_verified` (Lab invariant): no copy exists of content
   the catalog cannot name, no copy claims a digest that version does not have,
   every copy traces back to the object store, and no Run reads a copy nothing
-  checked. "Traces back to the object store" has two shapes and the second is
-  why the rule is not simply "the version is durable": a copy was fetched from a
-  publication, or it is the output the producing Run wrote on its way to
-  becoming one.
+  checked. "Traces back to the object store" is exactly the version being durable,
+  with no second shape: only a fetch Mercator issued leaves a copy, because a copy
+  is worth what checking it against the catalog says it is worth. Content a
+  workload wrote for itself is `artifact.written` in the ledger and never a copy in
+  an inventory, and restoring the world that filed one fails the rule with `offer
+  "producer-rental" holds a copy of Artifact "artifact:checkpoint:v1", which
+  nothing published`.
 - `dataset-gravity-beats-image-cache` (green): four machines at one price for
   one Run that reads a 40GB dataset, so nothing but what each holds can decide
   the placement. The Rental holding a checked copy owes 40MB of image and beats
@@ -1494,34 +1499,6 @@ Phase 3 added:
   minutes. What it waits for is the minute that is left, so it takes a queued
   Booking; a schedule that summed declared runtimes answered half an hour and
   reverting the projection turns the execution into `no feasible offers`.
-- `consumer-prefers-the-producing-host` (green): two Rentals at one price, both
-  holding the whole image, both unable to list their Artifact copies, and one of
-  them is the machine the 40GB dataset was written on. Nothing either machine
-  says separates them, so silence is charged the whole read on both; what
-  separates them is Mercator's own record of where the content was published, and
-  the consumer prefers that machine by the 640 seconds it would not spend there.
-  The ids are ordered so the neighbour takes any tie, because a fixture whose
-  winner is decided by offer-ID order proves nothing about affinity. Dropping the
-  discount hands it to the neighbour.
-- `producer-host-gone-still-places` (green): the same world with the producing
-  Rental's idle lease elapsing five minutes in and the consumer arriving ten
-  minutes in. It places on what is left, feasible with no rejection of any kind,
-  priced the object-store read it will actually pay. Applying the discount
-  without comparing which candidate the record names prices that read at nothing
-  and fails this fixture, which is the defect the affinity fixture alone cannot
-  catch: there, both candidates would be discounted and the winner would simply
-  swap.
-- `a-consumer-follows-its-producer` (conformance): the same claim where the
-  record is written the way production writes it. A producer computes a 10GB
-  checkpoint on the one Rental holding its image and the object store stamps that
-  Rental when the upload lands. The consumer runs a different image both Rentals
-  hold whole, so by the time it arrives nothing about images, price, room, or
-  queueing separates the two candidates, and it is placed on the strength of the
-  record alone. The world then confirms the estimate: the consumer's own
-  `artifact.read` resolves against the copy on that machine rather than against
-  the object store, so the 160 seconds it was not charged is a transfer that did
-  not happen. Publishing without recording the Rental leaves the catalog naming
-  nobody and fails it at the record.
 - `a-host-that-cannot-hold-the-data-is-not-warm` (green): three machines and one
   Run at a time. Two hold the same 18GB layer of the same image at the same
   price, and one of those has nowhere to put the 40GB dataset the Run reads, so
@@ -1739,47 +1716,61 @@ the launch.
 
 ## Verification evidence
 
-### Phase 3 producer affinity
+### Phase 3 producer affinity, withdrawn under review
 
 On 2026-07-25, on a Linux workstation against Docker Engine 29.6.2 on the
-containerd snapshotter, which is the second slice of this phase to run on amd64
-at all. Both Blueprints were written first, driven as targets, and promoted in
-the same change once green. Each claim is held by a deliberate break:
+containerd snapshotter. Two independent reviewers refuted the affinity slice and
+every load-bearing finding held, so the preference is gone rather than defended.
+What was checked before removing it:
 
-- dropping the discount, so a silence is charged the whole read whoever produced
-  the content, fails `consumer-prefers-the-producing-host` with `expected
-  "rental-b-producer" to win, but the decision placed on "rental-a-neighbour"`
-  and `candidate "rental-b-producer": artifact_seconds: want exactly 0, got 640`;
-- taking the read off every candidate once the version names any producing host,
-  which is the same rule with the comparison against this offer left out, fails
-  both Blueprints with `candidate "rental-a-neighbour": artifact_seconds: want at
-  least 639, got 0`. This is why the second fixture exists: in the first, both
-  candidates would be discounted and the winner would simply swap, which one
-  fixture cannot tell from correctness;
-- letting the record override a machine that enumerated and holds no copy fails
-  `TestTheProducingHostIsPreferredOnlyWhereNothingElseAnswered` with `owes 0
-  bytes, want 40000000000` and `locality = "unknown", want "cold"`;
-- publishing without recording the Rental fails
-  `TestAConsumerFollowsTheMachineItsInputWasProducedOn` with `the catalog says
-  the checkpoint was produced on "", and the Run that published it ran on
-  "rental-b-producer"`, and dropping the discount fails the same case with the
-  consumer landing on the neighbour;
+- the discount was unreachable. `cmd/mercator-node` sets an artifact root
+  unconditionally, so `nodeagent.artifacts` reports an enumerated inventory,
+  `internal/node/offers.go` carries it through unchanged, and `internal/node` is
+  the only source of reusable-lane offers. Every production offer that can carry a
+  Rental identity therefore takes the enumerated branch, where the record was
+  deliberately given no say. The only world the discount fired in was the fixture
+  knob added with it;
+- the node that could have reported an unknown inventory cannot hold a copy
+  either. `nodeagent.PrepareArtifact` refuses a runtime with no artifact root
+  before touching the network, so the machine a record could have preferred is the
+  machine preparation cannot prepare;
+- nothing in production writes the record at all. The only assignments to
+  `ProducedOnRentalID` were in the two simulators, because no production
+  implementation of `orchestrator.ArtifactCatalog` exists;
+- the L1 conformance rested on the simulated world filing a verified copy of a
+  Run's own output on the host that computed it, which this slice's own live test
+  contradicts.
+
+The live half ran, and it is the fact the withdrawal rests on.
+`TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote` starts a MinIO container on
+this machine's own daemon, has the production `DockerRuntime` launch a real
+busybox workload that writes its output inside its own container, and reads the
+node's own Artifact inventory: enumerated, and empty. The same content then
+arrives through `PrepareArtifact` over a presigned GET and is reported verified
+against the digest the bytes produce. What a real node can say about content its
+own workload produced is nothing, so a record of where bytes were written buys a
+consumer nothing either.
+
+Two claims survive the withdrawal, each held by a deliberate break:
+
 - restoring the scheduler's own two-term uncertainty penalty fails
   `TestBothModelsPriceUncertaintyFromTheSameFacts` with `reference scored
   3.433333 and production scored 1.433333`, which is the divergence the dead
   weight was hiding, worth exactly the two facts the oracle counted and the
   scheduler did not;
-- making the node's replica enumeration skip every record fails the live case
-  with `the node reports [] after fetching the content itself`.
+- restoring the world that kept a verified copy of a Run's own output fails
+  `safety.artifact_replica_verified` with `offer "producer-rental" holds a copy of
+  Artifact "artifact:checkpoint:v1", which nothing published`, through both
+  `TestTheMachineThatWroteTheContentStillReadsTheObjectStore` and
+  `TestAConsumerReadsTheCopyAFetchLeftBehind`.
 
-The live half ran. `TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote` starts a
-MinIO container on this machine's own daemon, has the production `DockerRuntime`
-launch a real busybox workload that writes its output inside its own container,
-and reads the node's own Artifact inventory: enumerated, and empty. The same
-content then arrives through `PrepareArtifact` over a presigned GET and is
-reported verified against the digest the bytes produce. That is the premise the
-whole slice rests on, established rather than assumed: what a real node can say
-about content its own workload produced is nothing.
+What the review leaves open is one gap, now filed as
+[#171](https://github.com/benngarcia/mercator/issues/171): a verified replica in a
+node's replica store is not reachable from inside the container a Run executes in,
+so the zero seconds Placement prices for a host holding a checked copy is a
+specification exercised at L1 and not a saving any production workload can
+collect. `go test ./...` is green on this host, including the live daemon and
+MinIO cases.
 
 The reachability probe's missing timeout, issue #165, is again deliberately
 untouched. It does not reproduce on this host, and it has its own regression test
@@ -2061,7 +2052,10 @@ Each claim is held by a deliberate break that fails it:
   `vertical proof checkpoint 7 (warmth_observed) failed`. The rule that replaced
   asked only whether the producer's output landed on the offer the consumer was
   selected on, which was green on every execution of this Blueprint before
-  Artifact locality was scored anywhere.
+  Artifact locality was scored anywhere. Withdrawing producer affinity moved that
+  checkpoint again: the copy it reads is one a fetch put on the machine before the
+  world started, beside the whole read the consumer owes on the checkpoint its own
+  producer wrote.
 
 The demo Blueprint's normalized bundle hash moved from
 `sha256:d8766ff9fe41cb65c27f2ec502256dc70dd6ba2b663504e936491b6985d99ee4` to
@@ -2074,6 +2068,10 @@ is `established_start_seconds` entering the record. Answering the review of the
 start-bound commit moved it to
 `sha256:193d9726fcca9d51071cb6028fad5006dd06395096aafacef6765ce69015f15b`, which
 is start quantiles adding rather than being scaled off the expectation.
+Withdrawing producer affinity moved it to
+`sha256:2a2c9e3d7480a510d905b5af67451f551ce9eb996f561d0666f26c9be6c82db6`, which
+is the demo's consumer no longer being warm for content its own producer wrote,
+and reading a dataset a fetch had checked there instead.
 
 Three limits are worth stating rather than hiding.
 
@@ -2084,10 +2082,11 @@ this slice adds is exercised at L0, in the placement corpus, and at L1 through
 the real control plane, and none of it is exercised against a real store.
 
 Nothing yet fetches an Artifact onto a host before a Run needs it. The estimate
-prices what a candidate would have to read; controlled prewarming and
-producer-consumer soft affinity are later slices, and the affinity one is what
-turns this evidence into a stated preference rather than a consequence of
-arithmetic.
+prices what a candidate would have to read, and controlled prewarming is the
+later slice that acts on it. Producer-consumer soft affinity was the other slice
+this paragraph promised, and it was built and withdrawn: no shipped node can be in
+the state its discount fired in, which is under "Phase 3 producer affinity,
+withdrawn under review".
 
 The transfer rate is `DefaultObjectStoreDownloadMbps`, a stated assumption that
 nothing measures and no offer can override. `OfferSnapshot.RegistryDownload`
