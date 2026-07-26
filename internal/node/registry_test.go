@@ -302,7 +302,7 @@ func TestAHeartbeatRenewsTheLeaseAndReplacesTheNodesFacts(t *testing.T) {
 		ObservedAt: clock.Now(),
 		Facts: &capability.NodeFacts{
 			ObservedAt: clock.Now(),
-			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker", DiskFreeBytes: 500 << 30},
+			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker", Disk: capability.DiskFacts{Known: true, FreeBytes: 500 << 30}},
 		},
 	})
 	clock.Advance(node.DefaultLease/2 + time.Second)
@@ -318,7 +318,7 @@ func TestAHeartbeatRenewsTheLeaseAndReplacesTheNodesFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("facts: %v", err)
 	}
-	if facts.Host.DiskFreeBytes != 500<<30 {
+	if facts.Host.Disk.FreeBytes != 500<<30 {
 		t.Fatalf("facts were not replaced by the heartbeat: %+v", facts.Host)
 	}
 }

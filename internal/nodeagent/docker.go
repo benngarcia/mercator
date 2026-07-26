@@ -55,13 +55,10 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 		RuntimeVersion:   info.ServerVersion,
 		CPUMillis:        int64(info.NCPU) * 1000,
 		MemoryBytes:      info.MemTotal,
+		Disk:             docker.diskFacts(info.DockerRootDir),
 	}
 	if slices.Contains(info.runtimeNames(), "nvidia") {
 		facts.Host.AcceleratorToolkit = "nvidia-container-toolkit"
-	}
-	facts.Host.DiskTotalBytes, facts.Host.DiskFreeBytes, err = docker.diskFacts(ctx)
-	if err != nil {
-		return capability.NodeFacts{}, err
 	}
 	store, err := docker.openImageStore(ctx, info)
 	if err != nil {
@@ -409,7 +406,12 @@ type dockerInfo struct {
 	ServerVersion   string `json:"ServerVersion"`
 	NCPU            int    `json:"NCPU"`
 	MemTotal        int64  `json:"MemTotal"`
-	Runtimes        map[string]struct {
+	// DockerRootDir is where this daemon keeps everything it stores: image
+	// layers, volumes, and container writable layers. It is the daemon's own
+	// name for the filesystem a workload's content lands on, which is what makes
+	// the disk this node reports the disk its workloads get.
+	DockerRootDir string `json:"DockerRootDir"`
+	Runtimes      map[string]struct {
 		Path string `json:"path"`
 	} `json:"Runtimes"`
 	// DriverStatus is the image store's own account of itself. It is the only

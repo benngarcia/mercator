@@ -87,9 +87,14 @@ func (registry *Registry) offer(record Record, now time.Time) domain.OfferSnapsh
 		ExpiresAt: record.Facts.ObservedAt.Add(registry.offerFreshness()),
 		Platform:  platform,
 		Resources: domain.ResourceInventory{
-			CPUMillis:          host.CPUMillis,
-			MemoryBytes:        host.MemoryBytes,
-			EphemeralDiskBytes: host.DiskFreeBytes,
+			CPUMillis:   host.CPUMillis,
+			MemoryBytes: host.MemoryBytes,
+			// An offer states the room this node established it has left. A node
+			// that could not measure its disk offers none, which strikes it out
+			// of every placement on the disk floor a workload declares, out loud
+			// and in the record. It stays enrolled while it says so, because its
+			// containers and their exits are facts the fleet still needs.
+			EphemeralDiskBytes: host.Disk.FreeBytes,
 			Accelerators:       host.Accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{

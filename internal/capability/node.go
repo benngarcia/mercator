@@ -162,9 +162,28 @@ type HostFacts struct {
 	Accelerators     []domain.AcceleratorInventory `json:"accelerators,omitempty"`
 	CPUMillis        int64                         `json:"cpu_millis"`
 	MemoryBytes      int64                         `json:"memory_bytes"`
-	DiskTotalBytes   int64                         `json:"disk_total_bytes"`
-	DiskFreeBytes    int64                         `json:"disk_free_bytes"`
+	Disk             DiskFacts                     `json:"disk,omitzero"`
 	Network          []domain.NetworkFact          `json:"network,omitempty"`
+}
+
+// DiskFacts is the room on the filesystem this node's content lands on, and
+// separately whether this node could measure it at all. The two are stated
+// apart for the reason every other inventory here states them apart: a machine
+// that could not look is not a machine with no room, and a report that could
+// only say "zero" would make the two indistinguishable.
+//
+// A node that cannot measure its disk keeps reporting everything else. Its
+// liveness, its running containers, and the exit codes they produce are facts
+// the fleet needs whatever anyone knows about the disk, and failing the whole
+// report over this one measurement ends the node's session and, on a node with
+// no session yet, its enrollment. What silence costs instead is placements: an
+// offer states the room a machine established, so a node that established none
+// advertises none and is struck out by the disk floor every workload carries,
+// in the Booking Decision where an operator can read it.
+type DiskFacts struct {
+	Known      bool  `json:"known"`
+	TotalBytes int64 `json:"total_bytes,omitempty"`
+	FreeBytes  int64 `json:"free_bytes,omitempty"`
 }
 
 // ImageLocality is exact OCI image presence on one node. Every field states

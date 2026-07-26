@@ -229,7 +229,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 
 		if _, err := store.Heartbeat(context.Background(), workspaceID, nodeID, capability.NodeFacts{
 			ObservedAt: start.Add(time.Minute),
-			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker", DiskFreeBytes: 42},
+			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker", Disk: capability.DiskFacts{Known: true, FreeBytes: 42}},
 		}, start.Add(2*time.Hour)); err != nil {
 			t.Fatalf("heartbeat: %v", err)
 		}
@@ -245,7 +245,7 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		if err != nil {
 			t.Fatalf("get node: %v", err)
 		}
-		if record.Facts.Host.DiskFreeBytes != 42 {
+		if record.Facts.Host.Disk.FreeBytes != 42 {
 			t.Fatalf("facts were not replaced: %+v", record.Facts.Host)
 		}
 	})

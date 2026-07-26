@@ -672,8 +672,7 @@ func (runtime *scriptedRuntime) Facts(context.Context) (capability.NodeFacts, er
 			RuntimeVersion:   "27.0.0",
 			CPUMillis:        8000,
 			MemoryBytes:      32 << 30,
-			DiskTotalBytes:   500 << 30,
-			DiskFreeBytes:    400 << 30,
+			Disk:             capability.DiskFacts{Known: true, TotalBytes: 500 << 30, FreeBytes: 400 << 30},
 		},
 		Images: images,
 	}, nil
@@ -978,7 +977,7 @@ func TestPlacementChargesTheWholePullForAnotherPlatformsBuild(t *testing.T) {
 }
 
 // TestANodeOffersTheDiskItsHostReported is the seam the whole disk requirement
-// runs through. HostFacts.DiskFreeBytes was declared and never populated, and
+// runs through. The disk a host reports was declared and never populated, and
 // the offer projection maps it straight onto the resource a workload's disk
 // minimum is compared against, so every enrolled node advertised zero bytes and
 // every Run declaring any disk at all was refused on all of them. The node
