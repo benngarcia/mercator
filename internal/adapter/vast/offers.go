@@ -62,11 +62,17 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 			Kind: domain.OfferKindProvisionable,
 			// The ask ID above is a fresh integer for every search of the same
 			// machine, so it is the one field a launch history must never be filed
-			// under. What recurs here is where the machine is and what card it
-			// holds, and Vast publishes both: geolocation states the place, and the
-			// accelerator inventory below states the product, because Vast sells
-			// asks against machines rather than named instance types and so states
-			// no InstanceType at all.
+			// under. The machine behind it is not: Vast sells asks against hardware
+			// somebody already owns and publishes that owner's machine ID on every
+			// ask, so this is the handle that comes back tomorrow and it is what a
+			// history about this candidate is filed under. An ask publishing none
+			// falls to the place and the card below, which is all that recurs about
+			// a listing whose machine nobody named.
+			MachineID: machineHandle(o.MachineID),
+			// Where the machine is, which is the level a candidate nobody has
+			// measured falls to. Vast sells asks rather than named instance types and
+			// so states no InstanceType at all; the accelerator inventory below
+			// states the product.
 			Region:     o.Geolocation,
 			NativeRef:  strconv.FormatInt(o.ID, 10),
 			ObservedAt: now,
@@ -136,6 +142,20 @@ func interruptionHistory(uptimeScore *float64) domain.ReliabilityEvidence {
 	return domain.ReliabilityEvidence{
 		Interruptions: domain.StatedRate{Rate: clamp01(1 - *uptimeScore), Confidence: 1},
 	}
+}
+
+// machineHandle is Vast's own name for the hardware behind an ask, as a handle
+// or as nothing at all.
+//
+// An ask that publishes no machine ID publishes none, and it says so rather than
+// being filed under the zero its JSON leaves behind: every unattributed ask in
+// the catalog would share that name, and a history under it would answer out of
+// a hundred strangers' machines while claiming to be about this exact candidate.
+func machineHandle(machineID int64) string {
+	if machineID <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(machineID, 10)
 }
 
 // gpuVendor maps Vast's gpu_arch ("nvidia", "amd") onto the inventory vendor

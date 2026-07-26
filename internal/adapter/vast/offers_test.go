@@ -146,6 +146,7 @@ func TestTwoSearchesOfOneMachineAreOneCandidate(t *testing.T) {
 	machine := offer{
 		GPUName: "RTX 4090", GPUArch: "nvidia", NumGPUs: 2, GPURAMMb: 24576,
 		CPUCoresEffective: 16, CPURAMMb: 65536, DiskSpaceGB: 500,
+		MachineID:   7788,
 		Geolocation: "US-CA", DPHTotal: pricePtr(0.72), Verification: "verified",
 	}
 	first, second := machine, machine
@@ -169,6 +170,68 @@ func TestTwoSearchesOfOneMachineAreOneCandidate(t *testing.T) {
 		if strings.Contains(earlier.Candidate(true), ask) {
 			t.Fatalf("key %q names ask %s, which never comes back", earlier.Candidate(true), ask)
 		}
+	}
+	if earlier.Machine != "7788" {
+		t.Fatalf("the key names machine %q, and Vast published machine 7788 on both asks", earlier.Machine)
+	}
+}
+
+// TestTwoMachinesWithOneCardInOnePlaceAreTwoCandidates is what the machine
+// handle is for. Vast's catalog is other people's hardware, so a region full of
+// identical 4090s is the normal case rather than the corner: keyed on the place
+// and the card alone, a fast host and a slow host in the same city are one
+// history, and every launch either of them performs is served back as evidence
+// about the other.
+func TestTwoMachinesWithOneCardInOnePlaceAreTwoCandidates(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	product := offer{
+		GPUName: "RTX 4090", GPUArch: "nvidia", NumGPUs: 2, GPURAMMb: 24576,
+		CPUCoresEffective: 16, CPURAMMb: 65536, DiskSpaceGB: 500,
+		Geolocation: "US-CA", DPHTotal: pricePtr(0.72), Verification: "verified",
+	}
+	fast, slow := product, product
+	fast.ID, fast.MachineID = 9001, 7788
+	slow.ID, slow.MachineID = 9002, 4411
+
+	found := buildOffers([]offer{fast, slow}, 2, 75, now)
+
+	if len(found) != 2 {
+		t.Fatalf("expected both machines, got %d: %+v", len(found), found)
+	}
+	first := domain.CandidateIdentityOf(aggregated(found[0]), "sha256:image")
+	second := domain.CandidateIdentityOf(aggregated(found[1]), "sha256:image")
+	if first.Candidate(true) == second.Candidate(true) {
+		t.Fatalf("two machines share the key %q", first.Candidate(true))
+	}
+	if first.ProviderAndRegion() != second.ProviderAndRegion() {
+		t.Fatalf("two machines in one place fell to different regions: %q and %q",
+			first.ProviderAndRegion(), second.ProviderAndRegion())
+	}
+}
+
+// TestAnAskThatNamesNoMachineFallsToItsProduct holds the case Vast's own JSON
+// leaves behind. An ask with no machine ID decodes as zero, and filing every one
+// of them under that would gather a hundred strangers' machines into one key
+// reported as this exact candidate.
+func TestAnAskThatNamesNoMachineFallsToItsProduct(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	unattributed := offer{
+		ID: 9003, GPUName: "RTX 4090", GPUArch: "nvidia", NumGPUs: 2, GPURAMMb: 24576,
+		CPUCoresEffective: 16, CPURAMMb: 65536, DiskSpaceGB: 500,
+		Geolocation: "US-CA", DPHTotal: pricePtr(0.72), Verification: "verified",
+	}
+
+	found := buildOffers([]offer{unattributed}, 2, 75, now)
+
+	if len(found) != 1 {
+		t.Fatalf("expected the ask, got %+v", found)
+	}
+	identity := domain.CandidateIdentityOf(aggregated(found[0]), "sha256:image")
+	if identity.Machine != "" {
+		t.Fatalf("an ask naming no machine was filed under machine %q", identity.Machine)
+	}
+	if !strings.Contains(identity.Candidate(true), "region=US-CA") {
+		t.Fatalf("the key %q is not the product this ask still recurs as", identity.Candidate(true))
 	}
 }
 
