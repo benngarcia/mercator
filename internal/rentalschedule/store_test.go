@@ -53,6 +53,37 @@ func TestMemoryStoreCommitsScheduleWithRunEvent(t *testing.T) {
 	}
 }
 
+// TestASeededScheduleCountsTheTransitionsItsBookingsTook is the one thing a seed
+// can get wrong that no later commit would notice. A version counts transitions
+// and every Booking on the schedule took one, so a version below the number of
+// occupants is a history Mercator cannot have had. The next Booking is minted one
+// past the version, so accepting it would let a Run take the version a seeded
+// Booking already consumed.
+func TestASeededScheduleCountsTheTransitionsItsBookingsTook(t *testing.T) {
+	store := NewMemory(nil)
+	now := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	schedule := domain.NewRentalSchedule("rental-warm")
+	for _, request := range []domain.BookingRequest{
+		{BookingID: "booking-active", RunID: "run-active", ExpectedRuntimeSeconds: 60, MaxRuntimeSeconds: 120, ReservedAt: now},
+		{BookingID: "booking-waiting", RunID: "run-waiting", ExpectedRuntimeSeconds: 60, MaxRuntimeSeconds: 120, ReservedAt: now},
+	} {
+		var err error
+		schedule, _, err = schedule.Reserve(request)
+		if err != nil {
+			t.Fatalf("reserve %s: %v", request.BookingID, err)
+		}
+	}
+
+	schedule.Version = 1
+	if err := store.Seed("ws-1", schedule); err == nil {
+		t.Fatalf("the store accepted two Bookings at version one, which is one reservation for two occupants")
+	}
+	schedule.Version = 7
+	if err := store.Seed("ws-1", schedule); err != nil {
+		t.Fatalf("a schedule that has seen more transitions than it holds occupants is a Rental that has run work: %v", err)
+	}
+}
+
 type activeLog struct{ eventlog.EventLog }
 
 func (l activeLog) AppendIfWorkspaceActive(ctx context.Context, request eventlog.AppendRequest) (eventlog.AppendResult, error) {

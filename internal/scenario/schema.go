@@ -1592,8 +1592,16 @@ func (schedule RentalScheduleSpec) validate(start time.Time) error {
 		}
 		return nil
 	}
-	if schedule.Version == 0 {
-		return fmt.Errorf("rental %q: a nonempty RentalSchedule needs a positive version", rentalID)
+	// A version counts every transition this schedule has seen, and each Booking
+	// on it took one to get there, so a fixture may state more than it holds and
+	// never fewer. Stating fewer is a history Mercator cannot have had, and the
+	// arriving Run's Booking would be minted at a version one of these already
+	// consumed.
+	if occupants := uint64(1 + len(schedule.Queued)); schedule.Version < occupants {
+		return fmt.Errorf(
+			"rental %q: a RentalSchedule holding %d Bookings is at version %d, and each of them took a transition to get there",
+			rentalID, occupants, schedule.Version,
+		)
 	}
 	ids := map[string]bool{}
 	runs := map[string]bool{}

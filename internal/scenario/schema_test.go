@@ -161,7 +161,7 @@ func TestLoadRejectsIncoherentQueuedBooking(t *testing.T) {
           "state": "queued",
           "after": "booking-active",
           "projected_start_in": "5m",
-          "schedule_version": 2
+          "schedule_version": 3
         }
       }
     }`
@@ -208,7 +208,7 @@ func TestLoadEnforcesScheduleBounds(t *testing.T) {
         "rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}],
         "rental_schedules": [{
           "rental": "rental-a",
-          "version": 1,
+          "version": 6,
           "running": {"booking": "p0", "run": "r0", "remaining_max_runtime": "5m"},
           "queued": [
             {"booking": "p1", "run": "r1", "max_runtime": "5m"},
@@ -224,6 +224,13 @@ func TestLoadEnforcesScheduleBounds(t *testing.T) {
     }`
 	if _, err := loadFixtureText(t, overfull); err == nil || !strings.Contains(err.Error(), "at most 4") {
 		t.Fatalf("a fifth QueuedBooking must be rejected, got %v", err)
+	}
+	// A version counts transitions, and the two Bookings here took two of them.
+	// Stating one is a history Mercator cannot have had, and it is the version the
+	// arriving Run's own Booking would be minted at.
+	understated := strings.Replace(overfull, `"version": 6`, `"version": 1`, 1)
+	if _, err := loadFixtureText(t, understated); err == nil || !strings.Contains(err.Error(), "took a transition") {
+		t.Fatalf("a schedule holding more Bookings than transitions must be rejected, got %v", err)
 	}
 }
 
@@ -262,7 +269,7 @@ func TestProjectedStartsWorkOffExpectedRuntimes(t *testing.T) {
         "rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}],
         "rental_schedules": [{
           "rental": "rental-a",
-          "version": 1,
+          "version": 2,
           "running": {
             "booking": "p0",
             "run": "r0",
@@ -284,7 +291,7 @@ func TestProjectedStartsWorkOffExpectedRuntimes(t *testing.T) {
           "state": "queued",
           "after": "p1",
           "projected_start_in": "5m",
-          "schedule_version": 2
+          "schedule_version": 3
         }
       }
     }`
