@@ -1218,9 +1218,12 @@ complete because it works against a live provider.
     content it is holding. `NodeSupport.Prewarm` and `ArtifactReplicas` are true
     again, having been withdrawn in the image-store commit; garbage collection is
     the one still owed.
-  - Judgment calls. The desired set is per workspace rather than per host,
-    because what may be in flight at once is a fleet-wide bound and a per-host
-    command could not express it. A preparation identity carries the machine and
+  - Judgment calls. The desired set is stated per workspace and reconciled for
+    every workspace in one pass, because both bounds are the fleet's: what may be
+    in flight at once and how often preparation may begin are about a machine's
+    link and this process's egress, which every tenant shares. A per-host command
+    could not express either, and a pass per workspace expressed neither until
+    2026-07-25. A preparation identity carries the machine and
     the content and never the Run, so two Runs wanting one image on one host want
     one transfer. The Lab never restarts a preparation it abandoned under the
     same identity: content Mercator stopped wanting and then wants again arrives
@@ -1247,6 +1250,22 @@ complete because it works against a live provider.
     Nothing in production implements `orchestrator.ArtifactCatalog`, so no
     production Run declares an Artifact and the Artifact half of the desired set is
     exercised at L1 and against a real object store rather than end to end.
+- [x] 2026-07-25: Answer the second review of the prewarming commit. Two
+  reviewers refuted four things and every one of them held: an image's
+  preparation content was the empty string whenever nobody pinned the image, the
+  policy was enforced per workspace while the invariant and this plan claimed a
+  fleet-wide bound, the rate clock was lost with the process that kept it, and no
+  production deployment could reach the bound at all because the only caller was
+  a sweep slower than any interval an operator would state. A Run whose image
+  names no content is refused at intake; preparation is one pass over the fleet
+  with one budget and one clock; the clock is a durable row; and preparation runs
+  when a Booking, a launch, a withdrawal, or a closure changes what Mercator
+  wants prepared, with the sweep left as the only timer because a desire also
+  changes when a predicted start elapses and nothing is recorded then. The
+  two-tenant Blueprint also caught the Lab world reading one tenant's desired set
+  as the whole fleet's, which had made the concurrency bound unfailable in the
+  only world where it matters. Evidence and the deliberate breaks are under
+  "Phase 3 prewarming, the second review".
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1506,21 +1525,38 @@ Phase 3 added:
   the image, and three Runs that want two versions of one corpus. The first
   occupies the machine, the second queues and Mercator asks for
   `artifact:corpus:v70` a minute in, and the third arrives ninety seconds later
-  wanting `artifact:corpus:v7`. The second speculative fetch waits until five
-  minutes after the first one started. Every part of the fixture exists to be
-  failable: the wanted names prefix-collide, so a control plane comparing a new
-  desire against the joined text of the last one reads `v7` as content it has
-  already asked for and skips a bound it applies to additions only; the gap is
-  longer than the cadence, so the harness cannot produce it; and the third Run
-  arrives between two ticks, so the moment the bound is tested is not a moment the
-  driver chose. Deleting the rate bound, or restoring the substring comparison it
-  replaced, each fails it through `safety.prewarm_rate_within_bound`.
+  wanting `artifact:corpus:v7`. The control plane restarts the moment that third
+  Run is recorded, and the second speculative fetch still waits until five minutes
+  after the first one started. Every part of the fixture exists to be failable:
+  the wanted names prefix-collide, so a control plane comparing a new desire
+  against the joined text of the last one reads `v7` as content it has already
+  asked for and skips a bound it applies to additions only; the gap is longer than
+  the cadence, so the harness cannot produce it; the third Run arrives between two
+  ticks, so the moment the bound is tested is not a moment the driver chose; and
+  the restart means a clock living only in the process cannot satisfy it. Deleting
+  the rate bound, restoring the substring comparison it replaced, or keeping the
+  clock in process each fails it through `safety.prewarm_rate_within_bound`.
+- `prewarming-bounds-the-whole-fleet` (conformance): two tenants, two machines,
+  and both bounds. Each machine is occupied and holds what its own tenant runs, so
+  each queued Run wants twenty gigabytes on its own host. The first tenant's Run
+  arrives at five minutes and is prepared for; the second tenant's arrives ninety
+  seconds later and gets nothing, and its transfer starts once the first has
+  landed. Restoring per-workspace bookkeeping fails it through
+  `safety.prewarm_rate_within_bound` with `speculative preparation started at
+  2030-01-01T00:05:00Z and again 1m30s later at 2030-01-01T00:06:30Z`.
+- `prewarming-spends-one-budget-across-tenants` (conformance): the same two
+  tenants in a world that states a depth bound and no interval, both Runs arriving
+  in the same minute. One slot exists, the Run that starts soonest gets it, and the
+  other tenant waits for it to land. Truncating the desire per workspace fails it
+  through `safety.prewarm_yields_to_real_work` with `2 speculative fetches were in
+  flight at 2030-01-01T00:05:00Z, and this world allows 1`.
 - `safety.prewarm_rate_within_bound` (Lab invariant): no two moments at which
-  Mercator began preparing are closer together than the world's `min_interval`.
-  It is stated over the moments preparation started rather than over transfers,
-  because one desired set crosses the boundary at once and may open as many
-  transfers as the depth bound allows: how many may move together is the other
-  rule's question. A world stating no interval states no opinion.
+  Mercator began preparing are closer together than the world's `min_interval`,
+  whichever tenant wanted the content and whether or not the control plane
+  restarted in between. It is stated over the moments preparation started rather
+  than over transfers, because one desired set crosses the boundary at once and may
+  open as many transfers as the depth bound allows: how many may move together is
+  the other rule's question. A world stating no interval states no opinion.
 - `safety.prewarm_yields_to_real_work` (Lab invariant): no speculative transfer
   is moving onto a machine at the same time as content a Run admitted there is
   waiting for, and no more of them are in flight at once than the world stated.
@@ -1739,6 +1775,110 @@ go test -race ./internal/domain ./internal/scheduler ./internal/lab \
 Run on a Linux workstation against Docker Engine 29.6.2 on the containerd
 snapshotter, which is amd64 and not the arm64 macOS the earlier phase 3 slices
 were built on. Nothing in this slice behaved differently there.
+
+### Phase 3 prewarming, the second review
+
+On 2026-07-25, two more reviewers refuted four things about the prewarming slice
+on this host. All four were real, all four are repaired, and one of them was the
+Lab world rather than Mercator.
+
+An image's preparation content was not always a digest. Nothing enforced it:
+`domain.ValidateWorkloadRevision` only rejects an empty image and
+`domain.ReferenceDigest` answers empty for a tag, so `PrepareItem.Content()` was
+the empty string for an unpinned reference. Driving `prewarmItemKey` directly, two
+Runs wanting `registry.example/trainer:v1` and `registry.example/analyst:v2` on
+machine `builder` both produce the key `image:builder/`, so the second image was
+dropped from the desired set entirely, the node operation identity
+`prepare:image:builder:` was the same for both, and `ImageInventory.Holds("")` is
+false so the unidentifiable content was re-asked for on every changed set. A Run
+whose image is not digest-pinned is now refused at intake, which is where a Run
+commits to bytes. A stored workload revision may still name a tag, because it is a
+template and resolution is deferred to run-create, and that decision has its own
+case in `internal/workload`. The `httpapi` resolver hook no longer substitutes the
+submitted tag when a resolver answers with no reference.
+
+`PrewarmPolicy` was enforced per workspace while the invariant and this plan
+stated a fleet-wide bound. Reproduced by copying the rate-bound fixture into a
+two-tenant world: each tenant's clock was empty at its own first send, the
+per-workspace bound was honoured, and the run aborted with `speculative
+preparation started at 2030-01-01T00:05:00Z and again 1m30s later at
+2030-01-01T00:06:30Z`. Production had the same shape in the other direction, since
+the sweep called `Prewarm` once per workspace and a deployment with N tenants could
+begin N transfers per interval. Preparation is now one pass over every tenant: the
+desire is ordered across all of them by when the Run waiting for it is projected to
+start, truncated once, and a send that names new content moves one clock. While the
+bound holds, a desire loses its additions rather than being withheld whole, so a
+withdrawal never waits behind an addition it travelled with.
+
+Writing the two-tenant Blueprint caught the Lab world reading one tenant's desired
+set as the whole fleet's: it stopped every speculative transfer the request did not
+name, so the second tenant's set cancelled the first tenant's transfer and no two
+prefetches were ever in flight at once whatever Mercator asked for. That made the
+concurrency bound unfailable in the only world where it matters. Withdrawal is now
+decided against the union of every tenant's latest set.
+
+The rate clock lived in the process. A restarted Mercator found no last-sent time
+and was free to begin a transfer immediately, and a control plane restarting in a
+loop would begin one on every boot. What is wanted is derived from the Runs and the
+machines every time and stays in process; when preparation last began is one
+durable row, recording a decision Mercator made rather than what any machine holds.
+`prewarming-holds-its-own-rate-bound` now restarts the control plane when its third
+Run is recorded, and with an in-process clock it fails with `speculative preparation
+started at 2030-01-01T00:01:00Z and again 2m0s later at 2030-01-01T00:03:00Z`. The
+price is stated where the memory is: a restarted Mercator cannot tell content it has
+already asked for from content it has not, so it states nothing until the bound
+allows a beginning, and a withdrawal it discovers inside that window waits the same
+interval.
+
+The bound could not fire in any default production deployment. The only production
+caller was the sixty second reconcile sweep and `DefaultPrewarmPolicy.MinInterval`
+is thirty seconds, so two sweeps were never closer together than the cadence and
+the observed spacing between fetches was the sweep's. Preparation now also runs when
+something is recorded that could change what Mercator wants prepared: a Booking that
+named a machine, one that was dispatched, a launch a host is getting ready for, a
+withdrawal, or a Run whose machine is free again. The orchestrator names those
+events because it derives the answer from them, and the daemon subscribes from the
+log's head so a restart wakes on what happens next.
+`TestAQueuedRunIsPreparedForWithoutWaitingForASweep` drives it through the
+production daemon and the real node protocol and sweeps nothing; it fails with the
+subscription removed. The sweep stays and is the only timer, because a desire also
+changes when a moment passes rather than when anything is recorded: the case in
+point is a machine that stops being one Mercator must not disturb when the start its
+own decision predicted elapses, and the new case had to wait that moment out before
+the Run it is about could be prepared for at all.
+
+Preparing on every Booking made the daemon busier at shutdown and exposed two
+things in the shutdown path. Reconciliation and preparation send commands to
+machines, and an enrolled node receives one by holding a request open on the same
+server the daemon drains, so background work is told to stop before the drain and
+joined after it. The node protocol harness then gave shutdown two seconds where the
+production entrypoint gives itself fifteen, which asserted something about this
+machine's timing rather than about the daemon shutting down cleanly. Three of eight
+`-race -count=3` runs of `internal/daemon` failed in cleanup before this, and five
+consecutive runs pass after it in the same twenty seven seconds.
+
+What is left. A refused preparation is still terminal, which is the refutation the
+previous review accepted and left, and it is still owed a world that can refuse a
+fetch. The rate bound is reachable in production now and is stated in the Lab,
+where two fixtures fail without it; no L3 case states it, because the fleet harness
+serves two images and seeing a bound hold one piece of content back needs three on
+one machine. What the new L3 case holds is the trigger: a Run queued through the
+production API is prepared for without anything sweeping.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/capability ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/orchestrator ./internal/daemon \
+  ./internal/storage/sqlite -count=1
+go test ./internal/nodeagent -run TestANodeReplicatesAnArtifactFromARealObjectStore -count=1
+```
+
+The last of those is the live half: MinIO in a container of this machine's own
+Docker daemon, the node reading one version over a presigned URL the control plane
+minted, and the digest recomputed from the bytes that landed. It passes here.
+`internal/ociresolver`'s two Docker Hub conformance cases fail on this host with
+`429 Too Many Requests` from an unauthenticated pull of `busybox:latest`, which is
+the registry rate limiting this address and not this slice.
 
 ### Phase 3 Artifact locality at placement
 
