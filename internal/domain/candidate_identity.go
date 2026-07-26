@@ -2,7 +2,6 @@ package domain
 
 import (
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -153,10 +152,24 @@ func (identity CandidateIdentity) ProviderKey() string {
 	return "provider=" + identity.Provider
 }
 
-// acceleratorKey is this machine's accelerator inventory as one deterministic
-// string. It is sorted because an inventory is a set: a host that lists two
-// cards in the other order is the same product, and a key that disagreed would
-// split its history in half.
+// acceleratorKey is how many cards of each accelerator product this machine
+// holds, as one deterministic string.
+//
+// Cards are counted per product rather than per entry, because an inventory is
+// grouped by whatever stated it and a machine does not change when the grouping
+// does. The Docker probe groups nvidia-smi's output by raw name and memory
+// total, so one canonical model arrives as two entries whenever two spellings of
+// it or two memory readings of it are installed, and gpunorm maps every memory
+// variant of a marketing model onto a single id. What recurs about a machine is
+// how many of each product it holds, so that is what this counts: entries that
+// name one product add up, and the total is the same however the source split
+// them. Counting entries instead both dropped cards and split one machine's
+// history in half, in the same inventory.
+//
+// Memory is part of the product because gpunorm's granularity is model-level: an
+// A100 40GB and an A100 80GB are one canonical id and two different products,
+// and a key that dropped the memory would file both under one history. A source
+// that states no memory says so, rather than having a zero counted for it.
 //
 // A machine with no accelerator states nothing rather than "none". Holding no
 // card is a real fact about a product and it distinguishes no two products from
@@ -167,14 +180,27 @@ func acceleratorKey(inventory []AcceleratorInventory) string {
 	if len(inventory) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, len(inventory))
+	held := map[string]int{}
 	for _, accelerator := range inventory {
-		model := accelerator.CanonicalModel
-		if model == "" {
-			model = accelerator.Model
-		}
-		parts = append(parts, model+"x"+strconv.Itoa(accelerator.Count))
+		held[acceleratorProduct(accelerator)] += accelerator.Count
 	}
-	sort.Strings(parts)
-	return strings.Join(slices.Compact(parts), ",")
+	parts := make([]string, 0, len(held))
+	for product, count := range held {
+		parts = append(parts, product+"x"+strconv.Itoa(count))
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, ",")
+}
+
+// acceleratorProduct is the card itself: the canonical model and how much memory
+// each one of them holds.
+func acceleratorProduct(accelerator AcceleratorInventory) string {
+	model := accelerator.CanonicalModel
+	if model == "" {
+		model = accelerator.Model
+	}
+	if accelerator.MemoryBytes <= 0 {
+		return model
+	}
+	return model + "@" + strconv.FormatInt(accelerator.MemoryBytes, 10)
 }

@@ -140,6 +140,69 @@ func TestAMachineStageIgnoresTheImageItWasAskedToRun(t *testing.T) {
 	}
 }
 
+// gpuHost is one listing whose whole point is its cards: a machine in a region,
+// with exactly the inventory the case is about and nothing else to key on.
+func gpuHost(askID string, accelerators ...domain.AcceleratorInventory) domain.OfferSnapshot {
+	offer := vastListing(askID)
+	offer.Resources.Accelerators = accelerators
+	return offer
+}
+
+func a100(memoryGiB int64, count int) domain.AcceleratorInventory {
+	return domain.AcceleratorInventory{
+		Vendor:         "NVIDIA",
+		Model:          "A100",
+		CanonicalModel: "nvidia-a100",
+		Count:          count,
+		MemoryBytes:    memoryGiB * 1024 * 1024 * 1024,
+	}
+}
+
+// TestTwoSpellingsOfOneCardAreOneProduct is the grouping half of the key. A
+// probe groups by the raw name a driver printed, so a host holding two spellings
+// of one card reports two entries of it; gpunorm maps both onto one canonical id.
+// The machine holds four cards either way, and the key has to say four.
+func TestTwoSpellingsOfOneCardAreOneProduct(t *testing.T) {
+	split := gpuHost("off_vast_1", a100(80, 2), a100(80, 2))
+	whole := gpuHost("off_vast_2", a100(80, 4))
+
+	if got, want := key(split), key(whole); got != want {
+		t.Fatalf("one machine's cards keyed two ways:\n%s\n%s", got, want)
+	}
+}
+
+// TestTwiceTheCardsIsNotOneProduct is the case that made a four-GPU machine and a
+// two-GPU machine one exact candidate: two entries naming one product used to be
+// deduplicated rather than added up, so the second entry's cards vanished.
+func TestTwiceTheCardsIsNotOneProduct(t *testing.T) {
+	four := gpuHost("off_vast_1", a100(80, 2), a100(80, 2))
+	two := gpuHost("off_vast_2", a100(80, 2))
+
+	if key(four) == key(two) {
+		t.Fatalf("four cards and two share the key %q", key(four))
+	}
+}
+
+// TestOneModelInTwoMemorySizesIsTwoProducts holds the other half. gpunorm's
+// granularity is model-level, so the memory is the only thing left that tells an
+// A100 40GB from an A100 80GB, and a key that dropped it filed a mixed host under
+// the same history as a machine holding half the memory.
+func TestOneModelInTwoMemorySizesIsTwoProducts(t *testing.T) {
+	mixed := gpuHost("off_vast_1", a100(40, 1), a100(80, 1))
+	small := gpuHost("off_vast_2", a100(40, 2))
+
+	if key(mixed) == key(small) {
+		t.Fatalf("two memory sizes and one share the key %q", key(mixed))
+	}
+	if !strings.Contains(key(mixed), "nvidia-a100@") {
+		t.Fatalf("a key naming no memory cannot tell the two apart: %q", key(mixed))
+	}
+}
+
+func key(offer domain.OfferSnapshot) string {
+	return domain.CandidateIdentityOf(offer, "sha256:image").Candidate(true)
+}
+
 func TestAcceleratorOrderIsNotAProduct(t *testing.T) {
 	forward := vastListing("off_vast_1")
 	forward.Resources.Accelerators = append(forward.Resources.Accelerators, domain.AcceleratorInventory{
