@@ -794,9 +794,15 @@ type NodeListResponse struct {
 
 // NodeSummary defines model for NodeSummary.
 type NodeSummary struct {
-	Accelerators          int       `json:"accelerators,omitempty"`
-	AgentVersion          string    `json:"agent_version,omitempty"`
-	ContainerRuntime      string    `json:"container_runtime,omitempty"`
+	Accelerators     int    `json:"accelerators,omitempty"`
+	AgentVersion     string `json:"agent_version,omitempty"`
+	ContainerRuntime string `json:"container_runtime,omitempty"`
+
+	// DiskFreeBytes The room this node last measured on the filesystem its daemon keeps content on. It is what the node's offer states, so a node reporting none wins no placement that declares a disk floor.
+	DiskFreeBytes int64 `json:"disk_free_bytes,omitempty"`
+
+	// DiskMeasured Whether this node could measure its disk at all. A node whose daemon keeps its content somewhere the agent cannot see reports everything else and says nothing here, which costs it placements and never its membership of the fleet.
+	DiskMeasured          bool      `json:"disk_measured"`
 	Generation            int64     `json:"generation"`
 	Id                    string    `json:"id"`
 	LastHeartbeatAt       time.Time `json:"last_heartbeat_at,omitempty"`

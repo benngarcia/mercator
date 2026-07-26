@@ -1184,6 +1184,13 @@ export interface components {
             shadow_price_usd_per_hour: number;
             container_runtime?: string;
             accelerators?: number;
+            /**
+             * Format: int64
+             * @description The room this node last measured on the filesystem its daemon keeps content on. It is what the node's offer states, so a node reporting none wins no placement that declares a disk floor.
+             */
+            disk_free_bytes?: number;
+            /** @description Whether this node could measure its disk at all. A node whose daemon keeps its content somewhere the agent cannot see reports everything else and says nothing here, which costs it placements and never its membership of the fleet. */
+            disk_measured: boolean;
         };
         NodeListResponse: {
             nodes: components["schemas"]["NodeSummary"][];

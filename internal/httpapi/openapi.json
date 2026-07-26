@@ -4639,7 +4639,7 @@
       },
       "NodeSummary": {
         "type": "object",
-        "required": ["id", "rental_id", "generation", "state", "shadow_price_usd_per_hour"],
+        "required": ["id", "rental_id", "generation", "state", "shadow_price_usd_per_hour", "disk_measured"],
         "properties": {
           "id": { "type": "string" },
           "rental_id": { "type": "string" },
@@ -4654,7 +4654,16 @@
           "last_heartbeat_at": { "type": "string", "format": "date-time" },
           "shadow_price_usd_per_hour": { "type": "number" },
           "container_runtime": { "type": "string" },
-          "accelerators": { "type": "integer" }
+          "accelerators": { "type": "integer" },
+          "disk_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The room this node last measured on the filesystem its daemon keeps content on. It is what the node's offer states, so a node reporting none wins no placement that declares a disk floor."
+          },
+          "disk_measured": {
+            "type": "boolean",
+            "description": "Whether this node could measure its disk at all. A node whose daemon keeps its content somewhere the agent cannot see reports everything else and says nothing here, which costs it placements and never its membership of the fleet."
+          }
         }
       },
       "NodeListResponse": {

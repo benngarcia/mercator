@@ -456,6 +456,23 @@ func (f *fleet) refuseToPlace(t *testing.T, runID string) {
 	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusBadGateway)
 }
 
+// nodes is the operator's own view of the fleet.
+func (f *fleet) nodes(t *testing.T) []nodeSummary {
+	t.Helper()
+	var response struct {
+		Nodes []nodeSummary `json:"nodes"`
+	}
+	f.call(t, http.MethodGet, "/v1/nodes?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+	return response.Nodes
+}
+
+type nodeSummary struct {
+	ID            string `json:"id"`
+	State         string `json:"state"`
+	DiskMeasured  bool   `json:"disk_measured"`
+	DiskFreeBytes int64  `json:"disk_free_bytes"`
+}
+
 func (f *fleet) decision(t *testing.T, runID string) bookingDecision {
 	t.Helper()
 	var response struct {
@@ -989,6 +1006,29 @@ func TestANodeOffersTheDiskItsHostReported(t *testing.T) {
 
 	if offered != 400<<30 {
 		t.Fatalf("the node offered %d bytes of ephemeral disk, want the 400GiB free its host reported", offered)
+	}
+}
+
+// TestTheNodeListingSaysWhetherTheDiskWasMeasured is what an operator has to be
+// able to read. A node that could not measure its disk offers no room and wins
+// no placement that declares a floor, which every Run does, so a fleet listing
+// that showed only "ready" would leave a working machine looking idle for no
+// stated reason. The room and whether anybody established it are separate
+// answers because they send an operator to different places: a full machine is
+// one to clear out, and an unmeasurable one is a daemon this agent is not beside.
+func TestTheNodeListingSaysWhetherTheDiskWasMeasured(t *testing.T) {
+	fleet := startFleet(t)
+
+	listed := fleet.nodes(t)
+
+	if len(listed) != 1 {
+		t.Fatalf("the fleet listed %d nodes, want the one enrolled: %+v", len(listed), listed)
+	}
+	if !listed[0].DiskMeasured {
+		t.Fatalf("the node measured its disk and the listing says otherwise: %+v", listed[0])
+	}
+	if listed[0].DiskFreeBytes != 400<<30 {
+		t.Fatalf("the listing reports %d bytes free, and its host reported 400GiB", listed[0].DiskFreeBytes)
 	}
 }
 

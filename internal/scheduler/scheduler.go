@@ -431,33 +431,22 @@ func contentFor(input SchedulingInput, offer domain.OfferSnapshot) candidateCont
 		fetch:    fetch,
 		evidence: evidence,
 		disk: domain.DiskDemand{
-			FreeBytes:            offer.Resources.EphemeralDiskBytes,
-			ReservedBytes:        input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
-			LandBytes:            work.TransferBytes + fetch + caches,
-			EstablishedLandBytes: establishedLandBytes(work, locality, evidence, caches, offer.Caches.Known),
+			FreeBytes:     offer.Resources.EphemeralDiskBytes,
+			ReservedBytes: input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
+			LandBytes:     work.TransferBytes + fetch + caches,
+			EstablishedLandBytes: enumerated(work.TransferBytes, locality != domain.LocalityUnknown) +
+				establishedFetchBytes(evidence) +
+				enumerated(caches, offer.Caches.Known),
 		},
 	}
 }
 
-// establishedLandBytes is the content this candidate was established to still
-// need room for. Each kind is counted only where something enumerated it: a
-// manifest and an image inventory that both spoke, a version some host answered
-// about, a cache store that listed itself. Silence is priced in seconds and
-// never in a refusal, because the bytes a machine cannot describe may already be
-// on its disk.
-func establishedLandBytes(
-	work domain.ImageWork,
-	locality domain.LocalityState,
-	evidence []domain.ArtifactEvidence,
-	caches int64,
-	cachesKnown bool,
-) int64 {
-	bytes := establishedFetchBytes(evidence)
-	if locality != domain.LocalityUnknown {
-		bytes += work.TransferBytes
-	}
-	if cachesKnown {
-		bytes += caches
+// enumerated is bytes counted only where something looked. Content a host could
+// not describe is priced in seconds and never asked to fit, because nothing said
+// those bytes have to arrive and nothing said they are not already here.
+func enumerated(bytes int64, known bool) int64 {
+	if !known {
+		return 0
 	}
 	return bytes
 }
