@@ -24,7 +24,7 @@ import (
 // decision is superseded, because the class each objective becomes prices waiting
 // the way that objective ranked it.
 //
-// It refuses to run while any stream carrying the old field is still open. A Run
+// It refuses to run while any Run carrying the old field is still open. A Run
 // that is mid-flight is a Run whose next event Mercator is about to append from
 // state it has already read, and rewriting the record underneath it would leave
 // the two halves of one stream stating different vocabularies. A closed stream is
@@ -46,16 +46,30 @@ var legacyObjectiveClasses = map[string]domain.ServiceClass{
 }
 
 // legacyObjectiveSites is every place an event carries a placement objective:
-// the workload a Run was requested with, public and private, and the policy a
-// Booking Decision was taken under.
-var legacyObjectiveSites = []struct {
+// the workload a Run was requested with, public and private, the policy a
+// Booking Decision was taken under, and the workload revision a caller stored
+// for later Runs to name. The stream each site lives on is part of the site,
+// because only one of those streams can still be in flight.
+//
+// The stored revision is the site whose omission repriced work rather than only
+// leaving a stale word behind. Nothing decodes `objective` any more, so a
+// revision left speaking the old vocabulary reads back with no class at all, and
+// the next Run created from it is normalised to standard: a caller who stored
+// fastest_start would be scored at a twentieth of interactive's rate with
+// nothing in the record saying so, which is the silent repricing this migration
+// exists to refuse.
+type legacyObjectiveSite struct {
+	stream    string
 	column    string
 	objective string
 	class     string
-}{
-	{"data_json", "$.workload_revision.spec.placement.objective", "$.workload_revision.spec.placement.service_class"},
-	{"private_data", "$.workload_revision.spec.placement.objective", "$.workload_revision.spec.placement.service_class"},
-	{"data_json", "$.decision.policy.objective", "$.decision.policy.service_class"},
+}
+
+var legacyObjectiveSites = []legacyObjectiveSite{
+	{"run", "data_json", "$.workload_revision.spec.placement.objective", "$.workload_revision.spec.placement.service_class"},
+	{"run", "private_data", "$.workload_revision.spec.placement.objective", "$.workload_revision.spec.placement.service_class"},
+	{"run", "data_json", "$.decision.policy.objective", "$.decision.policy.service_class"},
+	{"workload", "data_json", "$.revision.spec.placement.objective", "$.revision.spec.placement.service_class"},
 }
 
 func migrateLegacyPlacementObjectives(ctx context.Context, db *sql.DB) error {
@@ -75,7 +89,7 @@ func migrateLegacyPlacementObjectives(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	for _, site := range legacyObjectiveSites {
-		if err := renameObjectiveToServiceClass(ctx, tx, site.column, site.objective, site.class); err != nil {
+		if err := renameObjectiveToServiceClass(ctx, tx, site); err != nil {
 			return err
 		}
 	}
@@ -89,13 +103,21 @@ func migrateLegacyPlacementObjectives(ctx context.Context, db *sql.DB) error {
 // objective is still open. Such a Run's next event is appended from state
 // Mercator has already read, so rewriting its history now leaves one stream
 // speaking two vocabularies with nothing to say which half is authoritative.
+//
+// It asks about the run streams only, because a Run is the only thing here that
+// can be in flight. A stored workload revision is a definition rather than a
+// life cycle: no event is ever appended from state read out of one, and a Run
+// created from it holds its own copy of the revision on its own stream, which is
+// the copy this refusal protects. A workload stream never closes, so counting it
+// as open would refuse every database that has one.
 func refuseOpenLegacyObjectives(ctx context.Context, tx *sql.Tx) error {
 	var open bool
 	if err := tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1
 			FROM events AS legacy
-			WHERE `+anyObjectivePresent()+`
+			WHERE legacy.stream_type = 'run'
+			  AND `+anyObjectivePresent()+`
 			  AND NOT EXISTS (
 				SELECT 1
 				FROM events AS closed
@@ -120,8 +142,9 @@ func refuseOpenLegacyObjectives(ctx context.Context, tx *sql.Tx) error {
 func refuseUnmappableObjectives(ctx context.Context, tx *sql.Tx) error {
 	for _, site := range legacyObjectiveSites {
 		rows, err := tx.QueryContext(ctx, fmt.Sprintf(
-			`SELECT DISTINCT json_extract(%[1]s, '%[2]s') FROM events WHERE json_type(%[1]s, '%[2]s') = 'text'`,
-			site.column, site.objective,
+			`SELECT DISTINCT json_extract(%[1]s, '%[2]s') FROM events
+			 WHERE stream_type = '%[3]s' AND json_type(%[1]s, '%[2]s') = 'text'`,
+			site.column, site.objective, site.stream,
 		))
 		if err != nil {
 			return fmt.Errorf("sqlite storage: read legacy placement objectives: %w", err)
@@ -189,14 +212,15 @@ func recordTheWeightsHistoryWasScoredAt(ctx context.Context, tx *sql.Tx) error {
 // the objective, in one statement per site so a partly rewritten event never
 // exists. The mapping is a CASE built from the one table above rather than
 // spelled out here, so there is one place a class assignment can be argued with.
-func renameObjectiveToServiceClass(ctx context.Context, tx *sql.Tx, column, objectivePath, classPath string) error {
+func renameObjectiveToServiceClass(ctx context.Context, tx *sql.Tx, site legacyObjectiveSite) error {
 	statement := fmt.Sprintf(`
 		UPDATE events
 		SET %[1]s = json_remove(json_set(%[1]s, '%[3]s', %[4]s), '%[2]s')
-		WHERE json_type(%[1]s, '%[2]s') = 'text'
-	`, column, objectivePath, classPath, objectiveCase(column, objectivePath))
+		WHERE stream_type = '%[5]s'
+		  AND json_type(%[1]s, '%[2]s') = 'text'
+	`, site.column, site.objective, site.class, objectiveCase(site.column, site.objective), site.stream)
 	if _, err := tx.ExecContext(ctx, statement); err != nil {
-		return fmt.Errorf("sqlite storage: migrate placement objective at %s: %w", objectivePath, err)
+		return fmt.Errorf("sqlite storage: migrate placement objective at %s: %w", site.objective, err)
 	}
 	return nil
 }
@@ -220,7 +244,8 @@ func sortedObjectives() []string {
 }
 
 // anyObjectivePresent is the condition that an event still speaks the old
-// vocabulary anywhere, over the row aliased as legacy.
+// vocabulary anywhere, over the row aliased as legacy. Which streams it is asked
+// about is the caller's to say.
 func anyObjectivePresent() string {
 	conditions := make([]string, 0, len(legacyObjectiveSites))
 	for _, site := range legacyObjectiveSites {

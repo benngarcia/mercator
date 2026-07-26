@@ -102,9 +102,11 @@ func TestOpenCompletesV052BookingDecisionMigration(t *testing.T) {
 // TestOpenRenamesLegacyPlacementObjectives is the service class rename on
 // history. A Run that stated an objective carries a word nothing reads, in three
 // places: the public request, the private one, and the policy its Booking Decision
-// was taken under. Each becomes the class that prices waiting the way that
-// objective ranked it, and the objective is gone rather than kept beside it,
-// because two vocabularies for one answer is how they drift.
+// was taken under. A stored workload revision is the fourth, and the one that
+// repriced work rather than only leaving a stale word behind. Each becomes the
+// class that prices waiting the way that objective ranked it, and the objective is
+// gone rather than kept beside it, because two vocabularies for one answer is how
+// they drift.
 func TestOpenRenamesLegacyPlacementObjectives(t *testing.T) {
 	ctx, db := openLegacyObjectiveFixture(t)
 
@@ -122,6 +124,7 @@ func TestOpenRenamesLegacyPlacementObjectives(t *testing.T) {
 		{"data_json", "$.workload_revision.spec.placement.service_class", domain.ClassInteractive},
 		{"private_data", "$.workload_revision.spec.placement.service_class", domain.ClassInteractive},
 		{"data_json", "$.decision.policy.service_class", domain.ClassBatch},
+		{"data_json", "$.revision.spec.placement.service_class", domain.ClassExperimental},
 	} {
 		var class string
 		query := "SELECT json_extract(" + migrated.column + ", '" + migrated.path + "') FROM events WHERE json_type(" + migrated.column + ", '" + migrated.path + "') = 'text'"
@@ -145,17 +148,29 @@ func TestOpenRenamesLegacyPlacementObjectives(t *testing.T) {
 	if weights != "{}" {
 		t.Errorf("migrated weights = %s, and the cheapest objective was scored on price alone", weights)
 	}
+	// Completeness is asked of the whole payload rather than of the paths the
+	// migration writes. Counting objectives at the sites it already rewrote is a
+	// tautology that passes while a site nobody listed keeps the old vocabulary,
+	// which is exactly how the stored workload revision was missed.
 	var objectives int
 	if err := db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM events
-		WHERE json_type(data_json, '$.workload_revision.spec.placement.objective') IS NOT NULL
-		   OR json_type(private_data, '$.workload_revision.spec.placement.objective') IS NOT NULL
-		   OR json_type(data_json, '$.decision.policy.objective') IS NOT NULL
+		WHERE data_json LIKE '%"objective"%' OR private_data LIKE '%"objective"%'
 	`).Scan(&objectives); err != nil {
 		t.Fatalf("count remaining objectives: %v", err)
 	}
 	if objectives != 0 {
-		t.Errorf("%d events still state a placement objective", objectives)
+		t.Errorf("%d events still state a placement objective somewhere in their payload", objectives)
+	}
+	// The class a caller stored, read back through the door a caller reads it
+	// through. A revision left speaking the old vocabulary reads back with no
+	// class at all, and the next Run created from it is normalised to standard.
+	revision, err := workload.New(storage.EventLog()).GetRevision(ctx, "ws_1", "wl_1", "wrev_9")
+	if err != nil {
+		t.Fatalf("read the migrated revision: %v", err)
+	}
+	if revision.Spec.Placement.Class != domain.ClassExperimental {
+		t.Errorf("the stored revision reads class %q, and a Run created from it is priced at whatever it says", revision.Spec.Placement.Class)
 	}
 }
 
