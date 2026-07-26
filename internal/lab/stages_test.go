@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/scenario"
 )
 
 // TestEveryStageOfALaunchHasAnActual is the waterfall at L1, driven through the
@@ -147,4 +148,85 @@ func TestAWorkloadThatNeverBecomesReadyMeasuresNoReadiness(t *testing.T) {
 				run.ID, run.ReadyAt.Format(time.RFC3339Nano))
 		}
 	}
+}
+
+// TestAMeasuredPathPricesTheReadAndThenSpendsIt is the transfer model at L1, and
+// it is one claim about two halves of one declaration. The Blueprint states each
+// machine's path to the object store once. Mercator reads the fact the machine
+// published and prices the read; this world reads the same declaration and really
+// moves the bytes. A tree where either half fell back to a constant per scope
+// would still produce a prediction and an actual, and they would agree by
+// construction on every machine in the fleet.
+//
+// The two machines are identical in every other column, including the image, so
+// nothing but the path can decide the placement. The far one publishes the faster
+// registry link on purpose: it holds the image already, so there is nothing to
+// fetch over that link, and a fast path of the wrong kind buys a candidate
+// nothing.
+func TestAMeasuredPathPricesTheReadAndThenSpendsIt(t *testing.T) {
+	execution := openConformanceExecution(t, "a-path-somebody-measured-prices-the-read")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 4 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("a launch priced from a measured path broke a standing rule: %v", err)
+	}
+
+	decision := bookingDecisions(t, execution)["run-reader"]
+	if decision.SelectedOfferSnapshotID != "rental-near-the-data" {
+		t.Fatalf("the decision placed on %q, and the machine beside the data reads the dataset twenty times faster",
+			decision.SelectedOfferSnapshotID)
+	}
+	// Eighty seconds against sixteen hundred, off the same forty gigabytes. Under
+	// one constant per scope both were 640 and the placement fell to whichever
+	// offer ID sorted first.
+	near := candidateFor(t, decision, "rental-near-the-data")
+	far := candidateFor(t, decision, "rental-far-from-the-data")
+	assertPricedRead(t, near, 80, 4000)
+	assertPricedRead(t, far, 1600, 200)
+
+	// The world's own account of what it then spent, which is the half a flat
+	// constant made unfalsifiable: this number comes from the Effect Ledger and
+	// the one above comes from the Booking Decision.
+	rows := bundlePredictions(t, execution)
+	read := rows[string(domain.StageArtifactFetch)+"_seconds"]
+	if read.ActualSource != "effect_ledger.launch.stage_seconds" {
+		t.Fatalf("the artifact read's actual came from %q, and the world's own ledger is the only thing that spent it",
+			read.ActualSource)
+	}
+	if read.ActualSeconds < 79 || read.ActualSeconds > 81 {
+		t.Fatalf("this world spent %.2fs reading forty gigabytes over a 4 Gbps path, and the path says eighty",
+			read.ActualSeconds)
+	}
+}
+
+// assertPricedRead holds one candidate to the seconds it was charged for its
+// Artifact read and to the rate those seconds came from. The rate is asserted
+// beside the seconds because the seconds alone cannot say which of the two halves
+// of the arithmetic a fixture pinned.
+func assertPricedRead(t *testing.T, candidate domain.CandidateDecision, seconds, mbps float64) {
+	t.Helper()
+	read := candidate.Estimates.Stages.ArtifactFetch
+	if read.Expected < seconds-1 || read.Expected > seconds+1 {
+		t.Fatalf("candidate %q was charged %.2fs of reading, and its path says %.2f", candidate.OfferSnapshotID, read.Expected, seconds)
+	}
+	for _, rate := range candidate.TransferRates {
+		if rate.Stage != domain.StageArtifactFetch {
+			continue
+		}
+		if rate.Mbps != mbps || rate.Measurement != scenario.PathFactSource {
+			t.Fatalf("candidate %q priced its read at %.2f Mbps measured by %q, want %.2f measured by the path it declared",
+				candidate.OfferSnapshotID, rate.Mbps, rate.Measurement, mbps)
+		}
+		return
+	}
+	t.Fatalf("candidate %q records no rate for the read it was charged %.2fs for", candidate.OfferSnapshotID, read.Expected)
 }

@@ -34,8 +34,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 29 {
-		t.Fatalf("latest invariant results = %d, want 29", len(latest))
+	if len(latest) != 30 {
+		t.Fatalf("latest invariant results = %d, want 30", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -270,6 +270,14 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 					LayerDigests: []string{"sha256:never-pulled"},
 				},
 			}}
+		},
+		// A candidate charged forty gigabytes at a throughput presented as
+		// measured, on a machine that published nothing about that path. The
+		// seconds read like every other prediction in the record, and there is
+		// nobody at all behind the number they were divided by.
+		"safety.transfer_rate_is_attributed": func(observation *InvariantObservation) {
+			observation.World.Offers = []domain.OfferSnapshot{{ID: "rental-warm"}}
+			observation.MercatorEvents = []eventlog.CloudEvent{pricedAtARate(measuredByNobody())}
 		},
 		"safety.locality_is_never_infeasibility": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{refusedForHoldingNothing()}
@@ -635,6 +643,124 @@ func runRecordReady(readyAt string) domain.RunRecord {
 		panic(err)
 	}
 	return domain.RunRecord{ID: "run-1", ReadyAt: &moment}
+}
+
+// TestEveryClauseOfTheTransferRateRuleCanFail is the attribution rule read the
+// way every law here has to be readable. The registry's single deliberate case
+// drives one of its clauses, and each of the others is shown failing on the one
+// record it exists to catch. Every case here is a record no code in this tree
+// writes, which is what a standing law is: the rule exists so a slice reaching
+// for a faster answer cannot write one of them and stay green.
+func TestEveryClauseOfTheTransferRateRuleCanFail(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	measured := domain.OfferSnapshot{
+		ID:         "rental-warm",
+		ObservedAt: now,
+		Network: domain.NetworkFacts{Download: []domain.NetworkFact{{
+			Scope:      domain.NetworkScopeObjectStore,
+			Statistic:  "p10",
+			ValueMbps:  200,
+			Source:     "node_probe",
+			ObservedAt: now,
+			Confidence: 0.9,
+		}}},
+	}
+	disowned := measured
+	disowned.Network.Download[0].Confidence = 0
+
+	for name, observed := range map[string]struct {
+		offer domain.OfferSnapshot
+		rate  domain.TransferRate
+	}{
+		"priced a transfer from nothing it names": {
+			offer: measured,
+			rate: domain.TransferRate{
+				Stage: domain.StageArtifactFetch,
+				Scope: domain.NetworkScopeObjectStore,
+				Mbps:  200,
+				Bytes: 40_000_000_000,
+			},
+		},
+		"priced a transfer from a measurement and an assumption at once": {
+			offer: measured,
+			rate: domain.TransferRate{
+				Stage:       domain.StageArtifactFetch,
+				Scope:       domain.NetworkScopeObjectStore,
+				Mbps:        200,
+				Bytes:       40_000_000_000,
+				Measurement: "node_probe",
+				Assumption:  domain.AssumptionObjectStoreRate,
+			},
+		},
+		"priced a transfer at a measured rate this machine never reported": {
+			offer: measured,
+			rate:  measuredByNobody(),
+		},
+		"priced a transfer at a measurement its own publisher disowned": {
+			offer: disowned,
+			rate: domain.TransferRate{
+				Stage:       domain.StageArtifactFetch,
+				Scope:       domain.NetworkScopeObjectStore,
+				Mbps:        200,
+				Bytes:       40_000_000_000,
+				Measurement: "node_probe",
+			},
+		},
+		"priced a transfer at a measurement of another path": {
+			offer: measured,
+			rate: domain.TransferRate{
+				Stage:       domain.StageImageFetch,
+				Scope:       domain.NetworkScopeRegistry,
+				Mbps:        200,
+				Bytes:       2_000_000_000,
+				Measurement: "node_probe",
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := InvariantObservation{
+				StartedAt:      now,
+				Now:            now,
+				World:          WorldTruthSnapshot{At: now, Offers: []domain.OfferSnapshot{observed.offer}},
+				MercatorEvents: []eventlog.CloudEvent{pricedAtARate(observed.rate)},
+			}
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.transfer_rate_is_attributed",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("a decision that %s was reported as pricing every transfer from something: %+v", name, result)
+			}
+		})
+	}
+}
+
+// TestARatePricedFromTheStatedAssumptionIsNotAViolation is the other side of the
+// same law. Nothing measures a host's storage, so every assembly in the fleet is
+// priced from Mercator's own constant, and the rule exists to make that visible
+// rather than to forbid it. A rule that failed an honest assumption would be a
+// rule the tree could only satisfy by claiming measurements it does not have.
+func TestARatePricedFromTheStatedAssumptionIsNotAViolation(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	observation := InvariantObservation{
+		StartedAt: now,
+		Now:       now,
+		World:     WorldTruthSnapshot{At: now, Offers: []domain.OfferSnapshot{{ID: "rental-warm", ObservedAt: now}}},
+		MercatorEvents: []eventlog.CloudEvent{pricedAtARate(domain.TransferRateFor(
+			domain.StageUnpack, "", 2_000_000_000, domain.UnpackRate(),
+		))},
+	}
+
+	result := invariantResultByID(t,
+		DefaultInvariantRegistry().Evaluate(observation),
+		"safety.transfer_rate_is_attributed",
+	)
+
+	if result.Status != InvariantPassed {
+		t.Fatalf("assembly priced from the assumption every host in the fleet is assumed to unpack at was reported as a violation: %s", result.Violation)
+	}
 }
 
 // TestEveryClauseOfTheDiskRuleCanFail is the disk rule read the way every law
@@ -1144,6 +1270,37 @@ func launchSpendingEveryStageBut(runID string, omitted domain.LaunchStage) Effec
 		Response:      EffectResponseDelivered,
 		CorrelationID: runID,
 		Consequence:   mustJSON(map[string]any{"stage_seconds": spent}),
+	}
+}
+
+// pricedAtARate is a Booking Decision whose one candidate was charged a transfer
+// at one rate. It is the whole input to the attribution rule: the rule reads what
+// a decision recorded about where a rate came from, and nothing else.
+func pricedAtARate(rate domain.TransferRate) eventlog.CloudEvent {
+	return bookingDecidedEvent("evt_transfer_rate", domain.BookingDecision{
+		ID:    "dec_transfer_rate",
+		RunID: "run-reader",
+		Candidates: []domain.CandidateDecision{{
+			OfferSnapshotID: "rental-warm",
+			Feasible:        true,
+			TransferRates:   []domain.TransferRate{rate},
+		}},
+		SelectedOfferSnapshotID: "rental-warm",
+		SelectionReasonCodes:    []string{"FEASIBLE"},
+	})
+}
+
+// measuredByNobody is a rate a decision presents as measured on a machine that
+// published no such fact. It is the record a prediction slice reaching for a
+// faster answer would write.
+func measuredByNobody() domain.TransferRate {
+	return domain.TransferRate{
+		Stage:       domain.StageArtifactFetch,
+		Scope:       domain.NetworkScopeObjectStore,
+		Mbps:        4000,
+		Bytes:       40_000_000_000,
+		Confidence:  0.9,
+		Measurement: "somebody",
 	}
 }
 

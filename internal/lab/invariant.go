@@ -115,6 +115,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
+		invariantRule{id: "safety.transfer_rate_is_attributed", check: transferRateIsAttributed},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
 		invariantRule{id: "safety.score_is_reproducible_from_the_record", check: scoreIsReproducibleFromTheRecord},
 		invariantRule{id: "safety.promised_start_is_still_ahead", check: promisedStartIsStillAhead},
@@ -1298,6 +1299,105 @@ func localityProvenance(observation InvariantObservation) error {
 		}
 	}
 	return nil
+}
+
+// transferRateIsAttributed is the provenance rule for the other half of a
+// transfer prediction. safety.locality_provenance holds that the bytes a
+// candidate is charged are explained; this holds that the rate they were divided
+// by is, because seconds are the product of the two and either one can be
+// invented.
+//
+// Two things fail it. A transfer priced from nothing, naming neither a
+// measurement nor an assumption, is a duration whose reader cannot tell which it
+// was, and the two are different claims about the fleet: one says Mercator
+// measured this machine, the other says Mercator guessed the same way it guesses
+// about every machine. A transfer priced at a throughput presented as measured,
+// on a host that published no such fact, is worse: it is a number with a
+// measurement's standing and nobody behind it, and it is exactly what a
+// prediction slice reaching for a faster answer would write.
+//
+// It is stated over what the decision recorded rather than over the arithmetic.
+// A rule that recomputed the seconds would be a second implementation of the
+// predictor agreeing with the first; this asks the record the question an
+// operator asks, which is who says so.
+func transferRateIsAttributed(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	published := map[string]domain.OfferSnapshot{}
+	for _, offer := range observation.World.Offers {
+		published[offer.ID] = offer
+	}
+	for _, decision := range decisions {
+		for _, candidate := range decision.Candidates {
+			for _, rate := range candidate.TransferRates {
+				if err := ratePricedFromSomething(decision, candidate, rate); err != nil {
+					return err
+				}
+				if err := measuredRateWasReported(decision, candidate, rate, published); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func ratePricedFromSomething(decision domain.BookingDecision, candidate domain.CandidateDecision, rate domain.TransferRate) error {
+	if rate.Attributed() {
+		return nil
+	}
+	return fmt.Errorf(
+		"Run %q: candidate %q was charged %d bytes at %.2f Mbps on its %s stage, and the record names %s",
+		decision.RunID, candidate.OfferSnapshotID, rate.Bytes, rate.Mbps, rate.Stage, describeRateProvenance(rate),
+	)
+}
+
+// measuredRateWasReported holds the second clause: a rate the record presents as
+// measured has to be a number some host or path fact actually reported, at the
+// scope it was priced over, and one its own publisher still stands behind. A
+// disowned or expired fact is silence for every other reader here, so it may not
+// become a measurement by being divided by.
+func measuredRateWasReported(
+	decision domain.BookingDecision,
+	candidate domain.CandidateDecision,
+	rate domain.TransferRate,
+	published map[string]domain.OfferSnapshot,
+) error {
+	if rate.Measurement == "" {
+		return nil
+	}
+	offer, known := published[candidate.OfferSnapshotID]
+	if !known {
+		return fmt.Errorf(
+			"Run %q: candidate %q priced its %s stage at %.2f Mbps measured by %q, and this world publishes no such machine to have measured it",
+			decision.RunID, candidate.OfferSnapshotID, rate.Stage, rate.Mbps, rate.Measurement,
+		)
+	}
+	fact, answered := offer.Network.DownloadP10(rate.Scope, offer.ObservedAt)
+	if !answered || fact.ValueMbps != rate.Mbps {
+		return fmt.Errorf(
+			"Run %q: candidate %q priced its %s stage at %.2f Mbps measured by %q, and %s published about its %q path",
+			decision.RunID, candidate.OfferSnapshotID, rate.Stage, rate.Mbps, rate.Measurement,
+			describeReportedPath(fact, answered), rate.Scope,
+		)
+	}
+	return nil
+}
+
+func describeRateProvenance(rate domain.TransferRate) string {
+	if rate.Measurement != "" && rate.Assumption != "" {
+		return fmt.Sprintf("both the measurement %q and the assumption %q, which is a decision that cannot have been taken twice", rate.Measurement, rate.Assumption)
+	}
+	return "neither a measurement nor an assumption it was priced from"
+}
+
+func describeReportedPath(fact domain.NetworkFact, answered bool) string {
+	if !answered {
+		return "nothing its publisher stands behind was"
+	}
+	return fmt.Sprintf("%.2f Mbps was", fact.ValueMbps)
 }
 
 // onlyKeptCapacityHoldsWhatItRan holds the line the lane split draws. It names
