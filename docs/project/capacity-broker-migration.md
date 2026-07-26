@@ -1523,6 +1523,59 @@ complete because it works against a live provider.
     refused `UNKNOWN_FACT` with "unknown" offered rather than
     `NETWORK_FACT_UNSATISFIED`, because that machine measured nothing rather than
     measuring too slow.
+- [x] 2026-07-26: Let a decision state the risk it was taken under, and hold the
+  two models to every candidate. Phase 4 prices reliability, and there was
+  nothing to price it from: `domain.ReliabilityEvidence` had exactly one writer
+  in the tree, `internal/adapter/vast`, no Blueprint could state a machine that
+  refuses to start, and no decision recorded either rate. So the whole risk half
+  of the goal rested on a fact no fixture could construct and no record could
+  show.
+  - `RentalSpec.reliability` is the Blueprint vocabulary, in the terms the one
+    production publisher states: how often this machine refuses to start, how
+    often it drops what it is running, and how much its publisher stands behind
+    the history. Both simulated worlds publish it, so the fact travels the way it
+    travels in production, from the provider onto the offer.
+  - `CandidateDecision.Reliability` is the record. Recording it is not deferred
+    along with pricing it, because the doubt about that history already reaches
+    the score: `Confidences` has carried a `reliability` entry since the two
+    uncertainty definitions were collapsed, so a candidate could be charged a
+    tenth of a point with no sign anywhere of which answer the doubt was about,
+    and a score is only re-derivable from the record if every answer it doubts is
+    in it.
+  - Neither rate is priced. Expected redo cost is a probability times a predicted
+    start, nothing here predicts either yet, and a flat penalty invented for them
+    now would be the unmeasured constant this plan keeps deleting, which is why
+    the two reliability weights were deleted from `ScoreWeights` rather than kept
+    at zero. `a-machine-that-fails-to-start-says-so` states that gap rather than
+    hiding it: two machines whose only difference is that one refuses two starts
+    in five score to the same dollar, so the placement falls through to the offer
+    ID and the flaky machine takes the Run. Price a refusal and the fixture fails,
+    which is the point of writing it down.
+  - The oracle law is per candidate now.
+    `TestSmallWorldReferenceSolverAgreesWithProductionOnEveryCandidate` compares
+    every stage of both models' predictions, their quantiles and confidences,
+    the dollars, the doubt, and the risk each recorded, where it used to compare
+    feasible sets and winners. Every drift this corpus has found was too small to
+    move a winner when it landed: two definitions of uncertainty agreed on every
+    placement for a phase because both were multiplied by zero. Restoring the
+    reference model's extra point for an unenumerated inventory fails it twice
+    per candidate, on the doubt and on the dollars; having the reference model
+    throw away either quantile the provider published fails it on
+    `provision_seconds` and on both starts derived from it; dropping the risk from
+    the production record fails it on what the two models recorded. The small
+    world's provisionable offer now states its own p50 and p90, because with only
+    an expectation stated there neither model could be caught inventing a spread,
+    which is a defect this plan has already had to fix once in the scheduler.
+  - Judgment calls. The rates go on `RentalSpec` and not on
+    `MarketplaceOfferSpec`, because a fixture that states a history no candidate
+    in the corpus is scored against is a declared field nothing consumes; a
+    marketplace offer publishes one the same way in the slice that needs it. A
+    clean measured record and no measurement at all stay two worlds: silence
+    states no rate to read and no confidence to doubt, so the corpus asserts the
+    steady machine's zeros as a published fact rather than deriving them from an
+    absence. The Blueprint's expectations for the two rates are exact rather than
+    bounded, because a published fact that arrives changed arrived from somewhere
+    else.
 
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
@@ -2023,6 +2076,20 @@ Phase 4 added:
   and the execution the Lab's own unpriced offer is falsifiable through. Publishing
   the default priced offer for it places the Run on the machine nobody quoted at a
   rate of zero.
+- `a-machine-that-fails-to-start-says-so` (green): two Rentals at one price and one
+  warmth, both standing behind a reliability history their provider measured. One
+  has refused two starts in five and been interrupted a quarter of the time, and the
+  other has never done either. The decision records both rates on both candidates
+  and prices neither, so the two score to the same dollar and the placement falls
+  through to the offer ID, which is how the machine known to refuse starts takes the
+  Run. That is the honest state of this model, written where a fixture will fail when
+  somebody closes the gap: what a refusal is worth is a probability times a predicted
+  start, and a flat penalty invented for it now would be the unmeasured constant this
+  plan keeps deleting. Deleting the L0 world's reliability projection fails it in
+  four columns at once, the two rates, the doubt, and the score.
+- `a-refusal-to-start-is-recorded-and-not-priced` (conformance): the same world at
+  L1, and the execution the Lab world's own reliability projection is falsifiable
+  through. It asserts the record and deliberately not the placement.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
@@ -2044,8 +2111,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 29 regression Blueprints: 26 green and 3 target, beside one demo,
-one minimized case, and twelve conformance Blueprints. The count is read off the
+The corpus is 30 regression Blueprints: 27 green and 3 target, beside one demo,
+one minimized case, and thirteen conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.

@@ -418,6 +418,54 @@ type RentalSpec struct {
 	// different amounts, which is the only way the uncertainty term can be shown
 	// pricing anything.
 	CapacityConfidence *float64 `json:"capacity_confidence,omitempty"`
+	// Reliability is the history this machine's provider publishes about it:
+	// how often it refuses to start, and how often it drops the work it is
+	// running. Omitted means nobody has measured this machine, which is what
+	// every simulated provider but one says today, and what makes silence and a
+	// clean record two different worlds a fixture must be able to tell apart.
+	Reliability *ReliabilitySpec `json:"reliability,omitempty"`
+}
+
+// ReliabilitySpec is a published risk history, in the terms the one production
+// publisher of it states: rates in [0,1] and how much their publisher stands
+// behind them. It is a fact about the machine rather than world truth, which is
+// why it carries a confidence and why a fixture may state a history that is
+// wrong about what the world then does.
+//
+// Nothing prices either rate yet. They are here because a decision that records
+// no risk at all cannot be the input to a slice that prices one, and because the
+// confidence beside them already reaches the score through the uncertainty term,
+// so the corpus needed a way to say which answer that doubt was about.
+type ReliabilitySpec struct {
+	StartFailureRate float64 `json:"start_failure_rate,omitempty"`
+	InterruptionRate float64 `json:"interruption_rate,omitempty"`
+	// Confidence is how much the publisher stands behind this history. A fixture
+	// states it because a measurement over three starts and one over three
+	// thousand are different answers, and because an omitted confidence would
+	// make a published history indistinguishable from no history at all.
+	Confidence float64 `json:"confidence"`
+}
+
+// Evidence is the risk record this declaration states, in the vocabulary an
+// offer carries it in.
+func (spec ReliabilitySpec) Evidence() domain.ReliabilityEvidence {
+	return domain.ReliabilityEvidence{
+		StartFailureRate: spec.StartFailureRate,
+		InterruptionRate: spec.InterruptionRate,
+		Confidence:       spec.Confidence,
+	}
+}
+
+// Risk is what this machine's provider publishes about how it behaves, and
+// nothing where no fixture stated a history. Silence is not a clean record: a
+// machine nobody has measured has published no rate to read and no confidence to
+// doubt, and reading it as zero failures would be a claim its provider never
+// made.
+func (spec RentalSpec) Risk() domain.ReliabilityEvidence {
+	if spec.Reliability == nil {
+		return domain.ReliabilityEvidence{}
+	}
+	return spec.Reliability.Evidence()
 }
 
 // Confidence is how sure this machine's publisher is of its capacity claim, and
@@ -789,6 +837,15 @@ type CandidateExpectation struct {
 	// state that a class's exchange rate was applied rather than merely that the
 	// winner came out right.
 	ScoreUSD *Bound `json:"score_usd,omitempty"`
+	// StartFailureRate and InterruptionRate assert the risk history the decision
+	// recorded for this candidate. They are exact rather than bounded, because
+	// they are a published fact carried through rather than an arithmetic answer:
+	// a rate that arrives changed arrived from somewhere else. Zero is worth
+	// asserting, and it is why they are pointers: a machine whose provider has
+	// measured it and never seen it fail states nothing to fear, and a machine
+	// nobody has measured states nothing at all.
+	StartFailureRate *float64 `json:"start_failure_rate,omitempty"`
+	InterruptionRate *float64 `json:"interruption_rate,omitempty"`
 }
 
 type ScheduleEvidenceExpectation struct {
@@ -1488,6 +1545,9 @@ func (w WorldSpec) validate() error {
 		if err := rental.Billing.validate("rental " + rental.ID); err != nil {
 			return err
 		}
+		if err := validateReliability("rental "+rental.ID, rental.Reliability); err != nil {
+			return err
+		}
 	}
 	rentalsWithSchedules := map[string]bool{}
 	bookingOwners := map[string]string{}
@@ -1573,6 +1633,30 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("duplicate runtime model %q", key)
 		}
 		runtimeModels[key] = true
+	}
+	return nil
+}
+
+// validateReliability refuses a history no provider could publish. A rate
+// outside the unit interval is not a share of this machine's starts, and a
+// history nobody stands behind is not a measurement: a published rate at zero
+// confidence would reach the record as a fact and reach the score as nothing,
+// which is the disowned measurement this corpus already refuses to state for a
+// link.
+func validateReliability(owner string, spec *ReliabilitySpec) error {
+	if spec == nil {
+		return nil
+	}
+	for answer, rate := range map[string]float64{
+		"start_failure_rate": spec.StartFailureRate,
+		"interruption_rate":  spec.InterruptionRate,
+	} {
+		if rate < 0 || rate > 1 {
+			return fmt.Errorf("%s states %s %v, which is not a share of its starts", owner, answer, rate)
+		}
+	}
+	if spec.Confidence <= 0 || spec.Confidence > 1 {
+		return fmt.Errorf("%s publishes a reliability history at confidence %v, and a history nobody stands behind is not one", owner, spec.Confidence)
 	}
 	return nil
 }

@@ -91,9 +91,11 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 				GranularitySeconds: 1,
 				Known:              true,
 			},
-			// reliability2 is Vast's empirical machine uptime score in [0,1];
-			// its complement is the chance the host drops out mid-run, which is
-			// what the scheduler prices via InterruptionPenaltyUSD.
+			// reliability2 is Vast's empirical machine uptime score in [0,1]; its
+			// complement is the chance the host drops out mid-run. The decision
+			// records it and nothing prices it: what an interruption costs is a
+			// probability times a predicted start, and the flat weight this comment
+			// used to name was deleted for being an invented exchange rate.
 			Reliability: domain.ReliabilityEvidence{
 				InterruptionRate: clamp01(1 - o.Reliability),
 				Confidence:       1,

@@ -499,6 +499,7 @@ type CandidateDecision struct {
 	NativeRef       string                         `json:"native_ref,omitempty"`
 	OfferSnapshotId string                         `json:"offer_snapshot_id"`
 	Rejections      []Violation                    `json:"rejections,omitempty"`
+	Reliability     ReliabilityEvidence            `json:"reliability,omitempty"`
 
 	// RentalSchedule One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them.
 	RentalSchedule ScheduleEvidence `json:"rental_schedule,omitempty"`
@@ -880,6 +881,7 @@ type OfferSnapshot = domain.OfferSnapshot
 
 // PlacementPolicy defines model for PlacementPolicy.
 type PlacementPolicy struct {
+	// AllowUnknownPricing Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none.
 	AllowUnknownPricing    bool    `json:"allow_unknown_pricing,omitempty"`
 	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds,omitempty"`
 	MaxExpectedCostUsd     float64 `json:"max_expected_cost_usd,omitempty"`

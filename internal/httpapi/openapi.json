@@ -4372,6 +4372,10 @@
           "disk": {
             "$ref": "#/components/schemas/DiskDemand"
           },
+          "reliability": {
+            "$ref": "#/components/schemas/ReliabilityEvidence",
+            "description": "The risk history this candidate's publisher stated: how often this machine refuses to start, and how often it drops the work it is running. It is recorded and never priced. What a refusal is worth is a probability times a predicted start, nothing here predicts either yet, and a flat penalty invented for it would be an exchange rate this model made up. It is recorded all the same, because the confidence beside it is one of the answers the uncertainty term already charges for: a score derived from this record is only re-derivable if every answer it doubts is in it."
+          },
           "rental_schedule": {
             "$ref": "#/components/schemas/ScheduleEvidence",
             "description": "The Broker state this candidate was weighed against, present only for a Rental that has Bookings on it. The queue estimate beside it is the projection; this is what the projection was read from. A Rental nothing is assigned to records none, because an empty schedule offered as evidence reads as a queue that was measured rather than one that does not exist."

@@ -207,7 +207,13 @@ func evaluateOffer(input SchedulingInput, weights domain.ScoreWeights, offer dom
 		// model invented. The workspace comparison is why it is worth recording:
 		// a cache of the same name in another workspace is a different cache, and
 		// it must never read as warmth on this Run's record.
-		CacheEvidence:  domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
+		CacheEvidence: domain.CacheWarmth(input.Workload.WorkspaceID, input.Workload.Spec.Caches, offer.Caches),
+		// What this machine's publisher says it does to work: refuse to start it,
+		// or drop it once it is running. Recorded and not scored, because pricing a
+		// refusal needs a probability times a predicted start and nothing here
+		// predicts either. It is recorded all the same, because the confidence
+		// beside it is already one of the answers the uncertainty term charges for.
+		Reliability:    offer.Reliability,
 		Disk:           work.disk,
 		RentalSchedule: scheduleEvidence(input, offer),
 		Estimates:      work.estimates,

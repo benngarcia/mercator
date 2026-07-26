@@ -148,6 +148,12 @@ func referenceCandidate(input scheduler.SchedulingInput, offer domain.OfferSnaps
 		Feasible:        true,
 		Estimates:       estimates,
 		Confidences:     referenceConfidences(offer, estimates),
+		// The risk history this model was given, carried through unpriced. It is
+		// here so the two records hold the same answers: a term added to one model
+		// and not the other is the drift an independent model exists to catch, and
+		// the doubt about this history is already in the score through the
+		// confidence beside it.
+		Reliability: offer.Reliability,
 	}
 	weights := input.Workload.Spec.Placement.Class.Weights()
 	candidate.ScoreUSD = weights.ScoreUSD(candidate, input.Workload.Spec.Placement.ExpectedRuntimeSeconds)

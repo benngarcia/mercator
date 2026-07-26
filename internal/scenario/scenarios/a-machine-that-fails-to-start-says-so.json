@@ -1,0 +1,62 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Two Rentals at one price, both holding the whole 2GB image, both a second from ready, and both standing behind a measured reliability history their provider published. The only difference between them is what that history says: rental-flaky has refused two starts in five and been interrupted a quarter of the time, and rental-steady has never done either. The decision records both rates on both candidates and prices neither, so the two candidates score to the same dollar and the placement falls through to the offer ID, which is how the machine known to refuse starts takes the Run. That is the whole claim: what a refusal is worth is a prediction nobody has made yet, expected redo cost is probability times a predicted start, and a flat penalty invented for it here would be an unmeasured constant. Until then the fixture states the gap rather than hiding it, and it is what makes the gap falsifiable: price a refusal and the two scores separate and this Blueprint fails. The doubt each machine carries is the tenth of a point its provider withheld from its own measurement, which is the same for both and therefore ranks neither.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2": {
+        "layers": [
+          {"digest": "sha256:1f5a1b0d90ba2d7c2d1e0f19e4c6a2b9de8fd0c3a6b1e2f4c5d6a7b8c9d0e1f2", "size": "2GB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-flaky",
+        "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
+        "rate_per_hour_usd": 2.0,
+        "reliability": {"start_failure_rate": 0.4, "interruption_rate": 0.25, "confidence": 0.9}
+      },
+      {
+        "id": "rental-steady",
+        "cached_images": ["trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2"],
+        "rate_per_hour_usd": 2.0,
+        "reliability": {"confidence": 0.9}
+      }
+    ]
+  },
+  "request": {
+    "image": "trainer@sha256:3ac74f26b3f57e10b9a30bb7ef54c0f66c8b1ab1e0d99e5b4e30a5b1cc7e91f2",
+    "service_class": "standard",
+    "expected_runtime": "10m",
+    "max_runtime": "30m"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "rental-flaky",
+    "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
+    "disposition": "release",
+    "candidates": {
+      "rental-flaky": {
+        "feasible": true,
+        "image_locality": "hot",
+        "pull_seconds": 0,
+        "pull_confidence": 1,
+        "start_failure_rate": 0.4,
+        "interruption_rate": 0.25,
+        "uncertainty": 0.1,
+        "score_usd": {"at_least": 0.3368, "at_most": 0.3369}
+      },
+      "rental-steady": {
+        "feasible": true,
+        "image_locality": "hot",
+        "pull_seconds": 0,
+        "pull_confidence": 1,
+        "start_failure_rate": 0,
+        "interruption_rate": 0,
+        "uncertainty": 0.1,
+        "score_usd": {"at_least": 0.3368, "at_most": 0.3369}
+      }
+    }
+  }
+}

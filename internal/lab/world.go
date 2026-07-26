@@ -461,6 +461,11 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			state.leaseExpiresAt = tape.Start.Add(rental.IdleLeaseExpiresIn.Duration())
 		}
 		state.offer.Capacity.Confidence = rental.Confidence()
+		// The history this machine's provider publishes about how it behaves. It
+		// is a fact about the machine rather than about the moment an offer was
+		// read, so it is stated once and republished with every snapshot, and a
+		// machine no fixture measured publishes none of it.
+		state.offer.Reliability = rental.Risk()
 		if rental.Unpriced {
 			// Nobody quoted this machine. That is a statement about the world, so it
 			// is carried through as one rather than becoming a rate of zero, which

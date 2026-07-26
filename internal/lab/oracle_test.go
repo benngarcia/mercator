@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"slices"
 	"testing"
@@ -13,8 +14,33 @@ import (
 	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
-func TestSmallWorldReferenceSolverAgreesWithProductionFeasibilityAndWinner(t *testing.T) {
+// TestSmallWorldReferenceSolverAgreesWithProductionOnEveryCandidate is the
+// oracle law, and it is stated over every candidate rather than over the winner.
+//
+// Comparing feasible sets and winners only catches a disagreement large enough
+// to move a placement, which in a world of two machines means a disagreement
+// worth more than the gap between them. Every drift this corpus has found so far
+// was smaller than that when it landed and larger later: two definitions of
+// uncertainty agreed on every winner for a phase because both were multiplied by
+// zero, and an Artifact read nobody priced changed no winner until a fixture put
+// forty gigabytes on one side. A model that agrees candidate by candidate about
+// each stage of the prediction, the dollars, the doubt, and what it recorded has
+// nowhere left to hide one.
+func TestSmallWorldReferenceSolverAgreesWithProductionOnEveryCandidate(t *testing.T) {
 	input := smallSchedulingInput(t)
+	// One machine publishes a risk history, so the agreement covers the answers a
+	// decision records without scoring as well as the ones it scores. A term read
+	// off an offer by one model and recorded by neither is how the two definitions
+	// of uncertainty came apart.
+	for index := range input.Offers {
+		if input.Offers[index].ID == "fresh-4090" {
+			input.Offers[index].Reliability = domain.ReliabilityEvidence{
+				StartFailureRate: 0.4,
+				InterruptionRate: 0.25,
+				Confidence:       0.9,
+			}
+		}
+	}
 	production, err := scheduler.New().Evaluate(context.Background(), input)
 	if err != nil {
 		t.Fatalf("evaluate production scheduler: %v", err)
@@ -36,6 +62,72 @@ func TestSmallWorldReferenceSolverAgreesWithProductionFeasibilityAndWinner(t *te
 	if !equalStrings(reference.FeasibleOfferIDs, productionFeasible) {
 		t.Fatalf("reference feasible = %v, production feasible = %v", reference.FeasibleOfferIDs, productionFeasible)
 	}
+	for _, candidate := range production.Candidates {
+		offer := offerFor(t, input, candidate.OfferSnapshotID)
+		assertModelsAgreeAboutCandidate(t, candidate, referenceCandidate(input, offer))
+	}
+}
+
+// assertModelsAgreeAboutCandidate holds the two models to the same account of one
+// candidate: every stage of the prediction it was scored on, the dollars it
+// costs, the doubt it carries, and the risk history the record states beside
+// them. Each quantity is named, so a failure says which answer the models
+// disagree about rather than that they disagree.
+//
+// The score is compared only where both models have something to rank. An
+// infeasible candidate is not for sale, so production scores it nothing while
+// this reference model prices only what it would use.
+func assertModelsAgreeAboutCandidate(t *testing.T, production, reference domain.CandidateDecision) {
+	t.Helper()
+	for _, stage := range []struct {
+		answer                string
+		production, reference domain.Estimate
+	}{
+		{"queue_seconds", production.Estimates.QueueSeconds, reference.Estimates.QueueSeconds},
+		{"provision_seconds", production.Estimates.ProvisionSeconds, reference.Estimates.ProvisionSeconds},
+		{"pull_seconds", production.Estimates.PullSeconds, reference.Estimates.PullSeconds},
+		{"artifact_seconds", production.Estimates.ArtifactSeconds, reference.Estimates.ArtifactSeconds},
+		{"start_seconds", production.Estimates.StartSeconds, reference.Estimates.StartSeconds},
+		{"established_start_seconds", production.Estimates.EstablishedStartSeconds, reference.Estimates.EstablishedStartSeconds},
+		{"cost_usd", production.Estimates.CostUSD, reference.Estimates.CostUSD},
+	} {
+		if !sameEstimate(stage.production, stage.reference) {
+			t.Errorf("candidate %q: %s: production predicted %s, the reference model %s",
+				production.OfferSnapshotID, stage.answer, describeEstimate(stage.production), describeEstimate(stage.reference))
+		}
+	}
+	if production.Priced() != reference.Priced() {
+		t.Errorf("candidate %q: production says priced=%v and the reference model %v, over cost %+v and %+v",
+			production.OfferSnapshotID, production.Priced(), reference.Priced(), production.Estimates.CostUSD, reference.Estimates.CostUSD)
+	}
+	if production.Reliability != reference.Reliability {
+		t.Errorf("candidate %q: production recorded risk %+v, the reference model %+v",
+			production.OfferSnapshotID, production.Reliability, reference.Reliability)
+	}
+	if production.Uncertainty() != reference.Uncertainty() {
+		t.Errorf("candidate %q: production counted %v points of doubt over %+v, the reference model %v over %+v",
+			production.OfferSnapshotID, production.Uncertainty(), production.Confidences,
+			reference.Uncertainty(), reference.Confidences)
+	}
+	if production.Feasible && math.Abs(production.ScoreUSD-reference.ScoreUSD) > 1e-6 {
+		t.Errorf("candidate %q: production scored %.6f USD, the reference model %.6f",
+			production.OfferSnapshotID, production.ScoreUSD, reference.ScoreUSD)
+	}
+}
+
+// sameEstimate compares what two models predicted, quantiles and confidence
+// included. It reads no source or model version: those name who answered, and
+// two independent models are meant to name themselves.
+func sameEstimate(left, right domain.Estimate) bool {
+	return math.Abs(left.Expected-right.Expected) < 1e-6 &&
+		math.Abs(left.P50-right.P50) < 1e-6 &&
+		math.Abs(left.P90-right.P90) < 1e-6 &&
+		math.Abs(left.Confidence-right.Confidence) < 1e-6
+}
+
+func describeEstimate(estimate domain.Estimate) string {
+	return fmt.Sprintf("expected %.4f, p50 %.4f, p90 %.4f, confidence %.4f",
+		estimate.Expected, estimate.P50, estimate.P90, estimate.Confidence)
 }
 
 // TestTheReferenceModelPricesAssemblyTheSameWayProductionDoes keeps the two
@@ -552,7 +644,12 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 	// A machine that does not exist yet has nothing on it to enumerate, so it
 	// says nothing rather than claiming it looked and found nothing.
 	fresh.Images = domain.ImageInventory{}
-	fresh.Provisioning = &domain.Estimate{Expected: 240}
+	// The provider states its own quantiles, tail included. A model that scaled a
+	// spread off the expectation instead would enforce a Run's start bound against
+	// a number Mercator made up while the provider's own answer sat unread on the
+	// offer, and with the expectation alone stated here neither model could be
+	// caught doing it.
+	fresh.Provisioning = &domain.Estimate{Expected: 240, P50: 210, P90: 480}
 	return scheduler.SchedulingInput{
 		RunID:    "run-reference",
 		Workload: workload,

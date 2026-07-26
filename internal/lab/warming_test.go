@@ -482,3 +482,56 @@ func TestAnUnquotedMachineIsTheLastResortAtL1(t *testing.T) {
 		t.Fatalf("the decision recorded %v, and it took the costlier machine because the cheaper one had no price", decision.SelectionReasonCodes)
 	}
 }
+
+// TestARefusalToStartIsRecordedAndNotPricedAtL1 is the risk history under the
+// real control plane, and the execution the Lab world's own statement about a
+// measured machine is falsifiable through.
+//
+// It asserts the record and deliberately not the placement. Two machines whose
+// only difference is that one refuses two starts in five score to the same
+// dollar, so the winner is whichever offer ID sorts first, and that is the honest
+// state of this model: what a refusal costs is a probability times a predicted
+// start, nothing here predicts either, and a flat penalty invented for it would
+// be the unmeasured constant this program keeps deleting. The gap is written down
+// where a fixture will fail when somebody closes it.
+func TestARefusalToStartIsRecordedAndNotPricedAtL1(t *testing.T) {
+	execution := openConformanceExecution(t, "a-refusal-to-start-is-recorded-and-not-priced")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 8 {
+		if _, err := execution.Drive(context.Background(), Advance(5*time.Minute)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+	}
+
+	decision := bookingDecisions(t, execution)["run-unbothered"]
+	flaky := candidateFor(t, decision, "rental-flaky")
+	steady := candidateFor(t, decision, "rental-steady")
+	for _, candidate := range []domain.CandidateDecision{flaky, steady} {
+		if !candidate.Feasible {
+			t.Fatalf("%s was refused as %+v, and an unreliable machine is not an unusable one", candidate.OfferSnapshotID, candidate.Rejections)
+		}
+	}
+	if flaky.Reliability != (domain.ReliabilityEvidence{StartFailureRate: 0.4, InterruptionRate: 0.25, Confidence: 0.9}) {
+		t.Fatalf("the decision recorded %+v for the machine that refuses two starts in five", flaky.Reliability)
+	}
+	if steady.Reliability != (domain.ReliabilityEvidence{Confidence: 0.9}) {
+		t.Fatalf("the decision recorded %+v for the machine that has never failed, and a clean measured record is not silence", steady.Reliability)
+	}
+	if flaky.ScoreUSD != steady.ScoreUSD {
+		t.Fatalf("the machine that refuses starts scored %.6f against the steady machine's %.6f, and nothing in this model prices a refusal yet",
+			flaky.ScoreUSD, steady.ScoreUSD)
+	}
+	if flaky.Uncertainty() != steady.Uncertainty() {
+		t.Fatalf("the two machines carry %v and %v points of doubt, and both publishers withheld the same tenth from their own measurement",
+			flaky.Uncertainty(), steady.Uncertainty())
+	}
+	if decision.SelectedOfferSnapshotID != "rental-flaky" {
+		t.Fatalf("the Run landed on %q, and with the two machines priced identically the record has nothing left to rank them by but the offer ID",
+			decision.SelectedOfferSnapshotID)
+	}
+}

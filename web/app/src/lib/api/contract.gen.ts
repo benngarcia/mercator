@@ -726,6 +726,7 @@ export interface components {
             expected_runtime_seconds?: number;
             /** Format: double */
             max_expected_cost_usd?: number;
+            /** @description Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none. */
             allow_unknown_pricing?: boolean;
         };
         ExecutionPolicy: {
@@ -1060,6 +1061,7 @@ export interface components {
             start_seconds: components["schemas"]["Estimate"];
             /** @description The part of the start prediction somebody established: queue and provisioning, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess. */
             established_start_seconds: components["schemas"]["Estimate"];
+            /** @description What this Run is billed for running here, over the runtime it declared. A machine whose price nobody published has no such number and predicts none: its source reads "unpriced", which is what the ranking reads to place it behind every candidate somebody priced. A rate of zero is a machine somebody says is free, which is a different answer. */
             cost_usd: components["schemas"]["Estimate"];
         };
         CandidateDecision: {
@@ -1081,6 +1083,8 @@ export interface components {
             /** @description What this candidate was found holding of the mutable caches the Run declared, one entry per name. It is recorded rather than scored, and it is what tells a machine that has never done this work from one holding another tenant's cache of the same name. */
             cache_evidence?: components["schemas"]["CacheEvidence"][];
             disk?: components["schemas"]["DiskDemand"];
+            /** @description The risk history this candidate's publisher stated: how often this machine refuses to start, and how often it drops the work it is running. It is recorded and never priced. What a refusal is worth is a probability times a predicted start, nothing here predicts either yet, and a flat penalty invented for it would be an exchange rate this model made up. It is recorded all the same, because the confidence beside it is one of the answers the uncertainty term already charges for: a score derived from this record is only re-derivable if every answer it doubts is in it. */
+            reliability?: components["schemas"]["ReliabilityEvidence"];
             /** @description The Broker state this candidate was weighed against, present only for a Rental that has Bookings on it. The queue estimate beside it is the projection; this is what the projection was read from. A Rental nothing is assigned to records none, because an empty schedule offered as evidence reads as a queue that was measured rather than one that does not exist. */
             rental_schedule?: components["schemas"]["ScheduleEvidence"];
             estimates: components["schemas"]["CandidateEstimates"];

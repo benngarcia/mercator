@@ -371,6 +371,18 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 	// computed from.
 	checkBound("uncertainty", expect.Uncertainty, candidate.Uncertainty())
 	checkBound("score_usd", expect.ScoreUSD, candidate.ScoreUSD)
+	// The risk history is asserted against the record and never against the world
+	// that published it. A rate reaches a placement through the offer, so reading
+	// the fixture's own declaration back would assert that the fixture says what
+	// it says.
+	checkRate := func(field string, want *float64, recorded float64) {
+		if want == nil || *want == recorded {
+			return
+		}
+		fail("%s: want %v, recorded %v", field, *want, recorded)
+	}
+	checkRate("start_failure_rate", expect.StartFailureRate, candidate.Reliability.StartFailureRate)
+	checkRate("interruption_rate", expect.InterruptionRate, candidate.Reliability.InterruptionRate)
 	return failures
 }
 

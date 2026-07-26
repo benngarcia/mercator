@@ -810,6 +810,19 @@ type CandidateDecision struct {
 	// only the seconds could not tell a machine that was passed over from one
 	// with nowhere to put the work.
 	Disk DiskDemand `json:"disk,omitzero"`
+	// Reliability is the risk history this candidate's publisher stated: how often
+	// this machine refuses to start, and how often it drops what it is running. It
+	// is recorded and never priced. What a refusal costs is a probability times a
+	// predicted start, nothing here predicts either yet, and a flat penalty
+	// invented for it would be an exchange rate this model made up.
+	//
+	// Recording it is not deferred along with pricing it, because the doubt about
+	// this history already reaches the score. Confidences carries what the
+	// publisher stood behind, so before this the record charged a candidate a
+	// tenth of a point with no sign anywhere of which answer that doubt was
+	// about, and a score derived from the record is only re-derivable if every
+	// answer it doubts is in it.
+	Reliability ReliabilityEvidence `json:"reliability,omitzero"`
 	// RentalSchedule is the Broker state this candidate was weighed against,
 	// recorded only for a Rental that has Bookings on it. The queue seconds
 	// beside it are the projection; this is what the projection was read from,
