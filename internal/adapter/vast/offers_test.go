@@ -1,6 +1,7 @@
 package vast
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -132,4 +133,50 @@ func TestAnAskThatPublishesNoUptimeScorePublishesNoHistory(t *testing.T) {
 	if got[0].Reliability.Measured() {
 		t.Fatalf("recorded the history %+v for an ask that published no uptime score", got[0].Reliability)
 	}
+}
+
+// TestTwoSearchesOfOneMachineAreOneCandidate is why this adapter states a region
+// at all. A Vast ask ID is a fresh integer for every search of a machine that was
+// already there, so a launch history keyed on anything Vast numbered would be a
+// growing pile of keys holding one sample each, each of them reported as evidence
+// about this exact candidate. What recurs is the place and the card, and this
+// adapter is the only thing that knows Vast publishes them.
+func TestTwoSearchesOfOneMachineAreOneCandidate(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	machine := offer{
+		GPUName: "RTX 4090", GPUArch: "nvidia", NumGPUs: 2, GPURAMMb: 24576,
+		CPUCoresEffective: 16, CPURAMMb: 65536, DiskSpaceGB: 500,
+		Geolocation: "US-CA", DPHTotal: pricePtr(0.72), Verification: "verified",
+	}
+	first, second := machine, machine
+	first.ID, second.ID = 9001, 12345
+
+	found := buildOffers([]offer{first, second}, 2, 75, now)
+
+	if len(found) != 2 {
+		t.Fatalf("expected the machine under both ask IDs, got %d: %+v", len(found), found)
+	}
+	earlier := domain.CandidateIdentityOf(aggregated(found[0]), "sha256:image")
+	later := domain.CandidateIdentityOf(aggregated(found[1]), "sha256:image")
+	if earlier.Candidate(true) != later.Candidate(true) {
+		t.Fatalf("two searches of one machine keyed differently:\n%s\n%s",
+			earlier.Candidate(true), later.Candidate(true))
+	}
+	if earlier.ProviderAndRegion() != "provider=vast;region=US-CA" {
+		t.Fatalf("the region rung of the ladder is %q, and Vast published US-CA", earlier.ProviderAndRegion())
+	}
+	for _, ask := range []string{"9001", "12345"} {
+		if strings.Contains(earlier.Candidate(true), ask) {
+			t.Fatalf("key %q names ask %s, which never comes back", earlier.Candidate(true), ask)
+		}
+	}
+}
+
+// aggregated is the offer as a scheduler receives it. The Broker stamps the
+// adapter type from the connection the offer came through rather than letting an
+// adapter name itself, so an offer straight out of buildOffers has no provider on
+// it yet and the candidate identity it derives has no level above the machine.
+func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
+	offer.AdapterType = "vast"
+	return offer
 }

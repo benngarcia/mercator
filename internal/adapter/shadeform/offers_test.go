@@ -130,3 +130,47 @@ func TestListOffersOmitsAcceleratorsForGPUlessTypes(t *testing.T) {
 		t.Fatalf("gpu-less type must advertise no accelerators, got %+v", offers)
 	}
 }
+
+// TestOneRegionNameInTwoCloudsIsTwoPlaces is why this adapter states the cloud and
+// the region together. Shadeform places by an explicit triple and a region name is
+// only unique inside the cloud that named it, so "us-east-1" from two clouds is two
+// datacentres on two networks: a history filed under the bare name would average a
+// machine in Virginia with a machine somewhere else, and report the average as
+// evidence about the region.
+func TestOneRegionNameInTwoCloudsIsTwoPlaces(t *testing.T) {
+	hyperstack, crusoe := vmType(), vmType()
+	crusoe.Cloud = "crusoe"
+	hyperstack.Availability = []availability{{Region: "us-east-1", Available: true}}
+	crusoe.Availability = []availability{{Region: "us-east-1", Available: true}}
+	fake := newFakeShadeform()
+	fake.types = []instanceType{hyperstack, crusoe}
+	a := newTestAdapter(t, fake, nil)
+
+	offers, err := a.ListOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+
+	if len(offers) != 2 {
+		t.Fatalf("expected the product in both clouds, got %d: %+v", len(offers), offers)
+	}
+	first := domain.CandidateIdentityOf(aggregated(offers[0]), "sha256:image")
+	second := domain.CandidateIdentityOf(aggregated(offers[1]), "sha256:image")
+	if first.ProviderAndRegion() == second.ProviderAndRegion() {
+		t.Fatalf("two clouds naming one region share the place %q", first.ProviderAndRegion())
+	}
+	if first.ProviderAndRegion() != "provider=shadeform;region=hyperstack/us-east-1" {
+		t.Fatalf("the place this offer recurs in is %q", first.ProviderAndRegion())
+	}
+	if first.InstanceType != "A6000" {
+		t.Fatalf("the product Shadeform sells this as is %q", first.InstanceType)
+	}
+}
+
+// aggregated is the offer as a scheduler receives it: the Broker stamps the
+// adapter type from the connection the offer arrived through, so an offer straight
+// out of the adapter does not name its own provider yet.
+func aggregated(offer domain.OfferSnapshot) domain.OfferSnapshot {
+	offer.AdapterType = "shadeform"
+	return offer
+}
