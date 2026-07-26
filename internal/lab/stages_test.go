@@ -270,6 +270,16 @@ func TestACandidateIsWhatRecursThroughTheWholeLabWorld(t *testing.T) {
 	if keys["ask-4417"] == keys["ask-51120"] {
 		t.Fatalf("cards of two memory sizes share the key %q", keys["ask-4417"])
 	}
+	// The grouping half of the key, through the whole control plane. This world
+	// publishes one machine's eight cards as two entries of four, which is what a
+	// probe does with a driver that printed one product under two names, and the
+	// machine holds eight cards however its inventory was split.
+	if keys["ask-2211"] != keys["ask-51120"] {
+		t.Fatalf("one product reported two ways keyed differently:\n%s\n%s", keys["ask-2211"], keys["ask-51120"])
+	}
+	if keys["ask-2211"] == keys["ask-2212"] {
+		t.Fatalf("eight cards and four share the key %q", keys["ask-2211"])
+	}
 	if keys["enrolled-a100"] != "provider=simnode;machine=enrolled-a100" {
 		t.Fatalf("the machine Mercator keeps is filed under %q", keys["enrolled-a100"])
 	}
@@ -280,7 +290,7 @@ func TestACandidateIsWhatRecursThroughTheWholeLabWorld(t *testing.T) {
 		t.Fatalf("a listing that cannot recur is filed under %q", keys["oneshot-pool"])
 	}
 	if result := invariantResultByID(t, latestInvariantResults(execution.invariants), "safety.candidate_identity_recurs"); result.Status != InvariantPassed {
-		t.Fatalf("the identity rule failed on a world that states five distinct candidates: %s", result.Violation)
+		t.Fatalf("the identity rule failed on a world that states four distinct candidates: %s", result.Violation)
 	}
 }
 

@@ -467,17 +467,20 @@ func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 		inventory.EphemeralDiskBytes = resources.Disk.Bytes()
 	}
 	if gpu := resources.GPU; gpu != nil {
-		count := gpu.Count
-		if count == 0 {
-			count = 1
+		// The cards arrive grouped the way the machine reports them. A host that
+		// reports one product across several entries is a host every real probe
+		// produces, and an inventory that silently regrouped it would be the harness
+		// answering a question the world was asked.
+		entries, perEntry := gpu.entries()
+		for range entries {
+			inventory.Accelerators = append(inventory.Accelerators, domain.AcceleratorInventory{
+				Vendor:         "NVIDIA",
+				Model:          gpu.Model,
+				CanonicalModel: gpunorm.Canonical("NVIDIA", gpu.Model),
+				Count:          perEntry,
+				MemoryBytes:    int64(gpu.Memory),
+			})
 		}
-		inventory.Accelerators = []domain.AcceleratorInventory{{
-			Vendor:         "NVIDIA",
-			Model:          gpu.Model,
-			CanonicalModel: gpunorm.Canonical("NVIDIA", gpu.Model),
-			Count:          count,
-			MemoryBytes:    int64(gpu.Memory),
-		}}
 	}
 	return inventory
 }

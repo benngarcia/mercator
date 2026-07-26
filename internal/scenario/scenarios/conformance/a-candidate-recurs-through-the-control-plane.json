@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "What a launch history may be filed under, at L1. Five candidates arrive for one Run: two asks a marketplace numbered differently for the same product in the same place, a third ask there whose cards hold half the memory, a machine Mercator keeps through its own runtime, and a one-shot pool publishing nothing that outlives its listing. Under the real control plane the decision records what it took each candidate to be, and the two asks have to key as one candidate, the half-memory ask as another, the enrolled machine as itself, and the pool as nothing at all. This is the Blueprint the world's own statement of these facts is falsifiable through: stop publishing the provider, the region, or the machine and the whole simulated fleet collapses onto one key, which is the world every earlier Blueprint here was written in and the reason no rule about candidate identity could be broken in it.",
+  "summary": "What a launch history may be filed under, at L1. Five candidates arrive for one Run: two asks a marketplace numbered differently for the same product in the same place, a third ask there whose cards hold half the memory, a fourth whose probe reported its eight cards as two entries of four, a fifth holding four of that same product, a machine Mercator keeps through its own runtime, and a one-shot pool publishing nothing that outlives its listing. Under the real control plane the decision records what it took each candidate to be, and the two asks have to key as one candidate, the half-memory ask as another, the split inventory as the same product as the ask that reported its cards whole, the four-card machine as another, the enrolled machine as itself, and the pool as nothing at all. This is the Blueprint the world's own statement of these facts is falsifiable through: stop publishing the provider, the region, or the machine and the whole simulated fleet collapses onto one key, which is the world every earlier Blueprint here was written in and the reason no rule about candidate identity could be broken in it.",
   "seed": "mercator-lab-candidate-identity-v1",
   "world": {
     "images": {
@@ -49,6 +49,22 @@
         "rate_per_hour_usd": 4.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
         "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
+      },
+      {
+        "id": "ask-2211",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB", "entries": 2}}
+      },
+      {
+        "id": "ask-2212",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "resources": {"gpu": {"model": "A100", "count": 4, "memory": "80GB"}}
       },
       {
         "id": "oneshot-pool",

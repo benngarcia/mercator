@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Five candidates the fleet has to be able to tell apart and put together: two asks for one marketplace machine that must key as one candidate, a third ask in the same place whose cards hold half the memory and must key as another, an enrolled machine that keys as itself, and a one-shot product publishing nothing that outlives its listing, which has no key at all and about which nothing may ever claim candidate-specific evidence.",
+  "summary": "The candidates a fleet has to be able to tell apart and put together: two asks for one marketplace machine that must key as one candidate, a third ask in the same place whose cards hold half the memory and must key as another, a fourth whose probe reported its eight cards as two entries of four and must key as the same product as the ask that reported them whole, a fifth holding half as many of that product and keying as another, an enrolled machine that keys as itself, and a one-shot product publishing nothing that outlives its listing, which has no key at all and about which nothing may ever claim candidate-specific evidence.",
   "classification": "green",
   "world": {
     "images": {
@@ -46,6 +46,22 @@
         "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB"}}
       },
       {
+        "id": "ask-2211",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 8, "memory": "80GB", "entries": 2}}
+      },
+      {
+        "id": "ask-2212",
+        "provider": "simvast",
+        "region": "US-CA",
+        "rate_per_hour_usd": 4.0,
+        "provisioning": {"expected": "4m", "p90": "8m", "acquisition": "24s", "boot": "3m", "agent_ready": "36s"},
+        "resources": {"gpu": {"model": "A100", "count": 4, "memory": "80GB"}}
+      },
+      {
         "id": "oneshot-pool",
         "provider": "simpool",
         "lane": "ephemeral",
@@ -67,6 +83,8 @@
       "ask-4417": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
       "ask-90218": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@40000000000x8"},
       "ask-51120": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x8"},
+      "ask-2211": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x8"},
+      "ask-2212": {"candidate": "provider=simvast;region=US-CA;instance=;accelerator=nvidia-a100@80000000000x4"},
       "oneshot-pool": {"candidate": ""}
     }
   }

@@ -874,6 +874,54 @@ type GPUSpec struct {
 	Model  string   `json:"model"`
 	Count  int      `json:"count,omitempty"`
 	Memory ByteSize `json:"memory,omitempty"`
+	// Entries is how many inventory entries this machine reports these cards
+	// across, which is a fact about the machine and not about the schema: a probe
+	// groups nvidia-smi's output by the raw name and memory total the driver
+	// printed, so a host holding two spellings of one card publishes it twice. An
+	// offer carries whatever grouping its probe produced, so a world that could
+	// only state one entry per product could not state the machine that made a
+	// candidate key drop half a machine's cards.
+	//
+	// Omitted is one entry, which is what every cleanly grouped machine reports.
+	// The cards divide evenly across the entries, because a fixture splitting
+	// seven cards three ways is describing no machine.
+	Entries int `json:"entries,omitempty"`
+}
+
+// gpu is the accelerator a spec states, and nothing where the fixture stated no
+// resources at all.
+func (spec *ResourcesSpec) gpu() *GPUSpec {
+	if spec == nil {
+		return nil
+	}
+	return spec.GPU
+}
+
+// entries is how many inventory entries this machine splits its cards across,
+// and how many cards each of them names.
+func (spec GPUSpec) entries() (count, perEntry int) {
+	cards := spec.Count
+	if cards == 0 {
+		cards = 1
+	}
+	if spec.Entries <= 1 {
+		return 1, cards
+	}
+	return spec.Entries, cards / spec.Entries
+}
+
+// validate refuses an inventory no machine could report.
+func (spec GPUSpec) validate(owner string) error {
+	if spec.Entries < 0 {
+		return fmt.Errorf("%s reports its cards across %d entries", owner, spec.Entries)
+	}
+	if spec.Entries > 1 && spec.Count%spec.Entries != 0 {
+		return fmt.Errorf(
+			"%s splits %d cards across %d entries, and no machine reports a fraction of a card",
+			owner, spec.Count, spec.Entries,
+		)
+	}
+	return nil
 }
 
 type RequestSpec struct {
@@ -1857,6 +1905,9 @@ func (w WorldSpec) validate() error {
 		if err := validateArtifactReplicas("rental "+rental.ID, rental.ArtifactReplicas, artifacts); err != nil {
 			return err
 		}
+		if err := validateInventory("rental "+rental.ID, rental.Resources); err != nil {
+			return err
+		}
 		cacheMounts := map[string]bool{}
 		for _, held := range rental.CacheMounts {
 			if !domain.ValidCacheName(held.Name) {
@@ -1914,6 +1965,9 @@ func (w WorldSpec) validate() error {
 		if err := validateArtifactReplicas("host "+host.ID, host.ArtifactReplicas, artifacts); err != nil {
 			return err
 		}
+		if err := validateInventory("host "+host.ID, host.Resources); err != nil {
+			return err
+		}
 		if host.RatePerHourUSD <= 0 {
 			return fmt.Errorf("host %q needs a positive rate_per_hour_usd", host.ID)
 		}
@@ -1959,6 +2013,9 @@ func (w WorldSpec) validate() error {
 		if err := validateReliability("marketplace offer "+offer.ID, offer.Reliability); err != nil {
 			return err
 		}
+		if err := validateInventory("marketplace offer "+offer.ID, offer.Resources); err != nil {
+			return err
+		}
 	}
 	pathIDs := map[string]bool{}
 	for _, path := range w.Paths {
@@ -1989,6 +2046,14 @@ func (w WorldSpec) validate() error {
 		runtimeModels[key] = true
 	}
 	return nil
+}
+
+// validateInventory refuses hardware no machine could report.
+func validateInventory(owner string, resources *ResourcesSpec) error {
+	if resources == nil || resources.GPU == nil {
+		return nil
+	}
+	return resources.GPU.validate(owner)
 }
 
 // validateReliability refuses a history no provider could publish. A rate outside
@@ -2251,6 +2316,12 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 		if artifacts[artifactID].Prepublished() {
 			return fmt.Errorf("request produces Artifact %q, which the world says was published before it started", artifactID)
 		}
+	}
+	if gpu := req.Resources.gpu(); gpu != nil && gpu.Entries != 0 {
+		return fmt.Errorf(
+			"request asks for %d cards across %d inventory entries, and a workload states what it needs rather than how a machine reported it",
+			gpu.Count, gpu.Entries,
+		)
 	}
 	if download := req.Download; download != nil {
 		if download.Scope == "" || download.MinP10Mbps <= 0 {
