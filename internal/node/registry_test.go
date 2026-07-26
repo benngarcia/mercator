@@ -9,6 +9,7 @@ import (
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/node"
+	"github.com/benngarcia/mercator/internal/nodeagent"
 )
 
 func TestAnInvitedMachineEnrollsAndReceivesASession(t *testing.T) {
@@ -666,7 +667,7 @@ func TestAPathANodeMeasuredReachesTheOfferItPrices(t *testing.T) {
 					Scope:       domain.NetworkScopeObjectStore,
 					Statistic:   "p10",
 					ValueMbps:   1750,
-					Source:      "node_transfer",
+					Source:      nodeagent.ArtifactCopySource,
 					SampleCount: 3,
 					ObservedAt:  clock.Now(),
 					ValidUntil:  clock.Now().Add(time.Hour),
@@ -684,7 +685,7 @@ func TestAPathANodeMeasuredReachesTheOfferItPrices(t *testing.T) {
 		t.Fatalf("offers = %d, want the one enrolled node", len(offers))
 	}
 	rate := offers[0].DownloadRate(domain.NetworkScopeObjectStore)
-	if rate.Mbps != 1750 || rate.Measurement != "node_transfer" {
+	if rate.Mbps != 1750 || rate.Measurement != nodeagent.ArtifactCopySource {
 		t.Fatalf("the offer prices an Artifact read at %+v, and this node measured 1750 Mbps itself", rate)
 	}
 	// The registry path this node never crossed. A node that measured one link is

@@ -130,6 +130,16 @@ const (
 	// registry one and routinely a different speed: a machine beside the object
 	// store and a machine beside the registry are different machines, and until
 	// this existed no fact anybody published could steer an Artifact read at all.
+	//
+	// A p10 over this scope is delivery: how fast content this host is asked for
+	// becomes content this host holds, which is the link, the disk the bytes land
+	// on, and the pass that verifies them, because that is the one duration the
+	// process doing the work holds. Both readers of the number ask the same
+	// question of it and so both get the same answer: how long the next read of
+	// forty gigabytes takes here, and whether this machine can serve a Run that
+	// states a floor on reading its dataset. A machine on a fast path whose
+	// Artifact disk is slow is a slow machine to read on, and a fact stating its
+	// link alone would win it placements it cannot honour.
 	NetworkScopeObjectStore    NetworkScope = "object_store"
 	NetworkScopePublicInternet NetworkScope = "public_internet"
 )

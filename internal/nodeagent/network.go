@@ -1,6 +1,8 @@
 package nodeagent
 
 import (
+	"cmp"
+	"slices"
 	"sync"
 	"time"
 
@@ -39,11 +41,34 @@ const minimumMeasuredBytes = 4_000_000
 // a calibration slice will replace it with.
 const MeasuredLinkConfidence = 0.9
 
-// MeasuredLinkValidity is how long a reading of a path stands. A measurement is
+// ArtifactCopySource names what a node measured when it timed itself reading
+// Artifact content, in the words of the process that did it. It is the whole
+// copy: the bytes crossing the path, landing on this disk, and being hashed on
+// the way past, because one read does all three jobs here and the node holds one
+// duration over all of them.
+//
+// The name says so rather than claiming the link alone, and the difference is not
+// pedantry. A machine on a ten gigabit path whose Artifact root is a slow disk
+// delivers content at the disk's rate, and that rate is the honest answer to both
+// questions anything asks this fact: how long the next read of forty gigabytes
+// takes here, and whether a Run that states a floor on reading its dataset can be
+// served by this machine. Timing the socket alone would answer neither, and would
+// be wrong in the direction that wins placements the machine cannot honour.
+const ArtifactCopySource = "node_artifact_copy"
+
+// MeasuredLinkValidity is how long one reading of a path stands. A measurement is
 // evidence about the path as it was, and a node that has moved nothing for an
 // hour is not evidence about the path now: it keeps reporting its liveness, its
 // containers, and its disk, so without an expiry its oldest reading would be
 // published as a current fact forever.
+//
+// It is the life of a reading and never of the summary over them. A window that
+// expired only when the node stopped transferring would keep the slowest reading
+// this machine ever took alive for as long as it keeps working, which is the
+// opposite of what an expiry is for: the machine that read once at a hundred
+// megabits while a container shared its link would publish that for the rest of
+// its life, and every transfer after it would refresh the date rather than retire
+// the number.
 const MeasuredLinkValidity = time.Hour
 
 // measurableScopes is every kind of path this node can time itself crossing,
@@ -58,28 +83,35 @@ const MeasuredLinkValidity = time.Hour
 // between two reports of one unchanged machine would be two different offers.
 var measurableScopes = []domain.NetworkScope{domain.NetworkScopeObjectStore}
 
-// pathMeasurements is what this node has measured about each kind of path it
-// crosses. It keeps the slowest reading rather than the latest or the mean,
-// because the quantile every reader in this tree asks for is the pessimistic one:
-// a fleet that published its best transfer would promise a rate its machines
-// routinely miss, and a Run with a hard floor on throughput would be admitted
-// onto them.
+// pathMeasurements is every transfer this node has timed and still stands behind,
+// kept per kind of path. What it publishes is the slowest of them rather than the
+// latest or the mean, because the quantile every reader in this tree asks for is
+// the pessimistic one: a fleet that published its best transfer would promise a
+// rate its machines routinely miss, and a Run with a hard floor on throughput
+// would be admitted onto them.
+//
+// The readings are kept one by one rather than reduced to a running floor. A floor
+// cannot be retired: the transfer that set it is the only thing that dates it, and
+// a summary carrying one date for a value some earlier transfer measured is either
+// a number nothing stands behind or a date nothing measured. Keeping the readings
+// is what lets the slow one expire and the fleet see this machine as it is now,
+// and the window bounds the collection for the same reason it bounds the fact.
 type pathMeasurements struct {
 	mu       sync.Mutex
-	observed map[domain.NetworkScope]pathReading
+	observed map[domain.NetworkScope][]pathReading
 }
 
-// pathReading is one path as this node has found it: the slowest throughput it
-// has seen, how many transfers it has seen at all, and when the last of them
-// finished.
+// pathReading is one completed transfer: the throughput it moved at, and the
+// moment it finished. The moment travels with the number because it is what the
+// published fact is dated and expired by, and a reading dated by some later
+// transfer that measured something else is a measurement nothing took.
 type pathReading struct {
-	slowestMbps float64
-	samples     int
-	at          time.Time
+	mbps float64
+	at   time.Time
 }
 
 func newPathMeasurements() *pathMeasurements {
-	return &pathMeasurements{observed: map[domain.NetworkScope]pathReading{}}
+	return &pathMeasurements{observed: map[domain.NetworkScope][]pathReading{}}
 }
 
 // record is one completed transfer offered as evidence about the path it crossed.
@@ -90,41 +122,54 @@ func (measurements *pathMeasurements) record(scope domain.NetworkScope, bytes in
 	if bytes < minimumMeasuredBytes || elapsed <= 0 {
 		return
 	}
-	mbps := float64(bytes*8) / 1_000_000 / elapsed.Seconds()
+	reading := pathReading{mbps: float64(bytes*8) / 1_000_000 / elapsed.Seconds(), at: at.UTC()}
 	measurements.mu.Lock()
 	defer measurements.mu.Unlock()
-	previous, seen := measurements.observed[scope]
-	reading := pathReading{slowestMbps: mbps, samples: previous.samples + 1, at: at.UTC()}
-	if seen && previous.slowestMbps < mbps {
-		reading.slowestMbps = previous.slowestMbps
-	}
-	measurements.observed[scope] = reading
+	measurements.observed[scope] = append(measurements.standing(scope, at), reading)
 }
 
 // facts is what this node publishes about the paths it has measured. A path it
 // has never crossed produces nothing at all, which is the silence Placement
-// prices rather than an absence of speed, and a reading past its own validity
-// produces nothing either: the node stops standing behind it rather than
-// restating it as current.
+// prices rather than an absence of speed, and a path whose every reading is past
+// its validity produces nothing either: the node stops standing behind them
+// rather than restating one as current.
+//
+// The fact is the slowest reading still standing, published as the transfer that
+// took it, so what an operator reads is a throughput this machine really moved at
+// and the moment it really moved at it.
 func (measurements *pathMeasurements) facts(at time.Time) []domain.NetworkFact {
 	measurements.mu.Lock()
 	defer measurements.mu.Unlock()
 	var published []domain.NetworkFact
 	for _, scope := range measurableScopes {
-		reading, measured := measurements.observed[scope]
-		if !measured || !at.Before(reading.at.Add(MeasuredLinkValidity)) {
+		standing := measurements.standing(scope, at)
+		measurements.observed[scope] = standing
+		if len(standing) == 0 {
 			continue
 		}
+		slowest := slices.MinFunc(standing, func(left, right pathReading) int {
+			return cmp.Compare(left.mbps, right.mbps)
+		})
 		published = append(published, domain.NetworkFact{
 			Scope:       scope,
 			Statistic:   "p10",
-			ValueMbps:   reading.slowestMbps,
-			Source:      "node_transfer",
-			SampleCount: reading.samples,
-			ObservedAt:  reading.at,
-			ValidUntil:  reading.at.Add(MeasuredLinkValidity),
+			ValueMbps:   slowest.mbps,
+			Source:      ArtifactCopySource,
+			SampleCount: len(standing),
+			ObservedAt:  slowest.at,
+			ValidUntil:  slowest.at.Add(MeasuredLinkValidity),
 			Confidence:  MeasuredLinkConfidence,
 		})
 	}
 	return published
+}
+
+// standing is the readings of one path this node still stands behind as of a
+// moment. Everything older than a reading's own validity is dropped rather than
+// held: it describes the path as it used to be, and this node has since crossed
+// the same path and knows better.
+func (measurements *pathMeasurements) standing(scope domain.NetworkScope, at time.Time) []pathReading {
+	return slices.DeleteFunc(measurements.observed[scope], func(reading pathReading) bool {
+		return !at.Before(reading.at.Add(MeasuredLinkValidity))
+	})
 }

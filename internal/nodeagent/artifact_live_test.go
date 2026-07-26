@@ -284,7 +284,7 @@ func TestANodeMeasuresTheObjectStorePathItJustCrossed(t *testing.T) {
 	if measured.ValueMbps <= 0 || measured.SampleCount != 1 {
 		t.Fatalf("the node reports %+v, want the one transfer it just timed", measured)
 	}
-	if measured.Source != "node_transfer" || measured.Confidence != MeasuredLinkConfidence {
+	if measured.Source != ArtifactCopySource || measured.Confidence != MeasuredLinkConfidence {
 		t.Fatalf("the node reports %+v, want a reading it names as its own", measured)
 	}
 	if !measured.Answers(facts.ObservedAt) {
@@ -296,7 +296,7 @@ func TestANodeMeasuresTheObjectStorePathItJustCrossed(t *testing.T) {
 	// registry projects them, which is where a measurement either reaches a
 	// decision or stops being worth making.
 	fetch := pricedArtifactRead(t, facts, 40_000_000_000)
-	if fetch.Measurement != "node_transfer" || fetch.Mbps != measured.ValueMbps {
+	if fetch.Measurement != ArtifactCopySource || fetch.Mbps != measured.ValueMbps {
 		t.Fatalf("Placement priced the next read at %+v, and this machine measured %.2f Mbps itself",
 			fetch, measured.ValueMbps)
 	}

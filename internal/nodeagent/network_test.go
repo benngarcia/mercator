@@ -31,9 +31,38 @@ func TestANodePublishesTheSlowestTransferItHasSeen(t *testing.T) {
 	if facts[0].SampleCount != 3 {
 		t.Fatalf("the node published %d samples, and it has timed three transfers", facts[0].SampleCount)
 	}
-	if !facts[0].ObservedAt.Equal(at.Add(2 * time.Minute)) {
-		t.Fatalf("the node dated its reading %s, and it last measured this path at %s",
-			facts[0].ObservedAt.Format(time.RFC3339), at.Add(2*time.Minute).Format(time.RFC3339))
+	// Dated by the transfer that measured it, and not by the last one to finish.
+	// A fact carrying one machine's slowest number under a later transfer's clock
+	// asserts a measurement nothing took.
+	if !facts[0].ObservedAt.Equal(at.Add(time.Minute)) {
+		t.Fatalf("the node dated its 100 Mbps reading %s, and it measured 100 Mbps at %s",
+			facts[0].ObservedAt.Format(time.RFC3339), at.Add(time.Minute).Format(time.RFC3339))
+	}
+}
+
+// TestASlowReadingRetiresWhileTheNodeKeepsWorking is the expiry read against a
+// machine that never stops. A node that shared its link with a container once and
+// read at a tenth of its usual rate has to publish that floor while it stands, and
+// has to stop publishing it an hour later, whatever it has done since: a floor
+// that every later transfer re-dated would be this machine's worst hour published
+// as its current speed for the rest of its life, and the only ways out would be an
+// hour of doing nothing or restarting the agent.
+func TestASlowReadingRetiresWhileTheNodeKeepsWorking(t *testing.T) {
+	at := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	measurements := newPathMeasurements()
+
+	measurements.record(domain.NetworkScopeObjectStore, 1_000_000_000, 80*time.Second, at)
+	for reading := range 24 {
+		measurements.record(domain.NetworkScopeObjectStore, 1_000_000_000, 8*time.Second, at.Add(time.Duration(reading+1)*30*time.Minute))
+	}
+
+	facts := measurements.facts(at.Add(12 * time.Hour))
+	if len(facts) != 1 || facts[0].ValueMbps != 1000 {
+		t.Fatalf("twelve hours of gigabit reads published %+v, and nothing measured 100 Mbps since noon", facts)
+	}
+	if facts[0].SampleCount != 2 {
+		t.Fatalf("the node published %d samples, and two of its reads landed inside the hour it stands behind",
+			facts[0].SampleCount)
 	}
 }
 
