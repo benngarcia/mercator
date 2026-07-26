@@ -1,0 +1,49 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "The two halves of the transfer model, told apart. One Rental, one 40GB dataset already durable, and a path this world crosses at 200 Mbps that the machine states no confidence in. Mercator may not read a number its publisher disowned, so it prices the read from its own fleet-wide assumption and charges 640 seconds, and then this world spends the sixteen hundred the path really costs. Every other Blueprint here declares paths the host stands behind, where the prediction and the actual are the same figure and a world reading Mercator's own input instead of its own declaration would be indistinguishable. This is the fixture that is not: the predicted seconds and the spent seconds come from different numbers, so the actual can only have come from the world's own reading of the path.",
+  "seed": "mercator-lab-disowned-path-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:imagenet:v2.41",
+        "content_digest": "sha256:1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "size": "40GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "rental-that-disowned-its-reading",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "paths": [
+      {"from": "rental-that-disowned-its-reading", "to": "objects.example", "scope": "object_store", "p10_mbps": 200, "confidence": 0}
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "reader",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "service_class": "standard",
+          "expected_runtime": "10m",
+          "max_runtime": "1h",
+          "consumes_artifacts": ["artifact:imagenet:v2.41"]
+        }
+      }
+    ]
+  }
+}
