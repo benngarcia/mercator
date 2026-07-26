@@ -2070,6 +2070,54 @@ complete because it works against a live provider.
     Lab compiles only the second: `a-fast-machine-far-from-the-data-loses` at L0 and
     `conformance/a-path-somebody-measured-prices-the-read` at L1, over one world.
 
+- [x] 2026-07-26: Answer the review of the measured transfer path. Two reviewers
+  refuted parts of it. Three of the four findings were real and are fixed at the
+  source; the fourth is half real, fixed as far as it goes, and rejected below where
+  it does not.
+  - A node's slowest reading could never retire. `pathMeasurements` kept a running
+    floor and re-dated it on every later transfer, so the slowest reading a machine
+    ever took was republished as a current p10 forever, stamped with the moment some
+    other transfer finished. A node that read once at 100 Mbps while a container
+    shared its link, and then read at a gigabit every half hour for twelve hours,
+    published 100 Mbps observed at midnight, and the only exits were a full hour of
+    moving nothing or restarting the agent. The commit message claimed the opposite
+    property. Readings are kept one by one now and the fact is the slowest of the ones
+    still standing, dated and expired by the transfer that took it: a floor cannot be
+    retired, because the transfer that set it is the only thing that dates it.
+  - `safety.transfer_rate_is_attributed` judged a historical decision against the
+    current fleet. Its second clause read World Truth's offer list, so a machine
+    legitimately gone by check time turned a correct placement into a reported safety
+    violation, in the exact words the rule exists to say about a prediction that
+    invented a measurement. The world writes down what it publishes now,
+    `publishOfferFacts` keeps it after the machine is retired, and the rule asks it as
+    of the decision's own `EvaluatedAt`. The second instance of the same defect was in
+    the declaration: a fixture's path was stamped valid for a day from the world's
+    start while offers are observed now, so any execution driven past twenty four
+    hours watched every declared path go silent and flipped every measured rate
+    already in its log into the same false violation. A declared path is a standing
+    statement of the world, and a fixture that wants silence states a confidence of
+    zero.
+  - Nothing in the corpus held the two halves of the transfer model apart. The Lab
+    world reads a Blueprint's declaration rather than the fact the machine published,
+    and every fixture that declared a path declared one its host stands behind, so
+    replacing the world's reading with a read of Mercator's own input left the whole
+    suite green. `conformance/a-path-a-host-disowned-is-still-the-path` is the case
+    that can tell them apart: the machine states no confidence in its own 200 Mbps
+    path, Mercator prices the read from its fleet-wide assumption at 640 seconds, and
+    this world spends the sixteen hundred the path really costs.
+  - What a node publishes is not the link, and now says so. The reading is timed over
+    `io.Copy`, so it is the bytes crossing the path, landing on the disk, and being
+    hashed on the way past; it is published as `node_artifact_copy` and
+    `NetworkScopeObjectStore` states that a p10 over it is delivery. What is rejected
+    is the reading of that as a false refusal. A machine on a ten gigabit path whose
+    Artifact disk delivers four cannot serve a Run that states a floor of eight, so
+    refusing it is the right answer and admitting it was the unmeasured guess this
+    slice replaced; both readers of the fact ask how fast content reaches this host,
+    and landing is part of reaching it. The expressibility half of the same finding
+    goes with it: a fixture's `p10_mbps` is that delivery rate, which is why one
+    declaration is enough, and a host that publishes something other than what it
+    delivers is stated through the confidence it puts on its own number.
+
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -2698,6 +2746,13 @@ Phase 4 added:
   onto the near one. Both halves come from the one declaration, so the prediction and
   the actual agree for a reason rather than by construction; dropping the world's
   reading of paths leaves it spending 640 seconds whatever the fixture declared.
+- `a-path-a-host-disowned-is-still-the-path` (conformance): the one world where the
+  prediction and the actual cannot be the same number. A single Rental reads a 40GB
+  dataset over a path this world crosses at 200 Mbps and states no confidence in, so
+  Mercator prices the read from its own assumption at 640 seconds and the world spends
+  1600. It is what holds the two halves of the transfer model apart: with the world
+  reading published facts instead of its own declaration, the read costs 640 and the
+  actual is derived from Mercator's own input.
 - `safety.transfer_rate_is_attributed` (Lab invariant): every transfer a Booking
   Decision recorded names either the measurement or the assumption it was priced
   from, and never both, and a rate the record presents as measured is a number some
@@ -2728,7 +2783,7 @@ refuses any Booking whose Run has no record, which is true of every seeded Booki
 by construction.
 
 The corpus is 36 regression Blueprints: 33 green and 3 target, beside one demo,
-one minimized case, and nineteen conformance Blueprints. The count is read off the
+one minimized case, and twenty conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
@@ -2798,6 +2853,60 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 the review of the measured transfer path
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and a real native
+Docker daemon. A concurrent session shared the worktree with its own slice in flight
+across several of the same files, so the full suite was run against a `git archive` of
+the commit under test rather than against the shared working directory. Every claim is
+held by a deliberate break that fails it:
+
+- restoring the running floor, so that later transfers re-date the slowest reading,
+  fails `TestASlowReadingRetiresWhileTheNodeKeepsWorking` with the reviewers' own
+  record: `100 Mbps, sample_count 25, observed_at 2026-07-27T00:00:00Z`, published by
+  a node that had measured a gigabit every half hour since noon. Dating the fact by
+  the latest transfer instead of the transfer that measured it fails
+  `TestANodePublishesTheSlowestTransferItHasSeen` on the date alone;
+- adding a ten minute idle lease to `rental-far-from-the-data` in
+  `conformance/a-path-somebody-measured-prices-the-read`, which is the reviewers'
+  repro, fails the old attribution rule with `candidate
+  "rental-far-from-the-data" priced its artifact_fetch stage at 200.00 Mbps measured by
+  "blueprint_path", and this world publishes no such machine to have measured it`. The
+  lease is now part of the fixture, so the corpus drives a decision past the retirement
+  of the machine it was about. `TestARateMeasuredOnCapacitySinceRetiredIsNotAViolation`
+  states the same law on its own;
+- putting the day-long expiry back on a fixture-declared path fails
+  `TestADeclaredPathIsStillPublishedADayLater`, which is the second instance of the
+  same defect: past the expiry Mercator reads silence about a path both worlds are
+  still crossing at the declared rate;
+- replacing the body of `simulatedWorld.linkMbps` with a read of the published-fact
+  channel, which is the reviewers' break and which used to leave the suite green,
+  fails `conformance/a-path-a-host-disowned-is-still-the-path` with `this world spent
+  640.00s reading forty gigabytes over the 200 Mbps path it declared, and it costs
+  sixteen hundred`;
+- the five clauses of `safety.transfer_rate_is_attributed` are still each driven by a
+  record no code in this tree writes, now stated over the publication record rather
+  than the standing fleet.
+
+The live half ran again on this host. `TestANodeReplicatesAnArtifactFromARealObjectStore`
+and `TestANodeMeasuresTheObjectStorePathItJustCrossed` start MinIO in a container of
+this daemon and stream real content over a presigned GET, and the reading the node
+publishes is the one it timed over that transfer. Mercator issue #165 was left alone.
+
+One limit is stated rather than hidden. A fixture's `p10_mbps` is one figure for what
+this world delivers and what the host publishes, and what separates the two channels
+is the confidence the host puts on its own number, which is what the new Blueprint
+spends. A world where a machine publishes one positive rate and delivers a different
+one is still unstatable, and it stays that way until something needs it: the number a
+node measures is delivery end to end, so a host whose disk is slower than its link is
+a host with a slower object-store path, stated as one.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race ./internal/domain ./internal/scheduler ./internal/scenario ./internal/lab \
+  ./internal/adapter/fake ./internal/node ./internal/nodeagent ./internal/httpapi ./internal/daemon
+```
 
 ### Phase 4 transfer rates from a measured path
 
