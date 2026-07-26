@@ -113,6 +113,14 @@ limits.
   them. A warm cache is recorded on a candidate and never scored, so two
   otherwise equal machines are chosen between on cost and start latency even
   when one holds the cache the Run declared.
+- A Run whose image is a tag is refused at intake with `IMAGE_NOT_PINNED`. Every
+  answer Mercator gives about an image is a digest comparison, so a Run is
+  admitted only against `repository@sha256:<64 hex>`. A deployment configured
+  with an image resolver pins a submitted tag before admission and an operator
+  sees nothing; a deployment with no resolver, or one whose registry is
+  unreachable when the Run is created, refuses the Run and the operator must
+  supply the digest. A stored workload revision may still carry a tag, because a
+  revision is a template.
 
 ## Adapters And Workloads
 

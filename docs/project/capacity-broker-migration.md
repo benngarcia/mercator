@@ -1957,10 +1957,21 @@ Hub refuses this address an anonymous manifest read, and no Docker Hub credentia
 is configured here. `TestConsoleRunsNavigation` and
 `TestLabConsoleUsesNormalAPIAndSSE` want `MERCATOR_BROWSER_TEST=1` and a
 Playwright install, so CI's Console job is where they run.
-`TestBuiltIndexReferencesAbsoluteAssets` wants a console build in `web/static`,
-which an exported copy has none of. `TestIntegrationDockerAdapterLaunchObserveRelease`
-is opt-in and was run on its own. All of this is recorded in
+`TestIntegrationDockerAdapterLaunchObserveRelease` and
+`TestE2EFakeAdapterHTTPAndCLI` are opt-in behind `MERCATOR_DOCKER_INTEGRATION=1`
+and `MERCATOR_E2E_FAKE=1`, and both were run on their own here and pass. Eight
+further skips are the target Blueprints in `TestPlacementScenarios`, which skip
+by design until a phase promotes them, for thirteen `SKIP` lines in a verbose run
+of the whole suite. All of this is recorded in
 `docs/production/known-limitations.md`.
+
+`TestBuiltIndexReferencesAbsoluteAssets` is a sixth case whose outcome depends on
+what ran before it rather than on this machine. It skips while `web/static` holds
+nothing but its `.gitkeep`, because the console bundle is embedded at compile
+time, and it passes once `bun run build` has populated that directory, which is
+the order CI uses and the order the close-out re-run below used. A Go suite run
+before the console build reports it as a skip, which is why an earlier draft of
+this entry counted it among the environment's gaps. It is not one.
 
 Both gate changes are themselves checked, because a gate that skips too readily
 is worse than the failure it replaced.
@@ -1983,6 +1994,39 @@ Mercator [#165](https://github.com/benngarcia/mercator/issues/165), the
 reachability probe with no timeout, was deliberately left alone. It does not
 reproduce on this host, because `docker info` answers immediately here, and
 smuggling a timeout into a locality slice would hide the regression test it owes.
+
+The whole of it was then run a second time by a different session against commit
+`f9f496f`, exported to a directory of its own so no other session could reach it,
+and the outcome is the record above with the two skip corrections already applied:
+
+- `go build ./...` and `go vet ./...`: no output, exit 0.
+- `go test ./... -count=1`: exit 0, 35 packages `ok`.
+- `go test -race -count=1` over `./cmd/...`, `./internal/adapter/...`,
+  `./internal/broker/...`, `./internal/capability/...`, `./internal/daemon/...`,
+  `./internal/domain/...`, `./internal/httpapi/...`, `./internal/lab/...`,
+  `./internal/node/...`, `./internal/nodeagent/...`, `./internal/ociresolver/...`,
+  `./internal/orchestrator/...`, `./internal/scenario/...`,
+  `./internal/scheduler/...`, `./internal/storage/sqlite/...`, and
+  `./internal/workload/...`: exit 0, every package `ok`. `internal/lab` is the
+  longest at 74.4 seconds, then `internal/nodeagent` at 15.9 and
+  `internal/orchestrator` at 13.2.
+- `TestCorpusCoversBothStatuses` logs `corpus: 16 green, 8 target` over the 24
+  Blueprints in `internal/scenario/scenarios`, beside 12 in
+  `internal/scenario/scenarios/conformance`.
+- The ten live cases the phase rests on pass in that default run, against this
+  host's own daemon and against `minio/minio` and `registry:2` containers it
+  started: image assembly, unpacked layer reporting, both disk cases, both cache
+  cases, all three Artifact replication cases, and the private-registry resolver
+  case.
+- The two opt-in cases pass when asked for: the Docker adapter integration case
+  with `MERCATOR_DOCKER_INTEGRATION=1 MERCATOR_DOCKER_IMAGE=busybox:latest`, and
+  the fake-adapter end-to-end case with `MERCATOR_E2E_FAKE=1`.
+- `go generate ./...` and `bun run generate:api` leave the tree byte identical,
+  checked by hashing every tracked file before and after.
+- The console: `bun install --frozen-lockfile`, `bun run check:react-effects`,
+  `bun run typecheck`, `bun run test` (5 files, 12 tests), and `bun run build`
+  (3 artifacts) all pass, and `TestBuiltIndexReferencesAbsoluteAssets` passes once
+  that build has run.
 
 ### Phase 3 producer affinity, withdrawn under review
 
