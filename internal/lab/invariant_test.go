@@ -35,8 +35,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 32 {
-		t.Fatalf("latest invariant results = %d, want 32", len(latest))
+	if len(latest) != 34 {
+		t.Fatalf("latest invariant results = %d, want 34", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -401,6 +401,35 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 			observation.Now = now.Add(25 * time.Hour)
 			observation.Runs = []domain.RunRecord{{ID: "run-1", Phase: "running"}}
 			observation.RunRequirements["run-1"] = RunArrival{Name: "run-1"}
+		},
+		// Aging switched off: a Run of the most patient class still waiting three
+		// hours after admission first deferred it, which is an hour past the
+		// longest wait any class declares. This is the state every unplaceable
+		// Run in the tree was in, and the liveness rule that should have caught
+		// it exempted the queued phase by name.
+		"liveness.aging_prevents_starvation": func(observation *InvariantObservation) {
+			queuedSince := now.Add(-3 * time.Hour)
+			observation.Runs = []domain.RunRecord{{
+				ID:           "run-patient",
+				Phase:        "queued",
+				ServiceClass: domain.ClassOpportunistic,
+				QueuedSince:  &queuedSince,
+				Admission: &domain.AdmissionDeferral{
+					Reason: domain.DeferredNoFeasibleOffer,
+					Class:  domain.ClassOpportunistic,
+					Behind: []domain.QueuedAhead{{RunID: "run-hog"}},
+				},
+			}}
+		},
+		// A stream of urgent arrivals stepping over work already waiting: an
+		// interactive Run is admitted a minute after an experimental Run was told
+		// to wait, and neither class declares itself eligible to backfill.
+		"safety.service_class_admission_order": func(observation *InvariantObservation) {
+			observation.Workloads["run-urgent"] = classedWorkload(domain.ClassInteractive)
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				admissionDeferredEvent("run-patient", now, domain.ClassExperimental),
+				admittedDecisionEvent("run-urgent", now.Add(10*time.Minute)),
+			}
 		},
 	}
 
@@ -1839,6 +1868,42 @@ func measuredByNobody() domain.TransferRate {
 		Confidence:  0.9,
 		Measurement: "somebody",
 	}
+}
+
+// classedWorkload is the one thing an admission rule reads a workload for: the
+// class its caller declared it to be.
+func classedWorkload(class domain.ServiceClass) domain.WorkloadRevision {
+	return domain.WorkloadRevision{Spec: domain.WorkloadSpec{Placement: domain.PlacementPolicy{Class: class}}}
+}
+
+// admissionDeferredEvent is Mercator telling a Run to wait, as the public log
+// carries it.
+func admissionDeferredEvent(runID string, at time.Time, class domain.ServiceClass) eventlog.CloudEvent {
+	data, err := json.Marshal(struct {
+		Deferral domain.AdmissionDeferral `json:"deferral"`
+	}{domain.AdmissionDeferral{Reason: domain.DeferredNoFeasibleOffer, Class: class}})
+	if err != nil {
+		panic(err)
+	}
+	return eventlog.CloudEvent{
+		ID:      "deferred-" + runID,
+		Type:    orchestrator.EventAdmissionDeferred,
+		Subject: "runs/" + runID,
+		Time:    at.Format(time.RFC3339Nano),
+		Data:    data,
+	}
+}
+
+// admittedDecisionEvent is a Booking Decision that selected something, which is
+// the moment a Run leaves the queue.
+func admittedDecisionEvent(runID string, at time.Time) eventlog.CloudEvent {
+	event := bookingDecidedEvent("decided-"+runID, domain.BookingDecision{
+		RunID:                   runID,
+		SelectedOfferSnapshotID: "offer-1",
+	})
+	event.Subject = "runs/" + runID
+	event.Time = at.Format(time.RFC3339Nano)
+	return event
 }
 
 func bookingDecidedEvent(id string, decision domain.BookingDecision) eventlog.CloudEvent {

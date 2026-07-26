@@ -123,6 +123,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.promised_start_is_still_ahead", check: promisedStartIsStillAhead},
 		invariantRule{id: "safety.prewarm_yields_to_real_work", check: prewarmYieldsToRealWork},
 		invariantRule{id: "safety.prewarm_rate_within_bound", check: prewarmRateWithinBound},
+		invariantRule{id: "safety.service_class_admission_order", check: serviceClassAdmissionOrder},
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},
@@ -161,6 +162,12 @@ func DefaultInvariantRegistry() InvariantRegistry {
 			assumptions: []string{"provider observations remain available", "actual runtime is bounded by the World Tape"},
 			bound:       24 * time.Hour,
 			check:       admittedRunProgress,
+		},
+		invariantRule{
+			id:          "liveness.aging_prevents_starvation",
+			assumptions: []string{"virtual time advances", "capacity eventually frees"},
+			bound:       longestClassQueueDelay(),
+			check:       agingPreventsStarvation,
 		},
 	)
 	if err != nil {
@@ -2205,6 +2212,12 @@ func secretsAbsent(observation InvariantObservation) error {
 	return nil
 }
 
+// admittedRunProgress is a Run Mercator accepted reaching an answer. It used to
+// exempt anything in phase "queued", which was free while nothing could reach
+// that phase and would have become a licence to starve the moment something
+// could. The exemption is gone rather than narrowed, and what replaced it is
+// liveness.aging_prevents_starvation: a queued Run is held to its own class's
+// maximum queue delay, which is a much earlier bound than this one.
 func admittedRunProgress(observation InvariantObservation) error {
 	bound := 24 * time.Hour
 	if observation.Now.Sub(observation.StartedAt) <= bound {
@@ -2218,9 +2231,7 @@ func admittedRunProgress(observation InvariantObservation) error {
 		if arrival.Name == "" {
 			continue
 		}
-		if run.Phase != "queued" {
-			return fmt.Errorf("Run %q exceeded %s without terminal or explicit queued state", run.ID, bound)
-		}
+		return fmt.Errorf("Run %q exceeded %s without reaching a terminal state", run.ID, bound)
 	}
 	return nil
 }
