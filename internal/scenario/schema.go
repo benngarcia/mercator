@@ -742,9 +742,9 @@ func (b *ByteSize) Bytes() int64 {
 	return int64(*b)
 }
 
-// Bytes builds a stated size, which is how Go code writes a fixture that a
-// Blueprint would write as a string.
-func Bytes(size int64) *ByteSize {
+// StatedBytes builds a size a fixture stated, which is how Go code writes what
+// a Blueprint writes as a string.
+func StatedBytes(size int64) *ByteSize {
 	stated := ByteSize(size)
 	return &stated
 }
