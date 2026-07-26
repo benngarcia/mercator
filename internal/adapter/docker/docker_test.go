@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,7 +72,11 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	}
 	req := launchRequest()
 	req.Image = image
-	req.Platform = domain.Platform{OS: "linux", Architecture: "arm64"}
+	// The platform is this machine's, because the container runs on this machine.
+	// Naming arm64 outright was an assumption from the laptop this case was written
+	// on: on an amd64 host the daemon reports the local image missing and goes to
+	// the registry for a build it will never run.
+	req.Platform = domain.Platform{OS: "linux", Architecture: runtime.GOARCH}
 	req.LaunchKey = "mercator-integration-" + time.Now().UTC().Format("20060102150405")
 	req.OperationKey = req.LaunchKey
 	req.CleanupLocator = req.LaunchKey
@@ -82,6 +88,12 @@ func TestIntegrationDockerAdapterLaunchObserveRelease(t *testing.T) {
 	})
 	receipt, err := ad.Launch(context.Background(), req)
 	if err != nil {
+		// A registry that will not serve this machine the image is an environment
+		// this case cannot be evaluated in, and reporting it as a launch defect
+		// describes the wrong thing. Anything else is the adapter.
+		if strings.Contains(err.Error(), "rate limit") || strings.Contains(err.Error(), "Too Many Requests") {
+			t.Skipf("the registry will not serve this machine %s: %v", image, err)
+		}
 		t.Fatalf("live launch: %v", err)
 	}
 	if receipt.ExternalID == "" {

@@ -603,8 +603,15 @@ func requireDocker(t *testing.T) {
 	}
 }
 
+// pull makes sure this machine holds the image a case runs. A machine that
+// already holds it needs no registry: these cases are about what a node does with
+// content on its disk, and a public registry refusing an anonymous client is not a
+// reason to skip a case whose content is already here.
 func pull(t *testing.T, reference string) {
 	t.Helper()
+	if exec.Command("docker", "image", "inspect", reference).Run() == nil {
+		return
+	}
 	if output, err := exec.Command("docker", "pull", "--quiet", reference).CombinedOutput(); err != nil {
 		t.Skipf("cannot pull %s on this machine: %v\n%s", reference, err, output)
 	}
