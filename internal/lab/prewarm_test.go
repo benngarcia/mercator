@@ -18,6 +18,7 @@ const (
 	analystImage         = "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
 	bulkyImage           = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
 	auditorImage         = "auditor@sha256:5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e"
+	corpusArtifact       = "artifact:corpus:v7"
 )
 
 // driveBlueprintForEightyMinutes runs a Blueprint at the cadence a control plane
@@ -212,6 +213,24 @@ func TestAPreparedHostIsWarmForARunThatNeverExecutedThere(t *testing.T) {
 	for _, retained := range retentions(t, execution) {
 		if retained.Image == analystImage && retained.Source != "prewarm" {
 			t.Fatalf("the machine holds %q because of a %q, want it prepared rather than executed", retained.Image, retained.Source)
+		}
+	}
+}
+
+// TestAPreparedCopyIsTheCopyTheRunReads is the saving actually being collected,
+// which is a different fact from the decision predicting it. The copy the
+// preparation fetched and hashed is on this machine, so both Runs that declared
+// that dataset read it off the local disk rather than crossing the link again.
+//
+// This is the one way a machine comes to hold a copy of an Artifact. A launch
+// leaves none, so a fixture that asserted a local read anywhere else would be
+// asserting warmth no node produces.
+func TestAPreparedCopyIsTheCopyTheRunReads(t *testing.T) {
+	execution := driveBlueprintForEightyMinutes(t, prewarmBlueprint)
+
+	for _, runID := range []string{"run-patient", "run-curious"} {
+		if source := artifactReadSource(t, execution, runID, corpusArtifact); source != "replica" {
+			t.Errorf("Run %q read its dataset from %q, and a preparation of Mercator's checked a copy onto that host", runID, source)
 		}
 	}
 }

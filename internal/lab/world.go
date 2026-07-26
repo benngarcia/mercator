@@ -1576,11 +1576,11 @@ func transferDuration(bytes int64, bandwidthMbps float64) time.Duration {
 // readableReplica is the copy one machine may read in place of the object store:
 // present, checked, and checked against what the catalog says this version is.
 // It is this world's half of domain.ArtifactInventory.Holds and it exists as one
-// function because three separate questions ask it, one of them from another
-// file: what a launch reads, what a launch still has to find room for, and what
-// a preparation still owes. A world that answered them from the copy's own state
-// alone would hand a Run another version's bytes, for free, on a machine every
-// predicate in the control plane had priced at the whole read.
+// function because two questions about the same launch ask it: what the workload
+// is handed, and what the machine has to find room for. A world that answered
+// either from the copy's own state alone would hand a Run another version's bytes,
+// for free, on a machine every predicate in the control plane had priced at the
+// whole read.
 func (world *simulatedWorld) readableReplica(artifactID, offerID string) (domain.ArtifactReplica, bool) {
 	replica, held := world.replicas[artifactID][offerID]
 	if !held || !replica.State.Usable() {

@@ -132,15 +132,16 @@ func (world *simulatedWorld) prefetchImage(item adapter.PrepareItem, operation s
 }
 
 // prefetchArtifact reads one immutable version out of the object store onto the
-// machine. The copy that lands is checked against the catalog on arrival, which
-// is what makes it worth reading later: an unchecked copy, and a checked copy of
-// other content filed under this version's name, cost a consumer exactly what no
-// copy costs, so both are fetched again rather than reported ready.
+// machine. The copy that lands is hashed on arrival and filed under the digest the
+// bytes actually produced, which is what makes it worth reading later.
+//
+// It reads whatever this machine is already holding, because that is what a node
+// does: nodeagent.PrepareArtifact streams the source it was given and rewrites the
+// record from the stream, with no test for a copy already on the disk. Answering
+// ready here for a copy the machine claims would be this world crediting a node
+// with a decision no node makes, and what stops the same bytes crossing the link
+// twice is the operation identity, on this seam and on a real one alike.
 func (world *simulatedWorld) prefetchArtifact(item adapter.PrepareItem, operation string) string {
-	if _, readable := world.readableReplica(item.ArtifactID, item.OfferSnapshotID); readable {
-		world.recordPrefetchEffect(item, operation, EffectCommandAccepted, map[string]any{"ready": true, "fetched_bytes": 0})
-		return operation
-	}
 	version, _ := world.store.entry(item.ArtifactID)
 	key := prefetchKey(item.OfferSnapshotID, item.Content())
 	completesAt := world.now.Add(world.store.transferDuration(item.ArtifactID))
