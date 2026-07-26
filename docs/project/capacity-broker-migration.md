@@ -2216,6 +2216,27 @@ complete because it works against a live provider.
     measured 12426.40 Mbps of delivery, and dropping the floor comparison admits it to
     a Run asking for twice that.
 
+- [x] 2026-07-26: Answer a launch stage from what earlier launches of the same
+  candidate really spent, at a declared level of a hierarchy. `internal/prediction`
+  files every measured launch under `domain.CandidateIdentity` and answers a stage
+  from the narrowest level holding samples: this exact candidate, this provider in
+  this region, this provider, then the prior the rest of the tree already computed.
+  Every stage estimate records the level, the sample count, and the key the samples
+  were read under, so an answer that cannot be audited cannot be written.
+  `SchedulingInput.LatencyEstimates` is deleted rather than kept beside it: it was
+  keyed by offer snapshot ID, nothing ever wrote it, and a start latency replayed onto
+  a machine whose locality has changed is the wrong number for a stated reason.
+  - Vast's `machine_id` reaches the offer. It was decoded and read by nothing, so a
+    catalog of other people's hardware keyed a region full of identical 4090s as one
+    candidate and served each host's launches back as evidence about the others.
+  - One stage has an actual today. Readiness is bounded by two moments Mercator
+    observes from independent authorities; the other seven happen inside one observed
+    interval and stay predicted from published claims and stated constants, named on
+    the record as the prior they are.
+  - A Blueprint can now state the machine behind a marketplace listing and the
+    readiness of one machine rather than of the whole world, which is what lets a
+    fixture publish one machine under two ask IDs and make the levels answer
+    different seconds.
 - [x] 2026-07-26: Answer the third review of the transfer path. Two reviewers refuted
   four things about the entry two above. Three were real and one was two claims, one
   of which is refuted below.
@@ -2900,6 +2921,37 @@ Phase 4 added:
   one-shot execution of one product under one name, naming the machine from the Rental
   fails it on every Blueprint in the corpus, and letting any provider recur fails it
   on the one-shot pool.
+- `history-answers-for-the-machine-it-was-measured-on` (green): six listings of five
+  marketplace machines, two of which this fleet has measured, and one of the measured
+  machines published twice under two ask IDs. A third Run asks all six what they will
+  spend on the stage this fleet has actuals for, and the fixture asserts every answer
+  by level, by sample count, and by seconds: both listings of the measured machine at
+  the exact candidate with its own thirty seconds, the second measured machine with
+  its own hundred and fifty, an unmeasured machine in the same region at the two
+  samples of that provider and place, an unmeasured machine of that provider elsewhere
+  at the provider, and a machine of a provider nobody has measured at the prior, which
+  is what the Run declared about itself. It is the first fixture that states the
+  machine behind a marketplace listing and the readiness of one machine rather than of
+  the whole world, and the second of those is what makes the levels answer different
+  seconds.
+- `history-answers-through-the-control-plane` (conformance): the same claim at L1,
+  where both halves of the answer are Mercator reading Mercator. The identity is the
+  one its own Booking Decision recorded and the seconds are the difference between two
+  moments its own Run stream adopted, one stated by the machine holding the container
+  and one stated by the application inside it.
+- `safety.prediction_states_its_provenance` (Lab invariant): every stage of every
+  recorded candidate names the level its answer came from and how many measured
+  launches stand behind it; a keyed level names a key and a positive count, a prior
+  names neither, and an answer claiming this exact candidate names a key that is not
+  the listing the offer arrived under and is this candidate's own. The listing clause
+  is the load-bearing one, because a marketplace mints an ask ID per search and a
+  history filed under it reports a key that cannot grow as candidate-specific
+  evidence. Each clause fails on the one record it exists to catch in
+  `TestEveryClauseOfThePredictionProvenanceRuleCanFail`, the counterpart holds that an
+  answered stage and a prior are both honest provenance, and the registry's permanent
+  deliberate failure drives the listing clause. Through the whole control plane on the
+  conformance Blueprint: keying the history on the offer snapshot ID, on both the
+  writing and the reading side, fails it with the key naming the listing.
 
 - `a-fast-machine-far-from-the-data-loses` (green): three Rentals equally warm on the
   image at one price, one on a measured 4 Gbps path to the object store, one on 200
@@ -3064,6 +3116,95 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 a hierarchical estimator keyed on what recurs
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. A concurrent session held its own slice open across
+`internal/scheduler/scheduler.go`, `internal/domain/types.go` and one corpus fixture
+in the same worktree throughout, so the full suite, `go vet`, `gofmt` and the race
+detector were all run against a `git archive` of the commit rather than against the
+shared working directory, and only this slice's own files were staged.
+
+Every stage estimate now names the level its answer came from and the number of
+measured launches behind it, keyed on `domain.CandidateIdentity` rather than on
+anything a listing was numbered with. `SchedulingInput.LatencyEstimates` is deleted.
+
+- The new Blueprint is red before the estimator and green after. With
+  `History.Predict` short-circuited to the prior, it fails twenty-four ways across
+  five candidates: `application_ready_seconds: want exactly 30, got 300`,
+  `application_ready source: want "history", got "workload.expected_ready"`,
+  `application_ready level: want "exact_candidate", answered at "prior" from 0
+  samples`, and the sample count beside each. Every level in the fixture is asserted
+  by all three.
+- Keying the history on the offer snapshot ID, on both the writing and the reading
+  side, fails the Blueprint on the second listing of the measured machine with
+  `application_ready level: want "exact_candidate", answered at "provider_and_region"
+  from 2 samples`, and fails `safety.prediction_states_its_provenance` at L1 with the
+  key naming the listing. Filing the history under the Run ID instead fails the L1
+  case with the machine answered at the provider level from a key naming nothing but
+  the provider.
+- Deleting the machine handle from the Vast adapter fails
+  `TestTwoSearchesOfOneMachineAreOneCandidate` with `the key names machine ""`, and
+  fails `TestTwoMachinesWithOneCardInOnePlaceAreTwoCandidates` with two machines
+  sharing one key. `machine_id` was decoded and read by nothing before this: in a
+  catalog that is other people's hardware, a region full of identical 4090s is the
+  ordinary case, so a fast host and a slow host in one city shared a history and each
+  was served back as evidence about the other.
+- Each clause of the provenance rule fails on the one record it exists to catch, and
+  the counterpart holds that an answered stage and a prior are both honest, because a
+  rule that failed those could only be satisfied by a tree that predicts nothing.
+
+Four judgment calls are worth stating rather than hiding.
+
+One stage has an actual today and the record says so about the other seven.
+Readiness is bounded by two moments Mercator observes from independent authorities:
+the machine states when the process began and the application states when it began
+serving. Every other stage happens inside one observed interval, because a provider
+reports a machine running from the moment it accepts the launch, and attributing that
+interval across seven stages would be arithmetic wearing a measurement's clothes.
+Those stages keep the published claims and stated constants they had, now named as
+the prior they are, and they become learnable without touching the estimator when a
+node reports the stages it performs.
+
+A coarser level beats a published claim. A provider's own boot window is a claim
+about a listing and a region's samples are launches somebody watched. The level is
+charged for its breadth instead: the confidence declines from 0.9 at the exact
+candidate to 0.6 at the provider and region and 0.4 at the provider, and one sample
+is worth half of what its level is worth. None of the three is 1, because the next
+launch is a draw from a distribution rather than a repeat of its median.
+
+The start is the sum of its stages, always. What was deleted replaced that sum with a
+measured start for the offer snapshot ID, which nothing ever wrote and which could
+not have been written honestly: a start latency is the sum of seven stages whose
+costs depend on what the machine holds now, so the measurement of a machine that
+pulled forty gigabytes last week would be served back as the prediction for the same
+machine now holding the image.
+
+The history is rebuilt per placement from the Booking Decisions and the Run
+projection. A Workspace pays one filtered scan of its decisions and one page walk of
+its Runs to place a Run, which is honest and is not free; a projection maintained on
+append is worth building when a Workspace's history is long enough for it to show.
+
+The live half ran on this host's own engine.
+`MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration`
+launches, observes and releases a real container on Docker Engine 29.6.2 and reaches
+the same daemon twice, once through the ambient socket and once through a docker
+context, holding that the daemon's own ID names one machine where the endpoint label
+names two. That is the identity half of this slice against real hardware. What did
+not run live is the learning half above the Lab: the readiness callback is
+authenticated with a per-run token and the daemon fixture does not configure
+reporting, so a fleet case in which a real node's workload reports itself ready and a
+second Run is then predicted from it is deferred rather than claimed. Mercator issue
+#165 does not reproduce here and was left alone.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/prediction ./internal/scheduler ./internal/orchestrator \
+  ./internal/lab ./internal/scenario/... ./internal/domain ./internal/adapter/vast \
+  ./internal/adapter/fake
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
 
 ### Phase 4 the third review of the transfer path
 
