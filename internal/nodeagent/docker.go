@@ -37,6 +37,11 @@ type DockerRuntime struct {
 	// than anything Docker manages. A runtime given none replicates nothing and
 	// reports no Artifact inventory, which is silence rather than an empty disk.
 	artifactRoot string
+	// network is what this node has measured about the paths it crosses. It is
+	// the runtime's own state rather than something read off the host at report
+	// time, because a throughput is only knowable while a transfer is happening
+	// and the transfers are this process's own work.
+	network *pathMeasurements
 }
 
 // RuntimeOption configures the Docker runtime.
@@ -55,7 +60,7 @@ func NewDockerRuntime(binary string, options ...RuntimeOption) *DockerRuntime {
 	if binary == "" {
 		binary = "docker"
 	}
-	runtime := &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator."}
+	runtime := &DockerRuntime{binary: binary, now: time.Now, labelPrefix: "mercator.", network: newPathMeasurements()}
 	for _, option := range options {
 		option(runtime)
 	}
@@ -77,6 +82,11 @@ func (docker *DockerRuntime) Facts(ctx context.Context) (capability.NodeFacts, e
 		CPUMillis:        int64(info.NCPU) * 1000,
 		MemoryBytes:      info.MemTotal,
 		Disk:             docker.diskFacts(info.DockerRootDir),
+		// What this node has measured about the paths it crosses, which is the
+		// field phase 2 declared and nothing wrote. A machine that has moved no
+		// content publishes nothing here, and Placement prices that silence with
+		// its own stated assumption rather than mistaking it for a slow link.
+		Network: docker.network.facts(facts.ObservedAt),
 	}
 	if slices.Contains(info.runtimeNames(), "nvidia") {
 		facts.Host.AcceleratorToolkit = "nvidia-container-toolkit"

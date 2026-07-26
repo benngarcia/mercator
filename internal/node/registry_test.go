@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/node"
 )
 
@@ -634,5 +635,62 @@ func TestANodeDeclaresOnlyWhatItsRuntimePerforms(t *testing.T) {
 	}
 	if support.GarbageCollection {
 		t.Error("the node declares garbage_collection, and nothing on the machine reclaims a byte")
+	}
+}
+
+// TestAPathANodeMeasuredReachesTheOfferItPrices is the last step of the only
+// measurement of a link anything in this tree makes. An enrolled node times its
+// own Artifact reads and reports what it found; unless the offer carries it,
+// Placement still prices every read in the fleet at Mercator's fleet-wide guess,
+// and the measurement is a number in a heartbeat that changes nothing.
+//
+// The rate the offer answers with is what decides a placement, so this asserts
+// the answer rather than the field: DownloadRate is the one rule both the
+// prediction and a Run's hard floor read, and a fact that reached the offer and
+// not that answer would be published and still unread.
+func TestAPathANodeMeasuredReachesTheOfferItPrices(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+
+	report(t, registry, bootstrap.NodeID, enrollment.SessionToken, node.Event{
+		ID:         "evt-heartbeat-measured-path",
+		Kind:       node.EventHeartbeat,
+		ObservedAt: clock.Now(),
+		Facts: &capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host: capability.HostFacts{
+				OS:               "linux",
+				ContainerRuntime: "docker",
+				Network: []domain.NetworkFact{{
+					Scope:       domain.NetworkScopeObjectStore,
+					Statistic:   "p10",
+					ValueMbps:   1750,
+					Source:      "node_transfer",
+					SampleCount: 3,
+					ObservedAt:  clock.Now(),
+					ValidUntil:  clock.Now().Add(time.Hour),
+					Confidence:  0.9,
+				}},
+			},
+		},
+	})
+
+	offers, err := registry.Offers(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("list node offers: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("offers = %d, want the one enrolled node", len(offers))
+	}
+	rate := offers[0].DownloadRate(domain.NetworkScopeObjectStore)
+	if rate.Mbps != 1750 || rate.Measurement != "node_transfer" {
+		t.Fatalf("the offer prices an Artifact read at %+v, and this node measured 1750 Mbps itself", rate)
+	}
+	// The registry path this node never crossed. A node that measured one link is
+	// not a node that measured them all, and the answer for the other is the
+	// standing assumption saying so.
+	if registryRate := offers[0].DownloadRate(domain.NetworkScopeRegistry); registryRate.Assumption != domain.AssumptionRegistryRate {
+		t.Fatalf("the offer prices an image pull at %+v, and nothing has measured this node's link to a registry", registryRate)
 	}
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/scheduler"
 )
 
 // This file is the higher-fidelity half of Artifact replication: the node
@@ -244,4 +245,135 @@ func sign(key []byte, message string) []byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(message))
 	return mac.Sum(nil)
+}
+
+// TestANodeMeasuresTheObjectStorePathItJustCrossed is the live half of the
+// transfer model. Everything else about how long content takes to reach a
+// machine is Mercator's own stated assumption, and this is the one place a real
+// number enters the system: the node streams sixteen megabytes out of a real
+// S3-compatible store over a real presigned GET, times the bytes it actually
+// moved, and publishes what it found as a fact about that path.
+//
+// Then Placement prices the next read off the reported number. That is the whole
+// point of measuring: a rate a machine published and nothing reads is a rate that
+// changes no decision, which is what the field this fills has been since phase 2.
+func TestANodeMeasuresTheObjectStorePathItJustCrossed(t *testing.T) {
+	requireDocker(t)
+	endpoint := startObjectStore(t)
+	// Large enough to be a measurement of throughput rather than of the round trip
+	// to the store, which is the distinction minimumMeasuredBytes draws.
+	content := []byte(strings.Repeat("mercator throughput conformance 0123456789abcdef\n", 340_000))
+	digest := sha256.Sum256(content)
+	putObject(t, endpoint, "datasets", "corpus-v9", content)
+
+	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
+	if err := runtime.PrepareArtifact(context.Background(), capability.PrepareArtifactCommand{
+		ArtifactID:    "artifact:corpus:v9",
+		ContentDigest: "sha256:" + hex.EncodeToString(digest[:]),
+		Source:        presign(t, http.MethodGet, endpoint, "datasets", "corpus-v9", time.Hour),
+		SizeBytes:     int64(len(content)),
+	}); err != nil {
+		t.Fatalf("replicate the Artifact: %v", err)
+	}
+
+	facts, err := runtime.Facts(context.Background())
+	if err != nil {
+		t.Fatalf("read the node's facts: %v", err)
+	}
+	measured := objectStorePath(t, facts.Host.Network)
+	if measured.ValueMbps <= 0 || measured.SampleCount != 1 {
+		t.Fatalf("the node reports %+v, want the one transfer it just timed", measured)
+	}
+	if measured.Source != "node_transfer" || measured.Confidence != MeasuredLinkConfidence {
+		t.Fatalf("the node reports %+v, want a reading it names as its own", measured)
+	}
+	if !measured.Answers(facts.ObservedAt) {
+		t.Fatalf("the node published %+v, which Mercator may not act on at the moment it was reported", measured)
+	}
+
+	// The next Run that reads out of this store is priced off that number rather
+	// than off the fleet-wide assumption. The offer is the node's own facts as the
+	// registry projects them, which is where a measurement either reaches a
+	// decision or stops being worth making.
+	fetch := pricedArtifactRead(t, facts, 40_000_000_000)
+	if fetch.Measurement != "node_transfer" || fetch.Mbps != measured.ValueMbps {
+		t.Fatalf("Placement priced the next read at %+v, and this machine measured %.2f Mbps itself",
+			fetch, measured.ValueMbps)
+	}
+	if fetch.Assumption != "" {
+		t.Fatalf("Placement priced the next read from the assumption %q on a machine that measured the path", fetch.Assumption)
+	}
+}
+
+func objectStorePath(t *testing.T, facts []domain.NetworkFact) domain.NetworkFact {
+	t.Helper()
+	for _, fact := range facts {
+		if fact.Scope == domain.NetworkScopeObjectStore {
+			return fact
+		}
+	}
+	t.Fatalf("the node published %+v, and nothing there describes its path to the object store", facts)
+	return domain.NetworkFact{}
+}
+
+// pricedArtifactRead runs the production scheduler over this node's own facts and
+// answers what it charged the Artifact read at. It reads the rate the decision
+// recorded rather than the seconds, because the seconds are bytes over a rate and
+// only the rate says which of the two halves this case is about.
+func pricedArtifactRead(t *testing.T, facts capability.NodeFacts, bytes int64) domain.TransferRate {
+	t.Helper()
+	now := facts.ObservedAt
+	decision, err := scheduler.New().Evaluate(context.Background(), scheduler.SchedulingInput{
+		RunID: "run-reader",
+		Workload: domain.WorkloadRevision{
+			WorkspaceID: "ws_alpha",
+			Spec: domain.WorkloadSpec{
+				Containers: []domain.ContainerSpec{{
+					Name:     "reader",
+					Image:    "trainer@sha256:" + strings.Repeat("cd", 32),
+					Platform: domain.Platform{OS: "linux", Architecture: "amd64"},
+				}},
+				Placement: domain.PlacementPolicy{Class: domain.ClassStandard, ExpectedRuntimeSeconds: 600},
+				Execution: domain.ExecutionPolicy{MaxRuntimeSeconds: 3600},
+				Artifacts: domain.ArtifactRequirements{Consumes: []string{"artifact:corpus:v9"}},
+			},
+		},
+		Offers: []domain.OfferSnapshot{{
+			ID:           "nod_live",
+			RentalID:     "rnt_live",
+			ConnectionID: "conn_nodes",
+			Kind:         domain.OfferKindStanding,
+			Lane:         domain.LaneReusable,
+			ObservedAt:   now,
+			ExpiresAt:    now.Add(time.Minute),
+			Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
+			Resources:    domain.ResourceInventory{CPUMillis: 8000, MemoryBytes: 32 << 30, EphemeralDiskBytes: 1 << 40},
+			Capabilities: domain.CapabilityProfile{
+				Container: domain.ContainerCapabilities{MaxContainers: 4, SupportsDigestRefs: true},
+			},
+			// The one field this case is about, carried the way node.Registry
+			// projects it onto an offer.
+			Network:   domain.NetworkFacts{Download: facts.Host.Network},
+			Pricing:   domain.PriceModel{Currency: "USD", RatePerSecondUSD: 0.0005, Known: true},
+			Capacity:  domain.CapacityEvidence{Available: true, Confidence: 1},
+			Artifacts: facts.Artifacts,
+		}},
+		Artifacts: []domain.ArtifactVersion{{
+			ID:            "artifact:corpus:v9",
+			ContentDigest: "sha256:" + strings.Repeat("ef", 32),
+			SizeBytes:     bytes,
+		}},
+		ModelVersion: "latency-v1",
+		EvaluatedAt:  now,
+	})
+	if err != nil {
+		t.Fatalf("evaluate placement over this node's facts: %v", err)
+	}
+	for _, rate := range decision.Candidates[0].TransferRates {
+		if rate.Stage == domain.StageArtifactFetch {
+			return rate
+		}
+	}
+	t.Fatalf("the decision priced no Artifact read: %+v", decision.Candidates[0])
+	return domain.TransferRate{}
 }
