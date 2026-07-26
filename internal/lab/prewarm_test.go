@@ -3,6 +3,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -148,6 +149,34 @@ func TestPreparationStopsWhenTheRunThatWantedItGoesAway(t *testing.T) {
 		}
 		if ledger.holds(ResidentLayer, "sha256:bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77") {
 			t.Fatal("the machine kept the layer of a Run that never ran")
+		}
+	}
+}
+
+// TestABackgroundPreparationLoopTripsNoDispatcherDetector is the claim that a
+// controller nothing is waiting on can run beside the Runs without making the
+// execution undecidable. The dispatcher refuses a livelock, a timestamp it
+// cannot get past, and a transition budget it has spent, and a loop that
+// reconciled a desired set on every tick is exactly the shape that trips all
+// three. This execution runs under the tight limits every Lab case here uses,
+// which are a hundredth of the production ones.
+func TestABackgroundPreparationLoopTripsNoDispatcherDetector(t *testing.T) {
+	execution := openConformanceExecution(t, prewarmBlueprint)
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	for range 80 {
+		checkpoint, err := execution.Drive(context.Background(), Advance(time.Minute))
+		for _, detector := range []error{ErrLivelock, ErrSameTimestampLimit, ErrTransitionLimit, ErrVirtualTimeLimit} {
+			if errors.Is(err, detector) {
+				t.Fatalf("the preparation loop tripped %v at %s", detector, checkpoint.Now)
+			}
+		}
+		if err != nil {
+			t.Fatalf("drive the execution: %v", err)
 		}
 	}
 }
