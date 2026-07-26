@@ -1247,6 +1247,48 @@ complete because it works against a live provider.
     Nothing in production implements `orchestrator.ArtifactCatalog`, so no
     production Run declares an Artifact and the Artifact half of the desired set is
     exercised at L1 and against a real object store rather than end to end.
+- [x] 2026-07-26: Seed the Bookings a placement world starts with, and let five
+  queue fixtures state the answer. A Blueprint that said a Rental was busy stated
+  it twice and only one of the two reached Mercator: the world knew the machine
+  was occupied, and the Broker's Rental Schedule store was empty, so Placement
+  had nothing to queue behind and struck every busy Rental out as
+  CAPACITY_UNAVAILABLE. The fast placement harness now seeds each declared
+  schedule through `domain.RentalSchedule.Reserve`, so a fixture can only state a
+  schedule Mercator could have reached, and completes the seeded Booking through
+  `Complete` at the moment the world frees the machine, because the Bookings a
+  world starts with belong to Runs no event log ever saw and nothing else would
+  ever report them ending. Two more gaps sat behind that one and neither was
+  fixture construction. Every Booking Decision recorded the wait and never what
+  the wait was read from, so each candidate on a Rental with Bookings now carries
+  the schedule as the decision read it, version and all: a schedule moves, and
+  the seconds alone are unretraceable afterwards. And fixtures name Bookings
+  while Mercator hashes them, so the runner resolves a fixture's names to the
+  identities Mercator minted rather than asking production to accept a name from
+  a world. `busy-rental-worth-waiting`, `queued-run-makes-fresh-capacity-win`,
+  `multiple-runs-schedule-in-order`, `full-schedule-forces-fresh-capacity`, and
+  `dataset-gravity-worth-waiting` are green.
+  - Judgment calls. No Lab invariant: seeding a schedule is fixture construction,
+    and the laws that police queueing already exist and now read seeded schedules
+    at L0 too. `busy-rental-not-worth-waiting` and `running-fills-a-cache` were
+    green while asserting the absence of this capability, with their busy Rental
+    refused rather than priced; both now assert the wait, which is the same
+    placement for the honest reason. `full-schedule-forces-fresh-capacity` asked
+    for SCHEDULE_FULL at `rental_schedule.queued`, a field a Rental Schedule does
+    not have, and now asserts the QUEUE_CAPACITY_EXCEEDED that Mercator emits at
+    the path it emits it on. Two fixtures priced the warm Rental a nickel an hour
+    above capacity that provisions in five minutes, which the balanced objective
+    decides on the price gap and not on the wait, so both now price their
+    machines identically and let the queue decide, which is what each is about.
+  - What is left. `queued-booking-deadline-expiry` keeps exactly one declaration,
+    `schedule_advancement`. Its Booking is queued with a latest start six minutes
+    out while the Booking ahead of it runs for thirty, and at seven minutes
+    nothing expires it. The survey's suspicion that the declaration was stale
+    because `dispatchQueuedBooking` exists is wrong: dispatch is what happens when
+    a Booking's turn arrives, and expiry is what happens when its turn does not.
+    A fixture can seed only the running Booking's end, because when a waiting one
+    finishes depends on when it starts and the world models one busy window per
+    machine; a queue that drains further than one Booking is held at L1 by
+    `a-queue-drains-as-it-runs`.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1394,9 +1436,10 @@ Phase 3 added:
   asked for the fastest start takes the warm one, pays double, and records
   `EARLIEST_START` rather than claiming it compared prices. Ranking on cost alone
   fails it with the hurried Run placed on the cold machine.
-- `dataset-gravity-worth-waiting` (target, missing `rental_schedule`): the same
-  gravity behind a running Booking. It now states one missing capability rather
-  than three, because Artifacts and their per-candidate evidence exist.
+- `dataset-gravity-worth-waiting` (green): the same gravity behind a running
+  Booking. The Rental holding the dataset is busy for eight more minutes and the
+  Rental with the perfect image cache is idle, and the Run queues for the dataset,
+  because 640 seconds of object store dwarfs eight minutes of waiting.
 - `a-late-start-must-be-a-fact` (conformance): one Run refusing to wait three
   minutes and reading a 40GB dataset, against a Rental a second from ready, a
   machine that does not exist yet stating ten minutes of provisioning, and a
@@ -1543,7 +1586,54 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 24 regression Blueprints: 16 green and 8 target, beside one demo,
+Phase 4 added:
+
+- `busy-rental-worth-waiting` (green): the warm Rental's Booking is expected to
+  finish in four minutes and fresh capacity pays five of boot plus an 18GB pull,
+  so the Run takes a queued Booking behind it. Dropping the seeded schedule out
+  of the world fails it with the Run placed on `fresh-4090` as a running Booking
+  on a Rental identity that did not exist a moment earlier.
+- `multiple-runs-schedule-in-order` (green): two Runs and a Rental one minute
+  from free, against capacity that takes thirty to provision. Both queue, in
+  submission order, and the second's Booking follows the first's rather than the
+  running one, which is the claim: a schedule is ordered, and Mercator reads its
+  own last answer before giving the next.
+- `queued-run-makes-fresh-capacity-win` (green): the same world with the price
+  gap removed, so the queue is the only thing that can decide it. The first Run
+  queues behind five minutes; the second reads a schedule that now holds the
+  first Run's twenty minutes as well, and twenty-five minutes of waiting loses to
+  ten of provisioning and pulling. A queue Mercator itself created is what makes
+  the second answer differ from the first.
+- `full-schedule-forces-fresh-capacity` (green): the cap rather than the score.
+  The warm Rental holds the maximum four waiting Bookings and is refused with
+  QUEUE_CAPACITY_EXCEEDED, and CAPACITY_UNAVAILABLE beside it, because with no
+  open position there is nothing left to make a busy machine available. Its
+  schedule is at version nine holding five Bookings, which is what makes the
+  seeded version load-bearing: a version counts transitions rather than
+  occupants, and deriving it from the Bookings still there fails the fixture with
+  version five.
+- `dataset-gravity-worth-waiting` (green): gravity behind a running Booking. The
+  Rental holding a checked copy of the 40GB dataset is busy for eight more
+  minutes and the Rental with the perfect image cache is idle, and the Run queues
+  for the dataset, because 640 seconds of object store dwarfs eight minutes of
+  waiting.
+- `queued-booking-deadline-expiry` (target, missing `schedule_advancement`): the
+  Run takes a queued Booking with a latest start six minutes out, and the Booking
+  ahead of it runs for thirty. At seven minutes nothing expires it. Its first two
+  steps are green, which is what makes the one declaration it keeps precise.
+- `a-queue-drains-as-it-runs` (conformance) gained the record beside the seconds.
+  The Booking ahead is twenty-nine minutes into a declared half hour, so this is
+  the one execution in the tree where what a Booking has left and what its caller
+  asked for are different numbers, and the recorded evidence has to say the
+  first: restating the declared runtimes fails it with "the record says the
+  Booking ahead has 1800.00s left".
+- No new Lab invariant. Seeding a schedule is fixture construction rather than
+  external behaviour, and the two laws that police queueing,
+  `safety.exclusive_booking_capacity` and
+  `safety.ephemeral_capacity_not_reused`, now read seeded schedules at L0 as well
+  as schedules the Broker committed.
+
+The corpus is 24 regression Blueprints: 21 green and 3 target, beside one demo,
 one minimized case, and nine conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two

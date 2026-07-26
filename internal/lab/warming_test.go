@@ -243,6 +243,34 @@ func TestAQueueDrainsAsItRunsAndTheBoundFollowsIt(t *testing.T) {
 	if decision.Booking == nil || decision.Booking.State != domain.BookingStateQueued {
 		t.Fatalf("the Run took %+v, want a queued Booking behind the Run that is still going", decision.Booking)
 	}
+	assertQueueEvidenceIsWhatIsLeft(t, decision, candidate)
+}
+
+// assertQueueEvidenceIsWhatIsLeft reads the schedule the decision recorded
+// beside the seconds it charged. This is the one execution in the tree where a
+// Booking is deep into a runtime its Run declared, so it is the only place the
+// difference between what a Booking has left and what its caller asked for
+// leaves a visible trace in the record.
+func assertQueueEvidenceIsWhatIsLeft(t *testing.T, decision domain.BookingDecision, candidate domain.CandidateDecision) {
+	t.Helper()
+	evidence := candidate.RentalSchedule
+	if evidence == nil {
+		t.Fatalf("the decision queued this Run and recorded no schedule to retrace the wait from")
+	}
+	if evidence.Running == nil || evidence.Running.RunID != "run-long" {
+		t.Fatalf("the evidence names %+v as what this Run waits behind, want the Run that is still going", evidence.Running)
+	}
+	if evidence.Running.RemainingExpectedRuntimeSeconds > 90 {
+		t.Fatalf("the record says the Booking ahead has %.2fs left, and it is a minute from its own expected finish",
+			evidence.Running.RemainingExpectedRuntimeSeconds)
+	}
+	if len(evidence.Preceding) != 0 {
+		t.Fatalf("the record says %d Bookings are already waiting, and this Run is the first", len(evidence.Preceding))
+	}
+	if decision.Booking.ScheduleVersion != evidence.Version+1 {
+		t.Fatalf("the Booking follows schedule version %d and the evidence was read from %d",
+			decision.Booking.ScheduleVersion, evidence.Version)
+	}
 }
 
 func refusedForLatency(candidate domain.CandidateDecision) bool {

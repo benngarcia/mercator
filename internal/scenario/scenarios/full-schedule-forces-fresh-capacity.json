@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "The warm Rental would win on score, but its RentalSchedule already holds the maximum of four queued Bookings. The cap, not the score, forces the fifth Run onto fresh capacity, and the rejections record both halves of why: the schedule has no open Booking position, and with none there is nothing left to make a busy machine available. A Rental one Booking short of full is a candidate this same Run would queue on.",
+  "summary": "The warm Rental would win on score, but its RentalSchedule already holds the maximum of four queued Bookings. The cap, not the score, forces the fifth Run onto fresh capacity, and the rejections record both halves of why: the schedule has no open Booking position, and with none there is nothing left to make a busy machine available. A Rental one Booking short of full is a candidate this same Run would queue on. Its schedule is at version nine holding five Bookings, because a version counts every transition a Rental has seen and this one has already run work that finished.",
   "classification": "green",
   "world": {
     "images": {
@@ -21,7 +21,7 @@
     "rental_schedules": [
       {
         "rental": "rental-warm",
-        "version": 5,
+        "version": 9,
         "running": {
           "booking": "booking-active",
           "run": "run-active",
@@ -61,7 +61,7 @@
           {"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}
         ],
         "rental_schedule": {
-          "version": 5,
+          "version": 9,
           "running": {
             "booking": "booking-active",
             "run": "run-active",
