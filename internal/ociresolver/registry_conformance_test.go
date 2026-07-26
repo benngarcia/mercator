@@ -33,10 +33,10 @@ const (
 // the image after that child would produce a digest no Docker daemon has ever
 // heard of, and the whole-image fast path would silently never fire.
 func TestRegistryResolverAgreesWithDockerAboutAPublicImage(t *testing.T) {
-	requireDockerHubReachable(t)
 	requireDocker(t)
-	docker(t, "pull", "--quiet", "busybox:latest")
+	requireImage(t, "busybox:latest")
 	pinned := docker(t, "image", "inspect", "busybox:latest", "--format", "{{index .RepoDigests 0}}")
+	requireDockerHubServes(t, pinned)
 	platform := dockerPlatform(t, "busybox:latest")
 
 	manifest, err := NewRegistryResolver().ResolveManifest(context.Background(), pinned, platform)
@@ -89,10 +89,9 @@ func platformManifestReference(t *testing.T, pinned string, platform domain.Plat
 // unauthenticated attempt is the control: without it, the credentials could be
 // doing nothing.
 func TestRegistryResolverAuthenticatesAgainstAPrivateRegistry(t *testing.T) {
-	requireDockerHubReachable(t)
 	requireDocker(t)
+	requireImage(t, "busybox:latest")
 	host := startPrivateRegistry(t)
-	docker(t, "pull", "--quiet", "busybox:latest")
 	reference := host + "/private/trainer:v1"
 	docker(t, "tag", "busybox:latest", reference)
 	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", reference).Run() })
@@ -126,6 +125,7 @@ func TestRegistryResolverAuthenticatesAgainstAPrivateRegistry(t *testing.T) {
 // returns the loopback host it answers on.
 func startPrivateRegistry(t *testing.T) string {
 	t.Helper()
+	requireImage(t, "registry:2")
 	container := docker(t,
 		"run", "--detach",
 		"--publish", "127.0.0.1::5000",
@@ -287,15 +287,31 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-// requireDockerHubReachable proves the network is there before a test that
-// needs it, so an offline machine skips rather than reporting a failure it
-// cannot have caused.
-func requireDockerHubReachable(t *testing.T) {
+// requireImage puts the content a case needs on this machine without insisting
+// on a fresh copy of it. The private-registry case pushes these bytes into a
+// registry it starts itself and checks the resolver against what that registry
+// stored, so a copy this daemon already holds is the same evidence as one just
+// fetched, and an address Docker Hub is throttling still runs the case.
+func requireImage(t *testing.T, reference string) {
 	t.Helper()
-	client := &http.Client{Timeout: 10 * time.Second}
-	response, err := client.Get("https://registry-1.docker.io/v2/")
-	if err != nil {
-		t.Skipf("docker.io is unreachable from this machine: %v", err)
+	if err := exec.Command("docker", "pull", "--quiet", reference).Run(); err == nil {
+		return
 	}
-	response.Body.Close()
+	if err := exec.Command("docker", "image", "inspect", reference).Run(); err != nil {
+		t.Skipf("this machine can neither pull %s nor already hold it: %v", reference, err)
+	}
+}
+
+// requireDockerHubServes proves this address may still read one public manifest
+// anonymously, which is the one thing the public-image case cannot substitute
+// for: it exists to compare a read of Docker Hub against the daemon's answer
+// about the same digest. An offline machine answers nothing and an address that
+// has spent Docker Hub's anonymous quota answers 429, and neither says anything
+// about the resolver either way, so both skip rather than report a failure this
+// tree cannot have caused.
+func requireDockerHubServes(t *testing.T, reference string) {
+	t.Helper()
+	if output, err := exec.Command("docker", "manifest", "inspect", reference).CombinedOutput(); err != nil {
+		t.Skipf("docker.io will not serve %s to this machine: %v\n%s", reference, err, output)
+	}
 }
