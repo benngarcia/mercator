@@ -1237,10 +1237,16 @@ complete because it works against a live provider.
     command per piece of content and no way to say stop, so an item a desired set
     no longer names is a pull that runs to completion there. The Lab world models
     it because a provider seam can, and the node's half is
-    [#170](https://github.com/benngarcia/mercator/issues/170). Nothing in
-    production implements `orchestrator.ArtifactCatalog`, so no production Run
-    declares an Artifact and the Artifact half of the desired set is exercised at
-    L1 and against a real object store rather than end to end.
+    [#170](https://github.com/benngarcia/mercator/issues/170). A refused
+    preparation is terminal: the operation store dedupes on the identity with no
+    regard for its state, so a node whose pull failed answers Duplicate for that
+    content from then on and the desired set is never restated either, which
+    defeats the node agent's own intent to retry. Reproduced under "the rate bound
+    under review" below and owed a slice, because reissuing a refusal changes what
+    an operation identity promises and the Lab world cannot yet refuse a fetch.
+    Nothing in production implements `orchestrator.ArtifactCatalog`, so no
+    production Run declares an Artifact and the Artifact half of the desired set is
+    exercised at L1 and against a real object store rather than end to end.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -1492,7 +1498,29 @@ Phase 3 added:
   executed neither. The fourth wants sixty gigabytes nothing else needs and its
   caller withdraws it eight minutes in: the preparation stops and the room goes
   back. Deleting the yielding guard, the concurrency bound, the withdrawal, or
-  the whole controller each fails it, three of them through an invariant.
+  the whole controller each fails it, three of them through an invariant. It
+  states nothing failable about the rate bound: its Runs arrive on minute
+  boundaries and the harness advances a minute at a time, so the gaps between its
+  preparations are the cadence rather than `PrewarmPolicy.MinInterval`.
+- `prewarming-holds-its-own-rate-bound` (conformance): one machine already holding
+  the image, and three Runs that want two versions of one corpus. The first
+  occupies the machine, the second queues and Mercator asks for
+  `artifact:corpus:v70` a minute in, and the third arrives ninety seconds later
+  wanting `artifact:corpus:v7`. The second speculative fetch waits until five
+  minutes after the first one started. Every part of the fixture exists to be
+  failable: the wanted names prefix-collide, so a control plane comparing a new
+  desire against the joined text of the last one reads `v7` as content it has
+  already asked for and skips a bound it applies to additions only; the gap is
+  longer than the cadence, so the harness cannot produce it; and the third Run
+  arrives between two ticks, so the moment the bound is tested is not a moment the
+  driver chose. Deleting the rate bound, or restoring the substring comparison it
+  replaced, each fails it through `safety.prewarm_rate_within_bound`.
+- `safety.prewarm_rate_within_bound` (Lab invariant): no two moments at which
+  Mercator began preparing are closer together than the world's `min_interval`.
+  It is stated over the moments preparation started rather than over transfers,
+  because one desired set crosses the boundary at once and may open as many
+  transfers as the depth bound allows: how many may move together is the other
+  rule's question. A world stating no interval states no opinion.
 - `safety.prewarm_yields_to_real_work` (Lab invariant): no speculative transfer
   is moving onto a machine at the same time as content a Run admitted there is
   waiting for, and no more of them are in flight at once than the world stated.
@@ -1648,6 +1676,57 @@ Nothing in production implements `orchestrator.ArtifactCatalog`, so no productio
 Run declares an Artifact and the Artifact half of a desired set never fires end to
 end. What the node does with one is held against a real object store, and what
 Mercator does with one is held at L1.
+
+### Phase 3 prewarming, the rate bound under review
+
+On 2026-07-25, two reviewers refuted the commit that replaced the desired-set
+memory's substring comparison with a set. Both were right about the same thing
+twice over, and the record is corrected here because a wrong record is what a
+later reader decides with.
+
+The commit stated the consequence backwards. It said a false "already asked for"
+answer would have held back a fetch nobody requested. `tooSoon` returns false
+whenever `adds` is false, so a wrong `adds=false` can only ever bypass the bound:
+the defect was under-throttling. Driven on this host, the pre-commit code starts a
+second speculative transfer at `00:02:30` under a five minute bound whose first
+fetch began at `00:01:00`, and the committed code starts it at `00:06:00`. The
+commit also named the wrong content as the collision. `PrepareItem.Content()` for
+an image is `domain.ReferenceDigest`, always `sha256:` and sixty four hex
+characters, and no fixed-length string is a strict prefix of another, so only an
+Artifact ID can collide. An Artifact ID is a name a workload declares, which is
+exactly why it can.
+
+The commit also landed with nothing that could fail on it. The whole of it reverts
+and `go test ./...` stays green in every package, because every Artifact ID in the
+corpus is mutually non-prefix and the one Lab assertion about `MinInterval` ran on
+a fixture whose gaps the harness produced. Editing that fixture's `min_interval`
+from `1m` to `0s`, which turns the bound off, left `internal/lab` and
+`internal/scenario` green. `prewarming-holds-its-own-rate-bound` and
+`safety.prewarm_rate_within_bound` are the repair: the fixture fails with the
+substring comparison restored and fails again with the `tooSoon` call deleted
+outright, both reported as `speculative preparation started at
+2030-01-01T00:01:00Z and again 1m30s later at 2030-01-01T00:02:30Z, and this world
+allows one no sooner than 5m0s`. The unfailable gap assertion in
+`TestOnePieceOfContentIsPreparedAtATime` is deleted rather than left to look like
+evidence.
+
+One further refutation is accepted and deliberately not repaired here. The
+preparation identity carries the machine and the content, and the operation store
+dedupes on it with no regard for the state it is in, so a refusal is terminal: a
+node whose pull failed answers `Duplicate` to every later request for that content
+and the control plane never asks again. Driving `internal/node` directly, a
+`PrepareImage` settled with `Applied:false` and a failure of `pull failed: registry
+unreachable` is followed by an identical `PrepareImage` that reports
+`Duplicate=true`, delivers nothing on the session, and leaves
+`AppliedOperationIDs=[]`, so the operation is neither applied nor reissuable.
+`internal/nodeagent` deliberately does not remember a failed pull so that a retry
+can happen, and the layer above defeats it. The orchestrator compounds it: the
+failed content is still absent from the offer's inventory, so the desired set is
+recomputed identically and `unchanged` keeps it from being restated at all. This
+predates the commit under review and it is a change to what an operation identity
+promises, so it is owed a slice of its own: the Lab world has no way to refuse a
+fetch, and a retry rule with no world that can fail it would be the same mistake
+this section is correcting.
 
 ```text
 go build ./... && go vet ./... && go test ./...
