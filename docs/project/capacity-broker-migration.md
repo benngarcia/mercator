@@ -1491,7 +1491,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
+| 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | not started, except that the four placement objectives now order candidates rather than being multiplied by weights nothing populates |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -1811,8 +1811,23 @@ Phase 3 added:
   holding less than before: locality decays, and a machine that lost what it held
   is a fact the World Tape must be able to state.
 
-The corpus is 23 regression Blueprints: 15 green and 8 target, beside one demo,
-one minimized case, and seven conformance Blueprints.
+The corpus at the phase 3 close-out is 24 regression Blueprints, 16 green and 8
+target, beside one demo, one minimized case, and twelve conformance Blueprints,
+counted by `TestOpenCatalogPreservesPlacementClassifications` and reported by
+`TestPlacementScenarios` as `corpus: 16 green, 8 target`. The eight targets are
+what phases 2, 4 and 5 owe: `enrolled-node-survives-its-first-run`,
+`busy-rental-worth-waiting`, `dataset-gravity-worth-waiting`,
+`full-schedule-forces-fresh-capacity`, `multiple-runs-schedule-in-order`,
+`queued-booking-deadline-expiry`, `queued-run-makes-fresh-capacity-win`, and
+`bad-host-facts-rejected-loudly`. Seven of the eight declare `rental_schedule`
+among their missing capabilities, so they wait on a Booking accumulating on
+capacity across Runs, which is why phase 3 promoted none of them. The eighth
+declares `host_facts`.
+
+The twelve conformance Blueprints are driven from `internal/lab` rather than from
+the placement corpus, because each one asserts something only an execution can
+say: what bytes a workload was handed, when a transfer was moving, what a host
+held afterwards, and what survived a control-plane restart.
 
 ## What phase 2 does not yet do
 
@@ -1879,6 +1894,95 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 3 close-out
+
+On 2026-07-25, on ws, an amd64 Linux workstation with 24 cores and Docker Engine
+29.6.2, native and healthy. Two sessions were committing to this worktree while
+the phase closed, so every command below ran against a copy of one named commit
+exported with `git archive` rather than against the working tree, and the numbers
+describe that commit rather than anybody's work in progress. The commit is the
+one carrying the whole phase apart from the conformance-gate work recorded below,
+which was verified on its own and changes no production code.
+
+- `go build ./...` and `go vet ./...`: clean.
+- `go test ./... -count=1`: 35 packages ok, exit 0, nothing skipped that this
+  machine could have run. Before the gate fix in this close-out the same command
+  exited 1 on `internal/ociresolver` with `toomanyrequests` from Docker Hub, and
+  ten live cases in `internal/nodeagent` skipped while holding the images they
+  needed.
+- `go test -race -count=1` over every package this phase touched, which is
+  `cmd/mercator`, `cmd/mercator-node`, `internal/adapter/...`, `internal/broker`,
+  `internal/capability`, `internal/daemon`, `internal/domain`, `internal/httpapi`,
+  `internal/lab`, `internal/node/...`, `internal/nodeagent`,
+  `internal/ociresolver`, `internal/orchestrator`, `internal/scenario`,
+  `internal/scheduler`, and `internal/storage/sqlite`: all ok, exit 0.
+  `internal/lab` takes about 75 seconds under the race detector and is the
+  longest.
+- The corpus: `corpus: 16 green, 8 target`, with
+  `TestOpenCatalogPreservesPlacementClassifications` holding those counts and the
+  24 regression Blueprints they come from. Twelve conformance Blueprints run from
+  `internal/lab`, beside one demo and one minimized case. No target passed, which
+  is what the corpus contract requires until one is promoted deliberately.
+- `go generate ./...` and `bun run generate:api` both leave the tree byte
+  identical, checked by hashing every file before and after rather than by reading
+  a diff, because the worktree was busy.
+- The console: `bun install --frozen-lockfile`, `bun run check:react-effects`,
+  `bun run typecheck`, `bun run test` (5 files, 12 tests), and `bun run build` all
+  pass.
+
+The live half ran, and this is the first time all of it has. On this host, with
+this daemon:
+
+- `internal/nodeagent`: `TestEveryImageThisDaemonHoldsIsAssembled`,
+  `TestDockerRuntimeReportsTheLayersItUnpacked`,
+  `TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet`,
+  `TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt`,
+  `TestTwoWorkspacesGetTwoVolumesForOneCacheName`,
+  `TestAContainerThatNeverStartsIsNotACacheThisNodeHolds`,
+  `TestANodeReplicatesAnArtifactFromARealObjectStore`,
+  `TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`, and
+  `TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote` all pass against real
+  containers, including a MinIO endpoint for the object-store half.
+- `internal/ociresolver`: `TestRegistryResolverAuthenticatesAgainstAPrivateRegistry`
+  passes against a `registry:2` container behind htpasswd, with the anonymous
+  attempt as its control.
+- `internal/adapter/docker`: `TestIntegrationDockerAdapterLaunchObserveRelease`
+  passes with `MERCATOR_DOCKER_INTEGRATION=1 MERCATOR_DOCKER_IMAGE=busybox:latest`,
+  which is the first time it has run on an amd64 host.
+
+Five cases skip in the whole suite, and none of them for a reason this tree can
+fix. `TestRegistryResolverAgreesWithDockerAboutAPublicImage` skips because Docker
+Hub refuses this address an anonymous manifest read, and no Docker Hub credential
+is configured here. `TestConsoleRunsNavigation` and
+`TestLabConsoleUsesNormalAPIAndSSE` want `MERCATOR_BROWSER_TEST=1` and a
+Playwright install, so CI's Console job is where they run.
+`TestBuiltIndexReferencesAbsoluteAssets` wants a console build in `web/static`,
+which an exported copy has none of. `TestIntegrationDockerAdapterLaunchObserveRelease`
+is opt-in and was run on its own. All of this is recorded in
+`docs/production/known-limitations.md`.
+
+Both gate changes are themselves checked, because a gate that skips too readily
+is worse than the failure it replaced.
+
+- `pull` was called on a reference no registry serves and this daemon does not
+  hold, with a `t.Fatalf` behind it. The case skipped and the `Fatalf` was never
+  reached, so content genuinely absent still stops a case rather than being waved
+  through.
+- The first version of the public-image gate proved one anonymous manifest read
+  and then let three more reads cross the same quota, so it passed and the case
+  failed 25 seconds later, which is a flake wearing an environment's clothes. The
+  throttle is answered where it appears now, on the resolver's own `ErrThrottled`
+  and on each `docker manifest inspect`, and five consecutive runs of the package
+  skip that case in 1.4 seconds and pass the private-registry case. A probe
+  pointed the same helper at a registry refusing the connection rather than the
+  quota, and the case failed as it should.
+- Both probes were removed.
+
+Mercator [#165](https://github.com/benngarcia/mercator/issues/165), the
+reachability probe with no timeout, was deliberately left alone. It does not
+reproduce on this host, because `docker info` answers immediately here, and
+smuggling a timeout into a locality slice would hide the regression test it owes.
 
 ### Phase 3 producer affinity, withdrawn under review
 

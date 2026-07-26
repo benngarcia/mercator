@@ -23,11 +23,11 @@ limits.
 
 ## Capacity Reuse
 
-- Every current backend is in the ephemeral lane. Docker, RunPod, Shadeform, and
-  Vast each create capacity for one workload and destroy it afterwards, so no
-  machine survives a Run and nothing is warm for the next one. Reusable capacity
-  needs the Mercator node runtime, which is not implemented
-  ([#155](https://github.com/benngarcia/mercator/issues/155) phase 2).
+- Every provider backend is in the ephemeral lane. Docker, RunPod, Shadeform,
+  and Vast each create capacity for one workload and destroy it afterwards, so
+  no machine those backends allocate survives a Run and nothing is warm for the
+  next one. The reusable lane is reached only through the Mercator node runtime,
+  which today means a Docker host an operator enrolled by hand.
 - An ephemeral execution still commits a Booking against a single-use Rental
   identity. Placement makes that binding unqueueable and records the honest
   `launch_ephemeral` disposition, but the Booking record type is shared with
@@ -49,20 +49,70 @@ limits.
 - A node runs one workload at a time and Rental Schedules are not populated, so
   a second Run arriving while a node is busy provisions elsewhere instead of
   queueing behind it.
-- Nothing resolves an image's layer list in production, so Mercator cannot tell
-  a warm candidate from a cold one on a real deployment. Every candidate's
-  transfer estimate is recorded as unknown, which leaves the comparison
-  unaffected and understates absolute start latency. Registry-backed manifest
-  resolution is the next slice
-  ([#125](https://github.com/benngarcia/mercator/issues/125) is the related
-  credential work).
-- The Docker adapter can enumerate what its daemon holds and does not, so a
-  Docker offer reports a silent inventory rather than its real content.
+- Image locality is exact only where a node reports content. Mercator resolves a
+  digest-pinned image's manifest from the registry and subtracts what an enrolled
+  node says it holds, so an enrolled node's candidacy is priced on real content.
+  A Docker offer from the ephemeral lane reports a silent inventory, so every
+  such candidate is priced a full pull at assumed link speed and they stay
+  indistinguishable from each other on locality.
+- Manifest resolution uses one static credential per registry connection
+  ([#125](https://github.com/benngarcia/mercator/issues/125)). An image whose
+  registry answers nothing, throttles, or refuses the credential is recorded
+  unreadable with the reason, and every candidate is then priced identically,
+  which understates absolute start latency without disturbing the comparison.
 - A Run placed on a node that then goes quiet stays open indefinitely. The node
   stops being offered for new work, but the Run already on it is never
   adjudicated: nothing re-places it and nothing fails it. Adjudicating a lost
   node's Bookings needs a declared grace window and restart policy, which is
   replanning work ([#163](https://github.com/benngarcia/mercator/issues/163)).
+
+## Locality, Artifacts, And Caches
+
+- No production deployment can run a workload that declares an Artifact input.
+  `cmd/mercator` builds the orchestrator with no `ArtifactCatalog`, because no
+  production object-store client exists, so a Run that reads an Artifact is
+  refused at intake with `ARTIFACT_CATALOG_UNAVAILABLE`. Everything Mercator
+  knows about Artifact durability, Artifact locality, and the read a candidate
+  still owes is therefore exercised in the Lab and against a MinIO container in
+  conformance, and reaches no operator until that client lands.
+- A verified Artifact copy on a node's disk is not readable from inside the
+  container a Run executes in
+  ([#171](https://github.com/benngarcia/mercator/issues/171)). Nothing attaches
+  a replica to a launch and nothing tells a workload which of its inputs are
+  local, so the zero seconds Placement prices a host holding a checked copy is a
+  statement about the decision rather than a saving the workload collects. An
+  operator reading a Booking Decision should read artifact locality as the
+  reason a host was chosen and not as time the Run will save.
+- A workload's own output leaves the machine no copy. A Run writes its output
+  inside its own container, and nothing hashes or files those bytes, so the
+  producing host reports no replica of what it just wrote and the next Run reads
+  the object store even when it lands on that same machine.
+- A refused preparation is terminal for that content on that node. The node
+  operation store dedupes on operation identity with no regard for state, so a
+  node whose prefetch failed answers `Duplicate` for that image or Artifact from
+  then on, and the desired set is never restated either. The Run still runs,
+  fetching at launch, and the prefetch never retries. Clearing it needs operator
+  intervention in the node's operation store.
+- A withdrawn prefetch keeps running on the node
+  ([#170](https://github.com/benngarcia/mercator/issues/170)). The node protocol
+  has one command per piece of content and no way to say stop, so cancelling a
+  queued Run stops Mercator asking and leaves the transfer already in flight
+  holding that node's link and disk until it completes.
+- A control-plane restart forgets which content it has already asked for. The
+  moment preparation last began is durable, and the desired sets are in process,
+  so a restarted Mercator restates a desire it may already have sent and delays
+  a withdrawal it discovers by up to `PrewarmPolicy.MinInterval`.
+- A node's disk report states free bytes and never total. An operator can tell a
+  full machine from an unmeasurable one through `disk_report` and
+  `disk_free_bytes` on `GET /v1/nodes`, and cannot see capacity or a utilisation
+  ratio.
+- A Run that finds no feasible offer records no Booking Decision, so a refused
+  placement leaves no rejection an operator can read. The refusal is visible on
+  the Run and in the daemon's answer alone.
+- Cache Mounts are isolated per workspace and per generation, and nothing prices
+  them. A warm cache is recorded on a candidate and never scored, so two
+  otherwise equal machines are chosen between on cost and start latency even
+  when one holds the cache the Run declared.
 
 ## Adapters And Workloads
 
@@ -93,6 +143,32 @@ limits.
 - Embedded UI is compact and read-oriented.
 - Deeper connection, offer, and sink management workflows are not built into the
   UI.
+
+## What A Developer Workstation Cannot Prove
+
+These are gaps in the evidence rather than in the product, recorded so a reader
+knows which promises rest on CI or on a credential this repository does not
+carry. Stated as of the phase 3 close-out on 2026-07-25, from an amd64 Linux
+workstation running Docker Engine 29.6.2.
+
+- The public-image half of registry conformance did not run. Docker Hub answers
+  an anonymous manifest read from this address with 429, so
+  `TestRegistryResolverAgreesWithDockerAboutAPublicImage` skips and the claim it
+  holds, that the resolver names a multi-platform public image the way the daemon
+  running it does, rests on runs from other addresses. Its authenticated half
+  runs here in full against a `registry:2` container. A Docker Hub credential in
+  the environment would close this.
+- No provider conformance trial ran against RunPod, Shadeform, or Vast. Nothing
+  in this environment carries their credentials, so the ephemeral lane's wire
+  behaviour rests on the recorded fixtures in each adapter's tests and on
+  `mercator verify` being run by an operator who holds a key. See
+  `docs/production/provider-conformance.md`.
+- The browser-driven console checkpoints skip without
+  `MERCATOR_BROWSER_TEST=1` and a Playwright Chromium install, so the console
+  half of the Lab acceptance flow was proven by CI rather than locally.
+- Provisioned reusable capacity has no live coverage at all, because no provider
+  bootstraps a node agent yet. Everything about a node that a real daemon proves
+  here was proven on this workstation's own daemon.
 
 ## GA Documentation Gaps
 
