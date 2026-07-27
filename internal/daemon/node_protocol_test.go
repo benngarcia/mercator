@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/daemon"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
 // TestNodeProtocolIsMountedAndSeparateFromTheOperatorAPI holds the boundary
@@ -69,7 +70,7 @@ func TestNodeProtocolIsMountedAndSeparateFromTheOperatorAPI(t *testing.T) {
 
 func startRuntime(t *testing.T) (string, *daemon.Runtime) {
 	t.Helper()
-	return startRuntimeWithLease(t, 0)
+	return startRuntimeWithLease(t, 0, nil)
 }
 
 // startRuntimeWithLease answers with the address a client reaches this daemon on
@@ -77,13 +78,14 @@ func startRuntime(t *testing.T) (string, *daemon.Runtime) {
 // through: preparation is a controller rather than a request, so nothing an HTTP
 // caller can do makes it happen, and waiting out the production minute would be
 // a test of a ticker.
-func startRuntimeWithLease(t *testing.T, lease time.Duration) (string, *daemon.Runtime) {
+func startRuntimeWithLease(t *testing.T, lease time.Duration, prewarm *orchestrator.PrewarmPolicy) (string, *daemon.Runtime) {
 	t.Helper()
 	runtime, err := daemon.New(t.Context(), daemon.Config{
 		SQLiteDSN:     "file:" + filepath.Join(t.TempDir(), "mercator.db"),
 		OperatorToken: "operator-token",
 		MasterKey:     []byte("0123456789abcdef0123456789abcdef"),
 		NodeLease:     lease,
+		Prewarm:       prewarm,
 		// An empty environment keeps the daemon off this machine's Docker
 		// credentials: a test registry is anonymous, and reading the developer's
 		// config.json would make the result depend on who ran the suite.

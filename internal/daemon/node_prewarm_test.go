@@ -2,11 +2,13 @@ package daemon_test
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/daemon"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
 // TestAQueuedRunPreparesTheMachineItIsGoingTo is the production half of the
@@ -148,4 +150,48 @@ func (f *fleet) prepareUntil(t *testing.T, satisfied func() bool, message string
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal(message)
+}
+
+// TestAMachineIsAskedAgainForContentItRefused is the production half of the
+// state-aware dedupe, through the real node protocol and the SQLite operation
+// store the control plane keeps its commands in.
+//
+// The machine turns the pull away and says so, which leaves nothing on its disk.
+// The Run that wanted the content is withdrawn and another arrives wanting the
+// same content on the same machine, so Mercator asks again under the identity it
+// asked under the first time: the identity is the machine and the content, and
+// nothing about it changed. That ask has to reach the agent. The record of a pull
+// that failed answering it Duplicate is the defect this closes, and it is
+// invisible from outside except as a machine that never becomes warm.
+func TestAMachineIsAskedAgainForContentItRefused(t *testing.T) {
+	fleet := startFleet(t, preparingAt(orchestrator.PrewarmPolicy{MaxConcurrent: 1}))
+	fleet.holdsImageAlready(t, trainerIndexDigest)
+	running := fleet.submitRun(t)
+	fleet.runtime.awaitLaunch(t, running)
+	fleet.runtime.refuseNextPullOf(rebuiltIndexDigest)
+
+	withdrawn := fleet.submitRunFor(t, fleet.rebuiltImage)
+	fleet.prepareUntil(t, func() bool {
+		return len(fleet.runtime.preparedImages()) > 0
+	}, "the queued Run's host was never asked to prepare anything")
+	fleet.cancelRun(t, withdrawn)
+	fleet.prepare(t)
+	fleet.submitRunFor(t, fleet.rebuiltImage)
+
+	fleet.prepareUntil(t, func() bool {
+		return fleet.nodeOffer(t).Images.Holds(rebuiltIndexDigest)
+	}, "the machine never held content it refused once and was asked for again")
+
+	asked := fleet.runtime.preparedImages()
+	if len(asked) != 2 || asked[0] != rebuiltIndexDigest || asked[1] != rebuiltIndexDigest {
+		t.Fatalf("the machine was asked to prepare %v, want the refused content asked for twice", asked)
+	}
+}
+
+// cancelRun withdraws work the way an operator does, which is what makes the
+// desired preparation set change: content nothing is waiting for is content
+// Mercator stops asking for.
+func (f *fleet) cancelRun(t *testing.T, runID string) {
+	t.Helper()
+	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/cancel?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusOK)
 }

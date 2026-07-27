@@ -22,6 +22,7 @@ import (
 	"github.com/benngarcia/mercator/internal/daemon"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/nodeagent"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
 // Two versions of one image, served by a registry the test starts on loopback,
@@ -384,7 +385,10 @@ type fleet struct {
 	// moment it stops being Mercator's. Empty is a machine bought in no increments,
 	// held for nobody in particular, with no window, which is what every case here
 	// enrolled before an operator could say otherwise.
-	soldOn    map[string]any
+	soldOn map[string]any
+	// prewarm is what this fleet's control plane is allowed to have in flight for
+	// work it has not admitted. Nil is the production default.
+	prewarm   *orchestrator.PrewarmPolicy
 	stop      context.CancelFunc
 	submitted int
 }
@@ -418,6 +422,14 @@ func boughtOn(terms map[string]any) fleetOption {
 	return func(f *fleet) { f.soldOn = terms }
 }
 
+// preparingAt replaces this fleet's speculative preparation bounds. A case about
+// asking twice cannot live inside the production rate bound, which is half a
+// minute and exists to keep a sweep from spending a machine's link: waiting it
+// out would make the case a test of the clock.
+func preparingAt(policy orchestrator.PrewarmPolicy) fleetOption {
+	return func(f *fleet) { f.prewarm = &policy }
+}
+
 func runningOn(runtime nodeagent.Runtime) fleetOption {
 	return func(f *fleet) {
 		f.agentRuntime = runtime
@@ -432,10 +444,7 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 	// where a Run lands, not how offers are aggregated.
 	t.Setenv("PATH", t.TempDir())
 	registry := startTrainerRegistry(t)
-	address, control := startRuntimeWithLease(t, 900*time.Millisecond)
 	harness := &fleet{
-		address:      address,
-		control:      control,
 		token:        "operator-token",
 		image:        registry + "/acme/trainer@" + trainerIndexDigest,
 		rebuiltImage: registry + "/acme/trainer@" + rebuiltIndexDigest,
@@ -451,6 +460,7 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 	for _, option := range options {
 		option(harness)
 	}
+	harness.address, harness.control = startRuntimeWithLease(t, 900*time.Millisecond, harness.prewarm)
 	bootstrap := harness.invite(t, 1.25)
 	harness.nodeID = bootstrap.NodeID
 	harness.stop = harness.startAgent(t, bootstrap, harness.agentRuntime)
@@ -1077,7 +1087,12 @@ type scriptedRuntime struct {
 	undescribed []string
 	// prepared is every image the control plane asked this machine to fetch for
 	// work it had not admitted here.
-	prepared     []string
+	prepared []string
+	// refusePulls is content this machine cannot fetch, by manifest digest. It is
+	// removed the first time it is asked for, so the second ask for the same
+	// content succeeds: a failed pull leaves nothing behind and a machine that
+	// refused one is not a machine that will refuse it forever.
+	refusePulls  map[string]bool
 	observations map[string]capability.WorkloadObservation
 	// launches is the command each Run arrived with, kept whole so a case can
 	// ask what this machine was actually told to attach and under whose
@@ -1104,8 +1119,18 @@ func newScriptedRuntime(unpacks map[string][]string) *scriptedRuntime {
 		platforms:    map[string]domain.Platform{},
 		observations: map[string]capability.WorkloadObservation{},
 		launches:     map[string]capability.LaunchWorkloadCommand{},
+		refusePulls:  map[string]bool{},
 		disk:         capability.DiskFacts{Known: true, TotalBytes: 500 << 30, FreeBytes: 400 << 30},
 	}
+}
+
+// refuseNextPullOf makes this machine turn away the next request for one piece of
+// content, exactly as a daemon whose registry is unreachable does. It leaves
+// nothing behind, so a later request for the same content is a first ask.
+func (runtime *scriptedRuntime) refuseNextPullOf(digest string) {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	runtime.refusePulls[digest] = true
 }
 
 // hold puts an image on this machine without Mercator having run it, which is
@@ -1210,6 +1235,10 @@ func (runtime *scriptedRuntime) PrepareImage(_ context.Context, command capabili
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	runtime.prepared = append(runtime.prepared, command.ManifestDigest)
+	if runtime.refusePulls[command.ManifestDigest] {
+		delete(runtime.refusePulls, command.ManifestDigest)
+		return fmt.Errorf("pull failed: registry unreachable")
+	}
 	if !slices.Contains(runtime.held, command.ManifestDigest) {
 		runtime.held = append(runtime.held, command.ManifestDigest)
 	}
