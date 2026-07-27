@@ -219,6 +219,7 @@ func replayQueueDepartures(observation InvariantObservation, began map[string]ti
 			if err != nil {
 				return nil, nil, err
 			}
+			waits[decision.RunID] = waits[decision.RunID].placed()
 			admitted = append(admitted, admittedRun{
 				runID: decision.RunID, workspace: event.WorkspaceID,
 				class: decision.Policy.Class, at: at,
@@ -230,38 +231,58 @@ func replayQueueDepartures(observation InvariantObservation, began map[string]ti
 }
 
 // queueWait is what the record establishes about one Run's wait as it goes on:
-// whose queue it is in, and the last thing the fleet said about it.
+// whose queue it is in, and whether anything ever said a machine could have taken
+// it.
 type queueWait struct {
-	workspace        string
-	fleetHeldNothing bool
+	workspace string
+	// fleetAnswered and fleetCouldHold are the whole account of the fleet during
+	// this wait. A wait nobody ever measured a fleet against establishes no
+	// exemption, and one measurement saying a machine could hold this Run is enough
+	// to say an ordering could have ended the wait.
+	fleetAnswered  bool
+	fleetCouldHold bool
 }
 
 // asked is this wait after one more moment admission decided about it.
 func (wait queueWait) asked(workspace string, deferral domain.AdmissionDeferral) queueWait {
 	wait.workspace = workspace
-	wait.fleetHeldNothing = wait.fleetLastSaid(deferral)
+	if deferral.Fleet == nil {
+		return wait
+	}
+	wait.fleetAnswered = true
+	wait.fleetCouldHold = wait.fleetCouldHold || !deferral.Fleet.HoldsNothing()
 	return wait
 }
 
-// fleetLastSaid is the fleet's last word about this Run: the answer beside this
-// decision where it carries one, and the last answer measured during the wait
-// where it does not.
+// placed is this wait after Mercator selected a machine for the Run, which is the
+// strongest thing that can be said about whether the fleet could hold it. A
+// placement is an answer nobody has to recount: the fleet published a machine, the
+// scheduler weighed it, and it took the Run.
+func (wait queueWait) placed() queueWait {
+	wait.fleetAnswered, wait.fleetCouldHold = true, true
+	return wait
+}
+
+// heldNothing is the exemption this wait carries: the fleet was asked, and nothing
+// anybody measured during the whole wait could have taken this Run.
 //
-// It is the last measurement rather than the latest deferral, which is where this
-// reading parts from the queue production orders on, and the two questions are why.
-// Production asks whether other work has to be held behind this wait now, and a
-// Run held behind higher priority work measured no machine at all, so it goes on
-// holding the queue until the fleet answers again. This asks whether any ordering
-// could have ended the wait, where an absence of evidence is not evidence the fleet
-// had room. A Run nothing could ever hold, refused at its bound through the
-// priority door, carries no fleet answer on the refusal whatsoever, and reading
-// only that answer convicted Mercator of starving a Run no machine it published
-// could take.
-func (wait queueWait) fleetLastSaid(deferral domain.AdmissionDeferral) bool {
-	if deferral.Fleet == nil {
-		return wait.fleetHeldNothing
-	}
-	return deferral.Fleet.HoldsNothing()
+// It is every answer during the wait rather than the answer beside the refusal, and
+// it is not the reading production orders the queue on, which is the difference
+// between the two questions. Production asks whether other work has to be held
+// behind this wait now, so it reads the latest deferral and a Run held behind
+// higher priority work measured no machine at all. This asks whether any ordering
+// could have ended the wait, over a wait that is now over, where an absence of
+// evidence is not evidence the fleet had room: a Run nothing could ever hold,
+// refused at its bound through the priority door, carries no fleet answer on the
+// refusal whatsoever, and reading only that answer convicted Mercator of starving a
+// Run no machine it published could take.
+//
+// Reading the last answer instead of all of them let a stale exemption outlive the
+// evidence against it. A Run measured unholdable once, then placed on a machine
+// Mercator itself selected, is a Run the fleet demonstrably could hold, and the
+// carried answer exempted it from this law for the rest of its life.
+func (wait queueWait) heldNothing() bool {
+	return wait.fleetAnswered && !wait.fleetCouldHold
 }
 
 // ended is this wait written as the refusal that closed it.
@@ -272,7 +293,7 @@ func (wait queueWait) ended(runID string, deferral domain.AdmissionDeferral, sin
 		class:            deferral.Class,
 		since:            since,
 		at:               at,
-		fleetHeldNothing: wait.fleetHeldNothing,
+		fleetHeldNothing: wait.heldNothing(),
 	}
 }
 

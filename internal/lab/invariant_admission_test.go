@@ -336,10 +336,20 @@ func TestARefusedQueueDelayIsStarvationWhenYoungerWorkOvertookIt(t *testing.T) {
 // the exemption. Every machine the fleet published was weighed against this Run and
 // none of them can ever take it, so no ordering could have placed it and the refusal
 // is Mercator reporting a fleet too small.
+//
+// Every machine means every moment of the wait, and the fixture says so from the
+// first deferral. A wait whose opening answer records a machine that could have taken
+// this Run is a wait some ordering could have ended, and this law convicts that: the
+// refusal at the end says the fleet has nothing now, which is not a statement about
+// the hour the Run spent waiting behind work that took the machine it wanted.
 func TestARefusedQueueDelayIsNotStarvationWhenTheFleetCouldHoldNothing(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
-		admissionDeferredEvent("run-impossible", now, domain.ClassBatch),
+		deferralEvent("run-impossible", now, domain.AdmissionDeferral{
+			Reason: domain.DeferredNoCapacityFits,
+			Class:  domain.ClassBatch,
+			Fleet:  &domain.FleetAnswer{Weighed: 1},
+		}),
 		admittedForClassEvent("run-urgent", domain.ClassInteractive, now.Add(31*time.Minute)),
 		refusedWaitEvent("run-impossible", now.Add(61*time.Minute), domain.ClassBatch, domain.RefusedQueueDelayExceeded, &domain.FleetAnswer{Weighed: 1}),
 	})
@@ -347,6 +357,70 @@ func TestARefusedQueueDelayIsNotStarvationWhenTheFleetCouldHoldNothing(t *testin
 	if err := agingPreventsStarvation(observation); err != nil {
 		t.Fatalf("a fleet that can hold nothing was read as a queue that wronged somebody: %v", err)
 	}
+}
+
+// TestARefusedQueueDelayIsStarvationWhenTheFleetOnceHeldIt is the other half of the
+// same reading, and it is the world the fixture above states with one number changed.
+//
+// The fleet published a machine that could have taken this batch Run at the moment it
+// was told to wait. An interactive Run that had waited nothing was admitted half an
+// hour later, past the point batch work promises to have been promoted above anything
+// arriving, and the refusal at the bound records a fleet that by then held nothing.
+// The wait ended on a fleet too small; it did not begin on one, and the exemption is
+// about whether any ordering could have ended the wait rather than about the last
+// thing measured before it was refused.
+func TestARefusedQueueDelayIsStarvationWhenTheFleetOnceHeldIt(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		admissionDeferredEvent("run-quiet", now, domain.ClassBatch),
+		admittedForClassEvent("run-urgent", domain.ClassInteractive, now.Add(31*time.Minute)),
+		refusedWaitEvent("run-quiet", now.Add(61*time.Minute), domain.ClassBatch,
+			domain.RefusedQueueDelayExceeded, &domain.FleetAnswer{Weighed: 1}),
+	})
+
+	err := agingPreventsStarvation(observation)
+	if err == nil {
+		t.Fatal("a Run the fleet could hold when its wait began was exempted by what the fleet said an hour later")
+	}
+	t.Logf("violation: %v", err)
+}
+
+// TestAPlacementRevokesTheFleetExemption is the deliberate failure of that
+// exemption, and it is the world a carried answer made permanently exempt.
+//
+// The fleet is asked once, at the very start, and holds no machine that could take
+// this batch Run. Then Mercator selects a machine for that same Run, which is the
+// strongest statement there is that the fleet could hold it. The launch fails, the
+// Run comes back through admission behind work that outranks it, an interactive Run
+// that had waited nothing is admitted past it well after the moment batch work
+// promises to have been promoted, and the wait is refused at its bound through the
+// priority door with no fleet answer on it at all.
+//
+// This is textbook starvation of a Run the fleet demonstrably held, and reading only
+// the last answer anybody recorded left the law silent on it: every deferral after
+// the placement carried no fleet, so the stale exemption from the first moment of the
+// wait outlived the placement that refuted it.
+func TestAPlacementRevokesTheFleetExemption(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now.Add(3602*time.Second), nil, []eventlog.CloudEvent{
+		deferralEvent("run-quiet", now, domain.AdmissionDeferral{
+			Reason: domain.DeferredNoCapacityFits,
+			Class:  domain.ClassBatch,
+			Fleet:  &domain.FleetAnswer{Weighed: 1},
+		}),
+		admittedForClassEvent("run-quiet", domain.ClassBatch, now.Add(600*time.Second)),
+		deferredForEvent("run-quiet", now.Add(700*time.Second), domain.ClassBatch,
+			domain.DeferredBehindHigherPriority, "run-other"),
+		admittedForClassEvent("run-fresh", domain.ClassInteractive, now.Add(2000*time.Second)),
+		refusedWaitEvent("run-quiet", now.Add(3601*time.Second), domain.ClassBatch,
+			domain.RefusedQueueDelayExceeded, nil),
+	})
+
+	err := agingPreventsStarvation(observation)
+	if err == nil {
+		t.Fatal("a Run Mercator itself placed a machine for was exempted from the starvation law by a measurement taken before it")
+	}
+	t.Logf("violation: %v", err)
 }
 
 // TestAWaitPastItsBoundIsJudgedWhateverTheRefusalIsNamedFor is the record this
@@ -417,15 +491,15 @@ func TestAReplacedRunCarriesTheWaitProductionHeldItAt(t *testing.T) {
 	}
 }
 
-// TestARefusedQueueDelayIsNotStarvationWhenTheFleetLastSaidItCouldHoldNothing is the
-// exemption read off the fleet's last measurement rather than off the refusal alone.
+// TestARefusedQueueDelayIsNotStarvationWhenNothingEverHeldIt is the exemption read
+// off every measurement taken during the wait rather than off the refusal alone.
 //
 // A Run no machine in this fleet can hold, once it is also behind work that outranks
 // it, is deferred by the priority door: that wait weighs no machine, so it carries no
 // fleet answer, and neither does the refusal that ends it at the bound. Reading only
 // the refusal's own answer therefore reported starvation for a Run no ordering could
 // ever have placed, which is the one thing the exemption exists to prevent.
-func TestARefusedQueueDelayIsNotStarvationWhenTheFleetLastSaidItCouldHoldNothing(t *testing.T) {
+func TestARefusedQueueDelayIsNotStarvationWhenNothingEverHeldIt(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
 		deferralEvent("run-unholdable", now, domain.AdmissionDeferral{
