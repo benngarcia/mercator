@@ -709,8 +709,11 @@ func workloadRevision(name, image string) map[string]any {
 // daemon published it as. A case that only needs the winner reads the accessors
 // below; a case about why a machine was passed over reads the candidate itself.
 type bookingDecision struct {
+	ID                      string                     `json:"id"`
 	SelectedOfferSnapshotID string                     `json:"selected_offer_snapshot_id"`
 	Candidates              []domain.CandidateDecision `json:"candidates"`
+	Supersedes              string                     `json:"supersedes"`
+	SupersedesReason        string                     `json:"supersedes_reason"`
 }
 
 func (decision bookingDecision) candidate(t *testing.T, offerID string) domain.CandidateDecision {
@@ -1617,6 +1620,43 @@ func TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout(t *testing.T) {
 		return rejection.Code == "RESOURCE_INSUFFICIENT" && rejection.Path == "resources.ephemeral_disk"
 	}) {
 		t.Fatalf("the recorded refusal says %+v, and the reason is the room the node has left", refused.Rejections)
+	}
+}
+
+// TestTheDecisionRouteAnswersWithTheWholeChain is the read an operator and the
+// console both make, through the real daemon. A decision is appended and never
+// rewritten, so a Run answered twice has two records and the route hands over
+// both: the refusal that came first, then the answer that stands in for it and
+// names it.
+//
+// The first machine in this fleet has fifty gibibytes free and the Run needs two
+// hundred, so it waits, and the refusal that says so is the only record of what
+// this fleet looked like when it arrived. A second machine is then enrolled with
+// room for the work, and the Run takes it. Collapsing the route's answer to its
+// last entry shows an operator a Run that had only ever been answered once, with
+// the wait and the machine that could not hold it nowhere on the page.
+func TestTheDecisionRouteAnswersWithTheWholeChain(t *testing.T) {
+	fleet := startFleet(t, reporting(capability.DiskFacts{Known: true, TotalBytes: 100 << 30, FreeBytes: 50 << 30}))
+
+	waiting := fleet.submitRunNeedingDisk(t, 200<<30)
+	fleet.queueForWantOfCapacity(t, waiting)
+	roomier := fleet.enrollAnother(t, 1.00)
+	fleet.advance(t, waiting)
+
+	chain := fleet.decisions(t, waiting)
+	if len(chain) != 2 {
+		t.Fatalf("the route answered with %d decisions, and this Run was answered once for want of room and again on the machine that had it", len(chain))
+	}
+	refusal, placement := chain[0], chain[1]
+	if refusal.SelectedOfferSnapshotID != "" || refusal.candidate(t, fleet.nodeID).Feasible {
+		t.Fatalf("the answer that no longer stands chose %q, and the only machine in this fleet had fifty gibibytes free", refusal.SelectedOfferSnapshotID)
+	}
+	if placement.SelectedOfferSnapshotID != roomier.nodeID {
+		t.Fatalf("the answer that stands says the Run went to %q, and the machine with room for it is %q", placement.SelectedOfferSnapshotID, roomier.nodeID)
+	}
+	if placement.Supersedes != refusal.ID || placement.SupersedesReason != domain.SupersededSelectedNothing {
+		t.Fatalf("the answer that stands replaces %q for %q, and the record before it is %q, which placed the Run nowhere",
+			placement.Supersedes, placement.SupersedesReason, refusal.ID)
 	}
 }
 

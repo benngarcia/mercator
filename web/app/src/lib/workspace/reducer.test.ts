@@ -243,6 +243,16 @@ test("replaces a failed provider booking for the same Run", () => {
   expect(result.rentals["rental-replacement-provider"]?.runningBookingID).toBe(
     "booking-replacement-provider",
   );
+  // A decision is appended and never rewritten, so a Run answered twice has two
+  // records on the page and the newest one names the record before it. Keeping the
+  // newest answer alone showed a Run that had always been going to the machine it
+  // ended up on, with the machine that refused the launch nowhere in the console.
+  expect(
+    result.runs["run-1"]?.decisions.map((decision) => decision.id),
+  ).toEqual(["decision-failed-provider", "decision-replacement-provider"]);
+  expect(result.runs["run-1"]?.decisions.at(-1)?.supersedes).toBe(
+    "decision-failed-provider",
+  );
 });
 
 // The console's elapsed runtime is measured from the moment the machine said its

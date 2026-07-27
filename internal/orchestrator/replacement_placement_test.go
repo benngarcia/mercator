@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -116,6 +117,58 @@ func TestAdvanceRunClosesWithRetryExhaustedAfterBoundedAttempts(t *testing.T) {
 	}
 	assertCompleteAttemptHistory(t, orch, "run_replacement", 2, 2, 0)
 	assertClosedReason(t, orch, "run_replacement", "RETRY_EXHAUSTED")
+}
+
+// TestTheChainAReaderGetsHoldsEveryAnswer is the decision record as the one
+// production read path hands it over. A decision is appended and never rewritten,
+// so what a reader gets is a chain, and every account of why a Run went where it
+// did is built on the entries before the last one: which machine was tried first,
+// which machine turned the work away, and in what order.
+//
+// Nothing constrained that. The Lab corpus and the conformance suite both read
+// booking_decided events straight out of the log, so GetBookingDecisions could be
+// collapsed to its last entry with the whole tree green, and a launch-failure trial
+// would show a Run that had only ever been answered once.
+//
+// Three answers rather than two, because two is the length at which a chain that
+// skips a link is indistinguishable from a chain that does not. Two machines refuse
+// the launch and the third takes it, so the middle answer is one a reader has to
+// walk through to get from the first to the last.
+func TestTheChainAReaderGetsHoldsEveryAnswer(t *testing.T) {
+	offers := replacementOffers(t, "two_refusals_then_a_machine")
+	first, next, takes := offers[0], offers[1], offers[2]
+	provider := newReplacementProvider(offers, map[string]error{
+		first.ID: capacityUnavailable(),
+		next.ID:  capacityUnavailable(),
+	})
+	orch := newReplacementOrchestrator(t, provider)
+	createReplacementRun(t, orch, 3)
+
+	if err := orch.AdvanceRun(t.Context(), "ws_1", "run_replacement"); err != nil {
+		t.Fatalf("advance a Run two machines refused: %v", err)
+	}
+
+	chain, err := orch.GetBookingDecisions(t.Context(), "ws_1", "run_replacement")
+	if err != nil {
+		t.Fatalf("read the decision chain: %v", err)
+	}
+	selected := []string{}
+	for _, decision := range chain {
+		selected = append(selected, decision.SelectedOfferSnapshotID)
+	}
+	if !slices.Equal(selected, []string{first.ID, next.ID, takes.ID}) {
+		t.Fatalf("the chain a reader gets names %v, and the Run was sent to three machines in that order", selected)
+	}
+	for index, decision := range chain[1:] {
+		predecessor := chain[index]
+		if decision.Supersedes != predecessor.ID || decision.SupersedesReason != domain.SupersededLaunchFailed {
+			t.Fatalf("decision %q replaces %q for %q, and the answer recorded before it was %q, refused by the machine it chose",
+				decision.ID, decision.Supersedes, decision.SupersedesReason, predecessor.ID)
+		}
+	}
+	if chain[0].Supersedes != "" || chain[0].SupersedesReason != "" {
+		t.Fatalf("the first answer replaces %q for %q, and nothing came before it", chain[0].Supersedes, chain[0].SupersedesReason)
+	}
 }
 
 func TestAdvanceRunRecordsTheDecisionThatExhaustsEligibleOffers(t *testing.T) {

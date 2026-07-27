@@ -58,10 +58,16 @@ type RunEvidence struct {
 	EventTypes         []string              `json:"event_types,omitempty"`
 	Events             []eventlog.CloudEvent `json:"events,omitempty"`
 	// BookingDecisions is every decision the control plane recorded about this Run,
-	// oldest first. It is the chain and not its last entry, because a decision is
-	// appended and never rewritten: a trial where the first machine refused the
-	// launch is a trial with two decisions, and evidence holding only the second
-	// cannot show that the first ever happened.
+	// oldest first, exactly as the decision route answered with them. It is the whole
+	// chain rather than its last entry because a decision is appended and never
+	// rewritten, so evidence holding one entry cannot say whether it is the only
+	// answer or the last of several.
+	//
+	// A trial of its own produces one, because a trial asks for one launch on one
+	// machine and states MaxPreStartAttempts of 1. So the length is not a claim this
+	// package can hold, and it is held where a Run really is answered twice: the
+	// decision route is read whole through the real daemon in internal/daemon, and
+	// safety.decisions_are_never_rewritten adjudicates the chain in the Lab.
 	BookingDecisions []domain.BookingDecision `json:"booking_decisions,omitempty"`
 }
 

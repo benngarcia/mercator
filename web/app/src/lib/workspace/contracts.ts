@@ -320,6 +320,13 @@ export const BookingDecision = Schema.Struct({
   selected_offer_snapshot_id: Schema.optionalKey(Schema.String),
   booking: Schema.optionalKey(Booking),
   selection_reason_codes: mutableArray(Schema.String),
+  // The record this answer stands in for, and why. The panel that shows a Run's
+  // decisions reads both, and the live stream dropped them on decode, so a
+  // supersession only ever rendered for a console that had refetched the chain
+  // over REST: a page watching a Run be re-placed showed two answers with nothing
+  // saying that either replaced anything.
+  supersedes: Schema.optionalKey(Schema.String),
+  supersedes_reason: Schema.optionalKey(Schema.String),
 });
 
 export const CloudEvent = Schema.Struct({
