@@ -49,7 +49,7 @@ func (world *simulatedWorld) Prepare(_ context.Context, request adapter.PrepareR
 		case prefetchUnsupported:
 			receipt.Unsupported = append(receipt.Unsupported, started)
 		case prefetchRefused:
-			receipt.Refused = append(receipt.Refused, item.Content())
+			receipt.Refused = append(receipt.Refused, item.Identity())
 		case prefetchDuplicate:
 			receipt.Duplicate = true
 		}

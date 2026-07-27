@@ -17,6 +17,8 @@ const (
 	bulkyImage              = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
 	refusedPrepareBlueprint = "a-refused-prepare-can-be-asked-again"
 	refusedCorpus           = "artifact:corpus:v9"
+
+	refusalIsPerMachineBlueprint = "a-refusal-on-one-machine-is-not-a-withdrawal-on-another"
 )
 
 // TestContentAMachineRefusedIsAskedForAgain is the whole of what a refusal means
@@ -47,6 +49,53 @@ func TestContentAMachineRefusedIsAskedForAgain(t *testing.T) {
 	if !held || !replica.State.Usable() {
 		t.Fatalf("the machine holds %+v of the refused corpus, want the copy the second ask fetched", replica)
 	}
+}
+
+// TestOneMachineRefusingIsNotEveryMachineStopping is what a refusal is about.
+// Two machines were each asked for the same corpus, one turned its fetch away and
+// the other started reading, and then both Runs that wanted it were withdrawn.
+// What is still moving has to be stopped, and the only thing that can stop it is
+// Mercator's own memory of what each machine took on.
+//
+// A control plane that hears a refusal as being about content rather than about
+// one machine's copy of it forgets the transfer that is really running, computes
+// an empty desire it believes it never departed from, and sends nothing at all.
+// The machine reads twenty gigabytes for Runs that no longer exist.
+func TestOneMachineRefusingIsNotEveryMachineStopping(t *testing.T) {
+	execution := driveRefusalIsPerMachineExecution(t)
+
+	asks := preparationAsks(t, execution, "prepare-artifact/east/"+refusedCorpus)
+	if len(asks) != 1 || asks[0].Command != EffectCommandRejected {
+		t.Fatalf("the cheap machine answered %+v, want the one refusal this world states", asks)
+	}
+	withdrawn := abandonedPreparations(t, execution)
+	if len(withdrawn) != 1 {
+		t.Fatalf("the ledger records %d withdrawals, want the transfer nothing was waiting for any more: %+v", len(withdrawn), withdrawn)
+	}
+	if withdrawn[0].OfferID != "west" || withdrawn[0].Content != refusedCorpus {
+		t.Fatalf("the withdrawal names %q on %q, want the corpus the other machine was still reading", withdrawn[0].Content, withdrawn[0].OfferID)
+	}
+	if replica, held := heldReplica(execution, "west", refusedCorpus); held {
+		t.Fatalf("the machine holds %+v, want a read that stopped when the Runs waiting for it went away", replica)
+	}
+}
+
+// driveRefusalIsPerMachineExecution runs the Blueprint a virtual minute at a
+// time, for longer than the transfer it withdraws would have taken to land.
+func driveRefusalIsPerMachineExecution(t *testing.T) *Execution {
+	t.Helper()
+	execution := openConformanceExecution(t, refusalIsPerMachineBlueprint)
+	t.Cleanup(func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	})
+	for range 30 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the execution: %v", err)
+		}
+	}
+	return execution
 }
 
 func driveRefusedPrepareExecution(t *testing.T) *Execution {

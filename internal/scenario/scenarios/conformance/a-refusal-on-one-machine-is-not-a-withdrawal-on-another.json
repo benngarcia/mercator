@@ -1,0 +1,159 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "Two machines, both busy, and a Run queued behind each of them reading the same hundred gigabyte corpus. The larger machine's Run is queued first, so that machine is asked for the corpus and starts reading it. The cheap machine's Run is queued five minutes later and joins the same desired set, so one ask now names the same content on two machines, and the cheap one turns its fetch away while the other is still reading. Then both callers withdraw their Runs. Nothing is waiting for that corpus anywhere, so the machine still reading it has to be told to stop and the room goes back before the bytes land. The failure this states is a control plane that hears a refusal as being about content rather than about one machine's copy of it: one host's refusal erases what the other host was recorded as taking on, the memory of the whole desire collapses to nothing Mercator believes it ever asked for, the withdrawal is never computed, and a machine spends a hundred gigabytes of disk and link on Runs that no longer exist.",
+  "seed": "mercator-lab-refusal-is-per-machine-v1",
+  "world": {
+    "launch": {
+      "unpack": "1s",
+      "container_start": "1s"
+    },
+    "prewarm": {
+      "max_concurrent": 2,
+      "min_interval": "5m"
+    },
+    "images": {
+      "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c": {
+        "layers": [
+          {
+            "digest": "sha256:aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66",
+            "size": "20GB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:corpus:v9",
+        "content_digest": "sha256:cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77bb88",
+        "size": "100GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "east",
+        "rate_per_hour_usd": 3.0,
+        "cached_images": [
+          "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
+        ],
+        "resources": {
+          "cpu_millis": 16000,
+          "memory": "128GB",
+          "disk": "2TB"
+        }
+      },
+      {
+        "id": "west",
+        "rate_per_hour_usd": 6.0,
+        "cached_images": [
+          "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
+        ],
+        "resources": {
+          "cpu_millis": 32000,
+          "memory": "512GB",
+          "disk": "2TB"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "occupant-east",
+        "candidate": "east",
+        "minimum": "40m",
+        "maximum": "40m"
+      },
+      {
+        "run": "occupant-west",
+        "candidate": "west",
+        "minimum": "40m",
+        "maximum": "40m"
+      },
+      {
+        "run": "reader-east",
+        "candidate": "east",
+        "minimum": "10m",
+        "maximum": "10m"
+      },
+      {
+        "run": "reader-west",
+        "candidate": "west",
+        "minimum": "10m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "occupant-east",
+        "at": "0s",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "expected_runtime": "40m",
+          "max_runtime": "2h"
+        }
+      },
+      {
+        "name": "occupant-west",
+        "at": "1m",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "expected_runtime": "40m",
+          "max_runtime": "2h",
+          "resources": {
+            "memory": "256GB"
+          }
+        }
+      },
+      {
+        "name": "reader-east",
+        "at": "10m",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "consumes_artifacts": [
+            "artifact:corpus:v9"
+          ],
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      },
+      {
+        "name": "reader-west",
+        "at": "5m",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "consumes_artifacts": [
+            "artifact:corpus:v9"
+          ],
+          "expected_runtime": "10m",
+          "max_runtime": "1h",
+          "resources": {
+            "memory": "256GB"
+          }
+        }
+      }
+    ],
+    "cancellations": [
+      {
+        "run": "reader-east",
+        "at": "12m"
+      },
+      {
+        "run": "reader-west",
+        "at": "12m"
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "the-cheap-machine-turns-the-corpus-away",
+      "trigger": {
+        "operation": "node.prepare_artifact",
+        "run": "reader-east"
+      },
+      "action": "reject_command"
+    }
+  ]
+}

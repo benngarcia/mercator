@@ -96,6 +96,13 @@ func (memory *prewarmMemory) tooSoon(workspaceID string, now time.Time, interval
 // nothing stopped it being asked for again, so remembering it as asked for is what
 // made a refusal permanent: the desire is recomputed identically on the next sweep
 // and an unchanged desire is not resent.
+//
+// A refusal is matched by the identity the desire stated the item under, which
+// names the machine as well as the content. Matching on content alone let one
+// host's refusal forget the same content another host had taken on, and what a
+// host is really fetching is what the withdrawal for it is computed against: the
+// memory collapsed to nothing, the next empty desire read as unchanged, and the
+// transfer nobody was waiting for any more ran to completion.
 func (memory *prewarmMemory) record(workspaceID string, wanted []adapter.PrepareItem, receipt adapter.PrepareReceipt, now time.Time) {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
@@ -105,7 +112,7 @@ func (memory *prewarmMemory) record(workspaceID string, wanted []adapter.Prepare
 		memory.at = map[string]time.Time{}
 	}
 	kept := slices.DeleteFunc(slices.Clone(wanted), func(item adapter.PrepareItem) bool {
-		return slices.Contains(receipt.Refused, item.Content())
+		return slices.Contains(receipt.Refused, item.Identity())
 	})
 	asked := make(map[string]bool, len(kept))
 	for _, item := range kept {
@@ -380,9 +387,11 @@ func offersByID(offers []domain.OfferSnapshot) map[string]domain.OfferSnapshot {
 }
 
 // prewarmItemKey names one piece of content on one machine, which is the
-// identity two Runs wanting the same image on the same host share.
+// identity two Runs wanting the same image on the same host share. It is the
+// item's own identity, so what the far side answers about one item and what this
+// controller remembers about it are the same string.
 func prewarmItemKey(item adapter.PrepareItem) string {
-	return string(item.Kind) + ":" + item.OfferSnapshotID + "/" + item.Content()
+	return string(item.Kind) + ":" + item.Identity()
 }
 
 // prewarmOperationKey is the identity of one desired state. Two reconciliations
