@@ -757,6 +757,13 @@ func TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet(t *testing.T) {
 func TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt(t *testing.T) {
 	requireDocker(t)
 	pull(t, "busybox:1.37")
+	// A run this case was interrupted through, by a signal or a timeout or a reboot,
+	// leaves its probe container behind holding the half gigabyte it wrote. Taking
+	// that away is a release of exactly the space this case is about, so it happens
+	// before anything is measured: done inside the window it counted the leftover as
+	// used, freed it, and then reported that a 512MiB write moved the number by
+	// nothing while the node's measurement was correct both times.
+	removeTheProbeContainer(t)
 	runtime := NewDockerRuntime("")
 	before, err := runtime.Facts(context.Background())
 	if err != nil {
@@ -772,38 +779,52 @@ func TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt(t *testing.T) {
 	if after.Host.Disk.TotalBytes != before.Host.Disk.TotalBytes {
 		t.Fatalf("the filesystem changed size under the case: %d then %d", before.Host.Disk.TotalBytes, after.Host.Disk.TotalBytes)
 	}
-	// The claim is that this node's own number answers to this node's own
-	// workload, so the bound is stated in one direction only. Free space on a
-	// working machine is shared with everything else on it, and an upper bound on
-	// how far it fell is an assertion that nothing else wrote during the window: a
-	// neighbouring container retaining 300MiB chunks fails 700MiB reliably, and the
-	// suite runs one package pulling images beside this one, so the whole of
-	// `go test ./...` was a coin toss on what the rest of the host was doing. What
-	// the bound would have caught beyond the two checks above is nothing, because
-	// the filesystem this reports is pinned by its total size here and against a
-	// container's own root in the case before it.
+	// The claim is that this node's own number answers to this node's own workload,
+	// so the bound is stated in one direction only. An upper bound on how far the
+	// room fell is an assertion that nothing else on the machine wrote during the
+	// window: a neighbouring container retaining 300MiB chunks fails 700MiB reliably,
+	// and the suite runs one package pulling images beside this one, so the whole of
+	// `go test ./...` turned on what the rest of the host was doing. What it would
+	// have caught beyond the two checks above is nothing, because the filesystem this
+	// reports is pinned by its total size here and against a container's own root in
+	// the case before it.
+	//
+	// The bound that remains is an assertion in the other direction, that nothing
+	// released more than 112MiB in the same fraction of a second, and that is stated
+	// rather than pretended away: it is the claim itself, and a case with no bound
+	// asserts nothing. The one release this case used to cause is now outside the
+	// window, and anything else freeing half a gigabyte of the docker root in 0.7
+	// seconds is a neighbour tearing down its own world.
 	taken := before.Host.Disk.FreeBytes - after.Host.Disk.FreeBytes
 	if taken < 400<<20 {
 		t.Fatalf("a workload wrote 512MiB and the room this node reports fell by %d bytes", taken)
 	}
 }
 
+// probeContainer is the one container these disk cases create, named so a run that
+// died before its cleanup leaves something a later run can find and take away.
+const probeContainer = "mercator-disk-conformance"
+
 // writeHalfAGigabyte is one container of this daemon's filling its own writable
 // layer, left behind until the case ends so the bytes are still there to be
 // measured.
 func writeHalfAGigabyte(t *testing.T) {
 	t.Helper()
-	name := "mercator-disk-conformance"
-	_ = exec.Command("docker", "rm", "--force", name).Run()
-	t.Cleanup(func() {
-		if output, err := exec.Command("docker", "rm", "--force", name).CombinedOutput(); err != nil {
-			t.Errorf("remove the probe container: %v\n%s", err, output)
-		}
-	})
-	output, err := exec.Command("docker", "run", "--name", name, "--network=none", "busybox:1.37",
+	t.Cleanup(func() { removeTheProbeContainer(t) })
+	output, err := exec.Command("docker", "run", "--name", probeContainer, "--network=none", "busybox:1.37",
 		"dd", "if=/dev/zero", "of=/half-a-gigabyte", "bs=1M", "count=512").CombinedOutput()
 	if err != nil {
 		t.Fatalf("fill a container's writable layer: %v\n%s", err, output)
+	}
+}
+
+// removeTheProbeContainer takes the probe container away, whether this run created
+// it or an interrupted earlier one did. A container that was never there is removed
+// successfully, so a failure here is a daemon that could not do it.
+func removeTheProbeContainer(t *testing.T) {
+	t.Helper()
+	if output, err := exec.Command("docker", "rm", "--force", probeContainer).CombinedOutput(); err != nil {
+		t.Fatalf("remove the probe container: %v\n%s", err, output)
 	}
 }
 
