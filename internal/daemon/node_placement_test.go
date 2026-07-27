@@ -1582,11 +1582,14 @@ func TestANodeThatCannotMeasureItsDiskWinsNoPlacement(t *testing.T) {
 // and the daemon queues it for want of capacity and never asks the node to run
 // it.
 //
-// The waiting is read from the daemon's answer, which is where admission put it:
-// a Run no candidate would take is queued with the reason on the Run itself.
-// Which candidate was struck out and why is asserted where a decision exists:
-// the Blueprint a-host-that-cannot-hold-the-data-is-not-warm holds
-// RESOURCE_INSUFFICIENT against the disk the Run asked for.
+// The Run nothing could place is now explainable from its own record, which is
+// what this case could not do before. A Run that found no feasible offer recorded
+// no Booking Decision at all, so the wait had to be read from the daemon's answer
+// and which machine was struck out and why could only be asserted one layer down,
+// in the Blueprint a-host-that-cannot-hold-the-data-is-not-warm. Both are read
+// here now, off the decision route, through the real daemon and the real enrolled
+// node: the refusal chose nothing, it weighed this fleet's one machine, and it
+// says the room was the reason.
 func TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout(t *testing.T) {
 	fleet := startFleet(t)
 
@@ -1601,6 +1604,19 @@ func TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout(t *testing.T) {
 	}
 	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, oversized) {
 		t.Fatalf("a Run needing 900GiB was sent to a machine with 400GiB free: %v", launched)
+	}
+	refusal := fleet.decision(t, oversized)
+	if refusal.SelectedOfferSnapshotID != "" {
+		t.Fatalf("the queued Run's decision chose %q, and no machine in this fleet has 900GiB", refusal.SelectedOfferSnapshotID)
+	}
+	refused := refusal.candidate(t, fleet.nodeID)
+	if refused.Feasible {
+		t.Fatalf("the recorded refusal calls the node feasible for a Run needing 900GiB: %+v", refused)
+	}
+	if !slices.ContainsFunc(refused.Rejections, func(rejection domain.Violation) bool {
+		return rejection.Code == "RESOURCE_INSUFFICIENT" && rejection.Path == "resources.ephemeral_disk"
+	}) {
+		t.Fatalf("the recorded refusal says %+v, and the reason is the room the node has left", refused.Rejections)
 	}
 }
 
