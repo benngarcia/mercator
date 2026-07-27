@@ -1,0 +1,89 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "A family of two whose caller said one of them may run at once, in the world busy-rental-worth-waiting states: one warm Rental with four minutes of somebody else's work left on it, and fresh capacity that would pay five minutes of boot and a full eighteen-gigabyte pull. The first member is given a queued Booking behind the running work, which is capacity Mercator has committed to it and not an execution. The second member is held on GROUP_AT_PARALLELISM anyway, because a family's declared width counts the members that have been given capacity rather than the ones already running: a member with a queued Booking is never asked about again, so counting executions would let this family commit the second machine now and then run two members at once when the first Booking starts. Every other family fixture in the corpus runs on idle machines, where a placement and an execution are the same instant, so this is the world that tells the two readings apart.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 2.5
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-warm",
+        "version": 1,
+        "running": {
+          "booking": "booking-active",
+          "run": "run-active",
+          "remaining_max_runtime": "6m",
+          "remaining_expected_runtime": "4m"
+        }
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "fresh-4090",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "5m",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "3m45s",
+          "agent_ready": "45s"
+        }
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "sweep-1",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "group": {"id": "sweep", "max_parallel": 1},
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-warm",
+        "booking": {
+          "id": "booking-run",
+          "rental": "rental-warm",
+          "state": "queued",
+          "after": "booking-active",
+          "projected_start_in": "4m",
+          "schedule_version": 2
+        }
+      }
+    },
+    {
+      "submit": "sweep-2",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "group": {"id": "sweep", "max_parallel": 1},
+        "expected_runtime": "20m",
+        "max_runtime": "1h"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "GROUP_AT_PARALLELISM",
+          "behind": ["sweep-1"],
+          "queued_seconds": 0,
+          "fleet": {"absent": true}
+        }
+      }
+    }
+  ]
+}
