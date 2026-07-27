@@ -354,6 +354,70 @@ func TestAnInterruptionTheClassPermittedIsNoViolation(t *testing.T) {
 	}
 }
 
+// TestOnlyThePartOfAWaitMercatorCausedIsCharged is one wait changing hands at a
+// moment nothing else happens, driven under the real control plane. A family of two
+// one wide on a single machine its provider can take back: the first member runs,
+// the second is held by the width its caller declared, and an hour and a minute in
+// the provider takes the machine away.
+//
+// So the second member's wait becomes Mercator's at an instant when its whole
+// recorded wait is already past the hour its class allows. Both halves of the
+// division are in one execution. It is not refused at the handover, because Mercator
+// had kept it waiting for capacity for nothing, and it is not exempt afterwards
+// either: an hour of the empty fleet is the whole of what the class allows, and the
+// refusal names that bound.
+func TestOnlyThePartOfAWaitMercatorCausedIsCharged(t *testing.T) {
+	execution := openConformanceExecution(t, "only-the-part-of-a-wait-mercator-caused-is-charged")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	// An hour and two minutes in, the provider has taken the machine back, the first
+	// member has given up the family's place, and the fleet the second member is
+	// measured against is empty.
+	checkpoint, err := execution.Drive(context.Background(), Advance(62*time.Minute))
+	if err != nil {
+		t.Fatalf("drive the family to the reclamation: %v", err)
+	}
+	held := projectedRun(t, execution, "run-sweep-2")
+	if held.Closed {
+		t.Fatalf("the held member is %q with outcome %q, and every second of its wait so far was its own family's declared width",
+			held.Phase, held.Outcome)
+	}
+	handover := deferralRecord(t, execution, "run-sweep-2")
+	if handover.Reason == domain.DeferredGroupAtParallelism {
+		t.Fatal("the member is still recorded as held by its family, and its family gave the place back with the machine")
+	}
+	if waited := checkpoint.Now.Sub(held.QueuedSince.UTC()).Seconds(); waited <= handover.MaxQueueDelaySeconds {
+		t.Fatalf("the member had waited %.0fs against the %.0fs its class allows, and this case is about a wait already past that", waited, handover.MaxQueueDelaySeconds)
+	}
+	if handover.SelfImposedSeconds < 60*60 {
+		t.Fatalf("the record charges %.0fs of the wait to the caller's own declaration, and its family held it for an hour and a minute", handover.SelfImposedSeconds)
+	}
+
+	// An hour of the empty fleet later, the wait is Mercator's own promise and it is
+	// ended in those words.
+	if _, err := execution.Drive(context.Background(), Advance(time.Hour)); err != nil {
+		t.Fatalf("drive the member past the queue delay its own class states: %v", err)
+	}
+	refusal := refusalRecord(t, execution, "run-sweep-2")
+	if refusal.Reason != domain.RefusedQueueDelayExceeded {
+		t.Fatalf("the member was refused %q, and what it had been waiting an hour for is capacity Mercator does not have", refusal.Reason)
+	}
+	if refusal.QueuedSeconds-refusal.SelfImposedSeconds <= refusal.MaxQueueDelaySeconds {
+		t.Fatalf("the refusal names a wait of %.0fs of which %.0fs was the caller's own, against a bound of %.0fs, so the bound it names is not the bound it broke",
+			refusal.QueuedSeconds, refusal.SelfImposedSeconds, refusal.MaxQueueDelaySeconds)
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("check invariants: %v", err)
+	}
+	if result := invariantResultByID(t, latestInvariantResults(execution.invariants), "liveness.aging_prevents_starvation"); result.Status != InvariantPassed {
+		t.Fatalf("the starvation law reports %+v", result)
+	}
+}
+
 func memberRunID(index int) string {
 	return fmt.Sprintf("run-member-%03d", index)
 }
