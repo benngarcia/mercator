@@ -12,11 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/runprojection"
+	"github.com/benngarcia/mercator/internal/scheduler"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workload"
 	"github.com/benngarcia/mercator/internal/workspace"
@@ -171,6 +174,89 @@ func TestOpenRenamesLegacyPlacementObjectives(t *testing.T) {
 	}
 	if revision.Spec.Placement.Class != domain.ClassExperimental {
 		t.Errorf("the stored revision reads class %q, and a Run created from it is priced at whatever it says", revision.Spec.Placement.Class)
+	}
+}
+
+// TestAMigratedRunReadsBackWithTheClassItsHistoryNowStates is the other half of
+// migrating a vocabulary: the read model derived from the log Mercator rewrote.
+//
+// The Run projection is what GET /v1/runs serves, and it is stored rather than
+// recomputed, so renaming the field inside the events left every historical Run
+// answering with no class at all and nothing able to notice. Its schema version
+// was already the current one, which is the only thing that asks for a rebuild,
+// so the projection would have kept the old vocabulary for the life of the
+// database. The migration marks it stale, and the rebuild the daemon already
+// performs for that reason reduces the migrated log into the record a reader
+// reads.
+func TestAMigratedRunReadsBackWithTheClassItsHistoryNowStates(t *testing.T) {
+	ctx, db := openLegacyObjectiveFixture(t)
+
+	storage, err := sqlitestore.New(ctx, db)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	rebuild, err := storage.Runs().RequiresRebuild(ctx)
+	if err != nil {
+		t.Fatalf("inspect the Run projection: %v", err)
+	}
+	if !rebuild {
+		t.Fatalf("the migration rewrote the log the Run projection is derived from and nothing asked for a rebuild")
+	}
+	orch := orchestrator.New(
+		storage.EventLog(),
+		scheduler.New(),
+		fake.New(),
+		orchestrator.WithRunProjection(storage.Runs()),
+	)
+	if err := orch.RebuildRunProjection(ctx, "ws_1"); err != nil {
+		t.Fatalf("rebuild the Run projection: %v", err)
+	}
+
+	page, err := storage.Runs().List(ctx, "ws_1", runprojection.PageRequest{})
+	if err != nil {
+		t.Fatalf("list the Run projection: %v", err)
+	}
+	if len(page.Records) != 1 {
+		t.Fatalf("the projection holds %d Runs, want the one the fixture recorded", len(page.Records))
+	}
+	if page.Records[0].ServiceClass != domain.ClassInteractive {
+		t.Errorf("the projected Run reads class %q, and this is the copy every API reader is served",
+			page.Records[0].ServiceClass)
+	}
+}
+
+// TestOpenLeavesTheRunProjectionAloneWithNoHistoryToMigrate keeps the staleness
+// specific to a log that was rewritten. A database Mercator has nothing to
+// migrate must not ask for a rebuild of every Workspace it holds on every
+// startup, which is what invalidating the projection unconditionally would do.
+func TestOpenLeavesTheRunProjectionAloneWithNoHistoryToMigrate(t *testing.T) {
+	ctx := context.Background()
+	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
+	storage, err := sqlitestore.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	if err := storage.Runs().MarkRebuilt(ctx); err != nil {
+		t.Fatalf("mark the Run projection current: %v", err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatalf("close storage: %v", err)
+	}
+
+	reopened, err := sqlitestore.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("reopen storage: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	rebuild, err := reopened.Runs().RequiresRebuild(ctx)
+	if err != nil {
+		t.Fatalf("inspect the Run projection: %v", err)
+	}
+	if rebuild {
+		t.Errorf("a database with nothing to migrate asked for a Run projection rebuild")
 	}
 }
 

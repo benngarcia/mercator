@@ -66,6 +66,26 @@ func (store *RunStore) RequiresRebuild(ctx context.Context) (bool, error) {
 	return version != runProjectionSchemaVersion, nil
 }
 
+// markRunProjectionStale says that the log this projection was derived from is not
+// the log it is stored against any more, which is what a migration that rewrites
+// events leaves behind. It writes the version a projection that has never been
+// built carries, because that is exactly the state it is in: what is stored was
+// reduced from events that no longer exist in that form, and RequiresRebuild is
+// already the one question the daemon asks about it.
+//
+// It runs on the schema the projection migration creates, so it is asked after it
+// and never before.
+func markRunProjectionStale(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		UPDATE run_projection_metadata
+		SET schema_version = 0
+		WHERE singleton = 1
+	`); err != nil {
+		return fmt.Errorf("mark Run projection stale: %w", err)
+	}
+	return nil
+}
+
 func (store *RunStore) MarkRebuilt(ctx context.Context) error {
 	if _, err := store.db.ExecContext(ctx, `
 		UPDATE run_projection_metadata

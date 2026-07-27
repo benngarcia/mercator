@@ -72,31 +72,39 @@ var legacyObjectiveSites = []legacyObjectiveSite{
 	{"workload", "data_json", "$.revision.spec.placement.objective", "$.revision.spec.placement.service_class"},
 }
 
-func migrateLegacyPlacementObjectives(ctx context.Context, db *sql.DB) error {
+// migrateLegacyPlacementObjectives rewrites the vocabulary and reports whether it
+// rewrote anything. The answer is what tells the read model derived from this log
+// that it is no longer derived from it: a projection is stored rather than
+// recomputed, so a Run whose events were rewritten underneath it keeps answering
+// in the vocabulary the rename deleted.
+func migrateLegacyPlacementObjectives(ctx context.Context, db *sql.DB) (bool, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("sqlite storage: begin service class migration: %w", err)
+		return false, fmt.Errorf("sqlite storage: begin service class migration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err := refuseOpenLegacyObjectives(ctx, tx); err != nil {
-		return err
+		return false, err
 	}
 	if err := refuseUnmappableObjectives(ctx, tx); err != nil {
-		return err
+		return false, err
 	}
 	if err := recordTheWeightsHistoryWasScoredAt(ctx, tx); err != nil {
-		return err
+		return false, err
 	}
+	rewritten := int64(0)
 	for _, site := range legacyObjectiveSites {
-		if err := renameObjectiveToServiceClass(ctx, tx, site); err != nil {
-			return err
+		renamed, err := renameObjectiveToServiceClass(ctx, tx, site)
+		if err != nil {
+			return false, err
 		}
+		rewritten += renamed
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sqlite storage: commit service class migration: %w", err)
+		return false, fmt.Errorf("sqlite storage: commit service class migration: %w", err)
 	}
-	return nil
+	return rewritten > 0, nil
 }
 
 // refuseOpenLegacyObjectives stops the migration while a Run that stated an
@@ -212,17 +220,22 @@ func recordTheWeightsHistoryWasScoredAt(ctx context.Context, tx *sql.Tx) error {
 // the objective, in one statement per site so a partly rewritten event never
 // exists. The mapping is a CASE built from the one table above rather than
 // spelled out here, so there is one place a class assignment can be argued with.
-func renameObjectiveToServiceClass(ctx context.Context, tx *sql.Tx, site legacyObjectiveSite) error {
+func renameObjectiveToServiceClass(ctx context.Context, tx *sql.Tx, site legacyObjectiveSite) (int64, error) {
 	statement := fmt.Sprintf(`
 		UPDATE events
 		SET %[1]s = json_remove(json_set(%[1]s, '%[3]s', %[4]s), '%[2]s')
 		WHERE stream_type = '%[5]s'
 		  AND json_type(%[1]s, '%[2]s') = 'text'
 	`, site.column, site.objective, site.class, objectiveCase(site.column, site.objective), site.stream)
-	if _, err := tx.ExecContext(ctx, statement); err != nil {
-		return fmt.Errorf("sqlite storage: migrate placement objective at %s: %w", site.objective, err)
+	result, err := tx.ExecContext(ctx, statement)
+	if err != nil {
+		return 0, fmt.Errorf("sqlite storage: migrate placement objective at %s: %w", site.objective, err)
 	}
-	return nil
+	rewritten, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("sqlite storage: count events migrated at %s: %w", site.objective, err)
+	}
+	return rewritten, nil
 }
 
 func objectiveCase(column, objectivePath string) string {

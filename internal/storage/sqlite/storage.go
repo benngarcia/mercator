@@ -48,7 +48,8 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 		_ = log.Close()
 		return nil, err
 	}
-	if err := migrateLegacyPlacementObjectives(ctx, db); err != nil {
+	renamedObjectives, err := migrateLegacyPlacementObjectives(ctx, db)
+	if err != nil {
 		_ = log.Close()
 		return nil, err
 	}
@@ -63,6 +64,15 @@ func New(ctx context.Context, db *sql.DB) (*Storage, error) {
 	if err := migrateRuns(ctx, db); err != nil {
 		_ = log.Close()
 		return nil, err
+	}
+	// The Run projection is stored, not recomputed, so a migration that rewrote the
+	// events it was reduced from left it answering in a vocabulary the log no longer
+	// speaks. Saying so here is what makes the daemon's existing rebuild pass do it.
+	if renamedObjectives {
+		if err := markRunProjectionStale(ctx, db); err != nil {
+			_ = log.Close()
+			return nil, err
+		}
 	}
 	if err := migrateNodes(ctx, db); err != nil {
 		_ = log.Close()
