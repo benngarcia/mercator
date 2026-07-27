@@ -148,6 +148,43 @@ func TestLoadRejectsFixtureMistakes(t *testing.T) {
 			`"offer": "rental-a", "candidates": {"rental-a": {"stages": {"agent_enrolled": {"seconds": 0}}}}`,
 			`stage "agent_enrolled"`,
 		},
+		// A term nobody charges is the price assertion that cannot fail, for the reason
+		// a stage nobody predicts is: the record carries the terms it charged and
+		// nothing else, so a fixture naming another one would read the absence as
+		// agreement.
+		"cost term that is not part of a price": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "candidates": {"rental-a": {"cost": {"terms": {"electricity": 0.5}}}}`,
+			`cost term "electricity"`,
+		},
+		// A machine nobody quoted has no dollars, so a fixture that says both is
+		// stating two worlds and one of the two assertions can never be checked.
+		"a price on a machine the fixture says nobody quoted": {
+			`"offer": "rental-a"`,
+			`"offer": "rental-a", "candidates": {"rental-a": {"cost": {"unpriced": true, "usd": 0.5}}}`,
+			"states unpriced or states an amount",
+		},
+		// A commitment that has already lapsed at the world's own start is capacity
+		// nothing could ever be placed on, which is a fixture asserting a refusal by
+		// arithmetic rather than a world.
+		"a commitment that ended before the world began": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "terms": {"committed_for": "0s"}}]`,
+			"positive duration from the world's start",
+		},
+		// A machine held for work Mercator refuses at the door is held for nothing.
+		"a reservation for a class Mercator cannot price": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "terms": {"eligible_service_classes": ["urgent"]}}]`,
+			"which Mercator cannot price",
+		},
+		// A publisher selling blocks of no time bills continuously, which a fixture
+		// states by saying nothing.
+		"a billing increment of no time at all": {
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0}]`,
+			`"rentals": [{"id": "rental-a", "rate_per_hour_usd": 1.0, "billing": {"granularity": "0s"}}]`,
+			"billing granularity must be positive",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
