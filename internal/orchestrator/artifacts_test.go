@@ -53,7 +53,7 @@ func TestARunIsNotPlacedUntilItsInputIsDurable(t *testing.T) {
 	if record.Phase != "requested" {
 		t.Fatalf("the consumer is %q, and the version it reads has never been published", record.Phase)
 	}
-	if _, err := orch.GetBookingDecision(ctx, "ws_1", "run_1"); err == nil {
+	if _, err := orch.GetBookingDecisions(ctx, "ws_1", "run_1"); err == nil {
 		t.Fatal("Mercator placed a Run that reads content the object store does not hold")
 	}
 	if len(catalog.asked) == 0 || catalog.asked[0] != "ws_1/"+checkpointArtifact {
@@ -72,7 +72,7 @@ func TestARunIsNotPlacedUntilItsInputIsDurable(t *testing.T) {
 		t.Fatalf("advance the consumer after publication: %v", err)
 	}
 
-	decision, err := orch.GetBookingDecision(ctx, "ws_1", "run_1")
+	decision, err := standingDecision(t, orch, ctx, "ws_1", "run_1")
 	if err != nil {
 		t.Fatalf("the consumer was still not placed once its input was durable: %v", err)
 	}

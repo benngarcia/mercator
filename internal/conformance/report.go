@@ -57,7 +57,12 @@ type RunEvidence struct {
 	Closed             bool                   `json:"closed"`
 	EventTypes         []string               `json:"event_types,omitempty"`
 	Events             []eventlog.CloudEvent  `json:"events,omitempty"`
-	BookingDecision    domain.BookingDecision `json:"booking_decision,omitempty"`
+	// BookingDecisions is every decision the control plane recorded about this Run,
+	// oldest first. It is the chain and not its last entry, because a decision is
+	// appended and never rewritten: a trial where the first machine refused the
+	// launch is a trial with two decisions, and evidence holding only the second
+	// cannot show that the first ever happened.
+	BookingDecisions []domain.BookingDecision `json:"booking_decisions,omitempty"`
 }
 
 type InventoryEvidence struct {

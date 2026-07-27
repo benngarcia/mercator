@@ -174,12 +174,12 @@ func (client trialClient) captureRunEvidence(ctx context.Context, workspaceID st
 			evidence.EventTypes = append(evidence.EventTypes, event.Type)
 		}
 	}
-	var decision httpapi.BookingDecisionResponse
+	var decisions httpapi.BookingDecisionResponse
 	path = "/v1/runs/" + url.PathEscape(run.Run.ID) + "/decision?workspace_id=" + url.QueryEscape(workspaceID)
-	if err := client.do(ctx, http.MethodGet, path, "", nil, &decision); err != nil {
-		responseErr = errors.Join(responseErr, fmt.Errorf("read probe booking decision: %w", err))
+	if err := client.do(ctx, http.MethodGet, path, "", nil, &decisions); err != nil {
+		responseErr = errors.Join(responseErr, fmt.Errorf("read probe booking decisions: %w", err))
 	} else {
-		evidence.BookingDecision = decision.Decision
+		evidence.BookingDecisions = decisions.Decisions
 	}
 	return evidence, responseErr
 }

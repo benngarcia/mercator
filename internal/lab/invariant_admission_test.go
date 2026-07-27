@@ -90,8 +90,25 @@ func TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane(t *testing.T) {
 	if selected := decisions["run-fits"].SelectedOfferSnapshotID; selected != "rental-small" {
 		t.Fatalf("the Run that fits this fleet was placed on %q, and the idle machine here has room for it", selected)
 	}
-	if _, placed := decisions["run-impossible"]; placed {
-		t.Fatalf("a Run asking for 900GB was placed on a fleet whose largest machine has 200GB")
+	// The Run nothing could place is answered and placed nowhere, which are two
+	// statements now. Before, a Run that found no feasible offer recorded no
+	// decision at all, so its whole account of itself was the reason code and the
+	// two counts asserted below, and every rule that reads Booking Decisions had
+	// nothing to read on the one Run in this fleet whose refusal is the point.
+	refusal, answered := decisions["run-impossible"]
+	if !answered {
+		t.Fatal("the Run nothing could place has no recorded decision to be explained from")
+	}
+	if refusal.SelectedOfferSnapshotID != "" {
+		t.Fatalf("a Run asking for 900GB was placed on %q, and the largest machine in this fleet has 200GB", refusal.SelectedOfferSnapshotID)
+	}
+	if len(refusal.Candidates) != 2 {
+		t.Fatalf("the recorded refusal weighed %d machines, and this fleet has two", len(refusal.Candidates))
+	}
+	for _, candidate := range refusal.Candidates {
+		if candidate.Feasible || len(candidate.Rejections) == 0 {
+			t.Fatalf("the recorded refusal has nothing to say about why %q could not take the Run: %+v", candidate.OfferSnapshotID, candidate)
+		}
 	}
 	// It was never told to wait at all. A Run ordered behind the impossible ask is
 	// the defect, and it is visible as one deferral of a Run the fleet had room for

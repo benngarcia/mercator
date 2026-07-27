@@ -513,7 +513,12 @@ func offerFromDecision(decision domain.BookingDecision) (domain.OfferSnapshot, e
 // not moved it: admission queues that Run and the next tick asks again.
 func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string, version uint64, state runState, run queuePosition) (bool, error) {
 	attemptNumber := state.attemptCount + 1
-	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, state.excludedOfferSnapshotIDs)
+	supersedes, supersedesReason := state.supersession()
+	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, placementRequest{
+		excludedOfferSnapshotIDs: state.excludedOfferSnapshotIDs,
+		supersedes:               supersedes,
+		supersedesReason:         supersedesReason,
+	})
 	if err != nil {
 		return false, err
 	}
@@ -522,15 +527,17 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 			return true, o.closeRetryExhausted(ctx, workspaceID, runID, version, decision)
 		}
 		deferral, projected := placementDeferral(run, decision)
-		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, deferral, projected)
+		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, run, admissionAnswer{
+			deferral:  deferral,
+			projected: projected,
+			decision:  &decision,
+		})
 	}
 	nextSchedule, err := reserveDecision(*state.requested, decision, schedule)
 	if err != nil {
 		return false, err
 	}
-	events := []eventlog.NewEvent{
-		mustEvent(runID, "booking_decided_"+decision.Booking.ID, EventBookingDecided, bookingDecisionData{Decision: decision}, o.now()),
-	}
+	events := []eventlog.NewEvent{decisionEvent(runID, decision, o.now())}
 	commandKey := "advance:placement:" + decision.Booking.ID
 	if decision.Booking.State == domain.BookingStateQueued {
 		request, requestErr := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
@@ -559,6 +566,14 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	}
 	_, err = o.commitSchedule(ctx, request, decision.Booking.ScheduleVersion-1, nextSchedule)
 	return true, err
+}
+
+// decisionEvent is one Booking Decision written down. It is identified by the
+// decision rather than by the Booking it created, because a decision that placed
+// the Run nowhere created no Booking and is still a decision the Run has to be
+// explainable from.
+func decisionEvent(runID string, decision domain.BookingDecision, now time.Time) eventlog.NewEvent {
+	return mustEvent(runID, "booking_decided_"+decision.ID, EventBookingDecided, bookingDecisionData{Decision: decision}, now)
 }
 
 func reserveDecision(requested runRequestedData, decision domain.BookingDecision, schedule domain.RentalSchedule) (domain.RentalSchedule, error) {
@@ -760,28 +775,33 @@ func (o *Orchestrator) listOpenRunIDs(ctx context.Context, workspaceID string) (
 	return o.runs.ListOpenIDs(ctx, workspaceID)
 }
 
-func (o *Orchestrator) GetBookingDecision(ctx context.Context, workspaceID, runID string) (domain.BookingDecision, error) {
+// GetBookingDecisions is every decision Mercator recorded about this Run, in the
+// order it recorded them, and it is the whole chain rather than its last element.
+// A decision is added and never edited, so the newest one is an answer that
+// stands in for the ones before it and names them: collapsing the chain to its
+// last entry was showing a reader a Run that had only ever been answered once,
+// with the refusal that came first and the machine that turned it away nowhere on
+// the page.
+func (o *Orchestrator) GetBookingDecisions(ctx context.Context, workspaceID, runID string) ([]domain.BookingDecision, error) {
 	events, err := o.GetRunEvents(ctx, workspaceID, runID)
 	if err != nil {
-		return domain.BookingDecision{}, err
+		return nil, err
 	}
-	var latest domain.BookingDecision
-	found := false
+	var chain []domain.BookingDecision
 	for _, event := range events {
 		if event.Type != EventBookingDecided {
 			continue
 		}
 		var data bookingDecisionData
 		if err := json.Unmarshal(event.Data, &data); err != nil {
-			return domain.BookingDecision{}, err
+			return nil, err
 		}
-		latest = data.Decision
-		found = true
+		chain = append(chain, data.Decision)
 	}
-	if found {
-		return latest, nil
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("orchestrator: booking decision not found")
 	}
-	return domain.BookingDecision{}, fmt.Errorf("orchestrator: booking decision not found")
+	return chain, nil
 }
 
 func (o *Orchestrator) RefreshRun(ctx context.Context, workspaceID, runID string) (domain.RunRecord, error) {

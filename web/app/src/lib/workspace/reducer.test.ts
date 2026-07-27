@@ -116,9 +116,9 @@ test("reads a Booking Decision that launched a one-shot ephemeral execution", ()
     decided,
   ].reduce(reduceWorkspace, createWorkspace("ws_scenario"));
 
-  expect(workspace.runs["run-one-shot"]?.decision?.candidates[0]?.disposition).toBe(
-    "launch_ephemeral",
-  );
+  expect(
+    workspace.runs["run-one-shot"]?.decisions.at(-1)?.candidates[0]?.disposition,
+  ).toBe("launch_ephemeral");
 });
 
 function bookingDecidedMessage(input: {

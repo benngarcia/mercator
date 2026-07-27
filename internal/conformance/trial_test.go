@@ -23,13 +23,13 @@ import (
 func TestRunEvidenceSerializesBookingDecisionVocabulary(t *testing.T) {
 	encoded, err := json.Marshal(RunEvidence{
 		ID:              "run-1",
-		BookingDecision: domain.BookingDecision{ID: "decision-1"},
+		BookingDecisions: []domain.BookingDecision{{ID: "decision-1"}},
 	})
 	if err != nil {
 		t.Fatalf("marshal run evidence: %v", err)
 	}
 	text := string(encoded)
-	if !strings.Contains(text, `"booking_decision"`) || strings.Contains(text, `"placement"`) {
+	if !strings.Contains(text, `"booking_decisions"`) || strings.Contains(text, `"placement"`) {
 		t.Fatalf("run evidence uses superseded decision vocabulary: %s", text)
 	}
 }
@@ -61,7 +61,7 @@ func TestRunnerVerifiesARealReportedRunAndConfirmedCleanup(t *testing.T) {
 	if evidence.Inventory.Owned != 0 {
 		t.Fatalf("owned inventory = %d, want zero", evidence.Inventory.Owned)
 	}
-	if evidence.Run.BookingDecision.SelectedOfferSnapshotID == "" || len(evidence.Run.Events) == 0 || evidence.Run.StartedAt.IsZero() {
+	if len(evidence.Run.BookingDecisions) != 1 || evidence.Run.BookingDecisions[0].SelectedOfferSnapshotID == "" || len(evidence.Run.Events) == 0 || evidence.Run.StartedAt.IsZero() {
 		t.Fatalf("run evidence is incomplete: %+v", evidence.Run)
 	}
 	// The probe reported its own readiness over the real report endpoint, with the

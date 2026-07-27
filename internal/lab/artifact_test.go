@@ -95,7 +95,7 @@ func TestARunHeldByAdmissionIsVisible(t *testing.T) {
 	if held.Phase != "requested" {
 		t.Fatalf("the Run waiting on a publication is %q, and Mercator has accepted it and not placed it", held.Phase)
 	}
-	if _, err := execution.runtime.orchestrator.GetBookingDecision(
+	if _, err := execution.runtime.orchestrator.GetBookingDecisions(
 		context.Background(),
 		labWorkspace,
 		"run-checkpoint-consumer",

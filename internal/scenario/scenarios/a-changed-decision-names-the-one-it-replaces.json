@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
   "summary": "One warm Rental whose schedule is full: a Booking running for six more minutes and the maximum four waiting behind it. The Run that arrives is refused on the machine's own schedule, has nowhere else to go, and waits. That first step is the audit hole this Blueprint closes. Placement weighed the fleet, priced the only machine in it, and recorded nothing at all, so a queued Run's whole account of itself was a reason code and a count of machines: no candidate, no rejection, no schedule the wait was read off, and nothing for the rules that read Booking Decisions to read. The refusal is a decision now, recorded with the deferral it caused. Six minutes later the running Booking finishes, a waiting one takes the machine, and a position opens. The same Run is asked again and takes it, and the answer that changed is appended rather than written over the first: the second decision names the first by ID and says why it stands in for it, so both survive and a reader walks the chain instead of taking the last record and assuming nothing came before it. The re-decision here is caused by the fleet changing rather than by a machine refusing a launch, because a launch that fails is a fault and a placement world has none; the launch-failure half of the same rule is stated at conformance, where the world can make a machine refuse.",
-  "classification": "target",
-  "missing_capabilities": ["appended_decisions"],
+  "classification": "green",
   "world": {
     "images": {
       "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {

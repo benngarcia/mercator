@@ -860,13 +860,26 @@ func (f *fleet) summaryFor(t *testing.T, nodeID string) nodeSummary {
 	return nodeSummary{}
 }
 
+// decision is the answer that stands for a Run, read off the chain the API
+// answers with. The route carries every decision the Run has, oldest first,
+// because a decision is appended rather than edited: a caller who wants the
+// current answer takes the end of the chain.
 func (f *fleet) decision(t *testing.T, runID string) bookingDecision {
 	t.Helper()
+	chain := f.decisions(t, runID)
+	return chain[len(chain)-1]
+}
+
+func (f *fleet) decisions(t *testing.T, runID string) []bookingDecision {
+	t.Helper()
 	var response struct {
-		Decision bookingDecision `json:"decision"`
+		Decisions []bookingDecision `json:"decisions"`
 	}
 	f.call(t, http.MethodGet, "/v1/runs/"+runID+"/decision?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
-	return response.Decision
+	if len(response.Decisions) == 0 {
+		t.Fatalf("the decision route answered with no decisions for Run %q", runID)
+	}
+	return response.Decisions
 }
 
 type offerSnapshot struct {

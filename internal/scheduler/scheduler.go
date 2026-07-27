@@ -34,6 +34,14 @@ type SchedulingInput struct {
 	// content digest are properties of the content, and a host that does not
 	// hold something cannot be asked how big it is.
 	Artifacts []domain.ArtifactVersion
+	// Supersedes is the decision this evaluation is being asked to stand in for,
+	// and SupersedesReason is why. They are inputs rather than something stamped on
+	// afterwards because the decision's identity is derived from them: two answers
+	// about one unchanged fleet at one instant are different decisions exactly
+	// because the second one replaces the first, and an identity that ignored that
+	// would give them the same ID.
+	Supersedes       string
+	SupersedesReason string
 	// History is what earlier launches of these candidates really spent, indexed
 	// by what recurs about them. It replaces a map of measured estimates keyed by
 	// offer snapshot ID: nothing in production ever wrote that map, and nothing
@@ -73,6 +81,8 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		ModelVersion:           input.ModelVersion,
 		Policy:                 input.Workload.Spec.Placement,
 		Weights:                weights,
+		Supersedes:             input.Supersedes,
+		SupersedesReason:       input.SupersedesReason,
 		CollectionReport: domain.CollectionReport{
 			ConnectionsQueried: connectionIDs(input.Offers),
 		},
@@ -104,18 +114,14 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 	} else {
 		decision.SelectionReasonCodes = []string{"NO_FEASIBLE_OFFERS"}
 	}
-	id, err := domain.CanonicalHash(struct {
-		RunID       string
-		Revision    string
-		EvaluatedAt time.Time
-		Model       string
-		Candidates  []domain.CandidateDecision
-		SelectedID  string
-	}{input.RunID, input.Workload.Digest, input.EvaluatedAt.UTC(), input.ModelVersion, decision.Candidates, decision.SelectedOfferSnapshotID})
+	// The identity is derived from the decision itself and not from the search that
+	// produced it, so that any reader holding the record can re-derive it and get
+	// the same answer. See domain.BookingDecision.Identity.
+	id, err := decision.Identity()
 	if err != nil {
 		return domain.BookingDecision{}, err
 	}
-	decision.ID = "dec_" + id[len("sha256:"):24]
+	decision.ID = id
 	if bestIndex >= 0 {
 		booking, err := bookingForDecision(input, decision.ID, offers[bestIndex])
 		if err != nil {

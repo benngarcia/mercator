@@ -251,9 +251,9 @@ func (s *Server) GetRunDecision(ctx context.Context, request GetRunDecisionReque
 		}
 		return GetRunDecision400JSONResponse(workspaceErr.Response), nil
 	}
-	decision, err := s.orch.GetBookingDecision(ctx, workspaceID, request.RunId)
+	decisions, err := s.orch.GetBookingDecisions(ctx, workspaceID, request.RunId)
 	if err != nil {
 		return GetRunDecision404JSONResponse(apiError("DECISION_NOT_FOUND", err.Error())), nil
 	}
-	return GetRunDecision200JSONResponse{Decision: decision}, nil
+	return GetRunDecision200JSONResponse{Decisions: decisions}, nil
 }

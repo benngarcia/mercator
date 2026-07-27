@@ -155,9 +155,7 @@ func (o *Orchestrator) recordTerminalLaunchFailure(ctx context.Context, workspac
 }
 
 func (o *Orchestrator) closeRetryExhausted(ctx context.Context, workspaceID, runID string, version uint64, decision domain.BookingDecision) error {
-	events := []eventlog.NewEvent{
-		mustEvent(runID, "booking_decided_retry_exhausted", EventBookingDecided, bookingDecisionData{Decision: decision}, o.now()),
-	}
+	events := []eventlog.NewEvent{decisionEvent(runID, decision, o.now())}
 	events = append(events, retryExhaustedEvents(runID, o.now())...)
 	return o.appendEvents(ctx, workspaceID, runID, version, "advance:retry_exhausted", events)
 }

@@ -523,9 +523,9 @@ type Booking = domain.Booking
 // BookingDecision defines model for BookingDecision.
 type BookingDecision = domain.BookingDecision
 
-// BookingDecisionResponse defines model for BookingDecisionResponse.
+// BookingDecisionResponse Every decision recorded about one Run, oldest first. A decision is appended and never rewritten, so the newest entry is the answer that stands, it names the entry it supersedes and why, and the ones before it are the answers a reader needs to see the Run's history.
 type BookingDecisionResponse struct {
-	Decision BookingDecision `json:"decision"`
+	Decisions []BookingDecision `json:"decisions"`
 }
 
 // CPURequirement defines model for CPURequirement.

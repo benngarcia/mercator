@@ -34,7 +34,7 @@ func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string,
 	waiting := queue.position(runID, state, o.now().UTC())
 	if behind := queue.ahead(waiting); len(behind) > 0 {
 		deferral := waiting.deferral(domain.DeferredBehindHigherPriority, behind)
-		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, deferral, false)
+		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, admissionAnswer{deferral: deferral})
 	}
 	return o.stepPlace(ctx, workspaceID, runID, version, state, waiting)
 }
@@ -258,14 +258,39 @@ func (o *Orchestrator) deferOrRefuse(
 	version uint64,
 	state runState,
 	run queuePosition,
-	deferral domain.AdmissionDeferral,
-	projected bool,
+	answer admissionAnswer,
 ) error {
-	if run.policy.DeadlineUnreachable(run.queued, deferral.ProjectedWaitSeconds, projected) {
-		deferral.Reason = domain.RefusedDeadlineUnreachable
-		return o.recordRefusal(ctx, workspaceID, runID, version, state, deferral)
+	if run.policy.DeadlineUnreachable(run.queued, answer.deferral.ProjectedWaitSeconds, answer.projected) {
+		answer.deferral.Reason = domain.RefusedDeadlineUnreachable
+		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)
 	}
-	return o.recordDeferral(ctx, workspaceID, runID, version, state, deferral)
+	return o.recordDeferral(ctx, workspaceID, runID, version, state, answer)
+}
+
+// admissionAnswer is one answer admission reached about a Run it will not admit
+// now: the wait it puts the Run in, whether anything projected an end to that
+// wait, and the Booking Decision the answer was read off.
+//
+// The decision travels with the wait because the two are one fact recorded
+// together. Before this, a Run Placement weighed the whole fleet for and placed
+// nowhere recorded a reason code and a count of machines: no candidate, no
+// rejection, no schedule the wait was projected from, and nothing at all for the
+// rules that read Booking Decisions. A Run held behind work that outranks it
+// carries none, because nothing weighed a machine on its behalf, and the queue it
+// is in is the whole of what happened to it.
+type admissionAnswer struct {
+	deferral  domain.AdmissionDeferral
+	projected bool
+	decision  *domain.BookingDecision
+}
+
+// evidence is the decision this answer rests on, written as the fact it is, ahead
+// of the admission event that cites it.
+func (answer admissionAnswer) evidence(runID string, now time.Time) []eventlog.NewEvent {
+	if answer.decision == nil {
+		return nil
+	}
+	return []eventlog.NewEvent{decisionEvent(runID, *answer.decision, now)}
 }
 
 // placementDeferral is the wait a decision that selected nothing puts a Run in:
@@ -362,19 +387,24 @@ func workAhead(candidates []domain.CandidateDecision) []domain.QueuedAhead {
 // hour would otherwise write sixty identical facts saying so: what an operator
 // needs is what it is waiting for and since when, and both survive the
 // suppression because the first deferral is always recorded.
+// The decision it was read off is appended with it, and is suppressed with it. A
+// Run waiting an hour on an unchanged fleet would otherwise write sixty decisions
+// nobody asked a different question of, and the evidence for the wait an operator
+// is reading is the evidence recorded when the answer last changed.
 func (o *Orchestrator) recordDeferral(
 	ctx context.Context,
 	workspaceID, runID string,
 	version uint64,
 	state runState,
-	deferral domain.AdmissionDeferral,
+	answer admissionAnswer,
 ) error {
-	if state.deferral != nil && sameDeferral(*state.deferral, deferral) {
+	if state.deferral != nil && sameDeferral(*state.deferral, answer.deferral) {
 		return nil
 	}
-	return o.appendEvents(ctx, workspaceID, runID, version, admissionCommand(state, "deferred"), []eventlog.NewEvent{
-		mustEvent(runID, admissionEventID(state), EventAdmissionDeferred, admissionDeferredData{Deferral: deferral}, o.now()),
-	})
+	events := append(answer.evidence(runID, o.now()),
+		mustEvent(runID, admissionEventID(state), EventAdmissionDeferred, admissionDeferredData{Deferral: answer.deferral}, o.now()),
+	)
+	return o.appendEvents(ctx, workspaceID, runID, version, admissionCommand(state, "deferred"), events)
 }
 
 // recordRefusal closes a Run admission will not queue, loudly: the reason, the
@@ -385,13 +415,13 @@ func (o *Orchestrator) recordRefusal(
 	workspaceID, runID string,
 	version uint64,
 	state runState,
-	refusal domain.AdmissionDeferral,
+	answer admissionAnswer,
 ) error {
-	events := []eventlog.NewEvent{
-		mustEvent(runID, admissionEventID(state), EventAdmissionRefused, admissionDeferredData{Deferral: refusal}, o.now()),
+	events := append(answer.evidence(runID, o.now()),
+		mustEvent(runID, admissionEventID(state), EventAdmissionRefused, admissionDeferredData{Deferral: answer.deferral}, o.now()),
 		mustEvent(runID, "outcome_recorded", EventRunOutcomeRecorded, runOutcomeRecordedData{Outcome: domain.RunOutcomeFailed}, o.now()),
-		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true, Reason: refusal.Reason}, o.now()),
-	}
+		mustEvent(runID, "closed", EventRunClosed, runClosedData{Closed: true, Reason: answer.deferral.Reason}, o.now()),
+	)
 	command := admissionCommand(state, "refused")
 	if state.bookingQueued() {
 		return o.completeBookingAndAppend(ctx, workspaceID, runID, version, state, command, events)

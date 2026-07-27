@@ -68,6 +68,33 @@ func (state runState) replacementEligible() bool {
 	return state.launchFailure != nil && state.launchFailure.replacementEligible()
 }
 
+// supersession is the decision a fresh evaluation of this Run stands in for, and
+// why. A Run nothing has decided about yet supersedes nothing, which is what
+// leaves the first decision on every Run naming nothing.
+//
+// The reason is read off the Run's own record rather than passed down from the
+// caller, because the record is what an operator will check it against: the
+// machine the last decision chose refused to start the work, or the last decision
+// placed the Run nowhere and the fleet is being asked again. Those are the only
+// two ways Mercator decides twice about one Run, and both are facts already in
+// the stream.
+func (state runState) supersession() (string, string) {
+	if state.bookingDecision == nil {
+		return "", ""
+	}
+	if state.replacementEligible() {
+		return state.bookingDecision.ID, domain.SupersededLaunchFailed
+	}
+	return state.bookingDecision.ID, domain.SupersededSelectedNothing
+}
+
+// placed reports whether the last decision on this Run chose a machine. A
+// decision that chose nothing is still a decision, and it is recorded, so
+// "decided" and "placed" are separate questions now.
+func (state runState) placed() bool {
+	return state.bookingDecision != nil && state.bookingDecision.SelectedOfferSnapshotID != ""
+}
+
 func (state runState) bookingQueued() bool {
 	return state.bookingDecision != nil && state.bookingDecision.Booking != nil && state.bookingDecision.Booking.State == domain.BookingStateQueued
 }
@@ -460,7 +487,12 @@ func runRecordFromState(workspaceID, runID string, state runState) domain.RunRec
 	// lifecycle was missing: before this, a Run nothing could place read as
 	// "requested" for ever and was indistinguishable from one Mercator had not
 	// got to yet.
-	if state.deferral != nil && state.bookingDecision == nil {
+	//
+	// It asks whether anything was chosen rather than whether anything was
+	// decided. A Run nothing could place now records the decision that placed it
+	// nowhere, and reading the presence of a decision as placement would report
+	// every queued Run as requested again.
+	if state.deferral != nil && !state.placed() {
 		record.Phase = "queued"
 	}
 	if state.launchIntent != nil {

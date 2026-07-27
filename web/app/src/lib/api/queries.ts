@@ -29,7 +29,7 @@ import {
   replaySinkAtom,
   resolveImageAtom,
   runAtom,
-  runDecisionAtom,
+  runDecisionsAtom,
   runEventsAtom,
   runsAtom,
   sinkStatusAtom,
@@ -94,7 +94,7 @@ function inactiveResource<A>() {
 const inactiveRunsAtom = inactiveResource<Run[]>();
 const inactiveRunAtom = inactiveResource<Run>();
 const inactiveRunEventsAtom = inactiveResource<CloudEvent[]>();
-const inactiveRunDecisionAtom = inactiveResource<BookingDecision | null>();
+const inactiveRunDecisionsAtom = inactiveResource<BookingDecision[] | null>();
 const inactiveOffersAtom = inactiveResource<OfferSnapshot[]>();
 const inactiveConnectionsAtom = inactiveResource<ConnectionRecord[]>();
 const inactiveSinkStatusAtom = inactiveResource<SinkStatus>();
@@ -240,14 +240,18 @@ export function useRunEvents(
   );
 }
 
-export function useRunDecision(
+// useRunDecisions is every decision recorded for one Run, oldest first, and null
+// where nothing has decided about it yet. It is the chain rather than its last
+// element: a Run whose first answer was replaced has a history, and a reader
+// handed only the newest entry cannot see it.
+export function useRunDecisions(
   runId: string | undefined,
   workspaceOverride?: string,
-): ResourceResult<BookingDecision | null> {
+): ResourceResult<BookingDecision[] | null> {
   const workspaceId = useWorkspaceId(workspaceOverride);
   const enabled = workspaceId !== null && runId !== undefined;
   return useResource(
-    enabled ? runDecisionAtom(workspaceId, runId) : inactiveRunDecisionAtom,
+    enabled ? runDecisionsAtom(workspaceId, runId) : inactiveRunDecisionsAtom,
     enabled,
   );
 }

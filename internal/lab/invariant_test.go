@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 36 {
-		t.Fatalf("latest invariant results = %d, want 36", len(latest))
+	if len(latest) != 38 {
+		t.Fatalf("latest invariant results = %d, want 38", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -465,6 +465,29 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 					Behind: []domain.QueuedAhead{{RunID: "run-occupies-the-other-machine"}},
 				}),
 				deferredForEvent("run-fits", now.Add(2*time.Minute), domain.ClassStandard, domain.DeferredBehindHigherPriority, "run-impossible"),
+			}
+		},
+		// One decision edited in place: the same ID recorded twice, once placing the
+		// Run on the machine it really ran on and once on another. Every account built
+		// on that ID, the prediction filed against it and the audit of why the Run
+		// went where it did, is then an account of something that never happened.
+		"safety.decisions_are_never_rewritten": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				identifiedDecisionEvent("first", "run-1", "offer-1"),
+				identifiedDecisionEvent("rewrite", "run-1", "offer-2"),
+			}
+		},
+		// A decision whose ID says nothing about its content. Re-deriving the ID from
+		// the record that carries it yields another one, so the record cannot answer
+		// for itself and a chain of consistent-looking decisions could be assembled
+		// after the fact out of content nothing ever decided.
+		"safety.decision_is_reproducible": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				bookingDecidedEvent("invented", domain.BookingDecision{
+					ID:                      "dec_invented",
+					RunID:                   "run-1",
+					SelectedOfferSnapshotID: "offer-1",
+				}),
 			}
 		},
 	}
@@ -2351,6 +2374,18 @@ func admittedDecisionEvent(runID string, at time.Time) eventlog.CloudEvent {
 	event.Subject = "runs/" + runID
 	event.Time = at.Format(time.RFC3339Nano)
 	return event
+}
+
+// identifiedDecisionEvent is one recorded decision under a stated identity, for a
+// fixture that has to put two different answers under one decision ID. Nothing in
+// production can build one: the ID is derived from the content, so an identity
+// that outlives a change to the content is a record somebody edited.
+func identifiedDecisionEvent(eventID, runID, offerID string) eventlog.CloudEvent {
+	return bookingDecidedEvent(eventID, domain.BookingDecision{
+		ID:                      "dec_edited",
+		RunID:                   runID,
+		SelectedOfferSnapshotID: offerID,
+	})
 }
 
 func bookingDecidedEvent(id string, decision domain.BookingDecision) eventlog.CloudEvent {

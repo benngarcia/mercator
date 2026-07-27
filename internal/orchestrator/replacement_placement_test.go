@@ -59,7 +59,7 @@ func TestAdvanceRunReplacesOnlyTheRejectedOffer(t *testing.T) {
 	if record.Closed || record.Phase != "running" {
 		t.Fatalf("replacement should keep the run alive on alternate capacity: %+v", record)
 	}
-	decision, err := orch.GetBookingDecision(ctx, "ws_1", "run_replacement")
+	decision, err := standingDecision(t, orch, ctx, "ws_1", "run_replacement")
 	if err != nil {
 		t.Fatalf("get latest placement: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestAdvanceRunRecordsTheDecisionThatExhaustsEligibleOffers(t *testing.T) {
 		t.Fatalf("exhaust eligible offers: %v", err)
 	}
 
-	decision, err := orch.GetBookingDecision(t.Context(), "ws_1", "run_replacement")
+	decision, err := standingDecision(t, orch, t.Context(), "ws_1", "run_replacement")
 	if err != nil {
 		t.Fatalf("get exhausted placement: %v", err)
 	}
@@ -438,6 +438,19 @@ func assertCompleteAttemptHistory(t *testing.T, orch *Orchestrator, runID string
 		seenAttempts[intent.AttemptID] = true
 		seenLaunches[intent.LaunchKey] = true
 	}
+}
+
+// standingDecision is the answer that stands: the last entry of the chain
+// Mercator recorded. Every earlier entry is an answer this one replaced and names,
+// so a caller who wants the current answer asks for the chain and takes its end
+// rather than being handed a Run that looks as though it was answered once.
+func standingDecision(t *testing.T, orch *Orchestrator, ctx context.Context, workspaceID, runID string) (domain.BookingDecision, error) {
+	t.Helper()
+	chain, err := orch.GetBookingDecisions(ctx, workspaceID, runID)
+	if err != nil {
+		return domain.BookingDecision{}, err
+	}
+	return chain[len(chain)-1], nil
 }
 
 func bookingDecisionsFromRun(t *testing.T, orch *Orchestrator, runID string) []domain.BookingDecision {

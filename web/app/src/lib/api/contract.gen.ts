@@ -567,8 +567,9 @@ export interface components {
         PlacementPreviewResponse: {
             decision: components["schemas"]["BookingDecision"];
         };
+        /** @description Every decision recorded about one Run, oldest first. A decision is appended and never rewritten, so the newest entry is the answer that stands, it names the entry it supersedes and why, and the ones before it are the answers a reader needs to see the Run's history. */
         BookingDecisionResponse: {
-            decision: components["schemas"]["BookingDecision"];
+            decisions: components["schemas"]["BookingDecision"][];
         };
         AdapterListResponse: {
             adapters: components["schemas"]["AdapterManifest"][];
@@ -1293,6 +1294,10 @@ export interface components {
             selected_offer_snapshot_id?: string;
             booking?: components["schemas"]["Booking"];
             selection_reason_codes: string[];
+            /** @description The decision this one replaces. Empty on a Run's first decision, which replaces nothing. */
+            supersedes?: string;
+            /** @description Why this decision replaces the one it names: PREVIOUS_LAUNCH_FAILED when the machine the earlier decision chose refused to start the work, PREVIOUS_DECISION_SELECTED_NOTHING when the earlier decision placed the Run nowhere and the fleet was asked again. */
+            supersedes_reason?: string;
         };
         CloudEvent: {
             specversion: string;
@@ -2033,7 +2038,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Placement decision */
+            /** @description Placement decision chain */
             200: {
                 headers: {
                     [name: string]: unknown;

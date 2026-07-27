@@ -126,6 +126,8 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.prewarm_rate_within_bound", check: prewarmRateWithinBound},
 		invariantRule{id: "safety.service_class_admission_order", check: serviceClassAdmissionOrder},
 		invariantRule{id: "safety.nothing_waits_behind_an_impossible_ask", check: nothingWaitsBehindAnImpossibleAsk},
+		invariantRule{id: "safety.decisions_are_never_rewritten", check: decisionsAreNeverRewritten},
+		invariantRule{id: "safety.decision_is_reproducible", check: decisionIsReproducible},
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
 			assumptions: []string{"the provider preserves operation identity", "provider observation remains available"},

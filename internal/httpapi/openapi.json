@@ -785,7 +785,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Placement decision",
+            "description": "Placement decision chain",
             "content": {
               "application/json": {
                 "schema": {
@@ -2769,12 +2769,16 @@
       },
       "BookingDecisionResponse": {
         "type": "object",
+        "description": "Every decision recorded about one Run, oldest first. A decision is appended and never rewritten, so the newest entry is the answer that stands, it names the entry it supersedes and why, and the ones before it are the answers a reader needs to see the Run's history.",
         "required": [
-          "decision"
+          "decisions"
         ],
         "properties": {
-          "decision": {
-            "$ref": "#/components/schemas/BookingDecision"
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BookingDecision"
+            }
           }
         }
       },
@@ -4828,6 +4832,14 @@
             "items": {
               "type": "string"
             }
+          },
+          "supersedes": {
+            "type": "string",
+            "description": "The decision this one replaces. Empty on a Run's first decision, which replaces nothing."
+          },
+          "supersedes_reason": {
+            "type": "string",
+            "description": "Why this decision replaces the one it names: PREVIOUS_LAUNCH_FAILED when the machine the earlier decision chose refused to start the work, PREVIOUS_DECISION_SELECTED_NOTHING when the earlier decision placed the Run nowhere and the fleet was asked again."
           }
         },
         "x-go-type": "domain.BookingDecision",
