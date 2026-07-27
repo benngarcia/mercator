@@ -519,21 +519,27 @@ func TestARefusedQueueDelayIsNotStarvationWhenNothingEverHeldIt(t *testing.T) {
 	}
 }
 
-// TestAWaitItsOwnFamilyHoldsIsNoStarvation is the exemption the first half of this
-// law carries, stated on the record the projection holds rather than on the log. A
-// batch member is still queued an hour and ten minutes into a wait its class bounds
-// at an hour, and the last thing admission said about it is that its own family is
-// already as wide as its caller declared.
+// TestAWaitItsOwnFamilyHoldsIsNoStarvation is the division the first half of this
+// law measures. A batch member is still queued an hour and ten minutes into a wait
+// its class bounds at an hour, and its own family's declared width has held every
+// second of it.
 //
-// It is the exemption the second half already carried, for the same reason: the
-// width counts members rather than machines, so no ordering could have ended the
-// wait and a fleet standing idle beside it changes nothing. The paired failure is in
-// TestInvariantsFailOnBrokenExecutions, where the identical record waits on
-// NO_FEASIBLE_OFFER instead and this law reports it.
+// The intervals are read off the log beside the projection, because who held a wait
+// is a question about intervals and the projection holds one answer. The width
+// counts members rather than machines, so no ordering could have ended those
+// intervals and a fleet standing idle beside them changes nothing. The paired
+// failure is in TestInvariantsFailOnBrokenExecutions, where the identical record
+// waits on NO_FEASIBLE_OFFER instead and this law reports it.
 func TestAWaitItsOwnFamilyHoldsIsNoStarvation(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	queuedSince := now.Add(-70 * time.Minute)
-	observation := admissionObservation(now, nil, nil)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		deferralEvent("run-member-003", queuedSince, domain.AdmissionDeferral{
+			Reason: domain.DeferredGroupAtParallelism,
+			Class:  domain.ClassBatch,
+			Behind: []domain.QueuedAhead{{RunID: "run-member-002"}},
+		}),
+	})
 	observation.Runs = []domain.RunRecord{{
 		ID:           "run-member-003",
 		Phase:        "queued",
@@ -549,6 +555,47 @@ func TestAWaitItsOwnFamilyHoldsIsNoStarvation(t *testing.T) {
 	if err := agingPreventsStarvation(observation); err != nil {
 		t.Fatalf("a member held by the width its own caller declared was read as Mercator starving it: %v", err)
 	}
+}
+
+// TestAFleetStarvedWaitIsNotExcusedByASibling is the other direction of the same
+// division, and it is what exempting a record on its latest answer hid. The fleet
+// held this member for seventy minutes, which is past the hour its class allows, and
+// then a sibling took the family's place: from that moment the projection says the
+// family is what holds it, and every second Mercator had already spent went out of
+// this law's sight.
+//
+// The wait is still standing, so the first half is what has to see it. Nothing else
+// would: the second half only adjudicates waits admission has ended, and this is one
+// it has not.
+func TestAFleetStarvedWaitIsNotExcusedByASibling(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	queuedSince := now.Add(-75 * time.Minute)
+	held := domain.AdmissionDeferral{
+		Reason: domain.DeferredGroupAtParallelism,
+		Class:  domain.ClassBatch,
+		Behind: []domain.QueuedAhead{{RunID: "run-member-001"}},
+	}
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		deferralEvent("run-member-002", queuedSince, domain.AdmissionDeferral{
+			Reason: domain.DeferredNoFeasibleOffer,
+			Class:  domain.ClassBatch,
+			Fleet:  &domain.FleetAnswer{Weighed: 1, CouldHold: 1},
+		}),
+		deferralEvent("run-member-002", now.Add(-5*time.Minute), held),
+	})
+	observation.Runs = []domain.RunRecord{{
+		ID:           "run-member-002",
+		Phase:        "queued",
+		ServiceClass: domain.ClassBatch,
+		QueuedSince:  &queuedSince,
+		Admission:    &held,
+	}}
+
+	err := agingPreventsStarvation(observation)
+	if err == nil {
+		t.Fatal("the fleet held a member seventy minutes past the hour its class allows, and a sibling taking the family's place excused it")
+	}
+	t.Logf("violation: %v", err)
 }
 
 // TestAReplacedRunIsHeldToTheDeadlineOfItsWholeWait is the deliberate failure of

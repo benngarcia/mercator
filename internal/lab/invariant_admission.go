@@ -53,11 +53,18 @@ func longestClassQueueDelay() time.Duration {
 // inside the bound, and only the second of those is Mercator working. A refusal at
 // the bound is therefore read as starvation whenever the record says the wait
 // could have ended and younger work was admitted past it after the moment the
-// Run's own class promises to have promoted it. A wait its own family's declared
-// width was holding is the other thing no ordering could have ended, and it is
-// exempt for the same reason: the bound counts members rather than machines, so a
-// caller whose declared width outlasts its class's own patience has contradicted
-// itself and nothing Mercator could have done would have placed the Run.
+// Run's own class promises to have promoted it.
+//
+// Both halves are stated over the part of each wait Mercator caused, which is the
+// bound's own subject: the maximum queue delay is what Mercator promises about
+// keeping work waiting for capacity, and a family's declared width counts members
+// rather than machines, so no ordering and no machine could have ended the part of
+// a wait a caller's own declaration held. It is divided by interval rather than
+// exempted by the latest answer, because a deferral says who held the Run over the
+// interval it opens and nothing more. Exempting the record instead let a Run the
+// fleet had starved for an hour disappear from this law entirely the moment a
+// sibling took its family's place, and left the one class that states no deadline
+// with a wait nothing anywhere could report.
 //
 // That second half is deliberately stated over waits rather than over effective
 // priority. Production orders the queue on the number EffectivePriority returns,
@@ -67,10 +74,14 @@ func longestClassQueueDelay() time.Duration {
 // Run outranks anything that could arrive once it has waited half its own bound,
 // and the only thing it takes from the class table is that bound.
 func agingPreventsStarvation(observation InvariantObservation) error {
-	if err := noWaitPastItsClassBound(observation); err != nil {
+	queue, err := replayQueueDepartures(observation)
+	if err != nil {
 		return err
 	}
-	return noRefusalYoungerWorkOvertook(observation)
+	if err := noWaitPastItsClassBound(observation, queue); err != nil {
+		return err
+	}
+	return noRefusalYoungerWorkOvertook(queue)
 }
 
 // noWaitPastItsClassBound is a Run Mercator accepted and told to wait still
@@ -81,29 +92,28 @@ func agingPreventsStarvation(observation InvariantObservation) error {
 // Mercator says what that is. A Run that left the queue at any point is not
 // starving whatever happened to it since.
 //
-// A wait the caller's own declaration is holding is exempt, which is the exemption
-// noRefusalYoungerWorkOvertook already carries below and for the same reason: a
-// family's width counts members rather than machines, so no ordering could have
-// ended the wait and a fleet standing idle beside it changes nothing. Stating it in
-// one half and not the other had the two halves demanding opposite things of one
-// record. This half could only be satisfied by refusing the held member at the
-// bound, and that refusal closed the later members of every family narrower than
-// its class's patience as failed Runs, on a promise Mercator had not broken. Both
-// halves now say what the other says: a caller whose declared width outlasts its
-// own class's patience has contradicted itself, and that is not Mercator starving
-// anybody.
-func noWaitPastItsClassBound(observation InvariantObservation) error {
+// What it measures is the part of the wait Mercator caused, which is the whole of
+// it less the intervals the Run's own family held it, replayed out of the log
+// beside it. A family's width counts members rather than machines, so no ordering
+// could have ended those intervals and a fleet standing idle beside them changes
+// nothing. Exempting the whole record whenever the latest answer was the family
+// stated it too strongly in one direction and not at all in the other: it excused
+// every hour the fleet had already starved a Run of the moment a sibling took the
+// family's place, and demanding the whole wait could only be satisfied by refusing
+// the held member, which closed the later members of every family narrower than
+// its class's patience as failed Runs on a promise Mercator had not broken.
+func noWaitPastItsClassBound(observation InvariantObservation, queue replayedQueue) error {
 	for _, run := range observation.Runs {
-		if run.Closed || run.Admission == nil || run.QueuedSince == nil || run.Admission.SelfImposed() {
+		if run.Closed || run.Admission == nil || run.QueuedSince == nil {
 			continue
 		}
-		waited := observation.Now.Sub(run.QueuedSince.UTC())
+		waited := observation.Now.Sub(run.QueuedSince.UTC()) - queue.selfImposed(run.ID, observation.Now)
 		bound := run.ServiceClass.Admission().MaxQueueDelaySeconds
 		if bound <= 0 || waited.Seconds() <= bound {
 			continue
 		}
 		return fmt.Errorf(
-			"Run %q of class %q has waited %s, which is past the %.0fs its class allows, behind %s",
+			"Run %q of class %q has waited %s for capacity, which is past the %.0fs its class allows, behind %s",
 			run.ID, run.ServiceClass, waited, bound, describeQueuedAhead(run.Admission.Behind),
 		)
 	}
@@ -136,17 +146,9 @@ func noWaitPastItsClassBound(observation InvariantObservation) error {
 // It is replayed out of the public log because it is about moments that have
 // passed: which Runs took capacity while this one waited, and how long each of
 // them had waited when they did. The projection only says who is waiting now.
-func noRefusalYoungerWorkOvertook(observation InvariantObservation) error {
-	began, err := waitsBegan(observation)
-	if err != nil {
-		return err
-	}
-	admitted, refused, err := replayQueueDepartures(observation, began)
-	if err != nil {
-		return err
-	}
-	for _, wait := range refused {
-		if err := agingShouldHaveTaken(wait, admitted); err != nil {
+func noRefusalYoungerWorkOvertook(queue replayedQueue) error {
+	for _, wait := range queue.refused {
+		if err := agingShouldHaveTaken(wait, queue.admitted); err != nil {
 			return err
 		}
 	}
@@ -190,39 +192,58 @@ func waitsBegan(observation InvariantObservation) (map[string]time.Time, error) 
 	return began, nil
 }
 
-// replayQueueDepartures is every way this log says a wait ended: the Runs that
-// left it by taking capacity, with how long each had waited when it did, and the
-// waits admission would not go on holding.
+// replayedQueue is what this log says about every wait in it: the waits still
+// standing, the Runs that left one by taking capacity, and the waits admission
+// would not go on holding.
+type replayedQueue struct {
+	waits    map[string]queueWait
+	admitted []admittedRun
+	refused  []refusedWait
+}
+
+// selfImposed is how much of one Run's wait the caller's own declaration had held
+// by one moment, which is the part of it neither the queue nor the fleet caused.
+// An interval still open at that moment runs to it, because how long the answer
+// standing now has stood is a question about then.
+func (queue replayedQueue) selfImposed(runID string, at time.Time) time.Duration {
+	return queue.waits[runID].divided.closed(at).selfImposed
+}
+
+// replayQueueDepartures is what the log says about every wait: who held each one
+// and for how long, the Runs that left one by taking capacity, with how long each
+// had waited when it did, and the waits admission would not go on holding.
 //
 // Every moment is read only where the rule needs one, which is why the timestamp
 // is parsed inside each case rather than beside the event. A record whose
 // admission facts cannot state when they happened is a record this rule fails on,
 // and the rest of the stream is none of its business.
-func replayQueueDepartures(observation InvariantObservation, began map[string]time.Time) ([]admittedRun, []refusedWait, error) {
-	waits := map[string]queueWait{}
-	var admitted []admittedRun
-	var refused []refusedWait
+func replayQueueDepartures(observation InvariantObservation) (replayedQueue, error) {
+	began, err := waitsBegan(observation)
+	if err != nil {
+		return replayedQueue{}, err
+	}
+	queue := replayedQueue{waits: map[string]queueWait{}}
 	for _, event := range observation.MercatorEvents {
 		runID := strings.TrimPrefix(event.Subject, "runs/")
 		switch event.Type {
 		case orchestrator.EventAdmissionDeferred, orchestrator.EventAdmissionRefused:
 			deferral, err := recordedDeferral(event)
 			if err != nil {
-				return nil, nil, err
+				return replayedQueue{}, err
 			}
 			at, err := eventOccurredAt(event)
 			if err != nil {
-				return nil, nil, err
+				return replayedQueue{}, err
 			}
-			wait := waits[runID].asked(event.WorkspaceID, deferral)
-			waits[runID] = wait
+			wait := queue.waits[runID].asked(event.WorkspaceID, deferral, at)
+			queue.waits[runID] = wait
 			if event.Type == orchestrator.EventAdmissionRefused {
-				refused = append(refused, wait.ended(runID, deferral, began[runID], at))
+				queue.refused = append(queue.refused, wait.ended(runID, deferral, began[runID], at))
 			}
 		case orchestrator.EventBookingDecided:
 			decision, err := recordedDecision(event)
 			if err != nil {
-				return nil, nil, err
+				return replayedQueue{}, err
 			}
 			// A decision that selected nothing admitted nothing, and it is also the
 			// shape every synthetic Booking Decision in this tree carries, so asking
@@ -233,17 +254,17 @@ func replayQueueDepartures(observation InvariantObservation, began map[string]ti
 			}
 			at, err := eventOccurredAt(event)
 			if err != nil {
-				return nil, nil, err
+				return replayedQueue{}, err
 			}
-			waits[decision.RunID] = waits[decision.RunID].placed()
-			admitted = append(admitted, admittedRun{
+			queue.waits[decision.RunID] = queue.waits[decision.RunID].placed(at)
+			queue.admitted = append(queue.admitted, admittedRun{
 				runID: decision.RunID, workspace: event.WorkspaceID,
 				class: decision.Policy.Class, at: at,
 				waited: waitedBy(began[decision.RunID], at),
 			})
 		}
 	}
-	return admitted, refused, nil
+	return queue, nil
 }
 
 // queueWait is what the record establishes about one Run's wait as it goes on:
@@ -257,24 +278,16 @@ type queueWait struct {
 	// to say an ordering could have ended the wait.
 	fleetAnswered  bool
 	fleetCouldHold bool
-	// familyHeld is whether the last thing admission said about this wait is that the
-	// Run's own family is already as wide as its caller declared. It is the second
-	// exemption this rule needs, and it is not about capacity at all: the bound
-	// counts members of the family rather than machines, so no ordering could have
-	// ended the wait and a fleet standing idle beside it changes nothing.
-	//
-	// It is the latest answer rather than any answer during the wait, for the reason
-	// AdmissionDeferral.HoldsNoQueue reads the latest one. A Run whose family was
-	// full an hour ago and has since been waiting for a machine is in a wait an
-	// ordering could have ended, and carrying the exemption forward would excuse
-	// exactly that.
-	familyHeld bool
+	// divided is how much of this wait the caller's own declaration has held, summed
+	// over the intervals it held, which is the part of it no ordering and no machine
+	// could have ended.
+	divided dividedWait
 }
 
 // asked is this wait after one more moment admission decided about it.
-func (wait queueWait) asked(workspace string, deferral domain.AdmissionDeferral) queueWait {
+func (wait queueWait) asked(workspace string, deferral domain.AdmissionDeferral, at time.Time) queueWait {
 	wait.workspace = workspace
-	wait.familyHeld = deferral.Reason == domain.DeferredGroupAtParallelism
+	wait.divided = wait.divided.answered(at, deferral.SelfImposed())
 	if deferral.Fleet == nil {
 		return wait
 	}
@@ -287,8 +300,46 @@ func (wait queueWait) asked(workspace string, deferral domain.AdmissionDeferral)
 // strongest thing that can be said about whether the fleet could hold it. A
 // placement is an answer nobody has to recount: the fleet published a machine, the
 // scheduler weighed it, and it took the Run.
-func (wait queueWait) placed() queueWait {
-	wait.fleetAnswered, wait.fleetCouldHold, wait.familyHeld = true, true, false
+func (wait queueWait) placed(at time.Time) queueWait {
+	wait.fleetAnswered, wait.fleetCouldHold = true, true
+	wait.divided = wait.divided.closed(at)
+	return wait
+}
+
+// dividedWait is one wait split by who held it: how much of it the caller's own
+// declaration has held, and since when the answer standing now has been holding
+// it.
+//
+// It is summed over intervals because that is what a deferral says. Admission's
+// answer at one moment stands until the next answer replaces it, so a reason names
+// who held the Run over the interval it opens, and reading the latest reason as a
+// statement about the whole wait excused the part of it Mercator caused and charged
+// the part it did not.
+type dividedWait struct {
+	selfImposed time.Duration
+	heldSince   time.Time
+}
+
+// answered is this division after admission gave one more answer: the interval that
+// answer replaces is closed, and a wait the caller's own declaration is holding
+// opens a new one.
+func (wait dividedWait) answered(at time.Time, selfImposed bool) dividedWait {
+	wait = wait.closed(at)
+	if selfImposed {
+		wait.heldSince = at
+	}
+	return wait
+}
+
+// closed is this division with the interval standing at one moment ended there. A
+// division with no such interval is already whole, which is every wait the queue
+// or the fleet is holding.
+func (wait dividedWait) closed(at time.Time) dividedWait {
+	if wait.heldSince.IsZero() {
+		return wait
+	}
+	wait.selfImposed += at.Sub(wait.heldSince)
+	wait.heldSince = time.Time{}
 	return wait
 }
 
@@ -323,7 +374,7 @@ func (wait queueWait) ended(runID string, deferral domain.AdmissionDeferral, sin
 		since:            since,
 		at:               at,
 		fleetHeldNothing: wait.heldNothing(),
-		familyHeld:       wait.familyHeld,
+		selfImposed:      wait.divided.closed(at).selfImposed,
 	}
 }
 
@@ -347,11 +398,12 @@ type refusedWait struct {
 	since            time.Time
 	at               time.Time
 	fleetHeldNothing bool
-	// familyHeld is the wait's other exemption: the Run's own family was as wide as
-	// its caller said it may run, which is a bound no ordering and no machine can
-	// lift. A caller whose declared width outlasts its class's own patience has
-	// contradicted itself, and that is not Mercator starving anybody.
-	familyHeld bool
+	// selfImposed is how much of the wait the Run's own family held, which is the
+	// part of it no ordering and no machine could have ended: the width counts
+	// members rather than machines. A caller whose declared width outlasts its
+	// class's own patience has contradicted itself, and that is not Mercator starving
+	// anybody.
+	selfImposed time.Duration
 }
 
 // agingShouldHaveTaken adjudicates one refused wait against every admission taken
@@ -362,8 +414,8 @@ type refusedWait struct {
 // something else, and a Run refused without ever having been deferred waited for
 // nothing at all.
 func agingShouldHaveTaken(wait refusedWait, admissions []admittedRun) error {
-	held := wait.at.Sub(wait.since).Seconds()
-	if wait.fleetHeldNothing || wait.familyHeld || !wait.class.Admission().Starved(held) {
+	held := (wait.at.Sub(wait.since) - wait.selfImposed).Seconds()
+	if wait.fleetHeldNothing || !wait.class.Admission().Starved(held) {
 		return nil
 	}
 	// A class that states no bound cannot reach this, because a wait past a bound of
@@ -395,8 +447,8 @@ func agingShouldHaveTaken(wait refusedWait, admissions []admittedRun) error {
 			continue
 		}
 		return fmt.Errorf(
-			"Run %q of class %q was refused after waiting %.0fs, and %q of class %q was admitted %.0fs into that wait having waited %.0fs, which is past the %.0fs at which this class promises to have promoted a Run above anything arriving",
-			wait.runID, wait.class, wait.at.Sub(wait.since).Seconds(),
+			"Run %q of class %q was refused after waiting %.0fs for capacity, and %q of class %q was admitted %.0fs into that wait having waited %.0fs, which is past the %.0fs at which this class promises to have promoted a Run above anything arriving",
+			wait.runID, wait.class, held,
 			admission.runID, admission.class, waited, admission.waited, promoted,
 		)
 	}
