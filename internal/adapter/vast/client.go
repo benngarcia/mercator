@@ -48,6 +48,12 @@ type offer struct {
 	// has published nothing, and read as zero that machine drops every run.
 	Reliability  *float64 `json:"reliability2"`
 	Verification string   `json:"verification"`
+	// Rented is whether somebody is on this machine right now. It is read rather
+	// than filtered out server-side, because an ask this adapter never returned is
+	// an ask Mercator cannot tell apart from hardware nobody sells: the search is
+	// how the fleet answers, and a fleet that answered with nothing is the
+	// strongest thing it can say.
+	Rented bool `json:"rented"`
 	MachineID    int64    `json:"machine_id"`
 	Geolocation  string   `json:"geolocation"`
 	StaticIP     bool     `json:"static_ip"`

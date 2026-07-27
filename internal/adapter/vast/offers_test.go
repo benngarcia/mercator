@@ -28,8 +28,18 @@ func TestSecureOfferQueryHardCodesTheSecureTier(t *testing.T) {
 	if got := q["type"]; got != "ondemand" {
 		t.Errorf("type = %v", got)
 	}
-	if got := q["num_gpus"].(map[string]any)["eq"]; got != 2 {
+	// At least what the Run needs, not exactly it. Vast sells asks against
+	// power-of-two partitions of a machine, so a Run wanting three cards matched
+	// nothing in a market selling two, four and eight, and the whole fleet then
+	// answered that ask with nothing.
+	if got := q["num_gpus"].(map[string]any)["gte"]; got != 2 {
 		t.Errorf("num_gpus = %v", got)
+	}
+	// Machines somebody is already on are searched for and published as capacity
+	// that is not available. Filtering them out server-side made every sold-out
+	// moment indistinguishable from a shape this marketplace does not sell.
+	if _, filtered := q["rented"]; filtered {
+		t.Errorf("the search excludes rented machines: %v", q["rented"])
 	}
 	if got := q["allocated_storage"]; got != float64(75) {
 		t.Errorf("allocated_storage = %v", got)
@@ -105,10 +115,60 @@ func TestBuildOffersDropsNonSecureUnpricedAndWrongSizeOffers(t *testing.T) {
 		{ID: 1, GPUName: "RTX 4090", NumGPUs: 1, DPHTotal: pricePtr(0.2), Verification: "unverified"},
 		{ID: 2, GPUName: "RTX 4090", NumGPUs: 1, DPHTotal: pricePtr(0.2), Verification: "deverified"},
 		{ID: 3, GPUName: "RTX 4090", NumGPUs: 1, DPHTotal: nil, Verification: "verified"},           // no price
-		{ID: 4, GPUName: "RTX 4090", NumGPUs: 4, DPHTotal: pricePtr(0.8), Verification: "verified"}, // wrong GPU count
+		{ID: 4, GPUName: "RTX 4090", NumGPUs: 1, DPHTotal: pricePtr(0.8), Verification: "verified"}, // too few cards
 	}
-	if got := buildOffers(offers, 1, 20, now); len(got) != 0 {
+	if got := buildOffers(offers, 2, 20, now); len(got) != 0 {
 		t.Fatalf("expected all offers dropped, got %+v", got)
+	}
+}
+
+// TestAnAskWithMoreCardsThanTheRunAsksForIsACandidate is the other half of the
+// partition arithmetic. Renting four cards for a Run that needs three is a
+// machine that can hold the work at a price the record states, and the ranking
+// decides on that price. Excluding it made a fleet abundantly selling four say it
+// sells nothing of this shape, which admission reads as capacity that does not
+// exist.
+func TestAnAskWithMoreCardsThanTheRunAsksForIsACandidate(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	offers := []offer{{
+		ID: 9003, GPUName: "RTX 4090", GPUArch: "nvidia", NumGPUs: 4, GPURAMMb: 24576,
+		CPUCoresEffective: 32, CPURAMMb: 131072, DiskSpaceGB: 500,
+		DPHTotal: pricePtr(1.44), Verification: "verified",
+	}}
+
+	got := buildOffers(offers, 3, 75, now)
+
+	if len(got) != 1 {
+		t.Fatalf("a market selling four cards answered a three card ask with %d offers", len(got))
+	}
+	if count := got[0].Resources.Accelerators[0].Count; count != 4 {
+		t.Fatalf("the ask publishes %d cards, and it is an ask for four", count)
+	}
+}
+
+// TestARentedAskIsPublishedAsCapacityThatIsNotAvailable is the load-bearing half
+// of the search. An ask this adapter never returns is one the control plane
+// cannot tell apart from hardware nobody sells, and it treats a fleet that
+// published nothing as capacity that has to be added: a Run against a sold-out
+// market lost its place in the queue. A rented ask is published as the wait it
+// is, which is how every other occupied machine in this tree is published.
+func TestARentedAskIsPublishedAsCapacityThatIsNotAvailable(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	offers := []offer{
+		{ID: 9004, GPUName: "RTX 4090", NumGPUs: 1, DPHTotal: pricePtr(0.35), Verification: "verified", Rented: true},
+		{ID: 9005, GPUName: "RTX 4090", NumGPUs: 1, DPHTotal: pricePtr(0.35), Verification: "verified"},
+	}
+
+	got := buildOffers(offers, 1, 75, now)
+
+	if len(got) != 2 {
+		t.Fatalf("a sold-out ask and a free one produced %d offers", len(got))
+	}
+	if got[0].Capacity.Available {
+		t.Fatalf("an ask somebody is already on says its capacity is available")
+	}
+	if !got[1].Capacity.Available {
+		t.Fatalf("an ask nobody is on says its capacity is not available")
 	}
 }
 

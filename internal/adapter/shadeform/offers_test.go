@@ -17,10 +17,19 @@ func TestListOffersMapsCatalogTriplesToOffers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	if len(offers) != 1 {
-		t.Fatalf("want 1 offer (only the available region), got %d: %+v", len(offers), offers)
+	// Both regions this type is listed in, and the one with no stock says so
+	// rather than being left out. An answer filtered on availability makes a
+	// sold-out region indistinguishable from inventory nobody sells.
+	if len(offers) != 2 {
+		t.Fatalf("want both listed regions, got %d: %+v", len(offers), offers)
 	}
 	o := offers[0]
+	if !o.Capacity.Available {
+		t.Errorf("the region with stock says its capacity is not available: %+v", o.Capacity)
+	}
+	if offers[1].Capacity.Available {
+		t.Errorf("the region with no stock says its capacity is available: %+v", offers[1].Capacity)
+	}
 	if o.NativeRef != "hyperstack/canada-1/A6000" {
 		t.Errorf("native ref = %q, want the cloud/region/type triple", o.NativeRef)
 	}
@@ -74,7 +83,7 @@ func TestListOffersMarksGraceHostsAsARM64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	if len(offers) != 1 || offers[0].Platform.Architecture != "arm64" {
+	if len(offers) != 2 || offers[0].Platform.Architecture != "arm64" {
 		t.Fatalf("GH200 (Grace superchip) hosts are ARM; advertising amd64 places images that die at exec: %+v", offers)
 	}
 }
@@ -94,7 +103,7 @@ func TestListOffersExcludesNonVMDeploymentTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	if len(offers) != 1 || offers[0].NativeRef != "hyperstack/canada-1/A6000" {
+	if len(offers) != 2 || offers[0].NativeRef != "hyperstack/canada-1/A6000" {
 		t.Fatalf("container/baremetal inventory must be excluded, got %+v", offers)
 	}
 }
@@ -110,7 +119,7 @@ func TestListOffersFiltersToAllowedClouds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	if len(offers) != 1 || offers[0].NativeRef != "lambdalabs/canada-1/A6000" {
+	if len(offers) != 2 || offers[0].NativeRef != "lambdalabs/canada-1/A6000" {
 		t.Fatalf("allowed_clouds must filter offers (case-insensitively), got %+v", offers)
 	}
 }
@@ -126,7 +135,7 @@ func TestListOffersOmitsAcceleratorsForGPUlessTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list offers: %v", err)
 	}
-	if len(offers) != 1 || len(offers[0].Resources.Accelerators) != 0 {
+	if len(offers) != 2 || len(offers[0].Resources.Accelerators) != 0 {
 		t.Fatalf("gpu-less type must advertise no accelerators, got %+v", offers)
 	}
 }

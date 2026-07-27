@@ -12,11 +12,19 @@ const gib = int64(1024) * 1024 * 1024
 
 // buildOffers maps the Shadeform instance-type catalog onto offer snapshots.
 // Placement on Shadeform is an explicit (cloud, region, shade_instance_type)
-// triple, so each available region of each type becomes its own offer and the
-// triple is the offer's NativeRef. Only deployment_type "vm" is offered: the
-// docs never define what launch_configuration means on container- or
-// baremetal-typed inventory (open question with Shadeform support); callers log
-// the excluded count so the coverage loss stays visible.
+// triple, so each region of each type becomes its own offer and the triple is
+// the offer's NativeRef. Only deployment_type "vm" is offered: the docs never
+// define what launch_configuration means on container- or baremetal-typed
+// inventory (open question with Shadeform support); callers log the excluded
+// count so the coverage loss stays visible.
+//
+// A region with no stock right now is published as capacity that is not
+// available rather than dropped. Dropping it made a region that is sold out
+// indistinguishable from a machine type this catalog does not sell, and the
+// control plane reads the difference: a Run the fleet published nothing for is
+// waiting for capacity to be added and is exempted from holding the queue, while
+// a Run refused by a machine somebody else is on keeps its place and waits for
+// that machine. Sold out is the second of those.
 func buildOffers(types []instanceType, allowedClouds map[string]bool, now time.Time) (offers []domain.OfferSnapshot, excludedNonVM int) {
 	for _, t := range types {
 		if t.DeploymentType != "vm" {
@@ -27,16 +35,13 @@ func buildOffers(types []instanceType, allowedClouds map[string]bool, now time.T
 			continue
 		}
 		for _, region := range t.Availability {
-			if !region.Available {
-				continue
-			}
-			offers = append(offers, buildOffer(t, region.Region, now))
+			offers = append(offers, buildOffer(t, region.Region, region.Available, now))
 		}
 	}
 	return offers, excludedNonVM
 }
 
-func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapshot {
+func buildOffer(t instanceType, region string, available bool, now time.Time) domain.OfferSnapshot {
 	cfg := t.Configuration
 	var accelerators []domain.AcceleratorInventory
 	if cfg.NumGPUs > 0 {
@@ -88,12 +93,18 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 			GranularitySeconds: 1,
 			Known:              true,
 		},
-		// A catalog listing says this machine type can be had. Its publisher states no
-		// confidence in that, and neither does Mercator on their behalf: capacity that
-		// may be gone by launch, asserted certain, is a claim nobody made. What would
-		// state it here is a measurement of how often provisioning this listing
-		// actually succeeds, which nothing collects yet.
-		Capacity: domain.CapacityEvidence{Available: true},
+		// A catalog listing says this machine type can be had in this region, and
+		// Shadeform says per region whether it can be had right now. That answer
+		// is carried through rather than used to drop the listing: a region with
+		// no stock is a wait, a machine type this catalog never listed is a shape
+		// nobody sells, and the queue is ordered on the difference.
+		//
+		// Its publisher states no confidence in either, and neither does Mercator
+		// on their behalf: capacity that may be gone by launch, asserted certain,
+		// is a claim nobody made. What would state it here is a measurement of how
+		// often provisioning this listing actually succeeds, which nothing
+		// collects yet.
+		Capacity: domain.CapacityEvidence{Available: available},
 		// Shadeform pulls the image fresh on the provisioned host, but the
 		// image (and its size) is unknown at offer time and the evidence
 		// contract has no "uncached, size unknown" state: Known:true with

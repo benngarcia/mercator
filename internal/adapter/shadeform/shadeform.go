@@ -111,7 +111,11 @@ func (a *Adapter) Verify(ctx context.Context) error {
 }
 
 func (a *Adapter) ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	types, err := a.client.instanceTypes(ctx, url.Values{"available": {"true"}, "sort": {"price"}})
+	// The catalog is asked for everything it sells in this shape and not only for
+	// what is in stock. An answer filtered on availability makes a sold-out region
+	// look like inventory that does not exist, which admission reads as capacity
+	// that has to be added rather than capacity to wait for.
+	types, err := a.client.instanceTypes(ctx, url.Values{"sort": {"price"}})
 	if err != nil {
 		return nil, err
 	}

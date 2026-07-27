@@ -191,9 +191,18 @@ func (a *Adapter) secureAskID(ctx context.Context, req adapter.LaunchRequest) (i
 		return 0, err
 	}
 	for _, o := range offers {
-		if o.ID == askID && o.Verification == secureVerification {
-			return askID, nil
+		if o.ID != askID || o.Verification != secureVerification {
+			continue
 		}
+		// The search returns machines somebody is already on, because that is how
+		// this fleet says a shape is sold out rather than unsold. Launching onto
+		// one is not a thing to attempt: Vast would refuse the create, and the
+		// record would then say the provider failed rather than that the ask was
+		// taken between the decision and the launch.
+		if o.Rented {
+			return 0, fmt.Errorf("vast: refusing launch: ask %d is rented", askID)
+		}
+		return askID, nil
 	}
 	return 0, fmt.Errorf("vast: refusing launch: ask %d is not (or no longer) a secure-tier offer (verified machine in a certified datacenter); this adapter never launches on community capacity", askID)
 }
