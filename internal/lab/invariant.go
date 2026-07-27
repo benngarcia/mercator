@@ -128,6 +128,8 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.class_bounds_honoured", check: classBoundsHonoured},
 		invariantRule{id: "safety.nothing_waits_behind_an_impossible_ask", check: nothingWaitsBehindAnImpossibleAsk},
 		invariantRule{id: "safety.a_silence_is_not_an_answer_about_capacity", check: aSilenceIsNotAnAnswerAboutCapacity},
+		invariantRule{id: "safety.group_parallelism_respected", check: groupParallelismRespected},
+		invariantRule{id: "safety.interruption_was_permitted", check: interruptionWasPermitted},
 		invariantRule{id: "safety.decisions_are_never_rewritten", check: decisionsAreNeverRewritten},
 		invariantRule{id: "safety.decision_is_reproducible", check: decisionIsReproducible},
 		invariantRule{

@@ -1,0 +1,76 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "Two cheap machines sold on terms that let their provider take them back, one dearer machine nobody can reclaim, and two Runs that differ only in what their class says about being interrupted. The batch Run takes the cheapest reclaimable machine, and the standard Run is refused both of them and pays for the machine that is its own: INTERRUPTION_NOT_PERMITTED is decided before anything starts, because there is no decision left afterwards. Five minutes in, the provider takes both reclaimable machines back, which is the first thing in this corpus that happens to Mercator rather than because of it. The batch Run is the one interrupted, its class permitted that, and the standard Run runs to the end on capacity nothing could reclaim. This is the execution safety.interruption_was_permitted reads the reclamation out of the ledger of, and letting the standard class permit interruption puts that Run on the machine that disappears.",
+  "seed": "mercator-lab-preemption-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "4GB"
+          },
+          {
+            "digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948",
+            "size": "40MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-spot-a",
+        "reclaimable": true,
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 1.0
+      },
+      {
+        "id": "rental-spot-b",
+        "reclaimable": true,
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 1.1
+      },
+      {
+        "id": "rental-held",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 3.0
+      }
+    ],
+    "preemptions": [
+      {"rental": "rental-spot-a", "at": "5m"},
+      {"rental": "rental-spot-b", "at": "5m"}
+    ],
+    "runtime_models": [
+      {"candidate": "rental-spot-a", "minimum": "20m", "maximum": "20m"},
+      {"candidate": "rental-spot-b", "minimum": "20m", "maximum": "20m"},
+      {"candidate": "rental-held", "minimum": "20m", "maximum": "20m"}
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "sweeper",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "service_class": "batch",
+          "expected_runtime": "20m",
+          "max_runtime": "30m"
+        }
+      },
+      {
+        "name": "trainer",
+        "at": "1m",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "service_class": "standard",
+          "expected_runtime": "20m",
+          "max_runtime": "30m"
+        }
+      }
+    ]
+  }
+}

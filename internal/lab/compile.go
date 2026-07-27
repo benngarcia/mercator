@@ -87,6 +87,11 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 		return WorldTape{}, nil, err
 	}
 	events = append(events, withdrawals...)
+	reclaimed, err := preemptionEvents(seed, start, len(arrivals)+len(withdrawals), blueprint.World.Preemptions)
+	if err != nil {
+		return WorldTape{}, nil, err
+	}
+	events = append(events, reclaimed...)
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].At.Equal(events[j].At) {
 			return events[i].Sequence < events[j].Sequence
@@ -140,6 +145,34 @@ func cancellationEvents(
 			At:       start.Add(cancellation.At.Duration()),
 			Sequence: uint64(len(arrivals) + index + 1),
 			Kind:     EventRunCancelled,
+			Data:     data,
+		})
+	}
+	return events, nil
+}
+
+// preemptionEvents is every machine this world's providers take back. The
+// sequence is offset past everything a caller does, so a reclamation at the same
+// instant as an arrival or a withdrawal is ordered after it: the work is in the
+// world before the world acts on it. The tape resequences the lot once it is
+// sorted by time.
+func preemptionEvents(
+	seed string,
+	start time.Time,
+	before int,
+	preemptions []scenario.PreemptionSpec,
+) ([]WorldEvent, error) {
+	events := make([]WorldEvent, 0, len(preemptions))
+	for index, preemption := range preemptions {
+		data, err := json.Marshal(CapacityPreemption{Rental: preemption.Rental})
+		if err != nil {
+			return nil, fmt.Errorf("encode capacity preemption %q: %w", preemption.Rental, err)
+		}
+		events = append(events, WorldEvent{
+			ID:       DeterministicID(seed, "event", "capacity-preemption/"+preemption.Rental),
+			At:       start.Add(preemption.At.Duration()),
+			Sequence: uint64(before + index + 1),
+			Kind:     EventCapacityPreempted,
 			Data:     data,
 		})
 	}

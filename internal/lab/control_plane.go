@@ -212,6 +212,11 @@ func (runtime *controlPlane) handle(ctx context.Context, event WorldEvent) error
 			return err
 		}
 		return runtime.applyEventFaults(ctx)
+	case EventCapacityPreempted:
+		if err := runtime.handleCapacityPreemption(ctx, event); err != nil {
+			return err
+		}
+		return runtime.applyEventFaults(ctx)
 	default:
 		return fmt.Errorf("Lab control plane does not handle World event kind %q", event.Kind)
 	}
@@ -260,6 +265,29 @@ func (runtime *controlPlane) handleRunCancellation(ctx context.Context, event Wo
 		return fmt.Errorf("cancel Lab Run %q: %w", cancellation.Name, err)
 	}
 	return runtime.advanceWorkspace(ctx, workspace)
+}
+
+// handleCapacityPreemption is the provider taking a machine back. Nothing is asked
+// of Mercator and nothing is told to it: the world removes the capacity and the
+// executions on it, and then every tenant's open Runs are advanced, which is the
+// sweep that finds the launch missing. That is how a control plane learns of a
+// reclamation it was never notified of, and it is the only way it can learn of one
+// here, because a provider that has taken its machine back answers no differently
+// from a provider whose machine finished the work.
+func (runtime *controlPlane) handleCapacityPreemption(ctx context.Context, event WorldEvent) error {
+	var preemption CapacityPreemption
+	if err := json.Unmarshal(event.Data, &preemption); err != nil {
+		return fmt.Errorf("decode capacity preemption event %q: %w", event.ID, err)
+	}
+	if err := runtime.world.preemptCapacity(preemption.Rental); err != nil {
+		return err
+	}
+	for _, workspace := range runtime.workspaces {
+		if err := runtime.advanceWorkspace(ctx, workspace); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) error {

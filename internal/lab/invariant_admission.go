@@ -53,7 +53,11 @@ func longestClassQueueDelay() time.Duration {
 // inside the bound, and only the second of those is Mercator working. A refusal at
 // the bound is therefore read as starvation whenever the record says the wait
 // could have ended and younger work was admitted past it after the moment the
-// Run's own class promises to have promoted it.
+// Run's own class promises to have promoted it. A wait its own family's declared
+// width was holding is the other thing no ordering could have ended, and it is
+// exempt for the same reason: the bound counts members rather than machines, so a
+// caller whose declared width outlasts its class's own patience has contradicted
+// itself and nothing Mercator could have done would have placed the Run.
 //
 // That second half is deliberately stated over waits rather than over effective
 // priority. Production orders the queue on the number EffectivePriority returns,
@@ -241,11 +245,24 @@ type queueWait struct {
 	// to say an ordering could have ended the wait.
 	fleetAnswered  bool
 	fleetCouldHold bool
+	// familyHeld is whether the last thing admission said about this wait is that the
+	// Run's own family is already as wide as its caller declared. It is the second
+	// exemption this rule needs, and it is not about capacity at all: the bound
+	// counts members of the family rather than machines, so no ordering could have
+	// ended the wait and a fleet standing idle beside it changes nothing.
+	//
+	// It is the latest answer rather than any answer during the wait, for the reason
+	// AdmissionDeferral.HoldsNoQueue reads the latest one. A Run whose family was
+	// full an hour ago and has since been waiting for a machine is in a wait an
+	// ordering could have ended, and carrying the exemption forward would excuse
+	// exactly that.
+	familyHeld bool
 }
 
 // asked is this wait after one more moment admission decided about it.
 func (wait queueWait) asked(workspace string, deferral domain.AdmissionDeferral) queueWait {
 	wait.workspace = workspace
+	wait.familyHeld = deferral.Reason == domain.DeferredGroupAtParallelism
 	if deferral.Fleet == nil {
 		return wait
 	}
@@ -259,7 +276,7 @@ func (wait queueWait) asked(workspace string, deferral domain.AdmissionDeferral)
 // placement is an answer nobody has to recount: the fleet published a machine, the
 // scheduler weighed it, and it took the Run.
 func (wait queueWait) placed() queueWait {
-	wait.fleetAnswered, wait.fleetCouldHold = true, true
+	wait.fleetAnswered, wait.fleetCouldHold, wait.familyHeld = true, true, false
 	return wait
 }
 
@@ -294,6 +311,7 @@ func (wait queueWait) ended(runID string, deferral domain.AdmissionDeferral, sin
 		since:            since,
 		at:               at,
 		fleetHeldNothing: wait.heldNothing(),
+		familyHeld:       wait.familyHeld,
 	}
 }
 
@@ -317,6 +335,11 @@ type refusedWait struct {
 	since            time.Time
 	at               time.Time
 	fleetHeldNothing bool
+	// familyHeld is the wait's other exemption: the Run's own family was as wide as
+	// its caller said it may run, which is a bound no ordering and no machine can
+	// lift. A caller whose declared width outlasts its class's own patience has
+	// contradicted itself, and that is not Mercator starving anybody.
+	familyHeld bool
 }
 
 // agingShouldHaveTaken adjudicates one refused wait against every admission taken
@@ -328,7 +351,7 @@ type refusedWait struct {
 // nothing at all.
 func agingShouldHaveTaken(wait refusedWait, admissions []admittedRun) error {
 	held := wait.at.Sub(wait.since).Seconds()
-	if wait.fleetHeldNothing || !wait.class.Admission().Starved(held) {
+	if wait.fleetHeldNothing || wait.familyHeld || !wait.class.Admission().Starved(held) {
 		return nil
 	}
 	// A class that states no bound cannot reach this, because a wait past a bound of

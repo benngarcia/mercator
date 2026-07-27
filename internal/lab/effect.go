@@ -50,6 +50,16 @@ const (
 	// landed. The pull is a command with a duration; retention is the fact that
 	// outlives it, and only one of the two can explain what a host holds.
 	OperationImageRetained = "image.retained"
+	// OperationCapacityPreempted is a provider taking back a machine, and the
+	// executions that went with it. It is the one entry here Mercator did not
+	// command: every other operation records a crossing from the control plane into
+	// the world, and this records the world acting on its own account.
+	//
+	// It is in the ledger because the ledger is the only account of what really
+	// happened to an execution. Mercator's own record can say a Run stopped; only
+	// this says the machine was reclaimed and names the work that was interrupted by
+	// it, which is what a rule about permission has to read.
+	OperationCapacityPreempted = "capacity.preempted"
 )
 
 type EffectCommand string

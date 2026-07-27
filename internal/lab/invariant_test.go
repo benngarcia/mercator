@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 40 {
-		t.Fatalf("latest invariant results = %d, want 40", len(latest))
+	if len(latest) != 42 {
+		t.Fatalf("latest invariant results = %d, want 42", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -511,6 +511,34 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				identifiedDecisionEvent("first", "run-1", "offer-1"),
 				identifiedDecisionEvent("rewrite", "run-1", "offer-2"),
 			}
+		},
+		// A family of three with four of its members holding capacity at one moment,
+		// which is admission never asking how wide the caller said the family may run.
+		// The width is a bound on the work rather than on the fleet, so a machine
+		// standing idle beside it does not make the fourth launch legitimate.
+		"safety.group_parallelism_respected": func(observation *InvariantObservation) {
+			observation.Workloads = map[string]domain.WorkloadRevision{
+				"run-1": workloadInFamily("sweep", 3),
+				"run-2": workloadInFamily("sweep", 3),
+				"run-3": workloadInFamily("sweep", 3),
+				"run-4": workloadInFamily("sweep", 3),
+			}
+			observation.Effects = []EffectRecord{
+				launchEffect(1, "run-1"),
+				launchEffect(2, "run-2"),
+				launchEffect(3, "run-3"),
+				launchEffect(4, "run-4"),
+			}
+		},
+		// A provider taking back a machine that was running work whose class says it
+		// may not be interrupted, which is what placing such a Run on reclaimable
+		// capacity eventually produces. Nothing Mercator does afterwards recovers the
+		// work, so the permission had to be honoured before the launch.
+		"safety.interruption_was_permitted": func(observation *InvariantObservation) {
+			observation.Workloads = map[string]domain.WorkloadRevision{
+				"run-1": {Spec: domain.WorkloadSpec{Placement: domain.PlacementPolicy{Class: domain.ClassInteractive}}},
+			}
+			observation.Effects = []EffectRecord{preemptionEffect(1, "rental-spot", "run-1")}
 		},
 		// A decision whose ID says nothing about its content. Re-deriving the ID from
 		// the record that carries it yields another one, so the record cannot answer

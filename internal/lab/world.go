@@ -1010,13 +1010,68 @@ func (world *simulatedWorld) retireExpiredCapacity() {
 		if state.leaseExpiresAt.IsZero() || world.now.Before(state.leaseExpiresAt) || world.busy(id) {
 			continue
 		}
-		delete(world.truth, id)
-		delete(world.seededLocality, id)
-		delete(world.seededReplicas, id)
-		delete(world.cacheMounts, id)
-		for _, hosts := range world.replicas {
-			delete(hosts, id)
+		world.retireCapacity(id)
+	}
+}
+
+// preemptCapacity is the provider taking a machine back. It is the same removal an
+// elapsed lease performs and it is not the same act: a lease waits for the machine
+// to be idle, and this does not, which is the whole of what reclaimable capacity
+// means. Whatever was running here stops running here, and the ledger says so
+// before the machine is gone, because after it there is nothing left to name.
+func (world *simulatedWorld) preemptCapacity(rentalID string) error {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	if _, exists := world.truth[rentalID]; !exists {
+		return fmt.Errorf("Lab world cannot preempt %q, which is not capacity it holds", rentalID)
+	}
+	interrupted := []map[string]any{}
+	for _, launchKey := range slices.Sorted(maps.Keys(world.executions)) {
+		execution := world.executions[launchKey]
+		if execution.OfferID != rentalID {
+			continue
 		}
+		interrupted = append(interrupted, map[string]any{
+			"run_id":       execution.RunID,
+			"launch_key":   execution.LaunchKey,
+			"workspace_id": execution.WorkspaceID,
+			// Whether the process had begun at all. A launch reclaimed before its
+			// container started lost the machine and no work, which is a different
+			// fact about the same event and one nothing else in the record could
+			// recover once the execution is gone.
+			"started": !execution.StartedAt.IsZero() && !world.now.Before(execution.StartedAt),
+		})
+		delete(world.executions, launchKey)
+		world.cancelTransfers(launchKey)
+	}
+	world.recordEffect(
+		OperationCapacityPreempted,
+		"capacity-preempted/"+rentalID,
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+		rentalID,
+		"capacity-preempted/"+rentalID,
+		"",
+		map[string]any{"offer_id": rentalID},
+		map[string]any{"interrupted": interrupted},
+		"",
+	)
+	world.retireCapacity(rentalID)
+	world.publishObservations()
+	return nil
+}
+
+// retireCapacity is a machine ceasing to exist, whichever of the two reasons took
+// it. Everything local goes with it: the content on its disk and the Artifact
+// copies on it were on that disk, and a copy is exactly what does not survive the
+// machine. What survives is what the object store holds, which is the point.
+func (world *simulatedWorld) retireCapacity(id string) {
+	delete(world.truth, id)
+	delete(world.seededLocality, id)
+	delete(world.seededReplicas, id)
+	delete(world.cacheMounts, id)
+	for _, hosts := range world.replicas {
+		delete(hosts, id)
 	}
 }
 
