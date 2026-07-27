@@ -94,19 +94,28 @@ func noWaitPastItsClassBound(observation InvariantObservation) error {
 	return nil
 }
 
-// noRefusalYoungerWorkOvertook holds every wait admission ended at the class
+// noRefusalYoungerWorkOvertook holds every wait admission ended past the class
 // bound to the reason it is allowed to end there. A fleet that never published a
 // machine which could take this Run is one, and it is the whole of the exemption:
 // no ordering could have placed work nothing can hold, so the refusal is Mercator
 // reporting a fleet too small rather than a queue that wronged somebody.
 //
-// Anything else refused at the bound has to be explained by what was admitted
+// Anything else refused past the bound has to be explained by what was admitted
 // while it waited, and the rule is the one the aging rate is derived from. Once a
 // Run has waited half its own maximum queue delay it is worth more than any class
 // starting fresh, so work admitted past it from that moment on must itself have
 // waited at least half of its own bound. Work that had not is younger work that
 // stepped over it, which is exactly the starvation the derivation exists to
 // prevent.
+//
+// Which refusals those are is read off the wait and never off the reason code,
+// which is what safety.nothing_waits_behind_an_impossible_ask says about reasons
+// in general: the word Mercator chose is the answer under examination. Reading
+// QUEUE_DELAY_EXCEEDED alone left the law silent on exactly the record it exists
+// to catch. A Run refused after a wait sixteen thousand seconds past its class
+// bound was named for the later of the two bounds it broke, so neither half of
+// this rule saw it: the wait is over, which is what the first half skips, and the
+// refusal did not carry the word, which is what the second half filtered on.
 //
 // It is replayed out of the public log because it is about moments that have
 // passed: which Runs took capacity while this one waited, and how long each of
@@ -126,48 +135,43 @@ func noRefusalYoungerWorkOvertook(observation InvariantObservation) error {
 
 // replayQueueDepartures is every way this log says a wait ended: the Runs that
 // left it by taking capacity, with how long each had waited when it did, and the
-// Runs admission would not hold any longer.
+// waits admission would not go on holding.
+//
+// The wait it measures over is the one production measures. runState.queuedSince is
+// set at the first deferral and nothing ever clears it, so a Run that took a
+// machine, failed to launch on it and came back through admission is held at the
+// standing of its whole wait. A replay that began the wait again at each placement
+// disagreed with the scheduler about that same number: the re-placed Run read back
+// as a fresh arrival that had waited nothing, and convicted the queue it was in
+// fact the oldest member of. Nothing is deleted here for the same reason nothing is
+// there: a Run ID is unique, and the moment its wait began is a fact about it that
+// no later event revises.
 //
 // Every moment is read only where the rule needs one, which is why the timestamp
 // is parsed inside each case rather than beside the event. A record whose
 // admission facts cannot state when they happened is a record this rule fails on,
 // and the rest of the stream is none of its business.
 func replayQueueDepartures(observation InvariantObservation) ([]admittedRun, []refusedWait, error) {
-	waiting := map[string]time.Time{}
+	waits := map[string]queueWait{}
 	var admitted []admittedRun
 	var refused []refusedWait
 	for _, event := range observation.MercatorEvents {
 		runID := strings.TrimPrefix(event.Subject, "runs/")
 		switch event.Type {
-		case orchestrator.EventAdmissionDeferred:
-			at, err := eventOccurredAt(event)
-			if err != nil {
-				return nil, nil, err
-			}
-			// The moment a wait began never moves, for the reason the queue itself
-			// reads it that way: a Run told to wait for a second reason has not
-			// started waiting again.
-			if _, held := waiting[runID]; !held {
-				waiting[runID] = at
-			}
-		case orchestrator.EventAdmissionRefused:
+		case orchestrator.EventAdmissionDeferred, orchestrator.EventAdmissionRefused:
 			deferral, err := recordedDeferral(event)
 			if err != nil {
 				return nil, nil, err
 			}
-			if deferral.Reason == domain.RefusedQueueDelayExceeded {
-				at, err := eventOccurredAt(event)
-				if err != nil {
-					return nil, nil, err
-				}
-				refused = append(refused, refusedWait{
-					runID: runID, class: deferral.Class, since: waiting[runID], at: at,
-					fleetHeldNothing: deferral.HoldsNoQueue(),
-				})
+			at, err := eventOccurredAt(event)
+			if err != nil {
+				return nil, nil, err
 			}
-			delete(waiting, runID)
-		case orchestrator.EventRunClosed:
-			delete(waiting, runID)
+			wait := waits[runID].asked(event.WorkspaceID, at, deferral)
+			waits[runID] = wait
+			if event.Type == orchestrator.EventAdmissionRefused {
+				refused = append(refused, wait.ended(runID, deferral, at))
+			}
 		case orchestrator.EventBookingDecided:
 			decision, err := recordedDecision(event)
 			if err != nil {
@@ -185,29 +189,85 @@ func replayQueueDepartures(observation InvariantObservation) ([]admittedRun, []r
 				return nil, nil, err
 			}
 			admitted = append(admitted, admittedRun{
-				runID: decision.RunID, class: decision.Policy.Class, at: at,
-				waited: waitedBy(waiting[decision.RunID], at),
+				runID: decision.RunID, workspace: event.WorkspaceID,
+				class: decision.Policy.Class, at: at,
+				waited: waitedBy(waits[decision.RunID].since, at),
 			})
-			delete(waiting, decision.RunID)
 		}
 	}
 	return admitted, refused, nil
 }
 
-// admittedRun is one Run taking capacity at one moment, and how long it had
-// itself been kept waiting when it did.
-type admittedRun struct {
-	runID  string
-	class  domain.ServiceClass
-	at     time.Time
-	waited float64
+// queueWait is one Run's wait as the log states it: whose queue it is in, the
+// moment admission first told it to wait, and the last thing the fleet said about
+// it.
+type queueWait struct {
+	workspace        string
+	since            time.Time
+	fleetHeldNothing bool
 }
 
-// refusedWait is one wait admission ended at the class bound: whose it was, when
-// it began and ended, and whether the fleet had said there was nothing here to
-// wait for.
+// asked is this wait after one more moment admission decided about it.
+func (wait queueWait) asked(workspace string, at time.Time, deferral domain.AdmissionDeferral) queueWait {
+	// The moment a wait began never moves, for the reason the queue itself reads it
+	// that way: a Run told to wait for a second reason has not started waiting again.
+	if wait.since.IsZero() {
+		wait.since = at
+	}
+	wait.workspace = workspace
+	wait.fleetHeldNothing = wait.fleetLastSaid(deferral)
+	return wait
+}
+
+// fleetLastSaid is the fleet's last word about this Run: the answer beside this
+// decision where it carries one, and the last answer measured during the wait
+// where it does not.
+//
+// It is the last measurement rather than the latest deferral, which is where this
+// reading parts from the queue production orders on, and the two questions are why.
+// Production asks whether other work has to be held behind this wait now, and a
+// Run held behind higher priority work measured no machine at all, so it goes on
+// holding the queue until the fleet answers again. This asks whether any ordering
+// could have ended the wait, where an absence of evidence is not evidence the fleet
+// had room. A Run nothing could ever hold, refused at its bound through the
+// priority door, carries no fleet answer on the refusal whatsoever, and reading
+// only that answer convicted Mercator of starving a Run no machine it published
+// could take.
+func (wait queueWait) fleetLastSaid(deferral domain.AdmissionDeferral) bool {
+	if deferral.Fleet == nil {
+		return wait.fleetHeldNothing
+	}
+	return deferral.Fleet.HoldsNothing()
+}
+
+// ended is this wait written as the refusal that closed it.
+func (wait queueWait) ended(runID string, deferral domain.AdmissionDeferral, at time.Time) refusedWait {
+	return refusedWait{
+		runID:            runID,
+		workspace:        wait.workspace,
+		class:            deferral.Class,
+		since:            wait.since,
+		at:               at,
+		fleetHeldNothing: wait.fleetHeldNothing,
+	}
+}
+
+// admittedRun is one Run taking capacity at one moment, whose queue it left, and
+// how long it had itself been kept waiting when it did.
+type admittedRun struct {
+	runID     string
+	workspace string
+	class     domain.ServiceClass
+	at        time.Time
+	waited    float64
+}
+
+// refusedWait is one wait admission would not go on holding: whose it was, which
+// queue it was in, when it began and ended, and whether the fleet had said there
+// was nothing here to wait for.
 type refusedWait struct {
 	runID            string
+	workspace        string
 	class            domain.ServiceClass
 	since            time.Time
 	at               time.Time
@@ -215,19 +275,29 @@ type refusedWait struct {
 }
 
 // agingShouldHaveTaken adjudicates one refused wait against every admission taken
-// during it. A wait this replay never saw begin is not judged, because there is no
-// moment to measure anything from and a Run refused without ever having been
-// deferred waited for nothing.
+// during it.
+//
+// A wait refused inside its own class bound is not judged, because the bound is
+// what this rule is about: a Run refused before reaching it was refused for
+// something else, and a Run refused without ever having been deferred waited for
+// nothing at all.
 func agingShouldHaveTaken(wait refusedWait, admissions []admittedRun) error {
-	if wait.fleetHeldNothing || wait.since.IsZero() {
+	held := wait.at.Sub(wait.since).Seconds()
+	if wait.fleetHeldNothing || !wait.class.Admission().Starved(held) {
 		return nil
 	}
+	// A class that states no bound cannot reach this, because a wait past a bound of
+	// nothing is not a wait anything passed.
 	promoted := halfTheBound(wait.class)
-	if promoted <= 0 {
-		return nil
-	}
 	for _, admission := range admissions {
-		if admission.runID == wait.runID || admission.at.Before(wait.since) || admission.at.After(wait.at) {
+		// One queue is one workspace's, which is how production builds it: a Run is
+		// ordered against the waits in its own tenant and against nothing else, so an
+		// admission in another workspace competed with this wait for nothing and
+		// convicts it of nothing.
+		if admission.workspace != wait.workspace || admission.runID == wait.runID {
+			continue
+		}
+		if admission.at.Before(wait.since) || admission.at.After(wait.at) {
 			continue
 		}
 		waited := admission.at.Sub(wait.since).Seconds()

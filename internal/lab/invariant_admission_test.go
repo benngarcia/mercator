@@ -127,6 +127,30 @@ func TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane(t *testing.T) {
 		t.Fatalf("the record says %d machines were weighed and %d of them could hold this Run, and the fleet has two machines and neither can",
 			waiting.Fleet.Weighed, waiting.Fleet.CouldHold)
 	}
+	// The wait ends named for the earlier of the two bounds it broke. Driven to the
+	// world's own horizon this execution reaches five hours in one advance, with the
+	// half hour of queue this class allows and its four hour deadline both behind it,
+	// and naming the deadline told the caller the answer had stopped being worth
+	// having about a promise Mercator broke four and a half hours earlier.
+	closing := refusalRecord(t, execution, "run-impossible")
+	if closing.Reason != domain.RefusedQueueDelayExceeded {
+		t.Fatalf("the wait ended as %q after %.0fs, against the %.0fs of queue this class allows",
+			closing.Reason, closing.QueuedSeconds, closing.MaxQueueDelaySeconds)
+	}
+	if closing.QueuedSeconds <= closing.MaxQueueDelaySeconds {
+		t.Fatalf("the refusal says the Run waited %.0fs against a bound of %.0fs, which is not a bound anything passed",
+			closing.QueuedSeconds, closing.MaxQueueDelaySeconds)
+	}
+	// And the starvation law is silent about it, which is the exemption read off the
+	// fleet's last measurement. This refusal carries no fleet answer of its own,
+	// because the door it left by weighed no machine.
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("check invariants: %v", err)
+	}
+	starvation := invariantResultByID(t, latestInvariantResults(execution.invariants), "liveness.aging_prevents_starvation")
+	if starvation.Status != InvariantPassed {
+		t.Fatalf("the starvation law read a fleet nothing in it can hold this Run as a queue that wronged somebody: %+v", starvation)
+	}
 }
 
 // TestACostBoundRefusesTheMachineTheClassWouldBuyAtL1 is the caller's maximum cost
@@ -279,7 +303,7 @@ func TestARefusedQueueDelayIsStarvationWhenYoungerWorkOvertookIt(t *testing.T) {
 	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
 		admissionDeferredEvent("run-quiet", now, domain.ClassBatch),
 		admittedForClassEvent("run-urgent", domain.ClassInteractive, now.Add(31*time.Minute)),
-		refusedForQueueDelayEvent("run-quiet", now.Add(61*time.Minute), domain.ClassBatch, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}),
+		refusedWaitEvent("run-quiet", now.Add(61*time.Minute), domain.ClassBatch, domain.RefusedQueueDelayExceeded, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}),
 	})
 
 	err := agingPreventsStarvation(observation)
@@ -298,11 +322,107 @@ func TestARefusedQueueDelayIsNotStarvationWhenTheFleetCouldHoldNothing(t *testin
 	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
 		admissionDeferredEvent("run-impossible", now, domain.ClassBatch),
 		admittedForClassEvent("run-urgent", domain.ClassInteractive, now.Add(31*time.Minute)),
-		refusedForQueueDelayEvent("run-impossible", now.Add(61*time.Minute), domain.ClassBatch, &domain.FleetAnswer{Weighed: 1}),
+		refusedWaitEvent("run-impossible", now.Add(61*time.Minute), domain.ClassBatch, domain.RefusedQueueDelayExceeded, &domain.FleetAnswer{Weighed: 1}),
 	})
 
 	if err := agingPreventsStarvation(observation); err != nil {
 		t.Fatalf("a fleet that can hold nothing was read as a queue that wronged somebody: %v", err)
+	}
+}
+
+// TestAWaitPastItsBoundIsJudgedWhateverTheRefusalIsNamedFor is the record this
+// tree held before the repair, and it is the deliberate failure of the clause
+// reading the wait rather than the reason code.
+//
+// A standard Run waited four hours and fifty nine minutes, which is sixteen
+// thousand seconds past the half hour its class allows, and the refusal that closed
+// it named the deadline. Both bounds had gone by, so the word is a choice; the wait
+// is not. Filtering the law on QUEUE_DELAY_EXCEEDED made the whole rule silent about
+// exactly this record, because the other half skips a Run that is closed.
+func TestAWaitPastItsBoundIsJudgedWhateverTheRefusalIsNamedFor(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		admissionDeferredEvent("run-quiet", now, domain.ClassStandard),
+		admittedForClassEvent("run-urgent", domain.ClassInteractive, now.Add(3000*time.Second)),
+		refusedWaitEvent("run-quiet", now.Add(17940*time.Second), domain.ClassStandard,
+			domain.RefusedDeadlineUnreachable, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}),
+	})
+
+	err := agingPreventsStarvation(observation)
+	if err == nil {
+		t.Fatal("a wait sixteen thousand seconds past its class bound was refused under another name and the rule allowed it")
+	}
+	t.Logf("violation: %v", err)
+}
+
+// TestAWaitIsJudgedAgainstItsOwnTenantsQueue is a lawful execution the flat replay
+// convicted. Mercator orders each workspace's queue on its own, filtering the log by
+// workspace to build it, so no Run in another tenant is ever in a Run's ahead-list
+// and no ordering in ws_alpha could have placed ws_beta's work.
+func TestAWaitIsJudgedAgainstItsOwnTenantsQueue(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		inWorkspace(admissionDeferredEvent("run-quiet", now, domain.ClassBatch), "ws_alpha"),
+		inWorkspace(admittedForClassEvent("run-other-tenant", domain.ClassInteractive, now.Add(1900*time.Second)), "ws_beta"),
+		inWorkspace(refusedWaitEvent("run-quiet", now.Add(3601*time.Second), domain.ClassBatch,
+			domain.RefusedQueueDelayExceeded, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}), "ws_alpha"),
+	})
+
+	if err := agingPreventsStarvation(observation); err != nil {
+		t.Fatalf("an admission in another tenant convicted a queue it never competed with: %v", err)
+	}
+}
+
+// TestAReplacedRunCarriesTheWaitProductionHeldItAt is the other lawful execution the
+// replay convicted. A launch that failed for capacity nobody has left sends a Run
+// back through admission, and the second decision that takes a machine for it is a
+// replacement rather than an arrival.
+//
+// Production holds that Run at the standing of its whole wait, because queuedSince is
+// set at the first deferral and nothing clears it. The replay used to start the wait
+// again at every placement, so it read the oldest Run in the queue as work that had
+// waited nothing and convicted the batch Run's refusal on it.
+func TestAReplacedRunCarriesTheWaitProductionHeldItAt(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		admissionDeferredEvent("run-watched", now.Add(-1000*time.Second), domain.ClassInteractive),
+		admissionDeferredEvent("run-quiet", now, domain.ClassBatch),
+		admittedForClassEvent("run-watched", domain.ClassInteractive, now.Add(1000*time.Second)),
+		admittedForClassEvent("run-watched", domain.ClassInteractive, now.Add(2000*time.Second)),
+		refusedWaitEvent("run-quiet", now.Add(3601*time.Second), domain.ClassBatch,
+			domain.RefusedQueueDelayExceeded, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}),
+	})
+
+	if err := agingPreventsStarvation(observation); err != nil {
+		t.Fatalf("a Run placed again after a failed launch was read as a fresh arrival that had waited nothing: %v", err)
+	}
+}
+
+// TestARefusedQueueDelayIsNotStarvationWhenTheFleetLastSaidItCouldHoldNothing is the
+// exemption read off the fleet's last measurement rather than off the refusal alone.
+//
+// A Run no machine in this fleet can hold, once it is also behind work that outranks
+// it, is deferred by the priority door: that wait weighs no machine, so it carries no
+// fleet answer, and neither does the refusal that ends it at the bound. Reading only
+// the refusal's own answer therefore reported starvation for a Run no ordering could
+// ever have placed, which is the one thing the exemption exists to prevent.
+func TestARefusedQueueDelayIsNotStarvationWhenTheFleetLastSaidItCouldHoldNothing(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		deferralEvent("run-unholdable", now, domain.AdmissionDeferral{
+			Reason: domain.DeferredNoCapacityFits,
+			Class:  domain.ClassInteractive,
+			Fleet:  &domain.FleetAnswer{Weighed: 1},
+		}),
+		deferredForEvent("run-unholdable", now.Add(100*time.Second), domain.ClassInteractive,
+			domain.DeferredBehindHigherPriority, "run-older"),
+		admittedForClassEvent("run-fresh", domain.ClassInteractive, now.Add(200*time.Second)),
+		refusedWaitEvent("run-unholdable", now.Add(301*time.Second), domain.ClassInteractive,
+			domain.RefusedQueueDelayExceeded, nil),
+	})
+
+	if err := agingPreventsStarvation(observation); err != nil {
+		t.Fatalf("a Run the fleet had already said it can never hold was read as a queue that wronged somebody: %v", err)
 	}
 }
 
@@ -318,7 +438,7 @@ func TestARefusedQueueDelayIsNotStarvationWhenOlderWorkWasAdmitted(t *testing.T)
 		admissionDeferredEvent("run-older", now.Add(-100*time.Second), domain.ClassInteractive),
 		admissionDeferredEvent("run-watched", now, domain.ClassInteractive),
 		admittedForClassEvent("run-older", domain.ClassInteractive, now.Add(200*time.Second)),
-		refusedForQueueDelayEvent("run-watched", now.Add(301*time.Second), domain.ClassInteractive, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}),
+		refusedWaitEvent("run-watched", now.Add(301*time.Second), domain.ClassInteractive, domain.RefusedQueueDelayExceeded, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}),
 	})
 
 	if err := agingPreventsStarvation(observation); err != nil {
@@ -430,7 +550,7 @@ func publicRunEvents(t *testing.T, execution *Execution) []eventlog.StoredEvent 
 // rule reads it: what a Run was worth when it was admitted is a fact about the
 // decision rather than about today's class table.
 func admittedForClassEvent(runID string, class domain.ServiceClass, at time.Time) eventlog.CloudEvent {
-	event := bookingDecidedEvent("decided-"+runID, domain.BookingDecision{
+	event := bookingDecidedEvent("decided-"+runID+"-"+at.Format(time.RFC3339Nano), domain.BookingDecision{
 		RunID:                   runID,
 		SelectedOfferSnapshotID: "offer-1",
 		Policy:                  domain.PlacementPolicy{Class: class},
@@ -440,15 +560,24 @@ func admittedForClassEvent(runID string, class domain.ServiceClass, at time.Time
 	return event
 }
 
-// refusedForQueueDelayEvent is admission ending a wait at the class bound, carrying
-// the fleet answer the wait rested on.
-func refusedForQueueDelayEvent(runID string, at time.Time, class domain.ServiceClass, fleet *domain.FleetAnswer) eventlog.CloudEvent {
+// refusedWaitEvent is admission ending a wait, named for the bound it says the wait
+// passed and carrying the fleet answer it rested on. The reason is a parameter
+// because the starvation law reads the wait rather than the word: a fixture that
+// could only state one reason could not say what the law does about the other.
+func refusedWaitEvent(runID string, at time.Time, class domain.ServiceClass, reason string, fleet *domain.FleetAnswer) eventlog.CloudEvent {
 	event := deferralEvent(runID, at, domain.AdmissionDeferral{
-		Reason: domain.RefusedQueueDelayExceeded,
+		Reason: reason,
 		Class:  class,
 		Fleet:  fleet,
 	})
 	event.Type = orchestrator.EventAdmissionRefused
+	return event
+}
+
+// inWorkspace is one recorded fact filed under the tenant it happened in, which is
+// how every event Mercator appends arrives and what the queue is partitioned by.
+func inWorkspace(event eventlog.CloudEvent, workspaceID string) eventlog.CloudEvent {
+	event.WorkspaceID = workspaceID
 	return event
 }
 
