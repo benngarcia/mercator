@@ -159,6 +159,15 @@ far. A candidate over the cost bound is refused `COST_LIMIT_EXCEEDED` at
 load, because a fixture whose budget refuses every quoted machine is a world to
 state on purpose rather than by leaving a number out.
 
+`request.group` is the family of Runs this one arrived with and how wide that
+family may run at once, as `{"id": "sweep", "max_parallel": 3}`. Every member
+states the width, because a group is a label the work carries rather than an
+object an operator creates first, and a name without a width or a width without a
+name is refused where the Run enters. It is a bound on the work rather than a
+preference for a machine: a member whose family is already that wide is deferred
+`GROUP_AT_PARALLELISM` with capacity standing idle beside it, and the wait ends
+when a member of the same family finishes rather than when a machine comes free.
+
 The other bounds are the class's own and no request states them: how long a Run
 may be kept waiting, and the moment it must have started by. Both are measured
 from when admission first told the Run to wait, both end the wait rather than
@@ -189,8 +198,10 @@ because nothing the fleet published can hold this Run, whether it weighed machin
 and refused every one of them or published nothing this ask even matches,
 `CAPACITY_UNSTATED` for a wait on a machine that has not said enough for anybody to
 tell, which is what an enrolled node whose disk probe failed publishes,
-and `BEHIND_HIGHER_PRIORITY` for a Run the queue in front of it
-outranks. Two reasons are what a `refuse` states, and each is a bound on waiting
+`BEHIND_HIGHER_PRIORITY` for a Run the queue in front of it
+outranks, and `GROUP_AT_PARALLELISM` for a Run whose own family is already as wide
+as its caller declared, which says nothing about capacity at all and carries no
+`fleet` answer because no machine was weighed. Two reasons are what a `refuse` states, and each is a bound on waiting
 that has gone by: `QUEUE_DELAY_EXCEEDED` for a Run Mercator has already kept
 waiting longer than its class allows, and `DEADLINE_UNREACHABLE` for one where the
 moment its class says it must have started by is already past. `behind`
@@ -283,6 +294,15 @@ its disk at all, which is a different fixture from a machine with no room and is
 refused as a silence rather than as a shortfall. A marketplace listing is a search
 result, so both worlds publish one only to an ask its room and its cards match;
 capacity Mercator holds is listed whole and refused in the record.
+A Rental states `reclaimable` when whoever sold it may take the machine back while
+Mercator is still using it, which is the term a spot ask is sold on. A Run whose
+class does not permit interruption is refused such a machine with
+`INTERRUPTION_NOT_PERMITTED`, before anything starts, because nothing Mercator
+holds survives a machine being reclaimed. `world.preemptions` is the provider
+taking one back, as `{"rental": "rental-spot", "at": "5m"}`, and it may only name a
+Rental this world declared reclaimable: a world reclaiming anything else would be
+describing a provider breaking its own contract. Whatever was running there is
+gone, and Mercator learns of it the way it does in production, by looking.
 `world.rental_schedules` belongs to Mercator and references Rentals by ID. A nonempty schedule has a positive version, exactly one running
 Booking, and at most four ordered queued Bookings.
 

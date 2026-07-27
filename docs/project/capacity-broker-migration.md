@@ -3223,6 +3223,62 @@ complete because it works against a live provider.
       there is nothing to fix in the entries. The finding is filed twice, once against
       `invariant_admission.go` and once against this document, and the code half is the
       first repair above.
+- [x] 2026-07-27: Make a run group a bound admission holds, and let a world take a
+  machine back. Two vocabularies the corpus could write down and nothing could act on.
+  - A group was a string the arrival plan wrote onto a Run and nothing read. It reached
+    the World Tape and stopped there, because `WorkloadForRun` had nowhere to put it and
+    `domain.WorkloadSpec` had no field for it. It moves onto the request the class
+    already travels on rather than staying beside the arrival, so it enters production
+    the way every other statement a caller makes does, and the per-arrival and
+    per-family strings are deleted rather than joined by a second way to say it. A
+    family is a name and a width together, every member declares the width, and half a
+    declaration is refused where the Run enters: a name with no bound would be held to a
+    width of nothing and never placed.
+  - There is no Group aggregate, and that is the judgment call. A group is a label the
+    work carries, so there is nothing to register before submitting and nothing to
+    reconcile afterwards. The price is that members have to agree about their own width,
+    which `safety.group_parallelism_respected` reports rather than resolves: holding a
+    family to a bound half of it never asked for would be worse than saying the record
+    is contradictory.
+  - Admission asks the family first, ahead of the ordering and ahead of any machine
+    being weighed, because it is the only one of the three questions no ordering and no
+    capacity can answer differently. Asking it later recorded the Run as waiting behind
+    work that outranked it while the thing holding it was its own declaration, and let
+    it hold the queue against unrelated work. The wait it produces therefore holds no
+    queue, which is the same exemption an impossible ask carries and for the same
+    reason.
+  - The count is over placements rather than over executions. A member given a queued
+    Booking behind somebody else's work is not running yet and admission will never ask
+    about it again, so counting what runs would let a family of three commit six
+    machines and then run six of them.
+  - `reclaimable` is the term capacity was sold on, stated by the backend that sold it.
+    It is deliberately not derived from the interruption rate offers already carry: a
+    rate is how often a machine has been seen to fail, and refusing work that may not be
+    interrupted has to rest on what the capacity is. Silence means no provider said it
+    sells this capacity that way, which is safe on this fact alone, because what a
+    provider does not sell as reclaimable it does not reclaim, and the Lab enforces
+    exactly that by refusing to preempt a Rental no fixture declared reclaimable.
+  - Interruption permission is decided before the work starts and never after. Nothing
+    Mercator holds survives a machine being reclaimed, so there is no policy about which
+    execution to give up: by the time the provider says so the choice has been made for
+    it. It joins the class table beside the priority, because the two classes that price
+    waiting at a fifth of the rent or at nothing are exactly the two that would rather
+    be cheap than certain.
+  - `world.capacity.preempted.v1` is the first World Tape event that is neither a
+    caller's doing nor Mercator's. The world removes the capacity and the executions on
+    it, and Mercator learns the way it would in production, by looking and finding the
+    launch missing: a provider that has taken its machine back answers no differently
+    from one whose machine finished the work.
+  - An interrupted Run closes failed. Re-placing work whose process already ran is
+    replanning, which is the remaining phase 4 slice, so this one states the permission
+    and the loss rather than pretending to survive it.
+- [ ] Not yet done, and disclosed rather than implied. No production adapter publishes
+  `reclaimable`: the field is on the wire, the class states the permission, the
+  scheduler refuses on it, and the two simulated worlds write it, but the backends that
+  sell interruptible capacity are the phase 5 provider's business. Soft and hard
+  affinity and a blocked-until-ready edge wider than the single Artifact dependency are
+  also still open, and both want a scenario and an invariant of their own rather than a
+  field added quietly beside this one.
 
 
 ## Phase status
@@ -3232,7 +3288,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; the hierarchical estimator, owned economics, and replanning remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; the hierarchical estimator, owned economics, replanning, affinity, and a production publisher for reclaimable capacity remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -4127,6 +4183,53 @@ Phase 4 added:
   a Run must itself have waited half of its own bound. A fleet that published no
   machine which could ever hold the Run is the whole of the exemption, which is what
   separates a fleet too small from a queue that wronged somebody.
+- `a-group-never-runs-wider-than-it-declared` (green): eight Runs in one family whose
+  caller said three of them may run at once, four idle machines warm for the image,
+  and the fourth Run told to wait. The record names `GROUP_AT_PARALLELISM`, the three
+  siblings holding capacity, and no fleet answer at all, because no machine was
+  weighed on the fourth's behalf. The ninth Run belongs to no family and takes the
+  fourth machine, which is what makes the fixture about a declared width rather than
+  about a fleet that ran out. Dropping the family from `WorkloadForRun` runs all eight
+  at once and gives the ninth Run a queued Booking on a machine that was busy.
+- `a-group-of-eight-runs-three-at-a-time` (conformance): the same family driven to the
+  end under the real control plane. Three run, five wait, and as each member finishes
+  the next is admitted, so the peak in the launch ledger is three and every member
+  ends succeeded. A family held to its width by never running is starved rather than
+  bounded, and only an execution can tell those apart.
+- `safety.group_parallelism_respected` (Lab invariant): stated in two halves. The
+  family every member declared reached the workload Mercator recorded, and no family
+  ever held capacity wider than that, counted over distinct Runs in the launch ledger
+  rather than over anything the control plane keeps. The first half is what makes the
+  second falsifiable: reading the family off the recorded workload is right for the
+  reason `safety.artifact_dependencies` reads a Run's inputs off it, and on its own it
+  goes silent on exactly the defect this slice repaired, a declaration that never
+  reached the record. Members that disagree about their own width are a violation of
+  their own, which is the price of a group being a label the work carries rather than
+  an object Mercator registers.
+- `only-work-that-may-be-interrupted-runs-on-reclaimable-capacity` (green): two idle
+  machines, and the cheap one is sold on terms that let its provider take it back. The
+  standard Run goes first, while both are free, and `INTERRUPTION_NOT_PERMITTED`
+  strikes out the machine its class would have bought; the batch Run behind it takes
+  the reclaimable machine. Letting the standard class permit interruption puts the Run
+  with most to lose on the machine that can disappear.
+- `a-preemptible-run-is-the-one-interrupted` (conformance): the same fleet with the
+  provider taking both reclaimable machines back five minutes in, which is the first
+  thing in this corpus that happens to Mercator rather than because of it. The batch
+  Run is the one interrupted, and the standard Run runs to the end on capacity nothing
+  could reclaim.
+- `safety.interruption_was_permitted` (Lab invariant): no execution the world took
+  away belonged to a class that forbids interruption. It crosses the world's own
+  reclamation with the workload Mercator recorded, because neither half says it alone:
+  an execution whose machine went away and one that failed on its own are the same
+  fact on the Run's record. It reads the permission off the class table, as the
+  neighbouring laws read the queue bounds off it, so changing what a class permits is
+  a change to the contract rather than a break of it. What it is red for is Mercator
+  ignoring the permission, which dropping the feasibility refusal produces.
+- `liveness.aging_prevents_starvation` (Lab invariant, second exemption): a wait its
+  own family's declared width was holding is a wait no ordering could have ended,
+  because the bound counts members rather than machines. A caller whose width outlasts
+  its class's own patience has contradicted itself, and that is not Mercator starving
+  anybody.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
@@ -4148,8 +4251,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 53 regression Blueprints: 50 green and 3 target, beside one demo,
-one minimized case, and twenty six conformance Blueprints. The count is read off the
+The corpus is 55 regression Blueprints: 52 green and 3 target, beside one demo,
+one minimized case, and twenty eight conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
@@ -4219,6 +4322,53 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 run groups and interruption
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, so nothing that wants a daemon skipped:
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/orchestrator ./internal/scheduler \
+  ./internal/domain ./internal/scenario
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+Both Blueprints were red before and are green after, and each one and each half of
+each law was measured by breaking the production behaviour and reading what failed.
+
+- Dropping the family from `WorkloadForRun` fails
+  `a-group-never-runs-wider-than-it-declared` six ways: five members reported as
+  `admission recorded nothing at all about this Run waiting`, and the Run outside the
+  family placed on `rental-1` as a queued Booking rather than on the idle machine. The
+  same mutation fails `safety.group_parallelism_respected` on its first half, with
+  `Run "run-member-001" was submitted into family "sweep" at a width of 3 and Mercator
+  recorded family "" at a width of 0`.
+- Stopping admission from asking about the family fails the second half, with `group
+  "sweep" declared that 3 of its Runs may hold capacity at once, and at effect 15 it
+  held 4`, and fails the daemon case with `run is "requested" waiting for "", want a
+  Run queued waiting for "GROUP_AT_PARALLELISM"`.
+- Letting the standard class permit interruption fails
+  `only-work-that-may-be-interrupted-runs-on-reclaimable-capacity` three ways, on the
+  placement and on both halves of the refusal the record should carry.
+- Dropping the feasibility refusal fails `safety.interruption_was_permitted` with `Run
+  "run-trainer" of class "standard" was running when the capacity it was placed on was
+  reclaimed at effect 13`. That is the mutation the law is red for rather than the class
+  table itself: the law reads the permission off the class, as the neighbouring laws read
+  the queue bounds off it, so editing what a class permits is a change to the contract
+  and not a break of it.
+- The bound is tight rather than merely respected. The launch ledger of
+  `a-group-of-eight-runs-three-at-a-time` peaks at exactly three, in three waves at 0s,
+  9m26s and 18m47s, and every one of the eight members ends succeeded.
+
+What this slice could not reach. No production adapter publishes `reclaimable`, so the
+live half of the interruption rule is the class refusing a machine a simulated world
+sold that way; the daemon case that runs against real capacity is the group bound, over
+the public API, the real event log, and two nodes enrolled over the node protocol. A
+real-container case for it would prove the container runtime rather than the bound,
+which is a seam this slice does not touch, and the fleet harness clears PATH so that
+the enrolled node is the only capacity in play.
 
 ### Phase 4 the review of the queue review, and the three repairs that stopped short
 
