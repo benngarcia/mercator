@@ -140,16 +140,12 @@ func (b *Broker) Prepare(ctx context.Context, request adapter.PrepareRequest) (a
 // image, so an identity carrying either would have the node fetch the same bytes
 // again.
 //
-// What that identity answers is a redelivery of the same desire, and only that.
-// A node has applied an identity, is still working on it, or refused it, and the
-// operation store dedupes on the identity with no regard for which: a pull that
-// failed on the machine is answered Duplicate from then on, so this control plane
-// never asks that host for that content again while the node's own agent is
-// deliberately not remembering it so that a retry can happen. The defect is
-// recorded in docs/project/capacity-broker-migration.md under the prewarming
-// slice. It is not repaired here, because making a refusal reissuable changes
-// what an operation identity promises and needs a world that can refuse a fetch
-// before it has a specification that could fail on it.
+// What that identity answers is a redelivery of a desire the machine can still
+// act on. A node has applied the identity, is still working on it, or refused it,
+// and only the first two are answered Duplicate: a pull that failed left nothing
+// on the machine, so the same content asked for again reaches the runtime rather
+// than being answered out of the record of the failure. That is what makes the
+// node agent's own refusal to remember a failed pull mean something.
 func (b *Broker) prepareOnNode(ctx context.Context, request adapter.PrepareRequest, item adapter.PrepareItem) (capability.OperationReceipt, error) {
 	ref, err := b.nodeRef(ctx, request.WorkspaceID, item.NativeRef)
 	if err != nil {

@@ -107,6 +107,60 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		}
 	})
 
+	t.Run("a refused preparation is asked again rather than answered from the failed record", func(t *testing.T) {
+		store := invited(t, newStore)
+		mustEnroll(t, store, "token-1")
+		if _, _, err := store.AppendOperation(context.Background(), prepareOperation("op-pull")); err != nil {
+			t.Fatalf("append preparation: %v", err)
+		}
+		if err := store.SettleOperation(context.Background(), workspaceID, nodeID, node.Result{
+			OperationID: "op-pull", Applied: false, Failure: "pull failed: registry unreachable", ReportedAt: start,
+		}); err != nil {
+			t.Fatalf("settle refusal: %v", err)
+		}
+
+		stored, duplicate, err := store.AppendOperation(context.Background(), prepareOperation("op-pull"))
+		if err != nil {
+			t.Fatalf("append preparation again: %v", err)
+		}
+
+		if duplicate {
+			t.Fatal("a preparation the node refused must be askable again, not answered as already recorded")
+		}
+		if stored.State != node.OperationPending || stored.Failure != "" {
+			t.Fatalf("reissued operation = %+v, want a fresh pending command", stored)
+		}
+		pending, err := store.PendingOperations(context.Background(), workspaceID, nodeID)
+		if err != nil {
+			t.Fatalf("pending operations: %v", err)
+		}
+		if len(pending) != 1 || pending[0].OperationID != "op-pull" {
+			t.Fatalf("pending = %+v, want the reissued preparation waiting for the node", pending)
+		}
+	})
+
+	t.Run("a refused launch keeps its identity spent", func(t *testing.T) {
+		store := invited(t, newStore)
+		mustEnroll(t, store, "token-1")
+		if _, _, err := store.AppendOperation(context.Background(), operation("op-1")); err != nil {
+			t.Fatalf("append operation: %v", err)
+		}
+		if err := store.SettleOperation(context.Background(), workspaceID, nodeID, node.Result{
+			OperationID: "op-1", Applied: false, Failure: "container create failed", ReportedAt: start,
+		}); err != nil {
+			t.Fatalf("settle refusal: %v", err)
+		}
+
+		_, duplicate, err := store.AppendOperation(context.Background(), operation("op-1"))
+		if err != nil {
+			t.Fatalf("append operation again: %v", err)
+		}
+
+		if !duplicate {
+			t.Fatal("a launch that failed may have made the container, so its identity must stay spent")
+		}
+	})
+
 	t.Run("an unacknowledged operation stays pending and an applied one does not", func(t *testing.T) {
 		store := invited(t, newStore)
 		mustEnroll(t, store, "token-1")
@@ -311,6 +365,16 @@ func operation(operationID string) node.Operation {
 		IssuedAt:     start,
 		Payload:      []byte(`{"run_id":"run-1"}`),
 	}
+}
+
+// prepareOperation is one piece of content a machine is told to fetch. It is a
+// separate fixture from a launch because the two answer a refusal differently: a
+// failed pull left nothing behind and a failed launch may have made the container.
+func prepareOperation(operationID string) node.Operation {
+	command := operation(operationID)
+	command.Kind = node.CommandPrepareImage
+	command.Payload = []byte(`{"reference":"trainer@sha256:aaaa"}`)
+	return command
 }
 
 func workloadEvent(eventID string, phase capability.WorkloadPhase, observedAt time.Time) node.Event {

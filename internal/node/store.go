@@ -58,7 +58,10 @@ type Store interface {
 	// reported, which is what reconciliation compares against.
 	Workloads(ctx context.Context, workspaceID, nodeID string) ([]capability.WorkloadObservation, error)
 	// AppendOperation records one command durably, reporting true when this
-	// operation ID was already recorded.
+	// operation ID was already recorded and is not reissuable. What the stored
+	// operation became decides that: a refused command that cannot have left an
+	// effect behind is recorded afresh and reported as new, so the machine is asked
+	// again instead of being answered from a record of the pull that failed.
 	AppendOperation(ctx context.Context, operation Operation) (Operation, bool, error)
 	// SettleOperation records what the node did with one command.
 	SettleOperation(ctx context.Context, workspaceID, nodeID string, result Result) error

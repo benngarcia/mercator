@@ -274,6 +274,26 @@ type Operation struct {
 	Failure string `json:"failure,omitempty"`
 }
 
+// Reissuable reports whether this identity may be asked of the machine again.
+// Only a refusal ever is: a pending command is still in flight and an applied one
+// already happened, and answering either with anything but Duplicate is how a
+// workload gets launched twice.
+//
+// A refusal is reissuable only for a command that cannot have changed the machine
+// on its way to failing, which is the distinction CommandKind already draws. A
+// pull that failed left nothing, so the same content can be asked for again; a
+// launch that failed may have created the container, so its identity is spent
+// whatever the machine said about it.
+//
+// Without this the identity was terminal in either direction: a node whose pull
+// failed answered Duplicate for that content from then on, delivered nothing, and
+// never appeared as applied, so the content was neither there nor askable while the
+// node agent was deliberately not remembering the failure so that a retry could
+// happen.
+func (operation Operation) Reissuable() bool {
+	return operation.State == OperationRefused && !operation.Kind.MayLeaveEffectOnFailure()
+}
+
 // Result is what a node reports back about one operation.
 type Result struct {
 	OperationID string `json:"operation_id"`

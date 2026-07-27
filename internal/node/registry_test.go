@@ -105,6 +105,43 @@ func TestRepeatingAnOperationIDDeliversNothingAndReportsDuplicate(t *testing.T) 
 	}
 }
 
+// TestAContentRequestTheNodeRefusedReachesItAgain is the whole of what a refusal
+// means. The machine could not pull the image and said so, which left nothing on
+// its disk, so the control plane asking for that content again is a fresh command
+// rather than a redelivery. The identity is the machine and the content, so the
+// second ask carries the same one, and the record of the failure is what used to
+// answer it.
+func TestAContentRequestTheNodeRefusedReachesItAgain(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+	if _, err := registry.PrepareImage(context.Background(), prepareCommand(bootstrap, enrollment, "op-prepare-1")); err != nil {
+		t.Fatalf("first preparation: %v", err)
+	}
+	receiveCommand(t, session)
+	if err := registry.RecordResult(context.Background(), bootstrap.NodeID, enrollment.SessionToken, node.Result{
+		OperationID: "op-prepare-1",
+		Applied:     false,
+		Failure:     "pull failed: registry unreachable",
+	}); err != nil {
+		t.Fatalf("report the refusal: %v", err)
+	}
+
+	receipt, err := registry.PrepareImage(context.Background(), prepareCommand(bootstrap, enrollment, "op-prepare-1"))
+	if err != nil {
+		t.Fatalf("second preparation: %v", err)
+	}
+
+	if receipt.Duplicate {
+		t.Fatal("content the node refused must be askable again, not answered as a duplicate")
+	}
+	command := receiveCommand(t, session)
+	if command.OperationID != "op-prepare-1" || command.Kind != node.CommandPrepareImage {
+		t.Fatalf("delivered command = %+v, want the preparation asked for again", command)
+	}
+}
+
 func TestAReconnectingNodeReceivesTheCommandsItNeverAcknowledged(t *testing.T) {
 	registry, _ := newRegistry(t)
 	bootstrap := invite(t, registry)
@@ -602,6 +639,18 @@ func nodeRef(bootstrap capability.NodeBootstrap) capability.NodeRef {
 		RentalID:    bootstrap.RentalID,
 		Generation:  bootstrap.Generation,
 	}
+}
+
+func prepareCommand(bootstrap capability.NodeBootstrap, enrollment capability.Enrollment, operationID string) capability.PrepareImageCommand {
+	command := capability.PrepareImageCommand{
+		ManifestDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Reference:      "trainer@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		Unpack:         true,
+	}
+	command.NodeRef = nodeRef(bootstrap)
+	command.OperationID = operationID
+	command.FencingToken = enrollment.FencingToken
+	return command
 }
 
 func launchCommand(bootstrap capability.NodeBootstrap, enrollment capability.Enrollment, operationID string) capability.LaunchWorkloadCommand {

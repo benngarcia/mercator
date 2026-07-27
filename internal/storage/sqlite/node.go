@@ -318,8 +318,24 @@ func (store *NodeStore) AppendOperation(ctx context.Context, operation node.Oper
 	if err != nil {
 		return node.Operation{}, false, err
 	}
-	if found {
+	if found && !existing.Reissuable() {
 		return existing, true, tx.Commit()
+	}
+	if found {
+		// A refusal that left nothing on the machine is asked again under the same
+		// identity. The row is rewritten rather than added beside itself, because
+		// the identity names one command and its sequence is where the node was
+		// first told about this content.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE node_operations
+			SET kind = ?, fencing_token = ?, state = ?, issued_at = ?, settled_at = '', failure = '', payload = ?
+			WHERE workspace_id = ? AND node_id = ? AND operation_id = ?`,
+			string(operation.Kind), operation.FencingToken, string(operation.State), stamp(operation.IssuedAt),
+			operation.Payload, operation.WorkspaceID, operation.NodeID, operation.OperationID,
+		); err != nil {
+			return node.Operation{}, false, fmt.Errorf("reissue node operation: %w", err)
+		}
+		return operation, false, tx.Commit()
 	}
 	var sequence int64
 	if err := tx.QueryRowContext(ctx,
