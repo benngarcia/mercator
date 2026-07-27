@@ -1240,12 +1240,18 @@ complete because it works against a live provider.
     no longer names is a pull that runs to completion there. The Lab world models
     it because a provider seam can, and the node's half is
     [#170](https://github.com/benngarcia/mercator/issues/170). A refused
-    preparation was terminal: the operation store deduped on the identity with no
-    regard for its state, so a node whose pull failed answered Duplicate for that
-    content from then on and the desired set was never restated either, which
-    defeated the node agent's own intent to retry. Repaired under "replanning by
-    explicit policy" below, where the store became state-aware and the Lab world
-    gained a way to refuse a fetch.
+    preparation was terminal in two places and one of them is repaired. The
+    operation store deduped on the identity with no regard for its state, so a
+    node whose pull failed answered Duplicate for that content from then on and
+    defeated the node agent's own intent to retry; that half is repaired under
+    "replanning by explicit policy" below, and a second ask now reaches the
+    runtime when one is issued. The control plane's half is not repaired. It
+    reissues on `PrepareReceipt.Refused`, and no production prepare lane fills
+    that field: `broker.Prepare` answers Started or Duplicate, a node settles a
+    refusal asynchronously over the node protocol, and nothing in the prewarm
+    controller subscribes to that, so what triggers a second ask on the only
+    production lane there is remains a change to the desired set. Only the Lab
+    world produces the synchronous refusal the controller reads.
     Nothing in production implements `orchestrator.ArtifactCatalog`, so no
     production Run declares an Artifact and the Artifact half of the desired set is
     exercised at L1 and against a real object store rather than end to end.
@@ -3474,9 +3480,22 @@ complete because it works against a live provider.
     orchestrator's memory now remembers what the far side took on rather than what
     Mercator asked for. Remembering a refusal as asked-for is what made it permanent
     at the control plane: the desire is recomputed identically on the next sweep and
-    an unchanged desire is not resent. On the node lane the refusal is asynchronous,
-    so what triggers a second ask there is still a change to the desired set; what
-    this slice fixes is that the second ask reaches the runtime when it comes.
+    an unchanged desire is not resent. Nothing in production fills that field yet,
+    so this is the seam being right rather than a production lane changing
+    behaviour: `broker.Prepare` answers Started or Duplicate and a node settles a
+    refusal asynchronously, so what triggers a second ask on a node is still a
+    change to the desired set. What this slice makes true there is that the second
+    ask reaches the runtime when it comes.
+  - A refusal is answered by the machine that refused. `PrepareItem.Identity` is
+    what one item of a desired set is called, the machine and the content
+    together, and the receipt, the controller's memory, and the key that memory is
+    held under all name items by it. Matching a refusal on content alone let one
+    host's refusal erase the memory of the same content another host had taken on,
+    which collapsed the memory to the empty key: the next desire computed after
+    those Runs were withdrawn read as unchanged and the withdrawal for the transfer
+    that was really running was never sent.
+    `a-refusal-on-one-machine-is-not-a-withdrawal-on-another` is the world that
+    fails on it.
   - The Lab world can refuse a fetch, under a `reject_command` fault on
     `node.prepare_image` or `node.prepare_artifact`, and holds the same rule the
     store now does: a refused fetch is not remembered as work it took on.
@@ -3491,11 +3510,30 @@ complete because it works against a live provider.
     machine billing that no Run could ever be placed on. A Run that closed with no
     cleanup ever asked for is converged too, which is the hole a sweep keyed on the
     cleanup request alone could only skip.
-  - `safety.orphan_policy_is_explicit` replaces `liveness.orphan_convergence`, which
-    asked that no execution outlive its Run and therefore had exactly one lawful
-    answer to a world holding one: an error. The new rule asks what became of the
-    capacity a world began holding, so a machine still standing has simply not been
-    swept and a machine converged with no decision behind it is the violation.
+  - The launch is what decides, whenever there is one. Reading the cleanup request
+    first destroyed the whole machine under a Run that reached a launch on a pool
+    Mercator does not own and then ended without anybody asking for its capacity
+    back, which is the ordinary end of a launch whose attempts ran out.
+    `closed_without_a_cleanup_request` is what is left for a Run that recorded no
+    launch at all, and
+    `an-orphan-is-adopted-or-destroyed-by-policy` states that combination.
+  - The decision is recorded before the provider is asked to act on it, and a
+    sweep that finds capacity already decided about carries out that decision
+    rather than judging it again. Acting first left the one failure the rule calls
+    a violation and cannot be recovered from: a terminated machine is never listed
+    again, so nothing remains for a later sweep to explain.
+  - A provider that answers `ErrTerminateUnsupported` is saying there is no
+    machine of Mercator's to destroy, so the slot is given back and that is the
+    whole of the capacity ceasing to exist. Local Docker answers exactly that, and
+    stopping at the refusal returned before every later object in the same
+    listing, so one container nothing could account for stopped every sweep of
+    that workspace from then on.
+  - `safety.orphan_policy_is_explicit` is stated beside `liveness.orphan_convergence`
+    rather than in place of it. The two read different facts: one asks that no
+    execution Mercator launched outlives the Run that owns it, and the other asks
+    what became of capacity the world was already holding that Mercator never
+    launched. Dropping the first left every projection defect that strands a
+    running execution invisible to the whole corpus.
   - `world.orphans` is the Blueprint vocabulary, and it is deliberately not an
     execution. Every rule about the fleet reads an execution as work Mercator is
     accountable for, so folding the two together would make capacity nobody
@@ -3894,22 +3932,33 @@ Phase 3 added:
   fetch as work it had taken on answers the second ask Duplicate and moves nothing;
   a control plane that remembered refused content as content it had asked for
   computes an unchanged desire and never asks twice.
-- `an-orphan-is-adopted-or-destroyed-by-policy` (conformance): three machines and
-  one Run. Two of them are holding something the control plane never launched, and
-  the control plane restarts into that state. The one still carrying a Run identity
-  Mercator can account for is adopted, its slot released and its machine kept; the
-  one carrying nothing anybody can account for is terminated and its machine stops
-  existing. The fleet afterwards is the claim, because an adoption that quietly
-  destroyed the machine and a termination that quietly kept it read the same in a
-  count of things reclaimed.
+- `a-refusal-on-one-machine-is-not-a-withdrawal-on-another` (conformance): two busy
+  machines with a queued Run behind each, both reading the same hundred gigabyte
+  corpus. One machine is asked first and starts reading; the other joins the same
+  desired set five minutes later and turns its fetch away. Then both Runs are
+  withdrawn, and the transfer still running has to be stopped. A control plane that
+  hears a refusal as being about content rather than about one machine's copy of it
+  forgets what the other machine took on, computes an empty desire it believes it
+  never departed from, and sends no withdrawal at all.
+- `an-orphan-is-adopted-or-destroyed-by-policy` (conformance): four machines and
+  two Runs. Three of them are holding something the control plane never launched,
+  and the control plane restarts into that state. The one carrying a Run identity
+  Mercator can account for is adopted, its slot released and its machine kept. The
+  one carrying a Run whose start the provider refused until its attempts ran out is
+  adopted too, because its launch recorded the same release even though nobody ever
+  asked for its capacity back, and reading the cleanup request first destroys that
+  machine. The one carrying nothing anybody can account for is terminated and its
+  machine stops existing. The fleet afterwards is the claim, because an adoption
+  that quietly destroyed the machine and a termination that quietly kept it read
+  the same in a count of things reclaimed.
 - `safety.orphan_policy_is_explicit` (Lab invariant): capacity a world began
   holding that Mercator never launched is either still standing or converged by a
   decision the record holds, and every such decision names a policy, a reason, and
   one of the two outcomes an operator can act on. It reads what a world began with
   rather than the fleet as it stands, because the interesting case is the machine
-  that is no longer here. It replaces `liveness.orphan_convergence`, which asked
-  that no execution outlive its Run and so had one lawful answer to a world holding
-  one: an error.
+  that is no longer here. It stands beside `liveness.orphan_convergence` rather
+  than in place of it: that rule reads executions Mercator launched against the
+  Runs it projects, which is the fact this one says nothing about.
 - `safety.prewarm_rate_within_bound` (Lab invariant): no two moments at which
   Mercator began preparing are closer together than the world's `min_interval`.
   It is stated over the moments preparation started rather than over transfers,
@@ -4680,27 +4729,48 @@ had a policy, fails `an-orphan-is-adopted-or-destroyed-by-policy` with "the flee
 is [forgotten keeper stranded], and the machine the policy terminated is still
 billing".
 
-What is left. The node lane's second ask is triggered by a change to the desired
-set rather than by the node's own refusal reaching the control plane: a node
-settles a refusal asynchronously, nothing in the prewarm controller subscribes to
-that, and an unchanged desire is not resent. The store change is what makes the
-second ask reach the runtime when it comes, which is the whole of what this slice
-was scoped to. Orphaned reusable capacity is still only what `ListOwned` reports,
-which is the ephemeral executor's view; `capability.CapacityProvider.ListOwnedCapacity`
-has no caller, so a machine Mercator provisioned and lost the Rental record for is
-not yet something the policy can see.
+Reviewed and repaired the same day, before the slice was taken as done. Reading
+the cleanup request ahead of the recorded launch fails
+`an-orphan-is-adopted-or-destroyed-by-policy` with "the capacity of a Run that
+gave up was converged as terminated / closed_without_a_cleanup_request, want it
+adopted on its recorded disposition". Routing terminate at a provider that holds
+no machine of Mercator's fails with "sweep: adapter: terminate unsupported for
+standing capacity", which before the repair returned before every later object in
+the same listing. Acting before recording fails with "the record holds 0 orphan
+decisions, want exactly one" once the provider refuses one reclaim. Matching a
+refusal on content alone fails
+`a-refusal-on-one-machine-is-not-a-withdrawal-on-another` with "the ledger records
+0 withdrawals, want the transfer nothing was waiting for any more".
+
+What is left. The control plane's own second ask still rides on
+`PrepareReceipt.Refused`, and no production prepare lane fills it: `broker.Prepare`
+answers Started or Duplicate, a node settles a refusal asynchronously, and nothing
+in the prewarm controller subscribes to that, so what triggers a second ask on a
+node is a change to the desired set. The store change is what makes that second
+ask reach the runtime when it comes, and it is the whole of what this slice
+delivered on that lane. Orphaned reusable capacity is still only what `ListOwned`
+reports, which is the ephemeral executor's view;
+`capability.CapacityProvider.ListOwnedCapacity` has no caller, so a machine
+Mercator provisioned and lost the Rental record for is not yet something the
+policy can see.
 
 ```text
 go build ./... && go vet ./... && go test ./...
 go test -race ./internal/node/... ./internal/storage/sqlite ./internal/janitor \
   ./internal/orchestrator ./internal/broker ./internal/adapter/... \
   ./internal/lab ./internal/scenario ./internal/daemon -count=1
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration -count=1
+go test ./internal/nodeagent ./internal/ociresolver -count=1
 ```
 
-The live half ran with Docker on PATH: `internal/nodeagent` against a real daemon
-and a real object store, `internal/adapter/docker`, `internal/ociresolver` against
-a real registry, and `internal/daemon` with the local Docker connection seeded.
-All green. #165 does not reproduce here and was left alone.
+The live half ran against this host's own daemon. `internal/adapter/docker`'s two
+integration cases are gated on `MERCATOR_DOCKER_INTEGRATION=1` and were run with
+it set; without it they skip. `internal/nodeagent` ran against a real daemon and a
+real MinIO object store, and `internal/ociresolver` against a real registry. The
+daemon suite is not part of that claim: `startFleet` empties `PATH` on purpose, so
+no local Docker connection is seeded and this slice's conformance case there runs
+against a scripted runtime. All green. #165 does not reproduce here and was left
+alone.
 
 ### Phase 4 no capacity is free
 
