@@ -2950,6 +2950,76 @@ complete because it works against a live provider.
     exemption's freshness as the ordering in
     `a-wait-the-queue-caused-says-nothing-about-capacity`, and the recount as the
     deliberate failing case beside every other invariant.
+- [x] 2026-07-26: Hold a Run to the bounds it declared, and rebuild the read model
+  the class rename changed underneath. The class a Run states is the exchange rate
+  every candidate is scored at, so a class can always be talked into a costlier or a
+  later machine; the bounds are what say how far, and neither of them was fully
+  held.
+  - The class deadline bounded waiting and not starting. It was asked exclusively of
+    a Run being told to wait, so a Run whose capacity came free after the moment its
+    class says the answer stops being worth having was placed by the very pass that
+    should have refused it: it spent the money to produce an answer nobody was
+    waiting for, and the overshoot was however long the sweep interval is.
+    `stepAdmit` asks it on both ways out now. A Run being deferred is asked by
+    `deferOrRefuse`, which keeps recording what was holding it, and a Run nothing is
+    holding is asked before Placement and refused `DEADLINE_UNREACHABLE` with no
+    fleet answer beside it, because nothing weighed a machine for it and that
+    refusal is about the clock. `domain.Admission.DeadlinePassed` is the elapsed half
+    of the rule said once, and `DeadlineUnreachable` is stated over it.
+  - No Blueprint could state a bound on cost, which is why nothing here could catch
+    the other half. `COST_LIMIT_EXCEEDED` has been enforced in production since the
+    unpriced-machine pass and was reachable by no fixture, so everything this corpus
+    could say about money was which machine won on price. `request.max_cost_usd` is
+    the vocabulary, translated once in `WorkloadForRun` so both simulators read one
+    statement, and a budget of zero dollars is refused at load: a bound that refuses
+    every quoted machine in the world is a fixture to write on purpose.
+  - `safety.class_bounds_honoured` is the law. No Run was placed on a machine
+    costing more than its caller allowed, on a machine nobody quoted under a bound
+    on dollars, or past the moment its class states, measured from the deferral that
+    started its wait. The two are one law because they are one failure, and both
+    halves are read off the decision and the public log rather than off the
+    scheduler's own arithmetic. The maximum queue delay is deliberately not restated
+    in it: that promise is what `liveness.aging_prevents_starvation` is stated over,
+    and two laws over one bound let a repair satisfy one of them and be believed.
+  - The migration left the read model behind. The service class rename rewrites the
+    vocabulary inside the event log, and the Run projection is stored rather than
+    recomputed, so every Run recorded before a Run stated its class read back with
+    no class at all through `GET /v1/runs`, for the life of the installation: a
+    rebuild happens when the projection's schema version is not the current one, and
+    a database that predates the rename already carries the current version. The
+    migration reports whether it rewrote anything, and a rewritten log marks the
+    projection stale, which is the question the daemon already asks before it
+    replays each Workspace. It is the one migration in this tree with that problem:
+    the legacy run event migration predates the projection table, and the stored
+    revision migration rewrites workload streams, which no Run record is reduced
+    from.
+  - The live placement harness had been stating a superseded vocabulary. Every case
+    in `internal/daemon/node_placement_test.go` submitted
+    `placement.objective: balanced`, a word nothing has decoded since the class
+    replaced it, so each of them was normalised to standard and none of them
+    asserted anything about the class it thought it set. They state a service class
+    now.
+  - Judgment calls. The deadline fixture is L0 only, and that is a consequence
+    rather than a preference: every class's maximum queue delay is shorter than its
+    deadline, so a Run that reaches its deadline has already starved and
+    `liveness.aging_prevents_starvation` calls a Lab execution of that world a
+    violation. That is the same open question this plan has disclosed twice, and it
+    is a refusal-policy slice rather than something to smuggle in beside a law. The
+    deadline is measured from the first deferral in both the production queue and
+    the law, because a Run told to wait for a second reason has not started waiting
+    again. An unpriced candidate fails a stated bound rather than passing it, which
+    is the rule `Preferred` already ranks on, said as a limit. The corpus runner now
+    names the machine a Run a fixture expected to be waiting was actually placed on:
+    being placed appends no admission fact, so the diagnostic read the wait the Run
+    was in beforehand and reported the deadline regression as a Run still queued for
+    want of capacity when the Run had run.
+  - What is left. The public API still drops `objective` silently, the way any HTTP
+    surface drops a field its schema does not carry, so a caller who kept sending
+    `fastest_start` after the upgrade is scored as standard with nothing in the
+    record saying so. The corpus loader refuses the superseded word by name and the
+    door does not. Refusing it there means holding a list of retired vocabulary at
+    the door, or making the whole operator API strict about unknown fields, and
+    which of those is right is a decision about the wire rather than about the class.
 
 ## Phase status
 
@@ -2958,7 +3028,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; the hierarchical estimator, owned economics, and replanning remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; the hierarchical estimator, owned economics, and replanning remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -3771,6 +3841,44 @@ Phase 4 added:
   now is. It is stated over the fleet's own verdict now, the machines weighed and what
   each was refused for, which is what every law about Placement reads.
 
+- `a-bound-on-cost-outranks-the-class-that-would-pay` (green): the world
+  `the-service-class-decides-what-wins` states, with a bound on what the Run may
+  cost. Interactive work prices a second of waiting at twenty times the machine's
+  own rent, so its class buys the warm machine on the five minutes of pulling the
+  cold one owes, and twenty minutes there is 1.33 USD against the one dollar its
+  caller allowed. The warm machine is refused `COST_LIMIT_EXCEEDED` and the Run
+  runs on the cheap slow one. It is the first fixture in this corpus that states a
+  budget at all: the refusal was enforced in production and reachable by no
+  Blueprint, so everything the corpus could say about money was which machine won
+  on price. Removing the bound from the scheduler places the Run on the machine its
+  class prefers and fails it three ways over.
+- `a-machine-that-came-free-too-late-is-not-a-start` (green): one busy machine and
+  an interactive Run that will not wait a minute to start, so the only candidate is
+  struck out as too slow and nothing projects when the wait ends. The machine comes
+  free at ten minutes and a quarter, the Run is asked again half a minute later,
+  and its class says it must have started within ten minutes of being told to wait.
+  It is refused `DEADLINE_UNREACHABLE`. Asking the deadline only of a Run being
+  told to wait places it instead, which is what the fixture fails on.
+- `a-cost-bound-refuses-the-machine-the-class-would-buy` (conformance): the same
+  world under the real control plane, and the execution
+  `safety.class_bounds_honoured` is falsifiable through. It asserts the refused
+  machine scored better than the selected one, because a world where the cheap
+  machine also wins on score says nothing about a limit.
+- `safety.class_bounds_honoured` (Lab invariant): no Run was placed on a machine
+  costing more than its caller allowed, on a machine nobody quoted under a bound on
+  dollars, or past the moment its own class says the answer stops being worth
+  having, measured from the deferral that started its wait. Both bounds are read
+  off the record rather than off the scheduler's arithmetic, and they are one law
+  because they are one failure: a class is a declaration Mercator scores every
+  candidate on, so it can always be talked into a costlier or a later machine, and
+  the bounds say how far. The maximum queue delay is deliberately not restated in
+  it, because that promise is what `liveness.aging_prevents_starvation` is stated
+  over and two laws over one bound let a repair satisfy one of them and be
+  believed. The deadline half is exercised at L0 and in the rule's own clause test
+  and nowhere at L1: every class's maximum queue delay is shorter than its
+  deadline, so a Run that reaches its deadline has already starved and the
+  starvation law says so, which is the open question below.
+
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
 none at all, and `internal/scenario` imports nothing from `internal/lab`. Every
@@ -3791,8 +3899,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 46 regression Blueprints: 43 green and 3 target, beside one demo,
-one minimized case, and twenty three conformance Blueprints. The count is read off the
+The corpus is 51 regression Blueprints: 48 green and 3 target, beside one demo,
+one minimized case, and twenty four conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
