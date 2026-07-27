@@ -172,6 +172,90 @@ func TestAnImpossibleAskDoesNotStopWorkThatFits(t *testing.T) {
 	}
 }
 
+// TestAPlacementDoesNotRestartTheWaitTheQueueOrdersOn is the queue and the Run's
+// own door reading one wait the same way.
+//
+// A Run's standing rests on two facts and the queue kept one. Membership of the
+// queue is who is waiting on a decision now, and it ends when a Run takes a
+// machine. The moment its wait began is what every bound its class states is
+// measured from, and runState.queuedSince holds that from the first deferral
+// without ever clearing it. The queue dropped it at the placement, so a Run
+// deferred, placed, and told to wait again was weighed by its own door at the
+// standing of the whole wait and by every other Run in the tenant as an arrival
+// that had waited nothing: it went on ageing toward a queue delay measured from a
+// moment nobody else could see, while fresh work of a higher class was admitted
+// past a Run that outranked it.
+//
+// The history is stated rather than driven, because no production path reaches it
+// yet. A replacement that finds no machine closes the Run as RETRY_EXHAUSTED, and
+// expiring a Booking past its latest start and re-placing its Run is the unbuilt
+// schedule advancement the corpus still carries as a target. Both readings of the
+// wait are in the tree today, and this is the record that will tell them apart.
+func TestAPlacementDoesNotRestartTheWaitTheQueueOrdersOn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	appendWaitPlacedAndWaitedAgain(t, ctx, orch, "run_quiet", domain.ClassBatch, now)
+	submitClassed(t, ctx, orch, "run_fresh", domain.ClassStandard)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_fresh"); err != nil {
+		t.Fatalf("advance a fresh Run into a queue holding a replaced one: %v", err)
+	}
+
+	fresh := runEvents(t, ctx, orch, "run_fresh")
+	if reason := deferralReason(t, fresh); reason != domain.DeferredBehindHigherPriority {
+		t.Fatalf("a standard Run was told it waits for %q, and a batch Run twenty minutes into its wait is worth more than it is", reason)
+	}
+	if behind := deferralBehind(t, fresh); len(behind) != 1 || behind[0] != "run_quiet" {
+		t.Fatalf("the record says the fresh Run waits behind %v, and the batch Run had waited twenty minutes", behind)
+	}
+}
+
+// appendWaitPlacedAndWaitedAgain states one Run's whole wait as the log carries it:
+// admission told it to wait, a decision took a machine for it, and admission told
+// it to wait again. The moments are stated because what this is about is a wait
+// measured across the placement in the middle of it.
+func appendWaitPlacedAndWaitedAgain(
+	t *testing.T,
+	ctx context.Context,
+	orch *Orchestrator,
+	runID string,
+	class domain.ServiceClass,
+	now time.Time,
+) {
+	t.Helper()
+	deferral, err := json.Marshal(admissionDeferredData{Deferral: domain.AdmissionDeferral{
+		Reason: domain.DeferredNoFeasibleOffer,
+		Class:  class,
+		Fleet:  &domain.FleetAnswer{Weighed: 1, CouldHold: 1},
+	}})
+	if err != nil {
+		t.Fatalf("state the wait: %v", err)
+	}
+	placed, err := json.Marshal(bookingDecisionData{Decision: domain.BookingDecision{
+		RunID:                   runID,
+		SelectedOfferSnapshotID: "off_busy",
+		Policy:                  domain.PlacementPolicy{Class: class},
+	}})
+	if err != nil {
+		t.Fatalf("state the placement: %v", err)
+	}
+	if _, err := orch.log.Append(ctx, eventlog.AppendRequest{
+		Stream:      eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		CommandKey:  "state:" + runID,
+		RequestHash: "sha256:" + runID,
+		Events: []eventlog.NewEvent{
+			{ID: "admission_1", Type: EventAdmissionDeferred, SchemaVersion: 1, OccurredAt: now.Add(-20 * time.Minute), Data: deferral},
+			{ID: "decided_1", Type: EventBookingDecided, SchemaVersion: 1, OccurredAt: now.Add(-2 * time.Minute), Data: placed},
+			{ID: "admission_2", Type: EventAdmissionDeferred, SchemaVersion: 1, OccurredAt: now.Add(-time.Minute), Data: deferral},
+		},
+	}); err != nil {
+		t.Fatalf("state the wait of %q: %v", runID, err)
+	}
+}
+
 // orchOccupiedOffer is one machine this fleet holds that could run the work and is
 // not free to right now, which is the only wait other work in the queue has to be
 // ordered behind. It says so with its own capacity evidence: a refusal that names

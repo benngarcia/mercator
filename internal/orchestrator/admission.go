@@ -81,46 +81,65 @@ func (o *Orchestrator) admissionQueue(ctx context.Context, workspaceID string) (
 	if err != nil {
 		return admissionQueue{}, fmt.Errorf("orchestrator: read the admission queue: %w", err)
 	}
-	waiting := map[string]waitingRun{}
+	replay := queueReplay{waiting: map[string]waitingRun{}, began: map[string]time.Time{}}
 	for event, err := range eventlog.ScanAll(ctx, o.log, head, filter) {
 		if err != nil {
 			return admissionQueue{}, fmt.Errorf("orchestrator: read the admission queue: %w", err)
 		}
-		if err := applyToQueue(waiting, event); err != nil {
+		if err := replay.apply(event); err != nil {
 			return admissionQueue{}, err
 		}
 	}
-	queue := admissionQueue{waiting: slices.Collect(maps.Values(waiting))}
+	queue := admissionQueue{waiting: slices.Collect(maps.Values(replay.waiting))}
 	slices.SortFunc(queue.waiting, func(left, right waitingRun) int {
 		return strings.Compare(left.runID, right.runID)
 	})
 	return queue, nil
 }
 
-// applyToQueue is one public fact moving a Run into or out of the queue. Leaving
-// is every way a Run stops waiting on a decision: it was placed, it was refused,
-// or it is over.
-func applyToQueue(waiting map[string]waitingRun, event eventlog.StoredEvent) error {
+// queueReplay is the two facts the log keeps about waiting, because a Run's
+// standing rests on two. Membership of the queue is who is waiting on a decision
+// now. The moment each Run's wait began outlives its membership, exactly as
+// runState.queuedSince does: it is set at the first deferral and nothing revises
+// it, and every bound the class states is measured from it.
+//
+// Keeping only membership ranked one Run two ways at once. A Run deferred, placed,
+// and told to wait again is one wait with a placement in the middle of it, and its
+// own door read the whole wait while every other Run in the tenant read it as an
+// arrival that had waited nothing. So it went on ageing toward a queue delay
+// measured from a moment nobody else could see, and fresh work of a higher class
+// was admitted past a Run that outranked it. Nothing reaches that today, because a
+// replacement that finds no machine closes the Run and a Booking past its latest
+// start is not yet re-placed, and both readings are already in the tree.
+type queueReplay struct {
+	waiting map[string]waitingRun
+	began   map[string]time.Time
+}
+
+// apply is one public fact moving a Run into or out of the queue. Leaving is every
+// way a Run stops waiting on a decision: it was placed, it was refused, or it is
+// over. Only the last two end the wait itself.
+func (replay queueReplay) apply(event eventlog.StoredEvent) error {
 	switch event.Type {
 	case EventAdmissionDeferred:
 		var data admissionDeferredData
 		if err := json.Unmarshal(event.Data, &data); err != nil {
 			return fmt.Errorf("orchestrator: read the admission queue: %w", err)
 		}
-		// The moment a wait started never moves. The class's own bound is measured
-		// from it, and a Run told to wait for a second reason has not started
-		// waiting again. What it is waiting for does move, and the latest answer is
-		// the one the queue is ordered against.
-		queued := waiting[event.StreamID]
-		if queued.since.IsZero() {
-			queued.since = event.OccurredAt.UTC()
+		if _, waiting := replay.began[event.StreamID]; !waiting {
+			replay.began[event.StreamID] = event.OccurredAt.UTC()
 		}
-		queued.runID = event.StreamID
-		queued.class = data.Deferral.Class
-		queued.holdsNoQueue = data.Deferral.HoldsNoQueue()
-		waiting[event.StreamID] = queued
+		// What a Run is waiting for moves, and the latest answer is the one the
+		// queue is ordered against.
+		replay.waiting[event.StreamID] = waitingRun{
+			runID:        event.StreamID,
+			class:        data.Deferral.Class,
+			since:        replay.began[event.StreamID],
+			holdsNoQueue: data.Deferral.HoldsNoQueue(),
+		}
 	case EventAdmissionRefused, EventRunClosed:
-		delete(waiting, event.StreamID)
+		delete(replay.waiting, event.StreamID)
+		delete(replay.began, event.StreamID)
 	case EventBookingDecided:
 		var data struct {
 			Decision struct {
@@ -131,7 +150,7 @@ func applyToQueue(waiting map[string]waitingRun, event eventlog.StoredEvent) err
 			return fmt.Errorf("orchestrator: read the admission queue: %w", err)
 		}
 		if data.Decision.SelectedOfferSnapshotID != "" {
-			delete(waiting, event.StreamID)
+			delete(replay.waiting, event.StreamID)
 		}
 	}
 	return nil
@@ -149,6 +168,10 @@ type admissionQueue struct {
 type waitingRun struct {
 	runID string
 	class domain.ServiceClass
+	// since is the moment admission first told this Run to wait, which is the
+	// number every other Run in the tenant weighs it at. It survives a placement
+	// because queueReplay keeps it separately from membership, and it is the same
+	// moment runState.queuedSince holds for the Run's own door.
 	since time.Time
 	// holdsNoQueue is whether this Run's wait is one other work does not have to
 	// respect, as domain.AdmissionDeferral.HoldsNoQueue reads it off this Run's
