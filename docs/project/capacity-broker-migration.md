@@ -4661,6 +4661,15 @@ direction of the error is the safe one, because it overstates what committing to
 capacity costs rather than understating it, and the alternative is the previous model,
 which charged the remainder to nobody.
 
+What the window does not yet cover, said plainly. A placement is refused when the
+runtime Mercator enforces could outlive the window, which is checked once, at the
+decision. A Booking queued behind another one is projected from where that Booking is
+at that moment, so a predecessor that overruns can push a queued Booking's own
+enforced end past a window that was clear when it was admitted. Nothing reconciles
+that today: no Blueprint can state it either, because the corpus has no world where a
+window closes over a queue, and the slice that adopts or terminates capacity by policy
+is where a Booking caught by a closing window belongs.
+
 Named and not fixed here. The local Docker adapter publishes `RatePerSecondUSD: 0` with
 `Known: true`, which is the one production publisher of capacity somebody says is free,
 and `safety.no_capacity_is_free` cannot see it because invariants read Lab executions.
