@@ -49,14 +49,14 @@ type RunEvidence struct {
 	// each of them can see a process running and none of them can see whether it is
 	// serving. A probe that ran and never said so is a trial with that stage
 	// unproven, which is why the verdict reads it.
-	ApplicationReadyAt *time.Time             `json:"application_ready_at,omitempty"`
-	DurationSecs       float64                `json:"duration_seconds,omitempty"`
-	Outcome            string                 `json:"outcome,omitempty"`
-	ExitCode           *int                   `json:"exit_code,omitempty"`
-	Cleanup            string                 `json:"cleanup,omitempty"`
-	Closed             bool                   `json:"closed"`
-	EventTypes         []string               `json:"event_types,omitempty"`
-	Events             []eventlog.CloudEvent  `json:"events,omitempty"`
+	ApplicationReadyAt *time.Time            `json:"application_ready_at,omitempty"`
+	DurationSecs       float64               `json:"duration_seconds,omitempty"`
+	Outcome            string                `json:"outcome,omitempty"`
+	ExitCode           *int                  `json:"exit_code,omitempty"`
+	Cleanup            string                `json:"cleanup,omitempty"`
+	Closed             bool                  `json:"closed"`
+	EventTypes         []string              `json:"event_types,omitempty"`
+	Events             []eventlog.CloudEvent `json:"events,omitempty"`
 	// BookingDecisions is every decision the control plane recorded about this Run,
 	// oldest first. It is the chain and not its last entry, because a decision is
 	// appended and never rewritten: a trial where the first machine refused the

@@ -387,6 +387,7 @@ func workAhead(candidates []domain.CandidateDecision) []domain.QueuedAhead {
 // hour would otherwise write sixty identical facts saying so: what an operator
 // needs is what it is waiting for and since when, and both survive the
 // suppression because the first deferral is always recorded.
+//
 // The decision it was read off is appended with it, and is suppressed with it. A
 // Run waiting an hour on an unchanged fleet would otherwise write sixty decisions
 // nobody asked a different question of, and the evidence for the wait an operator

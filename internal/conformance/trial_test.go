@@ -22,7 +22,7 @@ import (
 
 func TestRunEvidenceSerializesBookingDecisionVocabulary(t *testing.T) {
 	encoded, err := json.Marshal(RunEvidence{
-		ID:              "run-1",
+		ID:               "run-1",
 		BookingDecisions: []domain.BookingDecision{{ID: "decision-1"}},
 	})
 	if err != nil {
