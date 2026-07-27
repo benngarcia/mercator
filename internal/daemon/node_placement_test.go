@@ -605,6 +605,19 @@ func (f *fleet) submitRunUnderBudget(t *testing.T, usd float64) string {
 	})
 }
 
+// submitRunInFamily submits a Run that belongs to a family of work and states how
+// wide that family may run. Every member states the width, because a group is a
+// label the work carries rather than an object an operator registers first.
+func (f *fleet) submitRunInFamily(t *testing.T, id string, width int) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		placement := revision["spec"].(map[string]any)["placement"].(map[string]any)
+		placement["group"] = map[string]any{"id": id, "max_parallel": width}
+		return revision
+	})
+}
+
 func (f *fleet) submitWorkload(t *testing.T, revision func(name string) map[string]any) string {
 	t.Helper()
 	f.submitted++
@@ -656,6 +669,23 @@ func (f *fleet) awaitOutcome(t *testing.T, runID, want string) {
 		f.call(t, http.MethodGet, "/v1/runs/"+runID+"?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
 		return run.Run.Outcome == want
 	}, fmt.Sprintf("Run %s never reached outcome %q (last outcome %q)", runID, want, run.Run.Outcome))
+}
+
+// awaitAdmission drives one Run forward the way the reconcile sweep does until
+// admission stops holding it back and a machine is selected. A Run whose wait ended
+// because something else finished is only asked again on the next sweep, so a case
+// about a bound lifting refreshes rather than waiting out the minute cadence.
+func (f *fleet) awaitAdmission(t *testing.T, runID string) {
+	t.Helper()
+	var response struct {
+		Run struct {
+			Phase string `json:"phase"`
+		} `json:"run"`
+	}
+	waitFor(t, func() bool {
+		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
+		return response.Run.Phase != "queued"
+	}, "Run "+runID+" was never admitted after the capacity it was waiting for came back")
 }
 
 // awaitStartMoment waits until the Run read model carries the moment its workload
@@ -924,6 +954,20 @@ func (f *fleet) offers(t *testing.T) []offerSnapshot {
 	}
 	f.call(t, http.MethodGet, "/v1/offers?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
 	return response.Offers
+}
+
+// offerFor is one named machine as Placement sees it, which is where an operator
+// reads whether capacity is free.
+func (f *fleet) offerFor(t *testing.T, nodeID string) offerSnapshot {
+	t.Helper()
+	listed := f.offers(t)
+	for _, offer := range listed {
+		if offer.ID == nodeID {
+			return offer
+		}
+	}
+	t.Fatalf("the offer catalog has no entry for node %q: %+v", nodeID, listed)
+	return offerSnapshot{}
 }
 
 // nodeOffer is the enrolled node as Placement sees it, through the same catalog
@@ -1862,4 +1906,50 @@ func TestABoundOnCostRefusesTheOnlyMachineInThisFleet(t *testing.T) {
 	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, pinched) {
 		t.Fatalf("a Run whose caller allowed one cent was sent to the machine anyway: %v", launched)
 	}
+}
+
+// TestAFamilyIsHeldToItsWidthWhileAMachineStandsIdle is the group bound where the
+// capacity is real. The placement corpus states one moment of the ordering and the
+// Lab drives the whole sweep over a simulated fleet; this puts it through the public
+// API, the real event log the queue is replayed out of, and two enrolled nodes over
+// the node protocol.
+//
+// The idle machine is the whole case. A family held back by a fleet with nothing
+// free proves nothing about a declared width, so the second machine is enrolled,
+// warm, and provably available: a Run outside the family takes it while the family's
+// own second member is waiting. The bound then lifts on its own, because the thing
+// holding the member was its family and the family made room.
+func TestAFamilyIsHeldToItsWidthWhileAMachineStandsIdle(t *testing.T) {
+	fleet := startFleet(t)
+	spare := fleet.enrollAnother(t, 9.00)
+
+	first := fleet.submitRunInFamily(t, "sweep", 1)
+	fleet.runtime.awaitLaunch(t, first)
+	second := fleet.submitRunInFamily(t, "sweep", 1)
+	fleet.queueWaitingFor(t, second, domain.DeferredGroupAtParallelism)
+
+	// No machine was asked to run the second member, and the record says why: the
+	// family it belongs to, and the member of it holding capacity.
+	for _, launched := range [][]string{fleet.runtime.launchedRuns(), spare.runtime.launchedRuns()} {
+		if slices.Contains(launched, second) {
+			t.Fatalf("the second member ran while its family was already as wide as its caller declared: %v", launched)
+		}
+	}
+	// And no machine was weighed for it either. A family already as wide as it
+	// declared asks the fleet nothing, because no answer the fleet could give would
+	// change what is holding the member.
+	fleet.call(t, http.MethodGet, "/v1/runs/"+second+"/decision?workspace_id="+daemon.DefaultWorkspaceID, nil, nil, http.StatusNotFound)
+	// The other machine was standing idle throughout, as its own heartbeat reports it
+	// over the same catalog Placement reads. That is what makes this a bound on the
+	// family rather than on a fleet that ran out.
+	if idle := fleet.offerFor(t, spare.nodeID); !idle.Capacity.Available {
+		t.Fatalf("the second machine reports %+v, and this case needs a machine that could have taken the waiting member", idle.Capacity)
+	}
+
+	// And the member runs the moment its own family makes room for it.
+	fleet.completeWorkload(t, first, 0)
+	fleet.awaitOutcome(t, first, "succeeded")
+	fleet.awaitAdmission(t, second)
+	fleet.completeWorkload(t, second, 0)
+	fleet.awaitOutcome(t, second, "succeeded")
 }

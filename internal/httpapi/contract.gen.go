@@ -1056,8 +1056,11 @@ type PlacementPolicy struct {
 	// ExpectedReadySeconds How long this workload takes to become ready for work once its process is running. It is the only prediction of the application-ready stage there is: readiness is the application's own semantics, so the workload is the only authority that can state it, and a Run that states nothing is predicted nothing.
 	ExpectedReadySeconds   float64 `json:"expected_ready_seconds,omitempty"`
 	ExpectedRuntimeSeconds float64 `json:"expected_runtime_seconds,omitempty"`
-	MaxExpectedCostUsd     float64 `json:"max_expected_cost_usd,omitempty"`
-	MaxP90StartSeconds     float64 `json:"max_p90_start_seconds,omitempty"`
+
+	// Group The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is scoped to the Run's own workspace, so two tenants naming one sweep are running two.
+	Group              RunGroup `json:"group,omitempty"`
+	MaxExpectedCostUsd float64  `json:"max_expected_cost_usd,omitempty"`
+	MaxP90StartSeconds float64  `json:"max_p90_start_seconds,omitempty"`
 
 	// ServiceClass The kind of work this Run is, which is the only thing that says what waiting is worth to it. Every class declares its own exchange rate, and the score is computed over those rates: interactive prices a second of waiting to the start at twenty times the rent of the machine doing the waiting, standard at that rent, experimental and batch price it to the finish at twice and a fifth of it, and opportunistic prices it at nothing and takes whatever costs least. A class Mercator does not know is refused with SERVICE_CLASS_UNKNOWN rather than ranked on price alone. Omitted means standard.
 	ServiceClass PlacementPolicyServiceClass `json:"service_class"`
@@ -1183,6 +1186,14 @@ type ResourceRequirements struct {
 
 // Run defines model for Run.
 type Run = domain.RunRecord
+
+// RunGroup The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is scoped to the Run's own workspace, so two tenants naming one sweep are running two.
+type RunGroup struct {
+	Id string `json:"id,omitempty"`
+
+	// MaxParallel How many members of this family may hold capacity at once. Zero is the absence of a family rather than a family of nothing.
+	MaxParallel int `json:"max_parallel,omitempty"`
+}
 
 // RunListResponse defines model for RunListResponse.
 type RunListResponse struct {

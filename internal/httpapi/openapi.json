@@ -2516,12 +2516,13 @@
         "properties": {
           "reason": {
             "type": "string",
-            "description": "Why this Run is not running. NO_FEASIBLE_OFFER is a wait for capacity to come free, and what holds it is named in behind. NO_CAPACITY_FITS is a wait for capacity to be added, because every machine the fleet published was weighed against this Run and none of them could hold it once what they are spending now came back. CAPACITY_UNSTATED is a wait on a machine that has not said enough for anybody to tell, which is what an enrolled node whose disk probe failed publishes. BEHIND_HIGHER_PRIORITY is work Mercator already owes an answer to outranking this Run. The last two end the wait rather than describe it, and the Run is closed with them: QUEUE_DELAY_EXCEEDED is a Run Mercator has already kept waiting longer than its class allows, and DEADLINE_UNREACHABLE is a Run whose class says the answer has stopped being worth having.",
+            "description": "Why this Run is not running. NO_FEASIBLE_OFFER is a wait for capacity to come free, and what holds it is named in behind. NO_CAPACITY_FITS is a wait for capacity to be added, because every machine the fleet published was weighed against this Run and none of them could hold it once what they are spending now came back. CAPACITY_UNSTATED is a wait on a machine that has not said enough for anybody to tell, which is what an enrolled node whose disk probe failed publishes. BEHIND_HIGHER_PRIORITY is work Mercator already owes an answer to outranking this Run. GROUP_AT_PARALLELISM is a Run whose own family is already as wide as its caller declared, which says nothing about capacity at all: the members holding it are named in behind, and no machine coming free ends the wait. The last two end the wait rather than describe it, and the Run is closed with them: QUEUE_DELAY_EXCEEDED is a Run Mercator has already kept waiting longer than its class allows, and DEADLINE_UNREACHABLE is a Run whose class says the answer has stopped being worth having.",
             "enum": [
               "NO_FEASIBLE_OFFER",
               "NO_CAPACITY_FITS",
               "CAPACITY_UNSTATED",
               "BEHIND_HIGHER_PRIORITY",
+              "GROUP_AT_PARALLELISM",
               "QUEUE_DELAY_EXCEEDED",
               "DEADLINE_UNREACHABLE"
             ]
@@ -3516,6 +3517,9 @@
               "opportunistic"
             ]
           },
+          "group": {
+            "$ref": "#/components/schemas/RunGroup"
+          },
           "max_p90_start_seconds": {
             "type": "number",
             "format": "double"
@@ -3536,6 +3540,19 @@
           "allow_unknown_pricing": {
             "type": "boolean",
             "description": "Whether this Run would rather run on a machine nobody has quoted a price for than not run at all. It admits such a candidate and never prefers one: an unpriced candidate ranks behind every candidate somebody priced, and it cannot clear max_expected_cost_usd, because a bound on dollars is not cleared by a candidate that has none."
+          }
+        }
+      },
+      "RunGroup": {
+        "type": "object",
+        "description": "The family of Runs this one belongs to and the most of that family Mercator may have holding capacity at once. It is a bound on the work rather than a request for a machine: a member whose family is already that wide is queued GROUP_AT_PARALLELISM even where the fleet has capacity standing idle, and the wait ends when a member of the same family finishes. Every member states the width, because a group is a label the work carries rather than an object an operator creates: there is nothing to register before submitting, and a name without a width is refused with RUN_GROUP_INCOMPLETE. The name is scoped to the Run's own workspace, so two tenants naming one sweep are running two.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "max_parallel": {
+            "type": "integer",
+            "description": "How many members of this family may hold capacity at once. Zero is the absence of a family rather than a family of nothing."
           }
         }
       },
@@ -4457,6 +4474,10 @@
           },
           "capacity": {
             "$ref": "#/components/schemas/CapacityEvidence"
+          },
+          "reclaimable": {
+            "type": "boolean",
+            "description": "Whether the provider of this capacity says it may take the machine back while Mercator is still using it, which is the term a spot ask and an interruptible listing are sold on. It is stated by the backend that sold the capacity rather than inferred from the interruption rate in reliability: a rate is how often a machine has been seen to fail, and work that may not be interrupted has to be refused on what the capacity is. A Run whose service class does not permit interruption is struck out here with INTERRUPTION_NOT_PERMITTED, because nothing Mercator holds survives a machine being reclaimed and there is no decision left once the provider says so."
           },
           "reliability": {
             "$ref": "#/components/schemas/ReliabilityEvidence"
