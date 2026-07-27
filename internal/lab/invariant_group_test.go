@@ -159,13 +159,17 @@ func TestAFamilyNarrowerThanItsClassPatienceStillDrains(t *testing.T) {
 // which nothing in the corpus produced before. A family of two one wide, one warm
 // machine, and that machine refuses the first member's launch.
 //
-// What takes a member out of the count is the capacity going back. The Booking is
-// completed in the same commit as the failure, so the family has room and the second
-// member is admitted onto the machine the first one gave back. The first member has
-// nowhere else to go, because Mercator will not offer it the snapshot that just
-// refused it, so it ends failed and its sibling is the one that runs. The order they
-// ran in is the claim: without the family making room, the second member would have
-// waited behind a machine nobody was holding.
+// The family has room again and the second member is admitted onto the machine its
+// sibling gave back. The first member has nowhere else to go, because Mercator will
+// not offer it the snapshot that just refused it, so it ends failed and its sibling
+// is the one that runs. That the family still drains is the claim, and only one
+// member ever holds capacity.
+//
+// Which recorded fact took the first member out of the count is not what this tells
+// apart, and neither is any Blueprint: the Booking going back with the failure and
+// the Run closing land in the same pass, so both readings admit the sibling here.
+// TestAMemberThatGaveItsCapacityBackLeavesRoomForItsFamily is the moment between
+// them, held still over a log that stops there.
 func TestAMemberThatGaveItsCapacityBackLeavesRoom(t *testing.T) {
 	execution := openConformanceExecution(t, "a-member-that-gave-its-capacity-back-leaves-room")
 	defer func() {
