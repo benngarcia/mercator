@@ -1109,11 +1109,13 @@ type CandidateDecision struct {
 	RentalSchedule *ScheduleEvidence  `json:"rental_schedule,omitempty"`
 	Estimates      CandidateEstimates `json:"estimates"`
 	// TransferRates is the throughput each transfer stage of this launch was
-	// priced at and where that number came from, one entry per stage this decision
-	// really did price from a throughput. A stage with nothing to move records
-	// none, and so does a stage answered out of measured launches: the first
-	// performed no transfer, the second was not priced from a rate at all, and an
-	// entry for either would be a number the decision never divided by.
+	// priced at and where that number came from, one entry per stage that had
+	// bytes to move. A stage with nothing to move records none: there is no
+	// transfer to have priced, and an entry for it would be a rate the decision
+	// never used. Nothing else suppresses one, because every transfer this fleet
+	// prices is bytes over a rate: a stage the estimator answered out of measured
+	// launches would be seconds this account could not explain, so a transfer is
+	// not a stage the estimator answers.
 	//
 	// It is recorded for the reason the confidences beside it are. The seconds a
 	// candidate is charged are bytes divided by a rate, the bytes are already

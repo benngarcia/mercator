@@ -85,7 +85,13 @@ func (history History) Empty() bool { return len(history.samples) == 0 }
 // level a candidate cannot produce a key for is named as the empty string and
 // skipped by both the writer and the reader, so a provider that publishes no
 // region does not file every machine it sells under one blank place.
+//
+// A stage priced from bytes has no ladder at any level, so a measured transfer is
+// filed nowhere and answers nothing.
 func levelKeys(identity domain.CandidateIdentity, stage domain.LaunchStage) []stageKey {
+	if pricedFromBytes(stage) {
+		return nil
+	}
 	return []stageKey{
 		{key: identity.Candidate(contentStage(stage)), stage: stage},
 		{key: identity.ProviderAndRegion(), stage: stage},
@@ -101,20 +107,51 @@ var levels = []domain.PredictionLevel{
 	domain.LevelProvider,
 }
 
-// contentStage reports whether this stage's duration is a property of what the
-// candidate was asked to run rather than of the candidate itself. Fetching and
-// unpacking an image are about the image, and so is an application coming up,
-// because the application is the image. What a machine spends being acquired,
-// booting, enrolling, and creating a container is about the machine, and keying
-// those on the content would split one machine's history across every image the
-// fleet ever ran on it.
-func contentStage(stage domain.LaunchStage) bool {
+// pricedFromBytes reports whether this stage's duration is a quantity of bytes
+// over a throughput rather than a property of the candidate. Reading an image out
+// of a registry, assembling it onto a disk, and reading the Run's declared inputs
+// out of the object store are all of that shape, and none of them is answerable
+// out of measured seconds.
+//
+// The bytes belong to the launch and not to the candidate. What a machine still
+// has to move is whatever it does not already hold when the placement is taken, so
+// one machine's own launches measured a transfer of one byte count and the next
+// launch of it is a transfer of another: the machine that pulled forty gigabytes
+// yesterday holds them today and moves nothing at all. An identity names the
+// machine and the image and can name neither what is resident on the disk now nor
+// which Artifact versions this Run consumes, so both launches land in one bucket
+// and the measured seconds are served back as the price of a transfer that will
+// not happen. That struck a host holding every byte out against a start bound for
+// a fetch its own evidence priced at zero, and it charged a host holding the whole
+// image for a pull it had already performed.
+//
+// What does recur about a transfer is the throughput of the path it crosses, and
+// that is already learned where it belongs. An enrolled node measures the rate on
+// the reads it really performs and publishes it as a fact with a validity window,
+// the inventory answers for the bytes, and the two are multiplied at the moment of
+// the decision. Seconds over a whole stage are the product with both halves thrown
+// away, and a product measured once is not a measurement of either factor.
+//
+// The estimator learns a transfer again when the key names what a transfer is: the
+// bytes this launch is missing and the path they cross. Until then a node's timed
+// fetch is filed nowhere rather than filed wrong.
+func pricedFromBytes(stage domain.LaunchStage) bool {
 	switch stage {
-	case domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch, domain.StageApplicationReady:
+	case domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch:
 		return true
 	default:
 		return false
 	}
+}
+
+// contentStage reports whether this stage's duration is a property of what the
+// candidate was asked to run rather than of the candidate itself. An application
+// coming up is, because the application is the image. What a machine spends being
+// acquired, booting, enrolling, and creating a container is about the machine, and
+// keying those on the content would split one machine's history across every image
+// the fleet ever ran on it.
+func contentStage(stage domain.LaunchStage) bool {
+	return stage == domain.StageApplicationReady
 }
 
 // Answer is what a level of the hierarchy had to say about one stage. A level

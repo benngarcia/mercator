@@ -1093,7 +1093,9 @@ func candidateIdentityRecurs(observation InvariantObservation) error {
 // level cannot be told from a stage answered by a constant, a keyed level with
 // no samples is a claim of evidence with none behind it, and a prior carrying
 // samples is the opposite: measured launches filed under an answer that says
-// nobody has watched this happen.
+// nobody has watched this happen. And a stage that moves bytes may not be
+// answered from launches at all, which is the clause every other reader of a
+// transfer's seconds rests on.
 func predictionStatesItsProvenance(observation InvariantObservation) error {
 	decisions, err := recordedDecisions(observation)
 	if err != nil {
@@ -1133,6 +1135,9 @@ func stageStatesItsProvenance(runID string, candidate domain.CandidateDecision, 
 		}
 		return nil
 	case domain.LevelExactCandidate, domain.LevelProviderAndRegion, domain.LevelProvider:
+		if err := aTransferWasNotAnsweredFromLaunches(runID, candidate, stage, answer); err != nil {
+			return err
+		}
 		return keyedAnswerIsHonest(runID, candidate, stage, answer)
 	default:
 		return fmt.Errorf(
@@ -1175,18 +1180,64 @@ func keyedAnswerIsHonest(runID string, candidate domain.CandidateDecision, stage
 	return nil
 }
 
+// aTransferWasNotAnsweredFromLaunches is the clause every other reader of a
+// transfer's seconds rests on, this rule's neighbours included.
+//
+// A stage that moves bytes is priced from two things and the record explains both:
+// the locality evidence accounts for the byte count, the transfer rate accounts
+// for the throughput, and safety.locality_is_never_infeasibility reads the seconds
+// back as their product when it works out how much of a refusal was charged for
+// content nobody could describe. Measured launches of this candidate are a
+// measurement of some other launch's byte count, because what a machine still has
+// to move is whatever it does not already hold at the moment it is asked. Answered
+// from them, the seconds belong to neither half: a share of the bytes applied to
+// them is a share of a quantity that did not produce them, and a host holding every
+// byte is charged the transfer it performed the last time it held none.
+//
+// So it is refused outright rather than accounted for. The alternative is every
+// rule that reads a transfer's seconds having to ask first whether these ones are a
+// transfer's seconds at all, which is a condition spread across the laws instead of
+// stated once.
+func aTransferWasNotAnsweredFromLaunches(
+	runID string,
+	candidate domain.CandidateDecision,
+	stage domain.LaunchStage,
+	answer domain.Estimate,
+) error {
+	if !pricedFromBytes(stage) {
+		return nil
+	}
+	return fmt.Errorf(
+		"Run %q answered candidate %q's %s stage from %d measured launches under %q, and a transfer's seconds are this launch's own missing bytes over the path they cross",
+		runID, candidate.OfferSnapshotID, stage, answer.SampleCount, answer.Key,
+	)
+}
+
+// pricedFromBytes is which stages of a launch are a byte count over a throughput,
+// stated here rather than read from the estimator. Reading an image out of a
+// registry, assembling it, and reading the Run's declared inputs all are, and each
+// of them is the one kind of stage this Lab holds the record to accounting for in
+// two halves.
+func pricedFromBytes(stage domain.LaunchStage) bool {
+	switch stage {
+	case domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch:
+		return true
+	default:
+		return false
+	}
+}
+
 // contentStage is which stages carry the content in their key, stated here
 // rather than read from the estimator. A rule that asked the predictor which key
 // it should have used would be the predictor agreeing with itself: this is the
 // Lab's own account of which durations are a property of what was pulled and
 // which are a property of the machine.
+//
+// One stage is left. An application coming up is a property of the image, because
+// the application is the image; the transfers are a property of the image too and
+// are not answered from launches at all, so no key of theirs is ever read back.
 func contentStage(stage domain.LaunchStage) bool {
-	switch stage {
-	case domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch, domain.StageApplicationReady:
-		return true
-	default:
-		return false
-	}
+	return stage == domain.StageApplicationReady
 }
 
 // keyedCandidate is what a candidate key has already been handed out for: the

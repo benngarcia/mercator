@@ -118,6 +118,38 @@ func TestAContentStageIsLearnedPerImageAndAMachineStageIsNot(t *testing.T) {
 	}
 }
 
+// TestATransferIsNotAnsweredFromTheSecondsAnotherLaunchSpent is the boundary of
+// what this package will answer. A transfer is a byte count over a throughput and
+// the byte count belongs to the launch rather than to the machine: what a host
+// still has to move is whatever it does not already hold when it is asked, so the
+// machine that pulled forty gigabytes yesterday holds them today and moves nothing.
+//
+// The key names the machine and the image and can name neither the bytes nor the
+// path, so a measured transfer of one byte count would be served back as the price
+// of another and, at zero bytes, as the price of a transfer that will not happen.
+// It is filed nowhere and answers nothing until the key says what a transfer is.
+func TestATransferIsNotAnsweredFromTheSecondsAnotherLaunchSpent(t *testing.T) {
+	ask := marketplaceAsk("off_vast_11111", "machine-77")
+	identity := domain.CandidateIdentityOf(ask, "sha256:image")
+	history := prediction.NewHistory([]prediction.Observation{
+		{Candidate: identity, Stage: domain.StageImageFetch, Seconds: 900},
+		{Candidate: identity, Stage: domain.StageUnpack, Seconds: 120},
+		{Candidate: identity, Stage: domain.StageArtifactFetch, Seconds: 920},
+	})
+
+	for _, transfer := range []domain.LaunchStage{
+		domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch,
+	} {
+		t.Run(string(transfer), func(t *testing.T) {
+			answer := history.Predict(identity, transfer)
+
+			if answer.Answered() || answer.Level != domain.LevelPrior {
+				t.Fatalf("a measured %s answered for a launch owing other bytes: %+v", transfer, answer)
+			}
+		})
+	}
+}
+
 // TestALaunchWithNoReadinessMeasuresNothing holds what an Observation is made
 // of. A workload that never reported it could do work leaves the stage with no
 // actual, and a zero there teaches a fleet that every application is serving the

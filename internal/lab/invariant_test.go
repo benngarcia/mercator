@@ -696,17 +696,21 @@ func TestAnAnsweredStageAndAPriorAreBothHonestProvenance(t *testing.T) {
 		// The content stages carry the content in their key and the machine stages
 		// do not, which is what keeps one machine's boot history from being split
 		// across every image the fleet ever ran on it.
-		"a stage answered from this machine's own launches": func(stage domain.LaunchStage) domain.Estimate {
-			return domain.Estimate{
-				Expected: 30, Level: domain.LevelExactCandidate, SampleCount: 1,
-				Key: machine.Candidate(contentStage(stage)),
-			}
-		},
-		"a stage answered from the province the machine is in": func(domain.LaunchStage) domain.Estimate {
-			return domain.Estimate{
-				Expected: 90, Level: domain.LevelProviderAndRegion, SampleCount: 2, Key: machine.ProviderAndRegion(),
-			}
-		},
+		"a stage answered from this machine's own launches": whereALaunchCanAnswer(
+			func(stage domain.LaunchStage) domain.Estimate {
+				return domain.Estimate{
+					Expected: 30, Level: domain.LevelExactCandidate, SampleCount: 1,
+					Key: machine.Candidate(contentStage(stage)),
+				}
+			},
+		),
+		"a stage answered from the province the machine is in": whereALaunchCanAnswer(
+			func(domain.LaunchStage) domain.Estimate {
+				return domain.Estimate{
+					Expected: 90, Level: domain.LevelProviderAndRegion, SampleCount: 2, Key: machine.ProviderAndRegion(),
+				}
+			},
+		),
 		"a stage nobody has ever measured": func(domain.LaunchStage) domain.Estimate {
 			return domain.Estimate{Expected: 300, Level: domain.LevelPrior}
 		},
@@ -756,6 +760,64 @@ func predictionObservation(now time.Time, identity domain.CandidateIdentity, ans
 // record itself states it once rather than eight times.
 func everyStage(answer domain.Estimate) func(domain.LaunchStage) domain.Estimate {
 	return func(domain.LaunchStage) domain.Estimate { return answer }
+}
+
+// whereALaunchCanAnswer is one answer given only for the stages a measured launch
+// may answer, with the transfers left at the prior they are always at. It is what
+// makes a case about an answered stage a record production really writes: a
+// transfer is priced from this launch's own missing bytes over the path they cross,
+// and measured seconds of a different launch's transfer answer for neither.
+func whereALaunchCanAnswer(answer func(domain.LaunchStage) domain.Estimate) func(domain.LaunchStage) domain.Estimate {
+	return func(stage domain.LaunchStage) domain.Estimate {
+		if pricedFromBytes(stage) {
+			return domain.Estimate{Expected: 12, Level: domain.LevelPrior}
+		}
+		return answer(stage)
+	}
+}
+
+// TestATransferAnsweredFromMeasuredLaunchesIsAViolation is the deliberate break
+// for the clause the rest of this file's readings of a transfer rest on. Each of
+// the three stages priced from bytes is shown failing on its own, with every other
+// stage of the same record at an honest prior, so what fails is the transfer and
+// not the company it is in.
+//
+// The seconds are as real as seconds get: one measured launch of this exact
+// machine, filed under the key that recurs. What makes them a violation is which
+// launch they are of. This machine's own transfer was a transfer of whatever it did
+// not hold at that moment, and what it does not hold now is a different quantity,
+// so a rule reading these seconds as bytes over a rate is reading a product of two
+// numbers neither of which is in this record.
+func TestATransferAnsweredFromMeasuredLaunchesIsAViolation(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	machine := domain.CandidateIdentity{
+		Lane: domain.LaneEphemeral, Provider: "simvast", Region: "US-CA",
+		Machine: "machine-77", Accelerator: "nvidia-a100x2", ImageDigest: "sha256:image",
+	}
+	for _, transfer := range []domain.LaunchStage{
+		domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch,
+	} {
+		t.Run(string(transfer), func(t *testing.T) {
+			observation := predictionObservation(now, machine, func(stage domain.LaunchStage) domain.Estimate {
+				if stage != transfer {
+					return domain.Estimate{Expected: 12, Level: domain.LevelPrior}
+				}
+				return domain.Estimate{
+					Expected: 920, Level: domain.LevelExactCandidate, SampleCount: 1,
+					Key: machine.Candidate(true),
+				}
+			})
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.prediction_states_its_provenance",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("a %s answered from measured launches was reported as honest provenance: %+v", transfer, result)
+			}
+		})
+	}
 }
 
 // keyedStages is every stage answered as this exact candidate out of the listing
@@ -1246,26 +1308,19 @@ func TestARatePricedFromTheStatedAssumptionIsNotAViolation(t *testing.T) {
 	}
 }
 
-// TestAStageAnsweredFromHistoryIsNotPricedFromAPathAtAll is the law read against
-// the estimator that landed on top of it, which is the one reader the earlier
-// cases could not have: they all state the record by hand, and this collision is
-// between two things production writes.
+// TestAMeasuredFetchIsNotWhatTheNextLaunchOwes is the estimator read against the
+// transfer path, driven through the production scheduler because the two live in
+// two packages and a fixture stating the record itself would agree with whatever
+// it stated.
 //
-// The hierarchical estimator replaces a stage's seconds with what measured
-// launches of this candidate really spent, artifact_fetch included, and the
-// confidence it carries is what those launches are worth rather than what a guess
-// is worth. The rate this rule reads is the throughput a stage was priced at. A
-// decision that answered the stage from history and then recorded the link speed
-// beside it anyway would be saying that an assumption produced seconds
-// measurements produced, and this law would adjudicate a lawful prediction as a
-// fabricated guess over a number the decision never divided by.
-//
-// So the record states no rate for a stage nothing priced from a rate, and the
-// law is left exactly as strong for every stage that was. It is driven through the
-// production scheduler rather than a stated decision, because the two halves of
-// the contradiction live in two packages and a fixture writing the record itself
-// would agree with whatever it wrote.
-func TestAStageAnsweredFromHistoryIsNotPricedFromAPathAtAll(t *testing.T) {
+// The fleet has watched this exact machine read the object store twice. It is asked
+// to read forty gigabytes it does not hold, over a path nothing has measured, and
+// the answer is the bytes over Mercator's own prior: a transfer is a byte count
+// divided by a throughput, this launch's byte count is not the one those launches
+// moved, and the machine's own seconds are not an answer about it. The record says
+// so in both halves, the locality evidence for the bytes and the transfer rate for
+// the throughput, which is what every law reading a transfer's seconds needs.
+func TestAMeasuredFetchIsNotWhatTheNextLaunchOwes(t *testing.T) {
 	input := historyAnsweredFetch()
 
 	decision, err := scheduler.New().Evaluate(context.Background(), input)
@@ -1273,23 +1328,85 @@ func TestAStageAnsweredFromHistoryIsNotPricedFromAPathAtAll(t *testing.T) {
 		t.Fatalf("evaluate production scheduler: %v", err)
 	}
 
-	fetch := candidateFor(t, decision, "rental-far").Estimates.Stages.ArtifactFetch
-	if fetch.Source != prediction.Source || fetch.Confidence <= domain.AssumedLinkConfidence {
-		t.Fatalf("this case needs a fetch answered from history and worth more than a guess, and the decision answered %+v", fetch)
+	candidate := candidateFor(t, decision, "rental-far")
+	fetch := candidate.Estimates.Stages.ArtifactFetch
+	if fetch.Source == prediction.Source || fetch.Level != domain.LevelPrior || fetch.SampleCount != 0 {
+		t.Fatalf("two measured launches of this machine answered for a fetch of other bytes: %+v", fetch)
 	}
-	result := invariantResultByID(t,
-		DefaultInvariantRegistry().Evaluate(InvariantObservation{
-			StartedAt:      input.EvaluatedAt,
-			Now:            input.EvaluatedAt,
-			World:          WorldTruthSnapshot{At: input.EvaluatedAt},
-			MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_history_fetch", decision)},
-		}),
-		"safety.transfer_rate_is_attributed",
-	)
+	if rate := findRateFor(t, candidate, domain.StageArtifactFetch); rate.Bytes != 40_000_000_000 {
+		t.Fatalf("the fetch was priced over %d bytes, and this machine holds none of the forty gigabytes", rate.Bytes)
+	}
+	for _, id := range []string{"safety.transfer_rate_is_attributed", "safety.prediction_states_its_provenance"} {
+		result := invariantResultByID(t,
+			DefaultInvariantRegistry().Evaluate(InvariantObservation{
+				StartedAt:      input.EvaluatedAt,
+				Now:            input.EvaluatedAt,
+				World:          WorldTruthSnapshot{At: input.EvaluatedAt},
+				MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_history_fetch", decision)},
+			}),
+			id,
+		)
+		if result.Status != InvariantPassed {
+			t.Fatalf("%s reported the fetch this machine really owes: %s", id, result.Violation)
+		}
+	}
+}
 
-	if result.Status != InvariantPassed {
-		t.Fatalf("a fetch answered from measured launches was reported as a rate nobody measured: %s", result.Violation)
+// TestAMachineHoldingEveryByteIsNotChargedForAFetchItWillNotPerform is the same
+// two launches asked of the machine that has since become warm. Its own inventory
+// answers that every byte of the dataset is here and verified, so the read is no
+// work at all, and a start bound it comfortably meets may not be turned against it
+// by the seconds it spent the last time it held nothing.
+//
+// It is the whole premise of Artifact locality stated as a case: a host that holds
+// the data is why the data is worth holding.
+func TestAMachineHoldingEveryByteIsNotChargedForAFetchItWillNotPerform(t *testing.T) {
+	input := historyAnsweredFetch()
+	input.Workload.Spec.Placement.MaxP90StartSeconds = 180
+	input.Offers[0].Artifacts = wholeDatasetVerified(input.Artifacts[0], input.EvaluatedAt)
+
+	decision, err := scheduler.New().Evaluate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("evaluate production scheduler: %v", err)
 	}
+
+	candidate := candidateFor(t, decision, "rental-far")
+	if fetch := candidate.Estimates.Stages.ArtifactFetch; fetch.Expected != 0 {
+		t.Errorf("a machine holding every byte was charged %.2fs to read them: %+v", fetch.Expected, fetch)
+	}
+	if !candidate.Feasible {
+		t.Errorf("a machine holding every byte was refused against a %.0fs bound: %+v",
+			input.Workload.Spec.Placement.MaxP90StartSeconds, candidate.Rejections)
+	}
+}
+
+// wholeDatasetVerified is a host that enumerated its copies and holds all of this
+// one, hashed and matched. Nothing about the read is left for it to do.
+func wholeDatasetVerified(version domain.ArtifactVersion, at time.Time) domain.ArtifactInventory {
+	return domain.ArtifactInventory{
+		Known:      true,
+		ObservedAt: at,
+		Replicas: []domain.ArtifactReplica{{
+			ArtifactID:    version.ID,
+			ContentDigest: version.ContentDigest,
+			SizeBytes:     version.SizeBytes,
+			State:         domain.ArtifactReplicaVerified,
+			VerifiedAt:    at.Add(-time.Hour),
+		}},
+	}
+}
+
+// findRateFor is the throughput one stage of one candidate was priced at, which a
+// case reads to state what the decision divided by rather than restating it.
+func findRateFor(t *testing.T, candidate domain.CandidateDecision, stage domain.LaunchStage) domain.TransferRate {
+	t.Helper()
+	for _, rate := range candidate.TransferRates {
+		if rate.Stage == stage {
+			return rate
+		}
+	}
+	t.Fatalf("candidate %q records no rate for its %s stage", candidate.OfferSnapshotID, stage)
+	return domain.TransferRate{}
 }
 
 // historyAnsweredFetch is one machine with two launches of exactly this candidate
@@ -1297,7 +1414,7 @@ func TestAStageAnsweredFromHistoryIsNotPricedFromAPathAtAll(t *testing.T) {
 // publishing nothing about the path to the object store. Every part of that is
 // load bearing: an unmeasured path is what makes the rate an assumption, bytes to
 // read are what make there be a rate at all, and launches of this exact candidate
-// are what make the seconds worth more than a guess.
+// are what would answer the stage if a transfer were a thing history could answer.
 func historyAnsweredFetch() scheduler.SchedulingInput {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	image := "sha256:" + strings.Repeat("a", 64)

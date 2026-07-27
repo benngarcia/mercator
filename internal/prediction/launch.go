@@ -39,6 +39,12 @@ type Launch struct {
 // that interval across them would be arithmetic wearing a measurement's clothes.
 // They stay predicted from published claims and stated constants, which the
 // record names as the prior it is, until a node reports the stages it performs.
+//
+// Three of them stay predicted even then. Pulling an image, assembling it, and
+// reading the Run's inputs are a byte count over a throughput, the byte count is
+// this launch's own rather than the candidate's, and pricedFromBytes is where that
+// is stated: a timed fetch becomes evidence when the key names the bytes and the
+// path, and the rate it crossed is already published as a fact of its own.
 func (launch Launch) Observations() []Observation {
 	if launch.StartedAt.IsZero() || launch.ReadyAt.IsZero() || launch.ReadyAt.Before(launch.StartedAt) {
 		return nil

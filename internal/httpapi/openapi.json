@@ -4527,7 +4527,7 @@
             "items": {
               "$ref": "#/components/schemas/TransferRate"
             },
-            "description": "The throughput each transfer stage of this launch was priced at and where that number came from, one entry per stage this decision really did price from a throughput. A stage with nothing to move records none, because there was no transfer to price, and so does a stage answered out of measured launches, because those seconds came from the launches rather than from a rate. The seconds a candidate is charged are bytes over a rate, the bytes are explained by the locality evidence, and this is the other half: a machine priced at a throughput nothing on it ever reported and a machine priced at Mercator's own assumption produce the same seconds and are different claims."
+            "description": "The throughput each transfer stage of this launch was priced at and where that number came from, one entry per stage that had bytes to move. A stage with nothing to move records none, because there was no transfer to price, and nothing else suppresses one: every transfer this fleet prices is bytes over a rate, so a transfer is not a stage the estimator answers out of measured launches. The seconds a candidate is charged are bytes over a rate, the bytes are explained by the locality evidence, and this is the other half: a machine priced at a throughput nothing on it ever reported and a machine priced at Mercator's own assumption produce the same seconds and are different claims."
           },
           "confidences": {
             "type": "array",
