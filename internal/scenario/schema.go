@@ -132,6 +132,13 @@ const (
 	// every stage in the tree is predicted from a published claim or a stated
 	// constant, whatever the fleet has watched that exact machine do.
 	CapabilityLearnedStageHistory Capability = "learned_stage_history"
+	// CapabilityAppendedDecisions is a Booking Decision that is added and never
+	// written over: a Run that found nothing has a decision recorded for it at
+	// all, and a re-decision names the one it stands in for and why. It names what
+	// a fixture about a chain of decisions is red for while a re-placement leaves
+	// readers to take the last record silently and a Run nothing could place
+	// records no decision.
+	CapabilityAppendedDecisions Capability = "appended_decisions"
 )
 
 var knownCapabilities = map[Capability]bool{
@@ -153,6 +160,7 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityLabUI:                  true,
 	CapabilityMeasuredTransferRates:  true,
 	CapabilityLearnedStageHistory:    true,
+	CapabilityAppendedDecisions:      true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued
@@ -1161,6 +1169,48 @@ type ExpectSpec struct {
 	// how the corpus states the queue: a Run that waits and never says why is
 	// the state this stage was built to replace.
 	Deferral *DeferralExpectation `json:"deferral,omitempty"`
+	// Decision asserts the record of the decisions themselves rather than what one
+	// of them chose: how many this Run holds, and which one the newest replaces.
+	// It is stated apart from the outcome because a decision is appended and never
+	// rewritten, so a Run answered twice holds two records and a fixture has to be
+	// able to say so.
+	Decision *DecisionExpectation `json:"decision,omitempty"`
+}
+
+// DecisionExpectation is what the record must say about this Run's chain of
+// Booking Decisions.
+type DecisionExpectation struct {
+	// Recorded is how many Booking Decisions this Run's stream holds. A Run
+	// decided twice holds two, because a changed answer appends: reading only the
+	// newest is what let a re-decision look like the only decision ever taken.
+	Recorded int `json:"recorded"`
+	// Supersedes is the one-based position in that chain of the decision the
+	// newest one replaces, and it is omitted for a first decision, which replaces
+	// nothing. A fixture names a position rather than an ID because Mercator
+	// hashes decision IDs and no fixture should predict one: the runner reads the
+	// ID off the record at that position and holds the newest decision to naming
+	// exactly it.
+	Supersedes int `json:"supersedes,omitempty"`
+	// SupersedesReason is the code the newest decision gives for replacing its
+	// predecessor. A supersession with no reason is a rewrite with more steps in
+	// it, so a fixture that states a predecessor states this too.
+	SupersedesReason string `json:"supersedes_reason,omitempty"`
+}
+
+// validate refuses a chain assertion nothing could check: a position outside the
+// chain it indexes, a predecessor with no reason for being replaced, and a
+// reason with no predecessor to explain.
+func (expect DecisionExpectation) validate() error {
+	if expect.Recorded <= 0 {
+		return fmt.Errorf("a decision expectation states how many decisions the record holds")
+	}
+	if expect.Supersedes < 0 || expect.Supersedes >= expect.Recorded {
+		return fmt.Errorf("superseded position %d is not one of the %d decisions before the newest", expect.Supersedes, expect.Recorded)
+	}
+	if (expect.Supersedes == 0) != (expect.SupersedesReason == "") {
+		return fmt.Errorf("a superseding decision names both the decision it replaces and why")
+	}
+	return nil
 }
 
 // DeferralExpectation is one recorded moment a Run was told to wait, or refused
@@ -2527,6 +2577,11 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 	}
 	if expect.Deferral != nil && expect.Deferral.Reason == "" {
 		return fmt.Errorf("a deferral states the reason admission recorded")
+	}
+	if expect.Decision != nil {
+		if err := expect.Decision.validate(); err != nil {
+			return err
+		}
 	}
 	if booking := expect.Booking; booking != nil {
 		if booking.BookingID == "" || booking.RentalID == "" || booking.ScheduleVersion == 0 {

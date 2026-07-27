@@ -1,0 +1,79 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One warm Rental whose schedule is full: a Booking running for six more minutes and the maximum four waiting behind it. The Run that arrives is refused on the machine's own schedule, has nowhere else to go, and waits. That first step is the audit hole this Blueprint closes. Placement weighed the fleet, priced the only machine in it, and recorded nothing at all, so a queued Run's whole account of itself was a reason code and a count of machines: no candidate, no rejection, no schedule the wait was read off, and nothing for the rules that read Booking Decisions to read. The refusal is a decision now, recorded with the deferral it caused. Six minutes later the running Booking finishes, a waiting one takes the machine, and a position opens. The same Run is asked again and takes it, and the answer that changed is appended rather than written over the first: the second decision names the first by ID and says why it stands in for it, so both survive and a reader walks the chain instead of taking the last record and assuming nothing came before it. The re-decision here is caused by the fleet changing rather than by a machine refusing a launch, because a launch that fails is a fault and a placement world has none; the launch-failure half of the same rule is stated at conformance, where the world can make a machine refuse.",
+  "classification": "target",
+  "missing_capabilities": ["appended_decisions"],
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-only",
+        "version": 9,
+        "running": {
+          "booking": "booking-active",
+          "run": "run-active",
+          "remaining_max_runtime": "6m",
+          "completes_after": "6m"
+        },
+        "queued": [
+          {"booking": "booking-q1", "run": "run-q1", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"booking": "booking-q2", "run": "run-q2", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"booking": "booking-q3", "run": "run-q3", "max_runtime": "2m", "expected_runtime": "1m"},
+          {"booking": "booking-q4", "run": "run-q4", "max_runtime": "2m", "expected_runtime": "1m"}
+        ]
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "waits-for-a-position",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_FEASIBLE_OFFER",
+          "behind": ["active", "q1", "q2", "q3", "q4"],
+          "weighed": 1,
+          "could_hold": 1
+        },
+        "decision": {
+          "recorded": 1
+        }
+      }
+    },
+    {
+      "advance": "6m"
+    },
+    {
+      "reconcile": "waits-for-a-position",
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-only",
+        "decision": {
+          "recorded": 2,
+          "supersedes": 1,
+          "supersedes_reason": "PREVIOUS_DECISION_SELECTED_NOTHING"
+        }
+      }
+    }
+  ]
+}

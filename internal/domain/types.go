@@ -1030,6 +1030,66 @@ type BookingDecision struct {
 	SelectedOfferSnapshotID string              `json:"selected_offer_snapshot_id,omitempty"`
 	Booking                 *Booking            `json:"booking,omitempty"`
 	SelectionReasonCodes    []string            `json:"selection_reason_codes"`
+	// Supersedes is the decision this one replaces, and SupersedesReason is why.
+	// A decision is never rewritten: an answer that changed is a new record that
+	// names the one it stands in for, so a reader walks the chain rather than
+	// taking the last entry and assuming the rest never happened.
+	//
+	// Both are empty on a Run's first decision, which replaces nothing, and both
+	// are set or neither is. A supersession with no reason is a rewrite with more
+	// steps in it: the reason is the part of the record that says whether the
+	// answer changed because a machine refused the work or because the fleet did.
+	Supersedes       string `json:"supersedes,omitempty"`
+	SupersedesReason string `json:"supersedes_reason,omitempty"`
+}
+
+// Supersession reasons: why Mercator decided again about a Run it had already
+// answered. Each names a fact already in the Run's own record, so a reader can
+// check the reason rather than take it.
+const (
+	// SupersededLaunchFailed is the machine the previous decision chose refusing
+	// to start the work. Its offer is excluded from the decision that replaces it,
+	// which is why the two decisions weighed different candidate sets.
+	SupersededLaunchFailed = "PREVIOUS_LAUNCH_FAILED"
+	// SupersededSelectedNothing is the previous decision having placed the Run
+	// nowhere. The Run waited, the fleet was asked again, and this answer stands in
+	// for the refusal rather than erasing it.
+	SupersededSelectedNothing = "PREVIOUS_DECISION_SELECTED_NOTHING"
+)
+
+// Identity is the decision ID derived from the decision's own recorded content:
+// what was asked, when it was asked, what was weighed, what was chosen, and what
+// this answer replaces. It is a function of the record rather than of the search
+// that produced it, which is what makes a decision reproducible: a reader with
+// nothing but the stored decision recomputes the ID and finds the same one.
+//
+// The Booking is deliberately not part of it. A Booking's own identity is
+// derived from this ID, so hashing it would be circular, and a Booking that was
+// later dispatched carries a state the decision never claimed.
+func (decision BookingDecision) Identity() (string, error) {
+	hash, err := CanonicalHash(struct {
+		RunID            string
+		Revision         string
+		EvaluatedAt      time.Time
+		Model            string
+		Candidates       []CandidateDecision
+		SelectedID       string
+		Supersedes       string
+		SupersedesReason string
+	}{
+		decision.RunID,
+		decision.WorkloadRevisionDigest,
+		decision.EvaluatedAt.UTC(),
+		decision.ModelVersion,
+		decision.Candidates,
+		decision.SelectedOfferSnapshotID,
+		decision.Supersedes,
+		decision.SupersedesReason,
+	})
+	if err != nil {
+		return "", err
+	}
+	return "dec_" + hash[len("sha256:"):24], nil
 }
 
 type CollectionReport struct {

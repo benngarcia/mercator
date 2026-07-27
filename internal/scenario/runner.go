@@ -83,24 +83,37 @@ func Run(backend Backend, sc Scenario) (Result, error) {
 	return Result{Failures: failures, Notes: session.Notes()}, nil
 }
 
-// recordedDecision is the latest booking decision in a run's stream, both
-// decoded and raw. The raw form is where target-contract fields (Booking,
-// RentalSchedule evidence, cache evidence) are asserted before the domain
-// types carry them.
+// recordedDecision is one booking decision in a run's stream, both decoded and
+// raw. The raw form is where target-contract fields (Booking, RentalSchedule
+// evidence, cache evidence) are asserted before the domain types carry them.
 type recordedDecision struct {
 	decision domain.BookingDecision
 	raw      map[string]json.RawMessage
 }
 
 func latestDecision(events []eventlog.StoredEvent) (recordedDecision, bool) {
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type != orchestrator.EventBookingDecided {
+	chain := decisionChain(events)
+	if len(chain) == 0 {
+		return recordedDecision{}, false
+	}
+	return chain[len(chain)-1], true
+}
+
+// decisionChain is every Booking Decision this Run's stream holds, in the order
+// Mercator appended them. It is the whole record rather than its last element,
+// because a changed answer appends: a reader given only the newest cannot tell a
+// Run answered once from a Run whose first answer was replaced, and telling them
+// apart is what this corpus states.
+func decisionChain(events []eventlog.StoredEvent) []recordedDecision {
+	var chain []recordedDecision
+	for _, event := range events {
+		if event.Type != orchestrator.EventBookingDecided {
 			continue
 		}
 		var payload struct {
 			Decision json.RawMessage `json:"decision"`
 		}
-		if err := json.Unmarshal(events[i].Data, &payload); err != nil {
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
 			continue
 		}
 		var rec recordedDecision
@@ -110,9 +123,9 @@ func latestDecision(events []eventlog.StoredEvent) (recordedDecision, bool) {
 		if err := json.Unmarshal(payload.Decision, &rec.raw); err != nil {
 			continue
 		}
-		return rec, true
+		chain = append(chain, rec)
 	}
-	return recordedDecision{}, false
+	return chain
 }
 
 func latestDisposition(events []eventlog.StoredEvent) (string, bool) {
@@ -221,7 +234,8 @@ func assertExpect(session Session, start time.Time, bookings bookingNames, name 
 		return []string{fmt.Sprintf("run %q: read events: %v", name, err)}
 	}
 	if expect.Outcome == OutcomeDefer || expect.Outcome == OutcomeRefuse {
-		return assertAdmission(events, name, expect)
+		failures := assertAdmission(events, name, expect)
+		return append(failures, assertDecisionChain(events, name, expect)...)
 	}
 	rec, ok := latestDecision(events)
 	if !ok {
@@ -254,10 +268,48 @@ func assertExpect(session Session, start time.Time, bookings bookingNames, name 
 			fail("expected disposition %q, got %q", expect.Disposition, disposition)
 		}
 	}
+	failures = append(failures, assertDecisionChain(events, name, expect)...)
 	failures = append(failures, assertStartMoment(events, name, expect)...)
 	failures = append(failures, assertReadyMoment(session, events, name, expect)...)
 	for _, id := range sortedKeys(expect.Candidates) {
 		failures = append(failures, assertCandidate(rec, bookings, name, id, expect.Candidates[id])...)
+	}
+	return failures
+}
+
+// assertDecisionChain reads the record of the decisions themselves: how many
+// this Run holds, and whether the newest one names the one it replaces and why.
+//
+// The predecessor is checked by identity and not by position alone, because
+// naming a decision is the whole claim. A chain whose newest entry points at
+// anything other than the record immediately before it is a chain a reader
+// cannot walk, and a decision that names nothing leaves the reader taking the
+// last record silently, which is the state this stage replaced.
+func assertDecisionChain(events []eventlog.StoredEvent, name string, expect ExpectSpec) []string {
+	if expect.Decision == nil {
+		return nil
+	}
+	want := *expect.Decision
+	chain := decisionChain(events)
+	fail := func(format string, args ...any) []string {
+		return []string{fmt.Sprintf("run %q: ", name) + fmt.Sprintf(format, args...)}
+	}
+	if len(chain) != want.Recorded {
+		return fail("expected %d recorded decisions, and the record holds %d", want.Recorded, len(chain))
+	}
+	newest := chain[len(chain)-1].decision
+	if want.Supersedes == 0 {
+		if newest.Supersedes != "" {
+			return fail("expected a first decision that replaces nothing, and it supersedes %q", newest.Supersedes)
+		}
+		return nil
+	}
+	var failures []string
+	if predecessor := chain[want.Supersedes-1].decision.ID; newest.Supersedes != predecessor {
+		failures = append(failures, fail("expected the newest decision to supersede %q, and it names %q", predecessor, newest.Supersedes)...)
+	}
+	if newest.SupersedesReason != want.SupersedesReason {
+		failures = append(failures, fail("expected the supersession reason %q, recorded %q", want.SupersedesReason, newest.SupersedesReason)...)
 	}
 	return failures
 }
