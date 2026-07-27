@@ -52,8 +52,10 @@
         "deferral": {
           "reason": "NO_CAPACITY_FITS",
           "behind": [],
-          "weighed": 1,
-          "could_hold": 0,
+          "fleet": {
+            "weighed": 1,
+            "could_hold": 0
+          },
           "projected_wait_seconds": 0
         }
       }
@@ -75,8 +77,10 @@
         "deferral": {
           "reason": "NO_FEASIBLE_OFFER",
           "behind": ["active", "q1", "q2", "q3", "q4"],
-          "weighed": 1,
-          "could_hold": 1
+          "fleet": {
+            "weighed": 1,
+            "could_hold": 1
+          }
         }
       }
     },
@@ -87,8 +91,9 @@
         "deferral": {
           "reason": "BEHIND_HIGHER_PRIORITY",
           "behind": ["the-next-iteration"],
-          "weighed": 0,
-          "could_hold": 0
+          "fleet": {
+            "absent": true
+          }
         }
       }
     },
@@ -106,8 +111,9 @@
         "deferral": {
           "reason": "BEHIND_HIGHER_PRIORITY",
           "behind": ["the-next-iteration"],
-          "weighed": 0,
-          "could_hold": 0
+          "fleet": {
+            "absent": true
+          }
         }
       }
     }

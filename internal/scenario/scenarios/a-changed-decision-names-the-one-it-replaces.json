@@ -51,8 +51,10 @@
         "deferral": {
           "reason": "NO_FEASIBLE_OFFER",
           "behind": ["active", "q1", "q2", "q3", "q4"],
-          "weighed": 1,
-          "could_hold": 1
+          "fleet": {
+            "weighed": 1,
+            "could_hold": 1
+          }
         },
         "decision": {
           "recorded": 1

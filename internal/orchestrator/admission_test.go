@@ -45,8 +45,12 @@ func TestARunNothingCanTakeWaitsInsteadOfSpinning(t *testing.T) {
 		t.Fatalf("the Run recorded %d deferrals over two advances, and it has waited once for one reason: %v",
 			deferrals, eventTypes(events))
 	}
-	if reason := deferralReason(t, events); reason != domain.DeferredNoFeasibleOffer {
-		t.Fatalf("the Run waits for %q, and this control plane published no machine to weigh it against", reason)
+	// A fleet that published nothing is a wait for capacity to be added. An offer
+	// query is a search on the shape asked for, so a fleet that answered with
+	// nothing has said it holds no machine of that shape, and waiting for the fleet
+	// as it stands is waiting for a machine that is not there.
+	if reason := deferralReason(t, events); reason != domain.DeferredNoCapacityFits {
+		t.Fatalf("the Run waits for %q, and this control plane published no machine that could ever hold it", reason)
 	}
 	if closed := countEvents(events, EventRunClosed); closed != 0 {
 		t.Fatalf("a Run waiting for capacity was closed: %v", eventTypes(events))
@@ -63,10 +67,15 @@ func TestARunNothingCanTakeWaitsInsteadOfSpinning(t *testing.T) {
 //
 // Three Runs are the smallest world that reaches it. One waits, one is told it is
 // behind that Run, and a third arrival changes what the second one is behind.
+//
+// The fleet holds one machine that could take any of them once the capacity it is
+// spending comes back, because that is the only wait the queue is ordered on. A
+// fleet that published nothing is a wait for capacity to be added, and no Run is
+// ordered behind an ask nothing in the fleet can hold.
 func TestAWaitThatChangedIsRecordedAndNotRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	orch := newTestOrchestrator(t, fake.New())
+	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", time.Now().UTC())})))
 	submitClassed(t, ctx, orch, "run_watched", domain.ClassInteractive)
 	submitClassed(t, ctx, orch, "run_watched_too", domain.ClassInteractive)
 	submitClassed(t, ctx, orch, "run_quiet", domain.ClassStandard)
@@ -105,7 +114,8 @@ func TestAWaitPastItsDeadlineIsRefusedBehindTheQueueToo(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
-	orch := New(openOrchestratorLog(t), scheduler.New(), fake.New(), WithClock(func() time.Time { return now }))
+	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
 	submitClassed(t, ctx, orch, "run_iterating", domain.ClassExperimental)
 	submitClassed(t, ctx, orch, "run_watched", domain.ClassInteractive)
 	for _, runID := range []string{"run_iterating", "run_watched"} {
@@ -160,6 +170,16 @@ func TestAnImpossibleAskDoesNotStopWorkThatFits(t *testing.T) {
 	if placed := countEvents(fits, EventLaunchIntentRecorded); placed != 1 {
 		t.Fatalf("the machine sat idle beside a Run that fits it: %v", eventTypes(fits))
 	}
+}
+
+// orchOccupiedOffer is one machine this fleet holds that could run the work and is
+// not free to right now, which is the only wait other work in the queue has to be
+// ordered behind. It says so with its own capacity evidence: a refusal that names
+// capacity somebody is spending ends when they stop spending it.
+func orchOccupiedOffer(id string, now time.Time) domain.OfferSnapshot {
+	offer := orchProvisionableOffer(id, now)
+	offer.Capacity.Available = false
+	return offer
 }
 
 // submitClassed submits one Run of a stated class without advancing it, so a test

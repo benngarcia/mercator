@@ -442,27 +442,27 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				admittedDecisionEvent("run-urgent", now.Add(10*time.Minute)),
 			}
 		},
-		// One impossible submission emptying a workspace: a Run asking for more room
-		// than any machine in the fleet has is queued, and the Run that does fit the
-		// fleet is then told it is waiting behind it. The machine stands idle beside
-		// work it could run, and nothing frees it, because the wait the queue is
-		// respecting is a wait for capacity nobody has.
+		// One impossible submission emptying a workspace: a Run nothing in the fleet
+		// can hold is queued, and the Run that does fit the fleet is then told it is
+		// waiting behind it. The machine stands idle beside work it could run, and
+		// nothing frees it, because the wait the queue is respecting is a wait for
+		// capacity nobody has.
 		//
-		// The middle event is what makes this the reachable record rather than a
-		// hand-built pair. A second machine in the workspace picks up work, so the
-		// impossible ask is weighed against a fleet that now has a Booking in it and
-		// Mercator calls the wait one for capacity to come free. Nothing about the
-		// fleet's answer changed: two machines were weighed and neither can hold the
-		// Run. A law stated over the last reason recorded reads that as an ordinary
-		// wait and certifies the block; this one is stated over what was weighed.
+		// The first event is the strongest form of it, and it is the one this law used
+		// to be blind to. A fleet that published nothing the ask even matches weighed
+		// no machines, and reading that as "nothing has been established" left the
+		// most impossible ask there is as the one wait nothing exempted. Two answers
+		// follow it to show the exemption survives them: the same ask told to wait
+		// again, and then the fleet publishing one machine that turns it away.
 		"safety.nothing_waits_behind_an_impossible_ask": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{
 				deferralEvent("run-impossible", now, domain.AdmissionDeferral{
-					Reason: domain.DeferredNoCapacityFits, Class: domain.ClassStandard, Weighed: 1, CouldHold: 0,
+					Reason: domain.DeferredNoCapacityFits, Class: domain.ClassStandard,
+					Fleet: &domain.FleetAnswer{},
 				}),
 				deferralEvent("run-impossible", now.Add(time.Minute), domain.AdmissionDeferral{
-					Reason: domain.DeferredNoFeasibleOffer, Class: domain.ClassStandard, Weighed: 2, CouldHold: 0,
-					Behind: []domain.QueuedAhead{{RunID: "run-occupies-the-other-machine"}},
+					Reason: domain.DeferredNoCapacityFits, Class: domain.ClassStandard,
+					Fleet: &domain.FleetAnswer{Weighed: 1, CouldHold: 0},
 				}),
 				deferredForEvent("run-fits", now.Add(2*time.Minute), domain.ClassStandard, domain.DeferredBehindHigherPriority, "run-impossible"),
 			}
@@ -2329,15 +2329,21 @@ func classedWorkload(class domain.ServiceClass) domain.WorkloadRevision {
 	return domain.WorkloadRevision{Spec: domain.WorkloadSpec{Placement: domain.PlacementPolicy{Class: class}}}
 }
 
-// admissionDeferredEvent is Mercator telling a Run to wait for want of any offer,
-// as the public log carries it.
+// admissionDeferredEvent is Mercator telling a Run to wait for a machine to come
+// free, as the public log carries it: one machine weighed, and it could take this
+// Run once whatever it is spending now comes back. That is a wait the rest of the
+// workspace has to respect, which is what the ordering rules are stated over.
 func admissionDeferredEvent(runID string, at time.Time, class domain.ServiceClass) eventlog.CloudEvent {
-	return deferredForEvent(runID, at, class, domain.DeferredNoFeasibleOffer)
+	return deferralEvent(runID, at, domain.AdmissionDeferral{
+		Reason: domain.DeferredNoFeasibleOffer,
+		Class:  class,
+		Fleet:  &domain.FleetAnswer{Weighed: 1, CouldHold: 1},
+	})
 }
 
 // deferredForEvent is Mercator telling a Run to wait for a stated reason, naming
-// the work it says is in front of it. It weighed no machines, which is what a wait
-// the queue caused rather than Placement records.
+// the work it says is in front of it. It carries no answer about the fleet, which
+// is what a wait the queue caused rather than Placement records.
 func deferredForEvent(runID string, at time.Time, class domain.ServiceClass, reason string, behind ...string) eventlog.CloudEvent {
 	deferral := domain.AdmissionDeferral{Reason: reason, Class: class}
 	for _, ahead := range behind {

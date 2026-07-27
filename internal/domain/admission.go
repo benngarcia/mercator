@@ -9,15 +9,23 @@ package domain
 
 const (
 	// DeferredNoFeasibleOffer is a Run nothing would take, waiting for capacity to
-	// come free. Every candidate was struck out, and what it waits behind is the
-	// work occupying the capacity those candidates were refused from. A fleet that
-	// published nothing at all is the same wait: nothing was weighed against this
-	// Run, so nothing has been established about what would hold it.
+	// come free. Every candidate was struck out and at least one of them could take
+	// the Run once the capacity it is spending comes back, so what this Run waits
+	// behind is the work occupying that machine.
 	DeferredNoFeasibleOffer = "NO_FEASIBLE_OFFER"
 	// DeferredNoCapacityFits is a Run nothing would take, waiting for capacity to
 	// be added. Every machine the fleet published was weighed against it, and none
 	// of them could hold it once the capacity it is spending now comes back, so
 	// waiting for the fleet as it stands changes nothing.
+	//
+	// A fleet that published nothing this Run's ask even matches is the same wait,
+	// stated as strongly as a fleet can state it. An offer query is a search on the
+	// shape asked for, so a marketplace that answered with nothing has said it sells
+	// no machine of that shape at all, and no amount of waiting for the fleet as it
+	// stands turns that into a machine. Calling that a wait for capacity to come
+	// free is what let the most impossible ask of all be the one wait nothing
+	// exempted: it kept the queue, aged past every other class, and stalled a
+	// workspace whose fleet was selling exactly what the work behind it asked for.
 	//
 	// It is decided from what each machine refused the Run for and never from what
 	// each machine happens to be doing. A refusal that names capacity somebody is
@@ -67,22 +75,58 @@ type AdmissionDeferral struct {
 	// a schedule to project from, which is a wait nobody measured rather than a
 	// wait of nothing.
 	ProjectedWaitSeconds float64 `json:"projected_wait_seconds,omitempty"`
-	// Weighed is how many machines the fleet published that this Run was measured
-	// against, and CouldHold how many of those could take it once the capacity
-	// they are spending now comes back.
+	// Fleet is what the fleet said about this Run at this moment, and it is the
+	// evidence the reason above rests on. The reason alone cannot be checked
+	// against anything, and the classification the whole queue is ordered on is
+	// read off this rather than off the word Mercator wrote beside it.
 	//
-	// They are the evidence the reason above rests on, and they are recorded
-	// because the reason alone cannot be checked. A wait for capacity to be added
-	// and a fleet that published nothing read identically to an operator who is
-	// told only that no offer was feasible, and a rule that has to police which of
-	// the two waits Mercator recorded has nothing to police it against.
-	//
-	// A wait admission caused rather than Placement weighed nothing, and says so
-	// with a zero: what a Run held behind work that outranks it is waiting for is
-	// the queue, and the fleet was never asked.
-	Weighed   int           `json:"weighed"`
-	CouldHold int           `json:"could_hold"`
-	Behind    []QueuedAhead `json:"behind,omitempty"`
+	// It is absent on a wait admission caused on its own account, where no machine
+	// was weighed at all. That is the distinction two counts could not carry: a
+	// fleet that published nothing an ask matches and a queue that never asked the
+	// fleet both weighed nothing, and the first is the strongest thing a fleet can
+	// say about an ask while the second says nothing about capacity whatsoever.
+	Fleet  *FleetAnswer  `json:"fleet,omitempty"`
+	Behind []QueuedAhead `json:"behind,omitempty"`
+}
+
+// FleetAnswer is what the fleet said about one Run at one moment: how many
+// machines it published that the Run was measured against, and how many of those
+// could take it once the capacity they are spending now comes back.
+type FleetAnswer struct {
+	Weighed   int `json:"weighed"`
+	CouldHold int `json:"could_hold"`
+}
+
+// HoldsNothing reports whether this is an answer no waiting can change: nothing
+// the fleet published could take this Run once the capacity it is spending comes
+// back. A fleet that published nothing the ask matches says it most strongly of
+// all, and it is the same statement: there is no machine here to wait for.
+func (answer FleetAnswer) HoldsNothing() bool {
+	return answer.CouldHold == 0
+}
+
+// HoldsNoQueue reports whether the wait this deferral records is one other work
+// does not have to be ordered behind, given what the record already established.
+// A Run waiting for a machine to come free holds the queue, because whatever is
+// behind it wants that same machine. A Run nothing in the fleet can hold is
+// waiting for capacity to arrive, and work that fits the fleet as it stands is not
+// competing with it for anything.
+//
+// Only the fleet's own answer can establish it, and a deferral that carries none
+// leaves the last answer standing. That is why it takes what was already
+// established: a Run held behind work that outranks it was measured against no
+// machine at all, and reading the ordering as an answer about capacity would put
+// an impossible ask straight back in front of the fleet it can never use.
+//
+// It is one rule in one place because production orders the queue on it and the
+// Lab adjudicates that ordering against it. Two readings of the same evidence
+// drifted apart in both directions at once: one of them called a fleet that
+// published nothing an ordinary wait, and the other could not see the ask at all.
+func (deferral AdmissionDeferral) HoldsNoQueue(established bool) bool {
+	if deferral.Fleet == nil {
+		return established
+	}
+	return deferral.Fleet.HoldsNothing()
 }
 
 // QueuedAhead is one piece of work a deferred Run is waiting behind: either a

@@ -96,7 +96,7 @@ func applyToQueue(waiting map[string]waitingRun, event eventlog.StoredEvent) err
 		}
 		queued.runID = event.StreamID
 		queued.class = data.Deferral.Class
-		queued.holdsNoQueue = holdsNoQueue(queued.holdsNoQueue, data.Deferral)
+		queued.holdsNoQueue = data.Deferral.HoldsNoQueue(queued.holdsNoQueue)
 		waiting[event.StreamID] = queued
 	case EventAdmissionRefused, EventRunClosed:
 		delete(waiting, event.StreamID)
@@ -116,26 +116,6 @@ func applyToQueue(waiting map[string]waitingRun, event eventlog.StoredEvent) err
 	return nil
 }
 
-// holdsNoQueue is what one deferral establishes about the wait a Run is in.
-// Only Placement can establish it, because only Placement weighed the fleet: a
-// Run told it waits behind work that outranks it was measured against no machine
-// at all, and a wait like that leaves what the fleet last said standing rather
-// than overwriting it.
-//
-// That is not a detail of bookkeeping. An impossible ask holds no queue, so it is
-// itself ordered behind the first Run that outranks it, and a deferral that read
-// the ordering as an answer about capacity would put the ask straight back in
-// front of the fleet it can never use.
-func holdsNoQueue(established bool, deferral domain.AdmissionDeferral) bool {
-	switch deferral.Reason {
-	case domain.DeferredNoCapacityFits:
-		return true
-	case domain.DeferredNoFeasibleOffer:
-		return false
-	}
-	return established
-}
-
 // admissionQueue is the work already waiting, which is the only thing a Run has
 // to be ordered against. Work that is running is not in it: a machine is held by
 // whoever is on it, and no priority takes that away.
@@ -150,16 +130,12 @@ type waitingRun struct {
 	class domain.ServiceClass
 	since time.Time
 	// holdsNoQueue is whether this Run's wait is one other work does not have to
-	// respect. A Run waiting for capacity to come free holds the queue, because
-	// whatever is behind it wants the same capacity. A Run every machine in the
-	// fleet was weighed against and none of them could hold is waiting for
-	// capacity to arrive, and it holds nothing: work that fits the fleet as it
-	// stands is not competing with it for anything.
+	// respect, as domain.AdmissionDeferral.HoldsNoQueue reads it off each deferral
+	// in turn.
 	//
 	// It is stated as the exemption rather than as the rule so that the zero value
 	// is the rule. A Run whose record says nothing about the fleet holds the queue
-	// like every other wait, and only a placement that weighed the fleet and found
-	// nothing in it may take that away.
+	// like every other wait, and only the fleet's own answer may take that away.
 	holdsNoQueue bool
 }
 
@@ -203,8 +179,8 @@ func (queue admissionQueue) position(runID string, state runState, at time.Time)
 // waited longer than its class allows, because capacity a starved Run is waiting
 // for is not capacity going spare.
 //
-// The second is a Run that holds no queue at all: one every machine in the fleet
-// was weighed against and none of them could take. Ordering work behind it is
+// The second is a Run that holds no queue at all: one the fleet was asked about
+// and answered with no machine that could ever take it. Ordering work behind it is
 // ordering it behind a wait for capacity nobody has, which leaves a machine idle
 // beside work that fits it and stalls a workspace on one impossible submission
 // until that Run's own deadline clears it.
@@ -304,17 +280,22 @@ func (answer admissionAnswer) evidence(runID string, now time.Time) []eventlog.N
 // refuse the Run again, projecting a start from it decides this Run's deadline on
 // somebody else's runtime, and counting it as a queue this Run is in is what let
 // one impossible ask empty a fleet the moment anything else was running.
+// The reason is derived from that answer rather than decided beside it, so the
+// word an operator reads and the classification the queue is ordered on are one
+// fact. A fleet that published nothing an ask matches was the case where the two
+// came apart: the strongest refusal a fleet can give was labelled as a wait for
+// capacity to come free.
 func placementDeferral(run queuePosition, decision domain.BookingDecision) (domain.AdmissionDeferral, bool) {
 	waitable := candidatesThatCouldHold(decision)
 	wait, projected := shortestProjectedWait(waitable)
+	answer := domain.FleetAnswer{Weighed: len(decision.Candidates), CouldHold: len(waitable)}
 	reason := domain.DeferredNoFeasibleOffer
-	if len(decision.Candidates) > 0 && len(waitable) == 0 {
+	if answer.HoldsNothing() {
 		reason = domain.DeferredNoCapacityFits
 	}
 	deferral := run.deferral(reason, workAhead(waitable))
 	deferral.ProjectedWaitSeconds = wait
-	deferral.Weighed = len(decision.Candidates)
-	deferral.CouldHold = len(waitable)
+	deferral.Fleet = &answer
 	return deferral, projected
 }
 

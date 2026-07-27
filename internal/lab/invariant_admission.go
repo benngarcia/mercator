@@ -126,7 +126,7 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 				held.since = at
 			}
 			held.class = deferral.Class
-			held.heldByNothing = heldByNothing(held.heldByNothing, deferral)
+			held.heldByNothing = deferral.HoldsNoQueue(held.heldByNothing)
 			queue[runID] = held
 		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
 			delete(queue, runID)
@@ -161,26 +161,10 @@ type queuedRun struct {
 	class domain.ServiceClass
 	since time.Time
 	// heldByNothing is what the record last established about the fleet's answer
-	// to this Run: weighed against every machine it published and held by none of
-	// them. A Run in that state is waiting for capacity to be added, so the
-	// ordering is not over it.
+	// to this Run: asked about it, and holding no machine that could ever take it.
+	// A Run in that state is waiting for capacity to be added, so the ordering is
+	// not over it.
 	heldByNothing bool
-}
-
-// heldByNothing is what one deferral establishes about the fleet's answer to the
-// Run it is about: measured against every machine the fleet published, and none of
-// them able to hold it once the capacity they are spending comes back.
-//
-// It is derived from the machines the deferral says were weighed rather than from
-// the reason Mercator recorded, because the reason is what these laws exist to
-// hold to account. A deferral that weighed nothing establishes nothing and leaves
-// the last answer standing: a Run held behind work that outranks it was measured
-// against no machine at all.
-func heldByNothing(established bool, deferral domain.AdmissionDeferral) bool {
-	if deferral.Weighed == 0 {
-		return established
-	}
-	return deferral.CouldHold == 0
 }
 
 func admittedInClassOrder(observation InvariantObservation, queue map[string]queuedRun, runID string, at time.Time) error {
@@ -218,8 +202,8 @@ func admittedInClassOrder(observation InvariantObservation, queue map[string]que
 
 // nothingWaitsBehindAnImpossibleAsk is the other half of what the queue is for.
 // Work is ordered behind work that outranks it, and never behind a wait nobody can
-// end: a Run every machine in the fleet was weighed against and none of them could
-// take is waiting for capacity to be added, and work that fits the fleet as it
+// end: a Run the fleet was asked about and answered with no machine that could ever
+// take it is waiting for capacity to be added, and work that fits the fleet as it
 // stands is not competing with it for anything.
 //
 // Without it one impossible submission empties a workspace. The Run that fits is
@@ -227,13 +211,18 @@ func admittedInClassOrder(observation InvariantObservation, queue map[string]que
 // impossible Run's own class deadline clears it, which for a class that declares no
 // deadline is never.
 //
-// What makes a Run impossible here is the evidence its own deferral carries and
-// never the reason Mercator wrote beside it. The reason is the answer under
-// examination: production decides the ordering from it, so a law that read the
-// same word could only ever fail on the ordering step, and the classification that
-// says which Runs the ordering exempts would be the one thing nothing policed.
-// A record of machines weighed and none of them able to hold this Run is a fact
-// about the fleet, and it stands whatever Mercator went on to call it.
+// What makes a Run impossible is the evidence its own deferral carries, read
+// through the one rule production orders the queue on. Two readings of it is what
+// this law had before, and they disagreed in both directions at once: the Lab could
+// not see a fleet that published nothing at all, and production called that fleet
+// an ordinary wait, so the strongest impossible ask there is was invisible to the
+// corpus and holding every workspace it landed in. The reason code is not read here
+// at all, and the rule it is derived from is.
+//
+// So this law is about the ordering, which is what its name says. A Run named as
+// work ahead is a Run the record has to say something can be waited for on, and a
+// bug anywhere between the queue Mercator rebuilds from the log and the deferral it
+// writes fails it.
 //
 // It is replayed out of the public log rather than read off the read model because
 // it is a rule about the moment a decision was taken: what matters is what Mercator
@@ -252,7 +241,7 @@ func nothingWaitsBehindAnImpossibleAsk(observation InvariantObservation) error {
 			if err := nothingAheadIsImpossible(impossible, runID, deferral); err != nil {
 				return err
 			}
-			impossible[runID] = heldByNothing(impossible[runID], deferral)
+			impossible[runID] = deferral.HoldsNoQueue(impossible[runID])
 		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
 			delete(impossible, runID)
 		case orchestrator.EventBookingDecided:

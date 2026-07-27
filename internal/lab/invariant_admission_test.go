@@ -120,9 +120,12 @@ func TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane(t *testing.T) {
 	if waiting.Reason != domain.DeferredNoCapacityFits {
 		t.Fatalf("the impossible Run's record says it waited for %q, and every machine in this fleet was weighed against it", waiting.Reason)
 	}
-	if waiting.Weighed != 2 || waiting.CouldHold != 0 {
+	if waiting.Fleet == nil {
+		t.Fatal("the impossible Run's record says nothing at all about the fleet it was measured against")
+	}
+	if waiting.Fleet.Weighed != 2 || waiting.Fleet.CouldHold != 0 {
 		t.Fatalf("the record says %d machines were weighed and %d of them could hold this Run, and the fleet has two machines and neither can",
-			waiting.Weighed, waiting.CouldHold)
+			waiting.Fleet.Weighed, waiting.Fleet.CouldHold)
 	}
 }
 

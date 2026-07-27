@@ -168,8 +168,9 @@ about admission, which decides before Placement is asked, and each states a
 
 `reason` is why the Run is not running: `NO_FEASIBLE_OFFER` for a wait on
 capacity to come free, `NO_CAPACITY_FITS` for a wait on capacity to be added
-because every machine the fleet published was weighed against this Run and none
-of them can hold it, `BEHIND_HIGHER_PRIORITY` for a Run the queue in front of it
+because nothing the fleet published can hold this Run, whether it weighed machines
+and refused every one of them or published nothing this ask even matches,
+`BEHIND_HIGHER_PRIORITY` for a Run the queue in front of it
 outranks, and `DEADLINE_UNREACHABLE` for the one a `refuse` states, where the
 moment the Run's class says it must have started by is already past. `behind`
 names the work the record says is in front of it, by the fixture's own names for
@@ -178,12 +179,16 @@ waits for is a queue an operator cannot read. `effective_priority` and
 `queued_seconds` are what the record says the Run was worth and how long it had
 been waiting, which is the only visible evidence that waiting promotes anything.
 
-`weighed` and `could_hold` are the fleet the wait was measured against: how many
-machines this Run was weighed against, and how many of those could have taken it
-once the capacity they are spending came back. They are the evidence the reason
-rests on, and stating them is how a fixture tells a fleet that published nothing
-from a fleet that weighed this Run and refused it. A machine that is both busy and
-too small counts in the first and never in the second.
+`fleet` is the answer the fleet gave about this Run, which is the evidence the
+reason is derived from and the classification the queue is ordered on. Its
+`weighed` and `could_hold` are how many machines the fleet published that this Run
+was measured against and how many of those could have taken it once the capacity
+they are spending came back, and a machine that is both busy and too small counts
+in the first and never in the second. `"absent": true` states the opposite: this
+wait rests on no answer about capacity at all, because the fleet was never asked.
+A fixture says that rather than asking for two zeroes, because a fleet that
+published nothing an ask matches also weighed no machines and the two are opposite
+statements.
 `projected_wait_seconds` is the wait the record projects from the Bookings on the
 capacity that could hold this Run, and zero states that nothing projected one.
 

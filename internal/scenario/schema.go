@@ -1229,14 +1229,9 @@ type DeferralExpectation struct {
 	Priority *Bound `json:"effective_priority,omitempty"`
 	// QueuedSeconds asserts how long the record says it had been waiting.
 	QueuedSeconds *Bound `json:"queued_seconds,omitempty"`
-	// Weighed asserts how many machines the record says this Run was measured
-	// against, and CouldHold how many of them could have taken it once the capacity
-	// they are spending came back. They are the evidence the reason rests on: a
-	// fixture stating only the reason cannot tell a fleet that published nothing
-	// from a fleet that weighed this Run and refused it, and that difference is what
-	// the queue is ordered on.
-	Weighed   *Bound `json:"weighed,omitempty"`
-	CouldHold *Bound `json:"could_hold,omitempty"`
+	// Fleet asserts the answer the fleet gave about this Run, which is the evidence
+	// the reason is derived from and the classification the queue is ordered on.
+	Fleet *FleetExpectation `json:"fleet,omitempty"`
 	// ProjectedWait asserts the wait the record says this Run faces, projected
 	// from the Bookings Mercator holds on capacity that could hold it. Zero states
 	// that nothing projected one, which is what a fixture needs to say about a Run
@@ -1244,6 +1239,33 @@ type DeferralExpectation struct {
 	// a projection off a machine that could never run the work refuses it for
 	// somebody else's runtime.
 	ProjectedWait *Bound `json:"projected_wait_seconds,omitempty"`
+}
+
+// FleetExpectation is the fleet's answer a fixture asserts a wait rests on: how
+// many machines the record says this Run was measured against, and how many of
+// them could have taken it once the capacity they are spending came back.
+//
+// Absent states the opposite: this wait rests on no answer about capacity at all,
+// because the fleet was never asked. A fixture says that by asking for the answer
+// to be missing rather than by asking for two zeroes, because a fleet that
+// published nothing an ask matches also weighed nothing and those are the opposite
+// statements. Reading them as one number is what let the strongest refusal a fleet
+// can give be recorded as an ordinary wait for a machine to come free.
+type FleetExpectation struct {
+	Absent    bool   `json:"absent,omitempty"`
+	Weighed   *Bound `json:"weighed,omitempty"`
+	CouldHold *Bound `json:"could_hold,omitempty"`
+}
+
+// validate refuses a fleet assertion that says both things at once.
+func (expect FleetExpectation) validate() error {
+	if expect.Absent && (expect.Weighed != nil || expect.CouldHold != nil) {
+		return fmt.Errorf("a wait resting on no fleet answer has no machines to count")
+	}
+	if !expect.Absent && expect.Weighed == nil && expect.CouldHold == nil {
+		return fmt.Errorf("a fleet assertion states the machines weighed, the machines that could hold, or that there is no answer")
+	}
+	return nil
 }
 
 type BookingExpectation struct {
@@ -2575,8 +2597,15 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 	default:
 		return fmt.Errorf("outcome must be \"place\", \"fail\", \"defer\", or \"refuse\", got %q", expect.Outcome)
 	}
-	if expect.Deferral != nil && expect.Deferral.Reason == "" {
-		return fmt.Errorf("a deferral states the reason admission recorded")
+	if expect.Deferral != nil {
+		if expect.Deferral.Reason == "" {
+			return fmt.Errorf("a deferral states the reason admission recorded")
+		}
+		if fleet := expect.Deferral.Fleet; fleet != nil {
+			if err := fleet.validate(); err != nil {
+				return err
+			}
+		}
 	}
 	if expect.Decision != nil {
 		if err := expect.Decision.validate(); err != nil {

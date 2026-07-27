@@ -37,8 +37,10 @@
           "behind": [],
           "effective_priority": 50,
           "queued_seconds": 0,
-          "weighed": 1,
-          "could_hold": 0
+          "fleet": {
+            "weighed": 1,
+            "could_hold": 0
+          }
         }
       }
     },
@@ -73,8 +75,10 @@
         "deferral": {
           "reason": "NO_CAPACITY_FITS",
           "behind": [],
-          "weighed": 1,
-          "could_hold": 0
+          "fleet": {
+            "weighed": 1,
+            "could_hold": 0
+          }
         }
       }
     }

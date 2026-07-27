@@ -43,8 +43,10 @@
     "deferral": {
       "reason": "NO_CAPACITY_FITS",
       "behind": [],
-      "weighed": 1,
-      "could_hold": 0,
+      "fleet": {
+        "weighed": 1,
+        "could_hold": 0
+      },
       "projected_wait_seconds": 0
     }
   }

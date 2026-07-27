@@ -362,14 +362,9 @@ func assertAdmission(events []eventlog.StoredEvent, name string, expect ExpectSp
 			fail("queued_seconds: %s", problem)
 		}
 	}
-	if want.Weighed != nil {
-		if problem := want.Weighed.Check(float64(deferral.Weighed)); problem != "" {
-			fail("the machines weighed: %s", problem)
-		}
-	}
-	if want.CouldHold != nil {
-		if problem := want.CouldHold.Check(float64(deferral.CouldHold)); problem != "" {
-			fail("the machines that could hold this Run once free: %s", problem)
+	if want.Fleet != nil {
+		for _, problem := range fleetAnswerProblems(*want.Fleet, deferral.Fleet) {
+			fail("%s", problem)
 		}
 	}
 	if want.ProjectedWait != nil {
@@ -378,6 +373,34 @@ func assertAdmission(events []eventlog.StoredEvent, name string, expect ExpectSp
 		}
 	}
 	return failures
+}
+
+// fleetAnswerProblems is the fixture's claim about the fleet's answer read against
+// the answer the record carries. Whether there is one at all is checked first,
+// because a wait the queue caused and a fleet that published nothing an ask matches
+// both weighed no machines and are opposite statements about capacity.
+func fleetAnswerProblems(want FleetExpectation, answer *domain.FleetAnswer) []string {
+	if want.Absent {
+		if answer == nil {
+			return nil
+		}
+		return []string{fmt.Sprintf("expected a wait resting on no answer about capacity, and the record weighed %d machines", answer.Weighed)}
+	}
+	if answer == nil {
+		return []string{"expected the record to say what the fleet answered, and it carries no answer at all"}
+	}
+	var problems []string
+	if want.Weighed != nil {
+		if problem := want.Weighed.Check(float64(answer.Weighed)); problem != "" {
+			problems = append(problems, "the machines weighed: "+problem)
+		}
+	}
+	if want.CouldHold != nil {
+		if problem := want.CouldHold.Check(float64(answer.CouldHold)); problem != "" {
+			problems = append(problems, "the machines that could hold this Run once free: "+problem)
+		}
+	}
+	return problems
 }
 
 // latestAdmission is the last thing admission said about this Run, and which of

@@ -54,8 +54,10 @@
           "behind": [],
           "effective_priority": 50,
           "queued_seconds": 0,
-          "weighed": 2,
-          "could_hold": 0
+          "fleet": {
+            "weighed": 2,
+            "could_hold": 0
+          }
         }
       }
     },
