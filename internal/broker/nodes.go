@@ -16,6 +16,11 @@ import (
 // offer capacity, and the run lifecycle reaches them through the node runtime
 // rather than through a provider API.
 type Nodes interface {
+	// NodeSupport is what this deployment's runtime can do with capacity a
+	// provider allocates, which is what makes rented capacity reusable. It
+	// satisfies capability.Fleet, so the same enrollment the Broker dispatches
+	// through is the one a capacity connection declares its lane from.
+	NodeSupport() capability.NodeSupport
 	Offers(ctx context.Context, workspaceID string) ([]domain.OfferSnapshot, error)
 	// Ref resolves a node's current identity, including the generation a
 	// command must be stamped with.
@@ -35,8 +40,17 @@ type Nodes interface {
 // WithNodes gives the Broker the enrolled nodes it can place Runs on. Without
 // it the Broker serves only the ephemeral lane, which is what a deployment with
 // no node agents actually has.
+//
+// It tells the connection catalog the same thing, because the reusable lane is a
+// provider's capacity plus this runtime and a lane is derived where a connection
+// becomes a Backend. One wiring site for one fact: a deployment whose Broker held
+// nodes and whose catalog did not would refuse every connection that can rent a
+// machine while happily placing Runs on the machines it already has.
 func WithNodes(nodes Nodes) Option {
-	return func(b *Broker) { b.nodes = nodes }
+	return func(b *Broker) {
+		b.nodes = nodes
+		b.factory.serveNodes(nodes)
+	}
 }
 
 // launchOnNode hands one Run to the machine that will execute it. The launch

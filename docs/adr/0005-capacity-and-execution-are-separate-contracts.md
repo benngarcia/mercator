@@ -56,10 +56,26 @@ lane instead of standing for every backend Mercator has.
 
 `capability.Declare` derives a backend's lane from the contracts it actually
 satisfies. Capacity plus a node runtime is the reusable lane. Anything else is
-ephemeral. Capacity without a node runtime is refused outright, because nothing
+ephemeral. Capacity with no node runtime is refused outright, because nothing
 could execute a second workload on it. A backend implementing both `NodeRuntime`
 and `EphemeralExecutor` is refused, because that claims one backend both
 controls and does not control its host runtime.
+
+The node runtime a provider's capacity is reusable through is the deployment's,
+not the provider's. A node enrolls with the control plane rather than with the
+connection that rented the machine it runs on, so the only `NodeRuntime` in the
+tree is the fleet-wide node registry and a provider adapter is never one.
+`Declare` therefore takes that runtime as a `capability.Fleet` beside the
+backend, and the Broker satisfies it with the same enrollment it dispatches
+through. A backend's own `NodeRuntime` still counts, which is what a runtime
+bound to one host would be; a deployment with neither is a deployment where
+rented capacity could execute one workload at most.
+
+A backend implementing both `CapacityProvider` and `EphemeralExecutor` is
+refused as well. One lane is stamped on every offer a connection publishes, so a
+connection answering both `ListCapacity` and `ListOffers` would publish machines
+and one-shot executions under one word, and nothing downstream could say which of
+the two an offer came from. A provider that sells both is two connections.
 
 `domain.ExecutionLane` carries the answer onto every offer. It is orthogonal to
 `OfferKind`: Kind says who owns the host, Lane says whether a second workload
@@ -94,9 +110,10 @@ they do today: each launch creates capacity for one workload and destroys it
 afterwards.
 
 Docker joins the reusable lane when a node agent enrolls on the host. Shadeform
-and Vast join it when they provision capacity an agent enrolls on, which is
-phases 2 and 5 of #155. `internal/providers` has a standing test that fails the
-moment a backend claims reuse without a `NodeRuntime`, so promotion is a
+and Vast join it when they implement `CapacityProvider`, which is phase 5 of
+#155: a machine they allocate is then reusable through the node runtime the
+deployment already has. `internal/providers` has a standing test that fails the
+moment a backend claims reuse with no `NodeRuntime` behind it, so promotion is a
 deliberate act rather than a drift.
 
 ## Consequences

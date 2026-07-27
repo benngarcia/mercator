@@ -141,7 +141,7 @@ func TestRequestedAllocationSchedulesAndReachesPodCreation(t *testing.T) {
 	}
 	// Placement sees offers as the Broker hands them over, with the lane
 	// stamped from the connection's negotiated Declaration.
-	declaration, err := capability.Declare("runpod", a)
+	declaration, err := capability.Declare("runpod", a, nil)
 	if err != nil {
 		t.Fatalf("declare runpod capabilities: %v", err)
 	}

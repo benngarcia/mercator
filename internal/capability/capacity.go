@@ -44,6 +44,22 @@ type CapacityProvider interface {
 // silently succeeding.
 var ErrCapabilityUnsupported = fmt.Errorf("capability: operation unsupported by this backend")
 
+// CapacityOperation is one act a caller can ask of a CapacityProvider. It is
+// named for the act rather than for the method that performs it, because a
+// capability set negotiates a stop and a resume and a caller refused one is
+// being told which promise the provider never made: StartCapacity is how a
+// resume is performed and "start" is not a promise anybody negotiated.
+type CapacityOperation string
+
+const (
+	CapacityProvision CapacityOperation = "provision"
+	CapacityObserve   CapacityOperation = "observe"
+	CapacityStop      CapacityOperation = "stop"
+	CapacityResume    CapacityOperation = "resume"
+	CapacityTerminate CapacityOperation = "terminate"
+	CapacityListOwned CapacityOperation = "list_owned"
+)
+
 // CapacitySupport is one provider's negotiated capability set. Every field is
 // a claim the scheduler and reconciler are entitled to rely on.
 type CapacitySupport struct {
@@ -80,6 +96,29 @@ const (
 	IdempotentProvisionOperationKey = "operation_key"
 	IdempotentProvisionNone         = "none"
 )
+
+// Claims reports whether this negotiated set promises one operation.
+//
+// Allocating, observing, and destroying capacity are the floor of the contract:
+// a provider that cannot do all three cannot hold a machine for Mercator at all,
+// so there is no field to negotiate them with. Suspending, resuming, and
+// enumerating what this connection owns are promises a provider makes or does
+// not, and a caller that sends one anyway is asking a provider to keep a promise
+// it never made.
+func (support CapacitySupport) Claims(operation CapacityOperation) bool {
+	switch operation {
+	case CapacityProvision, CapacityObserve, CapacityTerminate:
+		return true
+	case CapacityStop:
+		return support.Stop
+	case CapacityResume:
+		return support.Resume
+	case CapacityListOwned:
+		return support.ListOwned
+	default:
+		return false
+	}
+}
 
 // Validate refuses a negotiated set no provider could keep. Every promise here
 // is one the scheduler and the reconciler act on without asking again, so a set

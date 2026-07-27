@@ -165,11 +165,7 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		if err != nil {
 			return nil, err
 		}
-		executor, err := backend.Ephemeral()
-		if err != nil {
-			return nil, err
-		}
-		offers, err := executor.ListOffers(ctx, req)
+		offers, err := backend.ListOffers(ctx, req)
 		if err != nil {
 			return nil, err
 		}
@@ -341,11 +337,7 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 		if err != nil {
 			return nil, err
 		}
-		executor, err := backend.Ephemeral()
-		if err != nil {
-			return nil, err
-		}
-		return executor.ListOwned(ctx, req)
+		return backend.ListOwned(ctx, req)
 	})
 	var all []adapter.OwnedExternalObject
 	var failures ConnectionErrors

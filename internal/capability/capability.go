@@ -11,6 +11,13 @@
 // verifies: reusable capacity requires a NodeRuntime, because without one there
 // is no host runtime capable of executing a second workload. Declare returns an
 // error rather than letting a backend advertise reuse it cannot perform.
+//
+// The node runtime a provider's capacity is reusable through is the deployment's,
+// not the provider's. A node enrolls with the control plane rather than with the
+// connection that rented the machine it runs on, so a provider adapter is never
+// a NodeRuntime and no type assertion on one could find the runtime that will
+// execute the workloads. Declare therefore takes the deployment's Fleet beside
+// the backend.
 package capability
 
 import (
@@ -24,6 +31,22 @@ import (
 // combinations that would claim semantics the implementation cannot deliver.
 type Backend any
 
+// Fleet is the enrolled node runtime one Mercator deployment holds. It is the
+// other half of the reusable lane: a provider allocates the machine and this
+// executes the successive workloads on it.
+//
+// It is narrow on purpose. Declaring a lane asks the fleet what its runtime can
+// do and nothing else, so the Broker can satisfy it with the node registry it
+// already dispatches through instead of the control plane growing a second path
+// to the same enrollment.
+//
+// A deployment with no enrolled node runtime has no Fleet. Capacity it rents
+// could execute one workload at most, which is why Declare refuses to call that
+// capacity reusable.
+type Fleet interface {
+	NodeSupport() NodeSupport
+}
+
 // Declaration is what one backend claims it can do. It is checked against the
 // interfaces the backend actually implements, so a lane is evidence rather
 // than an assertion.
@@ -33,7 +56,10 @@ type Declaration struct {
 	Lane domain.ExecutionLane `json:"lane"`
 	// Capacity is present exactly when the backend implements CapacityProvider.
 	Capacity *CapacitySupport `json:"capacity,omitempty"`
-	// Node is present exactly when the backend implements NodeRuntime.
+	// Node is the runtime that will execute successive workloads on this
+	// backend's capacity: the backend's own when it implements NodeRuntime, and
+	// otherwise the deployment's enrolled runtime. It is absent when there is no
+	// such runtime, which is every one-shot connection.
 	Node *NodeSupport `json:"node,omitempty"`
 	// Ephemeral is present exactly when the backend implements
 	// EphemeralExecutor.
@@ -41,8 +67,34 @@ type Declaration struct {
 }
 
 // Declare derives a backend's Declaration from the contracts it implements and
-// refuses any claim the implementation cannot support.
-func Declare(adapterType string, backend any) (Declaration, error) {
+// the node runtime the deployment holds, and refuses any claim neither of them
+// can support. A nil fleet is a deployment with no enrolled node runtime.
+func Declare(adapterType string, backend Backend, fleet Fleet) (Declaration, error) {
+	declaration, err := implemented(adapterType, backend)
+	if err != nil {
+		return Declaration{}, err
+	}
+	if declaration.Capacity != nil && declaration.Node == nil && fleet != nil {
+		support := fleet.NodeSupport()
+		declaration.Node = &support
+	}
+	switch {
+	case declaration.Capacity != nil && declaration.Node != nil:
+		declaration.Lane = domain.LaneReusable
+	case declaration.Capacity != nil:
+		return Declaration{}, fmt.Errorf(
+			"capability: %q provides capacity and neither it nor this Mercator has a node runtime, so nothing can execute successive workloads on it",
+			adapterType,
+		)
+	default:
+		declaration.Lane = domain.LaneEphemeral
+	}
+	return declaration, nil
+}
+
+// implemented is what the backend itself satisfies, with the combinations no one
+// implementation can mean refused before any lane is derived from them.
+func implemented(adapterType string, backend Backend) (Declaration, error) {
 	declaration := Declaration{Type: adapterType}
 	if provider, ok := backend.(CapacityProvider); ok {
 		support := provider.CapacitySupport()
@@ -65,20 +117,16 @@ func Declare(adapterType string, backend any) (Declaration, error) {
 			"capability: %q implements neither CapacityProvider nor EphemeralExecutor",
 			adapterType,
 		)
-	case declaration.Capacity != nil && declaration.Node != nil:
-		declaration.Lane = domain.LaneReusable
-	case declaration.Capacity != nil:
-		return Declaration{}, fmt.Errorf(
-			"capability: %q provides capacity without a NodeRuntime, so nothing can execute successive workloads on it",
-			adapterType,
-		)
 	case declaration.Node != nil && declaration.Ephemeral != nil:
 		return Declaration{}, fmt.Errorf(
 			"capability: %q implements NodeRuntime and EphemeralExecutor, which claims one backend both controls and does not control its host runtime",
 			adapterType,
 		)
-	default:
-		declaration.Lane = domain.LaneEphemeral
+	case declaration.Capacity != nil && declaration.Ephemeral != nil:
+		return Declaration{}, fmt.Errorf(
+			"capability: %q provides capacity and one-shot execution on one connection, and one lane is stamped on every offer a connection publishes, so nothing could say which of the two an offer came from",
+			adapterType,
+		)
 	}
 	return declaration, nil
 }
