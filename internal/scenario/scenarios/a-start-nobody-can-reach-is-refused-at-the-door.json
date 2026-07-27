@@ -1,0 +1,54 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One machine with every Booking position on it taken, and an interactive Run arriving into that. Nothing here is broken yet: the Run has waited no time at all, and the half hour of queue its class allows and the ten minutes it states as a deadline are both still ahead of it. What the record already says is that the machine cannot take this Run for twenty five minutes, because five Bookings are in front of it and every one of them carries a runtime Mercator itself is holding. Interactive work states that it must have started within ten minutes of being told to wait, so the answer this Run is asking for stops being worth having long before the capacity arrives, and admission refuses it at its first pass rather than queueing a start the record says cannot happen. It is the only fixture in this corpus that pins DEADLINE_UNREACHABLE on the one branch that can still produce it. Admission.BoundAlreadyBroken names the deadline where a wait has already reached it, and every class states a queue delay shorter than its deadline, so that branch is unreachable for all five of them: a wait long enough to pass the deadline broke the queue delay first and is named for it. The projected miss is what is left, and it is the only thing in Mercator that can say a Run cannot start in time before either bound has gone by. The projection comes only from machines that could hold this Run once the capacity they are spending comes back, which is why the fleet here holds one such machine rather than none: a fleet that published nothing this ask matches projects no wait at all, and the deadline rule refuses to guess over a wait nobody measured.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-only",
+        "version": 5,
+        "running": {"booking": "booking-active", "run": "run-active", "remaining_max_runtime": "5m"},
+        "queued": [
+          {"booking": "booking-q1", "run": "run-q1", "max_runtime": "6m", "expected_runtime": "5m"},
+          {"booking": "booking-q2", "run": "run-q2", "max_runtime": "6m", "expected_runtime": "5m"},
+          {"booking": "booking-q3", "run": "run-q3", "max_runtime": "6m", "expected_runtime": "5m"},
+          {"booking": "booking-q4", "run": "run-q4", "max_runtime": "6m", "expected_runtime": "5m"}
+        ]
+      }
+    ]
+  },
+  "request": {
+    "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+    "service_class": "interactive",
+    "resources": {"disk": "100GB"},
+    "expected_runtime": "5m",
+    "max_runtime": "10m"
+  },
+  "expect": {
+    "outcome": "refuse",
+    "deferral": {
+      "reason": "DEADLINE_UNREACHABLE",
+      "behind": ["active", "q1", "q2", "q3", "q4"],
+      "queued_seconds": 0,
+      "effective_priority": 100,
+      "fleet": {"weighed": 1, "could_hold": 1},
+      "projected_wait_seconds": 1500
+    }
+  }
+}
