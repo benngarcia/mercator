@@ -3553,11 +3553,41 @@ and that the same content on an unmeasured neighbour is still answered at the re
 rung, which is what keeps the first rule from being satisfiable by a ladder that
 answers nothing.
 
+A second finding was half real and is recorded above, in the entry it refuted: the
+region rung's L1 coverage is in the reusable lane, and no production backend states a
+region there, so what that fixture holds is the path from the offer to the key and not
+a backend stating a place. The entry now says which half it holds and where the other
+half is held, and `TestAnEnrolledMachineStatesNoPlaceAndSaysSo` states the production
+fact in the package that builds those offers.
+
+Refused: the same finding called `lane=reusable;provider=node` a bucket that is not a
+provider, merging every enrolled machine of every provider and region, and asked for it
+to be treated as a defect. It is the coarsest rung behaving as designed. That rung is
+already "this source, anywhere, of any shape" for a marketplace too, where it merges a
+3060 in Poland with an 8xH100 in Texas, and the estimator's own comment says an answer
+from it is evidence that this candidate resembles them rather than evidence about this
+candidate: it is worth 0.4 at most and 0.2 from one launch, the record names the level
+and the key beside the seconds, and the rung above it is skipped rather than faked when
+no place is stated. What made the reviewer's example alarming was the collapse this
+entry fixes, because the bucket was answering about content nobody had run on any of
+those machines. Now that the key names the content, the claim it makes is that this
+image came up in this many seconds somewhere in this fleet, which is weak evidence
+honestly labelled. The rung stops merging unlike machines when an enrolment carries the
+provider and the region of the machine underneath it, which is capacity the node
+registry does not model yet and is not something to fake in a key.
+
 ```text
 go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
-go test -race -count=1 ./internal/lab ./internal/scenario/... ./internal/prediction ./internal/domain
+go test -race -count=1 ./internal/lab ./internal/scenario/... ./internal/prediction \
+  ./internal/domain ./internal/node/...
 MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
 ```
+
+The live half ran again on this host's own engine, and both Docker integration cases
+pass against Engine 29.6.2, including the one holding that a daemon reached twice
+through two endpoints is one machine. Nothing here touches the web console, so its
+checks were not re-run. Mercator issue #165 does not reproduce on this host and was
+left alone.
 
 ### Phase 4 the middle rung of the ladder, held through the real control plane
 
@@ -3577,11 +3607,30 @@ One thing the estimator's own ladder had no coverage for above the Lab. The thre
 keyed rungs were held at L0 by the placement Blueprint and directly by the
 invariant's deliberate cases, and the L1 conformance asserted the exact candidate and
 the provider with nothing between them, because its two Rentals published no region.
-That left the rung the region exists to create untested through the production path,
-which is the path with steps in it: an adapter states the region, aggregation carries
-the offer, the decision records the identity, and the estimator files a launch under
-the key. Any of those dropping the field would collapse the region rung onto the
-provider rung and no test above a unit test would have said so.
+That left the rung the region exists to create untested through the control plane's
+own path to it, which is a path with steps in it: an offer states the region,
+aggregation carries it, the decision records the identity, and the estimator files a
+launch under the key. Any of those dropping the field would collapse the region rung
+onto the provider rung and no test above a unit test would have said so.
+
+This paragraph claimed more than that when it was written, and a reviewer was right to
+refute it. It said the fixture holds an adapter stating the region, and the fixture is
+in the reusable lane, where no production backend states one: `internal/node/offers.go`
+is the only source of reusable offers today, it deliberately publishes no region, and
+`capability.Declare` makes vast, shadeform, runpod, and docker ephemeral-only. So the
+first step of that path is held where it exists, in the adapters, in the lane where
+they do state a place: `TestTwoSearchesOfOneMachineAreOneCandidate` pins Vast's
+geolocation reaching `lane=ephemeral;provider=vast;region=US-CA`,
+`TestOneRegionNameInTwoCloudsIsTwoPlaces` pins Shadeform's cloud and region reaching
+the same rung as one key, and `TestOneProductInTwoCloudsIsTwoCandidates` pins a RunPod
+catalog naming no datacenter having no such rung at all. What the conformance fixture holds is
+the rest of the path, from the offer to the recorded identity to the key, in a world
+whose reusable backend states a place because the Blueprint schema has always let one.
+That is the target ontology this corpus is written against, and the machine half of it
+is now stated as a fact of its own: `TestAnEnrolledMachineStatesNoPlaceAndSaysSo`
+holds that an enrolled machine publishes no region and that its ladder is therefore
+this machine and then every machine this control plane has enrolled, so a reader of
+the reusable fixtures is not left thinking a region survives that path in production.
 
 The fixture now states a region on its two Rentals and adds a third in another
 region, so the second Run's decision answers at all three levels at L1: the machine

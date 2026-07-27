@@ -65,9 +65,11 @@ func TestASecondRunIsPredictedFromTheFirstRunsMeasuredLaunch(t *testing.T) {
 	}
 	// The unmeasured machine beside it falls one rung, to what this provider has
 	// done in this place. That rung exists only because the offer states a region,
-	// and this is where the region has to survive the whole production path: the
-	// adapter publishes it, aggregation carries it, the decision records it inside
-	// the identity, and the estimator files a launch under it.
+	// and this is where the region has to survive every step between the offer and
+	// the key: aggregation carries it, the decision records it inside the identity,
+	// and the estimator files the launch under it. That a backend states one at all
+	// is held in the adapters, in the ephemeral lane where they do; the machines
+	// production enrols in this lane state no place, and internal/node holds that.
 	spare := candidateByOffer(t, second, "rental-spare").Estimates.Stages.ApplicationReady
 	if spare.Level != domain.LevelProviderAndRegion || spare.SampleCount != 1 || spare.Expected != 45 {
 		t.Fatalf("the unmeasured machine in the measured machine's own region was answered %+v", spare)

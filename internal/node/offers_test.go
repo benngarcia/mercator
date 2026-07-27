@@ -320,6 +320,45 @@ func TestTwoMachinesOnOneLeaseOfferTwoMachines(t *testing.T) {
 	}
 }
 
+// TestAnEnrolledMachineStatesNoPlaceAndSaysSo is the ladder an enrolled machine
+// really has, stated where the offer is built rather than assumed from a fixture.
+//
+// The region a machine sits in is its operator's to state and nothing enrols one,
+// so this projection publishes none. A launch history of a node therefore has two
+// rungs and not three: this machine, and then every machine this control plane has
+// enrolled. The middle rung is a target the Lab's worlds can already describe and
+// production cannot reach, and the test that says so is here so a reader of those
+// worlds is not left thinking a backend states a place today.
+//
+// What may not happen instead is a region guessed from the endpoint Mercator
+// reaches the machine through. A blank region is a rung skipped, which the estimator
+// already handles; a guessed one is two machines filed as neighbours because of how
+// an operator's network is addressed.
+func TestAnEnrolledMachineStatesNoPlaceAndSaysSo(t *testing.T) {
+	registry, clock := newRegistry(t)
+	enrollOn(t, registry, clock, "nod_first", "rnt_first")
+
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("offers: %v", err)
+	}
+
+	if len(offers) != 1 {
+		t.Fatalf("the workspace offered %d machines, want the one enrolled node", len(offers))
+	}
+	if offers[0].Region != "" {
+		t.Fatalf("an enrolled machine published the region %q, and nothing enrols one", offers[0].Region)
+	}
+	identity := domain.CandidateIdentityOf(offers[0], "sha256:image")
+	if identity.ProviderAndRegion(true) != "" {
+		t.Fatalf("a machine in no stated place has the region key %q", identity.ProviderAndRegion(true))
+	}
+	if identity.Candidate(true) == "" || identity.ProviderKey(true) == "" {
+		t.Fatalf("the two rungs this machine does have are %q and %q",
+			identity.Candidate(true), identity.ProviderKey(true))
+	}
+}
+
 // enrollOn brings one named machine up on a stated lease, which is what makes two
 // machines on one lease a world a test can build.
 func enrollOn(t *testing.T, registry *node.Registry, clock *testClock, nodeID, rentalID string) {
