@@ -12,7 +12,7 @@ import (
 )
 
 func TestBackendWithOnlyOneShotExecutionDeclaresTheEphemeralLane(t *testing.T) {
-	declaration, err := capability.Declare("oneshot", oneShotBackend{}, nil)
+	declaration, err := capability.Declare("oneshot", oneShotBackend{})
 	if err != nil {
 		t.Fatalf("declare one-shot backend: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestBackendWithOnlyOneShotExecutionDeclaresTheEphemeralLane(t *testing.T) {
 }
 
 func TestBackendWithCapacityAndNodeRuntimeDeclaresTheReusableLane(t *testing.T) {
-	declaration, err := capability.Declare("reusable", reusableBackend{}, nil)
+	declaration, err := capability.Declare("reusable", reusableBackend{})
 	if err != nil {
 		t.Fatalf("declare reusable backend: %v", err)
 	}
@@ -42,58 +42,36 @@ func TestBackendWithCapacityAndNodeRuntimeDeclaresTheReusableLane(t *testing.T) 
 	}
 }
 
-// TestCapacityIsReusableThroughTheDeploymentsOwnNodeRuntime is the shape every
-// real provider has. A node enrolls with the control plane rather than with the
-// connection that rented the machine it runs on, so no provider adapter can be a
-// NodeRuntime and no assertion on one could find the runtime that will execute
-// the workloads. The reusable lane is this provider's capacity plus this
-// deployment's enrolled runtime, and the Declaration reports the support of the
-// runtime that will actually do the executing.
-func TestCapacityIsReusableThroughTheDeploymentsOwnNodeRuntime(t *testing.T) {
-	declaration, err := capability.Declare("headless", capacityOnlyBackend{}, enrolledFleet{})
+// TestAProviderThatAllocatesMachinesSellsTheReusableLane is the shape every real
+// provider has: it allocates machines and executes nothing, because the runtime
+// that executes on a rented machine enrolls with the control plane rather than
+// with the connection that rented it. A machine that outlives the workload run on
+// it is reusable capacity, and that is the whole of what the lane says here.
+//
+// The Declaration asserts no node runtime, and that is the point. Whether
+// anything can execute on one machine is that machine's own fact, established by
+// the agent enrolled on it. A Declaration that answered for it would be this
+// deployment stating a container runtime, a prewarm and an artifact replica store
+// about a host it has never reached.
+func TestAProviderThatAllocatesMachinesSellsTheReusableLane(t *testing.T) {
+	declaration, err := capability.Declare("headless", capacityOnlyBackend{})
 	if err != nil {
-		t.Fatalf("declare a capacity provider in a deployment with enrolled nodes: %v", err)
+		t.Fatalf("declare a provider that allocates machines and executes nothing: %v", err)
 	}
 
 	if declaration.Lane != domain.LaneReusable {
 		t.Fatalf("lane = %q, want %q", declaration.Lane, domain.LaneReusable)
 	}
-	if declaration.Node == nil {
-		t.Fatal("a capacity provider in the reusable lane must report the runtime that will execute on it")
-	}
-	if declaration.Node.ContainerRuntime != "docker" {
-		t.Fatalf("node support = %+v, want the deployment's own runtime", declaration.Node)
-	}
-}
-
-func TestCapacityWithNoNodeRuntimeAnywhereIsRefused(t *testing.T) {
-	_, err := capability.Declare("headless", capacityOnlyBackend{}, nil)
-
-	if err == nil {
-		t.Fatal("capacity with nothing to execute on it must not declare a lane")
-	}
-}
-
-// TestAnEnrolledFleetDoesNotMakeAOneShotProductReusable holds the lane to the
-// backend it describes. A deployment with enrolled nodes has a runtime that could
-// execute successive workloads, and none of them could run on a provider-native
-// container that holds nothing after its workload exits.
-func TestAnEnrolledFleetDoesNotMakeAOneShotProductReusable(t *testing.T) {
-	declaration, err := capability.Declare("oneshot", oneShotBackend{}, enrolledFleet{})
-	if err != nil {
-		t.Fatalf("declare one-shot backend beside enrolled nodes: %v", err)
-	}
-
-	if declaration.Lane != domain.LaneEphemeral {
-		t.Fatalf("lane = %q, want %q", declaration.Lane, domain.LaneEphemeral)
+	if declaration.Capacity == nil {
+		t.Fatal("a capacity provider must report the capacity set it negotiated")
 	}
 	if declaration.Node != nil {
-		t.Fatalf("a one-shot product claimed a node runtime: %+v", declaration.Node)
+		t.Fatalf("a provider adapter claimed a node runtime of its own: %+v", declaration.Node)
 	}
 }
 
 func TestNodeRuntimeCombinedWithOneShotExecutionIsRefused(t *testing.T) {
-	_, err := capability.Declare("contradictory", contradictoryBackend{}, nil)
+	_, err := capability.Declare("contradictory", contradictoryBackend{})
 
 	if err == nil {
 		t.Fatal("a backend cannot both control and not control its host runtime")
@@ -109,7 +87,7 @@ func TestNodeRuntimeCombinedWithOneShotExecutionIsRefused(t *testing.T) {
 // one-shot executions under one word, and nothing downstream could say which of
 // the two an offer came from. A provider selling both is two connections.
 func TestCapacityCombinedWithOneShotExecutionIsRefused(t *testing.T) {
-	_, err := capability.Declare("bothlanes", capacityAndOneShotBackend{}, enrolledFleet{})
+	_, err := capability.Declare("bothlanes", capacityAndOneShotBackend{})
 
 	if err == nil {
 		t.Fatal("one connection cannot sell capacity and one-shot execution under one lane")
@@ -120,7 +98,7 @@ func TestCapacityCombinedWithOneShotExecutionIsRefused(t *testing.T) {
 }
 
 func TestBackendImplementingNoContractIsRefused(t *testing.T) {
-	_, err := capability.Declare("empty", struct{}{}, enrolledFleet{})
+	_, err := capability.Declare("empty", struct{}{})
 
 	if err == nil {
 		t.Fatal("a backend that implements no contract must be refused")
@@ -152,7 +130,7 @@ func TestACapacitySetThatContradictsItselfIsRefused(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := capability.Declare("incoherent", reusableBackendNegotiating(negotiated), nil)
+			_, err := capability.Declare("incoherent", reusableBackendNegotiating(negotiated))
 
 			if err == nil {
 				t.Fatalf("declaring %+v must be refused", negotiated)
@@ -161,24 +139,51 @@ func TestACapacitySetThatContradictsItselfIsRefused(t *testing.T) {
 	}
 }
 
-func TestStampLaneOverwritesTheLaneAndClearsUnearnedRentalIdentity(t *testing.T) {
-	declaration, err := capability.Declare("oneshot", oneShotBackend{}, nil)
+func TestStampLaneOverwritesTheLaneAnAdapterClaimed(t *testing.T) {
+	declaration, err := capability.Declare("oneshot", oneShotBackend{})
 	if err != nil {
 		t.Fatalf("declare one-shot backend: %v", err)
 	}
-	claimed := []domain.OfferSnapshot{{
-		ID:       "off_1",
-		RentalID: "rnt_claimed_without_a_node",
-		Lane:     domain.LaneReusable,
-	}}
+	claimed := []domain.OfferSnapshot{{ID: "off_1", Lane: domain.LaneReusable}}
 
 	stamped := capability.StampLane(declaration, claimed)
 
 	if stamped[0].Lane != domain.LaneEphemeral {
 		t.Fatalf("lane = %q, want the declared %q", stamped[0].Lane, domain.LaneEphemeral)
 	}
-	if stamped[0].RentalID != "" {
-		t.Fatalf("an ephemeral offer kept a Rental identity: %q", stamped[0].RentalID)
+}
+
+// TestNoAdapterCanStateARentalIdentity holds the identity Mercator alone mints.
+// A Rental is Mercator's lease record, and the offers that carry one are the
+// enrolled nodes' own, from the invitation that named it. An adapter filling the
+// field in from its instance type or its contract id would publish a Rental
+// Mercator does not hold on the public offer route, and a Booking bound to it
+// would let a second Run queue behind a lease that never existed. The reusable
+// lane is the case that matters, because that is the lane a provider that
+// allocates machines lands in.
+func TestNoAdapterCanStateARentalIdentity(t *testing.T) {
+	for name, backend := range map[string]capability.Backend{
+		"a provider that allocates machines": capacityOnlyBackend{},
+		"a one-shot executor":                oneShotBackend{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			declaration, err := capability.Declare("stated", backend)
+			if err != nil {
+				t.Fatalf("declare %s: %v", name, err)
+			}
+			claimed := []domain.OfferSnapshot{{
+				ID:       "off_1",
+				RentalID: "rnt_adapter_invented",
+				Kind:     domain.OfferKindStanding,
+			}}
+
+			stamped := capability.StampLane(declaration, claimed)
+
+			if stamped[0].RentalID != "" {
+				t.Fatalf("an offer in the %s lane kept the Rental identity %q its adapter stated",
+					declaration.Lane, stamped[0].RentalID)
+			}
+		})
 	}
 }
 
@@ -260,15 +265,6 @@ func (negotiatingBackend) Verify(context.Context) error { return nil }
 
 func reusableBackendNegotiating(negotiated capability.CapacitySupport) negotiatingBackend {
 	return negotiatingBackend{negotiated: negotiated}
-}
-
-// enrolledFleet is the node runtime a deployment with enrolled nodes holds. It is
-// the fleet-wide registry in production, which is why no test double for it
-// belongs to any one backend.
-type enrolledFleet struct{}
-
-func (enrolledFleet) NodeSupport() capability.NodeSupport {
-	return capability.NodeSupport{ContainerRuntime: "docker", MaxConcurrentWorkloads: 1}
 }
 
 type contradictoryBackend struct {

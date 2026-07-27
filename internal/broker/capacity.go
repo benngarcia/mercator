@@ -3,7 +3,6 @@ package broker
 import (
 	"context"
 
-	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/capability"
 )
 
@@ -86,26 +85,4 @@ func (b *Broker) providerFor(
 		return nil, err
 	}
 	return backend.CapacityFor(operation)
-}
-
-// ownedMachines states the machines one provider still holds in the vocabulary
-// the ownership sweep reads.
-//
-// A machine is not a workload, so it carries no Run, no attempt, and no launch
-// key: a Rental outlives the Run placed on it, and those identities belong to the
-// workload a node runtime started rather than to the lease. It carries no
-// external phase either, because a phase describes a container that is queued,
-// running, or exited, and translating a stopped machine into a released workload
-// would file the lease's state as the workload's. The connection is stamped by
-// the aggregation, as it is for every other owned object.
-func ownedMachines(held []capability.OwnedCapacity) []adapter.OwnedExternalObject {
-	objects := make([]adapter.OwnedExternalObject, 0, len(held))
-	for _, machine := range held {
-		objects = append(objects, adapter.OwnedExternalObject{
-			ExternalID:     machine.NativeRef,
-			WorkspaceID:    machine.WorkspaceID,
-			OwnershipToken: machine.OwnershipToken,
-		})
-	}
-	return objects
 }

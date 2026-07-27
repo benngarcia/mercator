@@ -3883,8 +3883,8 @@ complete because it works against a live provider.
     door calls the same function, so a fixture cannot state a provider Mercator
     would refuse to build.
   - `capacity` and `bootstrap` belong to the reusable lane and are refused on an
-    `ephemeral` listing, because `Declare` admits a `CapacityProvider` only
-    alongside a `NodeRuntime` and stamps every such connection reusable. Capacity
+    `ephemeral` listing, because `Declare` stamps every connection that provides
+    capacity reusable. Capacity
     implies the lane rather than accompanying a choice of one, and a one-shot
     execution product holds nothing after its workload exits, so it has no machine
     to stop, no machine to bring back, and no agent to enrol. Without the rule the
@@ -4034,40 +4034,71 @@ complete because it works against a live provider.
   one of `CapacityProvider`'s nine methods was called by nothing, `Backend.Capacity`
   had no caller, and `capability.Declare` refused capacity without a `NodeRuntime` on
   the same Go value, which is a shape no provider adapter can have. A connection can
-  now sell capacity without selling one-shot execution.
-  - The reusable lane is a provider's capacity plus the deployment's enrolled node
-    runtime, and `Declare` takes that runtime as `capability.Fleet` beside the
-    backend. A node enrolls with the control plane rather than with the connection
-    that rented the machine it runs on, so the only `NodeRuntime` in the tree is the
-    fleet-wide registry and no assertion on a provider adapter could ever have found
-    it. Capacity with neither its own runtime nor the deployment's is still refused,
-    because nothing could execute a second workload on it, and an enrolled fleet
-    promotes no one-shot product: the fleet is consulted only for a backend that
-    provides capacity.
-  - `Fleet` is one method wide, so the Broker satisfies it with the node registry it
-    already dispatches through rather than the control plane growing a second path to
-    the same enrollment. `broker.WithNodes` tells the catalog and the Broker together,
-    because a deployment whose Broker held nodes and whose catalog did not would
-    refuse every connection that can rent a machine while placing Runs on the machines
-    it already has.
+  now sell capacity without selling one-shot execution, and the machine lifecycle is
+  a call the control plane can make.
+  - A `CapacityProvider` declares the reusable lane, because a machine a provider
+    allocates and holds is capacity that outlives the workload run on it. There is no
+    second condition, and the first two attempts at one both failed: a `NodeRuntime`
+    on the same Go value is a shape no provider adapter has, and a `NodeRuntime`
+    anywhere in the deployment is a shape every deployment has, because `daemon.New`
+    always builds a node registry and `Registry.NodeSupport` is a static literal that
+    consults no enrolment. That check refused nothing in any real deployment while
+    licensing a Rental identity, a prewarm claim and an artifact replica claim about
+    machines Mercator had not allocated.
+  - Whether a workload can run on one machine is that machine's own fact, established
+    by the agent enrolled on it, so the rule is made where offers are published. A
+    capacity connection publishes no placement candidate. What `ListCapacity` returns
+    is capacity to acquire, and acting on that selection means provisioning a Rental
+    and bootstrapping an agent onto it, which is
+    [#200](https://github.com/benngarcia/mercator/issues/200).
+  - Publishing it before then had no correct outcome, and both halves were reproduced
+    against the real daemon. Stated as completely as a provider honestly can, the offer
+    is struck out of every placement with `UNKNOWN_FACT container.max_containers`,
+    `CAPACITY_UNAVAILABLE capacity.available` and
+    `CAPABILITY_MISMATCH container.supports_digest_refs`, and every decision record in
+    the workspace carries a candidate that can never be feasible. Stated with those
+    container facts filled in, which is a provider asserting a container runtime it
+    does not own on a host that may have no agent, Placement selects it, the record
+    says `disposition:run_now_existing_rental` and `REUSE_EXISTING_RENTAL` for a machine
+    nobody rented, and the launch fails because the offer's `NativeRef` resolves to no
+    enrolled node. The Run is now told `NO_FEASIBLE_OFFERS` and
+    `NO_CAPACITY_FITS` instead, which is the truth about a fleet with nothing on it.
+  - A machine that does have an agent on it is published once, by the node registry,
+    from the enrolment: the Rental the invitation named and the container runtime,
+    idempotent launch, free capacity, image inventory and disk the agent reported.
+    Publishing the provider's own listing of that same machine beside it counted one
+    host twice under two Rental identities, gave one machine with
+    `MaxConcurrentWorkloads` of 1 two independent Rental Schedules, and split
+    per-machine learning between the node ID and the provider's instance ref.
+  - A Rental identity is Mercator's to mint. `StampLane` now clears whatever
+    `rental_id` an adapter stated, in every lane rather than only where the lane
+    cannot become a Rental, and aggregation mints none: it used to mint one for a
+    standing offer in the reusable lane, which is `OfferKind` answering a question it
+    does not answer. Kind says who owns the host, so a Vast-style listing of somebody
+    else's idle machine is standing, and a Booking bound to it accumulated Warmth and
+    a queue against capacity nobody had allocated.
   - A connection that implements `CapacityProvider` and `EphemeralExecutor` at once is
     refused. One lane is stamped on every offer a connection publishes, so a backend
     answering both `ListCapacity` and `ListOffers` would publish machines and one-shot
     executions under one word and nothing downstream could say which an offer came
     from. A provider that sells both is two connections, and promoting one is
     deliberate rather than a precedence rule inside the Broker.
-  - Offer aggregation and the ownership sweep ask the connection through whichever
-    contract it has. A capacity connection's `ListCapacity` listings reach placement
-    with the reusable lane stamped, a machine it already holds earns the Rental
-    identity and a catalog listing of a machine nobody has allocated does not, and a
-    workspace holding a capacity connection can be swept at all: asking it for
-    one-shot executions used to fail the whole sweep.
-  - A provider that promised no owned listing reports nothing to the sweep rather
-    than a refusal, and that is the negotiated answer rather than a silence.
-    `CapacitySupport.Validate` already refuses the one set where a machine could go
-    unaccounted for, which is a provider that deduplicates no provision and lists no
-    owned capacity; a provider that deduplicates on an operation key loses no machine
-    to a lost response, so a sweep of it has nothing to discover.
+  - The ownership sweep converges workloads, and a capacity connection is running
+    none. It holds machines, and a machine carries no Run because a Rental outlives
+    the Run placed on it, so filing one as an `adapter.OwnedExternalObject` made
+    `janitor.decide` read it as capacity nobody could account for. The sweep then
+    wrote a durable `compute.capacity.orphan_converged.v1` with
+    `outcome:terminated reason:unattributed` about a live machine, failed to carry it
+    out because `Broker.Terminate` resolves an `EphemeralExecutor` a capacity
+    connection does not have, and aborted before reaching the one-shot executions that
+    were genuinely billing. The recorded decision was sticky, so every later sweep
+    read it back and failed identically. A capacity connection now reports no workload,
+    and machines are swept against Rental records by #199 in the Rental's own
+    vocabulary.
+  - What a capacity connection is asked for is settled on `Backend` rather than at the
+    call site, which is what fixed the sweep of the whole workspace: asking such a
+    connection for one-shot executions used to fail every reconcile of every workspace
+    that held one.
   - The five capacity commands are one method each on the Broker, resolving the
     connection from the command's own `CapacityRef` so a reconciler can act after a
     restart with nothing in memory to look the machine up in. `CapacitySupport.Claims`
@@ -4083,24 +4114,16 @@ complete because it works against a live provider.
     held at L1 by `internal/broker` and `internal/capability`, each new rule shown
     failing with the production behaviour broken, and the Blueprints that exercise
     what it makes possible arrive with the provider that emits a capacity command.
-  - The higher-fidelity half is
-    `TestACapacityConnectionSellsMachinesThroughTheProductionControlPlane` in
-    `internal/daemon`: real SQLite, the real connection
-    registry, the real HTTP API, and the node registry `daemon.New` builds. A capacity
-    connection is created and authorized over the API, its machine appears in
-    `/v1/offers` with lane `reusable`, and the workspace's ownership sweep reports the
-    machine it holds. It is the only test that would catch the production wiring
-    forgetting to tell the catalog which runtime this deployment executes through:
-    with that one line removed, authorizing the connection answers 502 and names the
-    runtime nothing can execute without.
-  - A machine reported to the ownership sweep carries no Run, no attempt, and no
-    launch key, because a Rental outlives the Run placed on it, and no external phase,
-    because translating a stopped machine into a released workload would file the
-    lease's state as the workload's. The janitor's own policy terminates an owned
-    object naming no Run, which is right for orphaned capacity and wrong for a Rental
-    Mercator is holding deliberately. Nothing in production implements
-    `CapacityProvider` yet, so nothing is swept today; the rule that tells the two
-    apart lands with the Rental lifecycle and is [#199](https://github.com/benngarcia/mercator/issues/199).
+  - The higher-fidelity half is two cases in `internal/daemon` against real SQLite,
+    the real connection registry, the real HTTP API and the production wiring.
+    `TestACapacityConnectionIsHeldByTheProductionControlPlane` authorizes a capacity
+    connection over the API, reads `/v1/offers`, submits a Run, and holds the recorded
+    Booking Decision to weighing no machine nothing can execute on while still naming
+    the connection in `connections_queried`.
+    `TestReconcilingAWorkspaceHoldingCapacityConvergesTheExecutionsThatLeaked` drives
+    `ReconcileWorkspace`, which is what the one-minute reconcile loop calls, over a
+    workspace holding a capacity connection and a one-shot connection that leaked an
+    execution, and holds the sweep to reclaiming the execution.
 
 ## Phase status
 
@@ -4110,7 +4133,7 @@ complete because it works against a live provider.
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution, its listings reach placement with the reusable lane earned from the deployment's own enrolled node runtime, a workspace holding such a connection can be swept, and a command the provider's negotiated set does not promise is refused at the seam naming the provider and the operation. No provider allocates a machine yet |
+| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. No provider allocates a machine yet |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -5357,6 +5380,78 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 5 the capacity connection under review
+
+Two reviewers refuted parts of the slice that made the capacity contract
+reachable. Six of the eight findings were one defect described twice from two
+angles, and every one of them was reproduced before anything was changed, against
+the real daemon on the amd64 Linux workstation with Go 1.25.11: real SQLite, the
+real HTTP API, the production reconcile path, and the slice's own provider fixture.
+
+What the reproductions showed.
+
+```text
+FIRST reconcile:  reclaimed=0 err=capability: operation unsupported by this
+                  backend: machines connection in the reusable lane does not
+                  provide one-shot execution
+SECOND reconcile: reclaimed=0 err=(the same, forever)
+```
+
+`ReconcileWorkspace` is what the one-minute reconcile loop calls. Before it failed
+it appended `compute.capacity.orphan_converged.v1` to stream `orphan/i-held` with
+`{"outcome":"terminated","reason":"unattributed","external_id":"i-held"}`, a
+durable statement that a machine the provider deliberately holds was destroyed,
+and `recordedDecision` reads that back on every later sweep, so the decision was
+sticky and would have been carried out by the first sweep after #199 gave
+`Terminate` a capacity route.
+
+With the offer's container facts left unstated, which is all a provider can
+honestly state, the recorded Booking Decision was `feasible:false` with
+`UNKNOWN_FACT container.max_containers`, `CAPACITY_UNAVAILABLE capacity.available`
+and `CAPABILITY_MISMATCH container.supports_digest_refs`, and the Run sat in
+`admission_deferred NO_CAPACITY_FITS`. With them filled in, the Run was booked:
+`rental_id:off_1c722f8c…`, `disposition:run_now_existing_rental`,
+`REUSE_EXISTING_RENTAL`, and then
+`ERROR provider operation failed operation=launch offer_native_ref=i-held`,
+because the reusable lane sends a launch to a node and `i-held` is not one.
+
+Each new rule was then shown failing with the production behaviour broken, which
+is the discipline this project holds an invariant to.
+
+```text
+publish the listing again        -> broker TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn
+                                   daemon TestACapacityConnectionIsHeldByTheProductionControlPlane
+report machines to the sweep     -> broker TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked
+                                   daemon TestReconcilingAWorkspaceHoldingCapacityConvergesTheExecutionsThatLeaked
+                                   (failing with the reviewer's exact error)
+keep the adapter's rental_id     -> capability TestNoAdapterCanStateARentalIdentity
+mint one from OfferKind again    -> broker TestNoAdapterListingCarriesARentalIdentityIntoPlacement
+```
+
+Every finding was confirmed. One proposed remedy was not taken: consulting
+`ListOwnedCapacity` during aggregation to decide which listing earns a Rental
+identity. A provider saying it owns a machine is not Mercator holding a lease on
+one, so that would have replaced the wrong evidence with different wrong evidence.
+The machines Mercator holds are the ones its own agents enrolled on, and the
+identity comes from the invitation that named the Rental.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test ./internal/nodeagent ./internal/ociresolver -count=1
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration -count=1
+go test ./internal/daemon -run TestTheFleetListingReportsTheRoomThisMachineReallyHas -count=1
+```
+
+The live half ran. Docker here is native on Linux at 29.6.2, so nothing skipped:
+`internal/nodeagent` and `internal/ociresolver` are 67 cases against a real
+engine, a real object store and a real registry with zero skips, the three
+`internal/adapter/docker` integration cases ran with the gate set, and the third of
+them is the janitor sweeping a real container this adapter launched, which is the
+case that would catch the sweep change breaking a real reclamation. The daemon
+case that stands up the production agent against this host's own Docker daemon and
+reads the disk it really has passed as well. All green. #165 does not reproduce
+here and was left alone.
 
 ### Phase 4 close-out
 

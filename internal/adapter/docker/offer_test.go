@@ -354,7 +354,7 @@ func TestGPUSpecSchedulesOnGPUDockerOfferAndRejectsCPUOnlyOffer(t *testing.T) {
 // offers, so a placement assertion sees production-shaped input.
 func stampedLane(t *testing.T, offers []domain.OfferSnapshot) []domain.OfferSnapshot {
 	t.Helper()
-	declaration, err := capability.Declare("docker", New(NewCLIClient("")), nil)
+	declaration, err := capability.Declare("docker", New(NewCLIClient("")))
 	if err != nil {
 		t.Fatalf("declare docker capabilities: %v", err)
 	}

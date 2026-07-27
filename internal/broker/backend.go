@@ -22,13 +22,10 @@ type Backend struct {
 	ephemeral capability.EphemeralExecutor
 }
 
-// NewBackend derives a Backend from a built implementation and the node runtime
-// this deployment holds, refusing any implementation whose contracts do not
-// support the lane it would land in. A nil fleet is a Mercator with no enrolled
-// node runtime, where nothing could execute a second workload on rented
-// capacity.
-func NewBackend(adapterType string, built capability.Backend, fleet capability.Fleet) (Backend, error) {
-	declaration, err := capability.Declare(adapterType, built, fleet)
+// NewBackend derives a Backend from a built implementation, refusing any
+// implementation whose contracts do not support the lane it would land in.
+func NewBackend(adapterType string, built capability.Backend) (Backend, error) {
+	declaration, err := capability.Declare(adapterType, built)
 	if err != nil {
 		return Backend{}, err
 	}
@@ -55,52 +52,66 @@ func (backend Backend) Verify(ctx context.Context) error {
 	}
 }
 
-// ListOffers asks this connection what it is selling, through whichever contract
-// it implements: a capacity provider is asked for the machines it can allocate,
-// and a one-shot executor for the executions it can run. Which of the two
-// answered is settled by the Declaration rather than at the call site, and a
-// connection cannot be both, so there is no precedence rule here to get wrong.
-func (backend Backend) ListOffers(ctx context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
-	if backend.capacity == nil {
-		executor, err := backend.Ephemeral()
-		if err != nil {
-			return nil, err
-		}
-		return executor.ListOffers(ctx, request)
-	}
-	return backend.capacity.ListCapacity(ctx, capability.CapacityQuery{
-		WorkspaceID: request.WorkspaceID,
-		Resources:   request.Resources,
-	})
-}
-
-// ListOwned asks this connection what it still holds for one workspace, through
-// whichever contract it implements. A one-shot executor answers with the
-// executions it is still running, and a capacity provider with the machines it
-// still holds.
+// ListOffers asks this connection for the candidates Placement may choose among.
+// A one-shot executor answers with the executions it can run.
 //
-// A provider that does not claim the owned listing answers with nothing rather
-// than a refusal, and that is the negotiated answer rather than a silence hiding
-// a leak: CapacitySupport.Validate refuses the one set where a machine could go
-// unaccounted for, which is a provider that deduplicates no provision AND lists
-// no owned capacity. A provider that deduplicates on an operation key loses no
-// machine to a lost response, so there is nothing for a sweep to discover.
-func (backend Backend) ListOwned(ctx context.Context, request adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
-	if backend.capacity == nil {
-		executor, err := backend.Ephemeral()
-		if err != nil {
-			return nil, err
-		}
-		return executor.ListOwned(ctx, request)
-	}
-	if !backend.Declaration.Capacity.Claims(capability.CapacityListOwned) {
+// A capacity connection answers with none, and that is where the migration
+// stands rather than a gap in this seam. What a provider lists is capacity to
+// acquire, and until an agent enrolls on one of those machines nothing on it can
+// execute anything: an offer built from the listing would have to state a
+// container runtime, an idempotent launch and free capacity, which are the node's
+// facts to establish from its own heartbeat and not a provider's to assert about
+// a host it does not run on. Placement acting on such an offer is a Run booked
+// against a machine that cannot take it, which is exactly what happened while
+// this returned the listing.
+//
+// The machines Mercator does hold are already published, by the node registry,
+// from the enrollment itself: the Rental the invitation named and the facts the
+// agent reported. Publishing the provider's own copy beside them would count one
+// machine twice under two Rental identities and let two Runs each believe they
+// held the only queue on it.
+//
+// A provider's listing becomes a candidate when the control plane can act on the
+// selection, which is provisioning a Rental and bootstrapping an agent onto it:
+// mercator#200.
+func (backend Backend) ListOffers(ctx context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+	if backend.capacity != nil {
 		return nil, nil
 	}
-	held, err := backend.capacity.ListOwnedCapacity(ctx, capability.OwnershipQuery{WorkspaceID: request.WorkspaceID})
+	executor, err := backend.Ephemeral()
 	if err != nil {
 		return nil, err
 	}
-	return ownedMachines(held), nil
+	return executor.ListOffers(ctx, request)
+}
+
+// ListOwned asks this connection which workloads of Mercator's it is still
+// running, which is what the ownership sweep converges: a one-shot execution left
+// behind by a lost response bills until something reclaims it, and the sweep
+// decides each one against Mercator's own record of the Run it was launched for.
+//
+// A capacity connection is running none, ever. It holds machines, and a machine
+// is not a workload: it carries no Run, because a Rental outlives the Run placed
+// on it, and the sweep reads an owned object naming no Run as capacity nobody can
+// account for and destroys it. Reporting machines here therefore recorded a
+// durable decision to terminate every machine a provider deliberately holds, and
+// then failed to carry it out, aborting the sweep before it reached the one-shot
+// executions that were genuinely leaking. Machines are swept against Rental
+// records by the reconciler in mercator#199, in the Rental's own vocabulary.
+//
+// Answering with nothing is what this connection has to say rather than a silence
+// over a leak. Nothing allocates a machine yet, and CapacitySupport.Validate
+// already refuses the one negotiated set where a machine could go unaccounted
+// for: a provider that deduplicates no provision and lists no owned capacity.
+func (backend Backend) ListOwned(ctx context.Context, request adapter.OwnershipQuery) ([]adapter.OwnedExternalObject, error) {
+	if backend.capacity != nil {
+		return nil, nil
+	}
+	executor, err := backend.Ephemeral()
+	if err != nil {
+		return nil, err
+	}
+	return executor.ListOwned(ctx, request)
 }
 
 // CapacityFor returns the capacity contract for one operation, refusing at the

@@ -198,6 +198,15 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 			aggregation.Failures = append(aggregation.Failures, connectionError(result))
 			continue
 		}
+		// A listing gets the connection that published it and an identity of
+		// Mercator's minting, and no Rental identity at all. A Rental is a lease
+		// Mercator holds, and the only capacity it holds is the machines its own
+		// agents enrolled on, which the node registry publishes above with the
+		// Rental its invitation named. Minting one here from the offer's kind
+		// bound a Booking to a lease nobody had allocated: OfferKind says who
+		// owns the host, so a marketplace listing of somebody else's idle machine
+		// is standing, and Runs queued behind it waited for a Rental that never
+		// existed.
 		for i := range result.items {
 			result.items[i].ConnectionID = result.connection.ID
 			result.items[i].AdapterType = result.connection.AdapterType
@@ -206,12 +215,6 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 				return OfferAggregation{}, err
 			}
 			result.items[i].ID = id
-			// Only reusable capacity becomes a Rental. A standing offer in
-			// the ephemeral lane is a pool Mercator borrows a slot from, not
-			// a machine it holds across Runs.
-			if result.items[i].Lane.Reusable() && result.items[i].Kind == domain.OfferKindStanding {
-				result.items[i].RentalID = id
-			}
 		}
 		aggregation.Offers = append(aggregation.Offers, result.items...)
 	}

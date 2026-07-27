@@ -20,10 +20,6 @@ type Factory struct {
 	mu        sync.RWMutex
 	fns       map[string]FactoryFunc
 	manifests map[string]adapter.Manifest
-	// fleet is the node runtime this deployment holds, which is the other half of
-	// the reusable lane and therefore part of every declaration this catalog
-	// derives. It is nil in a Mercator with no enrolled nodes.
-	fleet capability.Fleet
 }
 
 func NewFactory() *Factory {
@@ -56,27 +52,12 @@ func (f *Factory) Build(adapterType string, config map[string]string, secret str
 	if err != nil {
 		return Backend{}, err
 	}
-	f.mu.RLock()
-	fleet := f.fleet
-	f.mu.RUnlock()
-	return NewBackend(adapterType, built, fleet)
-}
-
-// serveNodes tells the catalog which enrolled node runtime this deployment
-// executes successive workloads through. It is set from the Broker's own
-// enrollment rather than wired separately, so a deployment cannot end up placing
-// Runs on machines while refusing every connection that could rent one.
-func (f *Factory) serveNodes(fleet capability.Fleet) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.fleet = fleet
+	return NewBackend(adapterType, built)
 }
 
 // Declarations returns every registered adapter's negotiated capability
 // Declaration, built with empty configuration so onboarding surfaces and
-// compatibility tests can state each backend's lane without a connection. The
-// lane is this deployment's: a catalog serving no enrolled node runtime declares
-// what its backends can do on their own.
+// compatibility tests can state each backend's lane without a connection.
 func (f *Factory) Declarations() ([]capability.Declaration, error) {
 	declarations := make([]capability.Declaration, 0, len(f.manifests))
 	for _, manifest := range f.Manifests() {

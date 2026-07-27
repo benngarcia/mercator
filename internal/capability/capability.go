@@ -7,17 +7,19 @@
 // enrolled agent. An EphemeralExecutor runs one workload on a provider-native
 // execution product Mercator does not control between workloads.
 //
-// The lane a backend declares is a claim about reuse, and a claim Mercator
-// verifies: reusable capacity requires a NodeRuntime, because without one there
-// is no host runtime capable of executing a second workload. Declare returns an
-// error rather than letting a backend advertise reuse it cannot perform.
+// The lane a backend declares is what the connection sells. A CapacityProvider
+// sells machines that outlive the workloads run on them, which is the reusable
+// lane; an EphemeralExecutor sells one execution that holds nothing afterwards,
+// which is the ephemeral one.
 //
-// The node runtime a provider's capacity is reusable through is the deployment's,
-// not the provider's. A node enrolls with the control plane rather than with the
-// connection that rented the machine it runs on, so a provider adapter is never
-// a NodeRuntime and no type assertion on one could find the runtime that will
-// execute the workloads. Declare therefore takes the deployment's Fleet beside
-// the backend.
+// A lane is not a licence to place work. Whether a workload can actually run on
+// one machine is a fact about that machine, established by the node runtime
+// enrolled on it, and no per-connection declaration can state it: a node enrolls
+// with the control plane rather than with the connection that rented the machine
+// it runs on. That is why the offers Mercator places against are the enrolled
+// nodes' own, and why a capacity connection publishes no placement candidate
+// until a Rental lifecycle can provision a machine and bootstrap an agent onto
+// it. See broker.Backend.ListOffers.
 package capability
 
 import (
@@ -31,22 +33,6 @@ import (
 // combinations that would claim semantics the implementation cannot deliver.
 type Backend any
 
-// Fleet is the enrolled node runtime one Mercator deployment holds. It is the
-// other half of the reusable lane: a provider allocates the machine and this
-// executes the successive workloads on it.
-//
-// It is narrow on purpose. Declaring a lane asks the fleet what its runtime can
-// do and nothing else, so the Broker can satisfy it with the node registry it
-// already dispatches through instead of the control plane growing a second path
-// to the same enrollment.
-//
-// A deployment with no enrolled node runtime has no Fleet. Capacity it rents
-// could execute one workload at most, which is why Declare refuses to call that
-// capacity reusable.
-type Fleet interface {
-	NodeSupport() NodeSupport
-}
-
 // Declaration is what one backend claims it can do. It is checked against the
 // interfaces the backend actually implements, so a lane is evidence rather
 // than an assertion.
@@ -56,37 +42,35 @@ type Declaration struct {
 	Lane domain.ExecutionLane `json:"lane"`
 	// Capacity is present exactly when the backend implements CapacityProvider.
 	Capacity *CapacitySupport `json:"capacity,omitempty"`
-	// Node is the runtime that will execute successive workloads on this
-	// backend's capacity: the backend's own when it implements NodeRuntime, and
-	// otherwise the deployment's enrolled runtime. It is absent when there is no
-	// such runtime, which is every one-shot connection.
+	// Node is present exactly when the backend implements NodeRuntime, which is
+	// a runtime bound to one host. It is absent for a provider adapter, because
+	// the runtime that executes on a rented machine enrolls with the control
+	// plane rather than with the connection that rented it, and absent for every
+	// one-shot connection, because nothing executes a second workload there.
 	Node *NodeSupport `json:"node,omitempty"`
 	// Ephemeral is present exactly when the backend implements
 	// EphemeralExecutor.
 	Ephemeral *EphemeralSupport `json:"ephemeral,omitempty"`
 }
 
-// Declare derives a backend's Declaration from the contracts it implements and
-// the node runtime the deployment holds, and refuses any claim neither of them
-// can support. A nil fleet is a deployment with no enrolled node runtime.
-func Declare(adapterType string, backend Backend, fleet Fleet) (Declaration, error) {
+// Declare derives a backend's Declaration from the contracts it implements.
+//
+// Capacity is the reusable lane, because a machine a provider allocates and
+// holds is exactly capacity that outlives the workload run on it. There is no
+// second condition on it: a deployment-wide "does anything execute here" check
+// was one this deployment could always answer yes to while owning no runtime on
+// the rented machine at all, so it refused nothing and licensed a Rental
+// identity for a machine Mercator had not allocated. The falsifiable claim is
+// per machine, and the enrolled node runtime is what makes it, which is why a
+// capacity connection publishes no placement candidate.
+func Declare(adapterType string, backend Backend) (Declaration, error) {
 	declaration, err := implemented(adapterType, backend)
 	if err != nil {
 		return Declaration{}, err
 	}
-	if declaration.Capacity != nil && declaration.Node == nil && fleet != nil {
-		support := fleet.NodeSupport()
-		declaration.Node = &support
-	}
-	switch {
-	case declaration.Capacity != nil && declaration.Node != nil:
+	if declaration.Capacity != nil {
 		declaration.Lane = domain.LaneReusable
-	case declaration.Capacity != nil:
-		return Declaration{}, fmt.Errorf(
-			"capability: %q provides capacity and neither it nor this Mercator has a node runtime, so nothing can execute successive workloads on it",
-			adapterType,
-		)
-	default:
+	} else {
 		declaration.Lane = domain.LaneEphemeral
 	}
 	return declaration, nil
@@ -131,16 +115,21 @@ func implemented(adapterType string, backend Backend) (Declaration, error) {
 	return declaration, nil
 }
 
-// StampLane marks every offer with the lane its backend actually serves, and
-// strips the Rental identity from offers that cannot become Rentals. Every
-// aggregation path calls it, which is what stops an adapter from advertising
-// reuse it cannot perform.
+// StampLane marks every offer with the lane its backend actually serves and
+// clears whatever Rental identity the adapter stated.
+//
+// A Rental is Mercator's own lease record, so only Mercator mints one, and it
+// mints it where it holds the machine: the offers that carry a Rental identity
+// are the enrolled nodes' own, from the invitation that named the Rental, and
+// they never pass through here. An adapter that filled the field in from its
+// instance type or its contract id would publish a Rental Mercator does not hold
+// on /v1/offers, and a Booking bound to it would let a second Run queue behind a
+// lease that never existed. Clearing it unconditionally is why no lane needs
+// checking here.
 func StampLane(declaration Declaration, offers []domain.OfferSnapshot) []domain.OfferSnapshot {
 	for index := range offers {
 		offers[index].Lane = declaration.Lane
-		if !declaration.Lane.Reusable() {
-			offers[index].RentalID = ""
-		}
+		offers[index].RentalID = ""
 	}
 	return offers
 }
