@@ -21,6 +21,10 @@ import { WorkspaceEventFeed } from "./WorkspaceEventFeed";
 const BASE_PIXELS_PER_MINUTE = 24;
 const MINIMUM_RUN_WIDTH = 72;
 const MINIMUM_HORIZON_MINUTES = 60;
+// Two days of columns is 289 ticks. It is the most this axis will draw whatever
+// the timestamps say, so no disagreement between the clock that wrote a
+// projection and the clock reading it can make this canvas unusable.
+const MAXIMUM_HORIZON_MINUTES = 2 * 24 * 60;
 const QUEUE_CAPACITY = 4;
 const LANE_LABEL_WIDTH = 224;
 
@@ -31,7 +35,7 @@ export function WorkspaceCanvas({
   events: readonly CloudEvent[];
   workspace: Workspace;
 }) {
-  const now = Date.now();
+  const now = workspaceNow(events);
   const rentals = Object.values(workspace.rentals).sort((a, b) => {
     const sourceOrder = sourceRank(a) - sourceRank(b);
     return sourceOrder || a.id.localeCompare(b.id);
@@ -554,6 +558,20 @@ function MarketplaceOffer({ offer }: { offer: OfferSnapshot }) {
   );
 }
 
+// workspaceNow is the moment this workspace last said something, which is the
+// clock every other timestamp on this canvas was written by. Reading the viewer's
+// own clock instead compares two frames of reference: a Lab execution runs on
+// virtual time years from today, so a Booking queued in one projected a start
+// three years out and the axis was asked for the whole distance. A workspace that
+// has said nothing has no clock of its own and also nothing placed on the
+// timeline, so the viewer's clock is what the empty axis is labelled from.
+function workspaceNow(events: readonly CloudEvent[]): number {
+  const latest = events[0];
+  if (!latest) return Date.now();
+  const stated = Date.parse(latest.time);
+  return Number.isNaN(stated) ? Date.now() : stated;
+}
+
 function tickMinutes(horizonMinutes: number): number[] {
   return Array.from(
     { length: Math.floor(horizonMinutes / 10) + 1 },
@@ -600,6 +618,18 @@ function readablePixelsPerMinute(workspace: Workspace): number {
   );
 }
 
+// workspaceHorizon is how far ahead this canvas has to reach to show everything
+// already committed: the machine still being provisioned, the Run occupying each
+// one, and the Runs queued behind them.
+//
+// It is bounded, because every term in it is a difference between two clocks. A
+// projected start is a moment the control plane wrote down, `now` is the moment
+// this workspace last said something, and a canvas that trusts their difference
+// without limit renders one column per ten minutes of it. Asked for a start a
+// few years out it built 723,040 elements and held the tab's main thread for
+// seventy seconds, which is not a slow canvas, it is an unusable one. Past the
+// bound the far end of the axis is honest about the window it shows and the work
+// beyond it stays in the queue where it is listed.
 function workspaceHorizon(workspace: Workspace, now: number): number {
   let seconds = MINIMUM_HORIZON_MINUTES * 60;
   for (const rental of Object.values(workspace.rentals)) {
@@ -628,7 +658,10 @@ function workspaceHorizon(workspace: Workspace, now: number): number {
       );
     }
   }
-  return Math.ceil(seconds / 60 / 10) * 10;
+  return Math.min(
+    MAXIMUM_HORIZON_MINUTES,
+    Math.ceil(seconds / 60 / 10) * 10,
+  );
 }
 
 function remainingExpected(run: WorkspaceRun | undefined, now: number): number {

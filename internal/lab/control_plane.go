@@ -238,7 +238,7 @@ func (runtime *controlPlane) handleRunArrival(ctx context.Context, event WorldEv
 	if err := runtime.admitRun(ctx, arrival); err != nil {
 		return err
 	}
-	_, err := runtime.orchestrator.Prewarm(ctx, workspaceID(arrival.Workspace))
+	_, err := runtime.orchestrator.Prewarm(ctx)
 	return err
 }
 
@@ -333,6 +333,14 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 			return err
 		}
 	}
+	// Preparation is reconciled after every tenant's Runs have moved, because
+	// what Mercator wants prepared is derived from where they ended up: a Booking
+	// that was just dispatched is no longer speculative, and a Run that was just
+	// cancelled is no longer worth a byte. It is one pass over the fleet because
+	// the bounds it stays inside are the fleet's.
+	if _, err := runtime.orchestrator.Prewarm(ctx); err != nil {
+		return err
+	}
 	return runtime.applyEventFaults(ctx)
 }
 
@@ -368,16 +376,9 @@ func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace str
 	if err != nil {
 		return err
 	}
-	// Preparation is reconciled after the Runs move, because what Mercator wants
-	// prepared is derived from where they ended up: a Booking that was just
-	// dispatched is no longer speculative, and a Run that was just cancelled is
-	// no longer worth a byte.
-	if _, err := runtime.orchestrator.Prewarm(ctx, workspace); err != nil {
-		return err
-	}
-	// The orphan sweep is last for the same reason: what capacity Mercator holds
-	// live work for is whatever the Runs just settled into, so a sweep that ran
-	// first would find a machine orphaned that a Run was about to be launched on.
+	// The orphan sweep is last because what capacity Mercator holds live work for
+	// is whatever the Runs just settled into, so a sweep that ran first would find
+	// a machine orphaned that a Run was about to be launched on.
 	_, err = runtime.janitor.Sweep(ctx, workspace)
 	return err
 }
@@ -400,7 +401,7 @@ func (runtime *controlPlane) restartOrchestrator() {
 		orchestrator.WithClock(runtime.world.nowTime),
 		orchestrator.WithImageManifests(runtime.world),
 		orchestrator.WithArtifactCatalog(runtime.world),
-		orchestrator.WithPrewarm(runtime.world, runtime.prewarm),
+		orchestrator.WithPrewarm(runtime.world, runtime.prewarm, runtime.storage.Preparation()),
 		orchestrator.WithRentalSchedules(runtime.storage.RentalSchedules()),
 		orchestrator.WithRunProjection(runtime.storage.Runs()),
 	)

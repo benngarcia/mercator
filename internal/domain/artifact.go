@@ -148,6 +148,16 @@ type ArtifactEvidence struct {
 // exactly as it does for images: a host that cannot enumerate its copies is not
 // a host with nothing to fetch, and pricing it at zero would score a machine
 // nobody can describe like one provably holding every byte.
+//
+// One host's replica store is the only place a copy a Run may read can be, which
+// is why the inventory is the whole answer and a record of where content was
+// produced is not part of it. The machine a version's bytes were written on is
+// not thereby a machine holding a readable copy of them: a workload writes its
+// output inside its own container, nothing files that content as a replica, and
+// bytes no verification ever touched are bytes no consumer may be sent to read.
+// A host that enumerated and found no copy of this version has answered about
+// every copy anybody could use, and charging it the whole read is that answer
+// taken at its word.
 func ArtifactFetchWork(versions []ArtifactVersion, inventory ArtifactInventory) (int64, []ArtifactEvidence) {
 	if len(versions) == 0 {
 		return 0, nil
@@ -166,19 +176,6 @@ func ArtifactFetchWork(versions []ArtifactVersion, inventory ArtifactInventory) 
 		evidence = append(evidence, found)
 	}
 	return fetch, evidence
-}
-
-// ArtifactResidentBytes is how much of the content one Run reads is already on
-// one host: every version it declared, less what that host would still have to
-// read out of the object store. A version nobody could enumerate is charged its
-// whole size and is resident nowhere, which is the same silence the fetch answer
-// above prices.
-func ArtifactResidentBytes(versions []ArtifactVersion, fetchBytes int64) int64 {
-	declared := int64(0)
-	for _, version := range versions {
-		declared += version.SizeBytes
-	}
-	return declared - fetchBytes
 }
 
 // ArtifactRequirements is what a workload reads and what it publishes, by

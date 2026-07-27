@@ -274,11 +274,11 @@ func prefetchSettlements(effects []EffectRecord) (map[string]time.Time, error) {
 		}
 		switch effect.Operation {
 		case OperationImageRetained:
-			if request.Source == "prewarm" {
+			if request.Source == contentSourcePrewarm {
 				settle(request.OfferID+"/"+domain.ReferenceDigest(request.Image), effect.At)
 			}
 		case OperationArtifactReplicated:
-			if request.Source == "prewarm" {
+			if request.Source == contentSourcePrewarm {
 				settle(request.OfferID+"/"+request.ArtifactID, effect.At)
 			}
 		case OperationNodePrepareAbandoned:

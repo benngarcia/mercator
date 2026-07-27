@@ -29,6 +29,13 @@ func prefetchKey(offerID, content string) string {
 // Mercator has stopped asking for, and this world stops moving it rather than
 // spending a machine's disk and bandwidth on a Run that will never run.
 //
+// A desired set speaks for one workspace. What it says nothing about is content
+// another tenant asked for, so withdrawal is decided against the union of every
+// tenant's latest set: a transfer stops when nobody wants it. A world that read
+// one set as the whole fleet's would have the second tenant's arrival cancel the
+// first tenant's transfer, which no machine does and which would hide the
+// concurrency bound this world exists to police.
+//
 // The withdrawal happens before anything new starts. A control plane that
 // started the next prefetch first would have both in flight for an instant,
 // which is exactly the moment a real launch would find the machine busy.
@@ -40,7 +47,8 @@ func (world *simulatedWorld) Prepare(_ context.Context, request adapter.PrepareR
 	for _, item := range request.Wanted {
 		wanted[prefetchKey(item.OfferSnapshotID, item.Content())] = true
 	}
-	receipt.Abandoned = world.abandonUnwantedPrefetches(wanted)
+	world.desired[request.WorkspaceID] = wanted
+	receipt.Abandoned = world.abandonUnwantedPrefetches(world.everythingWanted())
 	for _, item := range request.Wanted {
 		outcome, started := world.startPrefetch(item)
 		switch outcome {
@@ -122,7 +130,7 @@ func (world *simulatedWorld) prefetchImage(item adapter.PrepareItem, operation s
 		offerID:     item.OfferSnapshotID,
 		runID:       item.RunID,
 		launchKey:   key,
-		source:      "prewarm",
+		source:      contentSourcePrewarm,
 		image:       item.Image,
 		layers:      layers,
 		fetched:     fetched,
@@ -140,14 +148,16 @@ func (world *simulatedWorld) prefetchImage(item adapter.PrepareItem, operation s
 }
 
 // prefetchArtifact reads one immutable version out of the object store onto the
-// machine. The copy that lands is checked against the catalog on arrival, which
-// is what makes it worth reading later: an unchecked copy costs a consumer
-// exactly what no copy costs.
+// machine. The copy that lands is hashed on arrival and filed under the digest the
+// bytes actually produced, which is what makes it worth reading later.
+//
+// It reads whatever this machine is already holding, because that is what a node
+// does: nodeagent.PrepareArtifact streams the source it was given and rewrites the
+// record from the stream, with no test for a copy already on the disk. Answering
+// ready here for a copy the machine claims would be this world crediting a node
+// with a decision no node makes, and what stops the same bytes crossing the link
+// twice is the operation identity, on this seam and on a real one alike.
 func (world *simulatedWorld) prefetchArtifact(item adapter.PrepareItem, operation string) string {
-	if replica, held := world.replicas[item.ArtifactID][item.OfferSnapshotID]; held && replica.State.Usable() {
-		world.recordPrefetchEffect(item, operation, EffectCommandAccepted, map[string]any{"ready": true, "fetched_bytes": 0})
-		return operation
-	}
 	version, _ := world.store.entry(item.ArtifactID)
 	key := prefetchKey(item.OfferSnapshotID, item.Content())
 	completesAt := world.now.Add(world.store.transferDuration(item.ArtifactID, world.linkMbps(item.OfferSnapshotID, domain.NetworkScopeObjectStore)))
@@ -155,7 +165,7 @@ func (world *simulatedWorld) prefetchArtifact(item adapter.PrepareItem, operatio
 		offerID:     item.OfferSnapshotID,
 		runID:       item.RunID,
 		launchKey:   key,
-		source:      "prewarm",
+		source:      contentSourcePrewarm,
 		artifactID:  item.ArtifactID,
 		bytes:       version.SizeBytes,
 		completesAt: completesAt,
@@ -169,10 +179,22 @@ func (world *simulatedWorld) prefetchArtifact(item adapter.PrepareItem, operatio
 	return operation
 }
 
-// abandonUnwantedPrefetches stops every speculative transfer this desired set no
-// longer names. The room goes back to the machine at once, which is the whole
-// point: a queued Run that was cancelled must stop costing the host it was
-// queued on, and nothing else in this world can give that room back.
+// everythingWanted is the content every tenant's latest desired set names
+// together, which is what this world keeps fetching.
+func (world *simulatedWorld) everythingWanted() map[string]bool {
+	wanted := map[string]bool{}
+	for _, tenant := range world.desired {
+		for key := range tenant {
+			wanted[key] = true
+		}
+	}
+	return wanted
+}
+
+// abandonUnwantedPrefetches stops every speculative transfer no tenant asks for
+// any more. The room goes back to the machine at once, which is the whole point:
+// a queued Run that was cancelled must stop costing the host it was queued on,
+// and nothing else in this world can give that room back.
 func (world *simulatedWorld) abandonUnwantedPrefetches(wanted map[string]bool) []string {
 	var abandoned []string
 	for _, pull := range world.pulls {

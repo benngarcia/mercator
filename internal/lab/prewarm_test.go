@@ -11,13 +11,17 @@ import (
 )
 
 const (
-	prewarmBlueprint        = "prewarming-never-starves-real-work"
-	rateBoundBlueprint      = "prewarming-holds-its-own-rate-bound"
-	analystImage            = "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
-	bulkyImage              = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
-	refusedPrepareBlueprint = "a-refused-prepare-can-be-asked-again"
-	refusedCorpus           = "artifact:corpus:v9"
+	prewarmBlueprint     = "prewarming-never-starves-real-work"
+	rateBoundBlueprint   = "prewarming-holds-its-own-rate-bound"
+	fleetBoundBlueprint  = "prewarming-bounds-the-whole-fleet"
+	fleetBudgetBlueprint = "prewarming-spends-one-budget-across-tenants"
+	analystImage         = "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
+	bulkyImage           = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
+	auditorImage         = "auditor@sha256:5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e"
+	corpusArtifact       = "artifact:corpus:v7"
 
+	refusedPrepareBlueprint      = "a-refused-prepare-can-be-asked-again"
+	refusedCorpus                = "artifact:corpus:v9"
 	refusalIsPerMachineBlueprint = "a-refusal-on-one-machine-is-not-a-withdrawal-on-another"
 	restartedWithdrawalBlueprint = "a-restart-still-withdraws-what-nobody-waits-for"
 )
@@ -188,13 +192,14 @@ func heldReplica(execution *Execution, offerID, artifactID string) (domain.Artif
 	return domain.ArtifactReplica{}, false
 }
 
-// drivePrewarmExecution runs the Blueprint at the cadence a control plane
-// reconciles at, one virtual minute at a time. Preparation is a controller
-// rather than a step in any Run's lifecycle, so nothing about it happens unless
-// the clock moves and Mercator looks again.
-func drivePrewarmExecution(t *testing.T) *Execution {
+// driveBlueprintForEightyMinutes runs a Blueprint at the cadence a control plane
+// reconciles at, one virtual minute at a time. Preparation is a controller rather
+// than a step in any Run's lifecycle, so nothing about it happens unless the
+// clock moves and Mercator looks again. Every fixture here puts the moments it is
+// about between two of those ticks, so the harness cannot produce them.
+func driveBlueprintForEightyMinutes(t *testing.T, name string) *Execution {
 	t.Helper()
-	execution := openConformanceExecution(t, prewarmBlueprint)
+	execution := openConformanceExecution(t, name)
 	t.Cleanup(func() {
 		if err := execution.Close(); err != nil {
 			t.Fatalf("close execution: %v", err)
@@ -214,7 +219,7 @@ func drivePrewarmExecution(t *testing.T) *Execution {
 // may be moving onto that machine until they have landed, because a node
 // performs its commands in order and both fetches cross one link.
 func TestPreparationWaitsForTheRunAlreadyAdmittedThere(t *testing.T) {
-	execution := drivePrewarmExecution(t)
+	execution := driveBlueprintForEightyMinutes(t, prewarmBlueprint)
 
 	prefetches := prefetchStarts(t, execution)
 	if len(prefetches) != 3 {
@@ -250,7 +255,7 @@ func TestPreparationWaitsForTheRunAlreadyAdmittedThere(t *testing.T) {
 // switched off. The bound is stated where it can fail, in
 // prewarming-holds-its-own-rate-bound.
 func TestOnePieceOfContentIsPreparedAtATime(t *testing.T) {
-	execution := drivePrewarmExecution(t)
+	execution := driveBlueprintForEightyMinutes(t, prewarmBlueprint)
 
 	if _, err := execution.Check(context.Background()); err != nil {
 		t.Fatalf("the execution violates a standing rule: %v", err)
@@ -264,10 +269,17 @@ func TestOnePieceOfContentIsPreparedAtATime(t *testing.T) {
 // name is a prefix of the one already asked for, which is the shape that made a
 // control plane comparing desires as text read new content as content it had
 // already requested and skip the bound. It arrives between two ticks, so the
-// harness cannot supply the gap either.
+// harness cannot supply the gap either, and the control plane restarts the moment
+// it is recorded: the moment preparation last began is a fact about the fleet
+// rather than about the process, so a restarted Mercator is held by what the last
+// one did.
 func TestASecondSpeculativeFetchWaitsOutTheRateBound(t *testing.T) {
-	execution := driveRateBoundExecution(t)
+	execution := driveBlueprintForEightyMinutes(t, rateBoundBlueprint)
 
+	restarts := controlPlaneRestarts(t, execution)
+	if len(restarts) != 1 {
+		t.Fatalf("the ledger records %d control plane restarts, want the one this Blueprint states: %+v", len(restarts), restarts)
+	}
 	starts := prefetchStarts(t, execution)
 	if len(starts) != 2 {
 		t.Fatalf("the ledger records %d preparations, want one per corpus version: %+v", len(starts), starts)
@@ -286,24 +298,60 @@ func TestASecondSpeculativeFetchWaitsOutTheRateBound(t *testing.T) {
 	}
 }
 
-// driveRateBoundExecution runs the rate-bound Blueprint at the cadence a control
-// plane reconciles at. It advances a minute at a time on purpose: the Run whose
-// arrival tests the bound lands between two of those ticks, which is where a
-// control plane really hears about work.
-func driveRateBoundExecution(t *testing.T) *Execution {
-	t.Helper()
-	execution := openConformanceExecution(t, rateBoundBlueprint)
-	t.Cleanup(func() {
-		if err := execution.Close(); err != nil {
-			t.Fatalf("close execution: %v", err)
-		}
-	})
-	for range 80 {
-		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
-			t.Fatalf("drive the execution: %v", err)
-		}
+// TestTheSecondTenantWaitsForTheFleetsOneTransfer is the multi-tenant claim.
+// Both bounds belong to the fleet: what they protect is a machine's link and
+// this process's egress, and a second tenant arriving ninety seconds after the
+// first shares both. Its corpus is wanted on a different machine, and it still
+// waits.
+func TestTheSecondTenantWaitsForTheFleetsOneTransfer(t *testing.T) {
+	execution := driveBlueprintForEightyMinutes(t, fleetBoundBlueprint)
+
+	starts := prefetchStarts(t, execution)
+	if len(starts) != 2 {
+		t.Fatalf("the ledger records %d preparations, want one per tenant: %+v", len(starts), starts)
 	}
-	return execution
+	if starts[0].Content != "artifact:corpus-alpha:v1" || starts[1].Content != domain.ReferenceDigest(auditorImage) {
+		t.Fatalf(
+			"the fleet prepared %q then %q, want the tenant whose Run starts soonest first",
+			starts[0].Content, starts[1].Content,
+		)
+	}
+	if starts[0].OfferID == starts[1].OfferID {
+		t.Fatalf("both preparations landed on %q, and this fixture is about two machines", starts[0].OfferID)
+	}
+	if gap := starts[1].At.Sub(starts[0].At); gap < 5*time.Minute {
+		t.Fatalf(
+			"the second tenant's corpus started %s after the first tenant's, and this world allows one no sooner than 5m",
+			gap,
+		)
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("the execution violates a standing rule: %v", err)
+	}
+}
+
+// TestOneDepthBudgetIsSpentAcrossTenants is the depth half of the same claim,
+// on a world that states no interval at all. Two tenants want twenty gigabytes
+// each on their own machine at the same minute, and one slot exists: the Run
+// that starts soonest gets it, and the other tenant's transfer begins when that
+// one has landed. Nothing here is the rate bound holding it, because this world
+// states none.
+func TestOneDepthBudgetIsSpentAcrossTenants(t *testing.T) {
+	execution := driveBlueprintForEightyMinutes(t, fleetBudgetBlueprint)
+
+	starts := prefetchStarts(t, execution)
+	if len(starts) != 2 {
+		t.Fatalf("the ledger records %d preparations, want one per tenant: %+v", len(starts), starts)
+	}
+	if starts[0].Content != "artifact:corpus-alpha:v1" || starts[1].Content != domain.ReferenceDigest(auditorImage) {
+		t.Fatalf(
+			"the fleet prepared %q then %q, want the tenant whose Run starts soonest first",
+			starts[0].Content, starts[1].Content,
+		)
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("the execution violates a standing rule: %v", err)
+	}
 }
 
 // TestAPreparedHostIsWarmForARunThatNeverExecutedThere is the whole point of the
@@ -311,7 +359,7 @@ func driveRateBoundExecution(t *testing.T) *Execution {
 // and a checked copy of its dataset, and the machine has run neither: what it
 // holds arrived because Mercator asked for it on behalf of a Run still waiting.
 func TestAPreparedHostIsWarmForARunThatNeverExecutedThere(t *testing.T) {
-	execution := drivePrewarmExecution(t)
+	execution := driveBlueprintForEightyMinutes(t, prewarmBlueprint)
 
 	decision := bookingDecisions(t, execution)["run-curious"]
 	if decision.SelectedOfferSnapshotID != "builder" {
@@ -340,12 +388,30 @@ func TestAPreparedHostIsWarmForARunThatNeverExecutedThere(t *testing.T) {
 	}
 }
 
+// TestAPreparedCopyIsTheCopyTheRunReads is the saving actually being collected,
+// which is a different fact from the decision predicting it. The copy the
+// preparation fetched and hashed is on this machine, so both Runs that declared
+// that dataset read it off the local disk rather than crossing the link again.
+//
+// This is the one way a machine comes to hold a copy of an Artifact. A launch
+// leaves none, so a fixture that asserted a local read anywhere else would be
+// asserting warmth no node produces.
+func TestAPreparedCopyIsTheCopyTheRunReads(t *testing.T) {
+	execution := driveBlueprintForEightyMinutes(t, prewarmBlueprint)
+
+	for _, runID := range []string{"run-patient", "run-curious"} {
+		if source := artifactReadSource(t, execution, runID, corpusArtifact); source != "replica" {
+			t.Errorf("Run %q read its dataset from %q, and a preparation of Mercator's checked a copy onto that host", runID, source)
+		}
+	}
+}
+
 // TestPreparationStopsWhenTheRunThatWantedItGoesAway is the third claim. The
 // fourth Run is withdrawn eight minutes into a sixteen-minute fetch, and the
 // machine stops: the room goes back, the link goes quiet, and nothing of that
 // image is ever held here.
 func TestPreparationStopsWhenTheRunThatWantedItGoesAway(t *testing.T) {
-	execution := drivePrewarmExecution(t)
+	execution := driveBlueprintForEightyMinutes(t, prewarmBlueprint)
 
 	abandoned := abandonedPreparations(t, execution)
 	if len(abandoned) != 1 {
@@ -397,6 +463,19 @@ func TestABackgroundPreparationLoopTripsNoDispatcherDetector(t *testing.T) {
 			t.Fatalf("drive the execution: %v", err)
 		}
 	}
+}
+
+// controlPlaneRestarts is every moment this execution restarted Mercator, which
+// is what makes a claim about surviving one mean something.
+func controlPlaneRestarts(t *testing.T, execution *Execution) []time.Time {
+	t.Helper()
+	var restarts []time.Time
+	for _, effect := range execution.runtime.world.effectRecords() {
+		if effect.Operation == OperationControlPlaneRestart {
+			restarts = append(restarts, effect.At)
+		}
+	}
+	return restarts
 }
 
 // preparationStart is one speculative fetch as the ledger records it.

@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -1007,6 +1008,18 @@ func ReferenceDigest(reference string) string {
 		return ""
 	}
 	return digest
+}
+
+// pinnedImagePattern is a reference that names content instead of a moving
+// label: a repository, and a digest of the length a digest has.
+var pinnedImagePattern = regexp.MustCompile(`^[^@\s]+@sha256:[0-9a-f]{64}$`)
+
+// PinnedImage reports whether a reference identifies the bytes it names. It is
+// what a Run's image has to be: Mercator asks machines to hold content by
+// digest, compares what two of them hold by digest, and treats one digest on two
+// hosts as one piece of content, none of which a tag can answer.
+func PinnedImage(reference string) bool {
+	return pinnedImagePattern.MatchString(reference)
 }
 
 type CapacityEvidence struct {

@@ -89,7 +89,12 @@ func (s *Server) requiredWorkspace(ctx context.Context, queryWorkspaceID string)
 
 // resolveImageFn adapts the server's OCI resolver into the orchestrator's
 // ResolveImage hook. It returns nil when no resolver is configured, in which
-// case images are stored/launched as submitted.
+// case a submitted tag reaches intake as a tag and the Run is refused there: a
+// deployment that cannot pin an image cannot run one either.
+//
+// A resolver that answered with no reference is a broken resolver, and handing
+// the submitted tag back in its place would put the reference Mercator cannot
+// identify into the Run. The empty answer is passed on and intake says so.
 func (s *Server) resolveImageFn() orchestrator.ResolveImageFunc {
 	if s.resolver == nil {
 		return nil
@@ -98,9 +103,6 @@ func (s *Server) resolveImageFn() orchestrator.ResolveImageFunc {
 		resolved, err := s.resolver.Resolve(ctx, ociresolver.ResolveRequest{Image: image, Platform: platform})
 		if err != nil {
 			return "", "", err
-		}
-		if resolved.Image == "" {
-			resolved.Image = image
 		}
 		if resolved.Platform == "" {
 			resolved.Platform = platform

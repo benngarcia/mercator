@@ -309,8 +309,14 @@ type LaunchWorkloadCommand struct {
 	// a cache's identity is workspace-scoped, so a runtime that took a name
 	// alone would be free to hand one workspace another's bytes.
 	CacheMounts []domain.CacheMountRequirement
-	// ArtifactMounts names the immutable replicas to attach read-only.
-	ArtifactMounts    []string
+	// It carries no Artifact mounts. A field naming the immutable copies to
+	// attach read-only was declared here, populated by nothing, and read by
+	// nothing: the Docker runtime builds mount arguments for the caches above and
+	// for no other content, so a verified replica in a node's replica store is
+	// not reachable from inside the container a Run executes in. Attaching it,
+	// and telling a workload which of its inputs are local, is
+	// https://github.com/benngarcia/mercator/issues/171. A declaration of the
+	// half that is missing reads like the half that is there.
 	MaxRuntimeSeconds int64
 }
 

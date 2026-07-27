@@ -42,6 +42,9 @@ const (
 	objectStoreUser   = "mercator"
 	objectStoreSecret = "mercator-secret"
 	objectStoreRegion = "us-east-1"
+
+	producedLine  = "mercator producer affinity"
+	producedLines = 4096
 )
 
 // TestANodeReplicatesAnArtifactFromARealObjectStore is the conformance case.
@@ -123,6 +126,128 @@ func TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth(t *testing.T) {
 	if replicas[0].ContentDigest == command.ContentDigest {
 		t.Fatal("the node repeated back the digest it was asked for instead of the one its bytes produced")
 	}
+}
+
+// TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote is the premise producer
+// affinity exists for, checked against a real daemon rather than assumed. A
+// workload publishes an Artifact itself, which is what the authority model says
+// it does, so the bytes are written inside its own container and Mercator is told
+// nothing about where. This node then reports no copy of that version: the
+// content is on this machine, the machine holds every byte of it, and its
+// enumeration answers about the replica store alone.
+//
+// The bytes are read back out of the running container before the node is asked
+// anything, which is what makes that silence a fact rather than an artifact of an
+// empty directory. Every byte of this content is on this machine, under the digest
+// the catalog would name it by, and the node still reports nothing.
+//
+// Those same bytes then arrive through PrepareArtifact, and now the node does
+// report them: the content the workload wrote is the content the fetch verified,
+// because the object store was loaded from what came out of the container. The
+// upload is issued by this test rather than by busybox, which can neither sign an
+// S3 request nor reach this host's loopback, and it carries the container's own
+// bytes so that the two halves are about one piece of content.
+//
+// The two halves are the difference between content on a disk and content
+// Mercator can be asked about, which is the difference an affinity record was
+// supposed to fill in and cannot.
+func TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote(t *testing.T) {
+	requireDocker(t)
+	pull(t, "busybox:latest")
+	endpoint := startObjectStore(t)
+
+	runtime := NewDockerRuntime("", WithArtifactRoot(t.TempDir()))
+	written := writeArtifactInsideAContainer(t, runtime, "run-producer")
+	if want := strings.Repeat(producedLine+"\n", producedLines); string(written) != want {
+		t.Fatalf("the producer's container holds %d bytes of output, and it was told to write %d", len(written), len(want))
+	}
+	digest := "sha256:" + hex.EncodeToString(sliceDigest(written))
+
+	produced := runtime.artifacts()
+	if !produced.Known {
+		t.Fatalf("the node cannot enumerate its replica store at all, so this case cannot say what its silence means: %+v", produced)
+	}
+	if len(produced.Replicas) != 0 {
+		t.Fatalf("the node reports %+v of content its workload wrote into its own container", produced.Replicas)
+	}
+
+	putObject(t, endpoint, "datasets", "checkpoint-v1", written)
+	command := capability.PrepareArtifactCommand{
+		ArtifactID:    "artifact:checkpoint:v1",
+		ContentDigest: digest,
+		Source:        presign(t, http.MethodGet, endpoint, "datasets", "checkpoint-v1", time.Hour),
+		SizeBytes:     int64(len(written)),
+	}
+	command.WorkspaceID = "ws_alpha"
+	if err := runtime.PrepareArtifact(context.Background(), command); err != nil {
+		t.Fatalf("replicate the Artifact this workload produced: %v", err)
+	}
+
+	replicated := runtime.artifacts()
+	if len(replicated.Replicas) != 1 || replicated.Replicas[0].State != domain.ArtifactReplicaVerified {
+		t.Fatalf("the node reports %+v after fetching the content itself", replicated.Replicas)
+	}
+	if replicated.Replicas[0].ContentDigest != digest {
+		t.Fatalf("the copy hashes to %q and the workload's own bytes hash to %q",
+			replicated.Replicas[0].ContentDigest, digest)
+	}
+}
+
+// writeArtifactInsideAContainer runs one real workload that publishes its output
+// the way a workload does, into its own container's filesystem, and answers with
+// the bytes that landed there. Nothing tells this node where they went, which is
+// the whole point, and reading them back out is the only way anything outside
+// that container can see them at all.
+func writeArtifactInsideAContainer(t *testing.T, runtime *DockerRuntime, runID string) []byte {
+	t.Helper()
+	container := runtime.containerName(runID, "1")
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "--force", container).Run() })
+	command := capability.LaunchWorkloadCommand{
+		RunID:     runID,
+		AttemptID: "1",
+		BookingID: "bkg-" + runID,
+		Workload: domain.WorkloadSpec{Containers: []domain.ContainerSpec{{
+			Name:  "main",
+			Image: "busybox:latest",
+			// The content is generated in the container, so the bytes this case is
+			// about have no origin outside the workload. The rename is what lets the
+			// read below see the whole file or none of it.
+			Args: []string{"sh", "-c", fmt.Sprintf(
+				"yes '%s' | head -n %d > /checkpoint.partial && mv /checkpoint.partial /checkpoint && sleep 60",
+				producedLine, producedLines,
+			)},
+		}}},
+	}
+	command.WorkspaceID = "ws_alpha"
+	if err := runtime.LaunchWorkload(context.Background(), command); err != nil {
+		t.Fatalf("launch the producer: %v", err)
+	}
+	return contentOfContainerFile(t, container, "/checkpoint")
+}
+
+// contentOfContainerFile reads one file out of a running container. It polls
+// because LaunchWorkload returns when the container is running and the workload
+// writes its output after that, and it fails if the file never appears: a
+// producer that wrote nothing would leave its caller asserting that an empty
+// directory is empty.
+func contentOfContainerFile(t *testing.T, container, path string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		content, err := exec.Command("docker", "exec", container, "cat", path).Output()
+		if err == nil {
+			return content
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the workload in %s never wrote %s: %v", container, path, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func sliceDigest(content []byte) []byte {
+	sum := sha256.Sum256(content)
+	return sum[:]
 }
 
 // startObjectStore runs MinIO on this machine's own daemon and answers where it

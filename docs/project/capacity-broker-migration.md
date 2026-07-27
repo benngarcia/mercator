@@ -1220,9 +1220,12 @@ complete because it works against a live provider.
     content it is holding. `NodeSupport.Prewarm` and `ArtifactReplicas` are true
     again, having been withdrawn in the image-store commit; garbage collection is
     the one still owed.
-  - Judgment calls. The desired set is per workspace rather than per host,
-    because what may be in flight at once is a fleet-wide bound and a per-host
-    command could not express it. A preparation identity carries the machine and
+  - Judgment calls. The desired set is stated per workspace and reconciled for
+    every workspace in one pass, because both bounds are the fleet's: what may be
+    in flight at once and how often preparation may begin are about a machine's
+    link and this process's egress, which every tenant shares. A per-host command
+    could not express either, and a pass per workspace expressed neither until
+    2026-07-25. A preparation identity carries the machine and
     the content and never the Run, so two Runs wanting one image on one host want
     one transfer. The Lab never restarts a preparation it abandoned under the
     same identity: content Mercator stopped wanting and then wants again arrives
@@ -2630,6 +2633,226 @@ complete because it works against a live provider.
     `liveness.aging_prevents_starvation` calls that starvation on any execution that
     observes it inside that window.
 
+- [x] 2026-07-25: Answer the second review of the prewarming commit. Two
+  reviewers refuted four things and every one of them held: an image's
+  preparation content was the empty string whenever nobody pinned the image, the
+  policy was enforced per workspace while the invariant and this plan claimed a
+  fleet-wide bound, the rate clock was lost with the process that kept it, and no
+  production deployment could reach the bound at all because the only caller was
+  a sweep slower than any interval an operator would state. A Run whose image
+  names no content is refused at intake; preparation is one pass over the fleet
+  with one budget and one clock; the clock is a durable row; and preparation runs
+  when a Booking, a launch, a withdrawal, or a closure changes what Mercator
+  wants prepared, with the sweep left as the only timer because a desire also
+  changes when a predicted start elapses and nothing is recorded then. The
+  two-tenant Blueprint also caught the Lab world reading one tenant's desired set
+  as the whole fleet's, which had made the concurrency bound unfailable in the
+  only world where it matters. Evidence and the deliberate breaks are under
+  "Phase 3 prewarming, the second review".
+- [x] 2026-07-25: Withdraw producer affinity, and stop the Lab keeping a copy of
+  a Run's own output. Two reviewers refuted the affinity slice and both were
+  right, so it is gone rather than argued for. The discount fired only where a
+  machine had said nothing about its Artifact copies, and no machine Mercator runs
+  says nothing: `cmd/mercator-node` always builds the runtime with an artifact
+  root, so `nodeagent.artifacts` reports an enumerated inventory, and
+  `internal/node` is the only source of reusable-lane offers. The producing host
+  therefore took the enumerated-and-holds-none branch and was charged the full
+  read exactly like a machine that never saw the bytes. A preference that provably
+  changes no placement is the dead-weights failure in another costume, and this
+  plan had recorded it as delivered.
+  - The precedence was not the bug, so reordering it would have been worse. One
+    host's replica store is the only place a copy a Run may read can be. A
+    workload writes its output inside its own container, nothing files that
+    content as a replica, and bytes no verification ever touched are bytes no
+    consumer may be sent to read. So a host that enumerated and found no copy has
+    answered about every copy anybody could use. When a publication does file a
+    producing host's own output as a checked copy, that machine will be warm on
+    its own inventory and will need no record to be preferred.
+  - Deleted: `ProducedOnRentalID`, `ProducedOn`, `ArtifactEvidence.ProducedHere`
+    and its public field, the `produced_here` estimate source and its zero
+    confidence, the Blueprint `produced_on` and `produced_here` expectations with
+    their validation, the `enumerates_artifacts` knob in both simulators, and the
+    three fixtures and two tests that existed to make the discount fire.
+    `ArtifactFetchWork` takes an inventory again, because that is all it reads.
+  - The simulated world was keeping a verified replica of every Run's output on
+    the host that computed it, which is what let the affinity conformance report a
+    saving at all, and which a real node contradicts: this slice's own live test
+    on this workstation asserts a node reports zero replicas after a real
+    container wrote its output. A workload's output is now `artifact.written`, the
+    fourth Artifact operation beside read, replicated, and published, and it is
+    what the durability gap is measured from. Only a fetch Mercator issued leaves
+    a replica, so `safety.artifact_replica_verified` drops its second shape and
+    reads simply: a copy of a version nothing published is content from nowhere.
+  - The corpus keeps both halves of what a copy is worth, on copies that can
+    exist. `artifact-must-be-durable-before-a-consumer-runs` gains a fourth Run
+    that reads what the previous Run's fetch left and checked, and the vertical
+    demo's consumer now reads two inputs, a dataset a fetch put there before the
+    world started and the checkpoint its own producer wrote, so
+    `warmth_observed` asserts no read for the first and the whole read for the
+    second. A checkpoint that asked only for warmth would pass on a decision that
+    had invented some.
+  - What survives from the withdrawn slice is what was true.
+    `OfferSnapshot.UncertaintyPenalty` is still one quantity said once, because
+    the oracle and the scheduler had drifted on two of its four terms and agreed
+    only through a weight that is zero everywhere. The live test survives as the
+    fact the withdrawal rests on. `ScoreWeights` still gains no field, for the
+    reason it gained none before.
+  - What this leaves owed, and it is the one gap under everything above: a
+    verified replica in a node's replica store is not reachable from inside the
+    container a Run executes in.
+    `LaunchWorkloadCommand.ArtifactMounts` declared the attachment and was
+    populated by nothing and read by nothing, so it is deleted rather than left as
+    a promise. The zero seconds Placement prices for a host holding a checked copy
+    is therefore a specification ahead of its implementation, exercised at L1 and
+    not collectible by any production workload, and
+    [#171](https://github.com/benngarcia/mercator/issues/171) owes the attachment,
+    the way a workload learns which of its inputs are local, and a live
+    conformance test on a real daemon. No entry here may call artifact locality a
+    saving a Run collects until that lands.
+- [x] 2026-07-25: Read a host-local copy only when it is the version the catalog
+  names. The simulated world decided a copy was worth reading from the copy's
+  own state alone, in what a launch reads and in what a launch still needs room
+  for. Every predicate in the control plane already compares the copy's digest
+  against the catalog, so a machine reporting a checked copy of the version
+  before this one was priced the whole 640 second read by placement and then
+  handed the workload those bytes for nothing, in the same execution, with every
+  invariant green. `simulatedWorld.readableReplica` is the one predicate now,
+  this world's half of `domain.ArtifactInventory.Holds`.
+  - `a-restored-snapshot-is-not-a-copy` (conformance) is the world that produces
+    it: the estimate charges 40GB and the execution reads 40GB out of the object
+    store. It has to be a conformance Blueprint, because the Booking Decision
+    was already right and only an execution can say which bytes the workload was
+    handed. Deliberate break, since removed: trusting the copy's own state fails
+    `safety.artifact_replica_verified` with `Run "run-consumer" read Artifact
+    "artifact:imagenet:v2.41" from the replica on offer
+    "rental-restored-snapshot" and was handed digest sha256:2b2b..., and the
+    catalog says sha256:1a1a...`.
+  - The disk half is stated in the Lab's own failing case for disk rather than
+    in a case of its own. `a-machine-with-no-room-refuses-the-work` already
+    describes the one machine that can reach the world's refusal at all,
+    capacity whose inventory is silent, because silence is priced and never
+    refused: it now holds a checked copy of another version under this version's
+    name, so forty of its sixty gigabytes are spent on bytes this launch cannot
+    use, and World Truth refuses the work Placement selected it for. Deliberate
+    break, since removed: trusting the copy's state leaves eleven gigabytes of
+    work on twenty gigabytes of free disk, the launch is accepted, and the read
+    fails `safety.artifact_replica_verified` on `offer "cramped-host"`.
+  - Two claims this entry made when it was written were wrong, and the
+    corrections are in the entry below: preparation was said to answer ready
+    with zero fetched bytes on that machine, which no fixture reached and which
+    no node does, and the silence branch of `orchestrator.alreadyHeld` was said
+    to be reachable by nothing, which was false in two ways.
+- [x] 2026-07-25: Stop the Lab keeping copies nothing keeps, and stop preparing
+  on machines Mercator cannot see. Two reviewers refuted parts of the entry
+  above and of the entry before it; what follows is what was actually true and
+  what changed.
+  - A launch read left a verified copy behind. `readRunArtifacts` filed one for
+    every input read out of the object store, so a machine was warm afterwards
+    for content a workload had downloaded into its own container. Nothing in
+    production performs that: `PrepareArtifact` is the only fetch in the tree,
+    its only issuer is this controller over queued placements, and the launch
+    command has carried no Artifact mount since it was deleted for promising an
+    attachment nothing performs. `locality_provenance` now reads the source on
+    `artifact.replicated`, so a copy explained only by an execution is no copy,
+    and re-adding the launch side fails it with `offer "producer-rental" holds a
+    copy of Artifact "artifact:checkpoint:v1" with no World Tape seed and no
+    preparation recorded landing one there`. The fourth Run of
+    `artifact-must-be-durable-before-a-consumer-runs` was the entry above's
+    "reads what that fetch left behind"; it lands on that same machine and is
+    priced the whole 2GB again, which is what a real node charges it, and the
+    unchecked copy it read past is still unchecked. The saving a checked copy
+    buys is asserted where such a copy can exist: on the prepared host of
+    `prewarming-never-starves-real-work`, at both ends now, the decision pricing
+    zero and both Runs reading the local disk.
+  - The `artifact.read` effect recorded the digest and state of whatever copy
+    the machine had under that name, including on a read out of the object
+    store, so a green execution's own ledger said the workload was handed
+    another version's bytes and the law skipped every read whose source was not
+    a replica. A read now records what it served, and
+    `artifact_replica_verified` holds over every accepted read.
+  - `prefetchArtifact` answered ready with zero fetched bytes for a copy the
+    machine already held. Deleted rather than covered:
+    `nodeagent.PrepareArtifact` streams the source it was given and rewrites the
+    record from the stream with no test for a copy already on the disk, so
+    answering ready credited a node with a decision no node makes. What keeps
+    the same bytes from crossing the link twice is the operation identity, on
+    this seam and on a real one alike.
+  - The silence branch of `alreadyHeld` was reachable, twice. `catalog[id]`
+    returns a zero `OfferSnapshot` when a queued placement's machine is absent
+    from the current listing, and a node that keeps no replica store reports
+    `ArtifactInventory{}` on every heartbeat. The first was not silence about an
+    inventory at all, it was a machine Mercator could say nothing about, and in
+    the reusable lane it was a defect rather than a wasted command: a node
+    leaves the catalog through the same `record.Alive` predicate that makes
+    `Registry.Ref` refuse, so the desire became a command `Broker.Prepare`
+    errors on and `Prewarm` ended the whole fleet's pass, leaving every other
+    tenant's desire unstated, withdrawals included, on every trigger for as long
+    as the Booking stayed queued there. A queued placement whose machine is not
+    on offer now states nothing, and the silence that remains is the one the
+    branch always claimed: a machine on offer whose runtime cannot enumerate
+    what it holds. Stated at the orchestrator seam both ways, because no
+    Blueprint can take capacity out of the catalog while a Booking is queued on
+    it.
+  - `PrepareReceipt.Unsupported` is still written by both `Broker.Prepare` and
+    the Lab world and read by nobody, so a machine that refused the whole desire
+    is still indistinguishable from one that took it. That is the half of the
+    earlier note that stands, and it belongs to the slice that records what a
+    machine said it could not prepare.
+  - The live half ran on this workstation, amd64 Linux with a native daemon:
+    MinIO in a container of its own, a presigned GET the node reads with no
+    credential of any kind, a copy of another version's bytes reported
+    unverified under the digest it actually produced, and a real container's own
+    output reported as no copy at all. That last case is the production fact
+    both halves of the withdrawal rest on: this node's enumeration answers about
+    its replica store, so bytes a container wrote or downloaded for itself are
+    bytes Mercator is not told about.
+- [x] 2026-07-25: Close phase 3, and make its live half actually run. The three
+  classes of locality are exact: OCI image content named in both digest spaces and
+  subtracted from what a node reports, immutable Artifacts with the object store as
+  their authority, and mutable caches keyed per workspace and generation. Disk is a
+  resource all of it is accounted against, preparation is bounded so it cannot
+  starve admitted work, and producer affinity was built and withdrawn because no
+  shipped node can be in the state its discount fired in. Closing the phase turned
+  up two things about the evidence rather than about the product, and both were
+  assumptions from the machine the earlier slices were written on:
+  - the entire L4 half of this phase was skipping on this workstation, and none of
+    it skipped for a reason about this machine. `internal/nodeagent`'s gate pulled
+    the image a case needs and treated any failed pull as an environment that
+    proves nothing, so an address that has spent Docker Hub's anonymous quota
+    skipped image assembly, layer reporting, disk measurement, cache isolation and
+    Artifact replication while holding busybox, `registry:2` and `minio/minio`
+    unpacked on the daemon the whole time. What those cases check is the agent
+    against what this daemon itself reports, so a copy already here is the same
+    evidence as one fetched a second ago. The pull is now a refresh, and only a
+    reference this machine can neither pull nor already hold stops a case. Ten live
+    cases run as a result, including every live case slices 4 through 9 rest on.
+    The one case that genuinely needs Docker Hub, the public-image comparison,
+    proves it can read that exact manifest anonymously before it starts and skips
+    on 429 for the same reason it skips when offline. `requireDockerHubReachable`
+    is deleted: it proved a registry answers, which an address being throttled does
+    not contradict, so it was passing a gate meant to prove the read was possible;
+  - `TestIntegrationDockerAdapterLaunchObserveRelease` named `linux/arm64`
+    outright, which is the laptop the ephemeral lane was written on. On this amd64
+    host it asked Docker for a foreign build, so it could not use the image the
+    daemon holds and failed trying to fetch one. It is opt-in behind
+    `MERCATOR_DOCKER_INTEGRATION`, so no suite has ever run it here and nothing
+    caught it. It now asks the daemon what it is through `CLIClient.Info` and
+    `OCIArch`, the same reader production places standing offers from.
+  - Both are test-harness defects and neither changes a production answer. They are
+    recorded here because they are the difference between a phase whose live half
+    ran and a phase that reported skips, and because the first one had been silently
+    true since slice 4.
+  - What phase 3 does not leave finished is one thing above all others, and it is
+    not a locality question. No production deployment can run a workload that
+    declares an Artifact input at all: `cmd/mercator` builds the orchestrator with
+    no `ArtifactCatalog`, so such a Run is refused at intake with
+    `ARTIFACT_CATALOG_UNAVAILABLE`. Artifact durability, Artifact locality, the read
+    a candidate still owes, and the whole Artifact half of preparation are therefore
+    exercised in the Lab and against a MinIO container, and reach no operator until
+    a production object-store client lands. That client, the attachment in
+    [#171](https://github.com/benngarcia/mercator/issues/171), withdrawal on a node
+    in [#170](https://github.com/benngarcia/mercator/issues/170), and a preparation
+    that can be refused and retried are the four things phase 3 hands forward.
 - [x] 2026-07-24: Give the corpus standing capacity in the ephemeral lane.
   `WorldSpec.hosts` declares a machine Mercator has not enrolled, which is what
   the local Docker daemon is in production, and `unenrolled-host-holds-nothing`
@@ -3637,7 +3860,7 @@ complete because it works against a live provider.
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
+| 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -3737,26 +3960,39 @@ Phase 3 added:
   holds it, the offer carries no inventory, and the Run is priced the whole
   fetch. Publishing what such a machine holds fails it with `pull source
   "image_inventory" for a machine nothing of Mercator's runs on`.
-- `artifact-must-be-durable-before-a-consumer-runs` (conformance): four claims
-  about what makes an Artifact consumable, driven through the real orchestrator,
-  event log, and Run projection. A producer writes its 10GB checkpoint onto the
-  host it ran on and the object store takes it 160 seconds later, and Mercator
-  holds its consumer unplaced across that whole gap while carrying it in the
-  projection the entire time. A later Run consumes an Artifact whose only copy
-  sat on a Rental whose idle lease has since elapsed, and runs anyway from the
-  object store. That same Run reads a second Artifact whose copy is sitting on
-  the host it landed on and fetches it anyway, because nobody ever checked those
-  bytes against the catalog. Driven twice at cadences ten minutes apart, the two
-  executions agree on when the checkpoint was written and when it became
-  durable, because those are facts about the world rather than about the
+- `artifact-must-be-durable-before-a-consumer-runs` (conformance): five claims
+  about what makes an Artifact consumable and what a local copy is worth, driven
+  through the real orchestrator, event log, and Run projection. A producer writes
+  its 10GB checkpoint on the host it ran on and the object store takes it 160
+  seconds later, and Mercator holds its consumer unplaced across that whole gap
+  while carrying it in the projection the entire time. That consumer then lands on
+  the very machine the checkpoint was written on and reads the object store
+  anyway, priced the full 160 seconds, because nothing of Mercator's fetched,
+  hashed, or filed what a workload wrote inside its own container. Which machine
+  that is comes out of the ledger rather than out of the fixture: the case reads
+  the producing host off the `artifact.written` effect and requires the consumer's
+  selected offer to be that same host, because an assertion naming
+  `producer-rental` would hold just as well in a world where the producer ran
+  somewhere else. A later Run consumes an Artifact whose only copy sat on a Rental
+  whose idle lease has since elapsed, and runs anyway from the object store. That
+  same Run reads a second
+  Artifact whose copy is sitting on the host it landed on and fetches it anyway,
+  because nobody ever checked those bytes against the catalog. The Run behind it
+  reads what that fetch left and something checked, and is priced no read at all,
+  which is the one thing a local copy buys. Driven twice at cadences ten minutes
+  apart, the two executions agree on when the checkpoint was written and when it
+  became durable, because those are facts about the world rather than about the
   observer.
 - `safety.artifact_replica_verified` (Lab invariant): no copy exists of content
   the catalog cannot name, no copy claims a digest that version does not have,
   every copy traces back to the object store, and no Run reads a copy nothing
-  checked. "Traces back to the object store" has two shapes and the second is
-  why the rule is not simply "the version is durable": a copy was fetched from a
-  publication, or it is the output the producing Run wrote on its way to
-  becoming one.
+  checked. "Traces back to the object store" is exactly the version being durable,
+  with no second shape: only a fetch Mercator issued leaves a copy, because a copy
+  is worth what checking it against the catalog says it is worth. Content a
+  workload wrote for itself is `artifact.written` in the ledger and never a copy in
+  an inventory, and restoring the world that filed one fails the rule with `offer
+  "producer-rental" holds a copy of Artifact "artifact:checkpoint:v1", which
+  nothing published`.
 - `dataset-gravity-beats-image-cache` (green): four machines at one price for
   one Run that reads a 40GB dataset, so nothing but what each holds can decide
   the placement. The Rental holding a checked copy owes 40MB of image and beats
@@ -3770,6 +4006,16 @@ Phase 3 added:
   records `unknown` and is priced the whole read rather than the zero its silence
   used to buy, and never the zero its copy would have bought if an offer could
   carry it. Every rate is equal on purpose.
+- `a-restored-snapshot-is-not-a-copy` (conformance): the execution half of that
+  third Rental, on the one machine in the world, so it is the machine the Run
+  goes to. The decision prices the whole 40GB read for a checked copy of another
+  version filed under this one's name, and the Run then reads all 40GB out of the
+  object store rather than the bytes the machine happened to be holding. The
+  restored snapshot is still there afterwards: a workload reads its inputs into
+  its own container, so nothing repaired this machine and the next Run sent here
+  owes the same 640 seconds. A placement corpus cannot reach this: the Booking
+  Decision was right either way, and only an execution can say which bytes the
+  workload was handed.
 - `the-service-class-decides-what-wins` (green, replacing
   `the-objective-decides-what-wins`): one world, two Runs, and the only difference
   between them is the class of work each says it is. The warm Rental is a second
@@ -3823,12 +4069,17 @@ Phase 3 added:
   demand places it on the machine that cannot keep the promise it was admitted
   on.
 - `a-machine-with-no-room-refuses-the-work` (Lab testdata): capacity Mercator
-  borrows a slot on, twenty gigabytes of disk, and one Run needing a ten gigabyte
-  image and a forty gigabyte dataset. It says nothing about what it holds, so
-  Placement cannot establish the shortfall and selects it, which is the only way
-  a launch can still arrive somewhere it does not fit. The machine refuses the
-  work rather than taking it and filling up partway through, and deleting the
-  refusal fails the execution through `safety.disk_reservation_respected`.
+  borrows a slot on, sixty gigabytes of disk with forty already spent on a checked
+  copy of the version before the one it reads, and one Run needing a ten gigabyte
+  image and the forty gigabyte dataset the catalog names. It says nothing about
+  what it holds, so Placement cannot establish the shortfall and selects it, which
+  is the only way a launch can still arrive somewhere it does not fit. The machine
+  refuses the work rather than taking it and filling up partway through, and
+  deleting the refusal fails the execution through
+  `safety.disk_reservation_respected`. The copy is what makes it the disk half of
+  what a copy is worth as well: counting another version's bytes as this version's
+  leaves the work fitting, and the read that follows fails
+  `safety.artifact_replica_verified`.
 - `a-run-that-cannot-write-its-output-fails` (Lab testdata): a producer on a
   twenty gigabyte machine computing a forty gigabyte checkpoint. Nothing could
   have priced it, because a Run declares which Artifacts it publishes and never
@@ -4004,15 +4255,31 @@ Phase 3 added:
   the image, and three Runs that want two versions of one corpus. The first
   occupies the machine, the second queues and Mercator asks for
   `artifact:corpus:v70` a minute in, and the third arrives ninety seconds later
-  wanting `artifact:corpus:v7`. The second speculative fetch waits until five
-  minutes after the first one started. Every part of the fixture exists to be
-  failable: the wanted names prefix-collide, so a control plane comparing a new
-  desire against the joined text of the last one reads `v7` as content it has
-  already asked for and skips a bound it applies to additions only; the gap is
-  longer than the cadence, so the harness cannot produce it; and the third Run
-  arrives between two ticks, so the moment the bound is tested is not a moment the
-  driver chose. Deleting the rate bound, or restoring the substring comparison it
-  replaced, each fails it through `safety.prewarm_rate_within_bound`.
+  wanting `artifact:corpus:v7`. The control plane restarts the moment that third
+  Run is recorded, and the second speculative fetch still waits until five minutes
+  after the first one started. Every part of the fixture exists to be failable:
+  the wanted names prefix-collide, so a control plane comparing a new desire
+  against the joined text of the last one reads `v7` as content it has already
+  asked for and skips a bound it applies to additions only; the gap is longer than
+  the cadence, so the harness cannot produce it; the third Run arrives between two
+  ticks, so the moment the bound is tested is not a moment the driver chose; and
+  the restart means a clock living only in the process cannot satisfy it. Deleting
+  the rate bound, restoring the substring comparison it replaced, or keeping the
+  clock in process each fails it through `safety.prewarm_rate_within_bound`.
+- `prewarming-bounds-the-whole-fleet` (conformance): two tenants, two machines,
+  and both bounds. Each machine is occupied and holds what its own tenant runs, so
+  each queued Run wants twenty gigabytes on its own host. The first tenant's Run
+  arrives at five minutes and is prepared for; the second tenant's arrives ninety
+  seconds later and gets nothing, and its transfer starts once the first has
+  landed. Restoring per-workspace bookkeeping fails it through
+  `safety.prewarm_rate_within_bound` with `speculative preparation started at
+  2030-01-01T00:05:00Z and again 1m30s later at 2030-01-01T00:06:30Z`.
+- `prewarming-spends-one-budget-across-tenants` (conformance): the same two
+  tenants in a world that states a depth bound and no interval, both Runs arriving
+  in the same minute. One slot exists, the Run that starts soonest gets it, and the
+  other tenant waits for it to land. Truncating the desire per workspace fails it
+  through `safety.prewarm_yields_to_real_work` with `2 speculative fetches were in
+  flight at 2030-01-01T00:05:00Z, and this world allows 1`.
 - `a-refused-prepare-can-be-asked-again` (conformance): one machine already holding
   the image, one Run occupying it, and one queued Run that reads a twenty gigabyte
   corpus. The machine turns the fetch away, and a minute later, which is the
@@ -4067,11 +4334,12 @@ Phase 3 added:
   than in place of it: that rule reads executions Mercator launched against the
   Runs it projects, which is the fact this one says nothing about.
 - `safety.prewarm_rate_within_bound` (Lab invariant): no two moments at which
-  Mercator began preparing are closer together than the world's `min_interval`.
-  It is stated over the moments preparation started rather than over transfers,
-  because one desired set crosses the boundary at once and may open as many
-  transfers as the depth bound allows: how many may move together is the other
-  rule's question. A world stating no interval states no opinion.
+  Mercator began preparing are closer together than the world's `min_interval`,
+  whichever tenant wanted the content and whether or not the control plane
+  restarted in between. It is stated over the moments preparation started rather
+  than over transfers, because one desired set crosses the boundary at once and may
+  open as many transfers as the depth bound allows: how many may move together is
+  the other rule's question. A world stating no interval states no opinion.
 - `safety.prewarm_yields_to_real_work` (Lab invariant): no speculative transfer
   is moving onto a machine at the same time as content a Run admitted there is
   waiting for, and no more of them are in flight at once than the world stated.
@@ -4759,6 +5027,11 @@ liveness. Every one carries a deliberate failing case, which
 `TestEveryDefaultInvariantHasADeliberatelyFailingCase` requires of the registry
 itself: an invariant nothing can make fail is not evidence, so one cannot be
 registered without the world that breaks it.
+
+The conformance Blueprints are driven from `internal/lab` rather than from the
+placement corpus, because each one asserts something only an execution can say:
+what bytes a workload was handed, when a transfer was moving, what a host held
+afterwards, and what survived a control-plane restart.
 
 ## What phase 2 does not yet do
 
@@ -6668,6 +6941,317 @@ On 2026-07-26, on the amd64 Linux workstation, `go build ./...` and `go test
   `TestOpenMovesAStoredRevisionsSecretsOutOfThePublicPayload`, and reverting the
   door leaves the token in the event
   `TestAStoredRevisionKeepsItsSecretsOutOfThePublicEvent` reads.
+### Phase 3 close-out
+
+On 2026-07-25, on ws, an amd64 Linux workstation with 24 cores and Docker Engine
+29.6.2, native and healthy. Two sessions were committing to this worktree while
+the phase closed, so every command below ran against a copy of one named commit
+exported with `git archive` rather than against the working tree, and the numbers
+describe that commit rather than anybody's work in progress. The commit is the
+one carrying the whole phase apart from the conformance-gate work recorded below,
+which was verified on its own and changes no production code.
+
+- `go build ./...` and `go vet ./...`: clean.
+- `go test ./... -count=1`: 35 packages ok, exit 0, nothing skipped that this
+  machine could have run. Before the gate fix in this close-out the same command
+  exited 1 on `internal/ociresolver` with `toomanyrequests` from Docker Hub, and
+  ten live cases in `internal/nodeagent` skipped while holding the images they
+  needed.
+- `go test -race -count=1` over every package this phase touched, which is
+  `cmd/mercator`, `cmd/mercator-node`, `internal/adapter/...`, `internal/broker`,
+  `internal/capability`, `internal/daemon`, `internal/domain`, `internal/httpapi`,
+  `internal/lab`, `internal/node/...`, `internal/nodeagent`,
+  `internal/ociresolver`, `internal/orchestrator`, `internal/scenario`,
+  `internal/scheduler`, and `internal/storage/sqlite`: all ok, exit 0.
+  `internal/lab` takes about 75 seconds under the race detector and is the
+  longest.
+- The corpus: `corpus: 16 green, 8 target`, with
+  `TestOpenCatalogPreservesPlacementClassifications` holding those counts and the
+  24 regression Blueprints they come from. Twelve conformance Blueprints run from
+  `internal/lab`, beside one demo and one minimized case. No target passed, which
+  is what the corpus contract requires until one is promoted deliberately.
+- `go generate ./...` and `bun run generate:api` both leave the tree byte
+  identical, checked by hashing every file before and after rather than by reading
+  a diff, because the worktree was busy.
+- The console: `bun install --frozen-lockfile`, `bun run check:react-effects`,
+  `bun run typecheck`, `bun run test` (5 files, 12 tests), and `bun run build` all
+  pass.
+
+The live half ran, and this is the first time all of it has. On this host, with
+this daemon:
+
+- `internal/nodeagent`: `TestEveryImageThisDaemonHoldsIsAssembled`,
+  `TestDockerRuntimeReportsTheLayersItUnpacked`,
+  `TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet`,
+  `TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt`,
+  `TestTwoWorkspacesGetTwoVolumesForOneCacheName`,
+  `TestAContainerThatNeverStartsIsNotACacheThisNodeHolds`,
+  `TestANodeReplicatesAnArtifactFromARealObjectStore`,
+  `TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`, and
+  `TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote` all pass against real
+  containers, including a MinIO endpoint for the object-store half.
+- `internal/ociresolver`: `TestRegistryResolverAuthenticatesAgainstAPrivateRegistry`
+  passes against a `registry:2` container behind htpasswd, with the anonymous
+  attempt as its control.
+- `internal/adapter/docker`: `TestIntegrationDockerAdapterLaunchObserveRelease`
+  passes with `MERCATOR_DOCKER_INTEGRATION=1 MERCATOR_DOCKER_IMAGE=busybox:latest`,
+  which is the first time it has run on an amd64 host.
+
+Five cases skip in the whole suite, and none of them for a reason this tree can
+fix. `TestRegistryResolverAgreesWithDockerAboutAPublicImage` skips because Docker
+Hub refuses this address an anonymous manifest read, and no Docker Hub credential
+is configured here. `TestConsoleRunsNavigation` and
+`TestLabConsoleUsesNormalAPIAndSSE` want `MERCATOR_BROWSER_TEST=1` and a
+Playwright install, so CI's Console job is where they run.
+`TestIntegrationDockerAdapterLaunchObserveRelease` and
+`TestE2EFakeAdapterHTTPAndCLI` are opt-in behind `MERCATOR_DOCKER_INTEGRATION=1`
+and `MERCATOR_E2E_FAKE=1`, and both were run on their own here and pass. Eight
+further skips are the target Blueprints in `TestPlacementScenarios`, which skip
+by design until a phase promotes them, for thirteen `SKIP` lines in a verbose run
+of the whole suite. All of this is recorded in
+`docs/production/known-limitations.md`.
+
+`TestBuiltIndexReferencesAbsoluteAssets` is a sixth case whose outcome depends on
+what ran before it rather than on this machine. It skips while `web/static` holds
+nothing but its `.gitkeep`, because the console bundle is embedded at compile
+time, and it passes once `bun run build` has populated that directory, which is
+the order CI uses and the order the close-out re-run below used. A Go suite run
+before the console build reports it as a skip, which is why an earlier draft of
+this entry counted it among the environment's gaps. It is not one.
+
+Both gate changes are themselves checked, because a gate that skips too readily
+is worse than the failure it replaced.
+
+- `pull` was called on a reference no registry serves and this daemon does not
+  hold, with a `t.Fatalf` behind it. The case skipped and the `Fatalf` was never
+  reached, so content genuinely absent still stops a case rather than being waved
+  through.
+- The first version of the public-image gate proved one anonymous manifest read
+  and then let three more reads cross the same quota, so it passed and the case
+  failed 25 seconds later, which is a flake wearing an environment's clothes. The
+  throttle is answered where it appears now, on the resolver's own `ErrThrottled`
+  and on each `docker manifest inspect`, and five consecutive runs of the package
+  skip that case in 1.4 seconds and pass the private-registry case. A probe
+  pointed the same helper at a registry refusing the connection rather than the
+  quota, and the case failed as it should.
+- Both probes were removed.
+
+Mercator [#165](https://github.com/benngarcia/mercator/issues/165), the
+reachability probe with no timeout, was deliberately left alone. It does not
+reproduce on this host, because `docker info` answers immediately here, and
+smuggling a timeout into a locality slice would hide the regression test it owes.
+
+The whole of it was then run a second time by a different session against commit
+`f9f496f`, exported to a directory of its own so no other session could reach it,
+and the outcome is the record above with the two skip corrections already applied:
+
+- `go build ./...` and `go vet ./...`: no output, exit 0.
+- `go test ./... -count=1`: exit 0, 35 packages `ok`.
+- `go test -race -count=1` over `./cmd/...`, `./internal/adapter/...`,
+  `./internal/broker/...`, `./internal/capability/...`, `./internal/daemon/...`,
+  `./internal/domain/...`, `./internal/httpapi/...`, `./internal/lab/...`,
+  `./internal/node/...`, `./internal/nodeagent/...`, `./internal/ociresolver/...`,
+  `./internal/orchestrator/...`, `./internal/scenario/...`,
+  `./internal/scheduler/...`, `./internal/storage/sqlite/...`, and
+  `./internal/workload/...`: exit 0, every package `ok`. `internal/lab` is the
+  longest at 74.4 seconds, then `internal/nodeagent` at 15.9 and
+  `internal/orchestrator` at 13.2.
+- `TestCorpusCoversBothStatuses` logs `corpus: 16 green, 8 target` over the 24
+  Blueprints in `internal/scenario/scenarios`, beside 12 in
+  `internal/scenario/scenarios/conformance`.
+- The ten live cases the phase rests on pass in that default run, against this
+  host's own daemon and against `minio/minio` and `registry:2` containers it
+  started: image assembly, unpacked layer reporting, both disk cases, both cache
+  cases, all three Artifact replication cases, and the private-registry resolver
+  case.
+- The two opt-in cases pass when asked for: the Docker adapter integration case
+  with `MERCATOR_DOCKER_INTEGRATION=1 MERCATOR_DOCKER_IMAGE=busybox:latest`, and
+  the fake-adapter end-to-end case with `MERCATOR_E2E_FAKE=1`.
+- `go generate ./...` and `bun run generate:api` leave the tree byte identical,
+  checked by hashing every tracked file before and after.
+- The console: `bun install --frozen-lockfile`, `bun run check:react-effects`,
+  `bun run typecheck`, `bun run test` (5 files, 12 tests), and `bun run build`
+  (3 artifacts) all pass, and `TestBuiltIndexReferencesAbsoluteAssets` passes once
+  that build has run.
+
+CI then failed the branch where this workstation could not, on
+`TestAQueuedRunIsPreparedForWithoutWaitingForASweep`, and it was a flake rather
+than a regression: the Go job passed on the commit before a documentation-only
+change and failed on it. The mechanism was reproduced rather than retried.
+
+A node offer stays selectable for a third of the lease, and the daemon fleet
+harness leased its one machine for 900 milliseconds, so 300 milliseconds without a
+report is a machine Mercator can say nothing about. Stalling the scripted
+runtime's `Facts` call for 500 milliseconds as the second Run arrives fails that
+case three runs out of three, with the message CI reported and within a quarter of
+a second of its duration. The case gets one trigger, the Booking that names the
+machine, and a trigger that lands while the machine is off the catalog states
+nothing, because the sweep is what restates it and this case deliberately never
+sweeps. A loaded two-core runner executing the whole suite stalls a goroutine past
+300 milliseconds with nothing wrong.
+
+The lease is the fleet's own parameter now, 30 seconds by default, and
+`TestANodeThatGoesQuietStopsBeingOffered` states the 900 milliseconds it is
+measured in. That raises the threshold rather than removing it: the same stall
+passes, and a machine genuinely gone for twelve seconds still fails the case. The
+case also asserts the Booking before the prefetch, so a Run that was never given
+the machine reports that instead of reporting a preparation that never came, and
+`awaitPredictedStart` reads both halves of the restraint off the ledger rather
+than sleeping a margin from a clock the rule does not use. Both probes were
+removed. The daemon package is green 3 times under `-race`, and 3 times pinned to
+two cores against 30 spinning processes.
+
+What that leaves standing in production is a real consequence and it is recorded
+in `docs/production/known-limitations.md`: a Run queued while its machine's facts
+are momentarily stale is prepared for on the next sweep rather than on its own
+arrival, so the interval an operator states bounds how often preparation may
+begin and the sweep still bounds how late it may be.
+
+CI then failed the Console job three times running, and that one was no flake. It
+is the most valuable thing this close-out found, because it is a defect an operator
+would have met and no Go test can see.
+
+`TestLabConsoleUsesNormalAPIAndSSE` timed out waiting for the consumer's `Booking
+decided` row. The row was in the document and visible the whole time. What was
+wrong was the canvas: it positioned every block and every column against
+`Date.now()` while every moment it reads comes out of the workspace's own event
+stream. Those are two clocks. A Lab execution runs on virtual time in 2030, so the
+moment one of its Bookings was queued behind another Run, `workspaceHorizon` was
+asked to reach a projected start three and a half years out and `tickMinutes` built
+a column per ten minutes of it: 723,040 elements, and a main thread held for
+seventy seconds. The feed was not slow, the tab was unusable, and the fifteen
+second wait expired inside that freeze.
+
+This host cannot launch the browser those checkpoints need. Playwright's Chromium
+wants nine system libraries that are not installed here and installing them is not
+this branch's business, so the flow was driven inside a
+`mcr.microsoft.com/playwright` container with `--network host`, the host's own
+browser cache mounted in, and `mercator lab serve` running the real console on
+loopback. That reproduced CI exactly, three times, and it is how each fix was
+checked. Anyone can repeat it without a display.
+
+Three things changed, each with its own reason:
+
+- the canvas reads the workspace's clock, which is the moment it last said
+  something. In production that is seconds old and nothing moves. In the Lab it is
+  the virtual moment every projection on the screen was computed from, which is
+  what makes the axis mean anything there at all.
+- the horizon is bounded at two days, 289 columns. Every term in it is a difference
+  between two clocks, and a renderer that draws whatever that difference says is a
+  hazard on its own: a wrong projection, a skewed server clock, or an absurd
+  maximum runtime now costs a clipped axis rather than a frozen tab.
+- the flow advances until the console shows the Run closed instead of advancing a
+  fixed thirty minutes. Thirty was enough while a consumer read nothing and is ten
+  minutes short now that reading an Artifact costs what it costs, so the number was
+  asserting today's physics as a deadline without saying so.
+
+The vertical proof needed one correction to accept what the world now does.
+`queue_vs_fresh_compared` required a `run_now_existing_rental` candidate beside the
+fresh one, which is the case where standing capacity has no queue delay to weigh,
+and refused the case the checkpoint is named after. It takes either standing
+disposition now and still requires the evidence: a standing candidate whose queue
+delay was established, and a fresh candidate priced to provision.
+
+That correction uncovered something worse, and it is filed rather than fixed here.
+The same Blueprint, the same World Tape and the same policy record
+`queue_existing_rental` for that candidate when driven by successive advances and
+`run_now_existing_rental` when driven to completion. One world, two answers,
+decided by how the caller drove it. ADR 0004 makes determinism the Lab's central
+promise, the corpus drives conformance Blueprints in one-minute advances while the
+vertical proof drives to completion, and a Run Bundle that depends on its driver is
+a record of the driver as well as of the world. The `queue` answer is the honest
+one: the consumer is placed when its input becomes durable, which is while the
+producer is still on the machine.
+[#182](https://github.com/benngarcia/mercator/issues/182) owes the fix and an L1
+case driving one Blueprint two ways to the same decision. Widening the checkpoint
+made CI green and also stopped CI noticing this, which is why it is written down
+here and in known limitations rather than left in a commit message.
+
+### Phase 3 producer affinity, withdrawn under review
+
+On 2026-07-25, on a Linux workstation against Docker Engine 29.6.2 on the
+containerd snapshotter. Two independent reviewers refuted the affinity slice and
+every load-bearing finding held, so the preference is gone rather than defended.
+What was checked before removing it:
+
+- the discount was unreachable. `cmd/mercator-node` sets an artifact root
+  unconditionally, so `nodeagent.artifacts` reports an enumerated inventory,
+  `internal/node/offers.go` carries it through unchanged, and `internal/node` is
+  the only source of reusable-lane offers. Every production offer that can carry a
+  Rental identity therefore takes the enumerated branch, where the record was
+  deliberately given no say. The only world the discount fired in was the fixture
+  knob added with it;
+- the node that could have reported an unknown inventory cannot hold a copy
+  either. `nodeagent.PrepareArtifact` refuses a runtime with no artifact root
+  before touching the network, so the machine a record could have preferred is the
+  machine preparation cannot prepare;
+- nothing in production writes the record at all. The only assignments to
+  `ProducedOnRentalID` were in the two simulators, because no production
+  implementation of `orchestrator.ArtifactCatalog` exists;
+- the L1 conformance rested on the simulated world filing a verified copy of a
+  Run's own output on the host that computed it, which this slice's own live test
+  contradicts.
+
+The live half ran, and it is the fact the withdrawal rests on.
+`TestANodeReportsNoCopyOfWhatItsOwnWorkloadWrote` starts a MinIO container on
+this machine's own daemon and has the production `DockerRuntime` launch a real
+busybox workload that generates its output inside its own container. The test then
+reads those bytes back out of the running container, which is the only way
+anything outside it can see them, and only then asks the node what it holds:
+enumerated, and empty. Every byte of that content is on this machine, under the
+digest a catalog would name it by, and the node reports no copy of it. Those same
+bytes, the ones that came out of the container, are what the object store is
+loaded with, so the content that arrives back through `PrepareArtifact` over a
+presigned GET and is reported verified is the content the workload wrote. The
+upload itself is issued by the test rather than by busybox, which can neither sign
+an S3 request nor reach this host's loopback, and it carries the container's own
+bytes so that both halves are about one piece of content. What a real node can say
+about content its own workload produced is nothing, so a record of where bytes
+were written buys a consumer nothing either.
+
+Three deliberate breaks hold that live case, because the first version of it did
+not have any and a reviewer was right that it could not fail. Sending the
+producer's output to another path fails it with `the workload in
+mercator-run-producer-1 never wrote /checkpoint`, so no container, no write, and
+no daemon means no assertion. Serving the store bytes the container never held
+fails it with an `unverified` replica, so the second half is tied to the first.
+And filing a copy of a workload's own output would fail the enumeration check that
+sits between them.
+
+Two claims survive the withdrawal, each held by a deliberate break:
+
+- restoring the scheduler's own two-term uncertainty penalty fails
+  `TestBothModelsPriceUncertaintyFromTheSameFacts` with `reference scored
+  3.433333 and production scored 1.433333`, which is the divergence the dead
+  weight was hiding, worth exactly the two facts the oracle counted and the
+  scheduler did not;
+- restoring the world that kept a verified copy of a Run's own output fails
+  `safety.artifact_replica_verified` with `offer "producer-rental" holds a copy of
+  Artifact "artifact:checkpoint:v1", which nothing published`, through both
+  `TestTheMachineThatWroteTheContentStillReadsTheObjectStore` and
+  `TestAConsumerReadsTheCopyAFetchLeftBehind`.
+
+The second of those two cases now names no machine either. It reads the producing
+host off the `artifact.written` effect and requires the consumer's selected offer
+to be that host, so what is asserted is that one machine both wrote the content
+and read the object store rather than that a fixture called something
+`producer-rental`. Recording the write against another machine fails it with `the
+checkpoint was written on "some-other-machine" and its consumer was placed on
+"producer-rental"`. Swapping the two Rentals' rates now moves the assertion to
+`doomed-rental`, which is where both the producer and its consumer go in that
+world, instead of leaving the sentence exercised by nothing.
+
+What the review leaves open is one gap, now filed as
+[#171](https://github.com/benngarcia/mercator/issues/171): a verified replica in a
+node's replica store is not reachable from inside the container a Run executes in,
+so the zero seconds Placement prices for a host holding a checked copy is a
+specification exercised at L1 and not a saving any production workload can
+collect. `go test ./...` is green on this host, including the live daemon and
+MinIO cases.
+
+The reachability probe's missing timeout, issue #165, is again deliberately
+untouched. It does not reproduce on this host, and it has its own regression test
+to write.
 
 ### Phase 3 controlled prewarming
 
@@ -6797,6 +7381,110 @@ Run on a Linux workstation against Docker Engine 29.6.2 on the containerd
 snapshotter, which is amd64 and not the arm64 macOS the earlier phase 3 slices
 were built on. Nothing in this slice behaved differently there.
 
+### Phase 3 prewarming, the second review
+
+On 2026-07-25, two more reviewers refuted four things about the prewarming slice
+on this host. All four were real, all four are repaired, and one of them was the
+Lab world rather than Mercator.
+
+An image's preparation content was not always a digest. Nothing enforced it:
+`domain.ValidateWorkloadRevision` only rejects an empty image and
+`domain.ReferenceDigest` answers empty for a tag, so `PrepareItem.Content()` was
+the empty string for an unpinned reference. Driving `prewarmItemKey` directly, two
+Runs wanting `registry.example/trainer:v1` and `registry.example/analyst:v2` on
+machine `builder` both produce the key `image:builder/`, so the second image was
+dropped from the desired set entirely, the node operation identity
+`prepare:image:builder:` was the same for both, and `ImageInventory.Holds("")` is
+false so the unidentifiable content was re-asked for on every changed set. A Run
+whose image is not digest-pinned is now refused at intake, which is where a Run
+commits to bytes. A stored workload revision may still name a tag, because it is a
+template and resolution is deferred to run-create, and that decision has its own
+case in `internal/workload`. The `httpapi` resolver hook no longer substitutes the
+submitted tag when a resolver answers with no reference.
+
+`PrewarmPolicy` was enforced per workspace while the invariant and this plan
+stated a fleet-wide bound. Reproduced by copying the rate-bound fixture into a
+two-tenant world: each tenant's clock was empty at its own first send, the
+per-workspace bound was honoured, and the run aborted with `speculative
+preparation started at 2030-01-01T00:05:00Z and again 1m30s later at
+2030-01-01T00:06:30Z`. Production had the same shape in the other direction, since
+the sweep called `Prewarm` once per workspace and a deployment with N tenants could
+begin N transfers per interval. Preparation is now one pass over every tenant: the
+desire is ordered across all of them by when the Run waiting for it is projected to
+start, truncated once, and a send that names new content moves one clock. While the
+bound holds, a desire loses its additions rather than being withheld whole, so a
+withdrawal never waits behind an addition it travelled with.
+
+Writing the two-tenant Blueprint caught the Lab world reading one tenant's desired
+set as the whole fleet's: it stopped every speculative transfer the request did not
+name, so the second tenant's set cancelled the first tenant's transfer and no two
+prefetches were ever in flight at once whatever Mercator asked for. That made the
+concurrency bound unfailable in the only world where it matters. Withdrawal is now
+decided against the union of every tenant's latest set.
+
+The rate clock lived in the process. A restarted Mercator found no last-sent time
+and was free to begin a transfer immediately, and a control plane restarting in a
+loop would begin one on every boot. What is wanted is derived from the Runs and the
+machines every time and stays in process; when preparation last began is one
+durable row, recording a decision Mercator made rather than what any machine holds.
+`prewarming-holds-its-own-rate-bound` now restarts the control plane when its third
+Run is recorded, and with an in-process clock it fails with `speculative preparation
+started at 2030-01-01T00:01:00Z and again 2m0s later at 2030-01-01T00:03:00Z`. The
+price is stated where the memory is: a restarted Mercator cannot tell content it has
+already asked for from content it has not, so it states nothing until the bound
+allows a beginning, and a withdrawal it discovers inside that window waits the same
+interval.
+
+The bound could not fire in any default production deployment. The only production
+caller was the sixty second reconcile sweep and `DefaultPrewarmPolicy.MinInterval`
+is thirty seconds, so two sweeps were never closer together than the cadence and
+the observed spacing between fetches was the sweep's. Preparation now also runs when
+something is recorded that could change what Mercator wants prepared: a Booking that
+named a machine, one that was dispatched, a launch a host is getting ready for, a
+withdrawal, or a Run whose machine is free again. The orchestrator names those
+events because it derives the answer from them, and the daemon subscribes from the
+log's head so a restart wakes on what happens next.
+`TestAQueuedRunIsPreparedForWithoutWaitingForASweep` drives it through the
+production daemon and the real node protocol and sweeps nothing; it fails with the
+subscription removed. The sweep stays and is the only timer, because a desire also
+changes when a moment passes rather than when anything is recorded: the case in
+point is a machine that stops being one Mercator must not disturb when the start its
+own decision predicted elapses, and the new case had to wait that moment out before
+the Run it is about could be prepared for at all.
+
+Preparing on every Booking made the daemon busier at shutdown and exposed two
+things in the shutdown path. Reconciliation and preparation send commands to
+machines, and an enrolled node receives one by holding a request open on the same
+server the daemon drains, so background work is told to stop before the drain and
+joined after it. The node protocol harness then gave shutdown two seconds where the
+production entrypoint gives itself fifteen, which asserted something about this
+machine's timing rather than about the daemon shutting down cleanly. Three of eight
+`-race -count=3` runs of `internal/daemon` failed in cleanup before this, and five
+consecutive runs pass after it in the same twenty seven seconds.
+
+What is left. A refused preparation is still terminal, which is the refutation the
+previous review accepted and left, and it is still owed a world that can refuse a
+fetch. The rate bound is reachable in production now and is stated in the Lab,
+where two fixtures fail without it; no L3 case states it, because the fleet harness
+serves two images and seeing a bound hold one piece of content back needs three on
+one machine. What the new L3 case holds is the trigger: a Run queued through the
+production API is prepared for without anything sweeping.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/capability ./internal/scheduler ./internal/lab \
+  ./internal/scenario ./internal/orchestrator ./internal/daemon \
+  ./internal/storage/sqlite -count=1
+go test ./internal/nodeagent -run TestANodeReplicatesAnArtifactFromARealObjectStore -count=1
+```
+
+The last of those is the live half: MinIO in a container of this machine's own
+Docker daemon, the node reading one version over a presigned URL the control plane
+minted, and the digest recomputed from the bytes that landed. It passes here.
+`internal/ociresolver`'s two Docker Hub conformance cases fail on this host with
+`429 Too Many Requests` from an unauthenticated pull of `busybox:latest`, which is
+the registry rate limiting this address and not this slice.
+
 ### Phase 3 Artifact locality at placement
 
 On 2026-07-25, `dataset-gravity-beats-image-cache` was rewritten against the
@@ -6841,7 +7529,10 @@ Each claim is held by a deliberate break that fails it:
   `vertical proof checkpoint 7 (warmth_observed) failed`. The rule that replaced
   asked only whether the producer's output landed on the offer the consumer was
   selected on, which was green on every execution of this Blueprint before
-  Artifact locality was scored anywhere.
+  Artifact locality was scored anywhere. Withdrawing producer affinity moved that
+  checkpoint again: the copy it reads is one a fetch put on the machine before the
+  world started, beside the whole read the consumer owes on the checkpoint its own
+  producer wrote.
 
 The demo Blueprint's normalized bundle hash moved from
 `sha256:d8766ff9fe41cb65c27f2ec502256dc70dd6ba2b663504e936491b6985d99ee4` to
@@ -6854,6 +7545,10 @@ is `established_start_seconds` entering the record. Answering the review of the
 start-bound commit moved it to
 `sha256:193d9726fcca9d51071cb6028fad5006dd06395096aafacef6765ce69015f15b`, which
 is start quantiles adding rather than being scaled off the expectation.
+Withdrawing producer affinity moved it to
+`sha256:2a2c9e3d7480a510d905b5af67451f551ce9eb996f561d0666f26c9be6c82db6`, which
+is the demo's consumer no longer being warm for content its own producer wrote,
+and reading a dataset a fetch had checked there instead.
 
 Three limits are worth stating rather than hiding.
 
@@ -6864,10 +7559,11 @@ this slice adds is exercised at L0, in the placement corpus, and at L1 through
 the real control plane, and none of it is exercised against a real store.
 
 Nothing yet fetches an Artifact onto a host before a Run needs it. The estimate
-prices what a candidate would have to read; controlled prewarming and
-producer-consumer soft affinity are later slices, and the affinity one is what
-turns this evidence into a stated preference rather than a consequence of
-arithmetic.
+prices what a candidate would have to read, and controlled prewarming is the
+later slice that acts on it. Producer-consumer soft affinity was the other slice
+this paragraph promised, and it was built and withdrawn: no shipped node can be in
+the state its discount fired in, which is under "Phase 3 producer affinity,
+withdrawn under review".
 
 The transfer rate is `DefaultObjectStoreDownloadMbps`, a stated assumption that
 nothing measures and no offer can override. `OfferSnapshot.RegistryDownload`

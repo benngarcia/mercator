@@ -808,6 +808,7 @@ func effectMutatesWorld(operation string) bool {
 		OperationImagePull,
 		OperationImageRetained,
 		OperationArtifactRead,
+		OperationArtifactWritten,
 		OperationArtifactReplicated,
 		OperationArtifactPublished,
 		OperationCacheMountAttach,
@@ -905,19 +906,16 @@ func publicationSequences(observation InvariantObservation) (map[string]uint64, 
 // The object store is the authority and a replica is an optimisation over it, so
 // four things hold at once: no copy exists of content the catalog cannot name,
 // no copy claims a digest that version does not have, every copy traces back to
-// the object store, and no Run reads a copy nothing checked against the catalog.
+// the object store, and no Run reads a copy that was not checked against the
+// version it names.
 //
-// "Traces back to the object store" has exactly two shapes, and the second is
-// why the rule is not simply "the version is durable": a copy was fetched from a
-// publication, or it is the output the producing Run wrote on its way to
-// becoming one. A copy of a version nothing published and no Run produced there
-// is content from nowhere, which is what a replica standing in for an authority
+// "Traces back to the object store" is exactly the version being durable, with
+// no second shape. Content a workload wrote for itself is not one of these: no
+// runtime enumerates, hashes, or files it, so it is a write in the ledger and
+// never a copy in an inventory. A replica of a version nothing published is
+// content from nowhere, which is what a replica standing in for an authority
 // looks like.
 func artifactReplicaVerified(observation InvariantObservation) error {
-	produced, err := locallyProducedReplicas(observation.Effects)
-	if err != nil {
-		return err
-	}
 	for _, replica := range observation.World.ArtifactReplicas {
 		version, known := observation.ArtifactCatalog[replica.ArtifactID]
 		if !known {
@@ -938,42 +936,30 @@ func artifactReplicaVerified(observation InvariantObservation) error {
 				replica.OfferID, replica.ArtifactID, replica.ContentDigest, version.ContentDigest,
 			)
 		}
-		if !version.Durable() && !produced[replica.ArtifactID+"/"+replica.OfferID] {
+		if !version.Durable() {
 			return fmt.Errorf(
-				"offer %q holds a copy of Artifact %q, which nothing published and no Run produced there",
+				"offer %q holds a copy of Artifact %q, which nothing published",
 				replica.OfferID, replica.ArtifactID,
 			)
 		}
 	}
-	return artifactReadsWereVerified(observation.Effects)
+	return artifactReadsWereVerified(observation)
 }
 
-// locallyProducedReplicas is every copy a Run wrote where it ran, keyed by
-// version and host. It is the one legitimate reason a copy can exist before the
-// object store holds anything.
-func locallyProducedReplicas(effects []EffectRecord) (map[string]bool, error) {
-	produced := map[string]bool{}
-	for _, effect := range effects {
-		if effect.Operation != OperationArtifactReplicated || effect.Command != EffectCommandAccepted {
-			continue
-		}
-		var request struct {
-			ArtifactID string `json:"artifact_id"`
-			OfferID    string `json:"offer_id"`
-			Source     string `json:"source"`
-		}
-		if err := json.Unmarshal(effect.Request, &request); err != nil {
-			return nil, fmt.Errorf("decode Artifact replication %s: %w", effect.ID, err)
-		}
-		if request.Source == "run_output" {
-			produced[request.ArtifactID+"/"+request.OfferID] = true
-		}
-	}
-	return produced, nil
-}
-
-func artifactReadsWereVerified(effects []EffectRecord) error {
-	for _, effect := range effects {
+// artifactReadsWereVerified is the read side of the same rule, stated over every
+// read a Run made and against the catalog rather than against a copy's own state.
+// What a workload was handed has to be the version it asked for however the bytes
+// reached it: restoring an older volume snapshot leaves a machine holding a
+// verified copy of the version before under this version's name, and a Run handed
+// those bytes read the wrong content at local-disk speed on a candidate every
+// predicate in the control plane priced at the whole read.
+//
+// Stating it over reads out of the object store as well is what makes the ledger
+// answerable for them. The durable copy is the authority, so a read from it is the
+// right bytes by construction, and a record that said otherwise would be the world
+// reporting a read it did not perform.
+func artifactReadsWereVerified(observation InvariantObservation) error {
+	for _, effect := range observation.Effects {
 		if effect.Operation != OperationArtifactRead || effect.Command != EffectCommandAccepted {
 			continue
 		}
@@ -981,20 +967,23 @@ func artifactReadsWereVerified(effects []EffectRecord) error {
 			ArtifactID string `json:"artifact_id"`
 			OfferID    string `json:"offer_id"`
 		}
-		var read struct {
-			Source string                      `json:"source"`
-			State  domain.ArtifactReplicaState `json:"state"`
-		}
+		var read artifactRead
 		if err := json.Unmarshal(effect.Request, &request); err != nil {
 			return fmt.Errorf("decode Artifact read %s: %w", effect.ID, err)
 		}
 		if err := json.Unmarshal(effect.Consequence, &read); err != nil {
 			return fmt.Errorf("decode Artifact read consequence %s: %w", effect.ID, err)
 		}
-		if read.Source == "replica" && !read.State.Usable() {
+		if read.Source == "replica" && !read.ReplicaState.Usable() {
 			return fmt.Errorf(
 				"Run %q read Artifact %q from a %q copy on offer %q, which nothing checked against the catalog",
-				effect.CorrelationID, request.ArtifactID, read.State, request.OfferID,
+				effect.CorrelationID, request.ArtifactID, read.ReplicaState, request.OfferID,
+			)
+		}
+		if digest := observation.ArtifactCatalog[request.ArtifactID].ContentDigest; read.ContentDigest != digest {
+			return fmt.Errorf(
+				"Run %q read Artifact %q from the %s on offer %q and was handed digest %s, and the catalog says %s",
+				effect.CorrelationID, request.ArtifactID, read.Source, request.OfferID, read.ContentDigest, digest,
 			)
 		}
 	}
@@ -1766,7 +1755,7 @@ func localityProvenance(observation InvariantObservation) error {
 	if err != nil {
 		return err
 	}
-	replicated, err := replicatedByOffer(observation.Effects)
+	prepared, err := preparedCopiesByOffer(observation.Effects)
 	if err != nil {
 		return err
 	}
@@ -1777,7 +1766,7 @@ func localityProvenance(observation InvariantObservation) error {
 		if err := heldContentIsExplained(offer, observation.SeededLocality[offer.ID], retained[offer.ID]); err != nil {
 			return err
 		}
-		if err := heldCopiesAreExplained(offer, observation.SeededReplicas[offer.ID], replicated[offer.ID]); err != nil {
+		if err := heldCopiesAreExplained(offer, observation.SeededReplicas[offer.ID], prepared[offer.ID]); err != nil {
 			return err
 		}
 	}
@@ -2073,19 +2062,26 @@ func heldContentIsExplained(offer domain.OfferSnapshot, seeded, retained map[str
 }
 
 // heldCopiesAreExplained is the Artifact half of the same question images
-// answer through retention. A copy is on a machine because the World Tape
-// declared it there or because the ledger says content landed there, and a copy
-// with neither is bytes from nowhere. Durability of the version answers a
+// answer through retention, and it is stricter, because the two kinds of content
+// are kept by different things. A copy is on a machine because the World Tape
+// declared it there or because a preparation Mercator issued landed it there, and
+// a copy with neither is bytes from nowhere. Durability of the version answers a
 // different question: it says the content exists, never that it exists HERE, and
 // pricing a host warm for content nothing delivered to it is exactly the mistake
 // a per-host rule exists to catch.
-func heldCopiesAreExplained(offer domain.OfferSnapshot, seeded, replicated map[string]bool) error {
+//
+// A launch leaves no copy, which is why any landing at all is not enough. An
+// image pull is a runtime operation and the image stays in that runtime's store
+// afterwards; a Run reading its declared inputs is a workload reading into its own
+// container, and nothing enumerates, hashes, or files that content. So a copy
+// explained only by an execution is warmth the next Run cannot collect.
+func heldCopiesAreExplained(offer domain.OfferSnapshot, seeded, prepared map[string]bool) error {
 	for _, replica := range offer.Artifacts.Replicas {
-		if seeded[replica.ArtifactID] || replicated[replica.ArtifactID] {
+		if seeded[replica.ArtifactID] || prepared[replica.ArtifactID] {
 			continue
 		}
 		return fmt.Errorf(
-			"offer %q holds a copy of Artifact %q with no World Tape seed and nothing recorded landing there",
+			"offer %q holds a copy of Artifact %q with no World Tape seed and no preparation recorded landing one there",
 			offer.ID,
 			replica.ArtifactID,
 		)
@@ -2093,11 +2089,12 @@ func heldCopiesAreExplained(offer domain.OfferSnapshot, seeded, replicated map[s
 	return nil
 }
 
-// replicatedByOffer reads back which Artifact copies the ledger says landed on
-// each host, whether a fetch delivered them or the Run that produced them wrote
-// them there.
-func replicatedByOffer(effects []EffectRecord) (map[string]map[string]bool, error) {
-	replicated := map[string]map[string]bool{}
+// preparedCopiesByOffer reads back which Artifact copies the ledger says a
+// preparation of Mercator's landed on each host. Why the bytes moved is part of
+// the question, because it is the only way a machine may come to hold a copy: a
+// landing recorded against anything else is read here as no landing at all.
+func preparedCopiesByOffer(effects []EffectRecord) (map[string]map[string]bool, error) {
+	prepared := map[string]map[string]bool{}
 	for _, effect := range effects {
 		if effect.Operation != OperationArtifactReplicated || effect.Command != EffectCommandAccepted {
 			continue
@@ -2105,16 +2102,20 @@ func replicatedByOffer(effects []EffectRecord) (map[string]map[string]bool, erro
 		var landed struct {
 			ArtifactID string `json:"artifact_id"`
 			OfferID    string `json:"offer_id"`
+			Source     string `json:"source"`
 		}
 		if err := json.Unmarshal(effect.Request, &landed); err != nil {
 			return nil, fmt.Errorf("decode Artifact replication %s: %w", effect.ID, err)
 		}
-		if replicated[landed.OfferID] == nil {
-			replicated[landed.OfferID] = map[string]bool{}
+		if landed.Source != contentSourcePrewarm {
+			continue
 		}
-		replicated[landed.OfferID][landed.ArtifactID] = true
+		if prepared[landed.OfferID] == nil {
+			prepared[landed.OfferID] = map[string]bool{}
+		}
+		prepared[landed.OfferID][landed.ArtifactID] = true
 	}
-	return replicated, nil
+	return prepared, nil
 }
 
 // retainedByOffer reads back what the effect ledger says each host kept. It

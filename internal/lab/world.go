@@ -406,6 +406,16 @@ type pendingPull struct {
 	completesAt time.Time
 }
 
+// contentSourcePrewarm and contentSourceLaunch are why content is moving onto a
+// machine, which the ledger records beside every transfer. A host warmed because
+// Mercator asked it to get ready and a host warmed because it ran something are
+// different facts about that machine, and one law reads exactly this difference:
+// only a preparation may leave an Artifact copy behind.
+const (
+	contentSourcePrewarm = "prewarm"
+	contentSourceLaunch  = "launch"
+)
+
 // pendingReplica is Artifact content still moving from the object store onto a
 // host. A copy exists when its bytes have landed and their digest matched, not
 // when the launch that wanted it was accepted. Like a pull it is named by the
@@ -516,6 +526,12 @@ type simulatedWorld struct {
 	// prefetch Mercator abandoned was abandoned because it stopped wanting the
 	// content, and content it wants again arrives with the launch that needs it.
 	prepared map[string]bool
+	// desired is the last thing each tenant said it wanted prepared, keyed by
+	// workspace. A desired set speaks for one workspace, and a machine's link is
+	// shared by all of them, so what a host keeps fetching is the union: a
+	// transfer stops when no tenant wants it any more, and one tenant's set
+	// saying nothing about another's content is not that tenant withdrawing it.
+	desired map[string]map[string]bool
 
 	executions map[string]externalExecution
 	// orphans is capacity this world's provider holds that Mercator never
@@ -552,6 +568,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		paths:          slices.Clone(tape.InitialWorld.Paths),
 		launch:         tape.InitialWorld.Launch,
 		prepared:       map[string]bool{},
+		desired:        map[string]map[string]bool{},
 		executions:     map[string]externalExecution{},
 		orphans:        map[string]orphanedCapacity{},
 		seededOrphans:  map[string]bool{},
@@ -1030,8 +1047,9 @@ func (world *simulatedWorld) settlePublications() {
 }
 
 // keepReplica records a verified local copy landing on one host, when it landed
-// and where it came from. Both origins produce the same fact about the machine,
-// which is why they produce one effect: the ledger says which it was.
+// and which fetch put it there. Only a fetch can: the copy is worth what checking
+// it against the catalog says it is worth, and nothing checks bytes it did not
+// read.
 func (world *simulatedWorld) keepReplica(artifactID, offerID, runID, launchKey, source string, at time.Time) {
 	// Capacity that keeps nothing keeps no Artifact copy either, for the same
 	// two reasons it keeps no image: a provisionable offer is a machine that
@@ -1873,7 +1891,7 @@ func (world *simulatedWorld) launchFitsOnDisk(request adapter.LaunchRequest, arr
 	_, needed := state.missing(request.Image, world.images[request.Image].Layers)
 	needed += request.Resources.EphemeralDisk.MinBytes
 	for _, artifactID := range arrival.Request.ConsumesArtifacts {
-		if replica, held := world.replicas[artifactID][state.offer.ID]; !held || !replica.State.Usable() {
+		if _, readable := world.readableReplica(artifactID, state.offer.ID); !readable {
 			version, _ := world.store.entry(artifactID)
 			needed += version.SizeBytes
 		}
@@ -1942,7 +1960,7 @@ func (world *simulatedWorld) pullRunImage(execution externalExecution, image str
 			offerID:     execution.OfferID,
 			runID:       execution.RunID,
 			launchKey:   execution.LaunchKey,
-			source:      "launch",
+			source:      contentSourceLaunch,
 			image:       image,
 			layers:      layers,
 			fetched:     fetched,
@@ -1999,35 +2017,44 @@ func transferDuration(bytes int64, bandwidthMbps float64) time.Duration {
 	return time.Duration(seconds * float64(time.Second))
 }
 
+// readableReplica is the copy one machine may read in place of the object store:
+// present, checked, and checked against what the catalog says this version is.
+// It is this world's half of domain.ArtifactInventory.Holds and it exists as one
+// function because two questions about the same launch ask it: what the workload
+// is handed, and what the machine has to find room for. A world that answered
+// either from the copy's own state alone would hand a Run another version's bytes,
+// for free, on a machine every predicate in the control plane had priced at the
+// whole read.
+func (world *simulatedWorld) readableReplica(artifactID, offerID string) (domain.ArtifactReplica, bool) {
+	replica, held := world.replicas[artifactID][offerID]
+	if !held || !replica.State.Usable() {
+		return replica, false
+	}
+	version, known := world.store.entry(artifactID)
+	return replica, known && replica.ContentDigest == version.ContentDigest
+}
+
 // readRunArtifacts resolves every input this execution declared and answers when
-// the last of them is readable on the host. A verified local copy is read where
-// there is one and costs nothing, which is the whole value of a replica; anything
-// else is fetched from the object store, because a copy nobody checked is not
-// evidence that the right bytes are here. The ledger records which it was, so
-// what a Run read is a fact rather than an inference from world state.
+// the last of them is readable on the host. A copy this host may read is read
+// where there is one and costs nothing, which is the whole value of a replica;
+// anything else is read out of the object store, because a copy nobody checked
+// against this version is not evidence that the right bytes are here. The ledger
+// records which it was, so what a Run read is a fact rather than an inference
+// from world state.
+//
+// What the read does not leave behind is a copy. A workload reads its own inputs
+// into its own container: no runtime in this tree attaches a replica to a Run or
+// fetches one on its behalf at launch, so nothing hashes those bytes and nothing
+// files them, and a machine that read 40GB for one Run owes the same read for the
+// next. Only a fetch Mercator issued leaves a replica, which is the rule the
+// output side of this file already holds for the same reason.
 //
 // Reads start at from for the same reason a pull does: there is nowhere to read
 // them onto until the machine exists.
 func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consumes []string, from time.Time) time.Time {
 	ready := from
 	for _, artifactID := range consumes {
-		replica, held := world.replicas[artifactID][execution.OfferID]
-		source := "replica"
-		completesAt := from
-		if !held || !replica.State.Usable() {
-			source = "object_store"
-			completesAt = from.Add(world.store.transferDuration(artifactID, world.linkMbps(execution.OfferID, domain.NetworkScopeObjectStore)))
-			version, _ := world.store.entry(artifactID)
-			world.replicating = append(world.replicating, pendingReplica{
-				offerID:     execution.OfferID,
-				runID:       execution.RunID,
-				launchKey:   execution.LaunchKey,
-				source:      source,
-				artifactID:  artifactID,
-				bytes:       version.SizeBytes,
-				completesAt: completesAt,
-			})
-		}
+		read := world.artifactRead(artifactID, execution.OfferID, from)
 		world.recordEffect(
 			OperationArtifactRead,
 			"artifact-read/"+execution.LaunchKey+"/"+artifactID,
@@ -2037,22 +2064,62 @@ func (world *simulatedWorld) readRunArtifacts(execution externalExecution, consu
 			execution.LaunchKey,
 			"",
 			map[string]any{"artifact_id": artifactID, "offer_id": execution.OfferID},
-			map[string]any{"source": source, "state": replica.State, "completes_at": completesAt},
+			read,
 			"",
 		)
-		ready = later(ready, completesAt)
+		ready = later(ready, read.CompletesAt)
 	}
-	world.settleReplicas()
 	return ready
 }
 
-// storeRunOutputs is what a finished producer leaves behind, in the two places
-// it leaves it. The output is written to the host that computed it, where it is
-// a local copy like any other, and then uploaded to the object store, where it
-// becomes an Artifact anyone can depend on. The gap between the two is the whole
-// point: a consumer admitted on the first has been admitted on bytes that live
-// on one machine. Both moments are measured from when the process exited, which
-// is the only clock a workload's output has.
+// artifactRead is what one execution was handed of one input: where the bytes
+// came from, what those bytes are, what the copy behind them was worth if there
+// was one, and when the last of them was readable.
+//
+// The digest is the served content's and never the machine's own bookkeeping. A
+// read out of the object store beside a stale copy's claim states that the
+// workload got another version's content, which is the opposite of what happened
+// and is all a tape reader or a Run Bundle has to go on. So a read from the store
+// carries the digest the catalog names and no replica state at all, because no
+// copy was behind it, and that is what lets one law cover every read a Run made.
+type artifactRead struct {
+	Source        string                      `json:"source"`
+	ContentDigest string                      `json:"content_digest"`
+	ReplicaState  domain.ArtifactReplicaState `json:"replica_state,omitempty"`
+	CompletesAt   time.Time                   `json:"completes_at"`
+}
+
+func (world *simulatedWorld) artifactRead(artifactID, offerID string, from time.Time) artifactRead {
+	if replica, readable := world.readableReplica(artifactID, offerID); readable {
+		return artifactRead{
+			Source:        "replica",
+			ContentDigest: replica.ContentDigest,
+			ReplicaState:  replica.State,
+			CompletesAt:   from,
+		}
+	}
+	version, _ := world.store.entry(artifactID)
+	return artifactRead{
+		Source:        "object_store",
+		ContentDigest: version.ContentDigest,
+		CompletesAt:   from.Add(world.store.transferDuration(artifactID, world.linkMbps(offerID, domain.NetworkScopeObjectStore))),
+	}
+}
+
+// storeRunOutputs is what a finished producer leaves behind: bytes on the host
+// that computed them, and an upload that makes those bytes an Artifact anyone can
+// depend on. The gap between the two is the whole point, because a consumer
+// admitted on the first would have been admitted on content that lives on one
+// machine. Both moments are measured from when the process exited, which is the
+// only clock a workload's output has.
+//
+// What it does not leave is a replica. A workload writes its output inside its
+// own container, and no runtime in the tree enumerates, hashes, or files that
+// content: verified live on a real daemon, a node reports no copy of what its own
+// workload just wrote. So the write is recorded as the world fact it is, evidence
+// of nothing anybody may be placed on, and the producing host owes the same read
+// as every other machine until a fetch Mercator issued lands a checked copy
+// there.
 // roomForOutputs is the machine deciding whether what this workload computed
 // will fit on it. Content a Run produces is content on somebody's disk, and no
 // one else could have accounted for it: a Run declares which Artifacts it
@@ -2075,7 +2142,19 @@ func (world *simulatedWorld) roomForOutputs(execution externalExecution) bool {
 func (world *simulatedWorld) storeRunOutputs(execution externalExecution, at time.Time) {
 	arrival := world.runs[execution.RunID]
 	for _, artifactID := range arrival.Request.ProducesArtifacts {
-		world.keepReplica(artifactID, execution.OfferID, execution.RunID, execution.LaunchKey, "run_output", at)
+		version, _ := world.store.entry(artifactID)
+		world.recordEffect(
+			OperationArtifactWritten,
+			"artifact-written/"+execution.LaunchKey+"/"+artifactID,
+			EffectCommandAccepted,
+			EffectResponseDelivered,
+			execution.RunID,
+			execution.LaunchKey,
+			"",
+			map[string]any{"artifact_id": artifactID, "offer_id": execution.OfferID},
+			map[string]any{"size_bytes": version.SizeBytes, "written_at": at},
+			"",
+		)
 		world.publishing = append(world.publishing, pendingPublication{
 			artifactID:  artifactID,
 			runID:       execution.RunID,

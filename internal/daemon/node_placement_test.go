@@ -342,7 +342,7 @@ func TestAWorkloadThatFailsOnANodeClosesTheRunFailed(t *testing.T) {
 // machine Mercator has stopped hearing from. The node is refused as expired
 // rather than silently preferred.
 func TestANodeThatGoesQuietStopsBeingOffered(t *testing.T) {
-	fleet := startFleet(t)
+	fleet := startFleet(t, leasedFor(900*time.Millisecond))
 	fleet.stopAgent()
 
 	// Offers expire on the age of the node's last facts, which is sooner than
@@ -380,6 +380,14 @@ type fleet struct {
 	// daemon for the one case about what a real machine reports.
 	agentRuntime nodeagent.Runtime
 	heartbeat    time.Duration
+	// lease is how long this daemon keeps trusting a node it has stopped hearing
+	// from, and a third of it is how long one of its offers stays selectable. It
+	// is generous by default because a stalled heartbeat is a fact of a loaded
+	// machine rather than a claim any case here makes: a fleet whose only machine
+	// went stale mid-case is one where a Run cannot be placed at all, so a short
+	// lease turns every case into a bet on how busy the host running the suite
+	// is. The one case about a machine going quiet states the lease it needs.
+	lease time.Duration
 	// soldOn is what an operator states this fleet's machine is bought on beyond its
 	// price: the block of time it is billed in, the classes it is held for, and the
 	// moment it stops being Mercator's. Empty is a machine bought in no increments,
@@ -403,6 +411,12 @@ type fleetOption func(*fleet)
 // at all when it cannot see it.
 func reporting(disk capability.DiskFacts) fleetOption {
 	return func(f *fleet) { f.runtime.disk = disk }
+}
+
+// leasedFor is how long this fleet's daemon keeps trusting a silent node, which
+// is what a case about a machine going quiet is measured in.
+func leasedFor(lease time.Duration) fleetOption {
+	return func(f *fleet) { f.lease = lease }
 }
 
 // runningOn hands the agent a real container runtime instead of the scripted
@@ -455,12 +469,13 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 			rebuiltIndexDigest: {trainerBaseDiffID, rebuiltTopDiffID},
 		}),
 		heartbeat: 20 * time.Millisecond,
+		lease:     30 * time.Second,
 	}
 	harness.agentRuntime = harness.runtime
 	for _, option := range options {
 		option(harness)
 	}
-	harness.address, harness.control = startRuntimeWithLease(t, 900*time.Millisecond, harness.prewarm)
+	harness.address, harness.control = startRuntimeWithLease(t, harness.lease, harness.prewarm)
 	bootstrap := harness.invite(t, 1.25)
 	harness.nodeID = bootstrap.NodeID
 	harness.stop = harness.startAgent(t, bootstrap, harness.agentRuntime)
@@ -1012,6 +1027,32 @@ func (f *fleet) nodeOffer(t *testing.T) offerSnapshot {
 	}
 	t.Fatalf("the enrolled node %q is not being offered", f.nodeID)
 	return offerSnapshot{}
+}
+
+// get reads one endpoint and answers with the status instead of failing on it,
+// which is how a case asks whether Mercator has recorded something yet. A record
+// that does not exist is an answer about the control plane rather than a broken
+// call, and a case that cannot tell the two apart reports the wrong one.
+func (f *fleet) get(t *testing.T, path string, into any) int {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodGet, "http://"+f.address+path, http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET %s: %v", path, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+f.token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("call GET %s: %v", path, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	raw, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		return response.StatusCode
+	}
+	if err := json.Unmarshal(raw, into); err != nil {
+		t.Fatalf("decode GET %s: %v: %s", path, err, raw)
+	}
+	return response.StatusCode
 }
 
 func (f *fleet) call(t *testing.T, method, path string, body, into any, wantStatus int) {

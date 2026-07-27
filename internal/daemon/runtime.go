@@ -19,6 +19,7 @@ import (
 	"github.com/benngarcia/mercator/internal/broker"
 	"github.com/benngarcia/mercator/internal/connection"
 	"github.com/benngarcia/mercator/internal/credential"
+	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/httpapi"
 	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/node"
@@ -88,6 +89,7 @@ type Runtime struct {
 
 	stopReconcile context.CancelFunc
 	reconcileDone chan struct{}
+	prepareDone   chan struct{}
 	nodes         *node.Registry
 
 	shutdownOnce sync.Once
@@ -184,7 +186,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		// Preparation reaches enrolled nodes through the same Broker a launch
 		// does, which is what makes the prepare half of capability.NodeRuntime
 		// reachable from the control plane at all.
-		orchestrator.WithPrewarm(providerBroker, prewarmPolicy(cfg.Prewarm)),
+		orchestrator.WithPrewarm(providerBroker, prewarmPolicy(cfg.Prewarm), storage.Preparation()),
 	)
 	if signer.Enabled() && cfg.PublicURL != "" {
 		orchestratorOptions = append(orchestratorOptions, orchestrator.WithReporting(cfg.PublicURL, signer))
@@ -268,6 +270,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		janitor:       workspaceJanitor,
 		stopReconcile: stopReconcile,
 		reconcileDone: make(chan struct{}),
+		prepareDone:   make(chan struct{}),
 		nodes:         nodes,
 	}
 	// Draining the node sessions is registered with the server rather than
@@ -278,6 +281,7 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	// its own and is left to.
 	runtime.server.RegisterOnShutdown(nodes.Drain)
 	go runtime.reconcile(reconcileCtx)
+	go runtime.prepareWhenDesireChanges(reconcileCtx)
 	return runtime, nil
 }
 
@@ -410,13 +414,20 @@ func (r *Runtime) Serve(listener net.Listener) error {
 	return r.server.Serve(listener)
 }
 
-// Shutdown drains HTTP requests, stops and joins background reconciliation,
-// then closes SQLite. Repeated calls return the first shutdown result.
+// Shutdown stops and joins background reconciliation, drains HTTP requests, then
+// closes SQLite. Repeated calls return the first shutdown result.
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	r.shutdownOnce.Do(func() {
-		httpErr := r.server.Shutdown(ctx)
+		// Background work is told to stop before requests are drained, and joined
+		// after. Reconciliation and preparation both send commands to machines, and
+		// an enrolled node receives one by holding a request open on this same
+		// server, so draining while they are still starting work is waiting for
+		// requests this process is still creating. Joining them first would spend
+		// the caller's drain budget on a sweep that answers to nobody.
 		r.stopReconcile()
+		httpErr := r.server.Shutdown(ctx)
 		<-r.reconcileDone
+		<-r.prepareDone
 		storageErr := r.storage.Close()
 		r.shutdownErr = errors.Join(httpErr, storageErr)
 	})
@@ -439,7 +450,7 @@ type ReconcileResult struct {
 // returns the provider inventory observed after both paths run.
 func (r *Runtime) ReconcileWorkspace(ctx context.Context, workspaceID string) (ReconcileResult, error) {
 	advanced, advanceErr := r.orch.AdvanceOpenRuns(ctx, workspaceID)
-	_, prewarmErr := r.orch.Prewarm(ctx, workspaceID)
+	_, prewarmErr := r.orch.Prewarm(ctx)
 	swept, sweepErr := r.janitor.Sweep(ctx, workspaceID)
 	owned, inventoryErr := r.ListOwned(ctx, workspaceID)
 	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Converged(), Owned: owned},
@@ -479,6 +490,64 @@ func (r *Runtime) reconcile(ctx context.Context) {
 	}
 }
 
+// prepareWhenDesireChanges reconciles preparation as soon as something happened
+// that could change what Mercator wants prepared, which is what makes preparation
+// worth having: a Run submitted half a second after a sweep would otherwise wait
+// out the rest of a minute before anything was fetched for the machine it is
+// queued on, and the bound on how often preparation may begin would never be the
+// thing that held it back.
+//
+// It subscribes from the log's head, so a restart wakes on what happens next
+// rather than replaying every Booking this deployment ever made. Everything
+// already delivered is answered by one pass, because the desired set is derived
+// from all of it at once and reconciling per event would ask the same question
+// several times over.
+func (r *Runtime) prepareWhenDesireChanges(ctx context.Context) {
+	defer close(r.prepareDone)
+	events := r.storage.EventLog()
+	filter := eventlog.EventFilter{EventTypes: orchestrator.PreparationTriggers()}
+	head, err := events.LatestPosition(ctx, filter)
+	if err != nil {
+		log.Printf("read the log position to prepare from: %v", err)
+		return
+	}
+	deliveries, err := events.Subscribe(ctx, eventlog.SubscriptionRequest{
+		SubscriptionID: "daemon-preparation",
+		After:          head,
+		Filter:         filter,
+	})
+	if err != nil {
+		log.Printf("subscribe to the events that change what is prepared: %v", err)
+		return
+	}
+	for range deliveries {
+		drain(deliveries)
+		if ctx.Err() != nil {
+			return
+		}
+		if prepared, err := r.orch.Prewarm(ctx); err != nil {
+			log.Printf("prepare capacity for queued work: %v", err)
+		} else if prepared.Stated > 0 {
+			log.Printf("prepare capacity: asked %d workspaces for %d pieces of content", prepared.Stated, prepared.Wanted)
+		}
+	}
+}
+
+// drain takes everything already delivered off the channel. One reconciliation
+// answers all of it.
+func drain[T any](deliveries <-chan T) {
+	for {
+		select {
+		case _, open := <-deliveries:
+			if !open {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
 func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, jan *janitor.Janitor) {
 	workspaces, err := orch.ListRunWorkspaces(ctx)
 	if err != nil {
@@ -493,15 +562,6 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 		if advanced.Closed > 0 {
 			log.Printf("run advancement sweep %s: closed %d of %d open runs", workspaceID, advanced.Closed, advanced.Open)
 		}
-		// Preparation is reconciled after the Runs move, because what Mercator
-		// wants prepared is derived from where they ended up. A machine that
-		// refuses it costs the fleet start latency and never correctness, so a
-		// failure here is logged rather than allowed to end the sweep.
-		if prepared, err := orch.Prewarm(ctx, workspaceID); err != nil {
-			log.Printf("prepare capacity sweep %s: %v", workspaceID, err)
-		} else if prepared.Sent {
-			log.Printf("prepare capacity sweep %s: asked for %d pieces of content", workspaceID, prepared.Wanted)
-		}
 		result, err := jan.Sweep(ctx, workspaceID)
 		if err != nil {
 			log.Printf("janitor sweep %s: %v", workspaceID, err)
@@ -513,6 +573,16 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 				workspaceID, result.Found, result.Adopted, result.Terminated,
 			)
 		}
+	}
+	// Preparation is reconciled after every tenant's Runs have moved, because
+	// what Mercator wants prepared is derived from where they ended up, and in
+	// one pass over the fleet, because the bounds it stays inside are the
+	// fleet's. A machine that refuses it costs start latency and never
+	// correctness, so a failure here is logged rather than ending the sweep.
+	if prepared, err := orch.Prewarm(ctx); err != nil {
+		log.Printf("prepare capacity sweep: %v", err)
+	} else if prepared.Stated > 0 {
+		log.Printf("prepare capacity sweep: asked %d workspaces for %d pieces of content", prepared.Stated, prepared.Wanted)
 	}
 }
 

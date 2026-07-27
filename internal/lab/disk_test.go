@@ -23,6 +23,13 @@ import (
 // aimed at a machine nobody could enumerate: silence is priced and never
 // refused, so Mercator selects it holding no evidence either way, and World
 // Truth is what says no.
+//
+// What it is holding is the digest half of the same question. Forty of its sixty
+// gigabytes are a checked copy of the version before this one, filed under the
+// name this Run reads, so the room the launch needs is the whole dataset again. A
+// world that counted that copy as this version would find eleven gigabytes of work
+// on twenty gigabytes of disk, let the launch through, and hand the workload
+// another version's bytes.
 func TestAMachineWithNoRoomRefusesTheWork(t *testing.T) {
 	execution := openBlueprintExecution(t, "testdata/blueprints/a-machine-with-no-room-refuses-the-work.json", DefaultLimits())
 	defer func() {
@@ -43,14 +50,16 @@ func TestAMachineWithNoRoomRefusesTheWork(t *testing.T) {
 		t.Fatalf("Placement established %d bytes of content against a machine that enumerated nothing", candidate.Disk.EstablishedLandBytes)
 	}
 	ledger := diskLedgerFor(t, execution, "cramped-host")
-	if len(ledger.Resident) > 0 {
-		t.Fatalf("the machine that refused the work is holding %+v", ledger.Resident)
+	stale := replicaOf(t, execution, "artifact:imagenet:v2.41", "cramped-host")
+	if len(ledger.Resident) != 1 || ledger.Resident[0].SizeBytes != stale.SizeBytes {
+		t.Fatalf("the machine that refused the work is holding %+v, and it began holding one copy", ledger.Resident)
 	}
 	if ledger.ReservedBytes != 0 {
 		t.Fatalf("the machine that refused the work reserved %d bytes for it", ledger.ReservedBytes)
 	}
-	if free := ledger.FreeBytes(); free != ledger.CapacityBytes {
-		t.Fatalf("the machine offers %d of its %d bytes, and it took none of the work", free, ledger.CapacityBytes)
+	if free := ledger.FreeBytes(); free != ledger.CapacityBytes-stale.SizeBytes {
+		t.Fatalf("the machine offers %d of its %d bytes against a %d byte copy, and it took none of the work",
+			free, ledger.CapacityBytes, stale.SizeBytes)
 	}
 }
 

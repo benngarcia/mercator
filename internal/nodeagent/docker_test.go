@@ -604,17 +604,20 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-// pull makes sure this machine holds the image a case runs. A machine that
-// already holds it needs no registry: these cases are about what a node does with
-// content on its disk, and a public registry refusing an anonymous client is not a
-// reason to skip a case whose content is already here.
+// pull puts the content a case needs on this daemon. A pull that cannot be had
+// only stops a case when the daemon does not already hold the reference. Every
+// live case here checks the agent against what this daemon itself reports, so an
+// image already unpacked on this machine is the same evidence as one fetched a
+// second ago, and an address a registry is throttling still runs the whole live
+// half rather than skipping it and proving nothing.
 func pull(t *testing.T, reference string) {
 	t.Helper()
-	if exec.Command("docker", "image", "inspect", reference).Run() == nil {
+	output, err := exec.Command("docker", "pull", "--quiet", reference).CombinedOutput()
+	if err == nil {
 		return
 	}
-	if output, err := exec.Command("docker", "pull", "--quiet", reference).CombinedOutput(); err != nil {
-		t.Skipf("cannot pull %s on this machine: %v\n%s", reference, err, output)
+	if held := exec.Command("docker", "image", "inspect", reference).Run(); held != nil {
+		t.Skipf("this machine can neither pull %s nor already hold it: %v\n%s", reference, err, output)
 	}
 }
 

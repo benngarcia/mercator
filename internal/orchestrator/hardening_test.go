@@ -174,6 +174,52 @@ func TestCreateRunReplayReturnsOriginalGeneratedRunID(t *testing.T) {
 	}
 }
 
+// A Run whose image survives intake as a tag is a Run whose content Mercator
+// cannot name. Every answer it gives about an image afterwards is a digest
+// comparison: what a machine holds, whether it already holds this, and whether
+// two Runs want the same bytes. A deployment with no resolver is where this
+// happens, and the refusal belongs at intake rather than at each of those
+// answers.
+func TestARunWhoseImageNamesNoContentIsRefused(t *testing.T) {
+	ctx := context.Background()
+	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
+	revision := orchRevision()
+	revision.Spec.Containers[0].Image = "registry.example/trainer:v1"
+
+	_, err := orch.CreateRun(ctx, CreateRunRequest{
+		WorkspaceID:    "ws_1",
+		RunID:          "run_unpinned",
+		IdempotencyKey: "idem_unpinned",
+		Workload:       revision,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "IMAGE_NOT_PINNED") {
+		t.Fatalf("expected IMAGE_NOT_PINNED, got %v", err)
+	}
+}
+
+// A digest of the wrong length is not a digest. It reaches intake from a
+// resolver that answered with something else, and admitting it would put a
+// reference no registry can serve into a Run and a content identity nothing on
+// any machine will ever match.
+func TestARunWhoseDigestIsNotADigestIsRefused(t *testing.T) {
+	ctx := context.Background()
+	orch := newTestOrchestrator(t, fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOffer("off_1", time.Now().UTC())})))
+	revision := orchRevision()
+	revision.Spec.Containers[0].Image = "registry.example/trainer@sha256:deadbeef"
+
+	_, err := orch.CreateRun(ctx, CreateRunRequest{
+		WorkspaceID:    "ws_1",
+		RunID:          "run_short_digest",
+		IdempotencyKey: "idem_short_digest",
+		Workload:       revision,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "IMAGE_NOT_PINNED") {
+		t.Fatalf("expected IMAGE_NOT_PINNED, got %v", err)
+	}
+}
+
 // C (failure path): a resolver error surfaces a coded IMAGE_RESOLUTION_FAILED error.
 func TestCreateRunSurfacesResolutionFailure(t *testing.T) {
 	ctx := context.Background()

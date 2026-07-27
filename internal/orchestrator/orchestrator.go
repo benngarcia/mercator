@@ -122,10 +122,11 @@ type Orchestrator struct {
 	// file, so a workspace's admissions are all decided here or not at all. A
 	// second control plane over one log would need the log to arbitrate, which is a
 	// different design rather than a wider mutex.
-	admissionLocks keyedMutex
-	prewarmer      Prewarmer
-	prewarmPolicy  PrewarmPolicy
-	prewarmed      prewarmMemory
+	admissionLocks   keyedMutex
+	prewarmer        Prewarmer
+	prewarmPolicy    PrewarmPolicy
+	prewarmed        prewarmMemory
+	preparationClock PreparationClock
 }
 
 type Adapter interface {
@@ -258,6 +259,27 @@ func resolveWorkloadImages(ctx context.Context, rev domain.WorkloadRevision, res
 	return rev, nil
 }
 
+// refuseUnpinnedImages rejects a Run whose image names a label instead of
+// content. A stored workload revision may carry a tag, because it is a template
+// and resolution is deferred to here, but a Run is a commitment to bytes: every
+// answer Mercator gives about an image afterwards is a digest comparison, so a
+// Run admitted with a tag is one whose content Mercator cannot name, cannot ask
+// a machine whether it holds, and cannot recognise as the same content another
+// Run wants. It is refused at intake rather than guarded downstream, because the
+// answer never changes and each downstream guard would have to invent one.
+func refuseUnpinnedImages(workload domain.WorkloadRevision) error {
+	for _, container := range workload.Spec.Containers {
+		if domain.PinnedImage(container.Image) {
+			continue
+		}
+		return fmt.Errorf(
+			"IMAGE_NOT_PINNED: Run image %q names no content; reference it as repository@sha256:<64 hex> or configure an image resolver to pin it",
+			container.Image,
+		)
+	}
+	return nil
+}
+
 type CreateRunResult struct {
 	RunID     string
 	Duplicate bool
@@ -311,6 +333,9 @@ func (o *Orchestrator) CreateRun(ctx context.Context, req CreateRunRequest) (Cre
 	// Validate what we are about to store and launch, not what was submitted.
 	if violations := domain.ValidateWorkloadRevision(req.Workload); len(violations) > 0 {
 		return CreateRunResult{}, fmt.Errorf("%s: %s", violations[0].Code, violations[0].Message)
+	}
+	if err := refuseUnpinnedImages(req.Workload); err != nil {
+		return CreateRunResult{}, err
 	}
 	if err := o.refuseUnknowableInputs(req.Workload); err != nil {
 		return CreateRunResult{}, err

@@ -33,14 +33,16 @@ const (
 // the image after that child would produce a digest no Docker daemon has ever
 // heard of, and the whole-image fast path would silently never fire.
 func TestRegistryResolverAgreesWithDockerAboutAPublicImage(t *testing.T) {
-	requireDockerHubReachable(t)
 	requireDocker(t)
-	holdImage(t, "busybox:latest")
+	requireImage(t, "busybox:latest")
 	pinned := docker(t, "image", "inspect", "busybox:latest", "--format", "{{index .RepoDigests 0}}")
 	platform := dockerPlatform(t, "busybox:latest")
 
 	manifest, err := NewRegistryResolver().ResolveManifest(context.Background(), pinned, platform)
 
+	if errors.Is(err, ErrThrottled) {
+		t.Skipf("docker.io is rate limiting this address: %v", err)
+	}
 	if err != nil {
 		t.Fatalf("resolve %s: %v", pinned, err)
 	}
@@ -70,7 +72,7 @@ func platformManifestReference(t *testing.T, pinned string, platform domain.Plat
 			} `json:"platform"`
 		} `json:"manifests"`
 	}
-	if err := json.Unmarshal([]byte(docker(t, "manifest", "inspect", pinned)), &index); err != nil {
+	if err := json.Unmarshal([]byte(dockerHubRead(t, "manifest", "inspect", pinned)), &index); err != nil {
 		t.Fatalf("decode docker manifest inspect %s: %v", pinned, err)
 	}
 	repository, _, _ := strings.Cut(pinned, "@")
@@ -90,10 +92,7 @@ func platformManifestReference(t *testing.T, pinned string, platform domain.Plat
 // doing nothing.
 func TestRegistryResolverAuthenticatesAgainstAPrivateRegistry(t *testing.T) {
 	requireDocker(t)
-	// The registry this case reads from runs here, so Docker Hub is needed only to
-	// obtain the content once. A machine that already holds busybox needs nothing
-	// off this host at all.
-	holdImage(t, "busybox:latest")
+	requireImage(t, "busybox:latest")
 	host := startPrivateRegistry(t)
 	reference := host + "/private/trainer:v1"
 	docker(t, "tag", "busybox:latest", reference)
@@ -128,6 +127,7 @@ func TestRegistryResolverAuthenticatesAgainstAPrivateRegistry(t *testing.T) {
 // returns the loopback host it answers on.
 func startPrivateRegistry(t *testing.T) string {
 	t.Helper()
+	requireImage(t, "registry:2")
 	container := docker(t,
 		"run", "--detach",
 		"--publish", "127.0.0.1::5000",
@@ -212,7 +212,7 @@ func assertMatchesDockerManifest(t *testing.T, manifest domain.ImageManifest, re
 			Size   int64  `json:"size"`
 		} `json:"layers"`
 	}
-	if err := json.Unmarshal([]byte(docker(t, "manifest", "inspect", reference)), &reported); err != nil {
+	if err := json.Unmarshal([]byte(dockerHubRead(t, "manifest", "inspect", reference)), &reported); err != nil {
 		t.Fatalf("decode docker manifest inspect %s: %v", reference, err)
 	}
 	if len(reported.Layers) != len(manifest.Layers) {
@@ -289,67 +289,41 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-// requireDockerHubReachable proves the network is there before a test that
-// needs it, so an offline machine skips rather than reporting a failure it
-// cannot have caused.
-// requireDockerHubReachable skips the case unless Docker Hub will serve this
-// machine a manifest. A 200 from /v2/ was never that question: an anonymous
-// client over the registry's rate limit is issued a token and then answered 429
-// for every manifest it asks for, which surfaces as this case reporting that
-// Mercator and Docker disagree about a digest when the truth is that neither of
-// them was served. A registry refusing an environment proves nothing either way,
-// so the case says so and skips.
-func requireDockerHubReachable(t *testing.T) {
+// requireImage puts the content a case needs on this machine without insisting
+// on a fresh copy of it. The private-registry case pushes these bytes into a
+// registry it starts itself and checks the resolver against what that registry
+// stored, so a copy this daemon already holds is the same evidence as one just
+// fetched, and an address Docker Hub is throttling still runs the case.
+func requireImage(t *testing.T, reference string) {
 	t.Helper()
-	client := &http.Client{Timeout: 10 * time.Second}
-	request, err := http.NewRequest(http.MethodHead, "https://registry-1.docker.io/v2/library/busybox/manifests/latest", nil)
-	if err != nil {
-		t.Fatalf("build the reachability request: %v", err)
+	if err := exec.Command("docker", "pull", "--quiet", reference).Run(); err == nil {
+		return
 	}
-	request.Header.Set("Authorization", "Bearer "+dockerHubPullToken(t, client, "library/busybox"))
-	request.Header.Set("Accept", "application/vnd.oci.image.index.v1+json")
-	response, err := client.Do(request)
-	if err != nil {
-		t.Skipf("docker.io is unreachable from this machine: %v", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		t.Skipf("docker.io answers %s to an anonymous manifest read, so it will not serve this machine", response.Status)
+	if err := exec.Command("docker", "image", "inspect", reference).Run(); err != nil {
+		t.Skipf("this machine can neither pull %s nor already hold it: %v", reference, err)
 	}
 }
 
-// dockerHubPullToken is the anonymous pull token the daemon would fetch for the
-// same read. The rate limit is enforced on the manifest and not on the token, so
-// the token succeeding is not evidence the registry will serve anything.
-func dockerHubPullToken(t *testing.T, client *http.Client, repository string) string {
+// dockerHubRead is a docker command that reads a public registry, which answers
+// an address that has spent its anonymous quota with 429. Everything the
+// public-image case compares comes from two readers of the same registry, this
+// resolver and this daemon, and they cross that quota four times between them, so
+// a gate at the top can prove the first read is allowed and can promise nothing
+// about the fourth. The throttle is answered where it appears instead. A skip is
+// the honest answer to it for the same reason it is the honest answer to being
+// offline: a registry that will not serve the manifest says nothing about whether
+// the resolver reads it correctly.
+func dockerHubRead(t *testing.T, args ...string) string {
 	t.Helper()
-	response, err := client.Get("https://auth.docker.io/token?service=registry.docker.io&scope=repository:" + repository + ":pull")
-	if err != nil {
-		t.Skipf("docker.io is unreachable from this machine: %v", err)
+	var stdout, stderr strings.Builder
+	command := exec.Command("docker", args...)
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		if strings.Contains(stderr.String(), "toomanyrequests") {
+			t.Skipf("docker.io is rate limiting this address: docker %s\n%s", strings.Join(args, " "), stderr.String())
+		}
+		t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, stderr.String())
 	}
-	defer func() { _ = response.Body.Close() }()
-	var issued struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&issued); err != nil || issued.Token == "" {
-		t.Skipf("docker.io issued no anonymous pull token for %s: %v", repository, err)
-	}
-	return issued.Token
-}
-
-// holdImage makes sure this machine holds the image a case reads. A machine that
-// already holds it needs no registry: the content is identified by digest, so a
-// copy on this disk is the same content the registry would serve. A registry that
-// refuses to serve an image this machine does not hold skips the case rather than
-// failing it, for the same reason the guard above does.
-func holdImage(t *testing.T, reference string) {
-	t.Helper()
-	if exec.Command("docker", "image", "inspect", reference).Run() == nil {
-		return
-	}
-	output, err := exec.Command("docker", "pull", "--quiet", reference).CombinedOutput()
-	if err == nil {
-		return
-	}
-	t.Skipf("this machine holds no %s and the registry will not serve one: %s", reference, strings.TrimSpace(string(output)))
+	return strings.TrimSpace(stdout.String())
 }
