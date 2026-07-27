@@ -479,6 +479,49 @@ func TestASessionCredentialFromASupersededEnrollmentIsRejected(t *testing.T) {
 	}
 }
 
+// TestADrainedRegistryOpensNoFurtherSession is the half of the drain that makes it
+// final. Ending the open sessions is what lets a shutdown finish; refusing the next
+// one is what stops it being undone while the shutdown waits.
+//
+// The window is the ordinary case rather than a race. http.Server closes its
+// listeners and keeps every already-open keep-alive connection usable, and an agent
+// posts its events and opens its session over one http.Transport, so a session
+// request landing on a connection the sweep did not close starts a fresh long-lived
+// read that Shutdown then waits out. That is the whole fifteen seconds the
+// production binary allows and then exit 1 on a deadline it could not have met, and
+// nothing in the tree asked for it: the flag and the refusal could both be deleted
+// with every package green.
+func TestADrainedRegistryOpensNoFurtherSession(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+
+	registry.Drain()
+
+	if _, err := registry.OpenSession(context.Background(), bootstrap.NodeID, enrollment.SessionToken); err == nil {
+		t.Fatal("a control plane that has drained opened a node another long-lived read")
+	}
+}
+
+// TestADrainEndsTheSessionANodeIsHoldingOpen is the other half, stated at the object
+// that owns the sessions. The daemon case holds the same fact through a real
+// shutdown; this one holds it here, so a registry that stopped ending them fails
+// without an HTTP server in the way.
+func TestADrainEndsTheSessionANodeIsHoldingOpen(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	registry.Drain()
+
+	select {
+	case <-session.Done():
+	default:
+		t.Fatal("a drained control plane left a node holding its session open")
+	}
+}
+
 // Helpers below keep each case to arrange, act, assert.
 
 const (
