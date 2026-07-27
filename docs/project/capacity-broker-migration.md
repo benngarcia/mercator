@@ -4587,8 +4587,8 @@ the launch.
 
 On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
 native Docker Engine 29.6.2 on Ubuntu 26.04, against
-`beng/prediction-and-service-classes` at the eight commits above `515f995`.
-`go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
+`beng/prediction-and-service-classes` at this slice's commits, `65b2fa1` through
+`cb2e9a4`. `go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
 packages, and `go test -race -count=1` clean over `internal/domain`,
 `internal/scheduler`, `internal/scenario/...`, `internal/node`, `internal/httpapi`,
 `internal/storage/sqlite`, `internal/daemon` and `internal/lab`, `internal/lab`
