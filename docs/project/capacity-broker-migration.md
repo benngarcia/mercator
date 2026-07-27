@@ -3077,10 +3077,12 @@ complete because it works against a live provider.
     still owes, so the sweeps between the last arrival and the next completion happen
     inside one advance with nothing reasoning in the middle of them, and those sweeps
     are the entire fixture: a freed Booking position is given to whatever outranks the
-    rest of the queue on the sweep that notices it. It is also why
-    `an-impossible-ask-empties-no-fleet` still records `DEADLINE_UNREACHABLE` rather
-    than the earlier bound. Driven to the world's horizon it reaches five hours in one
-    advance, where both bounds have gone by and `stepAdmit` names the stronger one.
+    rest of the queue on the sweep that notices it.
+    `an-impossible-ask-empties-no-fleet` is driven to the world's horizon instead, so it
+    reaches five hours in one advance with both bounds behind it, and the bound its
+    refusal names is the earlier one. This entry first recorded that Run as refused
+    `DEADLINE_UNREACHABLE` and presented it as a consequence of the driver, which review
+    refuted. The review bullet below is where that is corrected.
   - `a-class-with-no-deadline-still-stops-waiting` is the refusal at L0 and
     `conformance/a-queue-delay-bound-is-refused-loudly` is the same claim at L1. Both
     are the opportunistic case on purpose, because it is the one where nothing else can
@@ -3112,9 +3114,59 @@ complete because it works against a live provider.
     naming the arrival that overtook the batch Run and the wait it had accumulated.
     Deleting the queue-delay branch from `deferOrRefuse` fails
     `conformance/a-queue-delay-bound-is-refused-loudly` on the same law's first half.
-    The strengthened clause has its own three cases in `internal/lab`: younger work
-    admitted past a Run later refused is a violation, a fleet that could hold nothing is
-    not, and older work admitted ahead of a Run later refused is not.
+    The strengthened clause has its own cases in `internal/lab`: younger work admitted
+    past a Run later refused is a violation, and a wait past its bound refused under
+    another name is a violation, while a fleet that could hold nothing, older work
+    admitted ahead, another tenant's admission, and a Run placed again after a failed
+    launch are all silent.
+  - Two reviewers refuted parts of this slice on 2026-07-27, five of the six findings
+    were real, and all five are repaired. Every repair has a case that is red against
+    the reading it replaces, driven one at a time.
+    - Admission named the later of two broken bounds. `stepAdmit` asked only the class
+      deadline on the way to Placement, so a Run past both bounds was closed
+      `DEADLINE_UNREACHABLE` with its queue delay unmentioned:
+      `an-impossible-ask-empties-no-fleet` refused `run-impossible` after 17940 seconds
+      against the 1800 its class allows and named the four hour deadline.
+      `Admission.BoundAlreadyBroken` is the one place both doors take the word from now,
+      and it names the promise Mercator broke first. Naming the elapsed deadline is
+      unreachable for every class in the table as a result, which is a fact about a
+      table where every queue delay is shorter than its own deadline rather than a hole:
+      `DEADLINE_UNREACHABLE` is what a projected miss is called, which is the case only
+      `deferOrRefuse` can see. `a-machine-that-came-free-too-late-is-not-a-start` changes
+      reason with it and proves exactly what it did before, that the Run is refused
+      rather than started on a machine that came free too late.
+    - The starvation law read the reason code, so the record above went unjudged by both
+      of its halves at once: the first skips a Run that is closed, and the second
+      filtered refusals on `QUEUE_DELAY_EXCEEDED` and never saw it. It reads the wait
+      against the class bound now, which is what this registry says about reason codes
+      everywhere else.
+    - Both admission laws replayed every tenant in one flat pass while Mercator orders
+      each workspace's queue on its own, so an admission in `ws_beta` convicted a
+      refusal in `ws_alpha` of starvation for an ordering neither queue can express.
+      They are scoped to the workspace now, and `WorkspaceID` was on every event the
+      whole time.
+    - Both laws also restarted a Run's wait at each placement, while
+      `runState.queuedSince` is set at the first deferral and never cleared. A
+      replacement after a launch that failed read back as an arrival that had waited
+      nothing, and convicted the queue it was in fact the oldest member of. Membership
+      of the queue still ends at a placement, and the moment a wait began no longer does.
+    - The exemption was read off the refusal's own fleet answer, and the priority door
+      records none, so a Run nothing in the fleet could ever hold was judged as if the
+      fleet had room for it. It is the fleet's last measurement during the wait now,
+      which is what this law's stated assumption always claimed and what production's own
+      reading deliberately does not do: production asks whether other work must be held
+      behind this wait now, where an unrenewed exemption is a claim about a fleet nobody
+      has asked since.
+    - Rejected, with the evidence. The sixth finding is that feeding `run.queued` into
+      `Starved` refuses a Run for time it spent holding a Booking rather than queueing.
+      `queued` is elapsed time since the first deferral, which is what the class deadline
+      has always been measured over and what `AdmissionDeferral.QueuedSeconds` documents
+      itself as, so subtracting the launch attempts would make the two bounds measure
+      different things while the record states one number for both. A Run that has not
+      started an hour after a thirty minute promise has broken that promise whether it
+      spent the hour queued or spent it failing to launch. Max pre-start attempts bound
+      how many machines a Run may be tried on, the class bounds how long its caller
+      waits, and whichever bites first is the answer.
 
 
 ## Phase status
@@ -4096,6 +4148,67 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 the queue slice under review, and the five readings it got wrong
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, against `beng/prediction-and-service-classes`
+at the three commits above `b41429b`. `go build ./...`, `go vet ./...` and `go test
+./... -count=1` all clean over 36 packages, and `go test -race -count=1` clean over
+`internal/domain`, `internal/lab`, `internal/orchestrator` and `internal/scenario/...`,
+`internal/lab` taking 198s of it.
+
+Every repair is red against the reading it replaces, mutated back one at a time.
+
+- Naming the deadline at the door on the way to Placement fails
+  `TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane` with `the wait ended as
+  "DEADLINE_UNREACHABLE" after 17940s, against the 1800s of queue this class allows`,
+  and fails `a-machine-that-came-free-too-late-is-not-a-start` in
+  `internal/scenario` on the reason its own timeline states.
+- Filtering the starvation law's second half on `QUEUE_DELAY_EXCEEDED` again leaves it
+  silent on a standard Run refused 17940 seconds into its wait under the other name,
+  while an interactive arrival that had waited nothing was admitted 3000 seconds in.
+- Dropping the workspace from the adjudication reports `Run "run-quiet" of class
+  "batch" was refused after waiting 3601s, and "run-other-tenant" of class
+  "interactive" was admitted 1900s into that wait having waited 0s` for two Runs in
+  two tenants, and dropping it from the ordering law reports the same shape for an
+  opportunistic Run admitted in `ws_beta`.
+- Restoring the delete on each Booking Decision reports `"run-watched" of class
+  "interactive" was admitted 2000s into that wait having waited 0s` for a Run that had
+  been waiting for three thousand seconds and was placed again after a failed launch.
+- Reading the exemption off the refusal's own fleet answer reports starvation for
+  `run-unholdable`, a Run whose fleet had already answered that no machine it published
+  can ever hold it, refused at its bound through the priority door.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestAFloorOnReadingTheDataIsAskedOfWhatThisNodeDelivers` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` all pass against MinIO containers
+of the native engine, and both cases of `MERCATOR_DOCKER_INTEGRATION=1 go test
+./internal/adapter/docker -run TestIntegration` pass against real containers. Nothing
+in this pass needed a container of its own, because what it changes is the control
+plane's own record and the laws stated over it. Mercator issue #165 does not reproduce
+here and was left alone.
+
+Named and not fixed here. `gofmt -l .` reports `internal/adapter/vast/client.go`,
+`internal/scheduler/scheduler.go` and `internal/scheduler/scheduler_test.go`, which are
+struct tag alignment left by `595f7b0` and `1e13518` earlier on this branch and are
+untouched by this pass. They are not reformatted here because a concurrent session
+holds `internal/scheduler/scheduler.go` in a stash against this worktree, and a
+whitespace commit under it would conflict for no gain.
+
+The root corpus is 52 Blueprints, 49 of them green, with 26 conformance fixtures. No
+fixture moved classification: one green Blueprint states a different refusal reason,
+which is the behaviour under repair.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/lab ./internal/orchestrator \
+  ./internal/scenario/...
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
 
 ### Phase 4 a decision is added, and a Run that found nothing gets one
 
