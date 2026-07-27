@@ -1,0 +1,68 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "Owned capacity economics at L1. An enrolled node at 1 USD an hour, bought by the hour and ten minutes into the hour Mercator has already paid for, against a marketplace machine at 1.60 an hour billed by the minute with a 5 cent fee to hand it over. The node is warm; the marketplace machine boots for half a minute and pulls the 200MB image. The half-hour Run costs 0.50 on the node if the only thing charged is the shadow price of the seconds it occupies, and 1.17 once the rest of the node's hour is charged to the placement that buys it: ten minutes already owed, twenty minutes of its own, and forty minutes nothing will use. So it runs on the marketplace machine for 0.85, and safety.no_capacity_is_free holds every candidate of that decision to a price its own terms account for. The sweep behind it is the other half: an operator holding a machine for work somebody is watching has said which classes may have it, so the batch Run is refused the node outright rather than priced on it, and the refusal is about what the machine is rather than about what it is doing.",
+  "seed": "mercator-lab-owned-economics-v1",
+  "world": {
+    "launch": {
+      "unpack": "1s",
+      "container_start": "1s"
+    },
+    "images": {
+      "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "200MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "node-owned",
+        "provider": "node",
+        "rate_per_hour_usd": 1.0,
+        "cached_images": ["sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b"],
+        "billing": {"granularity": "1h"},
+        "terms": {
+          "committed_for": "10m",
+          "eligible_service_classes": ["interactive", "standard"]
+        }
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "ask-minute",
+        "provider": "simcloud",
+        "lane": "ephemeral",
+        "rate_per_hour_usd": 1.6,
+        "billing": {"granularity": "1m", "setup_fee_usd": 0.05},
+        "provisioning": {"expected": "30s", "acquisition": "0s", "boot": "30s", "agent_ready": "0s"}
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "atlas",
+        "at": "0s",
+        "request": {
+          "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "service_class": "standard",
+          "expected_runtime": "30m",
+          "max_runtime": "40m"
+        }
+      },
+      {
+        "name": "sweeper",
+        "at": "1m",
+        "request": {
+          "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "service_class": "batch",
+          "expected_runtime": "10m",
+          "max_runtime": "20m"
+        }
+      }
+    ]
+  }
+}

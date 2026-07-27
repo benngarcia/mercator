@@ -1,6 +1,8 @@
 package lab
 
 import (
+	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -164,4 +166,109 @@ func TestAPriceItsOwnTermsDoNotAddUpToIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a candidate priced at 0.85 USD out of terms adding up to 0.80 raised nothing")
 	}
+}
+
+// TestAnIdleMachineIsNotFreeAtL1 is owned capacity economics under the real
+// control plane. The placement corpus shows the decision; this shows the Run
+// running where the terms of the sale sent it, through the offer catalog, the real
+// orchestrator, and every law in the registry.
+//
+// The case is only about the terms if the shadow price alone would have bought the
+// node, which is what the last assertion pins: half an hour of the node at its own
+// rate is 0.50 USD against the 0.85 the Run actually spends, so a model billing
+// the seconds one Run occupies sends it to the node and this one does not.
+func TestAnIdleMachineIsNotFreeAtL1(t *testing.T) {
+	execution := openConformanceExecution(t, "an-owned-hour-is-charged-to-somebody")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	if _, err := execution.DriveToCompletion(context.Background()); err != nil {
+		t.Fatalf("drive a fleet whose owned machine is billed by the hour: %v", err)
+	}
+
+	decision := bookingDecisions(t, execution)["run-atlas"]
+	if decision.SelectedOfferSnapshotID != "ask-minute" {
+		t.Fatalf("the half-hour Run landed on %q, and the node's hour costs more than the machine billed by the minute",
+			decision.SelectedOfferSnapshotID)
+	}
+	node := candidateFor(t, decision, "node-owned")
+	if !node.Feasible {
+		t.Fatalf("the node was refused as %+v, and a machine that costs more than another is not an unusable one", node.Rejections)
+	}
+	// Every term of the node's price, because the total is the number two opposite
+	// mistakes agree on: ten minutes of the hour already owed, twenty minutes this
+	// placement is what commits Mercator to, and the forty nothing will use.
+	for _, term := range []struct {
+		name string
+		usd  float64
+	}{
+		{domain.CostTermCommittedRent, 0.1664},
+		{domain.CostTermKeepAlive, 0.3336},
+		{domain.CostTermIdleTail, 0.6664},
+	} {
+		charged, recorded := node.Estimates.CostTermUSD(term.name)
+		if !recorded {
+			t.Fatalf("the node's price is not made of %q at all: %+v", term.name, node.Estimates.CostTerms)
+		}
+		if math.Abs(charged-term.usd) > 0.001 {
+			t.Fatalf("the node was charged %.4f USD of %s, and the hour it is bought in makes that %.4f", charged, term.name, term.usd)
+		}
+	}
+	if fee, charged := node.Estimates.CostTermUSD(domain.CostTermSetupFee); !charged || fee != 0 {
+		t.Fatalf("a machine Mercator already holds was charged %.4f USD to hand it over", fee)
+	}
+	winner := candidateFor(t, decision, "ask-minute")
+	if node.ScoreUSD <= winner.ScoreUSD {
+		t.Fatalf("the node scored %.4f against the machine that won at %.4f, and this case is about the node costing more",
+			node.ScoreUSD, winner.ScoreUSD)
+	}
+	// What the node would have cost billed by the second one Run occupies it, which
+	// is the rent for the seconds it spends and nothing else: the committed and
+	// keep-alive terms are that rent split at the end of the hour already owed, so
+	// they add up to it without this case restating the rate.
+	shadowPriceOnly := dollarsOf(t, node, domain.CostTermCommittedRent) + dollarsOf(t, node, domain.CostTermKeepAlive)
+	if shadowPriceOnly >= winner.Estimates.CostUSD.Expected {
+		t.Fatalf("half an hour of the node at its own rate is %.4f USD against the winner's %.4f, so the shadow price alone would not have bought the node and this world states nothing about the terms",
+			shadowPriceOnly, winner.Estimates.CostUSD.Expected)
+	}
+
+	// The sweep is the refusal. A machine an operator holds for watched work is not a
+	// machine a batch Run has to wait for, so the refusal is about what the machine is.
+	sweep := bookingDecisions(t, execution)["run-sweeper"]
+	held := candidateFor(t, sweep, "node-owned")
+	if held.Feasible {
+		t.Fatalf("a batch Run was offered a machine its operator holds for interactive and standard work, priced at %.4f USD",
+			held.Estimates.CostUSD.Expected)
+	}
+	if held.Rejections[0].Code != "CLASS_NOT_ELIGIBLE" || held.Rejections[0].Path != "capacity_terms.eligible_classes" {
+		t.Fatalf("the record says the node was refused as %+v, and what it was refused for is the classes it is held for", held.Rejections[0])
+	}
+	if held.Standing() != domain.StandingNeverHolds {
+		t.Fatalf("a machine reserved for other work counts as %v for this Run, and no amount of waiting makes a class eligible",
+			held.Standing())
+	}
+
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("check invariants: %v", err)
+	}
+	results := latestInvariantResults(execution.invariants)
+	for _, id := range []string{"safety.no_capacity_is_free", "safety.committed_cost_is_not_double_counted"} {
+		if result := invariantResultByID(t, results, id); result.Status != InvariantPassed {
+			t.Fatalf("%s reports %+v", id, result)
+		}
+	}
+}
+
+// dollarsOf is what one named term of a candidate's price came to, and a failure
+// where the price is not made of it at all.
+func dollarsOf(t *testing.T, candidate domain.CandidateDecision, name string) float64 {
+	t.Helper()
+	usd, charged := candidate.Estimates.CostTermUSD(name)
+	if !charged {
+		t.Fatalf("the price of %q is not made of %q: %+v", candidate.OfferSnapshotID, name, candidate.Estimates.CostTerms)
+	}
+	return usd
 }

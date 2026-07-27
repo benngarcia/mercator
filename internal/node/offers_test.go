@@ -693,14 +693,16 @@ func TestANodeOffersTheTermsItWasBoughtOn(t *testing.T) {
 	registry, clock := newRegistry(t)
 	enrolledAt := clock.Now()
 	inviteWithTerms(t, registry, node.Invitation{
-		WorkspaceID:            nodeWorkspace,
-		NodeID:                 "nod_terms",
-		RentalID:               "rnt_terms",
-		Generation:             1,
-		ShadowPriceUSDPerHour:  1.5,
-		BillingIntervalSeconds: 3600,
-		EligibleClasses:        []domain.ServiceClass{domain.ClassInteractive, domain.ClassStandard},
-		AvailableUntil:         enrolledAt.Add(6 * time.Hour),
+		WorkspaceID:           nodeWorkspace,
+		NodeID:                "nod_terms",
+		RentalID:              "rnt_terms",
+		Generation:            1,
+		ShadowPriceUSDPerHour: 1.5,
+		Purchase: node.Purchase{
+			BillingIntervalSeconds: 3600,
+			EligibleClasses:        []domain.ServiceClass{domain.ClassInteractive, domain.ClassStandard},
+			AvailableUntil:         enrolledAt.Add(6 * time.Hour),
+		},
 	}, clock)
 
 	// A minute in, which is as far as a node can be carried without another

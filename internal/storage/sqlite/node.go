@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
@@ -27,8 +28,15 @@ const createNodes = `CREATE TABLE IF NOT EXISTS nodes (
 	agent_version TEXT NOT NULL,
 	facts_json BLOB NOT NULL,
 	shadow_price_usd_per_hour REAL NOT NULL DEFAULT 0,
+	purchase_json BLOB NOT NULL DEFAULT '{}',
 	PRIMARY KEY(workspace_id, node_id)
 )`
+
+// addNodePurchase carries the terms a machine is bought on into a table that
+// existed before an operator could state them. SQLite has no "add column if not
+// exists", so a duplicate is how it says the column is already there, and a
+// registry that could not read the column would refuse every node it holds.
+const addNodePurchase = `ALTER TABLE nodes ADD COLUMN purchase_json BLOB NOT NULL DEFAULT '{}'`
 
 const createNodeIdentityIndex = `CREATE UNIQUE INDEX IF NOT EXISTS nodes_identity ON nodes(node_id)`
 
@@ -70,6 +78,9 @@ func migrateNodes(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate nodes: %w", err)
 		}
 	}
+	if _, err := db.ExecContext(ctx, addNodePurchase); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("migrate nodes: %w", err)
+	}
 	return nil
 }
 
@@ -83,16 +94,24 @@ func (store *NodeStore) Invite(ctx context.Context, record node.Record) error {
 	if err != nil {
 		return fmt.Errorf("encode node facts: %w", err)
 	}
+	// The sale this machine sits under, written at invitation because that is when
+	// the operator states it and because a registry that forgot it would price every
+	// machine it holds as though it were bought by the second.
+	purchase, err := json.Marshal(record.Purchase)
+	if err != nil {
+		return fmt.Errorf("encode node purchase: %w", err)
+	}
 	_, err = store.db.ExecContext(ctx, `
 		INSERT INTO nodes (
 			workspace_id, node_id, rental_id, generation, state, fencing_token,
 			enrollment_token_id, enrollment_expires, enrolled_at, lease_expires,
-			last_heartbeat_at, agent_version, facts_json, shadow_price_usd_per_hour
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			last_heartbeat_at, agent_version, facts_json, shadow_price_usd_per_hour,
+			purchase_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.WorkspaceID, record.ID, record.RentalID, record.Generation, string(record.State),
 		record.FencingToken, record.EnrollmentTokenID, stamp(record.EnrollmentExpires),
 		stamp(record.EnrolledAt), stamp(record.LeaseExpires), stamp(record.LastHeartbeatAt),
-		record.AgentVersion, facts, record.ShadowPriceUSDPerHour,
+		record.AgentVersion, facts, record.ShadowPriceUSDPerHour, purchase,
 	)
 	if err != nil {
 		return fmt.Errorf("invite node %q: %w", record.ID, err)
@@ -426,7 +445,7 @@ func (store *NodeStore) operations(ctx context.Context, workspaceID, nodeID stri
 
 const nodeColumns = `SELECT workspace_id, node_id, rental_id, generation, state, fencing_token,
 	enrollment_token_id, enrollment_expires, enrolled_at, lease_expires, last_heartbeat_at,
-	agent_version, facts_json, shadow_price_usd_per_hour FROM nodes`
+	agent_version, facts_json, shadow_price_usd_per_hour, purchase_json FROM nodes`
 
 func (store *NodeStore) scanOne(ctx context.Context, where string, args ...any) (node.Record, error) {
 	rows, err := store.db.QueryContext(ctx, nodeColumns+" "+where, args...)
@@ -448,11 +467,11 @@ type scanner interface{ Scan(...any) error }
 func scanNode(rows scanner) (node.Record, error) {
 	var record node.Record
 	var state, enrollmentExpires, enrolledAt, leaseExpires, heartbeat string
-	var facts []byte
+	var facts, purchase []byte
 	if err := rows.Scan(&record.WorkspaceID, &record.ID, &record.RentalID, &record.Generation,
 		&state, &record.FencingToken, &record.EnrollmentTokenID, &enrollmentExpires,
 		&enrolledAt, &leaseExpires, &heartbeat, &record.AgentVersion, &facts,
-		&record.ShadowPriceUSDPerHour); err != nil {
+		&record.ShadowPriceUSDPerHour, &purchase); err != nil {
 		return node.Record{}, err
 	}
 	record.State = node.State(state)
@@ -462,6 +481,9 @@ func scanNode(rows scanner) (node.Record, error) {
 	record.LastHeartbeatAt = parseStamp(heartbeat)
 	if err := json.Unmarshal(facts, &record.Facts); err != nil {
 		return node.Record{}, fmt.Errorf("decode node facts: %w", err)
+	}
+	if err := json.Unmarshal(purchase, &record.Purchase); err != nil {
+		return node.Record{}, fmt.Errorf("decode node purchase: %w", err)
 	}
 	return record, nil
 }

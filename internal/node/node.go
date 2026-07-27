@@ -77,30 +77,38 @@ type Record struct {
 	// capacity; a node with none has unknown pricing and is refused rather than
 	// treated as free.
 	ShadowPriceUSDPerHour float64 `json:"shadow_price_usd_per_hour,omitempty"`
-	// BillingIntervalSeconds is the block of time this machine is bought in, as
-	// its operator states it. It is what makes an hour Mercator has committed to
-	// an hour it pays for whether or not a Run uses the rest of it: work that
-	// runs past the end of one interval commits Mercator to the next whole one,
-	// and the part of that nothing uses is charged to the placement that bought
-	// it rather than to nobody.
-	//
-	// Zero is a machine bought in no increments at all, which is the operator's own
-	// hardware: Mercator holds it continuously, so no second of it is a fresh
-	// commitment and there is no tail to charge. It is not a fallback for an
-	// operator who did not answer, it is the answer, and it is the same silence
-	// PriceModel.GranularitySeconds already means.
+	// Purchase is what an operator says this machine is bought on beyond its price:
+	// the block of time it is billed in, the kinds of work they hold it for, and the
+	// moment it stops being Mercator's.
+	Purchase Purchase `json:"purchase,omitzero"`
+}
+
+// Purchase is the sale one enrolled machine sits under, as its operator stated it.
+// It is one type rather than three fields because it is one statement: an operator
+// answering "what am I buying, for whom, and until when" answers all of it at once,
+// and it is what Placement reads as the terms of the capacity.
+//
+// Every part of it is optional and every absence is an answer rather than a
+// default. No increment is a machine bought in no blocks at all, which is an
+// operator's own hardware: Mercator holds it continuously, so no second of it is a
+// fresh commitment and there is no tail of a block to charge. No classes is a
+// machine held for nobody in particular. No moment is a machine with no window.
+type Purchase struct {
+	// BillingIntervalSeconds is the block of time this machine is bought in. It is
+	// what makes an hour Mercator has committed to an hour it pays for whether or not
+	// a Run uses the rest of it: work that runs past the end of one block commits
+	// Mercator to the next whole one, and the part of that nothing uses is charged to
+	// the placement that bought it rather than to nobody.
 	BillingIntervalSeconds int64 `json:"billing_interval_seconds,omitempty"`
-	// EligibleClasses is the kinds of work this machine may be used for, as its
-	// operator reserved it. Empty is a machine held for nobody in particular.
-	// Placement refuses every other class outright rather than pricing it, because
-	// a reservation is a statement about what the machine is for and no amount of
+	// EligibleClasses is the kinds of work this machine may be used for. Placement
+	// refuses every other class outright rather than pricing it, because a
+	// reservation is a statement about what the machine is for and no amount of
 	// waiting changes it.
 	EligibleClasses []domain.ServiceClass `json:"eligible_classes,omitempty"`
-	// AvailableUntil is the moment this machine stops being Mercator's to use, as
-	// its operator declared. Zero is a machine with no such moment. It is a window
-	// somebody stated rather than capacity that can vanish without notice, so work
-	// that could still be running then is refused before it starts and work that
-	// finishes inside it is never at risk.
+	// AvailableUntil is the moment this machine stops being Mercator's to use. It is
+	// a window somebody stated rather than capacity that can vanish without notice,
+	// so work that could still be running then is refused before it starts and work
+	// that finishes inside it is never at risk.
 	AvailableUntil time.Time `json:"available_until,omitzero"`
 }
 
@@ -112,8 +120,8 @@ type Record struct {
 func (record Record) Terms(now time.Time) domain.CapacityTerms {
 	return domain.CapacityTerms{
 		CommittedUntil:  record.CommittedUntil(now),
-		EligibleClasses: record.EligibleClasses,
-		AvailableUntil:  record.AvailableUntil,
+		EligibleClasses: record.Purchase.EligibleClasses,
+		AvailableUntil:  record.Purchase.AvailableUntil,
 	}
 }
 
@@ -125,10 +133,10 @@ func (record Record) Terms(now time.Time) domain.CapacityTerms {
 // started paying for this generation of this machine. A node that has not
 // enrolled is not being paid for and is not offered either.
 func (record Record) CommittedUntil(now time.Time) time.Time {
-	if record.BillingIntervalSeconds <= 0 || record.EnrolledAt.IsZero() {
+	if record.Purchase.BillingIntervalSeconds <= 0 || record.EnrolledAt.IsZero() {
 		return time.Time{}
 	}
-	interval := time.Duration(record.BillingIntervalSeconds) * time.Second
+	interval := time.Duration(record.Purchase.BillingIntervalSeconds) * time.Second
 	elapsed := now.Sub(record.EnrolledAt)
 	if elapsed < 0 {
 		elapsed = 0

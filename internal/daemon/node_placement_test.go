@@ -379,8 +379,14 @@ type fleet struct {
 	// daemon for the one case about what a real machine reports.
 	agentRuntime nodeagent.Runtime
 	heartbeat    time.Duration
-	stop         context.CancelFunc
-	submitted    int
+	// soldOn is what an operator states this fleet's machine is bought on beyond its
+	// price: the block of time it is billed in, the classes it is held for, and the
+	// moment it stops being Mercator's. Empty is a machine bought in no increments,
+	// held for nobody in particular, with no window, which is what every case here
+	// enrolled before an operator could say otherwise.
+	soldOn    map[string]any
+	stop      context.CancelFunc
+	submitted int
 }
 
 // fleetOption changes what this fleet's one machine is before its agent starts
@@ -404,6 +410,12 @@ func reporting(disk capability.DiskFacts) fleetOption {
 // states, its container's start and its own read alike, comes off that clock.
 func keepingAClockAhead(offset time.Duration) fleetOption {
 	return func(f *fleet) { f.runtime.clockAhead = offset }
+}
+
+// boughtOn enrolls this fleet's machine on the terms an operator states for it, so
+// a case about what capacity costs states the sale rather than only the rate.
+func boughtOn(terms map[string]any) fleetOption {
+	return func(f *fleet) { f.soldOn = terms }
 }
 
 func runningOn(runtime nodeagent.Runtime) fleetOption {
@@ -511,10 +523,14 @@ func (f *fleet) invite(t *testing.T, priceUSDPerHour float64) capability.NodeBoo
 		EnrollmentToken string `json:"enrollment_token"`
 		AgentVersion    string `json:"agent_version"`
 	}
-	f.call(t, http.MethodPost, "/v1/nodes", map[string]any{
+	body := map[string]any{
 		"workspace_id":              daemon.DefaultWorkspaceID,
 		"shadow_price_usd_per_hour": priceUSDPerHour,
-	}, &response, http.StatusCreated)
+	}
+	for field, value := range f.soldOn {
+		body[field] = value
+	}
+	f.call(t, http.MethodPost, "/v1/nodes", body, &response, http.StatusCreated)
 	if response.EnrollmentToken == "" {
 		t.Fatal("an invitation must return enrollment material exactly once")
 	}
@@ -945,6 +961,11 @@ type offerSnapshot struct {
 	Images    domain.ImageInventory    `json:"images"`
 	Artifacts domain.ArtifactInventory `json:"artifacts"`
 	Capacity  domain.CapacityEvidence  `json:"capacity"`
+	// Pricing and Terms are what this machine costs and what it was bought on. They
+	// are read off the same catalog Placement reads, because an operator asking what a
+	// machine will cost them reads the offer rather than the decision.
+	Pricing domain.PriceModel    `json:"pricing"`
+	Terms   domain.CapacityTerms `json:"capacity_terms"`
 }
 
 func (f *fleet) offers(t *testing.T) []offerSnapshot {
@@ -1952,4 +1973,125 @@ func TestAFamilyIsHeldToItsWidthWhileAMachineStandsIdle(t *testing.T) {
 	fleet.awaitAdmission(t, second)
 	fleet.completeWorkload(t, second, 0)
 	fleet.awaitOutcome(t, second, "succeeded")
+}
+
+// TestANodeBilledInBlocksIsPricedForTheWholeBlock is owned capacity economics
+// through the public API, over the real node protocol and the real event log. The
+// Lab states the arithmetic against a simulated fleet; this states that an
+// operator's own answer about how their machine is bought reaches the offer
+// catalogue and the recorded decision.
+//
+// The machine is bought in ten-minute blocks and the Run wants twenty minutes, so
+// it runs past the end of the block Mercator is already inside and commits Mercator
+// to whole blocks beyond it. The seconds of those blocks nothing will use are
+// charged to this placement, which is the whole difference between this and billing
+// the seconds one Run occupies.
+func TestANodeBilledInBlocksIsPricedForTheWholeBlock(t *testing.T) {
+	fleet := startFleet(t, boughtOn(map[string]any{"billing_interval_seconds": 600}))
+
+	run := fleet.submitRunLasting(t, 1200, 1800)
+	fleet.runtime.awaitLaunch(t, run)
+
+	// The offer says what the machine is bought on, in the same catalogue an operator
+	// reads to find out what capacity will cost them.
+	offer := fleet.nodeOffer(t)
+	if offer.Pricing.GranularitySeconds != 600 {
+		t.Fatalf("a machine bought in ten-minute blocks publishes a billing increment of %ds", offer.Pricing.GranularitySeconds)
+	}
+	if offer.Terms.CommittedUntil.IsZero() {
+		t.Fatalf("a machine bought in blocks owes rent to no moment at all: %+v", offer.Terms)
+	}
+	if remaining := time.Until(offer.Terms.CommittedUntil); remaining <= 0 || remaining > 10*time.Minute {
+		t.Fatalf("the block this machine is inside ends in %s, and the blocks are ten minutes long", remaining)
+	}
+
+	// And the decision charges the placement for the blocks it buys, not for the
+	// seconds the Run occupies.
+	candidate := fleet.decision(t, run).candidate(t, fleet.nodeID)
+	rate := 1.25 / 3600
+	occupied, terms := rate*1200, candidate.Estimates.CostTerms
+	if len(terms) == 0 {
+		t.Fatalf("the node is priced at %.6f USD and the record says nothing about what that is made of", candidate.Estimates.CostUSD.Expected)
+	}
+	if candidate.Estimates.CostUSD.Expected <= occupied {
+		t.Fatalf("twenty minutes on a machine bought in ten-minute blocks costs %.6f USD, and the seconds the Run occupies alone are %.6f: %+v",
+			candidate.Estimates.CostUSD.Expected, occupied, terms)
+	}
+	tail, charged := candidate.Estimates.CostTermUSD(domain.CostTermIdleTail)
+	if !charged || tail <= 0 {
+		t.Fatalf("the block this Run runs past the end of leaves an idle tail of %.6f USD: %+v", tail, terms)
+	}
+	if committed := candidate.Estimates.Committed; committed.Until.IsZero() || committed.Seconds <= 0 {
+		t.Fatalf("the record says this placement spends %+v of the block Mercator already owes for", committed)
+	}
+	fleet.completeWorkload(t, run, 0)
+	fleet.awaitOutcome(t, run, "succeeded")
+}
+
+// TestANodeHeldForOtherWorkIsRefusedRatherThanPriced is reserved capacity through
+// the public API. An operator holding a machine for the work somebody is watching
+// says so at enrolment, and a batch sweep is then refused that machine rather than
+// ranked on it: the refusal is about what the machine is held for, so no amount of
+// waiting for this machine produces a placement.
+//
+// It is the only machine in this fleet, which is what makes the refusal visible: the
+// Run waits for capacity, and the decision beside it names the reservation.
+func TestANodeHeldForOtherWorkIsRefusedRatherThanPriced(t *testing.T) {
+	fleet := startFleet(t, boughtOn(map[string]any{"eligible_service_classes": []string{"interactive"}}))
+
+	watched := fleet.submitRunOfClass(t, "interactive")
+	fleet.runtime.awaitLaunch(t, watched)
+	fleet.completeWorkload(t, watched, 0)
+	fleet.awaitOutcome(t, watched, "succeeded")
+	sweep := fleet.submitRunOfClass(t, "batch")
+	fleet.queueForWantOfCapacity(t, sweep)
+
+	if selected := fleet.decision(t, watched).SelectedOfferSnapshotID; selected != fleet.nodeID {
+		t.Fatalf("the watched Run landed on %q, and this machine is held for exactly that work", selected)
+	}
+	refusal := fleet.decision(t, sweep)
+	if refusal.SelectedOfferSnapshotID != "" {
+		t.Fatalf("a batch sweep was placed on %q, which its operator holds for interactive work", refusal.SelectedOfferSnapshotID)
+	}
+	refused := refusal.candidate(t, fleet.nodeID)
+	if refused.Feasible {
+		t.Fatalf("the record calls a machine held for other work feasible, priced at %.6f USD", refused.Estimates.CostUSD.Expected)
+	}
+	if !slices.ContainsFunc(refused.Rejections, func(rejection domain.Violation) bool {
+		return rejection.Code == "CLASS_NOT_ELIGIBLE" && rejection.Path == "capacity_terms.eligible_classes"
+	}) {
+		t.Fatalf("the recorded refusal says %+v, and what this machine is not eligible for is this Run's class", refused.Rejections)
+	}
+	if refused.Standing() != domain.StandingNeverHolds {
+		t.Fatalf("a machine reserved for other work counts as %v for this Run, and waiting does not make a class eligible", refused.Standing())
+	}
+	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, sweep) {
+		t.Fatalf("a sweep was sent to a machine held for watched work anyway: %v", launched)
+	}
+}
+
+// submitRunLasting submits a Run that says how long it expects to hold a machine
+// and how long Mercator may let it. Both matter to what capacity costs: the
+// expectation is what the placement is priced over, and the bound is what an
+// availability window is judged against.
+func (f *fleet) submitRunLasting(t *testing.T, expected, maximum int) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		spec := revision["spec"].(map[string]any)
+		spec["placement"].(map[string]any)["expected_runtime_seconds"] = expected
+		spec["execution"].(map[string]any)["max_runtime_seconds"] = maximum
+		return revision
+	})
+}
+
+// submitRunOfClass submits a Run that declares what kind of work it is, which is
+// what capacity held for particular work is held by.
+func (f *fleet) submitRunOfClass(t *testing.T, class string) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		revision["spec"].(map[string]any)["placement"].(map[string]any)["service_class"] = class
+		return revision
+	})
 }

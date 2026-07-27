@@ -66,10 +66,12 @@ func (s *Server) InviteNode(ctx context.Context, request InviteNodeRequestObject
 		// the hour whatever a Run uses of it, a machine an operator holds for watched
 		// work refuses every other class, and a machine that goes back to its owner at
 		// a stated moment takes no work that could still be running then.
-		ShadowPriceUSDPerHour:  float64(body.ShadowPriceUsdPerHour),
-		BillingIntervalSeconds: body.BillingIntervalSeconds,
-		EligibleClasses:        body.EligibleServiceClasses,
-		AvailableUntil:         body.AvailableUntil.UTC(),
+		ShadowPriceUSDPerHour: float64(body.ShadowPriceUsdPerHour),
+		Purchase: node.Purchase{
+			BillingIntervalSeconds: body.BillingIntervalSeconds,
+			EligibleClasses:        body.EligibleServiceClasses,
+			AvailableUntil:         body.AvailableUntil.UTC(),
+		},
 	}
 	bootstrap, err := s.nodes.Invite(ctx, invitation)
 	if err != nil {

@@ -226,7 +226,7 @@ func shadowPrice(record Record) domain.PriceModel {
 		// The block of time this machine is bought in, which is what a placement is
 		// billed in whole multiples of. A machine bought in no increments states none,
 		// and its seconds are charged as they are spent.
-		GranularitySeconds: record.BillingIntervalSeconds,
+		GranularitySeconds: record.Purchase.BillingIntervalSeconds,
 		Known:              true,
 	}
 }
