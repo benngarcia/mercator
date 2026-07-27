@@ -65,6 +65,7 @@ func buildOffer(t instanceType, region string, now time.Time) domain.OfferSnapsh
 			CPUMillis:          int64(cfg.VCPUs) * 1000,
 			MemoryBytes:        int64(cfg.MemoryInGB) * gib,
 			EphemeralDiskBytes: int64(cfg.StorageInGB) * gib,
+			EphemeralDiskKnown: true,
 			Accelerators:       accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{

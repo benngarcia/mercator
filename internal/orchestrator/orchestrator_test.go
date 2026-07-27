@@ -901,6 +901,7 @@ func orchOffer(id string, now time.Time) domain.OfferSnapshot {
 			CPUMillis:          2000,
 			MemoryBytes:        2 << 30,
 			EphemeralDiskBytes: 2 << 30,
+			EphemeralDiskKnown: true,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, SupportsEntrypointOverride: true, MaxEnvironmentBytes: 32768},

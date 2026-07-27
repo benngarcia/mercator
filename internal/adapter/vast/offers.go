@@ -82,6 +82,7 @@ func buildOffers(offers []offer, gpuCount, diskGB int, now time.Time) []domain.O
 				CPUMillis:          int64(o.CPUCoresEffective * 1000),
 				MemoryBytes:        int64(o.CPURAMMb) * mib,
 				EphemeralDiskBytes: int64(diskGB) * gib,
+				EphemeralDiskKnown: true,
 				Accelerators: []domain.AcceleratorInventory{{
 					Vendor:         vendor,
 					Model:          o.GPUName,

@@ -255,6 +255,7 @@ func trialOffer(rate float64) domain.OfferSnapshot {
 			CPUMillis:          2000,
 			MemoryBytes:        2 << 30,
 			EphemeralDiskBytes: 2 << 30,
+			EphemeralDiskKnown: true,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},

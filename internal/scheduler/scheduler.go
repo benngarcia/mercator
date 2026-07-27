@@ -356,7 +356,23 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	// asking about the floor alone lets a machine with nowhere to put forty
 	// gigabytes be selected and then refuse the launch with nothing in the record
 	// naming disk.
-	if !work.disk.Fits() {
+	//
+	// A machine that never measured its room is refused too, and not for the same
+	// thing. Landing content on a disk nobody looked at is a launch nobody can
+	// promise, so the refusal stands, but it names a fact nobody published rather
+	// than a shortfall somebody measured. Read as a shortfall it said the fleet
+	// can never hold this work on the strength of one failed statfs.
+	switch {
+	case !work.disk.FreeBytesKnown:
+		violations = append(violations, domain.Violation{
+			Code:     "UNKNOWN_FACT",
+			Path:     "resources.ephemeral_disk",
+			Required: work.disk.RequiredBytes(),
+			Offered:  "unknown",
+			Message:  "Offer does not say how much room this machine has left.",
+			Unstated: true,
+		})
+	case !work.disk.Fits():
 		violations = append(violations, domain.Violation{
 			Code:     "RESOURCE_INSUFFICIENT",
 			Path:     "resources.ephemeral_disk",
@@ -621,8 +637,9 @@ func contentFor(input SchedulingInput, offer domain.OfferSnapshot) candidateCont
 		fetch:    fetch,
 		evidence: evidence,
 		disk: domain.DiskDemand{
-			FreeBytes:     offer.Resources.EphemeralDiskBytes,
-			ReservedBytes: input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
+			FreeBytes:      offer.Resources.EphemeralDiskBytes,
+			FreeBytesKnown: offer.Resources.EphemeralDiskKnown,
+			ReservedBytes:  input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
 			LandBytes:     work.TransferBytes + fetch + caches,
 			EstablishedLandBytes: enumerated(work.TransferBytes, locality != domain.LocalityUnknown) +
 				establishedFetchBytes(evidence) +

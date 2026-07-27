@@ -921,14 +921,21 @@ type ResourcesSpec struct {
 	CPUMillis int64    `json:"cpu_millis,omitempty"`
 	Memory    ByteSize `json:"memory,omitempty"`
 	// Disk separates a machine with no room from a machine whose fixture did
-	// not mention its disk, because zero is a state real capacity is in: an
-	// enrolled node that could not measure its disk offers exactly none, and it
-	// is the case an operator most needs the corpus to hold. Read as one value,
-	// a fixture that writes "0GB" to model that machine gets the 200GB default
-	// and states the opposite of what it meant. Zero CPU and zero memory
-	// describe no machine any offer can carry, so they stay a single number.
+	// not mention its disk, because zero is a state real capacity is in. Read as
+	// one value, a fixture that writes "0GB" to model a full machine gets the
+	// 200GB default and states the opposite of what it meant. Zero CPU and zero
+	// memory describe no machine any offer can carry, so they stay a single
+	// number.
 	Disk *ByteSize `json:"disk,omitempty"`
-	GPU  *GPUSpec  `json:"gpu,omitempty"`
+	// DiskUnmeasured is a machine that could not measure its disk at all, which
+	// is the third state and not a machine with no room. An enrolled node whose
+	// probe fails reports exactly this, keeps reporting everything else, and is
+	// struck out of every placement by the disk floor each Run declares. What the
+	// corpus needs it for is the wait: a machine that answered nothing is not a
+	// machine that can never hold the work, and reading it as one let one failed
+	// measurement say a whole fleet has nothing to offer.
+	DiskUnmeasured bool     `json:"disk_unmeasured,omitempty"`
+	GPU            *GPUSpec `json:"gpu,omitempty"`
 }
 
 type GPUSpec struct {
@@ -2269,7 +2276,15 @@ func (w WorldSpec) validate() error {
 
 // validateInventory refuses hardware no machine could report.
 func validateInventory(owner string, resources *ResourcesSpec) error {
-	if resources == nil || resources.GPU == nil {
+	if resources == nil {
+		return nil
+	}
+	// A machine that states its room and states that nobody measured it is two
+	// fixtures in one, and the world would have to pick which half to publish.
+	if resources.DiskUnmeasured && resources.Disk != nil {
+		return fmt.Errorf("%s states a disk and states that nobody measured it", owner)
+	}
+	if resources.GPU == nil {
 		return nil
 	}
 	return resources.GPU.validate(owner)

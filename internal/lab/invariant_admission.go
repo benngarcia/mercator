@@ -126,7 +126,7 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 				held.since = at
 			}
 			held.class = deferral.Class
-			held.heldByNothing = deferral.HoldsNoQueue(held.heldByNothing)
+			held.heldByNothing = deferral.HoldsNoQueue()
 			queue[runID] = held
 		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
 			delete(queue, runID)
@@ -241,7 +241,7 @@ func nothingWaitsBehindAnImpossibleAsk(observation InvariantObservation) error {
 			if err := nothingAheadIsImpossible(impossible, runID, deferral); err != nil {
 				return err
 			}
-			impossible[runID] = deferral.HoldsNoQueue(impossible[runID])
+			impossible[runID] = deferral.HoldsNoQueue()
 		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
 			delete(impossible, runID)
 		case orchestrator.EventBookingDecided:

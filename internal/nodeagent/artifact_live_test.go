@@ -385,7 +385,7 @@ func placeAReadOfTheCorpus(
 			ObservedAt:   now,
 			ExpiresAt:    now.Add(time.Minute),
 			Platform:     domain.Platform{OS: "linux", Architecture: "amd64"},
-			Resources:    domain.ResourceInventory{CPUMillis: 8000, MemoryBytes: 32 << 30, EphemeralDiskBytes: 1 << 40},
+			Resources:    domain.ResourceInventory{CPUMillis: 8000, MemoryBytes: 32 << 30, EphemeralDiskBytes: 1 << 40, EphemeralDiskKnown: true},
 			Capabilities: domain.CapabilityProfile{
 				Container: domain.ContainerCapabilities{MaxContainers: 4, SupportsDigestRefs: true},
 			},

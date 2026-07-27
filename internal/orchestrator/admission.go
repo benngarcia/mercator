@@ -96,7 +96,7 @@ func applyToQueue(waiting map[string]waitingRun, event eventlog.StoredEvent) err
 		}
 		queued.runID = event.StreamID
 		queued.class = data.Deferral.Class
-		queued.holdsNoQueue = data.Deferral.HoldsNoQueue(queued.holdsNoQueue)
+		queued.holdsNoQueue = data.Deferral.HoldsNoQueue()
 		waiting[event.StreamID] = queued
 	case EventAdmissionRefused, EventRunClosed:
 		delete(waiting, event.StreamID)
@@ -130,8 +130,13 @@ type waitingRun struct {
 	class domain.ServiceClass
 	since time.Time
 	// holdsNoQueue is whether this Run's wait is one other work does not have to
-	// respect, as domain.AdmissionDeferral.HoldsNoQueue reads it off each deferral
-	// in turn.
+	// respect, as domain.AdmissionDeferral.HoldsNoQueue reads it off this Run's
+	// latest deferral.
+	//
+	// It is the latest one and not the strongest one ever recorded. An exemption
+	// is a claim about the fleet at the moment it was measured, and a Run held
+	// behind work that outranks it measures nothing, so carrying the claim
+	// forward through such a wait states it about a fleet nobody has asked since.
 	//
 	// It is stated as the exemption rather than as the rule so that the zero value
 	// is the rule. A Run whose record says nothing about the fleet holds the queue
@@ -286,31 +291,32 @@ func (answer admissionAnswer) evidence(runID string, now time.Time) []eventlog.N
 // came apart: the strongest refusal a fleet can give was labelled as a wait for
 // capacity to come free.
 func placementDeferral(run queuePosition, decision domain.BookingDecision) (domain.AdmissionDeferral, bool) {
-	waitable := candidatesThatCouldHold(decision)
+	answer, waitable := fleetAnswer(decision)
 	wait, projected := shortestProjectedWait(waitable)
-	answer := domain.FleetAnswer{Weighed: len(decision.Candidates), CouldHold: len(waitable)}
-	reason := domain.DeferredNoFeasibleOffer
-	if answer.HoldsNothing() {
-		reason = domain.DeferredNoCapacityFits
-	}
-	deferral := run.deferral(reason, workAhead(waitable))
+	deferral := run.deferral(answer.Reason(), workAhead(waitable))
 	deferral.ProjectedWaitSeconds = wait
 	deferral.Fleet = &answer
 	return deferral, projected
 }
 
-// candidatesThatCouldHold is the machines this decision weighed that could take
-// this Run when whatever they are spending now comes back. It is the whole fleet
-// as far as a wait is concerned, and the rest of the candidate set is a record of
-// machines this Run is not competing for.
-func candidatesThatCouldHold(decision domain.BookingDecision) []domain.CandidateDecision {
+// fleetAnswer is the fleet's own account of this decision, and the machines that
+// could take this Run when whatever they are spending now comes back. Those are
+// the whole fleet as far as a wait is concerned, and the rest of the candidate
+// set is a record of machines this Run is not competing for.
+func fleetAnswer(decision domain.BookingDecision) (domain.FleetAnswer, []domain.CandidateDecision) {
+	answer := domain.FleetAnswer{Weighed: len(decision.Candidates)}
 	var waitable []domain.CandidateDecision
 	for _, candidate := range decision.Candidates {
-		if candidate.CouldHoldOnceFree() {
+		switch candidate.Standing() {
+		case domain.StandingCouldHold:
 			waitable = append(waitable, candidate)
+			answer.CouldHold++
+		case domain.StandingUnstated:
+			answer.Unstated++
+		case domain.StandingNeverHolds:
 		}
 	}
-	return waitable
+	return answer, waitable
 }
 
 // shortestProjectedWait is the soonest the record says anything that could hold

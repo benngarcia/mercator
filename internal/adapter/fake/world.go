@@ -843,8 +843,14 @@ func (w *World) machineOffer(machine *Machine, now time.Time) domain.OfferSnapsh
 	offer.ExpiresAt = now.Add(5 * time.Minute)
 	// What a machine offers is the room it has left rather than the disk it was
 	// built with, because content it is already holding is not room a Run can
-	// have.
-	offer.Resources.EphemeralDiskBytes = machine.freeDiskBytes()
+	// have. A machine this world declares cannot measure its disk offers no
+	// answer at all: the bytes it would have stated are bytes nobody
+	// established, and publishing them anyway is exactly the fabrication the
+	// node registry made when it read a failed measurement as a full disk.
+	offer.Resources.EphemeralDiskBytes = 0
+	if offer.Resources.EphemeralDiskKnown {
+		offer.Resources.EphemeralDiskBytes = machine.freeDiskBytes()
+	}
 	offer.Images = machine.publishedInventory(now)
 	offer.Artifacts = machine.publishedArtifacts(now)
 	offer.Caches = machine.publishedCaches(now)

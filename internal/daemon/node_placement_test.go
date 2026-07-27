@@ -786,6 +786,14 @@ func (f *fleet) advance(t *testing.T, runID string) {
 // Run has to respect.
 func (f *fleet) queueForWantOfCapacity(t *testing.T, runID string) {
 	t.Helper()
+	f.queueWaitingFor(t, runID, domain.DeferredNoCapacityFits)
+}
+
+// queueWaitingFor is the same read for a caller that names the wait itself,
+// because the fleet's answer decides which wait it is and the two the fleet can
+// give about a machine nothing placed a Run on are different facts.
+func (f *fleet) queueWaitingFor(t *testing.T, runID, reason string) {
+	t.Helper()
 	var response struct {
 		Run struct {
 			Phase     string `json:"phase"`
@@ -795,9 +803,9 @@ func (f *fleet) queueForWantOfCapacity(t *testing.T, runID string) {
 		} `json:"run"`
 	}
 	f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
-	if response.Run.Phase != "queued" || response.Run.Admission.Reason != domain.DeferredNoCapacityFits {
-		t.Fatalf("run %q is %q waiting for %q, and nothing in this fleet has room for it",
-			runID, response.Run.Phase, response.Run.Admission.Reason)
+	if response.Run.Phase != "queued" || response.Run.Admission.Reason != reason {
+		t.Fatalf("run %q is %q waiting for %q, want a Run queued waiting for %q",
+			runID, response.Run.Phase, response.Run.Admission.Reason, reason)
 	}
 }
 
@@ -1564,17 +1572,33 @@ func TestTheNodeListingTellsAnUnmeasurableDiskFromANodeNobodyHasHeardFrom(t *tes
 // containers, and every Run declares a disk floor, so a machine that established
 // no room is struck out of all of them. An operator reading only "ready" would
 // see a healthy node that never runs anything.
+//
+// What the Run waits for is the other half, and it is not what the fleet says
+// about a machine it measured. The offer states no room and states that nobody
+// measured it, so the wait names the silence, and a Run in it keeps its place in
+// the queue. Read as a machine with no room, one failed statfs on the only node
+// in a workspace made every Run in that workspace a Run no machine can ever
+// hold, and every one of them then lost its standing to the next arrival.
 func TestANodeThatCannotMeasureItsDiskWinsNoPlacement(t *testing.T) {
 	fleet := startFleet(t, reporting(capability.DiskFacts{}))
 
-	if offered := fleet.nodeOffer(t).Resources.EphemeralDiskBytes; offered != 0 {
-		t.Fatalf("a node that could not measure its disk offered %d bytes of room", offered)
+	offered := fleet.nodeOffer(t).Resources
+	if offered.EphemeralDiskBytes != 0 || offered.EphemeralDiskKnown {
+		t.Fatalf("a node that could not measure its disk offered %d bytes of room, known=%v",
+			offered.EphemeralDiskBytes, offered.EphemeralDiskKnown)
 	}
 	runID := fleet.submitRun(t)
-	fleet.queueForWantOfCapacity(t, runID)
+	fleet.queueWaitingFor(t, runID, domain.DeferredCapacityUnstated)
 
 	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, runID) {
 		t.Fatalf("a Run was sent to a machine whose room nobody established: %v", launched)
+	}
+	refusal := fleet.decision(t, runID)
+	if len(refusal.Candidates) != 1 || refusal.Candidates[0].Disk.FreeBytesKnown {
+		t.Fatalf("the decision weighed %d machines and the first states its room as measured", len(refusal.Candidates))
+	}
+	if code := refusal.Candidates[0].Rejections[0].Code; code != "UNKNOWN_FACT" {
+		t.Fatalf("a machine that never measured its disk was refused with %q", code)
 	}
 }
 

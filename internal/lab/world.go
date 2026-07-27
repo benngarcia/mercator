@@ -1566,8 +1566,13 @@ func (world *simulatedWorld) offerSnapshots(source map[string]hostState, at time
 		// built with. An offer that restated its capacity whatever it was
 		// holding is an offer that can never say no, and every Run reading its
 		// disk would be reading a number that stopped being true the first time
-		// anything landed here.
-		offer.Resources.EphemeralDiskBytes = world.diskLedger(state).FreeBytes()
+		// anything landed here. A machine this world declares cannot measure its
+		// disk states no room and states that nobody measured it, which are two
+		// facts rather than one number.
+		offer.Resources.EphemeralDiskBytes = 0
+		if offer.Resources.EphemeralDiskKnown {
+			offer.Resources.EphemeralDiskBytes = world.diskLedger(state).FreeBytes()
+		}
 		offer.Images = state.inventory(at)
 		offer.Artifacts = world.artifactInventory(offer.ID, at)
 		offer.Caches = world.cacheInventory(offer.ID, at)

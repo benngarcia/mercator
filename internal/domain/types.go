@@ -239,6 +239,22 @@ type Violation struct {
 	// somebody adds a disk. When a runtime reclaims space, what it reclaims will
 	// be a fact this flag can be set from.
 	EndedByWaiting bool `json:"ended_by_waiting,omitempty"`
+	// Unstated is whether this refusal names a fact nobody published rather than
+	// a fact that refuses the Run. A machine that could not measure its disk is
+	// not a machine with no room, and a fleet answer that counted it as one says
+	// no machine here can ever hold this work on the strength of a silence.
+	//
+	// It is stated beside EndedByWaiting rather than folded into it because they
+	// answer different questions. A refusal that ends by waiting names capacity
+	// somebody is spending; this names an answer nobody gave, which may become
+	// either of the other two the moment the machine speaks. Both are false for
+	// a machine that stated what it is and cannot take this Run.
+	//
+	// It is stated where the check is made for the reason the flag above is:
+	// only the check knows whether it read a measurement or a silence, and a
+	// reader deriving it from the refusal code would be deciding downstream what
+	// the publisher already knew.
+	Unstated bool `json:"unstated,omitempty"`
 }
 
 type OfferKind string
@@ -509,9 +525,23 @@ func (speed LinkSpeed) TransferSeconds(bytes int64) float64 {
 }
 
 type ResourceInventory struct {
-	CPUMillis          int64                  `json:"cpu_millis"`
-	MemoryBytes        int64                  `json:"memory_bytes"`
-	EphemeralDiskBytes int64                  `json:"ephemeral_disk_bytes"`
+	CPUMillis          int64 `json:"cpu_millis"`
+	MemoryBytes        int64 `json:"memory_bytes"`
+	EphemeralDiskBytes int64 `json:"ephemeral_disk_bytes"`
+	// EphemeralDiskKnown is whether the bytes above are room somebody measured.
+	// A provider selling a disk of a stated size measured it by selling it. A
+	// machine Mercator asked and got no answer from measured nothing, and the
+	// zero it leaves behind is not a machine with no room.
+	//
+	// It is stated rather than inferred from the bytes for the reason every
+	// other inventory here states its own silence. Read as a measurement, a
+	// missing answer refuses the Run on every disk floor a workload declares,
+	// and the record then says this machine can never hold the work when what
+	// happened is that nobody looked. Placement still refuses a machine that
+	// cannot say what room it has, because landing content on a disk nobody
+	// measured is a launch nobody can promise, but it refuses it as a silence
+	// and the queue is ordered on the difference.
+	EphemeralDiskKnown bool                   `json:"ephemeral_disk_known"`
 	Accelerators       []AcceleratorInventory `json:"accelerators,omitempty"`
 }
 

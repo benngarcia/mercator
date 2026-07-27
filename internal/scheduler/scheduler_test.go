@@ -641,6 +641,7 @@ func schedulerOffer(id string, now time.Time, ratePerSecondUSD float64, startSec
 			CPUMillis:          8000,
 			MemoryBytes:        16 << 30,
 			EphemeralDiskBytes: 80 << 30,
+			EphemeralDiskKnown: true,
 		},
 		Capabilities: domain.CapabilityProfile{
 			Container: domain.ContainerCapabilities{MaxContainers: 1, SupportsDigestRefs: true, MaxEnvironmentBytes: 32768},

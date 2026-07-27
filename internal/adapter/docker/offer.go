@@ -208,6 +208,7 @@ func StandingOffer(id EndpointIdentity, archOverride string, info HostInfo, disk
 			CPUMillis:          cpuMillis,
 			MemoryBytes:        memoryBytes,
 			EphemeralDiskBytes: ephemeralDiskBytes,
+			EphemeralDiskKnown: true,
 			Accelerators:       accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{

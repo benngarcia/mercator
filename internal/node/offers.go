@@ -135,12 +135,22 @@ func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapsho
 		Resources: domain.ResourceInventory{
 			CPUMillis:   host.CPUMillis,
 			MemoryBytes: host.MemoryBytes,
-			// An offer states the room this node established it has left. A node
-			// that could not measure its disk offers none, which strikes it out
-			// of every placement on the disk floor a workload declares, out loud
-			// and in the record. It stays enrolled while it says so, because its
-			// containers and their exits are facts the fleet still needs.
+			// An offer states the room this node established it has left, and
+			// separately whether it established any. A node that could not
+			// measure its disk is struck out of every placement on the disk
+			// floor a workload declares, out loud and in the record, and the
+			// record says the machine did not answer rather than that it has no
+			// room. It stays enrolled while it says so, because its containers
+			// and their exits are facts the fleet still needs.
+			//
+			// Publishing the silence as a zero is what made one failed
+			// measurement the strongest thing a fleet can say. Every Run carries
+			// a disk floor, so every Run in the workspace was refused, every
+			// refusal read as a machine that can never hold the work, and the
+			// whole workspace lost its queue ordering until the next heartbeat
+			// happened to succeed.
 			EphemeralDiskBytes: host.Disk.FreeBytes,
+			EphemeralDiskKnown: host.Disk.Known,
 			Accelerators:       host.Accelerators,
 		},
 		Capabilities: domain.CapabilityProfile{

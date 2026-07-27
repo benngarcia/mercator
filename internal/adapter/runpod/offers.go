@@ -81,6 +81,7 @@ func appendCloudOffer(offers []domain.OfferSnapshot, g gpuType, cloud string, pr
 			CPUMillis:          8000,
 			MemoryBytes:        16 * gib,
 			EphemeralDiskBytes: int64(diskGB) * gib,
+			EphemeralDiskKnown: true,
 			Accelerators: []domain.AcceleratorInventory{{
 				Vendor:         "NVIDIA",
 				Model:          g.DisplayName,

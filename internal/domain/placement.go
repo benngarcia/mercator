@@ -130,23 +130,46 @@ func (candidate CandidateDecision) Priced() bool {
 	return candidate.Estimates.CostUSD.Source != CostUnpriced
 }
 
-// CouldHoldOnceFree reports whether this machine could take this Run once the
-// capacity it is spending right now comes back. A candidate nothing refused
-// could take it already. A candidate refused for what the machine is, or for
-// what its publisher never said, could not take it whenever anybody waited.
+// FleetStanding is what one weighed machine turned out to be worth to one Run:
+// capacity this Run may end up on, capacity that can never take it, or a machine
+// that said too little for anybody to tell.
+type FleetStanding int
+
+const (
+	// StandingCouldHold is a machine this Run could be placed on now, or once the
+	// capacity it is spending right now comes back.
+	StandingCouldHold FleetStanding = iota
+	// StandingUnstated is a machine that refused this Run only for facts nobody
+	// published. It is neither of the other two, and counting it as either is how
+	// a silence became an answer about the fleet.
+	StandingUnstated
+	// StandingNeverHolds is a machine that refused this Run for what the machine
+	// is. No amount of waiting for this machine produces a placement.
+	StandingNeverHolds
+)
+
+// Standing is which of the three this candidate is, read off its refusals.
 //
 // It is the question the admission queue is ordered on, which is why it is asked
 // of the refusals rather than of the Bookings. A machine that is both busy and
 // too small is busy and too small: reading the Booking alone made every occupied
 // machine in the fleet look like a wait this Run was in, so one ask nothing could
 // hold emptied a workspace as soon as anything else was running.
-func (candidate CandidateDecision) CouldHoldOnceFree() bool {
+//
+// A stated refusal outranks a silence, because a machine that is too small to
+// ever hold this Run is too small whatever else it failed to say about itself.
+func (candidate CandidateDecision) Standing() FleetStanding {
+	standing := StandingCouldHold
 	for _, refusal := range candidate.Rejections {
-		if !refusal.EndedByWaiting {
-			return false
+		switch {
+		case refusal.EndedByWaiting:
+		case refusal.Unstated:
+			standing = StandingUnstated
+		default:
+			return StandingNeverHolds
 		}
 	}
-	return true
+	return standing
 }
 
 // FleetVerdict is what this decision said about the fleet: every machine it

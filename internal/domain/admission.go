@@ -39,6 +39,18 @@ const (
 	// machine. Work behind a Run waiting for a machine to arrive is only being
 	// stopped by it, and one impossible submission would otherwise empty a fleet.
 	DeferredNoCapacityFits = "NO_CAPACITY_FITS"
+	// DeferredCapacityUnstated is a Run nothing would take, where what stopped at
+	// least one machine from taking it is a fact nobody published. A node that
+	// could not measure its disk is the case: it is not a machine with no room
+	// and it is not a machine holding capacity somebody else is spending, so
+	// neither of the two waits above describes it and answering with either would
+	// be Mercator deciding a question the fleet left open.
+	//
+	// It holds the queue, because the machine may turn out to be able to take this
+	// Run the moment it answers, and work behind it would then be competing for
+	// exactly that machine. Uncertainty is not infeasibility here for the same
+	// reason it is not when a host cannot say what content it holds.
+	DeferredCapacityUnstated = "CAPACITY_UNSTATED"
 	// DeferredBehindHigherPriority is a Run that could have been placed and may
 	// not be, because work Mercator already owes an answer to outranks it. The
 	// ordering is on effective priority and not on the class alone: a Run of the
@@ -90,43 +102,78 @@ type AdmissionDeferral struct {
 }
 
 // FleetAnswer is what the fleet said about one Run at one moment: how many
-// machines it published that the Run was measured against, and how many of those
-// could take it once the capacity they are spending now comes back.
+// machines it published that the Run was measured against, how many of those
+// could take it once the capacity they are spending now comes back, and how many
+// said too little for anybody to tell.
 type FleetAnswer struct {
 	Weighed   int `json:"weighed"`
 	CouldHold int `json:"could_hold"`
+	// Unstated is the machines that refused this Run only for facts nobody
+	// published. A node that could not measure its disk is what this exists for:
+	// it is not a machine with no room, and counting it among the machines that
+	// can never hold the work lets one failed measurement say the fleet has
+	// nothing to offer, on evidence nobody produced.
+	Unstated int `json:"unstated,omitempty"`
 }
 
 // HoldsNothing reports whether this is an answer no waiting can change: nothing
 // the fleet published could take this Run once the capacity it is spending comes
-// back. A fleet that published nothing the ask matches says it most strongly of
-// all, and it is the same statement: there is no machine here to wait for.
+// back, and no machine was so quiet that nobody can say. A fleet that published
+// nothing the ask matches says it most strongly of all, and it is the same
+// statement: there is no machine here to wait for.
+//
+// One machine nobody could measure stops the fleet from saying it. This is the
+// strongest statement a fleet can make and it is not one to make over a silence:
+// a workspace whose only node failed to stat its filesystem would otherwise
+// record every Run in it as work no machine can ever hold, and lose the ordering
+// of all of them to a measurement that comes back on the next heartbeat.
 func (answer FleetAnswer) HoldsNothing() bool {
-	return answer.CouldHold == 0
+	return answer.CouldHold == 0 && answer.Unstated == 0
+}
+
+// Reason is the wait this answer puts a Run in, said in the words an operator
+// reads. It is derived here rather than decided beside the answer so that the
+// word in the record and the classification the queue is ordered on are one
+// fact: a fleet that published nothing an ask matches was the case where the two
+// came apart, and the strongest refusal a fleet can give was labelled as a wait
+// for capacity to come free.
+func (answer FleetAnswer) Reason() string {
+	switch {
+	case answer.CouldHold > 0:
+		return DeferredNoFeasibleOffer
+	case answer.Unstated > 0:
+		return DeferredCapacityUnstated
+	default:
+		return DeferredNoCapacityFits
+	}
 }
 
 // HoldsNoQueue reports whether the wait this deferral records is one other work
-// does not have to be ordered behind, given what the record already established.
-// A Run waiting for a machine to come free holds the queue, because whatever is
-// behind it wants that same machine. A Run nothing in the fleet can hold is
-// waiting for capacity to arrive, and work that fits the fleet as it stands is not
-// competing with it for anything.
+// does not have to be ordered behind. A Run waiting for a machine to come free
+// holds the queue, because whatever is behind it wants that same machine. A Run
+// nothing in the fleet can hold is waiting for capacity to arrive, and work that
+// fits the fleet as it stands is not competing with it for anything.
 //
-// Only the fleet's own answer can establish it, and a deferral that carries none
-// leaves the last answer standing. That is why it takes what was already
-// established: a Run held behind work that outranks it was measured against no
-// machine at all, and reading the ordering as an answer about capacity would put
-// an impossible ask straight back in front of the fleet it can never use.
+// Only the fleet's own answer can say it, and it says it about the moment it was
+// given. A deferral carrying no answer establishes no exemption: a Run held
+// behind work that outranks it was measured against no machine at all, and an
+// exemption carried through such a wait is a claim about a fleet nobody asked
+// since. That is the direction the carried version got wrong. A Run outranked by
+// a steady stream of arrivals never reaches Placement again, so an exemption
+// granted once outlived every machine that arrived afterwards, and work that
+// arrived later overtook a Run of its own class that the fleet could by then
+// have held.
+//
+// Losing the exemption on such a wait costs nothing that was not already lost.
+// A Run only fails to renew it while something outranks it, and whatever that
+// Run would have been holding up is held up by the work outranking it anyway.
 //
 // It is one rule in one place because production orders the queue on it and the
 // Lab adjudicates that ordering against it. Two readings of the same evidence
 // drifted apart in both directions at once: one of them called a fleet that
 // published nothing an ordinary wait, and the other could not see the ask at all.
-func (deferral AdmissionDeferral) HoldsNoQueue(established bool) bool {
-	if deferral.Fleet == nil {
-		return established
-	}
-	return deferral.Fleet.HoldsNothing()
+func (deferral AdmissionDeferral) HoldsNoQueue() bool {
+	return deferral.Fleet != nil && deferral.Fleet.HoldsNothing()
 }
 
 // QueuedAhead is one piece of work a deferred Run is waiting behind: either a

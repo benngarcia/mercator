@@ -485,6 +485,7 @@ func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 		CPUMillis:          defaultHostCPUMillis,
 		MemoryBytes:        defaultHostMemoryBytes,
 		EphemeralDiskBytes: defaultHostDiskBytes,
+		EphemeralDiskKnown: true,
 	}
 	if resources == nil {
 		return inventory
@@ -496,11 +497,13 @@ func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 		inventory.MemoryBytes = int64(resources.Memory)
 	}
 	// Stated is stated, including zero: a machine with no room is a machine an
-	// offer can carry, and it is what an enrolled node that could not measure
-	// its disk advertises.
+	// offer can carry, and it is a different machine from one that never looked.
 	if resources.Disk != nil {
 		inventory.EphemeralDiskBytes = resources.Disk.Bytes()
 	}
+	// A machine that could not measure its disk established no room, and both
+	// worlds publish that silence rather than the zero it leaves behind.
+	inventory.EphemeralDiskKnown = !resources.DiskUnmeasured
 	if gpu := resources.GPU; gpu != nil {
 		// The cards arrive grouped the way the machine reports them. A host that
 		// reports one product across several entries is a host every real probe
