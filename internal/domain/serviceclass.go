@@ -197,6 +197,16 @@ func (class ServiceClass) Admission() Admission {
 		// let anything sit unplaced without saying it has a starvation problem.
 		// Capacity going spare is the case reclaimable capacity is sold as, and a
 		// class that says waiting costs it nothing is saying the same of a redo.
+		//
+		// Stating no deadline means a member of a family this class is submitted
+		// into can be held by its own siblings for ever, because the only bound on
+		// a wait a caller's own declaration holds is the deadline and this class
+		// has none. That is this class doing what it says: waiting is free, the
+		// answer does not expire, and refusing the member would be Mercator
+		// inventing a moment the caller declined to state, in the words of a
+		// promise about capacity that nothing here broke. What ends such a wait is
+		// the sibling holding the place finishing, and a sibling that never
+		// finishes is what liveness.admitted_run_progress reports.
 		return Admission{
 			Priority:             0,
 			MaxQueueDelaySeconds: 2 * 60 * 60,
@@ -279,10 +289,20 @@ func (policy Admission) DeadlineUnreachable(queuedSeconds, waitSeconds float64, 
 // BoundAlreadyBroken names the bound this wait has already gone past, in the
 // words the record uses, and is empty where neither of them has.
 //
+// Each bound is asked of the part of the wait it is about, which is why it takes a
+// Wait rather than a number. The maximum queue delay is Mercator's promise about
+// its own queue and its own fleet, so it is asked of the part of the wait Mercator
+// caused; the deadline is about whether the answer is still worth producing, so it
+// is asked of the whole of it. A single number could only be charged whole to one
+// of them, and charging it to the queue delay refused the later members of every
+// family narrower than its class's patience while a machine that could have taken
+// the work stood idle.
+//
 // The queue delay is named first, and one place naming both is the whole point of
-// it. Every class states a queue delay shorter than its deadline, so a wait that
-// reached the deadline broke the queue delay first, and the promise Mercator broke
-// first is what belongs in a record somebody reads to find out what went wrong.
+// it. Every class states a queue delay shorter than its deadline, so a wait
+// Mercator caused all of and that reached the deadline broke the queue delay
+// first, and the promise Mercator broke first is what belongs in a record somebody
+// reads to find out what went wrong.
 //
 // Naming the later bound instead made the answer depend on how often the sweep
 // ran. A Run asked again a minute after its queue delay is refused for the bound
@@ -292,31 +312,15 @@ func (policy Admission) DeadlineUnreachable(queuedSeconds, waitSeconds float64, 
 // It also left the queue delay unsaid on the one door that can refuse a Run on its
 // way to a machine, so a caller read that the answer had stopped being worth
 // having about a promise broken hours before that.
-func (policy Admission) BoundAlreadyBroken(queuedSeconds float64) string {
+func (policy Admission) BoundAlreadyBroken(wait Wait) string {
 	switch {
-	case policy.Starved(queuedSeconds):
+	case policy.Starved(wait.ForCapacitySeconds()):
 		return RefusedQueueDelayExceeded
-	case policy.DeadlinePassed(queuedSeconds):
+	case policy.DeadlinePassed(wait.Seconds):
 		return RefusedDeadlineUnreachable
 	default:
 		return ""
 	}
-}
-
-// DeadlineOnlyAlreadyBroken names the bound a wait the caller imposed on itself
-// has gone past, which is the deadline and never the queue delay. A family already
-// as wide as it declared is the whole of that case, and
-// AdmissionDeferral.SelfImposed is where the difference is stated.
-//
-// It is a second entry point rather than a flag on the one above so that each door
-// reads the bound it means. A caller's own declaration cannot break Mercator's
-// promise about waiting for capacity, and the answer this class states a moment
-// for stops being worth having whoever caused the delay.
-func (policy Admission) DeadlineOnlyAlreadyBroken(queuedSeconds float64) string {
-	if policy.DeadlinePassed(queuedSeconds) {
-		return RefusedDeadlineUnreachable
-	}
-	return ""
 }
 
 // SelectionReason names the class whose exchange rates ranked the candidates, so

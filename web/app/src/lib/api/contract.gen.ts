@@ -508,7 +508,12 @@ export interface components {
             queued_seconds: number;
             /**
              * Format: double
-             * @description The longest its class allows this Run to be kept waiting. A wait past it is refused QUEUE_DELAY_EXCEEDED rather than held any longer.
+             * @description How much of that wait the caller's own declaration held, which is every interval whose answer was GROUP_AT_PARALLELISM. The maximum queue delay below is charged on the rest of it, because that bound is Mercator's promise about keeping work waiting for capacity and a caller cannot break it by declaring a family narrower than its class's patience. The class deadline is asked of the whole wait, because an answer nobody is waiting for is worth nothing however the waiting was caused.
+             */
+            self_imposed_seconds?: number;
+            /**
+             * Format: double
+             * @description The longest its class allows this Run to be kept waiting for capacity. A wait past it is refused QUEUE_DELAY_EXCEEDED rather than held any longer, and the part of it self_imposed_seconds names is not charged against it.
              */
             max_queue_delay_seconds: number;
             /**

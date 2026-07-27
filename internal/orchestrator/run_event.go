@@ -30,12 +30,19 @@ type runState struct {
 	// the workload can tell the difference.
 	readyAt       *time.Time
 	launchFailure *launchFailureData
-	// deferral is why admission last told this Run to wait, and queuedSince is
-	// when it first did. The two come apart on purpose: the reason is replaced
-	// every time the answer changes, and the moment the wait started is what the
-	// class's bound is measured from and must never move.
-	deferral                 *domain.AdmissionDeferral
-	queuedSince              time.Time
+	// deferral is why admission last told this Run to wait, deferredAt is when it
+	// said so, and queuedSince is when it first did. The three come apart on
+	// purpose: the reason is replaced every time the answer changes, the moment
+	// the wait started is what the class's bounds are measured from and must never
+	// move, and the moment of the latest answer is where the interval that answer
+	// covers begins.
+	deferral    *domain.AdmissionDeferral
+	deferredAt  time.Time
+	queuedSince time.Time
+	// selfImposedWait is how much of this Run's wait the caller's own declaration
+	// held, over the intervals that are closed. The interval still open is added
+	// where the wait is read, because how long it has run is a question about now.
+	selfImposedWait          time.Duration
 	deferralCount            int
 	attemptCount             int
 	excludedOfferSnapshotIDs []string
@@ -66,6 +73,41 @@ func (state runState) externalObjectPossible() bool {
 
 func (state runState) replacementEligible() bool {
 	return state.launchFailure != nil && state.launchFailure.replacementEligible()
+}
+
+// wait is how long this Run has been waiting at one moment, split into the whole
+// of it and the part the caller's own declaration held, which is what each of the
+// two bounds its class states is asked of.
+//
+// A Run nothing has deferred yet has waited nothing, which is not the same as a
+// wait of zero seconds that has begun: the class bounds are measured from the
+// first deferral, and there is no such moment yet.
+func (state runState) wait(at time.Time) domain.Wait {
+	if state.queuedSince.IsZero() {
+		return domain.Wait{}
+	}
+	return domain.Wait{
+		Seconds:            at.Sub(state.queuedSince).Seconds(),
+		SelfImposedSeconds: (state.selfImposedWait + state.selfImposedSince(at)).Seconds(),
+	}
+}
+
+// selfImposedSince is how much of the interval between admission's latest answer
+// and one later moment the caller's own declaration held. An answer stands until
+// the next one replaces it, so the reason recorded at the start of the interval is
+// what held the Run through it.
+//
+// A Run with no answer standing contributes nothing, which is the reading for the
+// two ways that happens. A Run nobody has deferred has no wait to divide. A Run
+// whose latest fact is a placement is a Run whose wait Mercator ended, and the
+// interval it spent holding a machine is charged to nobody's queue: what the
+// placement says about the family is that this Run is in the count rather than
+// waiting on it.
+func (state runState) selfImposedSince(at time.Time) time.Duration {
+	if state.deferral == nil || state.deferredAt.IsZero() || !state.deferral.SelfImposed() {
+		return 0
+	}
+	return at.Sub(state.deferredAt)
 }
 
 // supersession is the decision a fresh evaluation of this Run stands in for, and
@@ -134,7 +176,11 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		state.bookingDecision = &data.Decision
 		if data.Decision.SelectedOfferSnapshotID != "" {
 			// Placed work is not waiting on a decision, whatever it is still
-			// waiting for on the machine. How long it waited stays recorded.
+			// waiting for on the machine. How long it waited stays recorded, and so
+			// does what held it: the interval the placement ends is closed here
+			// rather than at the next deferral, because there is no answer standing
+			// after this to attribute it to.
+			state.selfImposedWait += state.selfImposedSince(stored.OccurredAt.UTC())
 			state.deferral = nil
 		}
 
@@ -146,7 +192,9 @@ func applyStoredEvent(state *runState, stored eventlog.StoredEvent) error {
 		if reason := invalidAdmissionDeferral(data); reason != "" {
 			return invalidRunEvent(stored, reason)
 		}
+		state.selfImposedWait += state.selfImposedSince(stored.OccurredAt.UTC())
 		state.deferral = &data.Deferral
+		state.deferredAt = stored.OccurredAt.UTC()
 		state.deferralCount++
 		if state.queuedSince.IsZero() {
 			state.queuedSince = stored.OccurredAt.UTC()

@@ -44,12 +44,13 @@ import (
 // is.
 //
 // What the deadline decides here and what the refusal is named are two questions,
-// and Admission.BoundAlreadyBroken answers the second for both doors. The deadline
-// is the only bound that may stop a Run on its way to a machine, because the queue
-// delay bounds waiting and this Run has stopped waiting. A wait that reached the
-// deadline is a wait that broke the class's queue delay first, though, so naming
-// the deadline here said the later of two broken promises and left the earlier one
-// out of the only record the caller gets.
+// and Admission.BoundAlreadyBroken answers the second for both doors, off the wait
+// and never off the answer of the moment. The deadline is the only bound that may
+// stop a Run on its way to a machine, because the queue delay bounds waiting and
+// this Run has stopped waiting. A wait Mercator caused that reached the deadline is
+// a wait that broke the class's queue delay first, though, so naming the deadline
+// here said the later of two broken promises and left the earlier one out of the
+// only record the caller gets.
 //
 // The whole stage is one decision per workspace at a time, because it is the one
 // stage that reads a fact about every Run and writes to a single stream. A Run's
@@ -76,8 +77,8 @@ func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string,
 		deferral := waiting.deferral(domain.DeferredBehindHigherPriority, behind)
 		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, admissionAnswer{deferral: deferral})
 	}
-	if waiting.policy.DeadlinePassed(waiting.queued) {
-		refusal := waiting.deferral(waiting.policy.BoundAlreadyBroken(waiting.queued), nil)
+	if waiting.policy.DeadlinePassed(waiting.wait.Seconds) {
+		refusal := waiting.deferral(waiting.policy.BoundAlreadyBroken(waiting.wait), nil)
 		return false, o.recordRefusal(ctx, workspaceID, runID, version, state, admissionAnswer{deferral: refusal})
 	}
 	return o.stepPlace(ctx, workspaceID, runID, version, state, waiting)
@@ -275,28 +276,35 @@ type queuePosition struct {
 	// group is the family this Run declared and the width it declared for it. It is
 	// read from the Run's own workload rather than from the queue, because the bound
 	// is the caller's statement about this Run and not something the queue can say.
-	group    domain.RunGroup
-	policy   domain.Admission
-	at       time.Time
-	queued   float64
+	group  domain.RunGroup
+	policy domain.Admission
+	at     time.Time
+	// wait is how long this Run has waited and how much of that its caller's own
+	// declaration held, because the two bounds the class states are asked of
+	// different parts of it.
+	wait domain.Wait
+	// priority is what the ordering weighs this Run at, and it is derived from the
+	// whole wait rather than from the part Mercator caused. The bounds are promises
+	// about what Mercator does, so they are charged by cause; the ordering is about
+	// which work has gone longest without an answer, which is the same question
+	// whoever caused the delay. A Run held by its own family holds no queue anyway,
+	// so the only thing this decides is what that Run is worth when it competes
+	// again.
 	priority float64
 }
 
 func (queue admissionQueue) position(runID string, state runState, at time.Time) queuePosition {
 	class := state.requested.Workload.Spec.Placement.Class
 	policy := class.Admission()
-	queued := 0.0
-	if !state.queuedSince.IsZero() {
-		queued = at.Sub(state.queuedSince).Seconds()
-	}
+	wait := state.wait(at)
 	return queuePosition{
 		runID:    runID,
 		class:    class,
 		group:    state.requested.Workload.Spec.Placement.Group,
 		policy:   policy,
 		at:       at,
-		queued:   queued,
-		priority: policy.EffectivePriority(queued),
+		wait:     wait,
+		priority: policy.EffectivePriority(wait.Seconds),
 	}
 }
 
@@ -375,29 +383,11 @@ func (run queuePosition) deferral(reason string, behind []domain.QueuedAhead) do
 		Class:                run.class,
 		EffectivePriority:    run.priority,
 		BasePriority:         run.policy.Priority,
-		QueuedSeconds:        run.queued,
+		QueuedSeconds:        run.wait.Seconds,
+		SelfImposedSeconds:   run.wait.SelfImposedSeconds,
 		MaxQueueDelaySeconds: run.policy.MaxQueueDelaySeconds,
 		Behind:               behind,
 	}
-}
-
-// boundAlreadyBroken is the promise this wait has already gone past, and which of
-// the two bounds its class states this wait is held to at all.
-//
-// A wait the caller's own declaration is holding is charged the deadline and never
-// the queue delay, which domain.AdmissionDeferral.SelfImposed is the statement of.
-// Charging a family's declared width against the class's queue delay closed the
-// later members of every family narrower than its class's patience: the eight
-// members of a family three wide taking half an hour each reach a third wave an
-// hour into the sweep, and each of those members was refused QUEUE_DELAY_EXCEEDED
-// while the machine that would have run it stood idle. Mercator had kept nobody
-// waiting there. The caller had said so itself, and the record already reads that
-// wait as asserting nothing about capacity.
-func (run queuePosition) boundAlreadyBroken(deferral domain.AdmissionDeferral) string {
-	if deferral.SelfImposed() {
-		return run.policy.DeadlineOnlyAlreadyBroken(run.queued)
-	}
-	return run.policy.BoundAlreadyBroken(run.queued)
 }
 
 // deferOrRefuse is what admission does with a Run it will not admit now. It
@@ -418,10 +408,15 @@ func (run queuePosition) boundAlreadyBroken(deferral domain.AdmissionDeferral) s
 // there as well, because it is a different question: whether the answer is still
 // worth producing at all.
 //
-// Which of the two a refused wait is named for is boundAlreadyBroken's answer, and
-// for every wait about capacity it is the same answer stepAdmit's own door gets.
-// The projected miss below is the one thing only this door can see: a wait still
-// inside both bounds, which the record says cannot end in time.
+// Which of the two a refused wait is named for is Admission.BoundAlreadyBroken's
+// answer, and it is the same answer stepAdmit's own door gets, off the same wait.
+// Naming it from the answer of the moment instead is how one Run got told two
+// different things depending on whether a machine happened to be free: the wait
+// its family had held for a day was refused for Mercator's queue delay at this
+// door and for the caller's own deadline at the other one, on the same record and
+// the same second, which is the sweep-cadence dependence the bound naming exists
+// to end. The projected miss below is the one thing only this door can see: a wait
+// still inside both bounds, which the record says cannot end in time.
 func (o *Orchestrator) deferOrRefuse(
 	ctx context.Context,
 	workspaceID, runID string,
@@ -430,11 +425,11 @@ func (o *Orchestrator) deferOrRefuse(
 	run queuePosition,
 	answer admissionAnswer,
 ) error {
-	if reason := run.boundAlreadyBroken(answer.deferral); reason != "" {
+	if reason := run.policy.BoundAlreadyBroken(run.wait); reason != "" {
 		answer.deferral.Reason = reason
 		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)
 	}
-	if run.policy.DeadlineUnreachable(run.queued, answer.deferral.ProjectedWaitSeconds, answer.projected) {
+	if run.policy.DeadlineUnreachable(run.wait.Seconds, answer.deferral.ProjectedWaitSeconds, answer.projected) {
 		answer.deferral.Reason = domain.RefusedDeadlineUnreachable
 		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)
 	}

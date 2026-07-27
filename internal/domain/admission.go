@@ -110,7 +110,18 @@ type AdmissionDeferral struct {
 	BasePriority      float64 `json:"base_priority"`
 	// QueuedSeconds is how long this Run had been waiting when it was asked,
 	// measured from the first time admission deferred it.
-	QueuedSeconds        float64 `json:"queued_seconds"`
+	QueuedSeconds float64 `json:"queued_seconds"`
+	// SelfImposedSeconds is how much of that wait the caller's own declaration
+	// held, summed over every interval between admission's answers whose answer
+	// was the Run's own family being as wide as its caller said it may run.
+	//
+	// It is recorded because it is the evidence the bound below was checked
+	// against, and the two numbers beside each other cannot be read without it. A
+	// wait an hour past a bound of an hour, deferred rather than refused, is a
+	// contradiction on the face of the record until it says which part of that
+	// hour Mercator caused, and a refusal naming the bound is only checkable
+	// against the part it was measured on.
+	SelfImposedSeconds   float64 `json:"self_imposed_seconds,omitempty"`
 	MaxQueueDelaySeconds float64 `json:"max_queue_delay_seconds"`
 	// ProjectedWaitSeconds is the shortest wait the decision says this Run
 	// faces, projected from the Bookings Mercator holds on the capacity that
@@ -217,24 +228,51 @@ func (deferral AdmissionDeferral) HoldsNoQueue() bool {
 	return deferral.Fleet != nil && deferral.Fleet.HoldsNothing()
 }
 
-// SelfImposed reports whether this wait is one the caller's own declaration is
-// holding rather than one Mercator's queue or Mercator's fleet is. A family
-// already as wide as its caller said may run is the only one: every other wait
-// here is Mercator failing to find the Run a machine, and this one is Mercator
-// doing exactly what it was asked.
+// SelfImposed reports whether the wait this deferral records is one the caller's
+// own declaration is holding rather than one Mercator's queue or Mercator's fleet
+// is. A family already as wide as its caller said may run is the only one: every
+// other wait here is Mercator failing to find the Run a machine, and this one is
+// Mercator doing exactly what it was asked.
 //
-// The difference decides which of the class's two bounds may end the wait, which
-// is why it is a rule of its own rather than a comparison at each door. The
-// maximum queue delay is Mercator's promise about how long it may keep work
-// waiting for capacity, so charging a caller's own declaration against it refused
-// the later members of every family narrower than its class's patience: the
-// record then said Mercator broke a promise, about a wait the caller asked for,
-// while a machine that could have taken the work stood idle. The deadline is a
-// different question and still applies, because it asks whether the answer is
-// worth producing at all and an answer nobody is waiting for is worth nothing
-// however the waiting was caused.
+// It is a statement about one interval and not about a Run. A deferral is the
+// answer admission had at one moment, and it stands until the next answer
+// replaces it, so what this says is who held the Run over that interval. Wait
+// below is what sums them, and reading this off the latest answer as though it
+// described the whole wait is how the difference got laundered in both
+// directions at once: a member whose family had held it for an hour was refused
+// for Mercator's own promise the instant the fleet became what held it, and a Run
+// the fleet had starved for an hour was excused the moment a sibling took its
+// family's place.
 func (deferral AdmissionDeferral) SelfImposed() bool {
 	return deferral.Reason == DeferredGroupAtParallelism
+}
+
+// Wait is how long one Run has been waiting on admission, in the two parts the
+// two bounds its class states are asked of.
+//
+// It is one shape rather than two numbers passed around because the split is the
+// fact, and every door that ends a wait has to read the same split. A wait
+// charged whole against the maximum queue delay refused the later members of
+// every family narrower than its class's patience, on a promise Mercator had not
+// broken, while a machine that could have taken the work stood idle.
+type Wait struct {
+	// Seconds is the whole wait, measured from the moment admission first deferred
+	// this Run. It is what the class deadline is asked of: that bound says the
+	// answer stops being worth producing at a moment, and an answer nobody is
+	// waiting for is worth nothing however the waiting was caused.
+	Seconds float64
+	// SelfImposedSeconds is how much of it the caller's own declaration held, which
+	// is every interval AdmissionDeferral.SelfImposed reports of.
+	SelfImposedSeconds float64
+}
+
+// ForCapacitySeconds is how long Mercator has kept this Run waiting for capacity,
+// which is the whole wait less the part the caller's own declaration held. It is
+// what the maximum queue delay is asked of, because that bound is Mercator's
+// promise about its own queue and its own fleet rather than a bound on what a
+// caller may declare.
+func (wait Wait) ForCapacitySeconds() float64 {
+	return wait.Seconds - wait.SelfImposedSeconds
 }
 
 // QueuedAhead is one piece of work a deferred Run is waiting behind: either a

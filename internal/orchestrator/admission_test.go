@@ -548,3 +548,123 @@ func submitInFamily(t *testing.T, ctx context.Context, orch *Orchestrator, runID
 	revision.Spec.Placement.Group = group
 	submitRevision(t, ctx, orch, runID, revision)
 }
+
+// TestAWaitAFamilyHeldIsNotChargedWhenTheFleetTakesOver is the moment a family
+// makes room and the fleet has nothing free at that instant. It is the handoff the
+// bound has to survive: every second of this member's wait was its own family's
+// declared width, and the first pass that cannot place it immediately is the pass
+// that used to close it as a failed Run.
+//
+// The wait charged whole against the class's queue delay is what did it. The
+// exemption read the answer of the moment, so a member held for seventy minutes
+// carried nothing forward: as soon as the reason moved to a wait about capacity,
+// the whole seventy minutes was charged to Mercator's own promise and the record
+// said Mercator had broken it, about a wait it had kept nobody in for zero
+// seconds.
+func TestAWaitAFamilyHeldIsNotChargedWhenTheFleetTakesOver(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
+	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	appendMemberPlacedInFamily(t, ctx, orch, "run_first", sweep, now, true)
+	submitInFamily(t, ctx, orch, "run_second", sweep)
+	appendHeldByItsFamily(t, ctx, orch, "run_second", sweep, now.Add(-70*time.Minute))
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_second"); err != nil {
+		t.Fatalf("advance a member whose family has just made room: %v", err)
+	}
+
+	second := runEvents(t, ctx, orch, "run_second")
+	deferral := latestDeferral(t, second)
+	if deferral.Reason != domain.DeferredNoFeasibleOffer {
+		t.Fatalf("the member was answered %q after seventy minutes its own family held it, and what holds it now is one busy machine", deferral.Reason)
+	}
+	if deferral.SelfImposedSeconds < 70*60 {
+		t.Fatalf("the record charges %.0fs of a %.0fs wait to the caller's own declaration, and the family held every second of it",
+			deferral.SelfImposedSeconds, deferral.QueuedSeconds)
+	}
+	if closed := runClosed(t, second); closed {
+		t.Fatal("the member was closed, and Mercator had kept it waiting for capacity for no time at all")
+	}
+}
+
+// TestAHeldMemberPastItsDeadlineIsRefusedForItsDeadline is the other door. A wait
+// its own family held reaches the moment the class says the answer stopped being
+// worth producing, and a machine happens to be free at that instant, so the
+// refusal is decided on the way to Placement rather than on the way into the
+// queue.
+//
+// Both doors name the bound off the same wait, which is what makes the answer
+// independent of the fleet. Naming it from the reason of the moment told one Run
+// two different things a second apart: the queue delay through the door that
+// records a wait, and the deadline through the door that stops a Run on its way to
+// a machine.
+func TestAHeldMemberPastItsDeadlineIsRefusedForItsDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
+	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchProvisionableOffer("off_free", now)}))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	submitInFamily(t, ctx, orch, "run_held", sweep)
+	appendHeldByItsFamily(t, ctx, orch, "run_held", sweep, now.Add(-(24*time.Hour + time.Minute)))
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_held"); err != nil {
+		t.Fatalf("advance a held member past its class deadline: %v", err)
+	}
+
+	held := runEvents(t, ctx, orch, "run_held")
+	if reason := deferralReason(t, held); reason != domain.RefusedDeadlineUnreachable {
+		t.Fatalf("a member its own family held for a day and a minute was refused %q, and the only bound its wait broke is its own deadline", reason)
+	}
+}
+
+// appendHeldByItsFamily states the wait a member of a family has been in since one
+// moment: admission answered its own family's declared width, and nothing has said
+// anything else about it since.
+func appendHeldByItsFamily(
+	t *testing.T,
+	ctx context.Context,
+	orch *Orchestrator,
+	runID string,
+	group domain.RunGroup,
+	since time.Time,
+) {
+	t.Helper()
+	deferral, err := json.Marshal(admissionDeferredData{Deferral: domain.AdmissionDeferral{
+		Reason: domain.DeferredGroupAtParallelism,
+		Class:  domain.ClassBatch,
+		Behind: []domain.QueuedAhead{{RunID: "run_first"}},
+	}})
+	if err != nil {
+		t.Fatalf("state the wait: %v", err)
+	}
+	events, err := orch.GetRunEvents(ctx, "ws_1", runID)
+	if err != nil {
+		t.Fatalf("read the stream of %q: %v", runID, err)
+	}
+	if _, err := orch.log.Append(ctx, eventlog.AppendRequest{
+		Stream:                eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		ExpectedStreamVersion: uint64(len(events)),
+		CommandKey:            "state:held:" + runID,
+		RequestHash:           "sha256:held:" + runID,
+		Events: []eventlog.NewEvent{
+			{ID: "evt_" + runID + "_admission_1", Type: EventAdmissionDeferred, SchemaVersion: 1, OccurredAt: since, Data: deferral},
+		},
+	}); err != nil {
+		t.Fatalf("state the family's hold on %q: %v", runID, err)
+	}
+}
+
+// runClosed reports whether this stream ends the Run.
+func runClosed(t *testing.T, events []eventlog.StoredEvent) bool {
+	t.Helper()
+	for _, event := range events {
+		if event.Type == EventRunClosed {
+			return true
+		}
+	}
+	return false
+}

@@ -2551,10 +2551,15 @@
             "format": "double",
             "description": "How long this Run had been waiting when it was asked, measured from the first time admission deferred it."
           },
+          "self_imposed_seconds": {
+            "type": "number",
+            "format": "double",
+            "description": "How much of that wait the caller's own declaration held, which is every interval whose answer was GROUP_AT_PARALLELISM. The maximum queue delay below is charged on the rest of it, because that bound is Mercator's promise about keeping work waiting for capacity and a caller cannot break it by declaring a family narrower than its class's patience. The class deadline is asked of the whole wait, because an answer nobody is waiting for is worth nothing however the waiting was caused."
+          },
           "max_queue_delay_seconds": {
             "type": "number",
             "format": "double",
-            "description": "The longest its class allows this Run to be kept waiting. A wait past it is refused QUEUE_DELAY_EXCEEDED rather than held any longer."
+            "description": "The longest its class allows this Run to be kept waiting for capacity. A wait past it is refused QUEUE_DELAY_EXCEEDED rather than held any longer, and the part of it self_imposed_seconds names is not charged against it."
           },
           "projected_wait_seconds": {
             "type": "number",
