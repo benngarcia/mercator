@@ -3279,6 +3279,70 @@ complete because it works against a live provider.
   affinity and a blocked-until-ready edge wider than the single Artifact dependency are
   also still open, and both want a scenario and an invariant of their own rather than a
   field added quietly beside this one.
+- [x] 2026-07-27: The group bound under review. Two reviewers refuted parts of the
+  slice above. Three findings were real, the fourth was real about its evidence and
+  wrong about the repair it asked for, and every repair is red against the reading it
+  replaces.
+  - Admission is one decision per workspace at a time. The width a family declared was
+    read over the whole workspace event log and written to one Run's stream, and nothing
+    anywhere refused the second writer: a Run's own stream version guards every other
+    transition it makes, and this bound has no such guard. Intake advances a Run inside
+    its own HTTP request, so a caller launching a sweep is exactly the burst that
+    defeats it, and two members of a family declared one wide each took a machine, five
+    times out of five. It is a lock in this process because the log is this process's own
+    SQLite file, so a workspace's admissions are all decided here or not at all; a
+    second control plane over one log would need the log itself to arbitrate, which is a
+    different design rather than a wider mutex. The price is that admissions in one
+    workspace no longer overlap, including the provider call a provisioning decision
+    makes, and admission already replayed the whole workspace log on every pass, so this
+    stage was never the parallel one.
+  - No Blueprint states that and none can. The Lab drives admission one Run at a time by
+    construction, which is what makes it a deterministic specification, and the daemon
+    fleet harness cannot force the interleaving either: six members of a width-one family
+    submitted together over the public API left the defect green twenty times out of
+    twenty, because the work each request does before admission is long enough that no
+    two admission windows line up. The claim is stated where the interleaving can be
+    forced, in `internal/orchestrator`, and the gap is disclosed here rather than papered
+    over with a case that passes against the defect.
+  - A wait a caller's own declaration is holding is charged the caller's own bound and
+    never Mercator's. A member held by its family's declared width was refused
+    `QUEUE_DELAY_EXCEEDED`, whose own record reads "a Run Mercator has already kept
+    waiting longer than its class allows", while a machine that could have taken it stood
+    idle: any family that takes longer to drain than its class's patience lost its later
+    members as failed Runs. The maximum queue delay is Mercator's promise about waiting
+    for capacity and a caller cannot break it; the deadline asks whether the answer is
+    still worth producing and still ends the wait.
+    `domain.AdmissionDeferral.SelfImposed` is the one place that difference is stated.
+  - The Lab held both readings at once. `liveness.aging_prevents_starvation` exempted
+    such a wait from its half about refusals and demanded through its half about live
+    waits that no accepted Run be left waiting past its class bound, which only refusing
+    the member could satisfy. Both halves carry the exemption now, and the deliberate
+    failure beside it is unchanged: the identical record waiting on `NO_FEASIBLE_OFFER`
+    is still reported.
+  - The corpus can state a queued Booking inside a family, and now does. Both group
+    Blueprints run on idle machines, where a placement and an execution are the same
+    instant, so no member of any family in the tree ever held a queued Booking and
+    counting executions instead of placements left every Blueprint and every law green.
+    That was a Blueprint nobody had written rather than a limitation of the Lab, and it
+    is written now.
+  - What takes a member out of that count is the capacity going back rather than
+    admission being asked about it again. The count left on a deferral, and its
+    correctness rested on the prose claim that admission is only ever asked of a Run that
+    still needs a machine, which holds today only because the one path that re-admits a
+    Run is restricted to capacity failures with no side effect whose Booking was
+    completed first. A Booking is given back in the same commit as the launch failure
+    that ended it, so the log says when the capacity went. An indeterminate launch
+    records a different fact and keeps its Booking, so such a Run keeps its family's
+    place, which is right for the reason the distinction exists: nobody knows whether the
+    container is running.
+  - Disclosed rather than implied. The Lab has no sweep of its own. Its driver advances
+    to the next thing the world does, which for a queued member is always the moment its
+    family makes room, so no Blueprint can ask a held Run a question in the middle of a
+    wait. That is why the queue-delay defect above was invisible at L1 and why the two
+    fixtures that state it drive the clock themselves, one through a `reconcile` step and
+    one through an explicit advance in the test. A periodic reconcile in the Lab would
+    make a class of bounds falsifiable that currently is not, and it is a change to the
+    execution model rather than a fixture, so it wants a slice of its own.
 
 
 ## Phase status
@@ -4229,7 +4293,41 @@ Phase 4 added:
   own family's declared width was holding is a wait no ordering could have ended,
   because the bound counts members rather than machines. A caller whose width outlasts
   its class's own patience has contradicted itself, and that is not Mercator starving
-  anybody.
+  anybody. Both halves of the law carry it. It was stated in the half about refusals
+  alone at first, and the half about live waits then demanded that no accepted Run be
+  left waiting past its class bound, which only refusing the held member could satisfy:
+  the two halves asked opposite things of one record, and production did what the
+  stricter one said. `TestAWaitItsOwnFamilyHoldsIsNoStarvation` states the exemption and
+  the deliberate failure beside it is the identical record waiting on
+  `NO_FEASIBLE_OFFER`.
+- `a-family-place-is-taken-by-a-member-that-waits-its-turn` (green): the world
+  `busy-rental-worth-waiting` states, with a family of two one wide in it. The first
+  member is given a queued Booking behind somebody else's running work, which is
+  capacity Mercator committed and not an execution, and the second member is held on
+  `GROUP_AT_PARALLELISM` anyway. It is the only fixture in the tree that tells the two
+  readings of the count apart: counting executions instead reports `run "sweep-2":
+  expected outcome "defer", and admission recorded nothing at all about this Run
+  waiting`, and leaves both group Blueprints, both group executions and every law green.
+- `a-family-holds-its-own-members-past-the-queue-bound` (green): a family of two one
+  wide, half an hour a member, two idle machines. An hour and a minute in, a minute past
+  the whole queue delay this class states, the held member is reconciled and waits,
+  because the wait is the caller's own declaration and not a promise Mercator made. A
+  day and a minute in the same member is refused `DEADLINE_UNREACHABLE`, which is the
+  caller's own bound ending it. Reconciling explicitly is how a fixture asks a held Run a
+  question at a moment nothing else is happening.
+- `a-family-narrower-than-its-class-patience-still-drains` (conformance): the same claim
+  driven to the end, three members one wide at forty minutes each, so the family takes
+  two hours to drain against the hour its class states. The test advances the clock into
+  the middle of the second member's run, which is the minute sweep production has and the
+  Lab does not, and reads the third member still queued and not closed; then all three
+  succeed and the second machine is never taken. Against the reading it replaces the
+  third member is closed failed after 4200 seconds.
+- `a-member-that-gave-its-capacity-back-leaves-room` (conformance): the first launch
+  failure inside a family anywhere in the corpus. One warm machine refuses the first
+  member's launch, the Booking goes back in the same commit, and the second member is
+  admitted onto the machine its sibling gave back and runs; the first member ends failed,
+  because Mercator will not offer it the snapshot that just refused it. The order the two
+  members ran in is the claim.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
@@ -4322,6 +4420,91 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 the group bound under review, and the four findings
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, against
+`beng/prediction-and-service-classes` at the four commits above `0683288`.
+`go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
+packages, and `go test -race -count=1` clean over `internal/domain`, `internal/lab`,
+`internal/orchestrator`, `internal/scenario/...` and `internal/daemon`, `internal/lab`
+taking 202s of it.
+
+The root corpus is 57 Blueprints, 54 of them green, with 30 conformance fixtures. Three
+Blueprints were added and no fixture moved classification.
+
+Every repair is red against the reading it replaces, mutated back one at a time.
+
+- Removing the workspace lock from `stepAdmit` fails
+  `TestAFamilyBurstSubmittedIsStillHeldToItsWidth` five times out of five with `a family
+  declared 1 wide was given capacity for [run_a on off_one run_b on off_one], and every
+  member of it asked at the same instant`. The offers are provisionable on purpose: a
+  queued Booking on an existing Rental commits through a Rental Schedule whose version is
+  checked, so two members competing for one machine would be serialised by that check for
+  a reason that has nothing to do with the family, and provisioning mints a fresh Rental
+  per Booking.
+- Charging a self-imposed wait against the class's queue delay again fails
+  `a-family-holds-its-own-members-past-the-queue-bound` with `expected outcome "defer",
+  and admission recorded "compute.run.admission_refused.v1" with reason
+  "QUEUE_DELAY_EXCEEDED"`, and fails `TestAFamilyNarrowerThanItsClassPatienceStillDrains`
+  with `the third member is "closed" with outcome "failed" after waiting 4200s`.
+- Removing the new exemption from the first half of
+  `liveness.aging_prevents_starvation` instead fails the same conformance case from the
+  law rather than from the assertion: `Run "run-member-003" of class "batch" has waited
+  1h10m0s, which is past the 3600s its class allows, behind run-member-002`. That is the
+  two halves of one law disagreeing, which is what the repair ended.
+- Counting executions rather than placements fails
+  `a-family-place-is-taken-by-a-member-that-waits-its-turn` with `run "sweep-2": expected
+  outcome "defer", and admission recorded nothing at all about this Run waiting`, and
+  leaves `a-group-never-runs-wider-than-it-declared`,
+  `a-group-of-eight-runs-three-at-a-time`, `a-family-narrower-than-its-class-patience-
+  still-drains` and every group law green. That is the reviewer's own mutation and its
+  own evidence: the corpus could not see the count before.
+- Removing the departure on a launch failure fails
+  `TestAMemberThatGaveItsCapacityBackLeavesRoomForItsFamily` with `the second member is
+  held by a family whose only other member holds no capacity: [run_first]`, and leaves
+  `a-member-that-gave-its-capacity-back-leaves-room` green. That asymmetry is stated
+  rather than hidden: under the real control plane the replacement follows in the same
+  pass, so a member whose launch failed is either placed again or closed
+  `RETRY_EXHAUSTED` before anything else asks, and the moment in between is what a sweep
+  interrupted by an error or a restart leaves behind.
+
+One finding was real about its evidence and wrong about the repair it asked for. The
+review asked for the population of `holding` to move from the decision to the dispatch,
+as the mutation that proves the corpus blind, and that is the reading the count must not
+have: a member given a queued Booking is never asked about again, so a family of one
+would commit a second machine and then run two. What was missing is the Blueprint, and
+the Blueprint is what this pass added.
+
+What this pass could not reach. The Lab has no sweep of its own, so no Blueprint can ask
+a held Run a question in the middle of a wait, and the two fixtures that need one drive
+the clock themselves. Concurrency has no Blueprint either and the daemon harness cannot
+force the interleaving. Both are disclosed in the progress entry rather than implied by a
+green corpus.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` pass against MinIO containers of the
+native engine, and `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run
+TestIntegration` passes against real containers. Nothing in this pass needed a container
+of its own: what it changes is admission's own bookkeeping and the laws stated over it.
+Mercator issue #165 does not reproduce here and was left alone.
+
+Named and not fixed here, unchanged from the entries below. `gofmt -l .` reports
+`internal/adapter/vast/client.go`, `internal/scheduler/scheduler.go` and
+`internal/scheduler/scheduler_test.go`, struct tag alignment left by `595f7b0` and
+`1e13518` earlier on this branch, untouched by this pass and still held in another
+session's stash against this worktree.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/lab ./internal/orchestrator \
+  ./internal/scenario/... ./internal/daemon
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
 
 ### Phase 4 run groups and interruption
 
