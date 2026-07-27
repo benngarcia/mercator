@@ -644,7 +644,7 @@ func TestEveryClauseOfThePredictionProvenanceRuleCanFail(t *testing.T) {
 		"a prior carrying samples": {Expected: 90, Level: domain.LevelPrior, SampleCount: 3, Key: machine.Candidate(true)},
 		// A level claiming measured launches with none behind it.
 		"a keyed level with nothing measured under it": {
-			Expected: 90, Level: domain.LevelProviderAndRegion, Key: machine.ProviderAndRegion(),
+			Expected: 90, Level: domain.LevelProviderAndRegion, Key: machine.ProviderAndRegion(true),
 		},
 		// An answer at a level of the hierarchy with no key to have read it from.
 		"a keyed level naming no key": {Expected: 90, Level: domain.LevelProvider, SampleCount: 2},
@@ -705,9 +705,10 @@ func TestAnAnsweredStageAndAPriorAreBothHonestProvenance(t *testing.T) {
 			},
 		),
 		"a stage answered from the province the machine is in": whereALaunchCanAnswer(
-			func(domain.LaunchStage) domain.Estimate {
+			func(stage domain.LaunchStage) domain.Estimate {
 				return domain.Estimate{
-					Expected: 90, Level: domain.LevelProviderAndRegion, SampleCount: 2, Key: machine.ProviderAndRegion(),
+					Expected: 90, Level: domain.LevelProviderAndRegion, SampleCount: 2,
+					Key: machine.ProviderAndRegion(contentStage(stage)),
 				}
 			},
 		),
@@ -815,6 +816,59 @@ func TestATransferAnsweredFromMeasuredLaunchesIsAViolation(t *testing.T) {
 
 			if result.Status != InvariantFailed || result.Violation == "" {
 				t.Fatalf("a %s answered from measured launches was reported as honest provenance: %+v", transfer, result)
+			}
+		})
+	}
+}
+
+// TestACoarseRungAnsweringContentItDoesNotNameIsAViolation is the deliberate break
+// for the rung collapse, which is the shape of the same defect one level up from
+// the listing.
+//
+// The key here recurs, names no listing, and is exactly what its level is called:
+// every candidate of this provider in this place, and every candidate this provider
+// sells. What makes it a violation is the stage it answered. Readiness is the
+// workload's own semantics, so a rung answering it out of a bucket naming no
+// workload is answering out of whatever else the fleet ran there, and the record
+// calls that measured evidence about this Run's content. Every other stage of the
+// record is at an honest prior, so what fails is the rung and not the company it is
+// in.
+//
+// The machine stages are the counterpart and they pass under these very keys, which
+// is what keeps the rule from reading as "coarse rungs may not answer": one
+// machine's boot is a fact about the machine, and its neighbours in the same place
+// are evidence about it.
+func TestACoarseRungAnsweringContentItDoesNotNameIsAViolation(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	machine := domain.CandidateIdentity{
+		Lane: domain.LaneEphemeral, Provider: "simvast", Region: "US-CA",
+		Machine: "machine-77", Accelerator: "nvidia-a100x2", ImageDigest: "sha256:image",
+	}
+	for name, collapsed := range map[string]domain.Estimate{
+		"the region rung": {
+			Expected: 900, Level: domain.LevelProviderAndRegion, SampleCount: 1,
+			Key: machine.ProviderAndRegion(false),
+		},
+		"the provider rung": {
+			Expected: 900, Level: domain.LevelProvider, SampleCount: 3,
+			Key: machine.ProviderKey(false),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := predictionObservation(now, machine, func(stage domain.LaunchStage) domain.Estimate {
+				if stage != domain.StageApplicationReady {
+					return domain.Estimate{Expected: 12, Level: domain.LevelPrior}
+				}
+				return collapsed
+			})
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.prediction_states_its_provenance",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("%s answering a readiness it does not name was reported as honest: %+v", name, result)
 			}
 		})
 	}

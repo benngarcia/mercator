@@ -156,11 +156,11 @@ func TestOneRegionNameInTwoCloudsIsTwoPlaces(t *testing.T) {
 	}
 	first := domain.CandidateIdentityOf(aggregated(offers[0]), "sha256:image")
 	second := domain.CandidateIdentityOf(aggregated(offers[1]), "sha256:image")
-	if first.ProviderAndRegion() == second.ProviderAndRegion() {
-		t.Fatalf("two clouds naming one region share the place %q", first.ProviderAndRegion())
+	if first.ProviderAndRegion(false) == second.ProviderAndRegion(false) {
+		t.Fatalf("two clouds naming one region share the place %q", first.ProviderAndRegion(false))
 	}
-	if first.ProviderAndRegion() != "lane=ephemeral;provider=shadeform;region=hyperstack/us-east-1" {
-		t.Fatalf("the place this offer recurs in is %q", first.ProviderAndRegion())
+	if first.ProviderAndRegion(false) != "lane=ephemeral;provider=shadeform;region=hyperstack/us-east-1" {
+		t.Fatalf("the place this offer recurs in is %q", first.ProviderAndRegion(false))
 	}
 	if first.InstanceType != "A6000" {
 		t.Fatalf("the product Shadeform sells this as is %q", first.InstanceType)

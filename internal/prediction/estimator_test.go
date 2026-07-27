@@ -79,8 +79,8 @@ func TestCapacityThatCannotRecurIsNeverAnExactCandidate(t *testing.T) {
 	if answer.Level != domain.LevelProvider {
 		t.Fatalf("a one-shot execution of this provider was answered %+v", answer)
 	}
-	if answer.Key != identity.ProviderKey() {
-		t.Fatalf("the answer was read under %q, and this listing recurs as %q", answer.Key, identity.ProviderKey())
+	if answer.Key != identity.ProviderKey(true) {
+		t.Fatalf("the answer was read under %q, and this listing recurs as %q", answer.Key, identity.ProviderKey(true))
 	}
 }
 
@@ -110,11 +110,91 @@ func TestAContentStageIsLearnedPerImageAndAMachineStageIsNot(t *testing.T) {
 		{Candidate: trained, Stage: domain.StageBoot, Seconds: 200},
 	})
 
-	if answer := history.Predict(scored, domain.StageApplicationReady); answer.Level == domain.LevelExactCandidate {
-		t.Fatalf("another image's readiness answered as this exact candidate: %+v", answer)
+	if answer := history.Predict(scored, domain.StageApplicationReady); answer.Answered() {
+		t.Fatalf("another image's readiness answered for this one: %+v", answer)
 	}
 	if answer := history.Predict(scored, domain.StageBoot); answer.Level != domain.LevelExactCandidate || answer.P50 != 200 {
 		t.Fatalf("the machine's own boot did not answer for a second image: %+v", answer)
+	}
+}
+
+// TestNoRungOfTheLadderAnswersContentItDoesNotName is the same law read down the
+// whole ladder rather than at the machine.
+//
+// A coarse rung generalizes over machines, which is what it is for, and never over
+// content. One measured launch of a 70B model server took fifteen minutes to come
+// up; a static page asked for on the machine beside it is not fifteen minutes from
+// ready, and the start bound of the Run asking for it is what such an answer gets
+// measured against. The machine stages of the same unmeasured candidate still fall
+// through the same rungs, because what a machine spends booting is the machine's.
+func TestNoRungOfTheLadderAnswersContentItDoesNotName(t *testing.T) {
+	measured := marketplaceAsk("off_vast_11111", "machine-77")
+	weights := domain.CandidateIdentityOf(measured, "sha256:llm-70b")
+	history := prediction.NewHistory([]prediction.Observation{
+		{Candidate: weights, Stage: domain.StageApplicationReady, Seconds: 900},
+		{Candidate: weights, Stage: domain.StageBoot, Seconds: 200},
+	})
+
+	elsewhere := marketplaceAsk("off_vast_33333", "machine-91")
+	elsewhere.Region = "EU-DE"
+
+	for name, offer := range map[string]domain.OfferSnapshot{
+		"a machine in the same place":    marketplaceAsk("off_vast_22222", "machine-88"),
+		"a machine of the same provider": elsewhere,
+	} {
+		t.Run(name, func(t *testing.T) {
+			other := domain.CandidateIdentityOf(offer, "sha256:tiny-http")
+
+			ready := history.Predict(other, domain.StageApplicationReady)
+			if ready.Answered() {
+				t.Fatalf("a 70B model server's readiness answered for a static page: %+v", ready)
+			}
+			if boot := history.Predict(other, domain.StageBoot); !boot.Answered() || boot.P50 != 200 {
+				t.Fatalf("the machine stage this candidate has neighbours for was answered %+v", boot)
+			}
+		})
+	}
+}
+
+// TestTheSameContentOnAMachineNobodyMeasuredIsAnsweredFromItsNeighbours is what
+// the rung above is for, stated here so the rule above cannot be satisfied by a
+// ladder that answers nothing.
+//
+// The image is the same image, and the machine beside the one that ran it is the
+// best evidence there is about how long it takes to come up. The key names the
+// place and the content both, so a reader can check the answer against the claim.
+func TestTheSameContentOnAMachineNobodyMeasuredIsAnsweredFromItsNeighbours(t *testing.T) {
+	measured := marketplaceAsk("off_vast_11111", "machine-77")
+	history := prediction.NewHistory([]prediction.Observation{{
+		Candidate: domain.CandidateIdentityOf(measured, "sha256:llm-70b"),
+		Stage:     domain.StageApplicationReady,
+		Seconds:   900,
+	}})
+
+	neighbour := domain.CandidateIdentityOf(marketplaceAsk("off_vast_22222", "machine-88"), "sha256:llm-70b")
+
+	answer := history.Predict(neighbour, domain.StageApplicationReady)
+
+	if answer.Level != domain.LevelProviderAndRegion || answer.SampleCount != 1 || answer.P50 != 900 {
+		t.Fatalf("the same image on the machine beside the measured one was answered %+v", answer)
+	}
+	if answer.Key != "lane=ephemeral;provider=simvast;region=US-CA;image=sha256:llm-70b" {
+		t.Fatalf("the region rung answered under %q, and it has to name the place and the content", answer.Key)
+	}
+}
+
+// TestContentNobodyCouldNameIsAnsweredAtNoLevel is the silence a registry leaves.
+// An image whose manifest could not be read has no content key at any rung, so
+// every unresolved image in the fleet stays out of one bucket that would be read
+// back as measured evidence about the rest of them.
+func TestContentNobodyCouldNameIsAnsweredAtNoLevel(t *testing.T) {
+	ask := marketplaceAsk("off_vast_11111", "machine-77")
+	history := prediction.NewHistory([]prediction.Observation{readiness(ask, 60)})
+
+	unresolved := domain.CandidateIdentityOf(ask, "")
+
+	if answer := history.Predict(unresolved, domain.StageApplicationReady); answer.Answered() {
+		t.Fatalf("an image nothing could name was answered %+v", answer)
 	}
 }
 

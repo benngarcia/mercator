@@ -141,20 +141,10 @@ func (identity CandidateIdentity) Recurs() bool {
 // Recurs is the question, and this returning nothing is the same answer stated
 // where a store would otherwise be written to.
 //
-// Unknown content has no content key, and the same answer says so. A registry that
-// is throttled, unreachable, unauthorized, or too slow leaves the manifest
-// unreadable, which is a placement Mercator still takes because silence about an
-// image is not infeasibility. What it may not do is name the content anyway: every
-// image the fleet could not resolve would collapse into one key per machine, and a
-// 900MB image's pull history would then be read back as exact-content evidence for
-// a 40GB image whose manifest also happened to be unreadable. The capacity levels
-// are unaffected, because what a machine spends booting is a property of the
-// machine.
+// Unknown content has no content key, and keyForContent below is where that is
+// stated for every level at once.
 func (identity CandidateIdentity) Candidate(includeImage bool) string {
 	if !identity.Recurs() {
-		return ""
-	}
-	if includeImage && identity.ImageDigest == "" {
 		return ""
 	}
 	parts := []string{"lane=" + string(identity.Lane), "provider=" + identity.Provider}
@@ -167,35 +157,67 @@ func (identity CandidateIdentity) Candidate(includeImage bool) string {
 			"accelerator="+identity.Accelerator,
 		)
 	}
-	if includeImage {
-		parts = append(parts, "image="+identity.ImageDigest)
-	}
-	return strings.Join(parts, ";")
+	return keyForContent(strings.Join(parts, ";"), identity.ImageDigest, includeImage)
 }
 
 // ProviderAndRegion is the key for every candidate of this provider, in this
-// lane, in this region. A provider that states no region has no such key, and says
-// so rather than filing every machine it sells under one blank region: that would
-// make the level indistinguishable from the provider level while claiming to be
-// narrower.
+// lane, in this region, running this content where the stage asked about is the
+// content's. A provider that states no region has no such key, and says so rather
+// than filing every machine it sells under one blank region: that would make the
+// level indistinguishable from the provider level while claiming to be narrower.
 //
 // The lane is carried at every level rather than only at the exact-candidate one.
 // A coarser key exists to answer about capacity that has no history of its own, and
 // answering out of the other lane's history is the same wrong answer made harder to
 // see: the stages a launch has are a property of the lane.
-func (identity CandidateIdentity) ProviderAndRegion() string {
+func (identity CandidateIdentity) ProviderAndRegion(includeImage bool) string {
 	if identity.Lane == "" || identity.Provider == "" || identity.Region == "" {
 		return ""
 	}
-	return "lane=" + string(identity.Lane) + ";provider=" + identity.Provider + ";region=" + identity.Region
+	place := "lane=" + string(identity.Lane) + ";provider=" + identity.Provider + ";region=" + identity.Region
+	return keyForContent(place, identity.ImageDigest, includeImage)
 }
 
-// ProviderKey is the key for everything this provider sells in this lane.
-func (identity CandidateIdentity) ProviderKey() string {
+// ProviderKey is the key for everything this provider sells in this lane, running
+// this content where the stage asked about is the content's.
+func (identity CandidateIdentity) ProviderKey(includeImage bool) string {
 	if identity.Lane == "" || identity.Provider == "" {
 		return ""
 	}
-	return "lane=" + string(identity.Lane) + ";provider=" + identity.Provider
+	return keyForContent("lane="+string(identity.Lane)+";provider="+identity.Provider, identity.ImageDigest, includeImage)
+}
+
+// keyForContent qualifies a capacity key with the content the candidate was asked
+// to run, and it is the one place every level of the hierarchy asks that question.
+//
+// A coarse level exists to answer about capacity nobody has measured out of
+// capacity somebody has, which is a claim about machines and never a claim about
+// content. A stage whose duration is a property of what was launched has to name
+// what was launched at every level or the level is answering out of other people's
+// work: an application server coming up in fifteen minutes is evidence about that
+// server, and a static page's readiness on the machine beside it is not a
+// prediction of it. Carrying the content only into the narrowest key left the two
+// coarse rungs of a readiness ladder answering from whatever else the fleet had
+// run in that region, and a Run whose start bound was tighter than another image's
+// readiness was struck out on it.
+//
+// Unknown content has no key at any level. A registry that is throttled,
+// unreachable, unauthorized, or too slow leaves the manifest unreadable, which is
+// a placement Mercator still takes because silence about an image is not
+// infeasibility. What it may not do is name the content anyway: every image the
+// fleet could not resolve would collapse into one key, and a 900MB image's history
+// would be read back as evidence about a 40GB image whose manifest also happened
+// to be unreadable. The capacity levels are unaffected, because what a machine
+// spends being acquired, booting, and creating a container is a property of the
+// machine.
+func keyForContent(key, imageDigest string, includeImage bool) string {
+	if !includeImage {
+		return key
+	}
+	if key == "" || imageDigest == "" {
+		return ""
+	}
+	return key + ";image=" + imageDigest
 }
 
 // acceleratorKey is how many cards of each accelerator product this machine

@@ -183,8 +183,8 @@ func TestOneProductInTwoCloudsIsTwoCandidates(t *testing.T) {
 	// A tier is not a place. Recording it as one would file a history about where
 	// a machine is under a word about who may reach it, so the ladder here has no
 	// region rung and says so.
-	if secure.ProviderAndRegion() != "" {
-		t.Fatalf("a catalog naming no datacenter published the region %q", secure.ProviderAndRegion())
+	if secure.ProviderAndRegion(false) != "" {
+		t.Fatalf("a catalog naming no datacenter published the region %q", secure.ProviderAndRegion(false))
 	}
 }
 

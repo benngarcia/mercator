@@ -100,7 +100,7 @@ func TestAnIdentityNamesNoListing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			identity := domain.CandidateIdentityOf(offer, "sha256:image")
 
-			for _, key := range []string{identity.Candidate(true), identity.ProviderAndRegion(), identity.ProviderKey()} {
+			for _, key := range []string{identity.Candidate(true), identity.ProviderAndRegion(true), identity.ProviderKey(true)} {
 				for _, listing := range []string{offer.ID, offer.NativeRef} {
 					if key == "" || listing == offer.MachineID {
 						continue
@@ -230,7 +230,7 @@ func TestCapacityNobodyClassifiedHasNoKey(t *testing.T) {
 	if identity.Recurs() {
 		t.Fatalf("capacity nobody classified claims to recur: %+v", identity)
 	}
-	for _, level := range []string{identity.Candidate(true), identity.ProviderAndRegion(), identity.ProviderKey()} {
+	for _, level := range []string{identity.Candidate(true), identity.ProviderAndRegion(true), identity.ProviderKey(true)} {
 		if level != "" {
 			t.Fatalf("capacity nobody classified is filed under %q", level)
 		}
@@ -257,6 +257,61 @@ func TestContentNobodyCouldNameHasNoContentKey(t *testing.T) {
 	// it.
 	if unresolved.Candidate(false) == "" {
 		t.Fatalf("a machine lost its own key because a registry would not answer: %+v", unresolved)
+	}
+}
+
+// TestEveryLevelOfTheLadderNamesTheContentOrNoneOfThemDoes is what makes a coarse
+// rung readable. A rung exists to answer about a machine nobody has measured out of
+// machines somebody has, which is a claim about where the machine is and who sells
+// it. Asked about a stage that is the content's, it has to name the content too:
+// carrying the image into the narrowest key alone left a region's key answering the
+// readiness of a workload nothing in that region had ever run.
+func TestEveryLevelOfTheLadderNamesTheContentOrNoneOfThemDoes(t *testing.T) {
+	identity := domain.CandidateIdentityOf(vastListing("off_vast_11111"), "sha256:llm-70b")
+
+	for name, key := range map[string]string{
+		"the exact candidate": identity.Candidate(true),
+		"the region":          identity.ProviderAndRegion(true),
+		"the provider":        identity.ProviderKey(true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(key, "image=sha256:llm-70b") {
+				t.Fatalf("a content key of %q says nothing about the content", key)
+			}
+		})
+	}
+	// The capacity levels of the same identity say nothing about it, so one
+	// machine's boot history is one bucket rather than one per image.
+	for name, key := range map[string]string{
+		"the exact candidate": identity.Candidate(false),
+		"the region":          identity.ProviderAndRegion(false),
+		"the provider":        identity.ProviderKey(false),
+	} {
+		t.Run(name+" asked about the machine", func(t *testing.T) {
+			if strings.Contains(key, "image=") {
+				t.Fatalf("a machine's own key %q is split per image", key)
+			}
+		})
+	}
+}
+
+// TestContentNobodyCouldNameHasNoKeyAtAnyLevel is the silence read down the whole
+// ladder. An unresolved manifest leaves no content key anywhere, because a coarse
+// bucket of every image the fleet could not read is the same wrong answer with more
+// samples behind it.
+func TestContentNobodyCouldNameHasNoKeyAtAnyLevel(t *testing.T) {
+	unresolved := domain.CandidateIdentityOf(vastListing("off_vast_11111"), "")
+
+	for name, key := range map[string]string{
+		"the exact candidate": unresolved.Candidate(true),
+		"the region":          unresolved.ProviderAndRegion(true),
+		"the provider":        unresolved.ProviderKey(true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if key != "" {
+				t.Fatalf("an image nobody could name is filed under %q", key)
+			}
+		})
 	}
 }
 

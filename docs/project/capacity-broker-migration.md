@@ -3287,7 +3287,12 @@ Phase 4 added:
   is what the Run declared about itself. It is the first fixture that states the
   machine behind a marketplace listing and the readiness of one machine rather than of
   the whole world, and the second of those is what makes the levels answer different
-  seconds.
+  seconds. A fourth Run asks the same six about a second image nothing in this world has
+  ever launched, and every rung has to be silent about it: readiness is the workload's
+  own semantics, so the measured machine, its neighbour in that region, and its provider
+  elsewhere all fall to what that Run declared about itself. A world holding one image
+  is what left the three answers above unfalsifiable against a ladder that carried the
+  content at its narrowest rung alone.
 - `history-answers-through-the-control-plane` (conformance): the same claim at L1,
   where both halves of the answer are Mercator reading Mercator. The identity is the
   one its own Booking Decision recorded and the seconds are the difference between two
@@ -3295,22 +3300,30 @@ Phase 4 added:
   and one stated by the application inside it. All three keyed rungs answer here: the
   machine that ran the first Run at the exact candidate, an unmeasured machine in its
   region at the provider and place, and an unmeasured machine in another region at the
-  provider, for the same seconds at less confidence. The middle rung is what holds a
-  region to surviving every production step between the backend that states it and the
-  identity the decision records.
+  provider, for the same seconds at less confidence. A third Run then asks the same
+  three machines about a second image, and all three fall to its own declaration, so
+  each coarse rung is in this world twice: once where it answers and once where it has
+  to be silent. What the region here holds is the half of its production path that runs
+  from the offer to the recorded identity; that a backend states one at all is held in
+  the adapters, in the lane where they do.
 - `safety.prediction_states_its_provenance` (Lab invariant): every stage of every
   recorded candidate names the level its answer came from and how many measured
   launches stand behind it; a keyed level names a key and a positive count, a prior
-  names neither, and an answer claiming this exact candidate names a key that is not
-  the listing the offer arrived under and is this candidate's own. The listing clause
-  is the load-bearing one, because a marketplace mints an ask ID per search and a
-  history filed under it reports a key that cannot grow as candidate-specific
-  evidence. Each clause fails on the one record it exists to catch in
-  `TestEveryClauseOfThePredictionProvenanceRuleCanFail`, the counterpart holds that an
-  answered stage and a prior are both honest provenance, and the registry's permanent
-  deliberate failure drives the listing clause. Through the whole control plane on the
-  conformance Blueprint: keying the history on the offer snapshot ID, on both the
-  writing and the reading side, fails it with the key naming the listing.
+  names neither, and the key an answer was read under is the key this candidate has at
+  the level that answered. Two clauses are load-bearing. A key that names the listing
+  the offer arrived under is refused, because a marketplace mints an ask ID per search
+  and a history filed under it reports a key that cannot grow as candidate-specific
+  evidence. And a coarse rung answering a stage that is a property of the content under
+  a key naming no content is refused, because a rung generalizes over machines and
+  never over what those machines were asked to run. Each clause fails on the one record
+  it exists to catch in `TestEveryClauseOfThePredictionProvenanceRuleCanFail` and
+  `TestACoarseRungAnsweringContentItDoesNotNameIsAViolation`, the counterpart holds
+  that an answered stage and a prior are both honest provenance, and the registry's
+  permanent deliberate failure drives the listing clause. Through the whole control
+  plane on the conformance Blueprint: keying the history on the offer snapshot ID, on
+  both the writing and the reading side, fails it with the key naming the listing, and
+  building the coarse keys without the image fails it on the artifact conformance
+  fixtures with a readiness answered at `provider` for content that key does not name.
 
 - `a-fast-machine-far-from-the-data-loses` (green): three Rentals equally warm on the
   image at one price, one on a measured 4 Gbps path to the object store, one on 200
@@ -3475,6 +3488,76 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 a rung of the ladder may not answer content it does not name
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. Two independent reviewers refuted the entry below it.
+Both raised the same defect through different routes and it was real: the ladder
+carried the image into its narrowest key alone, so the two coarse rungs answered
+`application_ready` out of launches of other content.
+
+The consequence was not one wrong number on a record. Readiness is the only stage
+this fleet measures, so every sample in every history was a readiness sample, and any
+candidate with no launch of its own was answered from whatever else its provider had
+run: `stagePredictor` feeds the answer into both the score and the established half,
+the established half becomes `EstablishedStartSeconds`, and `scheduler.go` strikes out
+any candidate whose P90 there exceeds `Placement.MaxP90StartSeconds`. A Run of a
+static page in a region where a 70B model server had once taken fifteen minutes was
+struck out with `LATENCY_SLO_EXCEEDED` on evidence about the model server. The keys
+the record showed named a lane, a provider, and a place, and no image, so neither a
+reader nor the invariant could see what the seconds were of.
+
+Fixed at the source. `domain.keyForContent` is now the one place any level of the
+hierarchy asks whether the content belongs in the key, `ProviderAndRegion` and
+`ProviderKey` take the same question `Candidate` already took, and `levelKeys` asks it
+of the stage once and gives every rung the same answer. Content nobody could name has
+no key at any level, so a fleet of unresolved manifests does not collapse into one
+bucket the way it would have if the coarse keys had grown an `image=` with nothing
+after it.
+
+`safety.prediction_states_its_provenance` could not have caught it, which is the
+second half of the finding and the reason this is not only a one-line fix. The rule
+derived the candidate's own key at the exact-candidate level and returned early at
+every other level, so a coarse answer only had to name some key that was not the
+listing. It now derives the key at whichever level answered, through `keyOfLevel`, and
+refuses an answer whose level this candidate has no key at.
+
+The coverage the entry below promoted could not have caught it either: both its
+worlds held one image, so every rung answered the same launch whether or not the key
+named it. The placement Blueprint now has a second image and a fourth Run asking the
+same six listings about it, and the conformance fixture a second image on all three
+Rentals and a third Run of it, so each coarse rung appears twice in a world, once
+where it answers and once where it must be silent.
+
+What the new coverage reports when the fix is removed. Building the two coarse keys
+without the image again fails `history-answers-for-the-machine-it-was-measured-on`
+sixteen ways across four candidates, each of the form `application_ready level: want
+"prior", answered at "provider_and_region" from 2 samples`. It also fails twenty-two
+cases in `internal/lab` on the invariant rather than on an assertion, of the form `Run
+"run-checkpoint-consumer" answered candidate "doomed-rental"'s application_ready stage
+out of "lane=reusable;provider=lab", and at level "provider" this candidate is
+"lane=reusable;provider=lab;image=sha256:9f2c..."`. All but one of those twenty-two are
+fixtures about Artifacts, caches, Run Bundles, or preparation that have nothing to say
+about prediction, which is how far the collapse reached: readiness answered out of
+another image's launch was in the green corpus everywhere a second Run existed, and no
+fixture's expectations had to change when it stopped.
+
+Two deliberate Lab cases hold the tightened rule, one per coarse rung, with every
+other stage of the same record at an honest prior so what fails is the rung and not
+the company it is in. Both keys they use recur and name no listing; what makes them
+violations is the stage they answered.
+
+At unit level the estimator now holds that no rung answers content it does not name
+and that the same content on an unmeasured neighbour is still answered at the region
+rung, which is what keeps the first rule from being satisfiable by a ladder that
+answers nothing.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/scenario/... ./internal/prediction ./internal/domain
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
 
 ### Phase 4 the middle rung of the ladder, held through the real control plane
 

@@ -86,16 +86,23 @@ func (history History) Empty() bool { return len(history.samples) == 0 }
 // skipped by both the writer and the reader, so a provider that publishes no
 // region does not file every machine it sells under one blank place.
 //
+// Whether the content is part of the key is a question about the stage rather than
+// about the level, so every rung is asked it and every rung gets the same answer.
+// A rung that dropped it would be a rung answering a stage about the content from
+// launches of other content, which is the one thing a coarse rung may not
+// generalize over: it is there to say that this machine resembles its neighbours.
+//
 // A stage priced from bytes has no ladder at any level, so a measured transfer is
 // filed nowhere and answers nothing.
 func levelKeys(identity domain.CandidateIdentity, stage domain.LaunchStage) []stageKey {
 	if pricedFromBytes(stage) {
 		return nil
 	}
+	content := contentStage(stage)
 	return []stageKey{
-		{key: identity.Candidate(contentStage(stage)), stage: stage},
-		{key: identity.ProviderAndRegion(), stage: stage},
-		{key: identity.ProviderKey(), stage: stage},
+		{key: identity.Candidate(content), stage: stage},
+		{key: identity.ProviderAndRegion(content), stage: stage},
+		{key: identity.ProviderKey(content), stage: stage},
 	}
 }
 
@@ -150,6 +157,11 @@ func pricedFromBytes(stage domain.LaunchStage) bool {
 // acquired, booting, enrolling, and creating a container is about the machine, and
 // keying those on the content would split one machine's history across every image
 // the fleet ever ran on it.
+//
+// It is the whole ladder's question and not one level's. Readiness is the only
+// stage this fleet measures today, so a ladder that asked it at the narrowest rung
+// alone would have had two of its three rungs answering every readiness in the
+// fleet out of every other one.
 func contentStage(stage domain.LaunchStage) bool {
 	return stage == domain.StageApplicationReady
 }

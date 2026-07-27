@@ -163,8 +163,8 @@ func TestTwoSearchesOfOneMachineAreOneCandidate(t *testing.T) {
 		t.Fatalf("two searches of one machine keyed differently:\n%s\n%s",
 			earlier.Candidate(true), later.Candidate(true))
 	}
-	if earlier.ProviderAndRegion() != "lane=ephemeral;provider=vast;region=US-CA" {
-		t.Fatalf("the region rung of the ladder is %q, and Vast published US-CA", earlier.ProviderAndRegion())
+	if earlier.ProviderAndRegion(false) != "lane=ephemeral;provider=vast;region=US-CA" {
+		t.Fatalf("the region rung of the ladder is %q, and Vast published US-CA", earlier.ProviderAndRegion(false))
 	}
 	for _, ask := range []string{"9001", "12345"} {
 		if strings.Contains(earlier.Candidate(true), ask) {
@@ -203,9 +203,9 @@ func TestTwoMachinesWithOneCardInOnePlaceAreTwoCandidates(t *testing.T) {
 	if first.Candidate(true) == second.Candidate(true) {
 		t.Fatalf("two machines share the key %q", first.Candidate(true))
 	}
-	if first.ProviderAndRegion() != second.ProviderAndRegion() {
+	if first.ProviderAndRegion(false) != second.ProviderAndRegion(false) {
 		t.Fatalf("two machines in one place fell to different regions: %q and %q",
-			first.ProviderAndRegion(), second.ProviderAndRegion())
+			first.ProviderAndRegion(false), second.ProviderAndRegion(false))
 	}
 }
 

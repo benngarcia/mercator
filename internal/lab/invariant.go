@@ -1075,10 +1075,10 @@ func candidateIdentityRecurs(observation InvariantObservation) error {
 }
 
 // predictionStatesItsProvenance is the law on what a prediction has to say about
-// itself. Every stage of every recorded candidate names the level its answer
-// came from and how many measured launches stand behind it, and an answer
-// claiming this exact candidate names a key that is not the listing it arrived
-// on.
+// itself. Every stage of every recorded candidate names the level its answer came
+// from and how many measured launches stand behind it, and the key it was read
+// under is the key this candidate has at that level: not the listing it arrived
+// on, and not a coarser bucket's name for something else.
 //
 // The last clause is the load-bearing one. A marketplace mints a fresh ask ID
 // for every search of a machine that was already there, so a history filed under
@@ -1115,9 +1115,9 @@ func predictionStatesItsProvenance(observation InvariantObservation) error {
 
 // stageStatesItsProvenance holds one stage of one candidate to what its level
 // claims. The key is checked against the candidate's own recorded identity as
-// well as against the listing, because those are the two ways an exact-candidate
-// answer goes wrong: filed under something that does not recur, or filed under
-// some other candidate's key entirely.
+// well as against the listing, because those are the two ways a keyed answer goes
+// wrong: filed under something that does not recur, or filed under a key that is
+// some other candidate's or some other workload's.
 func stageStatesItsProvenance(runID string, candidate domain.CandidateDecision, stage domain.LaunchStage) error {
 	answer := candidate.Estimates.Stages.Stage(stage)
 	switch answer.Level {
@@ -1162,22 +1162,48 @@ func keyedAnswerIsHonest(runID string, candidate domain.CandidateDecision, stage
 			)
 		}
 	}
-	if answer.Level != domain.LevelExactCandidate {
-		return nil
-	}
-	if !candidate.Candidate.Recurs() {
+	if answer.Level == domain.LevelExactCandidate && !candidate.Candidate.Recurs() {
 		return fmt.Errorf(
 			"Run %q answered candidate %q's %s stage as this exact candidate under %q, and nothing about this capacity outlives its listing",
 			runID, candidate.OfferSnapshotID, stage, answer.Key,
 		)
 	}
-	if own := candidate.Candidate.Candidate(contentStage(stage)); answer.Key != own {
+	own := keyOfLevel(candidate.Candidate, answer.Level, stage)
+	if own == "" {
 		return fmt.Errorf(
-			"Run %q answered candidate %q's %s stage out of %q, and this candidate is %q",
-			runID, candidate.OfferSnapshotID, stage, answer.Key, own,
+			"Run %q answered candidate %q's %s stage at level %q under %q, and this candidate has no key at that level for evidence to be filed under",
+			runID, candidate.OfferSnapshotID, stage, answer.Level, answer.Key,
+		)
+	}
+	if answer.Key != own {
+		return fmt.Errorf(
+			"Run %q answered candidate %q's %s stage out of %q, and at level %q this candidate is %q",
+			runID, candidate.OfferSnapshotID, stage, answer.Key, answer.Level, own,
 		)
 	}
 	return nil
+}
+
+// keyOfLevel is the key this candidate's own recorded identity has at one level of
+// the hierarchy, restated here rather than read from the estimator: a rule that
+// asked the predictor what the predictor should have used could not fail.
+//
+// Every level is derived, not only the narrowest. A coarse rung answers about
+// other machines by design and about other content never, so the content the
+// stage is about has to reach the key at whichever rung answered, and a rung that
+// dropped it reads back as a region's evidence about a workload nobody has run
+// there.
+func keyOfLevel(identity domain.CandidateIdentity, level domain.PredictionLevel, stage domain.LaunchStage) string {
+	switch level {
+	case domain.LevelExactCandidate:
+		return identity.Candidate(contentStage(stage))
+	case domain.LevelProviderAndRegion:
+		return identity.ProviderAndRegion(contentStage(stage))
+	case domain.LevelProvider:
+		return identity.ProviderKey(contentStage(stage))
+	default:
+		return ""
+	}
 }
 
 // aTransferWasNotAnsweredFromLaunches is the clause every other reader of a
