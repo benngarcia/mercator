@@ -33,11 +33,11 @@ export interface WorkspaceRun {
   expectedRuntimeSeconds: number | null;
   maxRuntimeSeconds: number;
   phase: WorkspaceRunPhase;
-  // decisions is every Booking Decision this Run has, oldest first. A decision is
-  // appended and never rewritten, so the projection keeps the chain: holding one
-  // decision meant a re-placement erased the answer it replaced, and the refusal a
-  // queued Run is waiting on was gone the moment anything else was decided.
-  decisions: BookingDecision[];
+  // The decisions themselves are not here. This projection is the canvas: the
+  // machines, the Bookings, and where each Run is. The chain of answers a Run was
+  // given is read over REST on the Run's own page, invalidated by the same
+  // booking_decided event that reaches this reducer, so a copy kept here was a
+  // second store of the same facts that nothing rendered.
   selectedOfferID?: string;
   bookingID?: string;
   // startedAt is when this Run's workload actually began, as the machine holding
@@ -266,7 +266,6 @@ function requestRun(workspace: Workspace, event: CloudEvent): Workspace {
       expected !== undefined && expected <= max ? expected : null,
     maxRuntimeSeconds: max,
     phase: "requested",
-    decisions: [],
   };
   return changed(workspace, { runs: { ...workspace.runs, [runID]: run } });
 }
@@ -277,14 +276,10 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
   const runID = decision.run_id ?? event.correlationid;
   if (!runID) throw new Error(`${event.type} requires decision.run_id`);
   const run = requiredRun(workspace, runID, event.type);
-  const decisions = [...run.decisions, decision];
   if (!decision.booking || !decision.selected_offer_snapshot_id) {
-    return changed(workspace, {
-      runs: {
-        ...workspace.runs,
-        [runID]: { ...run, decisions },
-      },
-    });
+    // A decision that placed the Run nowhere moves nothing on the canvas. It is
+    // the whole of what happened to the Run and it is read on the Run's page.
+    return workspace;
   }
   const sourceBooking = decision.booking;
   const booking: WorkspaceBooking = {
@@ -321,7 +316,6 @@ function decideBooking(workspace: Workspace, event: CloudEvent): Workspace {
       [runID]: {
         ...run,
         phase,
-        decisions,
         selectedOfferID: decision.selected_offer_snapshot_id,
         bookingID: booking.id,
       },
