@@ -139,6 +139,13 @@ const (
 	// readers to take the last record silently and a Run nothing could place
 	// records no decision.
 	CapabilityAppendedDecisions Capability = "appended_decisions"
+	// CapabilityRefusedQueueDelay is admission refusing a Run it has kept waiting
+	// longer than its class allows, rather than going on holding it. It names what
+	// a fixture about a maximum queue delay is red for while the class deadline is
+	// the only bound admission acts on: a class that declares no deadline waits for
+	// ever, and every class that declares one waits far past the bound it stated
+	// before anything ends the wait.
+	CapabilityRefusedQueueDelay Capability = "refused_queue_delay"
 )
 
 var knownCapabilities = map[Capability]bool{
@@ -161,6 +168,7 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityMeasuredTransferRates:  true,
 	CapabilityLearnedStageHistory:    true,
 	CapabilityAppendedDecisions:      true,
+	CapabilityRefusedQueueDelay:      true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued

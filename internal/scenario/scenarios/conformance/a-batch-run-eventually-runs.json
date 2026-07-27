@@ -1,0 +1,294 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One machine, a stream of interactive Runs arriving on it for half an hour, and one batch Run that base priority alone would leave in the queue for ever. Five interactive Runs take every Booking position the Rental has, the batch Run arrives half a minute later and is told to wait, and from then on every arrival outranks it: interactive work starts at the highest priority any class declares and batch work starts at twenty. What moves it is the age of its own wait. Its class states an hour as the longest it may be kept waiting, and the aging rate is derived from that bound rather than declared beside it, so waiting half of the bound promotes a Run above anything that could arrive. At thirty minutes and thirty seconds the batch Run is worth a hundred and one, the interactive Run arriving at thirty two minutes is the first one told it is waiting behind it, and the batch Run takes the Booking position that comes free half a minute later and runs. Aging lifting a Run past the work that outranks it is what the phase goal asks to be proved, and nothing in the corpus proved it: every queue fixture before this one states one moment of the ordering, and starvation is a claim about what a stream of arrivals does to a Run over half an hour. Deleting the aging term from Admission.EffectivePriority fails it. The batch Run is then worth twenty for ever, every arrival steps over it, and it is refused QUEUE_DELAY_EXCEEDED an hour into its wait, with liveness.aging_prevents_starvation naming the arrivals that were admitted while it had already waited past the point its own class promises to have promoted it. The interactive Runs this fleet cannot serve are refused too, and by their own deadline rather than by the queue: five Bookings of two minutes each project ten minutes of wait and interactive work states that it must have started within ten. That is the fleet being too small, which is a different failure from a Run being stepped over, and the starvation law is silent about it because every Run admitted ahead of one of them had waited longer than it had. The execution is driven in thirty second advances rather than to completion, because this queue is decided between arrivals: driving from one arrival to the next skips the sweeps where a freed Booking position is given to whatever outranks everything else waiting, which is the only moment the fixture is about.",
+  "seed": "mercator-lab-aging-v1",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {
+            "digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55",
+            "size": "4GB"
+          },
+          {
+            "digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee",
+            "size": "20MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": [
+          "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"
+        ],
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "runtime_models": [
+      {
+        "candidate": "rental-only",
+        "minimum": "2m",
+        "maximum": "2m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "watched-01",
+        "at": "0s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-02",
+        "at": "5s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-03",
+        "at": "10s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-04",
+        "at": "15s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-05",
+        "at": "20s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "quiet",
+        "at": "30s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "batch",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-06",
+        "at": "120s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-07",
+        "at": "220s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-08",
+        "at": "320s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-09",
+        "at": "420s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-10",
+        "at": "520s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-11",
+        "at": "620s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-12",
+        "at": "720s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-13",
+        "at": "820s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-14",
+        "at": "920s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-15",
+        "at": "1020s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-16",
+        "at": "1120s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-17",
+        "at": "1220s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-18",
+        "at": "1320s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-19",
+        "at": "1420s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-20",
+        "at": "1520s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-21",
+        "at": "1620s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-22",
+        "at": "1720s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-23",
+        "at": "1820s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-24",
+        "at": "1920s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      }
+    ]
+  }
+}
