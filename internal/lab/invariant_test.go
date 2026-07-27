@@ -706,6 +706,86 @@ func TestEveryClauseOfThePredictionProvenanceRuleCanFail(t *testing.T) {
 	}
 }
 
+// TestEveryClauseOfTheSupersessionRuleCanFail is the rule on the decision record
+// read the way every law here has to be readable. The registry's single deliberate
+// case drives the first clause, one ID recorded twice saying different things, and
+// that clause returns before any of the others is reached, so a reviewer showed
+// each of the remaining three could be deleted or weakened with the whole tree
+// green. Each is shown failing on the one record it exists to catch.
+//
+// The linearity clause needs three answers, because two is the length at which a
+// chain that skips a link and a chain that does not are the same chain. Production
+// reaches three whenever two machines refuse a launch in turn, which
+// TestTheChainAReaderGetsHoldsEveryAnswer drives through the orchestrator, and a
+// chain of three whose newest answer names the first is one no reader can walk.
+func TestEveryClauseOfTheSupersessionRuleCanFail(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	answered := func(id, supersedes, reason string) domain.BookingDecision {
+		return domain.BookingDecision{
+			ID:                      id,
+			RunID:                   "run-1",
+			SelectedOfferSnapshotID: "offer-" + id,
+			Supersedes:              supersedes,
+			SupersedesReason:        reason,
+		}
+	}
+	for name, chain := range map[string][]domain.BookingDecision{
+		// One decision edited in place: the same ID recorded twice, once placing the
+		// Run on the machine it really ran on and once on another.
+		"one ID recorded twice saying different things": {
+			answered("dec_one", "", ""),
+			{ID: "dec_one", RunID: "run-1", SelectedOfferSnapshotID: "offer-elsewhere"},
+		},
+		// A Run's first answer claiming to replace something. There is no earlier
+		// decision on this Run, so the record names a predecessor that does not exist
+		// and a reader following the chain backwards walks off the end of it.
+		"a first answer that replaces something": {
+			answered("dec_first", "dec_nothing_came_before", domain.SupersededLaunchFailed),
+		},
+		// The newest answer naming the first and skipping the middle one. Every
+		// individual record looks well formed, and the chain has a link in it that no
+		// reader walking backwards from the newest answer ever arrives at.
+		"a chain that skips a link": {
+			answered("dec_first", "", ""),
+			answered("dec_middle", "dec_first", domain.SupersededLaunchFailed),
+			answered("dec_newest", "dec_first", domain.SupersededLaunchFailed),
+		},
+		// A supersession with no reason. It says the answer changed and not whether
+		// the fleet changed or a machine refused the work, which are the two things an
+		// operator reads a chain to tell apart.
+		"a replacement that gives no reason": {
+			answered("dec_first", "", ""),
+			answered("dec_newest", "dec_first", ""),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := InvariantObservation{
+				StartedAt:       now,
+				Now:             now,
+				World:           WorldTruthSnapshot{At: now},
+				Workloads:       map[string]domain.WorkloadRevision{},
+				RentalSchedules: map[string]domain.RentalSchedule{},
+				RunRequirements: map[string]RunArrival{},
+				ArtifactCatalog: map[string]domain.ArtifactVersion{},
+				SeededLocality:  map[string]map[string]bool{},
+			}
+			for index, decision := range chain {
+				observation.MercatorEvents = append(observation.MercatorEvents,
+					bookingDecidedEvent(fmt.Sprintf("decision-%d", index+1), decision))
+			}
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.decisions_are_never_rewritten",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("%s was reported as a decision record a reader can walk: %+v", name, result)
+			}
+		})
+	}
+}
+
 // TestAnAnsweredStageAndAPriorAreBothHonestProvenance is the counterpart: the
 // rule has to pass the two records production actually writes, or it could only
 // be satisfied by a tree that predicts nothing.
