@@ -237,6 +237,29 @@ type WorldSpec struct {
 	// nobody sold that way would be describing a provider breaking its contract,
 	// which is a different fixture from the one this vocabulary is for.
 	Preemptions []PreemptionSpec `json:"preemptions,omitempty"`
+	// Orphans is capacity this world's provider is already holding that Mercator
+	// never launched. It is stated rather than produced, because nothing Mercator
+	// does creates one: what creates one is a control plane that lost a record, and
+	// a Blueprint saying so is the only honest way to put a world in that state.
+	Orphans []OrphanSpec `json:"orphans,omitempty"`
+}
+
+// OrphanSpec is one thing a provider is holding that the control plane does not
+// recognise. Its shape is the whole of what the orphan policy has to decide from:
+// which machine it is on, and whether it still carries a Run identity Mercator can
+// find in its own record.
+type OrphanSpec struct {
+	// ID is the launch key this capacity answers to, which is what a reclaim is
+	// addressed by and what the decision about it is filed under.
+	ID string `json:"id"`
+	// Rental is the machine it is running on, which has to be one this world
+	// declared: an execution on a machine that does not exist is not a world.
+	Rental string `json:"rental"`
+	// Run is the Run identity the capacity still carries, by this Blueprint's own
+	// name for that Run. An orphan naming one is capacity Mercator can account for
+	// out of its own record; an orphan naming nothing is capacity nothing can ever
+	// be bound to, and those are the two shapes the policy chooses between.
+	Run string `json:"run,omitempty"`
 }
 
 // PreemptionSpec is one machine going back to the provider that sold it.
@@ -2492,6 +2515,9 @@ func (w WorldSpec) validate() error {
 	if err := w.validatePreemptions(); err != nil {
 		return err
 	}
+	if err := w.validateOrphans(ids); err != nil {
+		return err
+	}
 	runtimeModels := map[string]bool{}
 	for _, model := range w.RuntimeModels {
 		if !ids[model.Candidate] || model.Minimum.Duration() <= 0 || model.Maximum.Duration() < model.Minimum.Duration() {
@@ -2511,6 +2537,25 @@ func (w WorldSpec) validate() error {
 // preempting an ordinary Rental would be describing a broken contract rather than
 // the interruption this vocabulary is for, and every rule about which work may be
 // interrupted would then be stated over a world that cannot happen.
+// validateOrphans refuses capacity this world could not be holding: one on a
+// machine nobody declared, and two under one identity. Both are fixtures that
+// would state a world and then quietly describe a different one.
+func (w WorldSpec) validateOrphans(machines map[string]bool) error {
+	seen := map[string]bool{}
+	for _, orphan := range w.Orphans {
+		switch {
+		case orphan.ID == "":
+			return fmt.Errorf("orphaned capacity needs an id, which is the identity a reclaim is addressed by")
+		case seen[orphan.ID]:
+			return fmt.Errorf("duplicate orphaned capacity %q", orphan.ID)
+		case !machines[orphan.Rental]:
+			return fmt.Errorf("orphaned capacity %q is on unknown machine %q", orphan.ID, orphan.Rental)
+		}
+		seen[orphan.ID] = true
+	}
+	return nil
+}
+
 func (w WorldSpec) validatePreemptions() error {
 	reclaimable := map[string]bool{}
 	for _, rental := range w.Rentals {

@@ -85,6 +85,24 @@ type externalExecution struct {
 	ReservedDiskBytes int64 `json:"reserved_disk_bytes,omitempty"`
 }
 
+// orphanedCapacity is one thing this world's provider is holding that Mercator
+// never launched. It is deliberately not an externalExecution: an execution is
+// Mercator's own, carries the identities Mercator minted for it, and every rule
+// about the fleet reads it as work this control plane is accountable for. This is
+// the opposite fact, and folding the two together would make capacity nobody
+// recognises look like a launch with half its identity missing.
+type orphanedCapacity struct {
+	LaunchKey      string `json:"launch_key"`
+	ExternalID     string `json:"external_id"`
+	OwnershipToken string `json:"ownership_token"`
+	RequestHash    string `json:"request_hash"`
+	OfferID        string `json:"offer_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	// RunID is the Run identity this capacity still carries, and empty is the
+	// answer that makes it unattributable. It is what the orphan policy reads.
+	RunID string `json:"run_id,omitempty"`
+}
+
 // ArtifactReplica is one host-local copy in World Truth: which machine holds
 // it, and what that copy is worth. It is deliberately not a boolean. A copy
 // nobody checked against the catalog is not evidence that the right bytes are
@@ -132,7 +150,12 @@ type WorldTruthSnapshot struct {
 	At               time.Time              `json:"at"`
 	Offers           []domain.OfferSnapshot `json:"offers"`
 	ActiveExecutions []externalExecution    `json:"active_executions"`
-	ArtifactReplicas []ArtifactReplica      `json:"artifact_replicas"`
+	// Orphans is capacity this world still holds that Mercator never launched and
+	// has not converged. It is stated apart from the executions for the same reason
+	// the world keeps them apart, and a rule about the orphan policy is the only
+	// thing that reads it.
+	Orphans          []orphanedCapacity `json:"orphans,omitempty"`
+	ArtifactReplicas []ArtifactReplica  `json:"artifact_replicas"`
 	// PublishedPaths is every network fact each machine in this world published
 	// about the paths it crosses, by offer, including machines this world has since
 	// retired. Offers above are the fleet as it stands; this is what the fleet has
@@ -494,7 +517,14 @@ type simulatedWorld struct {
 	// content, and content it wants again arrives with the launch that needs it.
 	prepared map[string]bool
 
-	executions  map[string]externalExecution
+	executions map[string]externalExecution
+	// orphans is capacity this world's provider holds that Mercator never
+	// launched, keyed by the launch key a reclaim is addressed by. seededOrphans is
+	// which of them this world began with and is never cleared: a rule about the
+	// policy has to be able to ask what became of capacity that is no longer here.
+	orphans       map[string]orphanedCapacity
+	seededOrphans map[string]bool
+
 	operations  map[string]worldOperation
 	launchCount map[string]int
 	faults      []scenario.FaultSpec
@@ -523,6 +553,8 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		launch:         tape.InitialWorld.Launch,
 		prepared:       map[string]bool{},
 		executions:     map[string]externalExecution{},
+		orphans:        map[string]orphanedCapacity{},
+		seededOrphans:  map[string]bool{},
 		operations:     map[string]worldOperation{},
 		launchCount:    map[string]int{},
 		faults:         slices.Clone(tape.Faults),
@@ -663,11 +695,36 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		state.offer.Reliability = marketplace.Risk()
 		world.truth[marketplace.ID] = cloneHostState(state)
 	}
+	world.seedOrphans(tape.InitialWorld.Orphans)
 	if err := world.refuseOversubscribedDisks(); err != nil {
 		return nil, err
 	}
 	world.publishObservations()
 	return world, nil
+}
+
+// seedOrphans is the capacity this world's provider was already holding when the
+// world began, which Mercator has no record of launching. The identities are
+// minted here rather than stated by the fixture: a Blueprint says which machine
+// the capacity is on and whose work it carries, and the handles a provider issued
+// for it are the provider's business exactly as they are for a launch.
+func (world *simulatedWorld) seedOrphans(declared []scenario.OrphanSpec) {
+	for _, orphan := range declared {
+		runID := ""
+		if orphan.Run != "" {
+			runID = "run-" + orphan.Run
+		}
+		world.seededOrphans[orphan.ID] = true
+		world.orphans[orphan.ID] = orphanedCapacity{
+			LaunchKey:      orphan.ID,
+			ExternalID:     "lab-orphan-" + orphan.ID,
+			OwnershipToken: "own-orphan-" + orphan.ID,
+			RequestHash:    "sha256:orphan-" + orphan.ID,
+			OfferID:        orphan.Rental,
+			WorkspaceID:    labWorkspace,
+			RunID:          runID,
+		}
+	}
 }
 
 // refuseOversubscribedDisks is this world declining to exist as described. A
@@ -1155,6 +1212,7 @@ func (world *simulatedWorld) truthSnapshot() WorldTruthSnapshot {
 		At:               world.now,
 		Offers:           world.offerSnapshots(world.truth, world.now),
 		ActiveExecutions: executions,
+		Orphans:          world.orphanedCapacity(),
 		ArtifactReplicas: world.artifactReplicas(),
 		CacheMounts:      world.cacheMountStates(),
 		PublishedPaths:   maps.Clone(world.publishedPaths),
@@ -1180,6 +1238,9 @@ type worldFacts struct {
 	SeededReplicas  map[string]map[string]bool
 	// Prewarm is the bound this world states on speculative preparation.
 	Prewarm *scenario.PrewarmSpec
+	// SeededOrphans is the capacity this world began holding that Mercator never
+	// launched, by the identity a decision about it is filed under.
+	SeededOrphans map[string]bool
 }
 
 func (world *simulatedWorld) invariantFacts() worldFacts {
@@ -1189,6 +1250,7 @@ func (world *simulatedWorld) invariantFacts() worldFacts {
 		Runs:            cloneMap(world.runs),
 		ArtifactCatalog: world.store.versions(),
 		Prewarm:         world.prewarm,
+		SeededOrphans:   cloneMap(world.seededOrphans),
 		SeededLocality:  make(map[string]map[string]bool, len(world.seededLocality)),
 		SeededReplicas:  make(map[string]map[string]bool, len(world.seededReplicas)),
 	}
@@ -1579,6 +1641,22 @@ func (world *simulatedWorld) ListOwned(_ context.Context, request adapter.Owners
 			Phase:          execution.Phase,
 		})
 	}
+	for _, launchKey := range slices.Sorted(maps.Keys(world.orphans)) {
+		orphan := world.orphans[launchKey]
+		if request.WorkspaceID != "" && request.WorkspaceID != orphan.WorkspaceID {
+			continue
+		}
+		objects = append(objects, adapter.OwnedExternalObject{
+			ExternalID:     orphan.ExternalID,
+			WorkspaceID:    orphan.WorkspaceID,
+			ConnectionID:   labConnection,
+			RunID:          orphan.RunID,
+			OwnershipToken: orphan.OwnershipToken,
+			LaunchKey:      orphan.LaunchKey,
+			RequestHash:    orphan.RequestHash,
+			Phase:          adapter.ExternalPhaseRunning,
+		})
+	}
 	sort.Slice(objects, func(i, j int) bool { return objects[i].LaunchKey < objects[j].LaunchKey })
 	world.recordEffect(
 		OperationProviderListOwned,
@@ -1607,6 +1685,9 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 		world.recordCleanupEffect(operation, operationKey, requestHash, launchKey, existing.correlationID, EffectCommandDuplicate)
 		return adapter.ReleaseReceipt{Released: true, Duplicate: true}, true, nil
 	}
+	if orphan, exists := world.orphans[launchKey]; exists {
+		return world.reclaimOrphan(operation, operationKey, requestHash, ownershipToken, launchHash, orphan)
+	}
 	execution, exists := world.executions[launchKey]
 	if exists && (ownershipToken != "" && ownershipToken != execution.OwnershipToken ||
 		launchHash != "" && launchHash != execution.RequestHash) {
@@ -1630,6 +1711,43 @@ func (world *simulatedWorld) cleanup(operation, operationKey, requestHash, launc
 	}
 	world.recordCleanupEffect(operation, operationKey, requestHash, launchKey, execution.RunID, EffectCommandAccepted)
 	return receipt, false, nil
+}
+
+// reclaimOrphan is the provider carrying out one decision about capacity Mercator
+// did not recognise. Releasing it gives the slot back and leaves the machine
+// standing; terminating it takes the machine with it, which is the whole reason the
+// two are different answers and the whole reason the policy has to choose.
+func (world *simulatedWorld) reclaimOrphan(
+	operation, operationKey, requestHash, ownershipToken, launchHash string,
+	orphan orphanedCapacity,
+) (adapter.ReleaseReceipt, bool, error) {
+	if ownershipToken != "" && ownershipToken != orphan.OwnershipToken ||
+		launchHash != "" && launchHash != orphan.RequestHash {
+		world.recordCleanupEffect(operation, operationKey, requestHash, orphan.LaunchKey, orphan.RunID, EffectCommandRejected)
+		return adapter.ReleaseReceipt{}, false, adapter.ErrIdempotencyConflict
+	}
+	delete(world.orphans, orphan.LaunchKey)
+	if operation == OperationProviderTerminate {
+		world.retireCapacity(orphan.OfferID)
+	}
+	receipt := adapter.ReleaseReceipt{Released: true}
+	world.operations[operationKey] = worldOperation{
+		hash:          requestHash,
+		correlationID: orphan.RunID,
+		receipt:       receipt,
+	}
+	world.recordCleanupEffect(operation, operationKey, requestHash, orphan.LaunchKey, orphan.RunID, EffectCommandAccepted)
+	world.publishObservations()
+	return receipt, false, nil
+}
+
+// orphanedCapacity is what this world still holds that Mercator never launched.
+func (world *simulatedWorld) orphanedCapacity() []orphanedCapacity {
+	held := make([]orphanedCapacity, 0, len(world.orphans))
+	for _, launchKey := range slices.Sorted(maps.Keys(world.orphans)) {
+		held = append(held, world.orphans[launchKey])
+	}
+	return held
 }
 
 // offerSnapshots projects host state into the only vocabulary Mercator gets to

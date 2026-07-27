@@ -310,8 +310,13 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				{LaunchKey: "launch-1", CompletesAt: now.Add(-6 * time.Minute)},
 			}
 		},
-		"liveness.orphan_convergence": func(observation *InvariantObservation) {
-			observation.World.ActiveExecutions = []externalExecution{{RunID: "run-missing", LaunchKey: "launch-1"}}
+		// A machine this world was holding that Mercator did not recognise, gone
+		// from the fleet with nothing in the record saying who took it or why. That
+		// is a reconciliation that acted on capacity by no stated rule, which the
+		// reading this replaced could not express: it could only refuse to have an
+		// orphan at all.
+		"safety.orphan_policy_is_explicit": func(observation *InvariantObservation) {
+			observation.SeededOrphans = map[string]bool{"launch-orphan": true}
 		},
 		"liveness.superseded_booking_release": func(observation *InvariantObservation) {
 			observation.RentalSchedules["rental-1"] = domain.RentalSchedule{

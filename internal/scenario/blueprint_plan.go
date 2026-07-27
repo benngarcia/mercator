@@ -182,7 +182,23 @@ func (plan ArrivalPlan) validate(world WorldSpec) error {
 			)
 		}
 	}
+	if err := plan.validateOrphanAttribution(world, names); err != nil {
+		return err
+	}
 	return plan.validateCancellations(runs)
+}
+
+// validateOrphanAttribution refuses orphaned capacity attributed to work this
+// Blueprint never declares. The point of an attributed orphan is that Mercator can
+// account for it out of its own record, and a name no Run answers to would state
+// the adoptable shape and produce the other one.
+func (plan ArrivalPlan) validateOrphanAttribution(world WorldSpec, names map[string]bool) error {
+	for _, orphan := range world.Orphans {
+		if orphan.Run != "" && !names[orphan.Run] {
+			return fmt.Errorf("orphaned capacity %q is attributed to unknown Run %q", orphan.ID, orphan.Run)
+		}
+	}
+	return nil
 }
 
 // validateCancellations refuses a withdrawal that names work this plan never

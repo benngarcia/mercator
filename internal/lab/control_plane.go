@@ -12,6 +12,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/runprojection"
 	"github.com/benngarcia/mercator/internal/scenario"
@@ -28,6 +29,11 @@ type controlPlane struct {
 	// caches, Artifacts, and Runs on them are not.
 	workspaces   []string
 	orchestrator *orchestrator.Orchestrator
+	// janitor is what converges capacity the control plane does not recognise. It
+	// is a controller beside the Runs rather than a step in any of them, exactly as
+	// it is in production: nothing waits on it, and what it decides about a machine
+	// is decided by a stated policy and written down.
+	janitor *janitor.Janitor
 	// prewarm is what this world's Blueprint allows the control plane to have in
 	// flight for work it has not admitted. A Blueprint that states none turns
 	// preparation off, which is every fixture written before it existed.
@@ -83,6 +89,7 @@ func (runtime *controlPlane) invariantObservation(ctx context.Context, tape Worl
 		SeededLocality:              facts.SeededLocality,
 		SeededReplicas:              facts.SeededReplicas,
 		Prewarm:                     facts.Prewarm,
+		SeededOrphans:               facts.SeededOrphans,
 		ProjectionRebuildEquivalent: reflect.DeepEqual(runs, rebuiltRuns),
 	}, nil
 }
@@ -194,6 +201,7 @@ func newControlPlane(ctx context.Context, tape WorldTape) (*controlPlane, error)
 		world:      world,
 		workspaces: workspaces,
 		prewarm:    prewarmPolicy(tape.InitialWorld.Prewarm),
+		janitor:    janitor.New(world, janitor.WithEventLog(storage.EventLog())),
 	}
 	runtime.restartOrchestrator()
 	return runtime, nil
@@ -364,7 +372,13 @@ func (runtime *controlPlane) advanceWorkspace(ctx context.Context, workspace str
 	// prepared is derived from where they ended up: a Booking that was just
 	// dispatched is no longer speculative, and a Run that was just cancelled is
 	// no longer worth a byte.
-	_, err = runtime.orchestrator.Prewarm(ctx, workspace)
+	if _, err := runtime.orchestrator.Prewarm(ctx, workspace); err != nil {
+		return err
+	}
+	// The orphan sweep is last for the same reason: what capacity Mercator holds
+	// live work for is whatever the Runs just settled into, so a sweep that ran
+	// first would find a machine orphaned that a Run was about to be launched on.
+	_, err = runtime.janitor.Sweep(ctx, workspace)
 	return err
 }
 

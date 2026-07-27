@@ -14,6 +14,7 @@ import (
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/janitor"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
@@ -66,7 +67,12 @@ type InvariantObservation struct {
 	// Prewarm is what this world allows the control plane to have in flight for
 	// work it has not admitted. A world that states none allows none, and the
 	// concurrency rule has nothing to say about it.
-	Prewarm                     *scenario.PrewarmSpec
+	Prewarm *scenario.PrewarmSpec
+	// SeededOrphans is the capacity this world began holding that Mercator never
+	// launched. A rule about the orphan policy reads it rather than the fleet as it
+	// stands, because the interesting case is capacity that is no longer here: a
+	// machine converged without a stated rule leaves nothing behind to ask about.
+	SeededOrphans               map[string]bool
 	ProjectionRebuildEquivalent bool
 }
 
@@ -133,6 +139,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.no_capacity_is_free", check: noCapacityIsFree},
 		invariantRule{id: "safety.committed_cost_is_not_double_counted", check: committedCostIsNotDoubleCounted},
 		invariantRule{id: "safety.decisions_are_never_rewritten", check: decisionsAreNeverRewritten},
+		invariantRule{id: "safety.orphan_policy_is_explicit", check: orphanPolicyIsExplicit},
 		invariantRule{id: "safety.decision_is_reproducible", check: decisionIsReproducible},
 		invariantRule{
 			id:          "liveness.lost_response_reconciliation",
@@ -145,12 +152,6 @@ func DefaultInvariantRegistry() InvariantRegistry {
 			assumptions: []string{"virtual time advances", "provider execution deadlines are observable"},
 			bound:       5 * time.Minute,
 			check:       staleLeaseExpiry,
-		},
-		invariantRule{
-			id:          "liveness.orphan_convergence",
-			assumptions: []string{"provider ownership listing is complete"},
-			bound:       5 * time.Minute,
-			check:       orphanConvergence,
 		},
 		invariantRule{
 			id:          "liveness.superseded_booking_release",
@@ -2434,14 +2435,82 @@ func staleLeaseExpiry(observation InvariantObservation) error {
 	return nil
 }
 
-func orphanConvergence(observation InvariantObservation) error {
-	runs := runsByID(observation.Runs)
-	for _, execution := range observation.World.ActiveExecutions {
-		if runs[execution.RunID].ID == "" {
-			return fmt.Errorf("external execution %q has no projected Run %q", execution.LaunchKey, execution.RunID)
+// orphanPolicyIsExplicit is the rule that makes reconciliation able to choose.
+// Capacity Mercator does not recognise is either taken back into the fleet or
+// destroyed, and whichever it was, the record names the policy that decided and
+// the reason it applied.
+//
+// It replaces a reading that could only ever fail. liveness.orphan_convergence
+// asked that no execution outlive the Run it belonged to, which says nothing about
+// what ought to happen to one that does: a world holding capacity nobody could
+// account for had exactly one lawful outcome and it was an error. The interesting
+// case is the capacity that is no longer here, so this asks what became of what
+// the world began holding rather than what the fleet looks like now.
+//
+// A machine still standing has not been decided about yet, which is not a
+// violation: a control plane that has not swept is a control plane that has not
+// looked. Converging one without a stated rule is the violation, and so is a
+// decision naming no policy, no reason, or an outcome that is neither of the two
+// an operator can act on.
+func orphanPolicyIsExplicit(observation InvariantObservation) error {
+	decided, err := recordedOrphanDecisions(observation.MercatorEvents)
+	if err != nil {
+		return err
+	}
+	held := map[string]bool{}
+	for _, orphan := range observation.World.Orphans {
+		held[orphan.LaunchKey] = true
+	}
+	for _, identity := range slices.Sorted(maps.Keys(observation.SeededOrphans)) {
+		if held[identity] {
+			continue
+		}
+		if _, decision := decided[identity]; !decision {
+			return fmt.Errorf(
+				"orphaned capacity %q is gone from this world and no decision names the policy that took it",
+				identity,
+			)
+		}
+	}
+	for _, identity := range slices.Sorted(maps.Keys(decided)) {
+		if err := statesItsPolicy(identity, decided[identity]); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func statesItsPolicy(identity string, decision janitor.OrphanConvergence) error {
+	switch {
+	case decision.Policy == "":
+		return fmt.Errorf("the decision about orphaned capacity %q names no policy", identity)
+	case decision.Outcome != janitor.OrphanAdopted && decision.Outcome != janitor.OrphanTerminated:
+		return fmt.Errorf(
+			"orphaned capacity %q was converged as %q, which is neither adopting it nor terminating it",
+			identity, decision.Outcome,
+		)
+	case decision.Reason == "":
+		return fmt.Errorf("the decision about orphaned capacity %q gives no reason the policy applied", identity)
+	default:
+		return nil
+	}
+}
+
+// recordedOrphanDecisions is every policy decision Mercator's public record holds
+// about capacity it did not recognise, by the identity it decided about.
+func recordedOrphanDecisions(events []eventlog.CloudEvent) (map[string]janitor.OrphanConvergence, error) {
+	decided := map[string]janitor.OrphanConvergence{}
+	for _, event := range events {
+		if event.Type != janitor.EventOrphanConverged {
+			continue
+		}
+		var convergence janitor.OrphanConvergence
+		if err := json.Unmarshal(event.Data, &convergence); err != nil {
+			return nil, fmt.Errorf("decode orphan convergence %s: %w", event.ID, err)
+		}
+		decided[convergence.LaunchKey] = convergence
+	}
+	return decided, nil
 }
 
 func supersededBookingRelease(observation InvariantObservation) error {
