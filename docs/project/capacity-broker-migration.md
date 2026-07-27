@@ -3343,6 +3343,73 @@ complete because it works against a live provider.
     one through an explicit advance in the test. A periodic reconcile in the Lab would
     make a class of bounds falsifiable that currently is not, and it is a change to the
     execution model rather than a fixture, so it wants a slice of its own.
+- [x] 2026-07-27: The divided wait. Two reviewers refuted the repair above. The
+  exemption it added was keyed on the reason of the moment while the whole wait went on
+  accumulating against the bound, so the difference it exists to state was laundered in
+  both directions. Four findings were real, two were real about their evidence and wrong
+  about the repair they asked for, and every repair is red against the reading it
+  replaces.
+  - A wait is two numbers now, `domain.Wait`, and each bound is asked of the part of it
+    that bound is about: the maximum queue delay of the part Mercator caused, the class
+    deadline of the whole of it. The part the caller's own declaration held is summed
+    over intervals, because a deferral is the answer for the interval it opens and
+    nothing else. The exemption's own claim is what the reviewers falsified. A member
+    held seventy minutes by its own siblings, asked on the first pass after its family
+    made room and finding no machine free that instant, was refused
+    `QUEUE_DELAY_EXCEEDED` and closed failed, for a wait Mercator had kept it in for
+    zero seconds. The reverse ran the other way: a Run the fleet had starved for fifty
+    minutes became exempt from the bound and from the starvation law both, for the rest
+    of its life, because a sibling took its family's place.
+  - The claim above that "`domain.AdmissionDeferral.SelfImposed` is the one place that
+    difference is stated" was false, and that is the second finding. One of the two doors
+    that can refuse a Run never read it: a held member past its class deadline was named
+    `QUEUE_DELAY_EXCEEDED` on the way to a machine and `DEADLINE_UNREACHABLE` on the way
+    into the queue, so which broken promise the caller was told about depended on whether
+    a machine happened to be free at that second, which is the sweep-cadence dependence
+    the bound naming exists to forbid. `Admission.BoundAlreadyBroken` now answers for
+    both doors off the wait, and `DeadlineOnlyAlreadyBroken` is deleted rather than
+    kept beside it. `SelfImposed` remains what it always described, one interval.
+  - The record carries the division, `self_imposed_seconds` on the admission fact and in
+    the API contract. Two numbers beside each other cannot be read without it: a deferral
+    an hour past a bound of an hour is a contradiction on the face of the record until it
+    says which part of that hour Mercator caused, and a refusal naming the bound is only
+    checkable against the part it was measured on.
+  - The corpus could not see any of it, and now states both directions.
+    `a-wait-the-fleet-caused-is-not-excused-by-a-sibling` is the laundering the plan Lab
+    can drive, and `only-the-part-of-a-wait-mercator-caused-is-charged` is the handoff
+    instant itself, which needs a world event because nothing in the plan Lab can give
+    capacity back: a provider takes the family's one machine away an hour and a minute
+    in. The two fixtures the previous pass added miss the defect for a reason worth
+    writing down. One never lets the family make room, and the other gives the family two
+    idle machines, so placement always succeeds at the handoff.
+  - The claim above that "the deadline asks whether the answer is still worth producing
+    and still ends the wait" is not true of every class, and the entry did not disclose
+    it. Opportunistic states no deadline, so a member of an opportunistic family whose
+    sibling never gives the place back is bounded by neither of the two bounds its class
+    states. That is the class doing what it says, and refusing it is the repair this pass
+    declined: it would name a moment the caller expressly declined to state, in the words
+    of a promise about capacity that nothing there broke, which is the lie the pass above
+    removed. What bounds it is that Mercator is still holding the Run.
+    `liveness.admitted_run_progress` reads the phase not at all, so a Run of a declared
+    arrival still open a day into an execution is reported whatever it is waiting for,
+    and `TestAFamilyHeldMemberIsStillHeldToProgress` states that over the held
+    opportunistic record. The reviewers' stronger claim, that nothing anywhere could
+    report such a member, is refuted by that law.
+  - `a-member-that-gave-its-capacity-back-leaves-room` described an execution that does
+    not happen. Its summary said the first member "waits behind its own sibling and runs
+    after it" and that "the order the two members ran in is the whole claim"; only one
+    member ever runs, and its own Lab test asserts the other never started. It also
+    cannot constrain what it was promoted for: dropping the `EventLaunchFailed` departure
+    from the admission queue leaves that Blueprint, the whole placement corpus and every
+    Lab law green, and only the orchestrator test over a log that stops between the
+    failure and the replacement goes red. Both are said plainly now, in the fixture, in
+    the test, and in the coverage list, which stated the order claim flatly.
+  - Ordering still ages on the whole wait, and that is a decision rather than an
+    oversight. The bounds are promises about what Mercator does, so they are charged by
+    cause; the ordering is about which work has gone longest without an answer, which is
+    the same question whoever caused the delay. A Run its family holds holds no queue
+    anyway, so the only thing this decides is what such a Run is worth when it competes
+    again.
 
 
 ## Phase status
@@ -3352,7 +3419,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; the hierarchical estimator, owned economics, replanning, affinity, and a production publisher for reclaimable capacity remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; the hierarchical estimator, owned economics, replanning, affinity, and a production publisher for reclaimable capacity remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -4289,17 +4356,18 @@ Phase 4 added:
   neighbouring laws read the queue bounds off it, so changing what a class permits is
   a change to the contract rather than a break of it. What it is red for is Mercator
   ignoring the permission, which dropping the feasibility refusal produces.
-- `liveness.aging_prevents_starvation` (Lab invariant, second exemption): a wait its
-  own family's declared width was holding is a wait no ordering could have ended,
-  because the bound counts members rather than machines. A caller whose width outlasts
-  its class's own patience has contradicted itself, and that is not Mercator starving
-  anybody. Both halves of the law carry it. It was stated in the half about refusals
-  alone at first, and the half about live waits then demanded that no accepted Run be
-  left waiting past its class bound, which only refusing the held member could satisfy:
-  the two halves asked opposite things of one record, and production did what the
-  stricter one said. `TestAWaitItsOwnFamilyHoldsIsNoStarvation` states the exemption and
-  the deliberate failure beside it is the identical record waiting on
-  `NO_FEASIBLE_OFFER`.
+- `liveness.aging_prevents_starvation` (Lab invariant, restated over a divided wait):
+  both halves measure the part of each wait Mercator caused, which is the whole of it
+  less the intervals the Run's own family held it. The width counts members rather than
+  machines, so no ordering could have ended those intervals, and a caller whose width
+  outlasts its class's own patience has contradicted itself rather than been starved.
+  The division is summed over intervals and never read off the latest answer: a
+  deferral says who held the Run over the interval it opens, and exempting the whole
+  record excused every hour the fleet had already starved a Run of as soon as a sibling
+  took the family's place. `TestAWaitItsOwnFamilyHoldsIsNoStarvation` states a wait its
+  family held all of, `TestAFleetStarvedWaitIsNotExcusedByASibling` is the failing case
+  for the other direction, and the deliberate failure beside them is the identical
+  record waiting on `NO_FEASIBLE_OFFER`.
 - `a-family-place-is-taken-by-a-member-that-waits-its-turn` (green): the world
   `busy-rental-worth-waiting` states, with a family of two one wide in it. The first
   member is given a queued Booking behind somebody else's running work, which is
@@ -4326,8 +4394,28 @@ Phase 4 added:
   failure inside a family anywhere in the corpus. One warm machine refuses the first
   member's launch, the Booking goes back in the same commit, and the second member is
   admitted onto the machine its sibling gave back and runs; the first member ends failed,
-  because Mercator will not offer it the snapshot that just refused it. The order the two
-  members ran in is the claim.
+  because Mercator will not offer it the snapshot that just refused it. That a family
+  which lost a member to a launch failure still drains is the claim, with one member
+  holding capacity at a time throughout. Only one member ever runs, so no order is being
+  claimed, and which recorded fact took the first member out of the count is not what
+  this tells apart: the Booking going back and the Run closing land in the same pass, so
+  either reading admits the sibling here. Its own summary said the opposite of all three
+  until the review that follows.
+- `a-wait-the-fleet-caused-is-not-excused-by-a-sibling` (green): a member whose ask no
+  machine in the fleet can hold waits two hours and a minute on `NO_CAPACITY_FITS`, and
+  then its sibling takes the family's one place. It is refused `QUEUE_DELAY_EXCEEDED`
+  for the two hours the fleet kept it waiting rather than exempted from that moment on.
+  Against the reading it replaces the fixture reports the `GROUP_AT_PARALLELISM`
+  deferral it got instead.
+- `only-the-part-of-a-wait-mercator-caused-is-charged` (conformance): the other
+  direction, and the handoff instant itself. One reclaimable machine, a family of two
+  one wide, and the provider taking the machine back an hour and a minute in, which
+  interrupts the first member and gives the family's place back at a moment nothing
+  else happens. The held member is deferred `NO_CAPACITY_FITS` with 3660 of 3660
+  seconds charged to its caller, and refused `QUEUE_DELAY_EXCEEDED` an hour later with
+  3660 of 7320 charged to Mercator. Against the reading it replaces the member is
+  closed failed at the handoff, for a wait Mercator had kept it in for no time at all.
+  It needs a world event because the plan-driven Lab has no way to give capacity back.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
@@ -4420,6 +4508,82 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 the divided wait, and the six findings
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, against
+`beng/prediction-and-service-classes` at the five commits above `1d62556`.
+`go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
+packages, and `go test -race -count=1` clean over `internal/domain`, `internal/lab`,
+`internal/orchestrator`, `internal/scenario/...` and `internal/daemon`, `internal/lab`
+taking 202s of it.
+
+The root corpus is 58 Blueprints, 55 of them green, with 31 conformance fixtures. Two
+Blueprints were added and no fixture moved classification.
+
+Every repair is red against the reading it replaces, mutated back one at a time.
+
+- Charging the whole wait against the class's queue delay again, with the
+  latest-answer exemption restored, fails
+  `TestAWaitAFamilyHeldIsNotChargedWhenTheFleetTakesOver` with `the member was
+  answered "QUEUE_DELAY_EXCEEDED" after seventy minutes its own family held it, and
+  what holds it now is one busy machine`, and fails
+  `TestOnlyThePartOfAWaitMercatorCausedIsCharged` with `the held member is "closed"
+  with outcome "failed", and every second of its wait so far was its own family's
+  declared width`.
+- The same mutation fails `TestAHeldMemberPastItsDeadlineIsRefusedForItsDeadline` with
+  `a member its own family held for a day and a minute was refused
+  "QUEUE_DELAY_EXCEEDED", and the only bound its wait broke is its own deadline`,
+  which is the second door naming the wrong broken promise.
+- Exempting the record on its latest answer in the starvation law instead of dividing
+  the wait fails `TestAFleetStarvedWaitIsNotExcusedByASibling`, and the new fixture
+  `a-wait-the-fleet-caused-is-not-excused-by-a-sibling` reports `run "sweep-2":
+  expected outcome "refuse", and admission recorded
+  "compute.run.admission_deferred.v1" with reason "GROUP_AT_PARALLELISM"`.
+- Removing the departure on a launch failure from the admission queue leaves
+  `internal/lab` and `internal/scenario` entirely green, including
+  `a-member-that-gave-its-capacity-back-leaves-room`, and fails only
+  `internal/orchestrator`. That is the reviewer's own mutation and it stands: the
+  Blueprint that was promoted for the reading cannot state it, which the fixture and
+  the coverage list now say.
+
+Two findings were real about their evidence and wrong about the repair they asked for.
+Both concerned the class that states no deadline. The review asked for an opportunistic
+member held by its own family to be refused at the class's queue delay, which is the
+refusal the pass above removed and for the same reason: Mercator had kept it waiting for
+capacity for none of that time, and `QUEUE_DELAY_EXCEEDED` is a statement about
+Mercator's own promise. The review also held that no invariant anywhere could report
+such a member. `liveness.admitted_run_progress` reports any Run of a declared arrival
+still open a day into an execution, whatever it is waiting for, and
+`TestAFamilyHeldMemberIsStillHeldToProgress` states it over the held opportunistic
+record. What was real is that the entry claimed the deadline "still ends the wait"
+without disclosing the one class it does not end, and that is disclosed now.
+
+What this pass could not reach, unchanged. The Lab still has no sweep of its own, so
+both new fixtures drive the clock themselves, one through a `reconcile` step and one
+through explicit advances in its test. Concurrency still has no Blueprint.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth` and
+`TestANodeMeasuresTheObjectStorePathItJustCrossed` pass against MinIO containers of the
+native engine, and `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
+-run TestIntegration` passes against real containers. Nothing in this pass needed a
+container of its own: what it changes is how admission divides a wait and the laws
+stated over it. Mercator issue #165 does not reproduce here and was left alone.
+
+Named and not fixed here, unchanged. `gofmt -l .` reports
+`internal/adapter/vast/client.go`, `internal/scheduler/scheduler.go` and
+`internal/scheduler/scheduler_test.go`, struct tag alignment left by `595f7b0` and
+`1e13518` earlier on this branch.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/lab ./internal/orchestrator \
+  ./internal/scenario/... ./internal/daemon
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
 
 ### Phase 4 the group bound under review, and the four findings
 
