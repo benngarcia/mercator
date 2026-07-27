@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 )
 
@@ -812,6 +813,137 @@ type MarketplaceOfferSpec struct {
 	// an offer missing or failing one must be rejected loudly. Target
 	// ontology: no offer field carries these yet.
 	Facts map[string]bool `json:"facts,omitempty"`
+	// Capacity is what this listing's provider will do with the machine once it
+	// has allocated one, in the shape a CapacityProvider really negotiates rather
+	// than a translation of it: whether it can stop and resume the machine under
+	// one identity, whether a stopped disk survives, whether it sells
+	// interruptible capacity, what it honours when the same provision is asked
+	// twice, whether it can list what this connection owns, and whether a
+	// terminated machine can still be looked at.
+	//
+	// A listing states it because those promises are the whole difference between
+	// capacity Mercator can hold across Runs and capacity it can only destroy, and
+	// no fixture could say which kind a machine came from: every simulated
+	// provider in this corpus was assumed to stop, resume, retain a disk, and
+	// deduplicate, because nothing asked. Omitted is a listing whose provider
+	// negotiated nothing, which is every listing here before phase 5.
+	Capacity *capability.CapacitySupport `json:"capacity,omitempty"`
+	// Bootstrap is what happens between this provider allocating a machine and
+	// Mercator being able to run anything on it.
+	Bootstrap *BootstrapSpec `json:"bootstrap,omitempty"`
+}
+
+// BootstrapSpec is the arrival of a node agent on a fresh machine, said as the
+// two things about it a fixture cannot state anywhere else: how long Mercator
+// goes on expecting it, and whether it ever happens at all. How long it takes
+// when it does happen is the listing's own agent_ready stage, because that is
+// the stage this is the outcome of.
+//
+// It hangs off a listing rather than off the world because it is a provider's
+// behaviour. A marketplace whose images carry no agent never enrols one, and one
+// whose startup script runs before the network is up enrols one late, and a world
+// that stated this once for the whole fleet could not put two such providers
+// beside each other in a single Blueprint.
+type BootstrapSpec struct {
+	// NeverEnrolls is a machine this provider allocates and boots whose agent
+	// never opens its session. It is stated rather than read out of a missing
+	// agent_ready stage, because silence there already means a stage that costs
+	// nothing, and a bootstrap that costs nothing is a machine ready the instant
+	// it booted. Folded into one field, the failure a real provider bills for
+	// would be indistinguishable from the fastest possible success.
+	NeverEnrolls bool `json:"never_enrolls,omitempty"`
+	// Deadline is how long after the allocation is accepted Mercator goes on
+	// expecting the agent's session before it gives up on the machine. It is
+	// Mercator's own patience rather than a provider fact, and a bootstrap is only
+	// late against a bound somebody named.
+	Deadline *Duration `json:"deadline,omitempty"`
+	// ReclaimAfter is this provider's own backstop: how long after allocation it
+	// destroys the machine whatever Mercator does or fails to do. It is what stops
+	// capacity nothing ever enrolled on from billing for ever, and it is the
+	// provider acting on its own account, so a world where Mercator never notices
+	// is still a world with an end.
+	ReclaimAfter *Duration `json:"reclaim_after,omitempty"`
+}
+
+// validateProvisioningStages requires every stage to be stated, including a stage
+// this fixture wants to cost nothing. Zero is a world worth writing down and
+// silence is how the whole of provisioning came to be free: an offer publishing
+// ten minutes of provisioning that the world spent none of put its execution
+// straight into running, so a Run's start was the moment its launch was accepted
+// and the three earliest stages of every launch had no actual at all.
+//
+// The one stage a listing may leave out is the enrolment of an agent it says never
+// enrols, because a stage that never completes has no seconds to state.
+func (spec MarketplaceOfferSpec) validateProvisioningStages() error {
+	stages := map[string]*Duration{
+		"acquisition": spec.Provisioning.Acquisition,
+		"boot":        spec.Provisioning.Boot,
+		"agent_ready": spec.Provisioning.AgentReady,
+	}
+	if spec.Bootstrap != nil && spec.Bootstrap.NeverEnrolls {
+		delete(stages, "agent_ready")
+	}
+	for stage, spent := range stages {
+		if spent == nil {
+			return fmt.Errorf("marketplace offer %q does not say what it spends on %s", spec.ID, stage)
+		}
+		if spent.Duration() < 0 {
+			return fmt.Errorf("marketplace offer %q spends %v on %s", spec.ID, spent.Duration(), stage)
+		}
+	}
+	return nil
+}
+
+// validateCapacityLifecycle refuses a listing whose account of what its provider
+// does with capacity could not hold. The negotiated set is checked by the contract
+// that owns it, so a Blueprint cannot state a provider Mercator would refuse to
+// build a connection for.
+func (spec MarketplaceOfferSpec) validateCapacityLifecycle() error {
+	if spec.Capacity != nil {
+		if err := spec.Capacity.Validate(); err != nil {
+			return fmt.Errorf("marketplace offer %q: %w", spec.ID, err)
+		}
+		// Every promise in the set is about one machine's identity surviving
+		// something: a stop, a resume, a repeated provision, a terminate. A reusable
+		// listing that makes them and names no machine is a fixture whose capacity
+		// lifecycle could not be recorded against anything, because a listing ID is
+		// numbered afresh on every search.
+		if spec.ExecutionLane().Reusable() && spec.Machine == "" {
+			return fmt.Errorf(
+				"marketplace offer %q states what its provider does with capacity and names no machine: every promise in that set is about one machine keeping its identity",
+				spec.ID,
+			)
+		}
+	}
+	return spec.Bootstrap.validate(spec)
+}
+
+// validate refuses a bootstrap declaration no world could hold.
+func (spec *BootstrapSpec) validate(offer MarketplaceOfferSpec) error {
+	if spec == nil {
+		return nil
+	}
+	for field, duration := range map[string]*Duration{"deadline": spec.Deadline, "reclaim_after": spec.ReclaimAfter} {
+		if duration != nil && duration.Duration() <= 0 {
+			return fmt.Errorf("marketplace offer %q: bootstrap.%s must be a positive duration", offer.ID, field)
+		}
+	}
+	if !spec.NeverEnrolls {
+		return nil
+	}
+	if offer.Provisioning.AgentReady != nil {
+		return fmt.Errorf(
+			"marketplace offer %q says its agent never enrols and states what enrolling spends there",
+			offer.ID,
+		)
+	}
+	if spec.Deadline == nil && spec.ReclaimAfter == nil {
+		return fmt.Errorf(
+			"marketplace offer %q says its agent never enrols and names neither a deadline nor a reclaim_after: a machine nobody gives up on bills for ever",
+			offer.ID,
+		)
+	}
+	return nil
 }
 
 // BillingSpec is how a machine in this world is charged for, beside the rate that
@@ -2467,23 +2599,11 @@ func (w WorldSpec) validate() error {
 		if offer.Provisioning.Expected.Duration() <= 0 {
 			return fmt.Errorf("marketplace offer %q needs a provisioning estimate", offer.ID)
 		}
-		// Every stage is stated, including a stage this fixture wants to cost
-		// nothing. Zero is a world worth writing down and silence is how the whole
-		// of provisioning came to be free: an offer publishing ten minutes of
-		// provisioning that the world spent none of put its execution straight into
-		// running, so a Run's start was the moment its launch was accepted and the
-		// three earliest stages of every launch had no actual at all.
-		for stage, spent := range map[string]*Duration{
-			"acquisition": offer.Provisioning.Acquisition,
-			"boot":        offer.Provisioning.Boot,
-			"agent_ready": offer.Provisioning.AgentReady,
-		} {
-			if spent == nil {
-				return fmt.Errorf("marketplace offer %q does not say what it spends on %s", offer.ID, stage)
-			}
-			if spent.Duration() < 0 {
-				return fmt.Errorf("marketplace offer %q spends %v on %s", offer.ID, spent.Duration(), stage)
-			}
+		if err := offer.validateProvisioningStages(); err != nil {
+			return err
+		}
+		if err := offer.validateCapacityLifecycle(); err != nil {
+			return err
 		}
 		if err := validateReliability("marketplace offer "+offer.ID, offer.Reliability); err != nil {
 			return err

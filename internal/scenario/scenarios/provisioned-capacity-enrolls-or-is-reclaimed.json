@@ -1,0 +1,85 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One listing, one Run, and a machine that arrives and never answers. The provider allocates the capacity in twenty-four seconds and the host reaches a usable operating system three minutes later, and the node agent on it never opens a session: an image with no agent baked in, a startup script that ran before the network was up, an outbound path something is blocking. Mercator has no session to that machine, so nothing can create a container there and no workload ever begins. The record has to say so: this Run's start is unobserved and its application has said nothing, because a start is a moment somebody observed and nobody was ever able to look. That is the failure a real provider bills for, which is why the listing states both ends of it, Mercator's own ten minutes of patience and the provider's own half-hour backstop that destroys the machine whatever the control plane does. Today the corpus cannot describe this at all: every provisioned machine in both simulated worlds is assumed to be executable the moment it has booted, so the whole of enrolment is a stage that costs seconds and cannot fail.",
+  "classification": "target",
+  "missing_capabilities": [
+    "node_bootstrap"
+  ],
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {
+            "digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de",
+            "size": "18GB"
+          }
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "silent-4090",
+        "machine": "simcloud-4090-a17c",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m"
+        },
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": false
+        },
+        "bootstrap": {
+          "never_enrolls": true,
+          "deadline": "10m",
+          "reclaim_after": "30m"
+        }
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "run-stranded",
+      "request": {
+        "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+        "service_class": "standard",
+        "expected_runtime": "10m",
+        "max_runtime": "30m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "silent-4090",
+        "disposition": "terminate",
+        "no_start_observed": true,
+        "candidates": {
+          "silent-4090": {
+            "feasible": true,
+            "disposition": "provision_fresh_rental"
+          }
+        }
+      }
+    },
+    {
+      "advance": "12m"
+    },
+    {
+      "reconcile": "run-stranded",
+      "expect": {
+        "outcome": "place",
+        "offer": "silent-4090",
+        "no_start_observed": true,
+        "no_ready_reported": true
+      }
+    }
+  ]
+}

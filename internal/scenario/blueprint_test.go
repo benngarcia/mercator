@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
@@ -102,14 +103,130 @@ func TestOpenCatalogPreservesPlacementClassifications(t *testing.T) {
 		counts[entry.Blueprint.Classification]++
 	}
 
-	if regressions != 59 {
-		t.Errorf("regression Blueprints = %d, want 59", regressions)
+	if regressions != 60 {
+		t.Errorf("regression Blueprints = %d, want 60", regressions)
 	}
 	if counts[ClassificationGreen] != 56 {
 		t.Errorf("green Blueprints = %d, want 56", counts[ClassificationGreen])
 	}
-	if counts[ClassificationTarget] != 3 {
-		t.Errorf("target Blueprints = %d, want 3", counts[ClassificationTarget])
+	if counts[ClassificationTarget] != 4 {
+		t.Errorf("target Blueprints = %d, want 4", counts[ClassificationTarget])
+	}
+}
+
+// TestTheEnrolledNodeTargetWaitsOnTheProvisionedToEnrolledTransition reads the
+// one target in this corpus that has waited on phase 5 since phase 1, and pins
+// what it is really waiting on. It carried `rental_schedule` as a third pending
+// reason, and that debt is paid: the Rental Schedule store, its versioning, and
+// its reservation are wired end to end and four green fixtures exercise them. What
+// is left is the provisioned-to-enrolled transition, twice over, and a target that
+// names a capability the tree already has cannot be read as evidence of anything.
+func TestTheEnrolledNodeTargetWaitsOnTheProvisionedToEnrolledTransition(t *testing.T) {
+	blueprint, err := LoadBlueprint("scenarios/enrolled-node-survives-its-first-run.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+
+	if !slices.Equal(blueprint.MissingCapabilities, []Capability{CapabilityNodeBootstrap, CapabilityExecutionWarmsCapacity}) {
+		t.Fatalf("the target waits on %v, want the bootstrap and the warming alone", blueprint.MissingCapabilities)
+	}
+	listing := blueprint.World.Marketplace[0]
+	if listing.Machine != "simcloud-4090-0f31" {
+		t.Errorf("the listing names machine %q, and a reused machine has to be nameable", listing.Machine)
+	}
+	if listing.Capacity == nil {
+		t.Fatal("the listing states nothing about what its provider does with capacity")
+	}
+	if !listing.Capacity.Stop || !listing.Capacity.Resume || !listing.Capacity.PersistentDisk {
+		t.Errorf("this provider holds a machine across Runs, and negotiated %+v", *listing.Capacity)
+	}
+	if listing.Bootstrap == nil || listing.Bootstrap.Deadline == nil {
+		t.Errorf("the listing states bootstrap %+v, and a late agent is only late against a bound", listing.Bootstrap)
+	}
+}
+
+// TestTheStrandedCapacityTargetStatesAnAgentThatNeverArrives is the world the
+// corpus could not describe: a provider that allocates and boots a machine whose
+// agent never opens a session. Silence about the enrolment stage already means a
+// stage that costs nothing, so without a word for it the failure a provider bills
+// for read as the fastest possible success.
+func TestTheStrandedCapacityTargetStatesAnAgentThatNeverArrives(t *testing.T) {
+	blueprint, err := LoadBlueprint("scenarios/provisioned-capacity-enrolls-or-is-reclaimed.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+
+	if blueprint.Classification != ClassificationTarget {
+		t.Errorf("classification = %q, want target", blueprint.Classification)
+	}
+	if !slices.Equal(blueprint.MissingCapabilities, []Capability{CapabilityNodeBootstrap}) {
+		t.Fatalf("the target waits on %v, want the bootstrap alone", blueprint.MissingCapabilities)
+	}
+	listing := blueprint.World.Marketplace[0]
+	if listing.Bootstrap == nil || !listing.Bootstrap.NeverEnrolls {
+		t.Fatalf("the listing states bootstrap %+v, want an agent that never enrols", listing.Bootstrap)
+	}
+	if listing.Provisioning.AcquisitionSpend() == 0 || listing.Provisioning.BootSpend() == 0 {
+		t.Errorf("acquisition and boot must succeed here, and the world spends %v on them", listing.Provisioning.Spend())
+	}
+	if listing.Bootstrap.Deadline == nil || listing.Bootstrap.ReclaimAfter == nil {
+		t.Errorf("a machine nothing enrols on needs an end to its bill, and the listing names %+v", listing.Bootstrap)
+	}
+}
+
+// TestLoadBlueprintRefusesACapacityAccountNoProviderCouldKeep holds the two
+// shapes of listing that would read green while stating a world no provider
+// produces. Both are refused at load, because a Blueprint is the public contract
+// and a fixture that got past this door would be asserting the negotiation rather
+// than describing it.
+func TestLoadBlueprintRefusesACapacityAccountNoProviderCouldKeep(t *testing.T) {
+	for _, testCase := range []struct{ path, want string }{
+		{
+			path: "testdata/blueprints/invalid/provisionable-listing-without-a-machine.json",
+			want: "every promise in that set is about one machine keeping its identity",
+		},
+		{
+			path: "testdata/blueprints/invalid/bootstrap-nobody-gives-up-on.json",
+			want: "a machine nobody gives up on bills for ever",
+		},
+	} {
+		_, err := LoadBlueprint(testCase.path)
+
+		if err == nil || !strings.Contains(err.Error(), testCase.want) {
+			t.Fatalf("loading %s gave %v, want a refusal naming %q", testCase.path, err, testCase.want)
+		}
+	}
+}
+
+// TestABlueprintStatesStopWithoutResume is why the negotiated set is carried as
+// the promises a CapacityProvider really answers with rather than as a list of the
+// capability names a provider ticked. A provider that suspends a machine and
+// cannot bring the same one back exists, and a list of names cannot tell a resume
+// nobody offers from a resume nobody mentioned, so it would encode the difference
+// away on the first round trip through the public contract.
+func TestABlueprintStatesStopWithoutResume(t *testing.T) {
+	blueprint, err := LoadBlueprint("testdata/blueprints/v1/stop-without-resume.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	encoded, err := EncodeBlueprint(blueprint)
+	if err != nil {
+		t.Fatalf("encode Blueprint: %v", err)
+	}
+	decoded, err := DecodeBlueprint("round-trip.json", encoded)
+	if err != nil {
+		t.Fatalf("decode Blueprint: %v", err)
+	}
+
+	negotiated := decoded.World.Marketplace[0].Capacity
+	if negotiated == nil {
+		t.Fatal("the round trip dropped what this provider negotiated")
+	}
+	if !negotiated.Stop || negotiated.Resume {
+		t.Fatalf("the round trip made this provider %+v, and it stops without resuming", *negotiated)
+	}
+	if negotiated.IdempotentProvision != capability.IdempotentProvisionNone || !negotiated.ListOwned {
+		t.Fatalf("this provider deduplicates nothing and is reconciled by listing, and the round trip says %+v", *negotiated)
 	}
 }
 

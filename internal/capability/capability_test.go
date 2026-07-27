@@ -65,6 +65,40 @@ func TestBackendImplementingNoContractIsRefused(t *testing.T) {
 	}
 }
 
+// TestACapacitySetThatContradictsItselfIsRefused holds the four sets no provider
+// could keep. Every field of the negotiated set is acted on without
+// asking again, so a set that answers two of them incompatibly has to be refused
+// where the connection is built rather than discovered by whichever caller happens
+// to read both: a provider that deduplicates nothing and lists nothing leaks every
+// machine a lost response allocated, and there is no later moment at which
+// Mercator could find those machines to account for them.
+func TestACapacitySetThatContradictsItselfIsRefused(t *testing.T) {
+	for name, negotiated := range map[string]capability.CapacitySupport{
+		"a resume of capacity nothing can stop": {
+			IdempotentProvision: capability.IdempotentProvisionOperationKey,
+			Resume:              true,
+		},
+		"a disk that survives a stop no provider performs": {
+			IdempotentProvision: capability.IdempotentProvisionOperationKey,
+			PersistentDisk:      true,
+		},
+		"no deduplication and no way to list what is owned": {
+			IdempotentProvision: capability.IdempotentProvisionNone,
+		},
+		"an idempotency mechanism Mercator has never heard of": {
+			IdempotentProvision: "eventually",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := capability.Declare("incoherent", reusableBackendNegotiating(negotiated))
+
+			if err == nil {
+				t.Fatalf("declaring %+v must be refused", negotiated)
+			}
+		})
+	}
+}
+
 func TestStampLaneOverwritesTheLaneAndClearsUnearnedRentalIdentity(t *testing.T) {
 	declaration, err := capability.Declare("oneshot", oneShotBackend{})
 	if err != nil {
@@ -116,6 +150,25 @@ type reusableBackend struct {
 }
 
 func (reusableBackend) Verify(context.Context) error { return nil }
+
+// negotiatingBackend is a reusable backend that negotiates whatever a test hands
+// it, which is the only way to state a set that a real provider's own
+// CapacitySupport method would never return.
+type negotiatingBackend struct {
+	capability.CapacityProvider
+	nodeBackend
+	negotiated capability.CapacitySupport
+}
+
+func (backend negotiatingBackend) CapacitySupport() capability.CapacitySupport {
+	return backend.negotiated
+}
+
+func (negotiatingBackend) Verify(context.Context) error { return nil }
+
+func reusableBackendNegotiating(negotiated capability.CapacitySupport) negotiatingBackend {
+	return negotiatingBackend{negotiated: negotiated}
+}
 
 type contradictoryBackend struct {
 	nodeBackend

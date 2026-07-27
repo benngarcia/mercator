@@ -145,6 +145,31 @@ A machine that has to answer differently from the rest of the fleet states its o
 listing states `machine`, which is what lets one machine be published under two
 listing IDs.
 
+A listing's `capacity` is what its provider negotiated over the machine, in the
+shape a `CapacityProvider` really answers with: `stop` and `resume` for suspending
+a machine and bringing the same one back, `persistent_disk` for a stopped machine
+that keeps its disk, `spot` for interruptible capacity, `exact_pricing` for a rate
+Mercator can bill against, `idempotent_provision` for what the provider honours
+when the same provision is asked twice (`operation_key` or `none`), `list_owned`
+for whether Mercator can ask what it owns there, and `observe_after_terminate` for
+whether a destroyed machine can still be looked at. A set that contradicts itself
+is refused at load by the contract that owns it, so a fixture cannot state a
+provider Mercator would refuse to build a connection for: a resume without a stop,
+a persistent disk without a stop, and no deduplication with no owned listing are
+each impossible. A reusable listing that states any of it must also name its
+`machine`, because every promise in the set is about one machine keeping its
+identity and a listing ID is numbered afresh on every search.
+
+A listing's `bootstrap` is how the node agent arrives on a fresh machine.
+`never_enrolls` is a machine the provider allocates and boots whose agent never
+opens a session, which has to be stated because an omitted `agent_ready` stage
+already means enrolment that costs nothing: a listing that says its agent never
+enrols states no `agent_ready` at all. `deadline` is how long Mercator goes on
+expecting that session, and `reclaim_after` is the provider's own backstop that
+destroys the machine whatever the control plane does. A listing whose agent never
+enrols must name one of the two, because a machine nobody gives up on bills for
+ever.
+
 `request` and `expect` are the single-decision shorthand. A Placement fixture
 that advances virtual time or submits several Runs uses `timeline`; each step
 is exactly one `submit`, `advance`, or `reconcile`.

@@ -85,6 +85,30 @@ func TestCompileRefusesAWorldStatementItWouldDrop(t *testing.T) {
 	}
 }
 
+// TestCompileRefusesABootstrapItWouldNotPerform is the second statement this
+// harness must not take quietly, and it is the same defect as the seeded schedule.
+// Provisioned capacity bootstraps no agent here, so a listing that says its agent
+// arrives late or never arrives compiles into a world that enrols nothing either
+// way: a fixture about a machine nothing can execute on would read green beside a
+// fixture about one that enrols perfectly, and both would be the same world.
+func TestCompileRefusesABootstrapItWouldNotPerform(t *testing.T) {
+	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/conformance/execution-warms-a-rental.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	deadline := scenario.Duration(10 * time.Minute)
+	blueprint.World.Marketplace = append(blueprint.World.Marketplace, scenario.MarketplaceOfferSpec{
+		ID:             "silent-4090",
+		Machine:        "sim-a17c",
+		RatePerHourUSD: 2,
+		Bootstrap:      &scenario.BootstrapSpec{NeverEnrolls: true, Deadline: &deadline},
+	})
+
+	if _, _, err := Compile(blueprint, CompileOptions{}); err == nil {
+		t.Fatal("compiled a world whose stated bootstrap nothing would perform")
+	}
+}
+
 func TestCompileSamplesActualRuntimeIndependentlyFromMercatorPrediction(t *testing.T) {
 	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/demos/artifact-warmth-restart.json")
 	if err != nil {

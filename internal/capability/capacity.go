@@ -72,6 +72,43 @@ type CapacitySupport struct {
 	ObserveAfterTerminate bool `json:"observe_after_terminate"`
 }
 
+// Provision idempotency mechanisms. They are not interchangeable: a provider
+// that deduplicates on a caller-supplied key can be asked for the same machine
+// twice and allocate one, and a provider that honors nothing can only be
+// reconciled by listing what this connection owns.
+const (
+	IdempotentProvisionOperationKey = "operation_key"
+	IdempotentProvisionNone         = "none"
+)
+
+// Validate refuses a negotiated set no provider could keep. Every promise here
+// is one the scheduler and the reconciler act on without asking again, so a set
+// that contradicts itself has to be refused where it enters Mercator rather than
+// caught by whichever caller happens to read two of its fields together.
+func (support CapacitySupport) Validate() error {
+	switch support.IdempotentProvision {
+	case IdempotentProvisionOperationKey:
+	case IdempotentProvisionNone:
+		if !support.ListOwned {
+			return fmt.Errorf(
+				"a provider that deduplicates no provision and lists no owned capacity leaks every machine a lost response allocated",
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%q is not a provision idempotency mechanism; state %q or %q",
+			support.IdempotentProvision, IdempotentProvisionOperationKey, IdempotentProvisionNone,
+		)
+	}
+	if support.Resume && !support.Stop {
+		return fmt.Errorf("a provider that resumes capacity it cannot stop has nothing to resume")
+	}
+	if support.PersistentDisk && !support.Stop {
+		return fmt.Errorf("a disk that survives a stop is a claim about a provider that can stop")
+	}
+	return nil
+}
+
 // CapacityQuery scopes a capacity listing to one workspace and requirement.
 type CapacityQuery struct {
 	WorkspaceID string

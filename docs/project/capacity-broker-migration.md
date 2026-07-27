@@ -3853,6 +3853,84 @@ complete because it works against a live provider.
     because an owned machine's shadow price already says its seconds are worth
     something to somebody else. Reserved capacity is delivered as eligible service
     classes rather than as a concept of its own, and is not deferred.
+- [x] 2026-07-27: Give the corpus the words for capacity, and the Effect Ledger the
+  operations. Nothing acts on either yet, and that is the order: the rules that
+  read a provision are already registered, so the day a provider really emits one
+  nothing else has to change for them to see it.
+  - A marketplace listing states what its provider negotiated over the machine,
+    carried as `capability.CapacitySupport` itself rather than as a Blueprint copy
+    of it. A parallel struct would be a translation of nothing and would drift, and
+    the whole point of the field is that a fixture states the set a real provider
+    answers with. It is a pointer, because a listing that negotiated nothing and a
+    listing whose provider can do nothing are different sentences, and every
+    listing in this corpus is the first.
+  - The set is a set of separate promises rather than a list of the capability
+    names a provider ticked. A provider that suspends a machine and cannot bring
+    the same one back exists, and a name list cannot tell a resume nobody offers
+    from a resume nobody mentioned.
+  - `CapacitySupport.Validate` is the contract's own coherence rule, and `Declare`
+    calls it, so an incoherent set is refused where the connection is built rather
+    than found later by whichever caller reads two of its fields together. A resume
+    without a stop, a persistent disk without a stop, an unknown idempotency
+    mechanism, and `none` with no owned listing are each refused. The last is the
+    one that matters most: a provider that deduplicates nothing and lists nothing
+    leaks every machine a lost response allocated, and there is no later moment at
+    which Mercator could find those machines to account for them. The Blueprint
+    door calls the same function, so a fixture cannot state a provider Mercator
+    would refuse to build.
+  - A reusable listing that states any of it must name its `machine`. Every promise
+    in the set is about one machine keeping its identity through a stop, a resume, a
+    repeated provision, or a terminate, and a listing ID is numbered afresh on every
+    search.
+  - `bootstrap.never_enrolls` is stated rather than derived from a missing
+    `agent_ready` stage. Silence there already means a stage that costs nothing, and
+    a bootstrap that costs nothing is a machine ready the instant it booted, so
+    folding the two together would make the failure a provider bills for
+    indistinguishable from the fastest possible success. A listing that says its
+    agent never enrols therefore states no `agent_ready` at all, which is the one
+    provisioning stage a listing may leave out: a stage that never completes has no
+    seconds to state. It must name a deadline or a `reclaim_after`, because a
+    machine nobody gives up on bills for ever.
+  - The ledger gains six capacity operations and one enrolment.
+    `capacity.provision`, `capacity.stop`, `capacity.resume`, and
+    `capacity.terminate` change what a provider holds for Mercator and are counted
+    by `effectMutatesWorld`; `capacity.observe` and `capacity.list_owned` are reads
+    and deliberately are not, because two reads answering differently is a machine
+    whose state moved and counting them would make every reconciliation sweep a
+    violation. `node.enrolled` is counted, because an enrolment token is redeemable
+    once. They are separate from `provider.launch` and `provider.release` on
+    purpose: those are an execution, and ADR 0005 is the reason a stop that suspends
+    a machine may never be filed under a release that ends a workload.
+    `capacity.resume` is named for the promise the capability set negotiates rather
+    than for `StartCapacity`, the method that performs it.
+  - `Compile` refuses an arrival-driven Blueprint whose listing states a bootstrap,
+    for the reason it already refuses a seeded Rental Schedule. Provisioned capacity
+    bootstraps no agent in the Lab, so a listing saying its agent never arrives would
+    compile into a world that enrols nothing either way, and a fixture about a
+    stranded machine would read green beside a fixture about one that enrols
+    perfectly while both described the same world. A world statement that reaches
+    nothing is an error rather than a silence. The two new Blueprints are placement
+    fixtures, so they do not go through that path; a conformance fixture that wants
+    this world arrives with the provider.
+  - No Lab invariant, and the reason is the registry's own rule.
+    `TestEveryDefaultInvariantHasADeliberatelyFailingCase` refuses an invariant no
+    world can make fail, and no world emits a capacity operation yet. What lands
+    instead is the classification and two tests over a hand-written ledger, one for
+    each direction: an operation left out of `effectMutatesWorld` is one
+    `safety.idempotent_external_commands` walks straight past, and an operation
+    wrongly counted fails on a machine seen starting and then active.
+- [x] 2026-07-27: Take the stale claim off
+  `enrolled-node-survives-its-first-run`. It declared `rental_schedule` beside
+  `node_bootstrap` and `execution_warms_capacity`, and the Rental Schedule store,
+  its versioning, and its reservation are wired end to end with four green fixtures
+  exercising them. A target naming a capability the tree already has cannot be read
+  as evidence of anything. Its listing now names the machine it becomes and the set
+  its provider negotiated, and the new target
+  `provisioned-capacity-enrolls-or-is-reclaimed` states the other half of the same
+  transition: acquisition and boot succeed, the agent never opens a session, and
+  the record has to say the start was never observed and the application never
+  spoke. The corpus moves from 59 Blueprints, 56 green and 3 target, to 60, 56
+  green and 4 target.
 
 ## Phase status
 
@@ -3862,7 +3940,7 @@ complete because it works against a live provider.
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | not started |
+| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and no provider allocates a machine yet |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -3872,9 +3950,14 @@ Phase 1 added:
 - `ephemeral-execution-is-never-a-rental` (green): a one-shot product is the
   cheapest and fastest candidate and still records `launch_ephemeral`, because
   nothing survives the workload's exit.
-- `enrolled-node-survives-its-first-run` (target, missing `node_runtime` and
-  `rental_schedule`): capacity provisioned for the first Run is still there when
-  the second arrives, and the second reuses it rather than provisioning again.
+- `enrolled-node-survives-its-first-run` (target, missing `node_bootstrap` and
+  `execution_warms_capacity`): capacity provisioned for the first Run is still
+  there when the second arrives, and the second reuses it rather than provisioning
+  again. It carried `rental_schedule` as a third pending reason until phase 5
+  slice 1, and that debt is paid: the Rental Schedule store, its versioning, and
+  its reservation are wired end to end and four green fixtures exercise them, so
+  what the second step waits on is the provisioned-to-enrolled transition twice
+  over.
 - `safety.ephemeral_capacity_not_reused` (Lab invariant): no Run is ever queued
   behind one-shot capacity, and capacity held for a one-shot execution never
   accumulates a second Booking.
@@ -5005,7 +5088,7 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 59 regression Blueprints: 56 green and 3 target, beside two demo
+The corpus is 60 regression Blueprints: 56 green and 4 target, beside two demo
 documents, one minimized case, and forty conformance Blueprints, all of
 them green. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
@@ -5015,9 +5098,13 @@ subdirectories beside them hold the demo and the one minimized case.
 Blueprint added without a classification fails the build rather than drifting the
 number quoted here.
 
-The three targets are the capabilities no simulated world performs yet.
+The four targets are the capabilities no simulated world performs yet.
 `enrolled-node-survives-its-first-run` needs an agent to bootstrap on provisioned
-capacity, which is phase 5. `queued-booking-deadline-expiry` needs
+capacity, which is phase 5. `provisioned-capacity-enrolls-or-is-reclaimed` needs
+the other half of the same transition: a machine the provider allocates and boots
+whose agent never opens a session, where nothing can create a container and no
+workload begins, which is the failure a real provider bills for until its own
+backstop fires. `queued-booking-deadline-expiry` needs
 `schedule_advancement`, which is a Booking expiring past its latest start and its
 Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
 publish host facts a machine then contradicts.
@@ -5065,8 +5152,8 @@ bootstrap a node agent yet, which is phase 5. Both simulators keep such an offer
 cold, and the reason is the honest one: the offer is a template for a machine
 that does not exist, so nothing an execution fetches there is anywhere a later
 Run can see it. `enrolled-node-survives-its-first-run` declares
-`execution_warms_capacity` alongside `node_bootstrap` and `rental_schedule`,
-which is the corpus stating what its second step was always waiting on.
+`execution_warms_capacity` alongside `node_bootstrap`, which is the corpus stating
+what its second step was always waiting on.
 
 A host Mercator has not enrolled still reports `Images.Known: true` holding
 nothing. In production that machine cannot enumerate its own content at all and

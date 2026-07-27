@@ -87,6 +87,12 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		if len(offer.Facts) > 0 {
 			session.note("offer %q declares host facts, but no offer field can carry them yet", offer.ID)
 		}
+		if offer.Capacity != nil {
+			session.note("offer %q negotiates a capacity capability set, and no provider seam reads one yet", offer.ID)
+		}
+		if offer.Bootstrap != nil {
+			session.note("offer %q states how its node agent arrives, and provisioned capacity bootstraps no agent yet", offer.ID)
+		}
 	}
 	log, err := eventlog.OpenSQLite(context.Background(), "file:scenario-"+uuid.NewString()+"?mode=memory&cache=shared")
 	if err != nil {

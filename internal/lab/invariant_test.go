@@ -605,6 +605,105 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 	}
 }
 
+// TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord is why the capacity
+// vocabulary lands before anything emits it. safety.idempotent_external_commands
+// reads only the operations the ledger counts as changing the world, so an
+// operation left out of that list is one the rule walks straight past: a machine
+// allocated twice under one operation key, a stopped machine resumed twice, or an
+// enrolment token redeemed a second time would each be a world no rule here
+// objected to, and each is a bill or a fenced generation Mercator would be wrong
+// about.
+//
+// No world emits a capacity operation until the provider seam exists, so the
+// ledger here is written by hand. That is the point: the rules that will read it
+// are already registered, and the day a provision is really recorded nothing else
+// has to change for them to see it.
+func TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	for _, operation := range []string{
+		OperationCapacityProvision,
+		OperationCapacityStop,
+		OperationCapacityResume,
+		OperationCapacityTerminate,
+		OperationNodeEnrolled,
+	} {
+		t.Run(operation, func(t *testing.T) {
+			observation := handWrittenLedger(now,
+				EffectRecord{
+					Operation: operation, OperationID: "operation-1",
+					Command: EffectCommandAccepted, Consequence: []byte(`{"native_ref":"machine-first"}`),
+				},
+				EffectRecord{
+					Operation: operation, OperationID: "operation-1",
+					Command: EffectCommandAccepted, Consequence: []byte(`{"native_ref":"machine-second"}`),
+				},
+			)
+
+			result := invariantResultByID(
+				t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.idempotent_external_commands",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("one %s key with two answers gave %+v", operation, result)
+			}
+		})
+	}
+}
+
+// TestLookingAtCapacityIsNotACommandThatChangedIt is the other half of the same
+// classification, and the half a list of operation names invites getting wrong.
+// Observing a machine and listing what this connection owns allocate nothing,
+// change nothing, and are asked repeatedly on purpose. Two reads that answer
+// differently are a machine whose state moved between them, which is what
+// observation is for, so counting either as a command would turn every
+// reconciliation sweep into a violation.
+func TestLookingAtCapacityIsNotACommandThatChangedIt(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	for _, operation := range []string{OperationCapacityObserve, OperationCapacityListOwned} {
+		t.Run(operation, func(t *testing.T) {
+			observation := handWrittenLedger(now,
+				EffectRecord{
+					Operation: operation, OperationID: "look-1",
+					Command: EffectCommandAccepted, Consequence: []byte(`{"state":"starting"}`),
+				},
+				EffectRecord{
+					Operation: operation, OperationID: "look-1",
+					Command: EffectCommandAccepted, Consequence: []byte(`{"state":"active"}`),
+				},
+			)
+
+			result := invariantResultByID(
+				t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.idempotent_external_commands",
+			)
+
+			if result.Status != InvariantPassed {
+				t.Fatalf("a machine seen starting and then active gave %+v", result)
+			}
+		})
+	}
+}
+
+// handWrittenLedger is an observation whose only content is the effects a test
+// states, for rules about the ledger that no Blueprint can yet drive.
+func handWrittenLedger(now time.Time, effects ...EffectRecord) InvariantObservation {
+	return InvariantObservation{
+		StartedAt:                   now,
+		Now:                         now,
+		World:                       WorldTruthSnapshot{At: now},
+		Workloads:                   map[string]domain.WorkloadRevision{},
+		RentalSchedules:             map[string]domain.RentalSchedule{},
+		RunRequirements:             map[string]RunArrival{},
+		ArtifactCatalog:             map[string]domain.ArtifactVersion{},
+		SeededLocality:              map[string]map[string]bool{},
+		ProjectionRebuildEquivalent: true,
+		Effects:                     effects,
+	}
+}
+
 // TestEveryClauseOfTheCandidateIdentityRuleCanFail is the identity rule read the way
 // every law here has to be readable. The registry's single deliberate case drives one
 // of its clauses, a collision between two capacities the world says are different,

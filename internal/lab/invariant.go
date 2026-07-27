@@ -802,6 +802,17 @@ func effectMutatesWorld(operation string) bool {
 	case OperationProviderLaunch,
 		OperationProviderRelease,
 		OperationProviderTerminate,
+		// Allocating a machine, suspending it, bringing it back, and destroying it
+		// each change what a provider is holding for Mercator, and each is asked for
+		// under an operation key the provider is expected to honour. A node
+		// enrolling changes what Mercator can execute on and redeems a token that may
+		// be redeemed once. The two reads in the same family, capacity.observe and
+		// capacity.list_owned, are deliberately not here.
+		OperationCapacityProvision,
+		OperationCapacityStop,
+		OperationCapacityResume,
+		OperationCapacityTerminate,
+		OperationNodeEnrolled,
 		OperationNodePrepareImage,
 		OperationNodePrepareArtifact,
 		OperationNodePrepareAbandoned,

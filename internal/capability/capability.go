@@ -46,6 +46,9 @@ func Declare(adapterType string, backend any) (Declaration, error) {
 	declaration := Declaration{Type: adapterType}
 	if provider, ok := backend.(CapacityProvider); ok {
 		support := provider.CapacitySupport()
+		if err := support.Validate(); err != nil {
+			return Declaration{}, fmt.Errorf("capability: %q negotiates a capacity set no provider could keep: %w", adapterType, err)
+		}
 		declaration.Capacity = &support
 	}
 	if runtime, ok := backend.(NodeRuntime); ok {

@@ -40,6 +40,22 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 			blueprint.Name, len(blueprint.World.RentalSchedules),
 		)
 	}
+	// A bootstrap declaration is a claim about a machine that does not exist yet,
+	// and this world builds no machine from a marketplace listing: provisioned
+	// capacity bootstraps no agent here, so a listing saying its agent arrives late
+	// or never arrives would be compiled into a world that enrols nothing either
+	// way, and a fixture about a stranded machine would read green while asserting
+	// the opposite of what it says. Refusing is the honest answer until a provider
+	// really allocates one.
+	for _, offer := range blueprint.World.Marketplace {
+		if offer.Bootstrap == nil {
+			continue
+		}
+		return WorldTape{}, nil, fmt.Errorf(
+			"Lab compilation bootstraps no node agent on provisioned capacity, and Blueprint %q states one for listing %q",
+			blueprint.Name, offer.ID,
+		)
+	}
 	seed := options.Seed
 	if seed == "" {
 		seed = blueprint.Seed

@@ -1,11 +1,10 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Capacity provisioned for the first Run is still there when the second arrives, because an enrolled node agent holds the host runtime open. The second Run reuses that machine and its layers instead of provisioning a second one. Mercator can already do this on a node an operator enrolled by hand; what is missing is provisioned capacity arriving with an agent already on it, and a Rental Schedule that survives the first Run.",
+  "summary": "Capacity provisioned for the first Run is still there when the second arrives, because an enrolled node agent holds the host runtime open. The second Run reuses that machine and its layers instead of provisioning a second one. The listing names the machine it becomes and states what its provider negotiated over it: this one stops and resumes a machine under one identity, keeps its disk while it is stopped, deduplicates a repeated provision on the operation key, and can list what Mercator owns there. Mercator does all of this today on a node an operator enrolled by hand. What is missing is the provisioned-to-enrolled transition, twice over: a fresh machine arriving with an agent that opens a session, and a host keeping what its workload fetched, so the second Run finds warm layers rather than a cold pull.",
   "classification": "target",
   "missing_capabilities": [
     "node_bootstrap",
-    "execution_warms_capacity",
-    "rental_schedule"
+    "execution_warms_capacity"
   ],
   "world": {
     "images": {
@@ -25,6 +24,7 @@
     "marketplace": [
       {
         "id": "reusable-4090",
+        "machine": "simcloud-4090-0f31",
         "provider": "simcloud",
         "lane": "reusable",
         "rate_per_hour_usd": 2.0,
@@ -34,6 +34,19 @@
           "acquisition": "24s",
           "boot": "3m",
           "agent_ready": "36s"
+        },
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": false
+        },
+        "bootstrap": {
+          "deadline": "10m"
         }
       }
     ]

@@ -13,6 +13,34 @@ const (
 	OperationProviderTerminate   = "provider.terminate"
 	OperationProviderListOwned   = "provider.list_owned"
 	OperationControlPlaneRestart = "control_plane.restart"
+	// The six capacity operations are Mercator allocating and holding a machine,
+	// which is a different contract from launching a workload on one. The four
+	// provider operations above are an execution: a one-shot product Mercator
+	// starts and cannot hold. These are the lease. Collapsing the two would file a
+	// stop that suspends a machine and a release that ends a workload under one
+	// name, and every rule about what Mercator owns reads the ledger.
+	//
+	// Resume is named for the act rather than for the method that performs it
+	// (CapacityProvider.StartCapacity), because a capability set negotiates stop
+	// and resume and a reader of the ledger is asking which promise was exercised.
+	// Observe and the owned listing are reads: they allocate nothing, they change
+	// nothing, and two of them answering differently is a machine whose state moved
+	// rather than a command applied twice.
+	OperationCapacityProvision = "capacity.provision"
+	OperationCapacityObserve   = "capacity.observe"
+	OperationCapacityStop      = "capacity.stop"
+	OperationCapacityResume    = "capacity.resume"
+	OperationCapacityTerminate = "capacity.terminate"
+	OperationCapacityListOwned = "capacity.list_owned"
+	// OperationNodeEnrolled is a node agent opening its authenticated session for
+	// the first time and being admitted, which is the moment provisioned capacity
+	// becomes capacity Mercator can execute on. It is the consequence of a
+	// bootstrap rather than a command Mercator issued, and it is recorded here
+	// because the ledger is the only account of what really happened on the
+	// machine: Mercator's own record can say a node is ready, and only this says
+	// which enrollment made it so, under which Rental generation, against a token
+	// that may be redeemed once.
+	OperationNodeEnrolled = "node.enrolled"
 	// The four Artifact operations are four different facts, and collapsing any
 	// two of them is how a local copy starts standing in for durable content.
 	// OperationArtifactRead is a consuming launch resolving one input, and says
