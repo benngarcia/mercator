@@ -1,0 +1,67 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "Two idle machines warm for the image, and the cheap one is sold on terms that let its provider take it back. The standard Run goes first, while both are free, and it is refused the cheaper machine: its class does not permit interruption, so INTERRUPTION_NOT_PERMITTED strikes out capacity that can disappear and the Run pays half again as much for a machine nobody can reclaim. The batch Run behind it takes the reclaimable machine, because a class that would rather be cheap than early is a caller saying the work can be redone. No offer could state the term it was sold on and no class could state whether its work may be lost, so both Runs took the cheapest machine and the one that must not be interrupted was the one with most to lose.",
+  "classification": "target",
+  "missing_capabilities": ["interruption_permission"],
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-spot",
+        "reclaimable": true,
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "rate_per_hour_usd": 1.0
+      },
+      {
+        "id": "rental-held",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "rate_per_hour_usd": 3.0
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "trainer",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "expected_runtime": "30m",
+        "max_runtime": "40m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-held",
+        "candidates": {
+          "rental-spot": {
+            "feasible": false,
+            "rejected": [{"code": "INTERRUPTION_NOT_PERMITTED", "path": "reclaimable"}]
+          },
+          "rental-held": {"feasible": true}
+        }
+      }
+    },
+    {
+      "submit": "sweeper",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "batch",
+        "expected_runtime": "30m",
+        "max_runtime": "40m"
+      },
+      "expect": {
+        "outcome": "place",
+        "offer": "rental-spot",
+        "candidates": {
+          "rental-spot": {"feasible": true}
+        }
+      }
+    }
+  ]
+}

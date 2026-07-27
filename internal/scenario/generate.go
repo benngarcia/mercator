@@ -261,7 +261,6 @@ func (generator *blueprintGenerator) arrivals(config GeneratorConfig, imageRefs 
 			Type: ArrivalPeriodic,
 			Periodic: &RunFamilySpec{
 				NamePrefix: "periodic",
-				Group:      "generated-periodic",
 				At:         0,
 				Interval:   Duration(time.Minute),
 				Count:      config.RunCount,
@@ -273,7 +272,6 @@ func (generator *blueprintGenerator) arrivals(config GeneratorConfig, imageRefs 
 			Type: ArrivalBurst,
 			Burst: &RunFamilySpec{
 				NamePrefix: "burst",
-				Group:      "generated-burst",
 				At:         Duration(time.Minute),
 				Interval:   0,
 				Count:      config.RunCount,
@@ -292,7 +290,6 @@ func (generator *blueprintGenerator) arrivals(config GeneratorConfig, imageRefs 
 			}
 			runs[index] = RunArrivalSpec{
 				Name:    fmt.Sprintf("generated-%03d", index+1),
-				Group:   "generated-dag",
 				At:      Duration(time.Duration(index/2) * time.Minute),
 				Request: runRequest,
 			}

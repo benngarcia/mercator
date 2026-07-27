@@ -129,7 +129,8 @@ const TopClassPriority = 100.0
 
 // Admission is what a class says about waiting: where it starts in the queue,
 // how long Mercator may make it wait at all, the moment it must have started by,
-// and whether it may go past work that is already waiting.
+// whether it may go past work that is already waiting, and whether it may be
+// admitted onto a machine its provider can take back.
 //
 // It is the class's statement rather than the Run's for the same reason the
 // exchange rates above are. A caller knows whether somebody is watching this
@@ -149,6 +150,18 @@ type Admission struct {
 	// a statement about what this work is worth, not about what the other work
 	// is.
 	BackfillEligible bool
+	// PermitsInterruption is whether work of this class may run on capacity its
+	// provider says it can reclaim. It is permission to lose the work rather than
+	// a preference for cheap machines: nothing Mercator does here survives a
+	// machine being taken away, so a class that grants it is a caller saying the
+	// run is worth redoing and a class that withholds it is one saying it is not.
+	//
+	// It belongs to the class beside the priority for the same reason the priority
+	// does. Whether somebody would rather pay for a machine nobody can take away
+	// is a fact about the work, and it is the same fact that decides what a second
+	// of waiting is worth: the two classes that price waiting at a fifth of the
+	// rent or at nothing are exactly the two that would rather be cheap.
+	PermitsInterruption bool
 }
 
 // Admission is what this class says about waiting.
@@ -167,14 +180,29 @@ func (class ServiceClass) Admission() Admission {
 		return Admission{Priority: 50, MaxQueueDelaySeconds: 30 * 60, DeadlineSeconds: 4 * 60 * 60}
 	case ClassBatch:
 		// The value is in the result rather than in when it began, so an hour of
-		// queue is tolerable and a day is the point it stops being this run.
-		return Admission{Priority: 20, MaxQueueDelaySeconds: 60 * 60, DeadlineSeconds: 24 * 60 * 60}
+		// queue is tolerable and a day is the point it stops being this run. Work
+		// that would rather be cheap than early is work that can be redone, so this
+		// is one of the two classes that will run where the machine can be taken
+		// back.
+		return Admission{
+			Priority:             20,
+			MaxQueueDelaySeconds: 60 * 60,
+			DeadlineSeconds:      24 * 60 * 60,
+			PermitsInterruption:  true,
+		}
 	case ClassOpportunistic:
 		// Waiting is free and the work does not expire, so this class states no
 		// deadline and is the only one that may take capacity going spare. Two
 		// hours is not what it is worth waiting: it is the longest Mercator will
 		// let anything sit unplaced without saying it has a starvation problem.
-		return Admission{Priority: 0, MaxQueueDelaySeconds: 2 * 60 * 60, BackfillEligible: true}
+		// Capacity going spare is the case reclaimable capacity is sold as, and a
+		// class that says waiting costs it nothing is saying the same of a redo.
+		return Admission{
+			Priority:             0,
+			MaxQueueDelaySeconds: 2 * 60 * 60,
+			BackfillEligible:     true,
+			PermitsInterruption:  true,
+		}
 	}
 	return Admission{}
 }

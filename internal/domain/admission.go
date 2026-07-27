@@ -57,6 +57,18 @@ const (
 	// same class that has waited longer outranks a fresh arrival, and a reason
 	// naming the class would report that as a class this Run is behind.
 	DeferredBehindHigherPriority = "BEHIND_HIGHER_PRIORITY"
+	// DeferredGroupAtParallelism is a Run whose own family is already as wide as
+	// its caller said it may run. Nothing about the fleet is being asserted: a
+	// machine may be standing idle beside this Run, and the bound is the whole
+	// reason it is not being used, which is what a caller asks for when it declares
+	// one.
+	//
+	// It is the first thing admission asks, ahead of the ordering and ahead of any
+	// machine being weighed, because it is the only answer here that no ordering and
+	// no capacity can change. Asking it later recorded a Run as waiting behind work
+	// that outranked it while the thing actually holding it was its own declaration,
+	// and let it hold the queue against work that had nothing to do with the family.
+	DeferredGroupAtParallelism = "GROUP_AT_PARALLELISM"
 	// RefusedDeadlineUnreachable is a Run whose class states a moment it must
 	// have started by that the queue in front of it is already past. It is
 	// refused rather than queued, because queueing it would be promising a
@@ -173,8 +185,15 @@ func (answer FleetAnswer) Reason() string {
 // nothing in the fleet can hold is waiting for capacity to arrive, and work that
 // fits the fleet as it stands is not competing with it for anything.
 //
-// Only the fleet's own answer can say it, and it says it about the moment it was
-// given. A deferral carrying no answer establishes no exemption: a Run held
+// A wait its own family's declared width is holding is the other one, and it is
+// the only wait here that is not about capacity at all. No machine coming free
+// ends it, because the bound counts members rather than machines, so work behind
+// it is not competing with it for anything. A group whose members held the queue
+// would let one narrow family stop every other Run in the tenant, which is the
+// same head-of-line block the fleet exemption exists to prevent.
+//
+// Otherwise only the fleet's own answer can say it, and it says it about the
+// moment it was given. A deferral carrying no answer establishes no exemption: a Run held
 // behind work that outranks it was measured against no machine at all, and an
 // exemption carried through such a wait is a claim about a fleet nobody asked
 // since. That is the direction the carried version got wrong. A Run outranked by
@@ -192,6 +211,9 @@ func (answer FleetAnswer) Reason() string {
 // drifted apart in both directions at once: one of them called a fleet that
 // published nothing an ordinary wait, and the other could not see the ask at all.
 func (deferral AdmissionDeferral) HoldsNoQueue() bool {
+	if deferral.Reason == DeferredGroupAtParallelism {
+		return true
+	}
 	return deferral.Fleet != nil && deferral.Fleet.HoldsNothing()
 }
 

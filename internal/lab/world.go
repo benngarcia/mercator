@@ -558,6 +558,10 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			state.leaseExpiresAt = tape.Start.Add(rental.IdleLeaseExpiresIn.Duration())
 		}
 		state.offer.Capacity.Confidence = rental.Confidence()
+		// The term this capacity was sold on. It is a property of the sale rather
+		// than of the moment an offer was read, so it is stated once here and
+		// republished with every snapshot the provider takes.
+		state.offer.Reclaimable = rental.Reclaimable
 		if rental.Unpriced {
 			// Nobody quoted this machine. That is a statement about the world, so it
 			// is carried through as one rather than becoming a rate of zero, which

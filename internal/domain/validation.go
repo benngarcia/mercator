@@ -95,6 +95,20 @@ func ValidateWorkloadRevision(rev WorkloadRevision) []Violation {
 			Message: "A Run states the class of work it is, and Mercator prices only the classes it knows.",
 		})
 	}
+	// A family is a name and a width, and half of one is neither. A name with no
+	// bound is a Run claiming membership of a family nobody said how wide, which
+	// admission would then hold to a width of nothing and never place. A bound with
+	// no name states a width for a family that does not exist. Both are refused
+	// where the Run enters rather than read as the other, because guessing which
+	// half the caller meant is how a sweep of eight ends up running one at a time.
+	if !rev.Spec.Placement.Group.Stated() {
+		violations = append(violations, Violation{
+			Code: "RUN_GROUP_INCOMPLETE", Path: "spec.placement.group",
+			Required: "a name and the most of the family that may run at once",
+			Offered:  rev.Spec.Placement.Group,
+			Message:  "A Run group is a name and a maximum parallelism together, so one without the other is refused.",
+		})
+	}
 	violations = append(violations, validateArtifactRequirements(rev.Spec.Artifacts)...)
 	violations = append(violations, validateCacheRequirements(rev.Spec.Caches)...)
 	for i, port := range container.Ports {

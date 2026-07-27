@@ -51,8 +51,7 @@ type WorldEvent struct {
 }
 
 type RunArrival struct {
-	Name  string `json:"name"`
-	Group string `json:"group,omitempty"`
+	Name string `json:"name"`
 	// Workspace is the Blueprint's label for the tenant this Run belongs to.
 	// Empty is the default workspace, which is where a single-tenant fixture
 	// puts everything.

@@ -195,9 +195,15 @@ type PlacementPolicy struct {
 	// waiting is worth to it. See serviceclass.go: the class carries the exchange
 	// rates the score is computed over, which is why it replaced the placement
 	// objective rather than sitting beside one.
-	Class                  ServiceClass `json:"service_class"`
-	MaxP90StartSeconds     float64      `json:"max_p90_start_seconds,omitempty"`
-	ExpectedRuntimeSeconds float64      `json:"expected_runtime_seconds,omitempty"`
+	Class ServiceClass `json:"service_class"`
+	// Group is the family this Run arrived with and the most of that family that
+	// may hold capacity at once. See rungroup.go: it is a bound admission holds
+	// rather than anything about which machine wins, and it sits beside the class
+	// because both are statements a caller makes about how the work may be
+	// scheduled rather than about the machine it wants.
+	Group                  RunGroup `json:"group,omitzero"`
+	MaxP90StartSeconds     float64  `json:"max_p90_start_seconds,omitempty"`
+	ExpectedRuntimeSeconds float64  `json:"expected_runtime_seconds,omitempty"`
 	// ExpectedReadySeconds is how long this workload says it takes to become
 	// ready for work once its process is running. It is the only prediction of
 	// the application-ready stage there is: readiness is the application's own
@@ -355,6 +361,21 @@ type OfferSnapshot struct {
 	// is workspace-scoped and an offer is read by every workspace's Runs.
 	Caches   CacheInventory   `json:"caches,omitzero"`
 	Capacity CapacityEvidence `json:"capacity"`
+	// Reclaimable is whether the provider of this capacity says it may take the
+	// machine back while Mercator is still using it. It is a term of the contract
+	// rather than a measurement: a spot ask and an interruptible listing are sold
+	// on it, and a machine an operator enrolled or a lease Mercator holds outright
+	// is not.
+	//
+	// It is stated by the backend, so silence means no provider here has said it
+	// sells this capacity that way. That is the safe direction on this fact and on
+	// this fact only, because the world cannot take back capacity nobody offered on
+	// those terms: what a provider does not sell as reclaimable, it does not
+	// reclaim. The consequence is a hard one, which is why it is not inferred from
+	// a measured interruption rate: a rate is how often a machine has been seen to
+	// fail, and refusing work that may not be interrupted has to rest on what the
+	// capacity is rather than on how it has behaved.
+	Reclaimable bool `json:"reclaimable,omitempty"`
 	// Reliability is what this machine's publisher has measured about how it
 	// behaves. A machine nobody measured carries none of it, and omitzero is what
 	// keeps that off the wire: omitempty never drops a struct, so every offer in the

@@ -368,6 +368,9 @@ func simRentalOffer(spec WorldSpec, rental RentalSpec, machineID string) domain.
 	// the machine may be busy by then. How sure its publisher is of that answer is
 	// a property of the publisher, so it is stated here and carried through.
 	offer.Capacity.Confidence = rental.Confidence()
+	// The term this capacity was sold on, which is a property of the sale and not
+	// of the moment the offer was read.
+	offer.Reclaimable = rental.Reclaimable
 	if rental.Unpriced {
 		offer.Pricing = domain.PriceModel{Currency: "USD"}
 		offer.Capabilities.Pricing = domain.PricingCapabilities{}
@@ -712,6 +715,10 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	// than this translation's. A class Mercator does not know is carried through
 	// verbatim, because a Blueprint stating one is a fixture about the refusal.
 	spec.Placement.Class = domain.ServiceClass(req.ServiceClass)
+	// The family this Run arrived with, carried verbatim for the reason the class
+	// is: a half-declared group is a fixture about the refusal, and a translation
+	// that repaired it would state a world no caller can submit.
+	spec.Placement.Group = req.Group
 	spec.Placement.AllowUnknownPricing = req.AllowUnknownPricing
 	if req.ExpectedRuntime != nil {
 		spec.Placement.ExpectedRuntimeSeconds = req.ExpectedRuntime.Duration().Seconds()

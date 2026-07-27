@@ -146,6 +146,17 @@ const (
 	// ever, and every class that declares one waits far past the bound it stated
 	// before anything ends the wait.
 	CapabilityRefusedQueueDelay Capability = "refused_queue_delay"
+	// CapabilityRunGroups is admission holding a family of Runs to the width its
+	// caller declared. It names what a fixture about a sweep is red for while a
+	// group is a word the arrival plan writes and nothing reads: every member of
+	// every family is placed the moment a machine can take it, whatever the caller
+	// said about how wide the family may run.
+	CapabilityRunGroups Capability = "run_groups"
+	// CapabilityInterruptionPermission is Mercator refusing to put work on capacity
+	// its provider can take back unless the work's class permits that. It names
+	// what a fixture about reclaimable capacity is red for while no offer states
+	// the term it was sold on and no class states whether it may be lost.
+	CapabilityInterruptionPermission Capability = "interruption_permission"
 )
 
 var knownCapabilities = map[Capability]bool{
@@ -169,6 +180,8 @@ var knownCapabilities = map[Capability]bool{
 	CapabilityLearnedStageHistory:    true,
 	CapabilityAppendedDecisions:      true,
 	CapabilityRefusedQueueDelay:      true,
+	CapabilityRunGroups:              true,
+	CapabilityInterruptionPermission: true,
 }
 
 // MaxQueuedBookings bounds every RentalSchedule: at most this many queued
@@ -214,6 +227,22 @@ type WorldSpec struct {
 	// else in a fixture can state. A machine's provisioning states its own three;
 	// a path states what a transfer costs; these three are the rest.
 	Launch LaunchSpec `json:"launch,omitzero"`
+	// Preemptions is capacity this world's provider takes back, and the moment it
+	// does. It is the world acting on its own account rather than work arriving,
+	// which is why it is stated here and not in the arrival plan: nothing Mercator
+	// does causes it, and whatever was running there is gone.
+	//
+	// Each one may only name a Rental the fixture declared reclaimable, because
+	// that is the term the capacity was sold on. A world that took back a machine
+	// nobody sold that way would be describing a provider breaking its contract,
+	// which is a different fixture from the one this vocabulary is for.
+	Preemptions []PreemptionSpec `json:"preemptions,omitempty"`
+}
+
+// PreemptionSpec is one machine going back to the provider that sold it.
+type PreemptionSpec struct {
+	Rental string   `json:"rental"`
+	At     Duration `json:"at"`
 }
 
 // LaunchSpec is what a launch costs in this world after its content has arrived.
@@ -511,9 +540,16 @@ type RentalSpec struct {
 	// It is not a rate of zero: a rate of zero is a machine somebody says is free,
 	// and this is a machine nobody can say anything about the cost of. A fixture
 	// states it instead of a rate, never beside one.
-	Unpriced  bool           `json:"unpriced,omitempty"`
-	Billing   BillingSpec    `json:"billing,omitempty"`
-	Resources *ResourcesSpec `json:"resources,omitempty"`
+	Unpriced bool `json:"unpriced,omitempty"`
+	// Reclaimable states that whoever sold this machine may take it back while
+	// Mercator is still using it, which is the term a spot ask and an interruptible
+	// listing are sold on. It is what lets a fixture put work on capacity that can
+	// disappear, and the only capacity this world's own preemptions may name: a
+	// world that reclaimed a machine nobody sold on those terms would be asserting
+	// a provider breaking its own contract.
+	Reclaimable bool           `json:"reclaimable,omitempty"`
+	Billing     BillingSpec    `json:"billing,omitempty"`
+	Resources   *ResourcesSpec `json:"resources,omitempty"`
 	// CapacityConfidence is how sure whoever published this machine's capacity
 	// claim was of it. Omitted means certain, which is what every simulated
 	// provider says about a machine it can see. A fixture states less when the
@@ -1037,6 +1073,15 @@ type RequestSpec struct {
 	// type so a fixture can state a class Mercator does not know, which is a world
 	// the corpus has to be able to build: the refusal is the behaviour under test.
 	ServiceClass string `json:"service_class,omitempty"`
+	// Group is the family this Run arrived with and how wide the family may run at
+	// once. It is stated on the request rather than beside the arrival because it
+	// is part of what the caller submits: the width is a bound on the work, so it
+	// travels into the workload the way the class does, and a family stated where
+	// only the harness could see it is a family production never hears about.
+	//
+	// It is the domain's own type, so a fixture states a half-declared group and
+	// the refusal is the behaviour under test, exactly as an unknown class is.
+	Group domain.RunGroup `json:"group,omitzero"`
 	// AllowUnknownPricing says this Run would rather run on a machine nobody has
 	// quoted a price for than not run at all. It is what admits such a machine as
 	// a candidate, and it is never a preference for one: an unpriced candidate is
@@ -2283,6 +2328,9 @@ func (w WorldSpec) validate() error {
 		}
 		pathIDs[key] = true
 	}
+	if err := w.validatePreemptions(); err != nil {
+		return err
+	}
 	runtimeModels := map[string]bool{}
 	for _, model := range w.RuntimeModels {
 		if !ids[model.Candidate] || model.Minimum.Duration() <= 0 || model.Maximum.Duration() < model.Minimum.Duration() {
@@ -2293,6 +2341,34 @@ func (w WorldSpec) validate() error {
 			return fmt.Errorf("duplicate runtime model %q", key)
 		}
 		runtimeModels[key] = true
+	}
+	return nil
+}
+
+// validatePreemptions refuses a world that takes back capacity nobody sold on
+// those terms. A provider reclaims what it sold as reclaimable, so a fixture
+// preempting an ordinary Rental would be describing a broken contract rather than
+// the interruption this vocabulary is for, and every rule about which work may be
+// interrupted would then be stated over a world that cannot happen.
+func (w WorldSpec) validatePreemptions() error {
+	reclaimable := map[string]bool{}
+	for _, rental := range w.Rentals {
+		reclaimable[rental.ID] = rental.Reclaimable
+	}
+	preempted := map[string]bool{}
+	for _, preemption := range w.Preemptions {
+		declared, exists := reclaimable[preemption.Rental]
+		switch {
+		case !exists:
+			return fmt.Errorf("preemption names unknown Rental %q", preemption.Rental)
+		case !declared:
+			return fmt.Errorf("preemption takes back Rental %q, which this world does not sell as reclaimable", preemption.Rental)
+		case preempted[preemption.Rental]:
+			return fmt.Errorf("Rental %q is preempted twice, and a machine goes back to its provider once", preemption.Rental)
+		case preemption.At.Duration() < 0:
+			return fmt.Errorf("Rental %q is preempted before this world began", preemption.Rental)
+		}
+		preempted[preemption.Rental] = true
 	}
 	return nil
 }
