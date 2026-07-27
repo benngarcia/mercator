@@ -204,9 +204,10 @@ func (replay queueReplay) apply(event eventlog.StoredEvent) error {
 // whoever is on it, and no priority takes that away.
 type admissionQueue struct {
 	waiting []waitingRun
-	// holding is every Run in this workspace that has capacity and belongs to a
-	// family, by Run ID. Work that is running is not in the queue above and is
-	// exactly what a family's width counts, which is why the two live side by side.
+	// holding is every Run in this workspace that has been given capacity and
+	// belongs to a family, by Run ID. It is the complement of the queue above: that
+	// is the work still owed an answer, and this is the work that has one, which is
+	// what a family's declared width is counted over.
 	holding map[string]domain.RunGroup
 }
 
