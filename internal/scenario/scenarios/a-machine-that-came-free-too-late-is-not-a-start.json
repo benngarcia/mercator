@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "One machine, busy, and an interactive Run that will not wait more than a minute to start. The machine is ten minutes into work of its own, so the only candidate is struck out as too slow to start and the Run waits: nothing here can end that wait sooner, and nothing projects when it ends either, so admission keeps the Run rather than refusing it on a guess. Then the machine comes free at ten minutes and a quarter, and the Run is asked again half a minute after that. Interactive work states that it must have started within ten minutes of being told to wait, and the machine came free after that, so the answer this Run was waiting for stopped being worth having before the capacity arrived. It is refused DEADLINE_UNREACHABLE. The deadline used to be asked only of a Run being told to wait again, so a Run whose capacity arrived one sweep after its own moment was placed by the very pass that should have refused it, and it spent the money and produced an answer nobody was waiting for any more.",
+  "summary": "One machine, busy, and an interactive Run that will not wait more than a minute to start. The machine is ten minutes into work of its own, so the only candidate is struck out as too slow to start and the Run waits: nothing here can end that wait sooner, and nothing projects when it ends either, so admission keeps the Run rather than refusing it on a guess. Then the machine comes free at ten minutes and a quarter, and the Run is asked again half a minute after that. Interactive work states that it must have started within ten minutes of being told to wait, and the machine came free after that, so the answer this Run was waiting for stopped being worth having before the capacity arrived, and it is refused instead of started. That door is the deadline's alone, because the queue delay bounds waiting and a Run whose capacity came free has stopped waiting. The deadline used to be asked only of a Run being told to wait again, so a Run whose capacity arrived one sweep after its own moment was placed by the very pass that should have refused it, and it spent the money and produced an answer nobody was waiting for any more. What the refusal is named for is the earlier of the two bounds this wait broke, which is the queue delay: the same class allows five minutes of it, so the wait passed that bound at five minutes and reached the deadline at ten, and QUEUE_DELAY_EXCEEDED is the promise Mercator broke first. Naming the deadline made the word in the record depend on how often the sweep ran, since a sweep at the minute ends this wait at five minutes and one, and only a tape that jumps from the first pass to the tenth minute reaches the deadline at all.",
   "classification": "green",
   "world": {
     "images": {
@@ -58,7 +58,7 @@
       "expect": {
         "outcome": "refuse",
         "deferral": {
-          "reason": "DEADLINE_UNREACHABLE",
+          "reason": "QUEUE_DELAY_EXCEEDED",
           "queued_seconds": 630
         }
       }

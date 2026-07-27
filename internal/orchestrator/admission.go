@@ -35,6 +35,14 @@ import (
 // have refused it, so it spent the money to produce an answer nobody was waiting
 // for, and how long a Run could overshoot by was however long the sweep interval
 // is.
+//
+// What the deadline decides here and what the refusal is named are two questions,
+// and Admission.BoundAlreadyBroken answers the second for both doors. The deadline
+// is the only bound that may stop a Run on its way to a machine, because the queue
+// delay bounds waiting and this Run has stopped waiting. A wait that reached the
+// deadline is a wait that broke the class's queue delay first, though, so naming
+// the deadline here said the later of two broken promises and left the earlier one
+// out of the only record the caller gets.
 func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
 	queue, err := o.admissionQueue(ctx, workspaceID)
 	if err != nil {
@@ -46,7 +54,7 @@ func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string,
 		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, admissionAnswer{deferral: deferral})
 	}
 	if waiting.policy.DeadlinePassed(waiting.queued) {
-		refusal := waiting.deferral(domain.RefusedDeadlineUnreachable, nil)
+		refusal := waiting.deferral(waiting.policy.BoundAlreadyBroken(waiting.queued), nil)
 		return false, o.recordRefusal(ctx, workspaceID, runID, version, state, admissionAnswer{deferral: refusal})
 	}
 	return o.stepPlace(ctx, workspaceID, runID, version, state, waiting)
@@ -254,10 +262,10 @@ func (run queuePosition) deferral(reason string, behind []domain.QueuedAhead) do
 // there as well, because it is a different question: whether the answer is still
 // worth producing at all.
 //
-// The queue delay is asked first, and every class states one shorter than its
-// deadline, so a wait that reaches a bound reaches this one. The order matters
-// only for a class somebody later gives a deadline inside its queue delay, and the
-// earlier bound is the honest thing to name in that record.
+// Which of the two a refused wait is named for is Admission.BoundAlreadyBroken's
+// answer, and it is the same answer stepAdmit's own door gets. The projected miss
+// below is the one thing only this door can see: a wait still inside both bounds,
+// which the record says cannot end in time.
 func (o *Orchestrator) deferOrRefuse(
 	ctx context.Context,
 	workspaceID, runID string,
@@ -266,8 +274,8 @@ func (o *Orchestrator) deferOrRefuse(
 	run queuePosition,
 	answer admissionAnswer,
 ) error {
-	if run.policy.Starved(run.queued) {
-		answer.deferral.Reason = domain.RefusedQueueDelayExceeded
+	if reason := run.policy.BoundAlreadyBroken(run.queued); reason != "" {
+		answer.deferral.Reason = reason
 		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)
 	}
 	if run.policy.DeadlineUnreachable(run.queued, answer.deferral.ProjectedWaitSeconds, answer.projected) {

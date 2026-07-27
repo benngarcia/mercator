@@ -248,6 +248,33 @@ func (policy Admission) DeadlineUnreachable(queuedSeconds, waitSeconds float64, 
 	}
 }
 
+// BoundAlreadyBroken names the bound this wait has already gone past, in the
+// words the record uses, and is empty where neither of them has.
+//
+// The queue delay is named first, and one place naming both is the whole point of
+// it. Every class states a queue delay shorter than its deadline, so a wait that
+// reached the deadline broke the queue delay first, and the promise Mercator broke
+// first is what belongs in a record somebody reads to find out what went wrong.
+//
+// Naming the later bound instead made the answer depend on how often the sweep
+// ran. A Run asked again a minute after its queue delay is refused for the bound
+// it just passed; the identical Run in an execution whose next sweep lands four
+// hours later was refused for a deadline it would never have reached under any
+// ordinary cadence, and the two are the same failure with different words on it.
+// It also left the queue delay unsaid on the one door that can refuse a Run on its
+// way to a machine, so a caller read that the answer had stopped being worth
+// having about a promise broken hours before that.
+func (policy Admission) BoundAlreadyBroken(queuedSeconds float64) string {
+	switch {
+	case policy.Starved(queuedSeconds):
+		return RefusedQueueDelayExceeded
+	case policy.DeadlinePassed(queuedSeconds):
+		return RefusedDeadlineUnreachable
+	default:
+		return ""
+	}
+}
+
 // SelectionReason names the class whose exchange rates ranked the candidates, so
 // the decision record says what it was scored for. A Run that asked for an
 // interactive start and got the costliest machine is explained by its own class,
