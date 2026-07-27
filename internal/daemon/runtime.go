@@ -442,7 +442,7 @@ func (r *Runtime) ReconcileWorkspace(ctx context.Context, workspaceID string) (R
 	_, prewarmErr := r.orch.Prewarm(ctx, workspaceID)
 	swept, sweepErr := r.janitor.Sweep(ctx, workspaceID)
 	owned, inventoryErr := r.ListOwned(ctx, workspaceID)
-	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Released, Owned: owned},
+	return ReconcileResult{Advanced: advanced, Reclaimed: swept.Converged(), Owned: owned},
 		errors.Join(advanceErr, prewarmErr, sweepErr, inventoryErr)
 }
 
@@ -507,8 +507,11 @@ func reconcileWorkspaces(ctx context.Context, orch *orchestrator.Orchestrator, j
 			log.Printf("janitor sweep %s: %v", workspaceID, err)
 			continue
 		}
-		if result.Released > 0 {
-			log.Printf("janitor sweep %s: reclaimed %d of %d owned objects", workspaceID, result.Released, result.Found)
+		if result.Converged() > 0 {
+			log.Printf(
+				"janitor sweep %s: of %d owned objects the orphan policy adopted %d and terminated %d",
+				workspaceID, result.Found, result.Adopted, result.Terminated,
+			)
 		}
 	}
 }

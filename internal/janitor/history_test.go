@@ -76,7 +76,7 @@ func TestJanitorSeesCleanupRequestedBeyondOneStreamPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if result.Released != 1 {
-		t.Fatalf("sweep result = %+v, want one released object", result)
+	if result.Adopted != 1 {
+		t.Fatalf("sweep result = %+v, want the object adopted through the disposition on page two", result)
 	}
 }

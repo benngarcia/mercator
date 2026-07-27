@@ -12,7 +12,12 @@ import (
 	"github.com/benngarcia/mercator/internal/eventlog"
 )
 
-func TestJanitorReleasesOwnedResources(t *testing.T) {
+// TestJanitorTerminatesCapacityMercatorCannotAccountFor is the terminate half of
+// the policy. The provider is holding an execution whose Run this control plane
+// has no record of at all, so nothing can ever be bound to it and nothing will
+// ever collect it. Releasing only its slot, which is what a sweep with no stated
+// policy did, leaves a machine billing that nothing in the fleet can use.
+func TestJanitorTerminatesCapacityMercatorCannotAccountFor(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ad := fake.New()
@@ -38,8 +43,21 @@ func TestJanitorReleasesOwnedResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if result.Found != 1 || result.Released != 1 {
-		t.Fatalf("unexpected sweep result: %+v", result)
+	if result.Found != 1 || result.Terminated != 1 || result.Adopted != 0 {
+		t.Fatalf("sweep result = %+v, want the unaccounted-for execution terminated", result)
+	}
+	if ad.TerminateCount() != 1 || ad.ReleaseCount() != 0 {
+		t.Fatalf(
+			"capacity nothing can be bound to was reclaimed with release=%d terminate=%d, want it destroyed",
+			ad.ReleaseCount(), ad.TerminateCount(),
+		)
+	}
+	convergence := onlyConvergence(t, log, "ws_1")
+	if convergence.Policy != OrphanPolicy || convergence.Outcome != OrphanTerminated {
+		t.Fatalf("the record says %+v, want the stated policy naming a termination", convergence)
+	}
+	if convergence.Reason != reasonNoRecordedRun {
+		t.Fatalf("the record gives reason %q, want the Run nobody recorded", convergence.Reason)
 	}
 	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
 	if err != nil {
@@ -76,8 +94,8 @@ func TestJanitorSkipsActiveRunResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if result.Found != 1 || result.Released != 0 {
-		t.Fatalf("active resource should be found but not released: %+v", result)
+	if result.Found != 1 || result.Converged() != 0 {
+		t.Fatalf("live work should be found and left alone: %+v", result)
 	}
 	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
 	if err != nil {
@@ -86,6 +104,127 @@ func TestJanitorSkipsActiveRunResources(t *testing.T) {
 	if len(owned) != 1 {
 		t.Fatalf("expected active resource to remain, got %+v", owned)
 	}
+}
+
+// TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives is the adopt half. Mercator
+// holds the launch this execution came from, and that record says the capacity is
+// handed back by releasing the slot: the machine outlives the workload. So the
+// slot goes back and the machine stays in the fleet, and the record says which
+// policy kept it.
+func TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := fake.New()
+	_, err := ad.Launch(ctx, adapter.LaunchRequest{
+		OperationKey:       "launch_adopt",
+		RequestHash:        "sha256:adopt",
+		WorkspaceID:        "ws_1",
+		RunID:              "run_adopt",
+		AttemptID:          "att_adopt",
+		OwnershipToken:     "own_adopt",
+		LaunchKey:          "launch_adopt",
+		CleanupLocator:     "cleanup_adopt",
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+		Disposition:        domain.DispositionRelease,
+	})
+	if err != nil {
+		t.Fatalf("seed adoptable execution: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	appendLaunchIntent(t, log, "ws_1", "run_adopt", domain.DispositionRelease)
+
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if result.Adopted != 1 || result.Terminated != 0 {
+		t.Fatalf("sweep result = %+v, want the machine adopted rather than destroyed", result)
+	}
+	if ad.ReleaseCount() != 1 || ad.TerminateCount() != 0 {
+		t.Fatalf(
+			"adopted capacity was reclaimed with release=%d terminate=%d, want its slot released and the machine kept",
+			ad.ReleaseCount(), ad.TerminateCount(),
+		)
+	}
+	convergence := onlyConvergence(t, log, "ws_1")
+	if convergence.Policy != OrphanPolicy || convergence.Outcome != OrphanAdopted {
+		t.Fatalf("the record says %+v, want the stated policy naming an adoption", convergence)
+	}
+	if convergence.Reason != reasonRecordedRelease || convergence.LaunchKey != "launch_adopt" {
+		t.Fatalf("the record gives %q for %q, want the recorded disposition for this capacity", convergence.Reason, convergence.LaunchKey)
+	}
+}
+
+// TestJanitorTerminatesCapacityLeftBehindByAClosedRun is the case a sweep keyed
+// on the cleanup request alone could only skip. The Run is over and Mercator
+// never asked for its capacity back, which is what a control plane that died
+// between closing a Run and reclaiming it leaves behind, and nothing else in the
+// tree would ever have come for it.
+func TestJanitorTerminatesCapacityLeftBehindByAClosedRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := fake.New()
+	_, err := ad.Launch(ctx, adapter.LaunchRequest{
+		OperationKey:       "launch_closed",
+		RequestHash:        "sha256:closed",
+		WorkspaceID:        "ws_1",
+		RunID:              "run_closed",
+		AttemptID:          "att_closed",
+		OwnershipToken:     "own_closed",
+		LaunchKey:          "launch_closed",
+		CleanupLocator:     "cleanup_closed",
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+	})
+	if err != nil {
+		t.Fatalf("seed stranded execution: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	appendRunEvent(t, log, "ws_1", "run_closed", "compute.run.closed.v1")
+
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if result.Terminated != 1 {
+		t.Fatalf("sweep result = %+v, want the capacity of a finished Run destroyed", result)
+	}
+	convergence := onlyConvergence(t, log, "ws_1")
+	if convergence.Reason != reasonClosedWithoutAsking {
+		t.Fatalf("the record gives reason %q, want the Run that closed with nothing asked for", convergence.Reason)
+	}
+}
+
+// onlyConvergence is the one orphan decision this workspace's record holds. It
+// reads the public log rather than the sweep's return value, because the record is
+// what an operator and every rule about the policy actually see.
+func onlyConvergence(t *testing.T, log eventlog.EventLog, workspaceID string) OrphanConvergence {
+	t.Helper()
+	head, err := log.LatestPosition(context.Background(), eventlog.EventFilter{WorkspaceID: workspaceID})
+	if err != nil {
+		t.Fatalf("read log head: %v", err)
+	}
+	var found []OrphanConvergence
+	for event, err := range eventlog.ScanAll(context.Background(), log, head, eventlog.EventFilter{WorkspaceID: workspaceID}) {
+		if err != nil {
+			t.Fatalf("scan log: %v", err)
+		}
+		if event.Type != EventOrphanConverged {
+			continue
+		}
+		var convergence OrphanConvergence
+		if err := json.Unmarshal(event.Data, &convergence); err != nil {
+			t.Fatalf("decode orphan convergence: %v", err)
+		}
+		found = append(found, convergence)
+	}
+	if len(found) != 1 {
+		t.Fatalf("the record holds %d orphan decisions, want exactly one: %+v", len(found), found)
+	}
+	return found[0]
 }
 
 func TestJanitorRequiresEventLog(t *testing.T) {
@@ -156,7 +295,7 @@ func TestJanitorReclaimsViaRecordedTerminateDisposition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if result.Released != 1 {
+	if result.Terminated != 1 {
 		t.Fatalf("expected one reclaim, got %+v", result)
 	}
 	if ad.TerminateCount() != 1 {
