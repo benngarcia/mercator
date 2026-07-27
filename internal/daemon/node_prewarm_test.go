@@ -128,16 +128,20 @@ func (f *fleet) awaitQueuedOn(t *testing.T, runID, offerSnapshotID string) {
 
 // placedOn is the machine this Run's Booking names, and the empty string while
 // Mercator has recorded no Booking for it.
+//
+// It reads the last entry of the decision chain rather than a single decision,
+// because a Booking Decision is appended and never rewritten: a Run weighed twice
+// has two records, and the machine it is on now is what the newest one says.
 func (f *fleet) placedOn(t *testing.T, runID string) string {
 	t.Helper()
 	var response struct {
-		Decision bookingDecision `json:"decision"`
+		Decisions []bookingDecision `json:"decisions"`
 	}
 	path := "/v1/runs/" + runID + "/decision?workspace_id=" + daemon.DefaultWorkspaceID
-	if status := f.get(t, path, &response); status != http.StatusOK {
+	if status := f.get(t, path, &response); status != http.StatusOK || len(response.Decisions) == 0 {
 		return ""
 	}
-	return response.Decision.SelectedOfferSnapshotID
+	return response.Decisions[len(response.Decisions)-1].SelectedOfferSnapshotID
 }
 
 // launchRecordedAt is the moment Mercator recorded this Run's launch, which is

@@ -5006,7 +5006,7 @@ refuses any Booking whose Run has no record, which is true of every seeded Booki
 by construction.
 
 The corpus is 59 regression Blueprints: 56 green and 3 target, beside two demo
-documents, one minimized case, and thirty seven conformance Blueprints, all of
+documents, one minimized case, and forty conformance Blueprints, all of
 them green. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
@@ -5022,7 +5022,7 @@ capacity, which is phase 5. `queued-booking-deadline-expiry` needs
 Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
 publish host facts a machine then contradicts.
 
-The Lab registry holds forty four invariants, thirty seven safety and seven
+The Lab registry holds forty five invariants, thirty eight safety and seven
 liveness. Every one carries a deliberate failing case, which
 `TestEveryDefaultInvariantHasADeliberatelyFailingCase` requires of the registry
 itself: an invariant nothing can make fail is not evidence, so one cannot be
@@ -5101,33 +5101,73 @@ the launch.
 
 ### Phase 4 close-out
 
-Run on 2026-07-27 at `e9db9c9` in the `beng/prediction-and-service-classes`
-worktree, on an amd64 Linux workstation with Go 1.25.11 and Docker Engine 29.6.2,
-which is not the arm64 macOS the phase 3 slices were built on. Every command
-below was executed and its real outcome recorded. Nothing is quoted from an
-earlier run.
+The branch was cut from `beng/artifact-locality` before that branch's own phase 3
+close-out landed, so the pull request opened with a merge conflict and GitHub
+computed no merge ref, which is why it had no CI at all rather than failing CI.
+Merging the base in conflicted in eighteen files. Most were both sides appending
+to one list. Six needed a decision about which model is current, and the rule
+applied was that the newer answer wins and the superseded code is deleted rather
+than left beside it: phase 4's class-derived weights and stage waterfall replace
+the dead-weight score and `ArtifactSeconds`, and phase 3's fleet-wide preparation
+pass with a durable clock replaces the per-workspace pass with an in-process one,
+with phase 4's refusal handling reapplied on top of that shape.
+
+The merge surfaced two real defects that neither branch could have seen alone,
+and both are worth recording because both were silent until the other side's code
+existed.
+
+The first is a rate bound that stopped pacing anything. Phase 3's `remember`
+answers whether stating a desire began any preparation, and the durable clock is
+recorded only when it did. Phase 4 made the memory record what the holder kept
+rather than what was sent, so that content a machine refused can be asked for
+again. Composed naively, a wholly refused desire began nothing, moved no clock,
+and was therefore re-askable in the same instant, forever:
+`TestOneMachineRefusingIsNotEveryMachineStopping` caught it, reporting the cheap
+machine answering a refusal and an acceptance at one timestamp. The two questions
+are now asked of different sets. What Mercator remembers asking for is what the
+holder kept, because a refusal left nothing anywhere. What the rate bound measures
+is the attempt, refused or not, because the bound is on how often Mercator may
+begin asking a fleet to move bytes.
+
+The second is a test reading an API that phase 4 replaced. Phase 3's prewarm case
+read `decision` from `GET /v1/runs/{id}/decision`, and phase 4 made that route
+answer `decisions`, the chain, because a Booking Decision is appended and never
+rewritten. The helper decoded nothing, returned the empty string, and reported
+that the Run had never been placed. It had been placed the whole time, on the
+machine the case named, and the case would have gone on reporting a placement
+failure for an API change. It reads the last entry of the chain now.
+
+Run on 2026-07-27 on the merged tree, in the
+`beng/prediction-and-service-classes` worktree, on an amd64 Linux workstation
+with Go 1.25.11 and Docker Engine 29.6.2, which is not the arm64 macOS the phase
+3 slices were built on. The whole verification was run again after the merge
+rather than carried over from before it, because a merge that resolves eighteen
+files is exactly the change most likely to invalidate an earlier green. Every
+command below was executed and its real outcome recorded. Nothing is quoted from
+an earlier run.
 
 `go build ./...` and `go vet ./...` both exit zero with no output.
 
-`go test ./...` exits zero across all 41 packages, 8 of which have no test files.
-The suite terminates. That matters, because an earlier slice on this branch
+`go test ./...` exits zero across every package, 36 of which have tests. The
+suite terminates. That matters, because an earlier slice on this branch
 recorded that `go test ./...` did not terminate: `internal/daemon` spun forever on
 a Run with no feasible offer, because `stepAdmit` reported progress while
 `recordDeferral` suppressed the repeated deferral and returned nil, so
 `AdvanceRun` looped on unchanged state re-scanning the event log. The queue slices
 that followed replaced that path, and `internal/daemon` now completes in 9.0s.
-The slowest packages are `internal/lab` at 16.2s, `internal/daemon` at 9.0s, and
-`internal/conformance` at 1.9s.
+The slowest packages are `internal/lab` at 18.6s, `internal/daemon` at 10.1s, and
+`internal/conformance` at 2.1s.
 
-`go test -race -count=1` over all 27 packages this phase touched, which is every
-package holding a file changed between `beng/artifact-locality` and this branch,
-exits zero. No data race is reported anywhere. `internal/lab` takes 237.9s under
-the race detector, `internal/cli` 31.7s, `internal/ociresolver` 16.4s,
-`internal/daemon` 15.9s, and `internal/orchestrator` 15.5s. The package list is
-derived from the diff rather than typed by hand, so a package this phase touched
-cannot be omitted by forgetting it.
+`go test -race -count=1` over every package this phase touched, which is every
+directory holding a Go file changed between `beng/artifact-locality` and this
+branch, exits zero across the 24 of them that have tests. No data race is
+reported anywhere. `internal/lab` takes 275.3s under the race detector,
+`internal/cli` 31.8s, `internal/nodeagent` 26.7s, `internal/daemon` 17.7s, and
+`internal/orchestrator` 15.3s. The package list is derived from the diff rather
+than typed by hand, so a package this phase touched cannot be omitted by
+forgetting it.
 
-The corpus is 59 regression Blueprints, 56 green and 3 target, and 37 conformance
+The corpus is 59 regression Blueprints, 56 green and 3 target, and 40 conformance
 Blueprints, all green. Those figures are asserted by
 `internal/scenario/blueprint_test.go` rather than counted by eye, and it passes.
 The three targets each name the capability no simulated world performs yet:

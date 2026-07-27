@@ -147,17 +147,20 @@ func (memory *prewarmMemory) withoutAdditions(workspaceID string, wanted []adapt
 }
 
 // remember records what the far side actually took on, which is the desire minus
-// whatever it turned away, and answers whether stating it began any preparation.
-// A desire naming only content this tenant was already asked for began no
-// transfer, and neither did one that only drops content, so neither is a moment
-// the rate bound measures from.
+// whatever it turned away, and answers whether stating it began preparing
+// anything. A desire naming only content this tenant was already asked for began
+// no transfer, and neither did one that only drops content, so neither is a
+// moment the rate bound measures from.
 //
-// Content a holder refused is not on its way anywhere and nothing stopped it
-// being asked for again, so remembering it as asked for is what made a refusal
-// permanent: the desire is recomputed identically on the next pass and an
-// unchanged desire is not restated. The key is derived from what was kept rather
-// than from what was sent, which is what makes the next identical desire a
-// change again.
+// The two questions are asked of different sets, which is the whole subtlety
+// here. What Mercator remembers asking for is what the holder kept, because
+// content it refused is not on its way anywhere and nothing stopped it being
+// asked for again: remembering a refusal as asked for is what made it permanent,
+// since the desire is recomputed identically on the next pass and an unchanged
+// desire is not restated. What the rate bound measures is the attempt, refused or
+// not, because the bound is on how often Mercator may begin asking a fleet to
+// move bytes. Pacing it on what was accepted instead lets a machine that refuses
+// everything be asked again in the same instant, forever.
 //
 // A refusal is matched by the identity the desire stated the item under, which
 // names the machine as well as the content. Matching on content alone let one
@@ -172,16 +175,17 @@ func (memory *prewarmMemory) remember(workspaceID string, wanted []adapter.Prepa
 		memory.sent = map[string]map[string]bool{}
 		memory.key = map[string]string{}
 	}
+	previous := memory.sent[workspaceID]
+	began := false
+	for _, item := range wanted {
+		began = began || !previous[prewarmItemKey(item)]
+	}
 	kept := slices.DeleteFunc(slices.Clone(wanted), func(item adapter.PrepareItem) bool {
 		return slices.Contains(receipt.Refused, item.Identity())
 	})
-	previous := memory.sent[workspaceID]
 	asked := make(map[string]bool, len(kept))
-	began := false
 	for _, item := range kept {
-		itemKey := prewarmItemKey(item)
-		asked[itemKey] = true
-		began = began || !previous[itemKey]
+		asked[prewarmItemKey(item)] = true
 	}
 	memory.sent[workspaceID] = asked
 	memory.key[workspaceID] = prewarmOperationKey(workspaceID, kept)
