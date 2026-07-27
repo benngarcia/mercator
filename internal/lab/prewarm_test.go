@@ -11,11 +11,89 @@ import (
 )
 
 const (
-	prewarmBlueprint   = "prewarming-never-starves-real-work"
-	rateBoundBlueprint = "prewarming-holds-its-own-rate-bound"
-	analystImage       = "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
-	bulkyImage         = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
+	prewarmBlueprint        = "prewarming-never-starves-real-work"
+	rateBoundBlueprint      = "prewarming-holds-its-own-rate-bound"
+	analystImage            = "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
+	bulkyImage              = "bulky@sha256:1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d"
+	refusedPrepareBlueprint = "a-refused-prepare-can-be-asked-again"
+	refusedCorpus           = "artifact:corpus:v9"
 )
+
+// TestContentAMachineRefusedIsAskedForAgain is the whole of what a refusal means
+// on either side of the seam. The machine turned the fetch away, which left
+// nothing on its disk and nothing in flight, so the identity is still askable and
+// Mercator asks the same machine for the same corpus at the next moment its own
+// rate bound allows. The bytes land on the second ask, and the queued Run starts
+// on a host holding a checked copy of the content it reads.
+//
+// It fails two ways. A world that remembered a refused fetch as work it had taken
+// on answers the second ask Duplicate and moves nothing. A control plane that
+// remembered refused content as content it had asked for computes an unchanged
+// desire and never asks a second time.
+func TestContentAMachineRefusedIsAskedForAgain(t *testing.T) {
+	execution := driveRefusedPrepareExecution(t)
+
+	asks := preparationAsks(t, execution, "prepare-artifact/builder/"+refusedCorpus)
+	if len(asks) != 2 {
+		t.Fatalf("the ledger records %d asks for the refused corpus, want the refusal and the ask that followed it: %+v", len(asks), asks)
+	}
+	if asks[0].Command != EffectCommandRejected || asks[0].FaultID != "corpus-fetch-refused" {
+		t.Fatalf("the first ask was %q under fault %q, want the machine turning the fetch away", asks[0].Command, asks[0].FaultID)
+	}
+	if asks[1].Command != EffectCommandAccepted {
+		t.Fatalf("the second ask was %q, want a machine that can still be asked for content it refused", asks[1].Command)
+	}
+	replica, held := heldReplica(execution, "builder", refusedCorpus)
+	if !held || !replica.State.Usable() {
+		t.Fatalf("the machine holds %+v of the refused corpus, want the copy the second ask fetched", replica)
+	}
+}
+
+func driveRefusedPrepareExecution(t *testing.T) *Execution {
+	t.Helper()
+	execution := openConformanceExecution(t, refusedPrepareBlueprint)
+	t.Cleanup(func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	})
+	for range 60 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the execution: %v", err)
+		}
+	}
+	return execution
+}
+
+// preparationAsk is one crossing of the preparation seam as the ledger recorded
+// it, whatever the machine answered. The other readers here keep only what was
+// accepted, and a rule about a refusal has to be able to see the refusal.
+type preparationAsk struct {
+	At      time.Time
+	Command EffectCommand
+	FaultID string
+}
+
+func preparationAsks(t *testing.T, execution *Execution, operationID string) []preparationAsk {
+	t.Helper()
+	var asks []preparationAsk
+	for _, effect := range execution.runtime.world.effectRecords() {
+		if effect.OperationID != operationID {
+			continue
+		}
+		asks = append(asks, preparationAsk{At: effect.At, Command: effect.Command, FaultID: effect.FaultID})
+	}
+	return asks
+}
+
+func heldReplica(execution *Execution, offerID, artifactID string) (domain.ArtifactReplica, bool) {
+	for _, replica := range execution.runtime.world.truthSnapshot().ArtifactReplicas {
+		if replica.OfferID == offerID && replica.ArtifactID == artifactID {
+			return replica.ArtifactReplica, true
+		}
+	}
+	return domain.ArtifactReplica{}, false
+}
 
 // drivePrewarmExecution runs the Blueprint at the cadence a control plane
 // reconciles at, one virtual minute at a time. Preparation is a controller

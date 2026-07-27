@@ -84,10 +84,11 @@ type PrepareRequest struct {
 }
 
 // PrepareReceipt is what the far side did with a desired set: what it took on,
-// what it stopped, and what it cannot do at all. Unsupported is stated rather
-// than silently dropped, because a machine that cannot prepare is a machine
-// whose next Run pays the whole fetch, and an operator reading a decision
-// should not have to infer that from a missing effect.
+// what it stopped, what it turned away, and what it cannot do at all.
+// Unsupported is stated rather than silently dropped, because a machine that
+// cannot prepare is a machine whose next Run pays the whole fetch, and an
+// operator reading a decision should not have to infer that from a missing
+// effect.
 type PrepareReceipt struct {
 	OperationKey string
 	AcceptedAt   time.Time
@@ -95,4 +96,10 @@ type PrepareReceipt struct {
 	Started      []string
 	Abandoned    []string
 	Unsupported  []string
+	// Refused is content the holder turned away and could take on later. It is a
+	// third answer rather than a shade of either of the others: a machine that
+	// cannot be prepared at all is Unsupported forever, and content a machine
+	// took on is on its way, while this is content nothing is fetching and
+	// nothing is stopping Mercator from asking for again.
+	Refused []string
 }

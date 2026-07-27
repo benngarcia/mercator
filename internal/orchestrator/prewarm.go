@@ -91,7 +91,12 @@ func (memory *prewarmMemory) tooSoon(workspaceID string, now time.Time, interval
 	return sent && now.Sub(last) < interval
 }
 
-func (memory *prewarmMemory) record(workspaceID, key string, wanted []adapter.PrepareItem, now time.Time) {
+// record remembers what the far side actually took on, which is the desire minus
+// whatever it turned away. Content a holder refused is not on its way anywhere and
+// nothing stopped it being asked for again, so remembering it as asked for is what
+// made a refusal permanent: the desire is recomputed identically on the next sweep
+// and an unchanged desire is not resent.
+func (memory *prewarmMemory) record(workspaceID string, wanted []adapter.PrepareItem, receipt adapter.PrepareReceipt, now time.Time) {
 	memory.mu.Lock()
 	defer memory.mu.Unlock()
 	if memory.sent == nil {
@@ -99,12 +104,15 @@ func (memory *prewarmMemory) record(workspaceID, key string, wanted []adapter.Pr
 		memory.key = map[string]string{}
 		memory.at = map[string]time.Time{}
 	}
-	asked := make(map[string]bool, len(wanted))
-	for _, item := range wanted {
+	kept := slices.DeleteFunc(slices.Clone(wanted), func(item adapter.PrepareItem) bool {
+		return slices.Contains(receipt.Refused, item.Content())
+	})
+	asked := make(map[string]bool, len(kept))
+	for _, item := range kept {
 		asked[prewarmItemKey(item)] = true
 	}
 	memory.sent[workspaceID] = asked
-	memory.key[workspaceID] = key
+	memory.key[workspaceID] = prewarmOperationKey(workspaceID, kept)
 	memory.at[workspaceID] = now
 }
 
@@ -150,7 +158,7 @@ func (o *Orchestrator) Prewarm(ctx context.Context, workspaceID string) (Prewarm
 	if err != nil {
 		return PrewarmResult{}, fmt.Errorf("orchestrator: prepare capacity for queued work: %w", err)
 	}
-	o.prewarmed.record(workspaceID, key, wanted, o.now())
+	o.prewarmed.record(workspaceID, wanted, receipt, o.now())
 	return PrewarmResult{Wanted: len(wanted), Sent: true, Receipt: receipt}, nil
 }
 

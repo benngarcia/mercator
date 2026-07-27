@@ -1,0 +1,89 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One machine already holding the image, one Run occupying it for forty minutes, and one Run queued behind it that reads a twenty gigabyte corpus. Mercator knows where the queued Run is going, so it asks the machine to get that corpus ready, and the machine cannot: the fetch is turned away and nothing lands. A refusal leaves nothing on the disk and nothing in flight, so it is the one answer that leaves the identity askable, and the minute the rate bound allows Mercator asks the same machine for the same corpus again. That second ask reaches the machine, the transfer runs, and the queued Run starts on a host holding a checked copy. The failure this states is a control plane that treats an identity as spent whatever became of it: a machine that refused the fetch is answered Duplicate from then on, no byte of the corpus ever arrives, and the Run that was waiting for it pays the whole read.",
+  "seed": "mercator-lab-refused-prepare-v1",
+  "world": {
+    "prewarm": {
+      "max_concurrent": 1,
+      "min_interval": "1m"
+    },
+    "images": {
+      "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c": {
+        "layers": [
+          {
+            "digest": "sha256:aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66",
+            "size": "20GB"
+          }
+        ]
+      }
+    },
+    "artifacts": [
+      {
+        "id": "artifact:corpus:v9",
+        "content_digest": "sha256:cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66aa77bb88",
+        "size": "20GB"
+      }
+    ],
+    "rentals": [
+      {
+        "id": "builder",
+        "rate_per_hour_usd": 3.0,
+        "cached_images": [
+          "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c"
+        ],
+        "resources": {
+          "cpu_millis": 16000,
+          "memory": "128GB",
+          "disk": "2TB"
+        }
+      }
+    ],
+    "runtime_models": [
+      {
+        "run": "occupant",
+        "candidate": "builder",
+        "minimum": "40m",
+        "maximum": "40m"
+      },
+      {
+        "run": "patient",
+        "candidate": "builder",
+        "minimum": "10m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "occupant",
+        "at": "0s",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "expected_runtime": "40m",
+          "max_runtime": "2h"
+        }
+      },
+      {
+        "name": "patient",
+        "at": "1m",
+        "request": {
+          "image": "analyst@sha256:7a1c4e9b2d6f8a0c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c",
+          "consumes_artifacts": ["artifact:corpus:v9"],
+          "expected_runtime": "10m",
+          "max_runtime": "1h"
+        }
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "corpus-fetch-refused",
+      "trigger": {"operation": "node.prepare_artifact"},
+      "action": "reject_command"
+    }
+  ]
+}
