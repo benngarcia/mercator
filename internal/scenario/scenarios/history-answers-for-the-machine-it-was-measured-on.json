@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "Six listings of five machines, two of which this fleet has measured. One marketplace machine is published twice under two ask IDs, and the Run that measured it ran on the first of them: an ask ID is a fresh integer for every search, so a history filed under it would answer for one listing of that machine and be blind to the other. A second machine in the same place was measured too, and it brings its application up five times slower. The third Run asks all six what they will spend on the stage this fleet has actuals for, and every answer names the level it came from: both listings of the measured machine answer at the exact candidate with its own thirty seconds, the second measured machine with its own hundred and fifty, an unmeasured machine in the same region falls to the two samples of that provider and place, an unmeasured machine of that provider elsewhere falls to the provider, and a machine of a provider nobody has ever measured falls to the only prior there is, which is what the Run itself declared. Key the history on the listing and the second ask of the measured machine loses its samples; key it on nothing at all and every machine here answers the same thirty seconds.",
+  "summary": "Six listings of five machines, two of which this fleet has measured. One marketplace machine is published twice under two ask IDs, and the Run that measured it ran on the first of them: an ask ID is a fresh integer for every search, so a history filed under it would answer for one listing of that machine and be blind to the other. A second machine in the same place was measured too, and it brings its application up five times slower. The third Run asks all six what they will spend on the stage this fleet has actuals for, and every answer names the level it came from: both listings of the measured machine answer at the exact candidate with its own thirty seconds, the second measured machine with its own hundred and fifty, an unmeasured machine in the same region falls to the two samples of that provider and place, an unmeasured machine of that provider elsewhere falls to the provider, and a machine of a provider nobody has ever measured falls to the only prior there is, which is what the Run itself declared. Key the history on the listing and the second ask of the measured machine loses its samples; key it on nothing at all and every machine here answers the same thirty seconds. Both measured machines are asked what they will spend pulling as well, which is the stage a history may not answer: a transfer is this launch's own missing bytes over the path they cross, so the answer is the prior and the rate it was divided by, and a measured launch reaching that stage charges a machine for four hundred megabytes it may already hold.",
   "classification": "green",
   "world": {
     "images": {
@@ -135,7 +135,8 @@
         "candidates": {
           "ask-4417": {
             "stages": {
-              "application_ready": {"seconds": 30, "source": "history", "level": "exact_candidate", "samples": 1}
+              "application_ready": {"seconds": 30, "source": "history", "level": "exact_candidate", "samples": 1},
+              "image_fetch": {"level": "prior", "samples": 0, "rate": {"mbps": 500.0, "assumption": "assumed_registry_rate"}}
             }
           },
           "ask-90218": {
@@ -145,7 +146,8 @@
           },
           "ask-2211": {
             "stages": {
-              "application_ready": {"seconds": 150, "source": "history", "level": "exact_candidate", "samples": 1}
+              "application_ready": {"seconds": 150, "source": "history", "level": "exact_candidate", "samples": 1},
+              "image_fetch": {"level": "prior", "samples": 0, "rate": {"mbps": 500.0, "assumption": "assumed_registry_rate"}}
             }
           },
           "ask-3333": {

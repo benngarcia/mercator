@@ -1308,6 +1308,50 @@ func TestARatePricedFromTheStatedAssumptionIsNotAViolation(t *testing.T) {
 	}
 }
 
+// TestATransferChargedWithNoRateAtAllIsAViolation is the clause that keeps the
+// three above from being silent by omission. Each of them is stated over the rates
+// a decision recorded, so a decision recording none gives them nothing to
+// adjudicate: leaving the throughput off the record is a cheaper way to charge
+// seconds nobody stands behind than inventing a measurement, and it reads
+// downstream as a rate somebody measured.
+func TestATransferChargedWithNoRateAtAllIsAViolation(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	for _, transfer := range []domain.LaunchStage{
+		domain.StageImageFetch, domain.StageUnpack, domain.StageArtifactFetch,
+	} {
+		t.Run(string(transfer), func(t *testing.T) {
+			observation := InvariantObservation{
+				StartedAt: now,
+				Now:       now,
+				World:     WorldTruthSnapshot{At: now},
+				MercatorEvents: []eventlog.CloudEvent{bookingDecidedEvent("evt_no_rate", domain.BookingDecision{
+					ID:          "dec_no_rate",
+					RunID:       "run-reader",
+					EvaluatedAt: now,
+					Candidates: []domain.CandidateDecision{{
+						OfferSnapshotID: "rental-warm",
+						Feasible:        true,
+						Estimates: domain.CandidateEstimates{Stages: secondsOn(transfer, domain.Estimate{
+							Expected: 640, P50: 640, P90: 960, Confidence: domain.AssumedLinkConfidence,
+						})},
+					}},
+					SelectedOfferSnapshotID: "rental-warm",
+					SelectionReasonCodes:    []string{"FEASIBLE"},
+				})},
+			}
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.transfer_rate_is_attributed",
+			)
+
+			if result.Status != InvariantFailed || result.Violation == "" {
+				t.Fatalf("640s of %s with no throughput behind it was reported as a transfer priced from something: %+v", transfer, result)
+			}
+		})
+	}
+}
+
 // TestAMeasuredFetchIsNotWhatTheNextLaunchOwes is the estimator read against the
 // transfer path, driven through the production scheduler because the two live in
 // two packages and a fixture stating the record itself would agree with whatever
@@ -2165,14 +2209,27 @@ func pricedAtARate(at time.Time, rate domain.TransferRate, read domain.Estimate,
 			OfferSnapshotID: "rental-warm",
 			Feasible:        true,
 			TransferRates:   []domain.TransferRate{rate},
-			Estimates: domain.CandidateEstimates{
-				Stages: domain.LaunchStageEstimates{ArtifactFetch: read},
-			},
-			Confidences: charged,
+			Estimates:       domain.CandidateEstimates{Stages: secondsOn(rate.Stage, read)},
+			Confidences:     charged,
 		}},
 		SelectedOfferSnapshotID: "rental-warm",
 		SelectionReasonCodes:    []string{"FEASIBLE"},
 	})
+}
+
+// secondsOn is one stage's seconds with every other stage of the launch at
+// nothing. The seconds go on the stage the rate under test priced, because a
+// record charging one stage and pricing another is a record no decision writes and
+// the law now says so.
+func secondsOn(stage domain.LaunchStage, read domain.Estimate) domain.LaunchStageEstimates {
+	return domain.LaunchStageEstimates{}.Answered(
+		func(each domain.LaunchStage, none domain.Estimate) domain.Estimate {
+			if each == stage {
+				return read
+			}
+			return none
+		},
+	)
 }
 
 // measuredByNobody is a rate a decision presents as measured on a machine that

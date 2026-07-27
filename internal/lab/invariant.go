@@ -1763,6 +1763,9 @@ func transferRateIsAttributed(observation InvariantObservation) error {
 	}
 	for _, decision := range decisions {
 		for _, candidate := range decision.Candidates {
+			if err := everyTransferNamesItsRate(decision, candidate); err != nil {
+				return err
+			}
 			for _, rate := range candidate.TransferRates {
 				if err := ratePricedFromSomething(decision, candidate, rate); err != nil {
 					return err
@@ -1775,6 +1778,37 @@ func transferRateIsAttributed(observation InvariantObservation) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// everyTransferNamesItsRate is what stops the three clauses below from being
+// silent by omission. Each of them is stated over the rates a decision recorded,
+// so a decision that recorded none says nothing they can adjudicate, and a
+// prediction reaching for a faster answer has an easier way out than inventing a
+// measurement: charge the seconds and leave the throughput off the record.
+//
+// A stage that moved bytes always spent time doing it, and a stage that moved none
+// spent none, so seconds are the question asked here rather than a byte count this
+// rule would have to be told. A transfer charged seconds with no rate beside them
+// is a duration whose second half nobody wrote down, and the reader that suffers is
+// safety.locality_is_never_infeasibility: it works out how much of a refusal was
+// charged for content nobody could describe, and an unattributed rate reads there
+// as a rate somebody measured.
+func everyTransferNamesItsRate(decision domain.BookingDecision, candidate domain.CandidateDecision) error {
+	priced := map[domain.LaunchStage]bool{}
+	for _, rate := range candidate.TransferRates {
+		priced[rate.Stage] = true
+	}
+	for _, stage := range domain.LaunchStages {
+		seconds := candidate.Estimates.Stages.Stage(stage).Expected
+		if !pricedFromBytes(stage) || seconds <= 0 || priced[stage] {
+			continue
+		}
+		return fmt.Errorf(
+			"Run %q: candidate %q was charged %.2fs on its %s stage, and the record names no throughput it was divided by",
+			decision.RunID, candidate.OfferSnapshotID, seconds, stage,
+		)
 	}
 	return nil
 }
