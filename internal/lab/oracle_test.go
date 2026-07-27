@@ -102,6 +102,23 @@ func assertModelsAgreeAboutCandidate(t *testing.T, production, reference domain.
 				production.OfferSnapshotID, stage, describeEstimate(predicted), describeEstimate(referenced))
 		}
 	}
+	// Every part of the price, and not only the total. A model that agreed about the
+	// dollars and disagreed about which term they are in would be two models with
+	// compensating errors, which is exactly what one independent model is for: an
+	// hour of committed rent read as an hour of keep-alive adds up to the same money
+	// and says the opposite thing about what the decision changed.
+	for _, term := range domain.CostTermNames() {
+		predicted, chargedByProduction := production.Estimates.CostTermUSD(term)
+		referenced, chargedByReference := reference.Estimates.CostTermUSD(term)
+		if chargedByProduction != chargedByReference || math.Abs(predicted-referenced) > 1e-6 {
+			t.Errorf("candidate %q: production priced %s at %.6f USD (charged=%v), the reference model %.6f (charged=%v)",
+				production.OfferSnapshotID, term, predicted, chargedByProduction, referenced, chargedByReference)
+		}
+	}
+	if production.Estimates.Committed != reference.Estimates.Committed {
+		t.Errorf("candidate %q: production met the commitment %+v, the reference model %+v",
+			production.OfferSnapshotID, production.Estimates.Committed, reference.Estimates.Committed)
+	}
 	if production.Priced() != reference.Priced() {
 		t.Errorf("candidate %q: production says priced=%v and the reference model %v, over cost %+v and %+v",
 			production.OfferSnapshotID, production.Priced(), reference.Priced(), production.Estimates.CostUSD, reference.Estimates.CostUSD)
