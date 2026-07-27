@@ -3878,8 +3878,17 @@ complete because it works against a live provider.
     which Mercator could find those machines to account for them. The Blueprint
     door calls the same function, so a fixture cannot state a provider Mercator
     would refuse to build.
-  - A reusable listing that states any of it must name its `machine`. Every promise
-    in the set is about one machine keeping its identity through a stop, a resume, a
+  - `capacity` and `bootstrap` belong to the reusable lane and are refused on an
+    `ephemeral` listing, because `Declare` admits a `CapacityProvider` only
+    alongside a `NodeRuntime` and stamps every such connection reusable. Capacity
+    implies the lane rather than accompanying a choice of one, and a one-shot
+    execution product holds nothing after its workload exits, so it has no machine
+    to stop, no machine to bring back, and no agent to enrol. Without the rule the
+    corpus could describe a provider-native one-shot execution that suspends a
+    machine and keeps its disk between Runs, which is the conflation ADR 0005 and
+    `safety.ephemeral_capacity_not_reused` exist to prevent.
+  - A listing that states any of it must name its `machine`. Every promise in the
+    set is about one machine keeping its identity through a stop, a resume, a
     repeated provision, or a terminate, and a listing ID is numbered afresh on every
     search.
   - `bootstrap.never_enrolls` is stated rather than derived from a missing
@@ -3897,12 +3906,14 @@ complete because it works against a live provider.
     by `effectMutatesWorld`; `capacity.observe` and `capacity.list_owned` are reads
     and deliberately are not, because two reads answering differently is a machine
     whose state moved and counting them would make every reconciliation sweep a
-    violation. `node.enrolled` is counted, because an enrolment token is redeemable
-    once. They are separate from `provider.launch` and `provider.release` on
-    purpose: those are an execution, and ADR 0005 is the reason a stop that suspends
-    a machine may never be filed under a release that ends a workload.
-    `capacity.resume` is named for the promise the capability set negotiates rather
-    than for `StartCapacity`, the method that performs it.
+    violation. `node.enrolled` is not counted either, for the reason
+    `capacity.preempted` is not: both are the world acting on its own account rather
+    than a command Mercator issued under a key a provider honours. They are separate
+    from `provider.launch` and `provider.release` on purpose: those are an execution,
+    and ADR 0005 is the reason a stop that suspends a machine may never be filed
+    under a release that ends a workload. `capacity.resume` is named for the promise
+    the capability set negotiates rather than for `StartCapacity`, the method that
+    performs it.
   - `Compile` refuses an arrival-driven Blueprint whose listing states a bootstrap,
     for the reason it already refuses a seeded Rental Schedule. Provisioned capacity
     bootstraps no agent in the Lab, so a listing saying its agent never arrives would
@@ -3918,7 +3929,10 @@ complete because it works against a live provider.
     instead is the classification and two tests over a hand-written ledger, one for
     each direction: an operation left out of `effectMutatesWorld` is one
     `safety.idempotent_external_commands` walks straight past, and an operation
-    wrongly counted fails on a machine seen starting and then active.
+    wrongly counted fails on a machine seen starting and then active. Both tests read
+    the whole registry rather than the one rule they are about, because a ledger entry
+    that trips a rule with no business reading it is the same defect as one the
+    intended rule misses.
 - [x] 2026-07-27: Take the stale claim off
   `enrolled-node-survives-its-first-run`. It declared `rental_schedule` beside
   `node_bootstrap` and `execution_warms_capacity`, and the Rental Schedule store,
@@ -3931,6 +3945,52 @@ complete because it works against a live provider.
   the record has to say the start was never observed and the application never
   spoke. The corpus moves from 59 Blueprints, 56 green and 3 target, to 60, 56
   green and 4 target.
+- [x] 2026-07-27: Fix what two reviewers refuted in the slice above. Every finding
+  held, two of the six being one defect stated twice, and all are fixed at the
+  source; the entries above are corrected where they stated something the tree no
+  longer does.
+  - `prefetchSettlements` decoded the request projection of every accepted effect
+    before deciding which operation the effect was, so an accepted
+    `capacity.provision`, whose answer lives in the consequence and which projects no
+    request at all, was a malformed effect rather than an operation the rule ignores.
+    The whole registry over the ledger the new test builds reported three violations,
+    not one: the intended `safety.idempotent_external_commands` plus
+    `safety.prewarm_yields_to_real_work` and `liveness.prefetch_converges`, both with
+    a JSON decode error. The slice's central claim, that the registered rules can read
+    a provision with nothing else changing, was false. Which operation an effect is
+    now decides whether the rule reads it at all, as its two sibling readers in the
+    same file already did, and both new tests read the whole registry.
+  - `node.enrolled` is no longer counted by `effectMutatesWorld`. Counting it
+    asserted that one enrolment identity yields one byte-identical consequence, and
+    the node registry is built the other way: `Reinvite` mints a fresh token for an
+    identity that already exists, so an agent that restarted or let its lease lapse
+    enrols again under the same node and generation, and every successful `Enroll`
+    closes the open session, mints a new one, and returns the next fencing token. A
+    node that came back from a reboot was a violation. A replayed token is refused
+    with `ErrEnrollmentSpent` rather than answered as a duplicate, so an enrolment
+    stays redeemable once whatever the ledger does: that guard is the registry's.
+  - The simulated world now honours `bootstrap.never_enrolls` instead of noting it
+    and enrolling anyway. Nothing can create a container on a machine Mercator has no
+    session to, so such a machine records no start moment, reports no readiness, and
+    holds none of the image, because no agent was ever there to fetch it. Refusing
+    the statement in `Compile` alone was a guard in the wrong place: no placement
+    fixture uses that path, so a green Blueprint could state `never_enrolls` and read
+    green while its world booted the machine, started the workload, and reported it
+    ready at eight minutes twelve. It also settles what the exemption from stating
+    `agent_ready` was worth: provisioning does not complete on such a machine, so it
+    is never the listing that provisions fastest, and the published `expected` and
+    `p90` the scheduler predicts from are stated as they are for every other listing.
+  - `provisioned-capacity-enrolls-or-is-reclaimed` asserts the reclaim half its name
+    promises. Stating only the outcome, the offer, and the two absent stages described
+    an indefinite wait: a control plane that provisions the silent machine and then
+    does nothing at all satisfied every expectation, so once the world honoured the
+    statement the fixture read as passing and would have been promoted to green as
+    evidence of a reclamation nobody built. It now carries a second, dearer listing
+    whose agent does arrive, and its last step expects the work to move there under an
+    appended decision that names the first and gives `PREVIOUS_LAUNCH_FAILED`. That
+    decision is the only thing in the record that separates giving up from waiting.
+  - `capacity` and `bootstrap` are refused on an `ephemeral` listing, recorded with
+    the rule itself in the entry above.
 
 ## Phase status
 

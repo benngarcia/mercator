@@ -145,12 +145,20 @@ func TestTheEnrolledNodeTargetWaitsOnTheProvisionedToEnrolledTransition(t *testi
 	}
 }
 
-// TestTheStrandedCapacityTargetStatesAnAgentThatNeverArrives is the world the
-// corpus could not describe: a provider that allocates and boots a machine whose
-// agent never opens a session. Silence about the enrolment stage already means a
-// stage that costs nothing, so without a word for it the failure a provider bills
-// for read as the fastest possible success.
-func TestTheStrandedCapacityTargetStatesAnAgentThatNeverArrives(t *testing.T) {
+// TestTheStrandedCapacityTargetStatesBothHalvesOfItsOwnName reads the target that
+// the corpus could not describe at all: a provider that allocates and boots a
+// machine whose agent never opens a session. Silence about the enrolment stage
+// already means a stage that costs nothing, so without a word for it the failure a
+// provider bills for read as the fastest possible success.
+//
+// It pins the reclaim half too, because that half is the one a fixture can promise
+// in its name and assert nowhere. Stating only the outcome, the offer, and the two
+// absent stages described an indefinite wait: a control plane that provisions the
+// silent machine and then does nothing at all satisfies every one of those, so the
+// fixture would have been promoted to green as evidence of a reclamation nobody
+// built. Only a second appended decision, naming the first and saying why it no
+// longer stands, can tell giving up from waiting.
+func TestTheStrandedCapacityTargetStatesBothHalvesOfItsOwnName(t *testing.T) {
 	blueprint, err := LoadBlueprint("scenarios/provisioned-capacity-enrolls-or-is-reclaimed.json")
 	if err != nil {
 		t.Fatalf("load Blueprint: %v", err)
@@ -162,15 +170,33 @@ func TestTheStrandedCapacityTargetStatesAnAgentThatNeverArrives(t *testing.T) {
 	if !slices.Equal(blueprint.MissingCapabilities, []Capability{CapabilityNodeBootstrap}) {
 		t.Fatalf("the target waits on %v, want the bootstrap alone", blueprint.MissingCapabilities)
 	}
-	listing := blueprint.World.Marketplace[0]
-	if listing.Bootstrap == nil || !listing.Bootstrap.NeverEnrolls {
-		t.Fatalf("the listing states bootstrap %+v, want an agent that never enrols", listing.Bootstrap)
+	stranded, patient := blueprint.World.Marketplace[0], blueprint.World.Marketplace[1]
+	if !stranded.NeverEnrolls() {
+		t.Fatalf("listing %q states bootstrap %+v, want an agent that never enrols", stranded.ID, stranded.Bootstrap)
 	}
-	if listing.Provisioning.AcquisitionSpend() == 0 || listing.Provisioning.BootSpend() == 0 {
-		t.Errorf("acquisition and boot must succeed here, and the world spends %v on them", listing.Provisioning.Spend())
+	if stranded.Provisioning.AcquisitionSpend() == 0 || stranded.Provisioning.BootSpend() == 0 {
+		t.Errorf("acquisition and boot must succeed here, and the world spends %v on them", stranded.Provisioning.Spend())
 	}
-	if listing.Bootstrap.Deadline == nil || listing.Bootstrap.ReclaimAfter == nil {
-		t.Errorf("a machine nothing enrols on needs an end to its bill, and the listing names %+v", listing.Bootstrap)
+	if stranded.Bootstrap.Deadline == nil || stranded.Bootstrap.ReclaimAfter == nil {
+		t.Errorf("a machine nothing enrols on needs an end to its bill, and the listing names %+v", stranded.Bootstrap)
+	}
+	// The dearer machine whose agent does arrive. Without somewhere for the work to
+	// go, giving up on the silent one could only be stated as a Run left nowhere.
+	if patient.NeverEnrolls() || patient.RatePerHourUSD <= stranded.RatePerHourUSD {
+		t.Fatalf("listing %q costs %v and states bootstrap %+v, want a dearer machine whose agent arrives",
+			patient.ID, patient.RatePerHourUSD, patient.Bootstrap)
+	}
+
+	gaveUp := *blueprint.Timeline[len(blueprint.Timeline)-1].Expect
+
+	if gaveUp.Offer != patient.ID {
+		t.Errorf("the last step expects offer %q, and a machine nobody gave up on is still the answer", gaveUp.Offer)
+	}
+	if gaveUp.Decision == nil || gaveUp.Decision.Recorded != 2 || gaveUp.Decision.Supersedes != 1 {
+		t.Fatalf("the last step expects decisions %+v, and a re-decision is what separates reclaiming from waiting", gaveUp.Decision)
+	}
+	if gaveUp.Decision.SupersedesReason != domain.SupersededLaunchFailed {
+		t.Errorf("the re-decision gives reason %q, want the capacity's own failure to start the work", gaveUp.Decision.SupersedesReason)
 	}
 }
 

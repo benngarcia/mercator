@@ -169,7 +169,12 @@ A listing's `bootstrap` is how the node agent arrives on a fresh machine.
 `never_enrolls` is a machine the provider allocates and boots whose agent never
 opens a session, which has to be stated because an omitted `agent_ready` stage
 already means enrolment that costs nothing: a listing that says its agent never
-enrols states no `agent_ready` at all. `deadline` is how long Mercator goes on
+enrols states no `agent_ready` at all. The world honours it. Mercator has no
+session to such a machine, so nothing can create a container there: no launch onto
+it ever reports a start, no workload on it ever reports readiness, and it holds
+none of the image, because no agent was ever there to fetch it. Provisioning does
+not complete, so it is never the listing that provisions fastest. `deadline` is how
+long Mercator goes on
 expecting that session, and `reclaim_after` is the provider's own backstop that
 destroys the machine whatever the control plane does. A listing whose agent never
 enrols must name one of the two, because a machine nobody gives up on bills for

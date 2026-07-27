@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "One listing, one Run, and a machine that arrives and never answers. The provider allocates the capacity in twenty-four seconds and the host reaches a usable operating system three minutes later, and the node agent on it never opens a session: an image with no agent baked in, a startup script that ran before the network was up, an outbound path something is blocking. Mercator has no session to that machine, so nothing can create a container there and no workload ever begins. The record has to say so: this Run's start is unobserved and its application has said nothing, because a start is a moment somebody observed and nobody was ever able to look. That is the failure a real provider bills for, which is why the listing states both ends of it, Mercator's own ten minutes of patience and the provider's own half-hour backstop that destroys the machine whatever the control plane does. Today the corpus cannot describe this at all: every provisioned machine in both simulated worlds is assumed to be executable the moment it has booted, so the whole of enrolment is a stage that costs seconds and cannot fail.",
+  "summary": "Two listings, one Run, and a machine that arrives and never answers. The cheaper provider allocates the capacity in twenty-four seconds and the host reaches a usable operating system three minutes later, and the node agent on it never opens a session: an image with no agent baked in, a startup script that ran before the network was up, an outbound path something is blocking. Mercator has no session to that machine, so nothing can create a container there and no workload ever begins. Placement cannot know that in advance, so it takes the cheap machine, and the record has to say what followed: this Run's start is unobserved and its application has said nothing, because a start is a moment somebody observed and nobody was ever able to look. Twelve minutes in, two minutes past the ten Mercator said it would wait, the answer has to change. Mercator gives up on the silent machine and decides again, and that second answer is appended rather than written over the first: it names the decision it stands in for and says the machine it chose failed to start the work, so a reader walks the chain and finds both the machine that billed for nothing and the dearer one the work moved to. That second decision is the whole difference between reclaiming stranded capacity and waiting on it for ever, and it is the only thing here that can tell them apart: every other fact this record states about the Run is equally true of a control plane that never gives up. The listing states both ends of the patience, Mercator's own ten minutes and the provider's own half-hour backstop that destroys the machine whatever the control plane does.",
   "classification": "target",
   "missing_capabilities": [
     "node_bootstrap"
@@ -44,6 +44,30 @@
           "deadline": "10m",
           "reclaim_after": "30m"
         }
+      },
+      {
+        "id": "patient-4090",
+        "machine": "simcloud-4090-b204",
+        "provider": "simcloud",
+        "lane": "reusable",
+        "rate_per_hour_usd": 3.0,
+        "provisioning": {
+          "expected": "4m30s",
+          "p90": "9m",
+          "acquisition": "30s",
+          "boot": "3m30s",
+          "agent_ready": "45s"
+        },
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "spot": false,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true,
+          "observe_after_terminate": false
+        }
       }
     ]
   },
@@ -61,6 +85,9 @@
         "offer": "silent-4090",
         "disposition": "terminate",
         "no_start_observed": true,
+        "decision": {
+          "recorded": 1
+        },
         "candidates": {
           "silent-4090": {
             "feasible": true,
@@ -76,9 +103,20 @@
       "reconcile": "run-stranded",
       "expect": {
         "outcome": "place",
-        "offer": "silent-4090",
+        "offer": "patient-4090",
         "no_start_observed": true,
-        "no_ready_reported": true
+        "no_ready_reported": true,
+        "decision": {
+          "recorded": 2,
+          "supersedes": 1,
+          "supersedes_reason": "PREVIOUS_LAUNCH_FAILED"
+        },
+        "candidates": {
+          "patient-4090": {
+            "feasible": true,
+            "disposition": "provision_fresh_rental"
+          }
+        }
       }
     }
   ]

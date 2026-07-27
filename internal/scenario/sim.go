@@ -80,6 +80,11 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 			// unlike the rest of the fleet.
 			ApplicationReadySpend: stated(offer.ApplicationReady),
 			LinkMbps:              simLinkMbps(spec, offer.ID),
+			// Whether the node agent arrives at all. A machine it never reaches never
+			// becomes executable, so the stages above are seconds this world never
+			// finishes spending rather than a machine that provisioned faster than one
+			// whose agent enrolled.
+			NeverEnrolls: offer.NeverEnrolls(),
 		}
 		if err := world.AddMachine(machine); err != nil {
 			return nil, err
@@ -90,8 +95,8 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		if offer.Capacity != nil {
 			session.note("offer %q negotiates a capacity capability set, and no provider seam reads one yet", offer.ID)
 		}
-		if offer.Bootstrap != nil {
-			session.note("offer %q states how its node agent arrives, and provisioned capacity bootstraps no agent yet", offer.ID)
+		if offer.Bootstrap != nil && offer.Bootstrap.Deadline != nil {
+			session.note("offer %q bounds how long Mercator expects its agent, and nothing gives up on a machine yet", offer.ID)
 		}
 	}
 	log, err := eventlog.OpenSQLite(context.Background(), "file:scenario-"+uuid.NewString()+"?mode=memory&cache=shared")

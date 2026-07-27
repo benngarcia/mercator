@@ -156,6 +156,61 @@ func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 	}
 }
 
+// TestWorldStrandedCapacityNeverStartsTheWorkItWasBilledFor is the machine a
+// provider allocates, boots, and bills for, whose node agent never opens a
+// session. Mercator has no session to it, so nothing can create a container
+// there: an hour after the launch was accepted no start has been observed, no
+// readiness has come due, and the machine holds none of the image, because
+// nothing was ever pulled onto it.
+//
+// The Rental beside it runs the same image and starts within the second, which is
+// what makes this an answer about the bootstrap rather than about the pull. Both
+// halves matter: a world that answered a start moment here would make a stranded
+// machine indistinguishable from a machine that came up, and a world that made it
+// hold the image would credit it with locality no agent ever fetched.
+func TestWorldStrandedCapacityNeverStartsTheWorkItWasBilledFor(t *testing.T) {
+	world := newLayeredWorld(t)
+	stranded := &Machine{
+		Offer:        domain.OfferSnapshot{ID: "silent-vm", Kind: domain.OfferKindProvisionable, Lane: domain.LaneReusable},
+		NeverEnrolls: true,
+	}
+	enrolled := &Machine{Offer: rentalOffer("rental-enrolled")}
+	for _, machine := range []*Machine{stranded, enrolled} {
+		if err := world.AddMachine(machine); err != nil {
+			t.Fatalf("add machine: %v", err)
+		}
+		if _, err := world.Launch(context.Background(), worldLaunch(machine.Offer.ID, "trainer:v1")); err != nil {
+			t.Fatalf("launch on %s: %v", machine.Offer.ID, err)
+		}
+	}
+
+	world.Clock().Advance(time.Hour)
+
+	if started := worldStartedAt(t, world, "launch-rental-enrolled"); started == nil {
+		t.Fatal("the enrolled machine reported no start, and this world's answer about a stranded one means nothing without it")
+	}
+	if started := worldStartedAt(t, world, "launch-silent-vm"); started != nil {
+		t.Fatalf("the stranded machine reported a start at %s, and nothing ever opened a session to it", started)
+	}
+	for _, report := range world.DueReadinessReports() {
+		if report.RunID == "run-silent-vm" {
+			t.Fatalf("a workload that never started reported itself ready: %+v", report)
+		}
+	}
+	if held := stranded.inventory(world.Clock().Now()); len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
+		t.Fatalf("the stranded machine holds %+v, and no agent was ever there to fetch it", held)
+	}
+}
+
+func worldStartedAt(t *testing.T, world *World, launchKey string) *time.Time {
+	t.Helper()
+	observation, err := world.Observe(context.Background(), adapter.ObserveRequest{LaunchKey: launchKey})
+	if err != nil {
+		t.Fatalf("observe %s: %v", launchKey, err)
+	}
+	return observation.StartedAt
+}
+
 // TestWorldHoldsARunningImageOnlyOnceItsBytesHaveArrived keeps the world from
 // blessing locality the machine does not have yet. The pull is 1010 bytes at
 // 500Mbps, so the image is on the host in well under a second and is provably

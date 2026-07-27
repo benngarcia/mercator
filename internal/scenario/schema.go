@@ -894,6 +894,14 @@ func (spec MarketplaceOfferSpec) validateProvisioningStages() error {
 	return nil
 }
 
+// NeverEnrolls reports whether this world allocates and boots the machine and its
+// node agent never opens a session. A listing that says nothing about its
+// bootstrap has an agent that arrives, which is every listing in this corpus
+// before phase 5.
+func (spec MarketplaceOfferSpec) NeverEnrolls() bool {
+	return spec.Bootstrap != nil && spec.Bootstrap.NeverEnrolls
+}
+
 // validateCapacityLifecycle refuses a listing whose account of what its provider
 // does with capacity could not hold. The negotiated set is checked by the contract
 // that owns it, so a Blueprint cannot state a provider Mercator would refuse to

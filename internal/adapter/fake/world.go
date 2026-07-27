@@ -144,6 +144,17 @@ type Machine struct {
 	// expectation would make that expectation right by construction. Standing
 	// capacity spends none of it, because the machine is already there.
 	ProvisionSpend time.Duration
+	// NeverEnrolls is a machine this world allocates and boots whose node agent
+	// never opens its session: an image with no agent in it, a startup script that
+	// ran before the network was up, an outbound path something blocks. Mercator
+	// has no session to it, so nothing can create a container there, no bytes are
+	// ever fetched onto it, and no workload launched here ever begins.
+	//
+	// Provisioning does not complete on such a machine, which is why this is a
+	// separate fact from a ProvisionSpend of any length. A stage that never
+	// finishes has no seconds to state, and stating none would make the failure a
+	// provider bills for the fastest possible success.
+	NeverEnrolls bool
 	// UnpackSpend is what this machine takes to turn content on its disk into a
 	// layer chain a container can start on, and ContainerStartSpend is what its
 	// runtime takes to create the container and hold a process in it. Both are
@@ -733,6 +744,14 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 	}
 	now := w.clock.Now()
 	machine.settle(now)
+	if machine.NeverEnrolls {
+		// Nothing can create a container on a machine Mercator has no session to, so
+		// this launch has no start moment to record and no readiness to follow it.
+		// The launch was accepted and the provider is billing; the record says the
+		// start was never observed, which is what makes a stranded machine a
+		// different world from one whose container starts instantly.
+		return
+	}
 	startsAt := machine.startExecution(
 		request.Image, w.images[request.Image].Layers, declaredCaches(request), now,
 	)
