@@ -445,6 +445,35 @@ func TestARefusedQueueDelayIsNotStarvationWhenTheFleetLastSaidItCouldHoldNothing
 	}
 }
 
+// TestAReplacedRunIsHeldToTheDeadlineOfItsWholeWait is the deliberate failure of
+// safety.class_bounds_honoured on the shape a failed launch produces, and it is the
+// record the third law in this file could not see.
+//
+// One wait with two placements in it. A standard Run is told to wait, a machine is
+// selected for it, the launch fails for capacity nobody has, it comes back through
+// admission, and four hours later a second machine is selected. Production refuses
+// that second placement, because stepAdmit reads the whole wait off queuedSince and
+// four hours and ten minutes is past the four hours this class states. A law that
+// restarted its clock at the first placement measured the remainder and returned
+// nothing, so it could not fail for any Run placed past its deadline that had been
+// placed once already.
+func TestAReplacedRunIsHeldToTheDeadlineOfItsWholeWait(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now.Add(15001*time.Second), nil, []eventlog.CloudEvent{
+		admissionDeferredEvent("run-quiet", now, domain.ClassStandard),
+		admittedForClassEvent("run-quiet", domain.ClassStandard, now.Add(1000*time.Second)),
+		deferredForEvent("run-quiet", now.Add(1100*time.Second), domain.ClassStandard,
+			domain.DeferredBehindHigherPriority, "run-other"),
+		admittedForClassEvent("run-quiet", domain.ClassStandard, now.Add(15000*time.Second)),
+	})
+
+	err := classBoundsHonoured(observation)
+	if err == nil {
+		t.Fatal("a Run was placed four hours and ten minutes into a wait its class bounds at four hours, and the rule allowed it")
+	}
+	t.Logf("violation: %v", err)
+}
+
 // TestARefusedQueueDelayIsNotStarvationWhenOlderWorkWasAdmitted is the other thing
 // the clause has to leave alone, and it is the state the aging fixture's own fleet
 // spends half an hour in. More interactive work is arriving than one machine can

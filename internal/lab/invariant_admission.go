@@ -121,7 +121,11 @@ func noWaitPastItsClassBound(observation InvariantObservation) error {
 // passed: which Runs took capacity while this one waited, and how long each of
 // them had waited when they did. The projection only says who is waiting now.
 func noRefusalYoungerWorkOvertook(observation InvariantObservation) error {
-	admitted, refused, err := replayQueueDepartures(observation)
+	began, err := waitsBegan(observation)
+	if err != nil {
+		return err
+	}
+	admitted, refused, err := replayQueueDepartures(observation, began)
 	if err != nil {
 		return err
 	}
@@ -133,25 +137,52 @@ func noRefusalYoungerWorkOvertook(observation InvariantObservation) error {
 	return nil
 }
 
+// waitsBegan is the moment each Run's wait began, which is the one number every
+// law in this file that measures a wait measures from. It is the first thing
+// admission recorded about the Run, and no later event revises it: a Run ID is
+// unique, and when its wait started is a fact about it.
+//
+// It is the number production measures too. runState.queuedSince is set at the
+// first deferral and nothing ever clears it, so a Run that took a machine, failed
+// to launch on it and came back through admission is held at the standing of its
+// whole wait, and the queue admission orders against keeps that same moment across
+// the placement. A reading that began the wait again there disagreed with the
+// scheduler about the same Run: the re-placed Run read back as a fresh arrival
+// that had waited nothing, so one law convicted the queue it was in fact the
+// oldest member of and another could not see a placement past a deadline at all.
+//
+// It is one function because three laws need it. Each of them replayed it for
+// itself, the same eight lines three times, and a repair to two of them left the
+// third measuring a shorter wait than production does and contradicting its own
+// doc comment.
+func waitsBegan(observation InvariantObservation) (map[string]time.Time, error) {
+	began := map[string]time.Time{}
+	for _, event := range observation.MercatorEvents {
+		if event.Type != orchestrator.EventAdmissionDeferred && event.Type != orchestrator.EventAdmissionRefused {
+			continue
+		}
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		if _, waiting := began[runID]; waiting {
+			continue
+		}
+		at, err := eventOccurredAt(event)
+		if err != nil {
+			return nil, err
+		}
+		began[runID] = at
+	}
+	return began, nil
+}
+
 // replayQueueDepartures is every way this log says a wait ended: the Runs that
 // left it by taking capacity, with how long each had waited when it did, and the
 // waits admission would not go on holding.
-//
-// The wait it measures over is the one production measures. runState.queuedSince is
-// set at the first deferral and nothing ever clears it, so a Run that took a
-// machine, failed to launch on it and came back through admission is held at the
-// standing of its whole wait. A replay that began the wait again at each placement
-// disagreed with the scheduler about that same number: the re-placed Run read back
-// as a fresh arrival that had waited nothing, and convicted the queue it was in
-// fact the oldest member of. Nothing is deleted here for the same reason nothing is
-// there: a Run ID is unique, and the moment its wait began is a fact about it that
-// no later event revises.
 //
 // Every moment is read only where the rule needs one, which is why the timestamp
 // is parsed inside each case rather than beside the event. A record whose
 // admission facts cannot state when they happened is a record this rule fails on,
 // and the rest of the stream is none of its business.
-func replayQueueDepartures(observation InvariantObservation) ([]admittedRun, []refusedWait, error) {
+func replayQueueDepartures(observation InvariantObservation, began map[string]time.Time) ([]admittedRun, []refusedWait, error) {
 	waits := map[string]queueWait{}
 	var admitted []admittedRun
 	var refused []refusedWait
@@ -167,10 +198,10 @@ func replayQueueDepartures(observation InvariantObservation) ([]admittedRun, []r
 			if err != nil {
 				return nil, nil, err
 			}
-			wait := waits[runID].asked(event.WorkspaceID, at, deferral)
+			wait := waits[runID].asked(event.WorkspaceID, deferral)
 			waits[runID] = wait
 			if event.Type == orchestrator.EventAdmissionRefused {
-				refused = append(refused, wait.ended(runID, deferral, at))
+				refused = append(refused, wait.ended(runID, deferral, began[runID], at))
 			}
 		case orchestrator.EventBookingDecided:
 			decision, err := recordedDecision(event)
@@ -191,29 +222,22 @@ func replayQueueDepartures(observation InvariantObservation) ([]admittedRun, []r
 			admitted = append(admitted, admittedRun{
 				runID: decision.RunID, workspace: event.WorkspaceID,
 				class: decision.Policy.Class, at: at,
-				waited: waitedBy(waits[decision.RunID].since, at),
+				waited: waitedBy(began[decision.RunID], at),
 			})
 		}
 	}
 	return admitted, refused, nil
 }
 
-// queueWait is one Run's wait as the log states it: whose queue it is in, the
-// moment admission first told it to wait, and the last thing the fleet said about
-// it.
+// queueWait is what the record establishes about one Run's wait as it goes on:
+// whose queue it is in, and the last thing the fleet said about it.
 type queueWait struct {
 	workspace        string
-	since            time.Time
 	fleetHeldNothing bool
 }
 
 // asked is this wait after one more moment admission decided about it.
-func (wait queueWait) asked(workspace string, at time.Time, deferral domain.AdmissionDeferral) queueWait {
-	// The moment a wait began never moves, for the reason the queue itself reads it
-	// that way: a Run told to wait for a second reason has not started waiting again.
-	if wait.since.IsZero() {
-		wait.since = at
-	}
+func (wait queueWait) asked(workspace string, deferral domain.AdmissionDeferral) queueWait {
 	wait.workspace = workspace
 	wait.fleetHeldNothing = wait.fleetLastSaid(deferral)
 	return wait
@@ -241,12 +265,12 @@ func (wait queueWait) fleetLastSaid(deferral domain.AdmissionDeferral) bool {
 }
 
 // ended is this wait written as the refusal that closed it.
-func (wait queueWait) ended(runID string, deferral domain.AdmissionDeferral, at time.Time) refusedWait {
+func (wait queueWait) ended(runID string, deferral domain.AdmissionDeferral, since, at time.Time) refusedWait {
 	return refusedWait{
 		runID:            runID,
 		workspace:        wait.workspace,
 		class:            deferral.Class,
-		since:            wait.since,
+		since:            since,
 		at:               at,
 		fleetHeldNothing: wait.fleetHeldNothing,
 	}
@@ -332,8 +356,12 @@ func halfTheBound(class domain.ServiceClass) float64 {
 	return class.Admission().MaxQueueDelaySeconds / 2
 }
 
+// waitedBy is how long a wait that began at one moment had run by another. A
+// moment before the wait began waited nothing rather than a negative amount of
+// time: a Run placed on its very first pass and told to wait afterwards did not
+// wait for the placement.
 func waitedBy(since, at time.Time) float64 {
-	if since.IsZero() {
+	if since.IsZero() || at.Before(since) {
 		return 0
 	}
 	return at.Sub(since).Seconds()
@@ -379,12 +407,14 @@ func describeQueuedAhead(ahead []domain.QueuedAhead) string {
 // Two facts are replayed and not one, because production keeps two. Membership of
 // the queue ends when a Run takes a machine, is refused, or is over, which is what
 // admissionQueue reads out of the log. The moment a Run's own wait began outlives
-// that, because runState.queuedSince is set once and nothing clears it, so a Run
-// placed again after a launch that failed is weighed at the standing of its whole
-// wait rather than as an arrival.
+// that, which is waitsBegan above, so a Run placed again after a launch that failed
+// is weighed at the standing of its whole wait rather than as an arrival.
 func serviceClassAdmissionOrder(observation InvariantObservation) error {
+	began, err := waitsBegan(observation)
+	if err != nil {
+		return err
+	}
 	queue := map[string]queuedRun{}
-	began := map[string]time.Time{}
 	for _, event := range observation.MercatorEvents {
 		runID := strings.TrimPrefix(event.Subject, "runs/")
 		switch event.Type {
@@ -393,17 +423,10 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 			if err != nil {
 				return err
 			}
-			at, err := eventOccurredAt(event)
-			if err != nil {
-				return err
-			}
-			// The moment a wait began never moves, and what the Run is waiting for
-			// does: a Run whose fleet filled up while it waited is waiting for
+			// What the Run is waiting for moves and the moment its wait began does
+			// not: a Run whose fleet filled up while it waited is waiting for
 			// something the ordering has to respect, and one whose fleet emptied is
 			// not.
-			if began[runID].IsZero() {
-				began[runID] = at
-			}
 			queue[runID] = queuedRun{
 				workspace:     event.WorkspaceID,
 				class:         deferral.Class,
@@ -631,10 +654,18 @@ func placedInsideItsBudget(decision domain.BookingDecision, selected domain.Cand
 // noPlacementPastItsDeadline replays the waits out of the public log and holds each
 // placement to the moment the placed Run's own class states. A class deadline is
 // measured from when admission first told the Run to wait, so the log is where both
-// ends of it are: the first deferral, and the decision that took a machine.
+// ends of it are: waitsBegan, and the decision that took a machine.
 //
 // A Run nothing ever deferred has no such moment and is not judged here, which is
 // what the class means by it. Waiting is what a deadline bounds.
+//
+// Every placement in a wait is judged and not only the first, which is the same
+// number production refuses on. A Run placed once, sent back through admission by a
+// launch that failed for capacity nobody has, and placed again is one wait with two
+// placements in it, and stepAdmit reads the whole wait off runState.queuedSince at
+// both of them. A reading that restarted the clock at the first placement could not
+// fail for any Run placed past its deadline that had been placed once before, which
+// is exactly the shape a failed launch produces.
 //
 // The world this exists to catch is the one the tree was in: the deadline was asked
 // only of a Run being told to wait, so a Run whose capacity came free after its own
@@ -642,40 +673,32 @@ func placedInsideItsBudget(decision domain.BookingDecision, selected domain.Cand
 // this registry reads a class deadline at all, and the refusal that should have been
 // recorded is an absence, which no rule about what a record says can see.
 func noPlacementPastItsDeadline(observation InvariantObservation) error {
-	waitingSince := map[string]time.Time{}
+	began, err := waitsBegan(observation)
+	if err != nil {
+		return err
+	}
 	for _, event := range observation.MercatorEvents {
-		runID := strings.TrimPrefix(event.Subject, "runs/")
-		switch event.Type {
-		case orchestrator.EventAdmissionDeferred:
-			at, err := eventOccurredAt(event)
-			if err != nil {
-				return err
-			}
-			// The moment a wait began never moves, for the reason the queue itself
-			// reads it that way: a Run told to wait for a second reason has not
-			// started waiting again.
-			if _, waiting := waitingSince[runID]; !waiting {
-				waitingSince[runID] = at
-			}
-		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
-			delete(waitingSince, runID)
-		case orchestrator.EventBookingDecided:
-			decision, err := recordedDecision(event)
-			if err != nil {
-				return err
-			}
-			since, waited := waitingSince[decision.RunID]
-			if decision.SelectedOfferSnapshotID == "" || !waited {
-				continue
-			}
-			at, err := eventOccurredAt(event)
-			if err != nil {
-				return err
-			}
-			if err := placedInsideItsDeadline(decision, at.Sub(since).Seconds()); err != nil {
-				return err
-			}
-			delete(waitingSince, decision.RunID)
+		if event.Type != orchestrator.EventBookingDecided {
+			continue
+		}
+		decision, err := recordedDecision(event)
+		if err != nil {
+			return err
+		}
+		// A decision that selected nothing placed nothing, and a Run nothing ever
+		// deferred has no moment to measure a deadline from. Both are asked before
+		// the timestamp, because a decision this rule has nothing to say about is
+		// also the shape every synthetic Booking Decision in this tree carries.
+		since, waited := began[decision.RunID]
+		if decision.SelectedOfferSnapshotID == "" || !waited {
+			continue
+		}
+		at, err := eventOccurredAt(event)
+		if err != nil {
+			return err
+		}
+		if err := placedInsideItsDeadline(decision, waitedBy(since, at)); err != nil {
+			return err
 		}
 	}
 	return nil
