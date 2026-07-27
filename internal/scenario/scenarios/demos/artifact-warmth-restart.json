@@ -92,6 +92,7 @@
           "expected_runtime": "8m",
           "max_runtime": "20m",
           "produces_artifacts": ["artifact:model-checkpoint:v1"],
+          "service_class": "batch",
           "cache_mounts": [
             {
               "name": "compiler-cache",
@@ -111,7 +112,8 @@
           "consumes_artifacts": [
             "artifact:model-checkpoint:v1",
             "artifact:tokenizer:v1"
-          ]
+          ],
+          "service_class": "batch"
         }
       }
     ]
