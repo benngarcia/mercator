@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/eventlog"
+	"github.com/benngarcia/mercator/internal/janitor"
 )
 
 func TestAdapterLaunchObserveReleaseAndListOwned(t *testing.T) {
@@ -745,4 +748,165 @@ func liveContextTo(t *testing.T, ambient *CLIClient) string {
 		_, _ = ambient.run(context.Background(), "context", "rm", "-f", name)
 	})
 	return name
+}
+
+// TestIntegrationTheJanitorConvergesOneAttemptsContainerByThatAttemptsLaunch is
+// the per-launch rule against a real daemon. Nothing below the control plane
+// tells the janitor which launch a container came from: the identities travel as
+// labels this adapter writes and reads back, so a rule that decides by the launch
+// that took the capacity is only as true as that round trip.
+//
+// The Run here was launched twice, and the container on this daemon is the first
+// attempt's. Its own launch recorded that the capacity does not outlive the
+// workload, and the replacement recorded the opposite, so a janitor reading the
+// Run's last launch converges this container under a rule that was never about
+// it. Local Docker is a standing pool, which is why the record is the assertion:
+// destroying and adopting reach the same daemon command here, and the reason on
+// the decision is the only place the difference is visible.
+func TestIntegrationTheJanitorConvergesOneAttemptsContainerByThatAttemptsLaunch(t *testing.T) {
+	if os.Getenv("MERCATOR_DOCKER_INTEGRATION") != "1" {
+		t.Skip("set MERCATOR_DOCKER_INTEGRATION=1 to run live Docker adapter integration")
+	}
+	image := os.Getenv("MERCATOR_DOCKER_IMAGE")
+	if image == "" {
+		image = "alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+	}
+	stamp := time.Now().UTC().Format("20060102150405")
+	provisioned := launchRequest()
+	provisioned.Image = image
+	provisioned.Platform = domain.Platform{OS: "linux", Architecture: runtime.GOARCH}
+	provisioned.WorkspaceID = "ws_janitor_" + stamp
+	provisioned.RunID = "run_replaced_" + stamp
+	provisioned.AttemptID = "att_one_" + stamp
+	provisioned.LaunchKey = "mercator-janitor-" + stamp
+	provisioned.OperationKey = provisioned.LaunchKey
+	provisioned.CleanupLocator = provisioned.LaunchKey
+	provisioned.Entrypoint = nil
+	provisioned.Args = []string{"sleep", "30"}
+	provisioned.Disposition = domain.DispositionTerminate
+	ad := New(NewCLIClient(""))
+	t.Cleanup(func() {
+		_, _ = ad.Release(context.Background(), adapter.ReleaseRequest{
+			OperationKey:      "cleanup_" + provisioned.LaunchKey,
+			RequestHash:       "sha256:cleanup",
+			LaunchKey:         provisioned.LaunchKey,
+			OwnershipToken:    provisioned.OwnershipToken,
+			LaunchRequestHash: provisioned.RequestHash,
+		})
+	})
+	if _, err := ad.Launch(context.Background(), provisioned); err != nil {
+		if strings.Contains(err.Error(), "rate limit") || strings.Contains(err.Error(), "Too Many Requests") {
+			t.Skipf("the registry will not serve this machine %s: %v", image, err)
+		}
+		t.Fatalf("live launch: %v", err)
+	}
+	replacement := provisioned
+	replacement.AttemptID = "att_two_" + stamp
+	replacement.LaunchKey = "mercator-janitor-replacement-" + stamp
+	replacement.Disposition = domain.DispositionRelease
+	log := openLiveJanitorLog(t)
+	appendReplacedRunHistory(t, log, provisioned, replacement)
+
+	result, err := janitor.New(ad, janitor.WithEventLog(log)).Sweep(context.Background(), provisioned.WorkspaceID)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if result.Found != 1 || result.Terminated != 1 {
+		t.Fatalf("the sweep of this daemon reports %+v, want the first attempt's container converged by its own launch", result)
+	}
+	decision := liveConvergence(t, log, provisioned.WorkspaceID)
+	if decision.Reason != "recorded_disposition_terminate" || decision.LaunchKey != provisioned.LaunchKey {
+		t.Fatalf("the record says %+v, want the disposition the launch that made this container recorded", decision)
+	}
+	owned, err := ad.ListOwned(context.Background(), adapter.OwnershipQuery{WorkspaceID: provisioned.WorkspaceID})
+	if err != nil {
+		t.Fatalf("list owned: %v", err)
+	}
+	if len(owned) != 0 {
+		// A provider that holds no machine of Mercator's answers terminate with a
+		// refusal, and the slot going back is the whole of this capacity ceasing to
+		// exist. Stopping at the refusal leaves the container standing.
+		t.Fatalf("this daemon still holds %+v, want the container gone", owned)
+	}
+}
+
+func openLiveJanitorLog(t *testing.T) *eventlog.SQLiteEventLog {
+	t.Helper()
+	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	return log
+}
+
+// appendReplacedRunHistory is a Run launched once per attempt and then closed,
+// written the way the orchestrator writes it: the whole launch request on the
+// private payload of each intent.
+func appendReplacedRunHistory(t *testing.T, log eventlog.EventLog, launches ...adapter.LaunchRequest) {
+	t.Helper()
+	events := make([]eventlog.NewEvent, 0, len(launches)+1)
+	for _, launch := range launches {
+		intent, err := json.Marshal(launch)
+		if err != nil {
+			t.Fatalf("marshal launch intent: %v", err)
+		}
+		events = append(events, eventlog.NewEvent{
+			ID:            "evt_intent_" + launch.AttemptID,
+			Type:          "compute.run.launch_intent_recorded.v1",
+			SchemaVersion: 1,
+			OccurredAt:    time.Now().UTC(),
+			Visibility:    eventlog.VisibilityPublic,
+			Data:          []byte(`{}`),
+			PrivateData:   intent,
+		})
+	}
+	events = append(events, eventlog.NewEvent{
+		ID:            "evt_closed_" + launches[0].RunID,
+		Type:          "compute.run.closed.v1",
+		SchemaVersion: 1,
+		OccurredAt:    time.Now().UTC(),
+		Visibility:    eventlog.VisibilityPublic,
+		Data:          []byte(`{}`),
+	})
+	_, err := log.Append(context.Background(), eventlog.AppendRequest{
+		Stream:                eventlog.StreamKey{WorkspaceID: launches[0].WorkspaceID, Type: "run", ID: launches[0].RunID},
+		ExpectedStreamVersion: 0,
+		CommandKey:            "seed:" + launches[0].RunID,
+		RequestHash:           "sha256:seed",
+		CorrelationID:         launches[0].RunID,
+		CausationID:           "seed",
+		Events:                events,
+	})
+	if err != nil {
+		t.Fatalf("append run history: %v", err)
+	}
+}
+
+func liveConvergence(t *testing.T, log eventlog.EventLog, workspaceID string) janitor.OrphanConvergence {
+	t.Helper()
+	filter := eventlog.EventFilter{WorkspaceID: workspaceID}
+	head, err := log.LatestPosition(context.Background(), filter)
+	if err != nil {
+		t.Fatalf("read log head: %v", err)
+	}
+	var decisions []janitor.OrphanConvergence
+	for event, err := range eventlog.ScanAll(context.Background(), log, head, filter) {
+		if err != nil {
+			t.Fatalf("scan log: %v", err)
+		}
+		if event.Type != janitor.EventOrphanConverged {
+			continue
+		}
+		var convergence janitor.OrphanConvergence
+		if err := json.Unmarshal(event.Data, &convergence); err != nil {
+			t.Fatalf("decode orphan convergence: %v", err)
+		}
+		decisions = append(decisions, convergence)
+	}
+	if len(decisions) != 1 {
+		t.Fatalf("the record holds %d orphan decisions, want exactly one: %+v", len(decisions), decisions)
+	}
+	return decisions[0]
 }
