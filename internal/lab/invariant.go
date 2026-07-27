@@ -804,15 +804,14 @@ func effectMutatesWorld(operation string) bool {
 		OperationProviderTerminate,
 		// Allocating a machine, suspending it, bringing it back, and destroying it
 		// each change what a provider is holding for Mercator, and each is asked for
-		// under an operation key the provider is expected to honour. A node
-		// enrolling changes what Mercator can execute on and redeems a token that may
-		// be redeemed once. The two reads in the same family, capacity.observe and
-		// capacity.list_owned, are deliberately not here.
+		// under an operation key the provider is expected to honour. The two reads
+		// in the same family, capacity.observe and capacity.list_owned, are
+		// deliberately not here, and neither are the two things this world does on
+		// its own account: capacity.preempted and node.enrolled.
 		OperationCapacityProvision,
 		OperationCapacityStop,
 		OperationCapacityResume,
 		OperationCapacityTerminate,
-		OperationNodeEnrolled,
 		OperationNodePrepareImage,
 		OperationNodePrepareArtifact,
 		OperationNodePrepareAbandoned,

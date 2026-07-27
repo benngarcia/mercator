@@ -32,14 +32,23 @@ const (
 	OperationCapacityResume    = "capacity.resume"
 	OperationCapacityTerminate = "capacity.terminate"
 	OperationCapacityListOwned = "capacity.list_owned"
-	// OperationNodeEnrolled is a node agent opening its authenticated session for
-	// the first time and being admitted, which is the moment provisioned capacity
-	// becomes capacity Mercator can execute on. It is the consequence of a
-	// bootstrap rather than a command Mercator issued, and it is recorded here
-	// because the ledger is the only account of what really happened on the
-	// machine: Mercator's own record can say a node is ready, and only this says
-	// which enrollment made it so, under which Rental generation, against a token
-	// that may be redeemed once.
+	// OperationNodeEnrolled is a node agent opening its authenticated session and
+	// being admitted, which is the moment provisioned capacity becomes capacity
+	// Mercator can execute on. It is recorded because the ledger is the only
+	// account of what really happened on the machine: Mercator's own record can say
+	// a node is ready, and only this says which enrollment made it so and under
+	// which Rental generation.
+	//
+	// Like capacity.preempted it is the world acting on its own account rather than
+	// a command Mercator issued, and effectMutatesWorld classifies both the same
+	// way for the same reason. There is no operation key here for a provider to
+	// honour: an agent that restarts or loses its lease is reinvited and enrols
+	// again under the same node and generation, and the registry answers each
+	// enrolment with a fresh session and the next fencing token, so one identity
+	// correctly has many different consequences. A replayed token is refused
+	// outright with ErrEnrollmentSpent rather than answered as a duplicate, which is
+	// what makes an enrolment redeemable once, and that guard is the registry's
+	// rather than the ledger's.
 	OperationNodeEnrolled = "node.enrolled"
 	// The four Artifact operations are four different facts, and collapsing any
 	// two of them is how a local copy starts standing in for durable content.

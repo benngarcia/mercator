@@ -609,10 +609,16 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 // vocabulary lands before anything emits it. safety.idempotent_external_commands
 // reads only the operations the ledger counts as changing the world, so an
 // operation left out of that list is one the rule walks straight past: a machine
-// allocated twice under one operation key, a stopped machine resumed twice, or an
-// enrolment token redeemed a second time would each be a world no rule here
-// objected to, and each is a bill or a fenced generation Mercator would be wrong
+// allocated twice under one operation key or a stopped machine resumed twice would
+// be a world no rule here objected to, and each is a bill Mercator would be wrong
 // about.
+//
+// It reads the whole registry rather than the one rule it is about, and that is
+// the half the first version of this test got wrong. A rule that trips over an
+// operation it has no business reading is a rule that will report a violation on
+// the first world to record a provision, and reading one result by ID hid exactly
+// that: two prewarming rules were decoding the request projection of every
+// accepted effect before deciding whether the effect was theirs.
 //
 // No world emits a capacity operation until the provider seam exists, so the
 // ledger here is written by hand. That is the point: the rules that will read it
@@ -625,7 +631,6 @@ func TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord(t *testing.T) {
 		OperationCapacityStop,
 		OperationCapacityResume,
 		OperationCapacityTerminate,
-		OperationNodeEnrolled,
 	} {
 		t.Run(operation, func(t *testing.T) {
 			observation := handWrittenLedger(now,
@@ -639,52 +644,72 @@ func TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord(t *testing.T) {
 				},
 			)
 
-			result := invariantResultByID(
-				t,
-				DefaultInvariantRegistry().Evaluate(observation),
-				"safety.idempotent_external_commands",
-			)
+			broken := brokenInvariants(DefaultInvariantRegistry().Evaluate(observation))
 
-			if result.Status != InvariantFailed || result.Violation == "" {
-				t.Fatalf("one %s key with two answers gave %+v", operation, result)
+			if !slices.Equal(broken, []string{"safety.idempotent_external_commands"}) {
+				t.Fatalf("one %s key with two answers broke %v, want the idempotency rule alone", operation, broken)
 			}
 		})
 	}
 }
 
-// TestLookingAtCapacityIsNotACommandThatChangedIt is the other half of the same
-// classification, and the half a list of operation names invites getting wrong.
-// Observing a machine and listing what this connection owns allocate nothing,
-// change nothing, and are asked repeatedly on purpose. Two reads that answer
-// differently are a machine whose state moved between them, which is what
-// observation is for, so counting either as a command would turn every
-// reconciliation sweep into a violation.
-func TestLookingAtCapacityIsNotACommandThatChangedIt(t *testing.T) {
+// TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated is the other
+// half of the same classification, and the half a list of operation names invites
+// getting wrong. Four kinds of entry are in the capacity family and are not
+// commands with an idempotency key behind them.
+//
+// Observing a machine and listing what this connection owns allocate nothing and
+// are asked repeatedly on purpose, so two answers that differ are a machine whose
+// state moved between them.
+//
+// An enrolment is not Mercator's command at all. The registry reinvites an agent
+// that restarted or let its lease lapse, and it enrols again under the same node
+// and the same generation: each enrolment closes the previous session, mints a
+// new one, and returns the next fencing token, so one identity has as many
+// different consequences as there were enrolments, every one of them correct. A
+// replayed token is refused with ErrEnrollmentSpent rather than answered as a
+// duplicate, so a token stays redeemable once whatever this rule does. Counted
+// here, a node that came back from a reboot would be a violation.
+func TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
-	for _, operation := range []string{OperationCapacityObserve, OperationCapacityListOwned} {
+	for operation, answers := range map[string][2]string{
+		OperationCapacityObserve:   {`{"state":"starting"}`, `{"state":"active"}`},
+		OperationCapacityListOwned: {`{"owned":1}`, `{"owned":2}`},
+		OperationNodeEnrolled:      {`{"fencing_token":1}`, `{"fencing_token":2}`},
+	} {
 		t.Run(operation, func(t *testing.T) {
 			observation := handWrittenLedger(now,
 				EffectRecord{
-					Operation: operation, OperationID: "look-1",
-					Command: EffectCommandAccepted, Consequence: []byte(`{"state":"starting"}`),
+					Operation: operation, OperationID: "nod_1/generation-7",
+					Command: EffectCommandAccepted, Consequence: []byte(answers[0]),
 				},
 				EffectRecord{
-					Operation: operation, OperationID: "look-1",
-					Command: EffectCommandAccepted, Consequence: []byte(`{"state":"active"}`),
+					Operation: operation, OperationID: "nod_1/generation-7",
+					Command: EffectCommandAccepted, Consequence: []byte(answers[1]),
 				},
 			)
 
-			result := invariantResultByID(
-				t,
-				DefaultInvariantRegistry().Evaluate(observation),
-				"safety.idempotent_external_commands",
-			)
+			broken := brokenInvariants(DefaultInvariantRegistry().Evaluate(observation))
 
-			if result.Status != InvariantPassed {
-				t.Fatalf("a machine seen starting and then active gave %+v", result)
+			if len(broken) > 0 {
+				t.Fatalf("two %s records answering differently broke %v", operation, broken)
 			}
 		})
 	}
+}
+
+// brokenInvariants is every registered rule this observation put into violation,
+// which is what a test about one rule has to read: a ledger entry that trips an
+// unrelated rule is the same defect as one the intended rule misses.
+func brokenInvariants(results []InvariantResult) []string {
+	var broken []string
+	for _, result := range results {
+		if result.Status != InvariantPassed {
+			broken = append(broken, result.ID)
+		}
+	}
+	slices.Sort(broken)
+	return broken
 }
 
 // handWrittenLedger is an observation whose only content is the effects a test
