@@ -349,8 +349,14 @@ type OfferSnapshot struct {
 	Capabilities CapabilityProfile `json:"capabilities"`
 	Network      NetworkFacts      `json:"network"`
 	Pricing      PriceModel        `json:"pricing"`
-	Queue        *QueueSnapshot    `json:"queue,omitempty"`
-	Provisioning *Estimate         `json:"provisioning,omitempty"`
+	// Terms is what this capacity was sold on beyond its rate: the interval
+	// Mercator already owes rent for, the classes of work it may take, and the
+	// moment it stops being available. Capacity nobody has allocated states none
+	// of them, which is why it is omitzero: an empty set of terms published by
+	// every catalog in the fleet would read as a sale somebody described.
+	Terms        CapacityTerms  `json:"capacity_terms,omitzero"`
+	Queue        *QueueSnapshot `json:"queue,omitempty"`
+	Provisioning *Estimate      `json:"provisioning,omitempty"`
 	Images       ImageInventory    `json:"images"`
 	// Artifacts is the immutable content this host says it holds a local copy
 	// of. It is placement evidence and never a dependency's authority: a Run's
@@ -1525,6 +1531,38 @@ type CandidateEstimates struct {
 	// by what it rests on.
 	EstablishedStartSeconds Estimate `json:"established_start_seconds"`
 	CostUSD                 Estimate `json:"cost_usd"`
+	// CostTerms is what those dollars are made of, one entry per part of the
+	// price this candidate was charged for. A machine nobody quoted records none,
+	// because there is nothing to account for.
+	//
+	// It is recorded for the reason the transfer rates are: the total alone cannot
+	// be argued with. Rent for seconds Mercator has already bought, rent this
+	// placement is what commits it to, and the tail of an increment nothing will
+	// use are three different claims about one machine, and an operator reading a
+	// candidate that lost on price has to be able to see which of them decided it.
+	// safety.no_capacity_is_free is stated over exactly this.
+	CostTerms []CostTerm `json:"cost_terms,omitempty"`
+	// Committed is the interval Mercator already owed rent for on this machine and
+	// the seconds of it this placement would spend. It is recorded beside the terms
+	// because the committed rent above is money that is spent once however many
+	// candidates are weighed against it, and a reader holding only the dollars
+	// cannot tell one Run charged for an hour from four Runs charged for the same
+	// hour. safety.committed_cost_is_not_double_counted reads it.
+	Committed CommittedInterval `json:"committed_interval,omitzero"`
+}
+
+// CommittedInterval is one machine's already-owed rent as one placement met it:
+// when the interval ends, when this Run would start spending it, and how many of
+// its seconds this Run would take. Capacity nothing is owed on records none of
+// it.
+type CommittedInterval struct {
+	Until time.Time `json:"until,omitzero"`
+	// FromSeconds is how long after the decision this Run would begin occupying
+	// the machine. Two Runs on one machine spend disjoint stretches of one
+	// interval, and without the offset a record of the seconds each of them spent
+	// cannot be told from a record of the same seconds sold twice.
+	FromSeconds float64 `json:"from_seconds,omitempty"`
+	Seconds     float64 `json:"seconds,omitempty"`
 }
 
 type RunOutcome string

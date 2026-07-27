@@ -546,6 +546,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 				// by the world exactly as a node ID is minted by the registry.
 				labCandidate{provider: rental.Provider, region: rental.Region, machine: scenario.NodeHandle(index)},
 				rental.RatePerHourUSD,
+				rental.Billing,
 				rental.Resources,
 			),
 			heldLayers:     map[string]scenario.LayerSpec{},
@@ -558,10 +559,13 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			state.leaseExpiresAt = tape.Start.Add(rental.IdleLeaseExpiresIn.Duration())
 		}
 		state.offer.Capacity.Confidence = rental.Confidence()
-		// The term this capacity was sold on. It is a property of the sale rather
-		// than of the moment an offer was read, so it is stated once here and
-		// republished with every snapshot the provider takes.
+		// The terms this capacity was sold on. They are properties of the sale rather
+		// than of the moment an offer was read, so they are stated once here and
+		// republished with every snapshot the provider takes: whether the provider
+		// may take the machine back, what Mercator already owes on it, what it is
+		// held for, and how long it stays Mercator's to use.
 		state.offer.Reclaimable = rental.Reclaimable
+		state.offer.Terms = rental.Terms.Terms(tape.Start)
 		if rental.Unpriced {
 			// Nobody quoted this machine. That is a statement about the world, so it
 			// is carried through as one rather than becoming a rate of zero, which
@@ -569,7 +573,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			state.offer.Pricing = domain.PriceModel{Currency: "USD"}
 			state.offer.Capabilities.Pricing = domain.PricingCapabilities{}
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, rental.ID, nil, rental.Billing)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, rental.ID, nil)
 		for _, reference := range rental.CachedImages {
 			for _, layer := range tape.InitialWorld.Images[reference].Layers {
 				state.heldLayers[layer.Digest] = layer
@@ -599,6 +603,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 				// Mercator reached it through.
 				labCandidate{machine: scenario.DaemonHandle(index)},
 				host.RatePerHourUSD,
+				host.Billing,
 				host.Resources,
 			),
 			heldLayers: map[string]scenario.LayerSpec{},
@@ -611,7 +616,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			}
 			state.heldImages[domain.ReferenceDigest(reference)] = true
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, host.ID, nil, host.Billing)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, host.ID, nil)
 		world.seededLocality[host.ID] = state.seededDigests()
 		world.truth[host.ID] = cloneHostState(state)
 		world.seedReplicas(host.ID, host.ArtifactReplicas, tape.InitialWorld, tape.Start)
@@ -631,6 +636,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 					instanceType: marketplace.InstanceType,
 				},
 				marketplace.RatePerHourUSD,
+				marketplace.Billing,
 				marketplace.Resources,
 			),
 			heldLayers: map[string]scenario.LayerSpec{},
@@ -641,7 +647,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			// expectation would make that expectation right by construction.
 			provisioning: marketplace.Provisioning,
 		}
-		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available, marketplace.Billing)
+		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available)
 		world.seededLocality[marketplace.ID] = state.seededDigests()
 		state.offer.Provisioning = &domain.Estimate{
 			Expected: marketplace.Provisioning.Expected.Duration().Seconds(),
@@ -741,13 +747,9 @@ func (world *simulatedWorld) seedCaches(offerID string, held []scenario.HeldCach
 // one, and a rule that asked only the machines still standing would read a
 // correct decision about capacity since retired as a decision priced from
 // nothing.
-func (world *simulatedWorld) publishOfferFacts(offer *domain.OfferSnapshot, spec scenario.WorldSpec, offerID string, available *bool, billing scenario.BillingSpec) {
+func (world *simulatedWorld) publishOfferFacts(offer *domain.OfferSnapshot, spec scenario.WorldSpec, offerID string, available *bool) {
 	if available != nil {
 		offer.Capacity.Available = *available
-	}
-	offer.Pricing.SetupFeeUSD = billing.SetupFeeUSD
-	if billing.MinimumCharge != nil {
-		offer.Pricing.MinimumChargeSeconds = int64(billing.MinimumCharge.Duration().Seconds())
 	}
 	offer.Network = spec.Paths.PublishedFacts(offerID, spec.Start())
 	world.publishedPaths[offerID] = slices.Clone(offer.Network.Download)
@@ -2347,6 +2349,7 @@ func labOffer(
 	lane domain.ExecutionLane,
 	candidate labCandidate,
 	ratePerHourUSD float64,
+	billing scenario.BillingSpec,
 	resources *scenario.ResourcesSpec,
 ) domain.OfferSnapshot {
 	offer := domain.OfferSnapshot{
@@ -2372,11 +2375,12 @@ func labOffer(
 			Pricing:   domain.PricingCapabilities{Known: true},
 			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "launch_key", ListOwned: true},
 		},
-		Pricing: domain.PriceModel{
-			Currency:         "USD",
-			RatePerSecondUSD: ratePerHourUSD / 3600,
-			Known:            true,
-		},
+		// What this publisher charges and how: the rate, the fee to hand the machine
+		// over, the smallest allocation it sells, and the block of time it bills in.
+		// The Blueprint's own words translate to a price model in one place, so the
+		// two simulated worlds cannot disagree about which of a fixture's billing
+		// terms they read.
+		Pricing: billing.PriceModel(ratePerHourUSD),
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 	// Only capacity Mercator keeps names a Rental, which is the same stamp

@@ -679,12 +679,12 @@ func smallSchedulingInput(t *testing.T) scheduler.SchedulingInput {
 	workload := scenario.WorkloadForRun(labWorkspace, "run-reference", request)
 	workload.Spec.Placement.Class = domain.ClassStandard
 	now := blueprint.World.Start()
-	warm := labOffer("rental-warm", domain.OfferKindStanding, domain.LaneReusable, labCandidate{machine: "rental-warm"}, 2.5, request.Resources)
+	warm := labOffer("rental-warm", domain.OfferKindStanding, domain.LaneReusable, labCandidate{machine: "rental-warm"}, 2.5, scenario.BillingSpec{}, request.Resources)
 	warm.ObservedAt = now
 	warm.ExpiresAt = now.Add(time.Minute)
 	// The warm host holds the 18GB base layer and not the 80MB top layer.
 	warm.Images = domain.ImageInventory{Known: true, ObservedAt: now, LayerDigests: []string{baseLayerDigest}}
-	fresh := labOffer("fresh-4090", domain.OfferKindProvisionable, domain.LaneReusable, labCandidate{}, 4, request.Resources)
+	fresh := labOffer("fresh-4090", domain.OfferKindProvisionable, domain.LaneReusable, labCandidate{}, 4, scenario.BillingSpec{}, request.Resources)
 	fresh.ObservedAt = now
 	fresh.ExpiresAt = now.Add(time.Minute)
 	// A machine that does not exist yet has nothing on it to enumerate, so it

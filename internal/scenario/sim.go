@@ -352,7 +352,7 @@ func simHeldCaches(held []HeldCacheSpec, at time.Time) map[string]domain.CacheMo
 // across Runs, which is what makes it reusable and the only thing warmth can
 // accumulate on.
 func simRentalOffer(spec WorldSpec, rental RentalSpec, machineID string) domain.OfferSnapshot {
-	offer := simOffer(spec, rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Resources)
+	offer := simOffer(spec, rental.ID, "conn_rentals", rental.RatePerHourUSD, rental.Billing, rental.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneReusable
 	// A Rental is a machine this world keeps, so it names one and a history about it
@@ -368,9 +368,12 @@ func simRentalOffer(spec WorldSpec, rental RentalSpec, machineID string) domain.
 	// the machine may be busy by then. How sure its publisher is of that answer is
 	// a property of the publisher, so it is stated here and carried through.
 	offer.Capacity.Confidence = rental.Confidence()
-	// The term this capacity was sold on, which is a property of the sale and not
-	// of the moment the offer was read.
+	// The terms this capacity was sold on, which are properties of the sale and not
+	// of the moment the offer was read: whether the provider may take it back, what
+	// Mercator already owes on it, what it is held for, and how long it stays
+	// Mercator's to use.
 	offer.Reclaimable = rental.Reclaimable
+	offer.Terms = rental.Terms.Terms(spec.Start())
 	if rental.Unpriced {
 		offer.Pricing = domain.PriceModel{Currency: "USD"}
 		offer.Capabilities.Pricing = domain.PricingCapabilities{}
@@ -406,7 +409,7 @@ func simHost(spec WorldSpec, host HostSpec, at time.Time, machineID string) *fak
 // it can hold content or run a second workload for Mercator, so it is in the
 // ephemeral lane and reports an inventory it cannot enumerate.
 func simHostOffer(spec WorldSpec, host HostSpec, machineID string) domain.OfferSnapshot {
-	offer := simOffer(spec, host.ID, "conn_hosts", host.RatePerHourUSD, host.Resources)
+	offer := simOffer(spec, host.ID, "conn_hosts", host.RatePerHourUSD, host.Billing, host.Resources)
 	offer.Kind = domain.OfferKindStanding
 	offer.Lane = domain.LaneEphemeral
 	// A borrowed host keeps nothing for Mercator and is the same machine next time,
@@ -414,17 +417,13 @@ func simHostOffer(spec WorldSpec, host HostSpec, machineID string) domain.OfferS
 	// with the daemon's own ID rather than with the endpoint Mercator reached it
 	// through, which is what the fixture's ID is.
 	offer.MachineID = machineID
-	offer.Pricing.SetupFeeUSD = host.Billing.SetupFeeUSD
-	if host.Billing.MinimumCharge != nil {
-		offer.Pricing.MinimumChargeSeconds = int64(host.Billing.MinimumCharge.Duration().Seconds())
-	}
 	return offer
 }
 
 // simMarketplaceOffer builds the offer for a machine that does not exist yet, so
 // nothing an execution fetches there is anywhere a later Run can see it.
 func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.OfferSnapshot {
-	offer := simOffer(world, spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Resources)
+	offer := simOffer(world, spec.ID, "conn_marketplace", spec.RatePerHourUSD, spec.Billing, spec.Resources)
 	offer.Kind = domain.OfferKindProvisionable
 	// The machine behind this listing, where this marketplace publishes one. A
 	// catalog selling a product nobody owns yet names none, and what recurs about
@@ -526,7 +525,7 @@ func HostInventory(resources *ResourcesSpec) domain.ResourceInventory {
 	return inventory
 }
 
-func simOffer(world WorldSpec, id, connectionID string, ratePerHourUSD float64, resources *ResourcesSpec) domain.OfferSnapshot {
+func simOffer(world WorldSpec, id, connectionID string, ratePerHourUSD float64, billing BillingSpec, resources *ResourcesSpec) domain.OfferSnapshot {
 	inventory := HostInventory(resources)
 	return domain.OfferSnapshot{
 		ID:           id,
@@ -546,11 +545,11 @@ func simOffer(world WorldSpec, id, connectionID string, ratePerHourUSD float64, 
 			Pricing:   domain.PricingCapabilities{Known: true},
 			Lifecycle: domain.LifecycleCapabilities{IdempotentLaunch: "launch_key", ListOwned: true},
 		},
-		Pricing: domain.PriceModel{
-			Currency:         "USD",
-			RatePerSecondUSD: ratePerHourUSD / 3600,
-			Known:            true,
-		},
+		// What this publisher charges and how: the rate, the fee to hand the machine
+		// over, the smallest allocation it sells, and the block of time it bills in.
+		// A world that read the rate alone made every fixture's billing terms
+		// unstatable for two of the three kinds of capacity it builds.
+		Pricing: billing.PriceModel(ratePerHourUSD),
 		Network: world.Paths.PublishedFacts(id, world.Start()),
 	}
 }

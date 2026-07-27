@@ -547,9 +547,14 @@ type RentalSpec struct {
 	// disappear, and the only capacity this world's own preemptions may name: a
 	// world that reclaimed a machine nobody sold on those terms would be asserting
 	// a provider breaking its own contract.
-	Reclaimable bool           `json:"reclaimable,omitempty"`
-	Billing     BillingSpec    `json:"billing,omitempty"`
-	Resources   *ResourcesSpec `json:"resources,omitempty"`
+	Reclaimable bool        `json:"reclaimable,omitempty"`
+	Billing     BillingSpec `json:"billing,omitempty"`
+	// Terms is what this machine was sold on beyond its price: what Mercator
+	// already owes on it, what it is held for, and how long it stays Mercator's.
+	// Only an allocation somebody already made can carry them, which is why they
+	// are stated here and not on a listing for a machine nobody has allocated.
+	Terms     CapacityTermsSpec `json:"terms,omitzero"`
+	Resources *ResourcesSpec    `json:"resources,omitempty"`
 	// CapacityConfidence is how sure whoever published this machine's capacity
 	// claim was of it. Omitted means certain, which is what every simulated
 	// provider says about a machine it can see. A fixture states less when the
@@ -786,9 +791,101 @@ type MarketplaceOfferSpec struct {
 	Facts map[string]bool `json:"facts,omitempty"`
 }
 
+// BillingSpec is how a machine in this world is charged for, beside the rate that
+// says how much. A fixture that states none of it describes a publisher billing
+// continuously with nothing to pay up front, which is what every machine in this
+// corpus was before there was a vocabulary for the rest.
 type BillingSpec struct {
 	SetupFeeUSD   float64   `json:"setup_fee_usd,omitempty"`
 	MinimumCharge *Duration `json:"minimum_charge,omitempty"`
+	// Granularity is the block of time this publisher sells. A machine billed by
+	// the minute charges a whole minute for a second of use, and a machine billed
+	// by the hour charges the hour, which is the difference between a twenty-minute
+	// Run costing twenty minutes and costing sixty. Omitted is continuous billing.
+	//
+	// It is the one part of a price model every adapter in the tree has always
+	// written and nothing has ever read, so no fixture could state a world where
+	// the increment mattered and the whole idle tail of an interval was charged to
+	// nobody.
+	Granularity *Duration `json:"granularity,omitempty"`
+}
+
+// PriceModel is what this machine's publisher charges, as the fixture states it.
+// It is built here rather than in each simulated world because it is a
+// translation of the Blueprint's own words and not a model of anything: two
+// worlds spelling it separately meant a fixture's billing terms reached one of
+// them and were silently dropped by the other.
+func (spec BillingSpec) PriceModel(ratePerHourUSD float64) domain.PriceModel {
+	price := domain.PriceModel{
+		Currency:         "USD",
+		RatePerSecondUSD: ratePerHourUSD / 3600,
+		SetupFeeUSD:      spec.SetupFeeUSD,
+		Known:            true,
+	}
+	if spec.MinimumCharge != nil {
+		price.MinimumChargeSeconds = int64(spec.MinimumCharge.Duration().Seconds())
+	}
+	if spec.Granularity != nil {
+		price.GranularitySeconds = int64(spec.Granularity.Duration().Seconds())
+	}
+	return price
+}
+
+// CapacityTermsSpec is what a machine in this world was sold on beyond its price:
+// the interval Mercator already owes rent for, the classes of work it is held
+// for, and how long it stays Mercator's to use. Every duration is measured from
+// the world's own start.
+//
+// It hangs off a Rental and off nothing else, because those are the terms of an
+// allocation somebody already made. A marketplace listing is a machine that does
+// not exist yet: nothing is owed on it, it is reserved for nobody, and it is
+// available for as long as the catalog lists it.
+type CapacityTermsSpec struct {
+	// CommittedFor is how long from the world's start Mercator already owes rent on
+	// this machine, whatever it does with it. It is what makes a Run that fits
+	// inside the interval cheap and a Run that overruns it expensive: the seconds
+	// past the end are a fresh increment Mercator has to buy whole.
+	CommittedFor *Duration `json:"committed_for,omitempty"`
+	// EligibleClasses is the kinds of work this machine is held for. Empty is a
+	// machine held for nobody in particular, which is every machine in this corpus
+	// until a fixture says otherwise.
+	EligibleClasses []domain.ServiceClass `json:"eligible_service_classes,omitempty"`
+	// AvailableFor is how long from the world's start this capacity stays
+	// Mercator's. It is a moment somebody declared rather than capacity that can
+	// vanish without notice, so work that would still be running then is refused
+	// before it starts.
+	AvailableFor *Duration `json:"available_for,omitempty"`
+}
+
+// Terms is the sale this declaration describes, resolved against the world clock.
+func (spec CapacityTermsSpec) Terms(start time.Time) domain.CapacityTerms {
+	terms := domain.CapacityTerms{EligibleClasses: spec.EligibleClasses}
+	if spec.CommittedFor != nil {
+		terms.CommittedUntil = start.Add(spec.CommittedFor.Duration())
+	}
+	if spec.AvailableFor != nil {
+		terms.AvailableUntil = start.Add(spec.AvailableFor.Duration())
+	}
+	return terms
+}
+
+// validate refuses terms no world could hold. A commitment or a window that has
+// already elapsed at the world's own start is capacity nothing could ever be
+// placed on, which is a fixture asserting a refusal by arithmetic rather than a
+// world; a class nothing can price is a reservation for work Mercator would turn
+// away at the door.
+func (spec CapacityTermsSpec) validate(owner string) error {
+	for field, duration := range map[string]*Duration{"committed_for": spec.CommittedFor, "available_for": spec.AvailableFor} {
+		if duration != nil && duration.Duration() <= 0 {
+			return fmt.Errorf("%s: terms.%s must be a positive duration from the world's start", owner, field)
+		}
+	}
+	for _, class := range spec.EligibleClasses {
+		if !class.Known() {
+			return fmt.Errorf("%s: terms.eligible_service_classes names %q, which Mercator cannot price", owner, class)
+		}
+	}
+	return nil
 }
 
 // PathSpec is one path between a machine in this world and infrastructure of one
@@ -2223,6 +2320,9 @@ func (w WorldSpec) validate() error {
 		if err := rental.Billing.validate("rental " + rental.ID); err != nil {
 			return err
 		}
+		if err := rental.Terms.validate("rental " + rental.ID); err != nil {
+			return err
+		}
 	}
 	rentalsWithSchedules := map[string]bool{}
 	bookingOwners := map[string]string{}
@@ -2450,6 +2550,12 @@ func (billing BillingSpec) validate(owner string) error {
 	}
 	if billing.MinimumCharge != nil && billing.MinimumCharge.Duration() <= 0 {
 		return fmt.Errorf("%s minimum charge must be positive", owner)
+	}
+	// A publisher that sells blocks of no time is billing continuously, which a
+	// fixture states by saying nothing. Stating a zero here would be a fixture
+	// asserting an increment and getting continuous billing.
+	if billing.Granularity != nil && billing.Granularity.Duration() <= 0 {
+		return fmt.Errorf("%s billing granularity must be positive, and a publisher selling no increment states none", owner)
 	}
 	return nil
 }

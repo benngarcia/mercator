@@ -1833,7 +1833,7 @@ func historyAnsweredFetch() scheduler.SchedulingInput {
 		PublishedAt:   now.Add(-24 * time.Hour),
 	}
 	offer := labOffer("rental-far", domain.OfferKindStanding, domain.LaneReusable,
-		labCandidate{provider: "simvast", region: "US-CA", machine: "machine-far"}, 2.5, nil)
+		labCandidate{provider: "simvast", region: "US-CA", machine: "machine-far"}, 2.5, scenario.BillingSpec{}, nil)
 	offer.ObservedAt = now
 	offer.ExpiresAt = now.Add(time.Minute)
 	offer.Images = domain.ImageInventory{Known: true, ObservedAt: now}

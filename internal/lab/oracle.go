@@ -94,7 +94,18 @@ func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapsh
 	if !referenceDisk(input, offer).Fits() {
 		return false
 	}
+	// Capacity reserved for other work, and capacity that stops being Mercator's
+	// before this Run would be off it, are refused by this model too. Both are
+	// terms of a sale rather than a price, so a model that priced them instead
+	// would rank a machine the work can never have and disagree with production
+	// about the winner for a reason belonging to neither model.
+	if !offer.Terms.Admits(input.Workload.Spec.Placement.Class) {
+		return false
+	}
 	estimates := referenceEstimates(input, offer)
+	if offer.Terms.OutlivesWindow(referenceOccupancy(input, estimates.StartSeconds)) {
+		return false
+	}
 	// A budget is not cleared by a candidate with no dollars to compare against it.
 	if maximum := input.Workload.Spec.Placement.MaxExpectedCostUSD; maximum != nil {
 		if estimates.CostUSD.Source == domain.CostUnpriced || estimates.CostUSD.Expected > *maximum {
@@ -265,6 +276,24 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	established.ImageFetch = referenceEstablished(established.ImageFetch, registry)
 	established.Unpack = referenceEstablished(established.Unpack, storage)
 	established.ArtifactFetch = referenceEstablished(established.ArtifactFetch, store)
+	start := referenceStart(queue, stages)
+	cost, terms, committed := referenceCost(input, offer, referenceOccupancy(input, start))
+	return domain.CandidateEstimates{
+		QueueSeconds:            queue,
+		Stages:                  stages,
+		StartSeconds:            start,
+		EstablishedStartSeconds: referenceStart(queue, established),
+		CostUSD:                 cost,
+		CostTerms:               terms,
+		Committed:               committed,
+	}
+}
+
+// referenceOccupancy is this model's own account of when a Run would hold a
+// machine and for how long. It reads the start it just derived, because what a
+// second of an already-committed interval is worth to a Run depends on whether
+// the Run is there for it.
+func referenceOccupancy(input scheduler.SchedulingInput, start domain.Estimate) domain.Occupancy {
 	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
 	if runtime <= 0 {
 		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
@@ -272,13 +301,15 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 	if runtime <= 0 {
 		runtime = 1
 	}
-	billed := math.Max(runtime, float64(offer.Pricing.MinimumChargeSeconds))
-	return domain.CandidateEstimates{
-		QueueSeconds:            queue,
-		Stages:                  stages,
-		StartSeconds:            referenceStart(queue, stages),
-		EstablishedStartSeconds: referenceStart(queue, established),
-		CostUSD:                 referenceCost(offer, billed),
+	maximum := float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
+	if maximum <= 0 {
+		maximum = float64(domain.DefaultMaxRuntimeSeconds)
+	}
+	return domain.Occupancy{
+		At:                input.EvaluatedAt,
+		StartSeconds:      start.Expected,
+		RuntimeSeconds:    runtime,
+		MaxRuntimeSeconds: maximum,
 	}
 }
 
@@ -293,15 +324,61 @@ func referenceEstablished(estimate domain.Estimate, rate domain.LinkSpeed) domai
 	return estimate
 }
 
-// referenceCost is what this model says running here is billed at. It states the
-// absence of a price the same way production does, because that absence is what
-// the ranking reads: a model predicting zero dollars for a machine nobody quoted
-// would call it the cheapest candidate in the world and agree with nothing.
-func referenceCost(offer domain.OfferSnapshot, billedSeconds float64) domain.Estimate {
+// referenceCost is this model's own account of what Mercator's spend changes by
+// if this Run occupies this machine, term by term. It states the absence of a
+// price the same way production does, because that absence is what the ranking
+// reads: a model predicting zero dollars for a machine nobody quoted would call
+// it the cheapest candidate in the world and agree with nothing.
+//
+// Every term is derived here rather than borrowed. The seconds of an already-owed
+// interval are counted from this model's own occupancy, the increment a publisher
+// sells is rounded up to by this model's own arithmetic, and the acquisition fee is
+// charged by this model's own reading of what has to be allocated. A reference
+// model that called the production pricing function would agree with it about a
+// bug in the rounding, which is the one thing an independent model is for.
+func referenceCost(input scheduler.SchedulingInput, offer domain.OfferSnapshot, held domain.Occupancy) (domain.Estimate, []domain.CostTerm, domain.CommittedInterval) {
 	if !offer.Pricing.Known {
-		return domain.Estimate{Source: domain.CostUnpriced}
+		return domain.Estimate{Source: domain.CostUnpriced}, nil, domain.CommittedInterval{}
 	}
-	return domain.Estimate{Expected: offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billedSeconds}
+	rate := offer.Pricing.RatePerSecondUSD
+	committed := domain.CommittedInterval{}
+	if until := offer.Terms.CommittedUntil; !until.IsZero() {
+		owed := until.Sub(held.Begins()).Seconds()
+		committed = domain.CommittedInterval{
+			Until:       until,
+			FromSeconds: held.StartSeconds,
+			Seconds:     math.Max(0, math.Min(held.RuntimeSeconds, owed)),
+		}
+	}
+	fee, minimum := 0.0, 0.0
+	if offer.Kind == domain.OfferKindProvisionable {
+		fee, minimum = offer.Pricing.SetupFeeUSD, float64(offer.Pricing.MinimumChargeSeconds)
+	}
+	keepAlive := held.RuntimeSeconds - committed.Seconds
+	billed := referenceBilledSeconds(math.Max(keepAlive, minimum), offer.Pricing.GranularitySeconds)
+	terms := []domain.CostTerm{
+		{Name: domain.CostTermSetupFee, USD: fee},
+		{Name: domain.CostTermCommittedRent, USD: rate * committed.Seconds},
+		{Name: domain.CostTermKeepAlive, USD: rate * keepAlive},
+		{Name: domain.CostTermIdleTail, USD: rate * (billed - keepAlive)},
+	}
+	total := 0.0
+	for _, term := range terms {
+		total += term.USD
+	}
+	return domain.Estimate{Expected: total}, terms, committed
+}
+
+// referenceBilledSeconds is this model's own account of what a publisher charges
+// for holding a machine for these seconds. A publisher that states no increment
+// bills continuously; every other one sells whole increments and bills a whole
+// one for a second of use.
+func referenceBilledSeconds(seconds float64, granularity int64) float64 {
+	if granularity <= 0 || seconds <= 0 {
+		return math.Max(0, seconds)
+	}
+	increments := math.Ceil(seconds / float64(granularity))
+	return increments * float64(granularity)
 }
 
 // referenceDisk is the reference model's own account of what this Run asks of

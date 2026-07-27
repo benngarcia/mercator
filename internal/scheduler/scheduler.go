@@ -412,6 +412,39 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	// It refuses the machine for what it is rather than for what it is doing, so no
 	// amount of waiting ends it and the fleet answer counts this candidate among the
 	// machines that can never hold this Run.
+	// Capacity somebody holds for a particular kind of work is refused to every
+	// other kind rather than priced for it. Reserved capacity is a statement about
+	// what the machine is for, so no amount of waiting makes a batch sweep eligible
+	// for a machine kept for work somebody is watching, and pricing it there would
+	// rank a machine the sweep can never have.
+	if !offer.Terms.Admits(workload.Spec.Placement.Class) {
+		violations = append(violations, domain.Violation{
+			Code:     "CLASS_NOT_ELIGIBLE",
+			Path:     "capacity_terms.eligible_classes",
+			Required: offer.Terms.EligibleClasses,
+			Offered:  workload.Spec.Placement.Class,
+			Message:  "This capacity is reserved for other service classes, and this Run's class is not one of them.",
+		})
+	}
+	// Capacity that stops being Mercator's at a known moment is refused work that
+	// could still be holding it then. The bound is the runtime Mercator enforces
+	// rather than the one the Run expects, because the expectation is a guess and
+	// the bound is what Mercator would actually allow: admitting on the guess puts
+	// work on a machine that goes away underneath it whenever the guess is short.
+	//
+	// It is a refusal rather than a price because there is nothing to trade off. A
+	// window that closes mid-Run does not make the work more expensive, it makes it
+	// not happen, and a Run that waits longer for this machine is worse off rather
+	// than better.
+	if offer.Terms.OutlivesWindow(work.occupancy) {
+		violations = append(violations, domain.Violation{
+			Code:     "AVAILABILITY_WINDOW_CLOSES",
+			Path:     "capacity_terms.available_until",
+			Required: offer.Terms.AvailableUntil,
+			Offered:  work.occupancy.LatestEnd(),
+			Message:  "This capacity stops being available before the Run would have to be off it.",
+		})
+	}
 	if offer.Reclaimable && !workload.Spec.Placement.Class.Admission().PermitsInterruption {
 		violations = append(violations, domain.Violation{
 			Code:     "INTERRUPTION_NOT_PERMITTED",
@@ -496,6 +529,11 @@ type candidateWork struct {
 	// LinkSpeed produced the seconds and this account of them.
 	rates []domain.TransferRate
 	disk  domain.DiskDemand
+	// occupancy is when this Run would hold the machine and for how long, which
+	// is what the price above was computed over and what the terms of the sale
+	// are checked against. It travels with the estimates because it is derived
+	// from one of them: the start.
+	occupancy domain.Occupancy
 }
 
 // contentWork is what one kind of content costs this candidate and how much of
@@ -538,18 +576,29 @@ func estimateCandidate(input SchedulingInput, offer domain.OfferSnapshot) candid
 	// carries above is never one a measurement of some other launch swallowed.
 	answer := stagePredictor(input, offer)
 	stages, established = stages.Answered(answer), established.Answered(answer)
+	start := startEstimate(input, queue, stages)
+	// The price is asked last, of the start this launch was just predicted to
+	// have. What a machine costs depends on when the Run gets it: the seconds a
+	// Run spends of an interval Mercator already owes begin where the wait in
+	// front of it ends, and a model that priced from the decision's own moment
+	// would sell one committed hour to everything queued on the machine.
+	held := occupancy(input, start)
+	cost, terms, committed := costEstimate(input, offer, held)
 	return candidateWork{
 		estimates: domain.CandidateEstimates{
 			QueueSeconds:            queue,
 			Stages:                  stages,
-			StartSeconds:            startEstimate(input, queue, stages),
+			StartSeconds:            start,
 			EstablishedStartSeconds: startEstimate(input, queue, established),
-			CostUSD:                 costEstimate(input, offer),
+			CostUSD:                 cost,
+			CostTerms:               terms,
+			Committed:               committed,
 		},
 		image:     content.locality,
 		artifacts: content.evidence,
 		rates:     transferRates(content, registry, storage, store),
 		disk:      content.disk,
+		occupancy: held,
 	}
 }
 
@@ -808,27 +857,122 @@ func startingStages(stages domain.LaunchStageEstimates) []domain.Estimate {
 	return parts
 }
 
-// costEstimate is what this Run is billed for running here, over the runtime it
-// declared. A machine nobody quoted has no such number, and the estimate says so
-// rather than predicting nothing: a rate of zero is a machine somebody says is
-// free, and a machine Mercator would actually pay for is not that.
-func costEstimate(input SchedulingInput, offer domain.OfferSnapshot) domain.Estimate {
-	if !offer.Pricing.Known {
-		return domain.Estimate{Source: domain.CostUnpriced, ModelVersion: input.ModelVersion}
+// occupancy is when this Run would hold this candidate and for how long. The
+// start it is measured from is the prediction the rest of this file just made,
+// which is what makes the price of a committed second belong to the Run that
+// really spends it: a Run queued behind an hour of work occupies the second hour
+// of a commitment, not the first.
+func occupancy(input SchedulingInput, start domain.Estimate) domain.Occupancy {
+	_, maximum := runtimeBounds(input.Workload)
+	return domain.Occupancy{
+		At:                input.EvaluatedAt,
+		StartSeconds:      start.Expected,
+		RuntimeSeconds:    billedRuntimeSeconds(input.Workload),
+		MaxRuntimeSeconds: maximum,
 	}
-	seconds := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
+}
+
+// billedRuntimeSeconds is how long this Run is priced for. It is the caller's own
+// expectation where there is one, the bound Mercator enforces where there is not,
+// and a second where a revision states neither, because a placement priced at no
+// seconds at all would rank every machine in the fleet identically.
+func billedRuntimeSeconds(workload domain.WorkloadRevision) float64 {
+	seconds := workload.Spec.Placement.ExpectedRuntimeSeconds
 	if seconds <= 0 {
-		seconds = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
+		seconds = float64(workload.Spec.Execution.MaxRuntimeSeconds)
 	}
 	if seconds <= 0 {
 		seconds = 1
 	}
-	billed := math.Max(seconds, float64(offer.Pricing.MinimumChargeSeconds))
+	return seconds
+}
+
+// costEstimate is what Mercator's spend changes by if this Run occupies this
+// machine, and the account of what that number is made of. A machine nobody
+// quoted has no such number, and the estimate says so rather than predicting
+// nothing: a rate of zero is a machine somebody says is free, and a machine
+// Mercator would actually pay for is not that.
+//
+// Four terms, because a rate times a runtime is only one of them:
+//
+// Rent for seconds Mercator has already committed to is charged to whoever
+// spends them. The invoice arrives either way, so the money is not what this
+// decision changes; the seconds are, because nothing else can have them
+// afterwards. That is what an owned machine's shadow price states, and it is why
+// an idle owned machine is not free: its seconds are the scarce thing.
+//
+// Rent for seconds beyond that commitment is what this placement is what commits
+// Mercator to, and it is bought in whatever increment the publisher sells. The
+// part of that increment nothing will use is the idle tail, charged here rather
+// than to nobody: an hourly machine asked for twenty minutes costs the hour, and
+// a model that billed the twenty minutes reported two thirds of the bill to
+// nobody.
+//
+// The setup fee is charged to capacity Mercator has to acquire and never to
+// capacity it already holds, because a machine that is already running was
+// already paid for. Charging it to every candidate priced an existing machine as
+// though it were being bought again.
+func costEstimate(input SchedulingInput, offer domain.OfferSnapshot, held domain.Occupancy) (domain.Estimate, []domain.CostTerm, domain.CommittedInterval) {
+	if !offer.Pricing.Known {
+		return domain.Estimate{Source: domain.CostUnpriced, ModelVersion: input.ModelVersion}, nil, domain.CommittedInterval{}
+	}
+	committed := committedInterval(offer.Terms, held)
+	price, rate := offer.Pricing, offer.Pricing.RatePerSecondUSD
+	keepAlive := held.RuntimeSeconds - committed.Seconds
+	// The minimum charge is the smallest allocation this publisher sells, so it
+	// binds only where Mercator is allocating something. A machine it already
+	// holds has already paid whatever minimum its allocation carried.
+	billed := price.BilledSeconds(math.Max(keepAlive, float64(minimumChargeSeconds(offer))))
+	terms := []domain.CostTerm{
+		{Name: domain.CostTermSetupFee, USD: acquisitionFee(offer)},
+		{Name: domain.CostTermCommittedRent, USD: rate * committed.Seconds},
+		{Name: domain.CostTermKeepAlive, USD: rate * keepAlive},
+		{Name: domain.CostTermIdleTail, USD: rate * (billed - keepAlive)},
+	}
+	total := 0.0
+	for _, term := range terms {
+		total += term.USD
+	}
 	return domain.Estimate{
-		Expected:     offer.Pricing.SetupFeeUSD + offer.Pricing.RatePerSecondUSD*billed,
+		Expected:     total,
 		Source:       "price_model",
 		ModelVersion: input.ModelVersion,
+	}, terms, committed
+}
+
+// committedInterval is the already-owed rent this candidate met, and nothing at
+// all for capacity nothing is owed on. The absence is stated as an absence
+// because a commitment recorded with no moment in it would read as an interval
+// that has already lapsed, and those are opposite answers: a machine whose
+// interval ended pays for its next second, and a machine nobody has allocated
+// pays for its first.
+func committedInterval(terms domain.CapacityTerms, held domain.Occupancy) domain.CommittedInterval {
+	if terms.CommittedUntil.IsZero() {
+		return domain.CommittedInterval{}
 	}
+	return domain.CommittedInterval{
+		Until:       terms.CommittedUntil,
+		FromSeconds: held.StartSeconds,
+		Seconds:     terms.CommittedSeconds(held),
+	}
+}
+
+// acquisitionFee is what this publisher charges to hand over a machine, and
+// nothing for a machine Mercator is already holding.
+func acquisitionFee(offer domain.OfferSnapshot) float64 {
+	if offer.Kind != domain.OfferKindProvisionable {
+		return 0
+	}
+	return offer.Pricing.SetupFeeUSD
+}
+
+// minimumChargeSeconds is the shortest allocation this publisher sells, asked
+// only of capacity Mercator would be allocating.
+func minimumChargeSeconds(offer domain.OfferSnapshot) int64 {
+	if offer.Kind != domain.OfferKindProvisionable {
+		return 0
+	}
+	return offer.Pricing.MinimumChargeSeconds
 }
 
 // queueable reports whether a Run may wait behind work already assigned here.
