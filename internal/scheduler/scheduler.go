@@ -412,6 +412,15 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	// It refuses the machine for what it is rather than for what it is doing, so no
 	// amount of waiting ends it and the fleet answer counts this candidate among the
 	// machines that can never hold this Run.
+	if offer.Reclaimable && !workload.Spec.Placement.Class.Admission().PermitsInterruption {
+		violations = append(violations, domain.Violation{
+			Code:     "INTERRUPTION_NOT_PERMITTED",
+			Path:     "reclaimable",
+			Required: false,
+			Offered:  true,
+			Message:  "Offer capacity can be taken back by its provider, and this Run's class does not permit interruption.",
+		})
+	}
 	// Capacity somebody holds for a particular kind of work is refused to every
 	// other kind rather than priced for it. Reserved capacity is a statement about
 	// what the machine is for, so no amount of waiting makes a batch sweep eligible
@@ -443,15 +452,6 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 			Required: offer.Terms.AvailableUntil,
 			Offered:  work.occupancy.LatestEnd(),
 			Message:  "This capacity stops being available before the Run would have to be off it.",
-		})
-	}
-	if offer.Reclaimable && !workload.Spec.Placement.Class.Admission().PermitsInterruption {
-		violations = append(violations, domain.Violation{
-			Code:     "INTERRUPTION_NOT_PERMITTED",
-			Path:     "reclaimable",
-			Required: false,
-			Offered:  true,
-			Message:  "Offer capacity can be taken back by its provider, and this Run's class does not permit interruption.",
 		})
 	}
 	if exceedsStartSLO(workload.Spec.Placement.MaxP90StartSeconds, estimates.EstablishedStartSeconds) {
