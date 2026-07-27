@@ -1240,12 +1240,12 @@ complete because it works against a live provider.
     no longer names is a pull that runs to completion there. The Lab world models
     it because a provider seam can, and the node's half is
     [#170](https://github.com/benngarcia/mercator/issues/170). A refused
-    preparation is terminal: the operation store dedupes on the identity with no
-    regard for its state, so a node whose pull failed answers Duplicate for that
-    content from then on and the desired set is never restated either, which
-    defeats the node agent's own intent to retry. Reproduced under "the rate bound
-    under review" below and owed a slice, because reissuing a refusal changes what
-    an operation identity promises and the Lab world cannot yet refuse a fetch.
+    preparation was terminal: the operation store deduped on the identity with no
+    regard for its state, so a node whose pull failed answered Duplicate for that
+    content from then on and the desired set was never restated either, which
+    defeated the node agent's own intent to retry. Repaired under "replanning by
+    explicit policy" below, where the store became state-aware and the Lab world
+    gained a way to refuse a fetch.
     Nothing in production implements `orchestrator.ArtifactCatalog`, so no
     production Run declares an Artifact and the Artifact half of the desired set is
     exercised at L1 and against a real object store rather than end to end.
@@ -3457,6 +3457,52 @@ complete because it works against a live provider.
     in the section below rather than left as silence: stopped-state storage, preemption
     risk, and warm-capacity opportunity cost as a term of its own.
 
+- [x] 2026-07-27: Replanning by explicit policy, and a refusal that is not terminal.
+  Reconciliation's mechanics were already real and its policy was implied, and the
+  operation store's dedupe was state-blind, so a machine that refused a pull was
+  answered Duplicate for that content forever.
+  - An operation identity is reissuable exactly when a refusal can have left nothing
+    behind, which is the line `CommandKind.MayLeaveEffectOnFailure` already drew for
+    the node agent's own retry rule: a failed pull left nothing, a failed launch may
+    have made the container. So a refused preparation is asked again and a refused
+    launch keeps its identity spent, and `nodetest.RunStoreSuite` carries both
+    promises so the in-memory and SQLite stores cannot drift apart on them. The
+    refused row is rewritten in place rather than appended beside itself, because
+    the sequence is where the node was first told about this content and a second
+    row would redeliver in the wrong order after a reconnection.
+  - `PrepareReceipt.Refused` is the third answer the seam was missing, and the
+    orchestrator's memory now remembers what the far side took on rather than what
+    Mercator asked for. Remembering a refusal as asked-for is what made it permanent
+    at the control plane: the desire is recomputed identically on the next sweep and
+    an unchanged desire is not resent. On the node lane the refusal is asynchronous,
+    so what triggers a second ask there is still a change to the desired set; what
+    this slice fixes is that the second ask reaches the runtime when it comes.
+  - The Lab world can refuse a fetch, under a `reject_command` fault on
+    `node.prepare_image` or `node.prepare_artifact`, and holds the same rule the
+    store now does: a refused fetch is not remembered as work it took on.
+    `a-refused-prepare-can-be-asked-again` is the fixture. It is a conformance entry
+    rather than the top-level path the slice named, because `LoadCorpus` refuses an
+    arrival-driven Blueprint there: every top-level entry is a placement fixture.
+  - `janitor.OrphanPolicy` is the replanning half, stated once and recorded with
+    every decision. Capacity whose recorded launch says the machine outlives its
+    workload is adopted, its slot released and the machine kept; everything else
+    stops existing. The behaviour change is that capacity Mercator cannot account
+    for is destroyed rather than half-reclaimed: releasing only its slot left a
+    machine billing that no Run could ever be placed on. A Run that closed with no
+    cleanup ever asked for is converged too, which is the hole a sweep keyed on the
+    cleanup request alone could only skip.
+  - `safety.orphan_policy_is_explicit` replaces `liveness.orphan_convergence`, which
+    asked that no execution outlive its Run and therefore had exactly one lawful
+    answer to a world holding one: an error. The new rule asks what became of the
+    capacity a world began holding, so a machine still standing has simply not been
+    swept and a machine converged with no decision behind it is the violation.
+  - `world.orphans` is the Blueprint vocabulary, and it is deliberately not an
+    execution. Every rule about the fleet reads an execution as work Mercator is
+    accountable for, so folding the two together would make capacity nobody
+    recognises look like a launch with half its identity missing, which is what
+    `safety.owned_external_resources` exists to refuse. The Lab control plane runs
+    the janitor after the Runs settle, for the same reason production does.
+
 
 ## Phase status
 
@@ -3465,7 +3511,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; the hierarchical estimator, replanning, affinity, stopped-state storage, preemption-risk pricing, and a production publisher for reclaimable capacity remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; the hierarchical estimator, affinity, stopped-state storage, preemption-risk pricing, and a production publisher for reclaimable capacity remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -3840,6 +3886,30 @@ Phase 3 added:
   arrives between two ticks, so the moment the bound is tested is not a moment the
   driver chose. Deleting the rate bound, or restoring the substring comparison it
   replaced, each fails it through `safety.prewarm_rate_within_bound`.
+- `a-refused-prepare-can-be-asked-again` (conformance): one machine already holding
+  the image, one Run occupying it, and one queued Run that reads a twenty gigabyte
+  corpus. The machine turns the fetch away, and a minute later, which is the
+  soonest the rate bound allows, Mercator asks the same machine for the same
+  corpus again. The bytes land on the second ask. A world that remembered a refused
+  fetch as work it had taken on answers the second ask Duplicate and moves nothing;
+  a control plane that remembered refused content as content it had asked for
+  computes an unchanged desire and never asks twice.
+- `an-orphan-is-adopted-or-destroyed-by-policy` (conformance): three machines and
+  one Run. Two of them are holding something the control plane never launched, and
+  the control plane restarts into that state. The one still carrying a Run identity
+  Mercator can account for is adopted, its slot released and its machine kept; the
+  one carrying nothing anybody can account for is terminated and its machine stops
+  existing. The fleet afterwards is the claim, because an adoption that quietly
+  destroyed the machine and a termination that quietly kept it read the same in a
+  count of things reclaimed.
+- `safety.orphan_policy_is_explicit` (Lab invariant): capacity a world began
+  holding that Mercator never launched is either still standing or converged by a
+  decision the record holds, and every such decision names a policy, a reason, and
+  one of the two outcomes an operator can act on. It reads what a world began with
+  rather than the fleet as it stands, because the interesting case is the machine
+  that is no longer here. It replaces `liveness.orphan_convergence`, which asked
+  that no execution outlive its Run and so had one lawful answer to a world holding
+  one: an error.
 - `safety.prewarm_rate_within_bound` (Lab invariant): no two moments at which
   Mercator began preparing are closer together than the world's `min_interval`.
   It is stated over the moments preparation started rather than over transfers,
@@ -4582,6 +4652,55 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 replanning by explicit policy
+
+On 2026-07-27, two defects the plan already recorded as owed were repaired on a
+Linux workstation with Docker Engine 29.6.2 on the overlayfs driver, which is
+amd64 and not the arm64 macOS the phase 3 slices were built on. Nothing behaved
+differently there.
+
+The state-blind dedupe. `node.Operation.Reissuable` is the whole rule and it
+reuses the line `CommandKind.MayLeaveEffectOnFailure` already drew. Restoring the
+state-blind answer fails both stores through `nodetest.RunStoreSuite` with "a
+preparation the node refused must be askable again, not answered as already
+recorded", fails the Lab fixture with "the ledger records 1 asks for the refused
+corpus, want the refusal and the ask that followed it", and fails the daemon case
+with "the machine never held content it refused once and was asked for again".
+Marking a refused fetch as prepared in the Lab world fails
+`safety.idempotent_external_commands` with "duplicate effect
+node.prepare_artifact/prepare-artifact/builder/artifact:corpus:v9 has no accepted
+command".
+
+The orphan policy. Converging without recording fails
+`safety.orphan_policy_is_explicit` with "orphaned capacity orphan-nobody-claims is
+gone from this world and no decision names the policy that took it". Reclaiming
+unattributed capacity by releasing its slot, which is what the sweep did before it
+had a policy, fails `an-orphan-is-adopted-or-destroyed-by-policy` with "the fleet
+is [forgotten keeper stranded], and the machine the policy terminated is still
+billing".
+
+What is left. The node lane's second ask is triggered by a change to the desired
+set rather than by the node's own refusal reaching the control plane: a node
+settles a refusal asynchronously, nothing in the prewarm controller subscribes to
+that, and an unchanged desire is not resent. The store change is what makes the
+second ask reach the runtime when it comes, which is the whole of what this slice
+was scoped to. Orphaned reusable capacity is still only what `ListOwned` reports,
+which is the ephemeral executor's view; `capability.CapacityProvider.ListOwnedCapacity`
+has no caller, so a machine Mercator provisioned and lost the Rental record for is
+not yet something the policy can see.
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/node/... ./internal/storage/sqlite ./internal/janitor \
+  ./internal/orchestrator ./internal/broker ./internal/adapter/... \
+  ./internal/lab ./internal/scenario ./internal/daemon -count=1
+```
+
+The live half ran with Docker on PATH: `internal/nodeagent` against a real daemon
+and a real object store, `internal/adapter/docker`, `internal/ociresolver` against
+a real registry, and `internal/daemon` with the local Docker connection seeded.
+All green. #165 does not reproduce here and was left alone.
 
 ### Phase 4 no capacity is free
 
