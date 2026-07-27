@@ -2,15 +2,19 @@ package daemon_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/benngarcia/mercator/internal/daemon"
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/runprojection"
 	sqlitestore "github.com/benngarcia/mercator/internal/storage/sqlite"
 	"github.com/benngarcia/mercator/internal/workspace"
 )
@@ -170,5 +174,69 @@ func TestLocalAuthRuntimeRejectsNonLoopbackHosts(t *testing.T) {
 	}
 	if cookies := response.Cookies(); len(cookies) != 0 {
 		t.Fatalf("rebound host received cookies: %v", cookies)
+	}
+}
+
+// TestRuntimeRebuildsTheRunProjectionARenameMadeStale is the migration and the read
+// model derived from it, through the whole startup path a real installation takes:
+// the SQLite file on disk, every migration in order, and the rebuild pass that reads
+// what they left behind.
+//
+// The service class migration rewrites the vocabulary inside the event log, and the
+// Run projection is stored rather than recomputed, so without the rebuild every Run
+// recorded before a Run stated its class reads back with no class at all. The
+// storage package can say the projection was marked stale; only this says the daemon
+// acts on it, and the class an operator is served comes from the migrated log.
+//
+// Docker is left alone here rather than stubbed on PATH: the runtime probes the local
+// daemon at startup, and this case is about what a real startup does.
+func TestRuntimeRebuildsTheRunProjectionARenameMadeStale(t *testing.T) {
+	// Arrange: an installation whose events and Run projection both predate the
+	// service class, which is the state the rename leaves behind.
+	dsn := "file:" + filepath.Join(t.TempDir(), "mercator.db")
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	fixture, err := os.ReadFile(filepath.Join("..", "storage", "sqlite", "testdata", "legacy_objective_event.sql"))
+	if err != nil {
+		t.Fatalf("read the pre-migration fixture: %v", err)
+	}
+	if _, err := db.ExecContext(t.Context(), string(fixture)); err != nil {
+		t.Fatalf("load the pre-migration fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close the arranged database: %v", err)
+	}
+
+	// Act: start the production runtime over it, and stop it again.
+	runtime, err := daemon.New(t.Context(), daemon.Config{
+		SQLiteDSN:     dsn,
+		OperatorToken: "operator-token",
+		MasterKey:     []byte("0123456789abcdef0123456789abcdef"),
+	})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	if err := runtime.Shutdown(t.Context()); err != nil {
+		t.Fatalf("shutdown runtime: %v", err)
+	}
+
+	// Assert: the projection an API reader is served states the class the migrated
+	// history now carries.
+	storage, err := sqlitestore.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("reopen storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	page, err := storage.Runs().List(t.Context(), "ws_1", runprojection.PageRequest{})
+	if err != nil {
+		t.Fatalf("list the Run projection: %v", err)
+	}
+	if len(page.Records) != 1 {
+		t.Fatalf("the projection holds %d Runs, want the one the fixture recorded", len(page.Records))
+	}
+	if page.Records[0].ServiceClass != domain.ClassInteractive {
+		t.Errorf("the projected Run reads class %q after a real startup", page.Records[0].ServiceClass)
 	}
 }

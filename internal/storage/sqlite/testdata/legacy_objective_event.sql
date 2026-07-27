@@ -108,7 +108,7 @@ CREATE TABLE runs (
 
 INSERT INTO runs (workspace_id, run_id, closed, record_json) VALUES (
   'ws_1', 'run_2', 1,
-  '{"id":"run_2","workspace_id":"ws_1","workload_revision_id":"wrev_2","phase":"closed","outcome":"succeeded","cleanup":{"state":"released"},"closed":true}'
+  '{"id":"run_2","workspace_id":"ws_1","workload_revision_id":"wrev_2","phase":"closed","outcome":"succeeded","cleanup":"confirmed","closed":true}'
 );
 
 CREATE TABLE run_projection_metadata (
