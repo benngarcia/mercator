@@ -3114,11 +3114,13 @@ complete because it works against a live provider.
     naming the arrival that overtook the batch Run and the wait it had accumulated.
     Deleting the queue-delay branch from `deferOrRefuse` fails
     `conformance/a-queue-delay-bound-is-refused-loudly` on the same law's first half.
-    The strengthened clause has its own cases in `internal/lab`: younger work admitted
-    past a Run later refused is a violation, and a wait past its bound refused under
-    another name is a violation, while a fleet that could hold nothing, older work
-    admitted ahead, another tenant's admission, and a Run placed again after a failed
-    launch are all silent.
+    The strengthened clause has its own cases in `internal/lab`. Younger work admitted
+    past a Run later refused is a violation, a wait past its bound refused under
+    another name is a violation, a Run the fleet could hold when its wait began and not
+    when it ended is a violation, and a Run Mercator itself placed a machine for is a
+    violation; while a fleet that held nothing from the first deferral to the refusal,
+    older work admitted ahead, another tenant's admission, and a Run placed again after
+    a failed launch are all silent.
   - Two reviewers refuted parts of this slice on 2026-07-27, five of the six findings
     were real, and all five are repaired. Every repair has a case that is red against
     the reading it replaces, driven one at a time.
@@ -3157,6 +3159,8 @@ complete because it works against a live provider.
       reading deliberately does not do: production asks whether other work must be held
       behind this wait now, where an unrenewed exemption is a claim about a fleet nobody
       has asked since.
+    - Two reviewers refuted parts of that pass in turn, and three of these five repairs
+      were incomplete. What each of them left is in the entry below.
     - Rejected, with the evidence. The sixth finding is that feeding `run.queued` into
       `Starved` refuses a Run for time it spent holding a Booking rather than queueing.
       `queued` is elapsed time since the first deferral, which is what the class deadline
@@ -3167,6 +3171,58 @@ complete because it works against a live provider.
       spent the hour queued or spent it failing to launch. Max pre-start attempts bound
       how many machines a Run may be tried on, the class bounds how long its caller
       waits, and whichever bites first is the answer.
+  - The review of that review, on 2026-07-27. Four findings were real and one is
+    rejected with its evidence. Every repair is red against the reading it replaces.
+    - "Both laws" is three laws. `internal/lab/invariant_admission.go` holds three that
+      measure a wait, and `noPlacementPastItsDeadline` was left restarting the clock at
+      each placement, contradicting its own doc comment. So
+      `safety.class_bounds_honoured` measured a shorter wait than `stepAdmit` refuses on,
+      and could not fail for any Run placed past its deadline that had been placed once
+      before, which is exactly the shape a failed launch produces. There is one reading
+      now, `waitsBegan`, and all three laws take the moment from it.
+    - The widened exemption survived a placement Mercator itself made. A Run measured
+      unholdable once, given a machine, and sent back through admission carried that
+      first answer for the rest of its life, because every later deferral through the
+      priority door records no fleet at all, so a Run the fleet demonstrably held was
+      exempt from the starvation law outright. The exemption is every answer during the
+      wait now, and a placement is the strongest answer there is that the fleet could
+      hold the Run. The same reading fixes the other direction: a Run the fleet could
+      hold when its wait began, overtaken for an hour, and refused after the machine
+      left the fleet was exempt on the strength of the last answer alone.
+    - Production held both of the readings the Lab was corrected for.
+      `runState.queuedSince` never moves, and `applyToQueue` dropped the moment a wait
+      began at every placement, so a Run deferred, placed, and told to wait again was
+      ranked at its whole wait by its own door and as an arrival by every other Run in
+      its tenant: it aged toward a queue delay measured from a moment nobody else could
+      see while fresh work of a higher class was admitted past it. The queue keeps both
+      facts now, membership and the moment. The finding named a launch failure as the
+      path that reaches it, and that half is refuted: a replacement that finds no
+      machine closes the Run `RETRY_EXHAUSTED` rather than returning it to the queue,
+      and the only other path, expiring a Booking past its latest start and re-placing
+      its Run, is the schedule advancement this corpus still carries as a target with
+      `schedule_advancement` declared missing. The disagreement was latent rather than
+      live, which is why no Blueprint states it: the record is stated in an orchestrator
+      test over the real event log, and the Blueprint belongs to the slice that builds
+      schedule advancement.
+    - Moving `a-machine-that-came-free-too-late-is-not-a-start` to
+      `QUEUE_DELAY_EXCEEDED` was right, and it left `DEADLINE_UNREACHABLE` asserted by
+      nothing in the whole executable specification. The elapsed branch of
+      `Admission.BoundAlreadyBroken` cannot fire for any class in the table, as the
+      entry above concedes, so the projected miss in `deferOrRefuse` is the only thing
+      left that can produce the word at all, and deleting those four lines left every
+      one of the 36 packages green. `a-start-nobody-can-reach-is-refused-at-the-door`
+      states the world that branch exists for: a machine whose Booking queue is full
+      for twenty five minutes, an interactive Run with no wait behind it and both its
+      bounds still ahead of it, and an answer that has already stopped being worth
+      producing.
+    - Rejected, with the evidence. One finding is that the plan's own
+      `safety.class_bounds_honoured` entries claim the opposite of what the law did, and
+      asks for the entries to be corrected. They say the deadline is measured from the
+      deferral that started the wait, which is what the law was written to do and now
+      does: the code was wrong and the prose was right, so the repair is in the code and
+      there is nothing to fix in the entries. The finding is filed twice, once against
+      `invariant_admission.go` and once against this document, and the code half is the
+      first repair above.
 
 
 ## Phase status
@@ -4005,8 +4061,20 @@ Phase 4 added:
   struck out as too slow and nothing projects when the wait ends. The machine comes
   free at ten minutes and a quarter, the Run is asked again half a minute later,
   and its class says it must have started within ten minutes of being told to wait.
-  It is refused `DEADLINE_UNREACHABLE`. Asking the deadline only of a Run being
-  told to wait places it instead, which is what the fixture fails on.
+  It is refused `QUEUE_DELAY_EXCEEDED`, which is the earlier of the two bounds that
+  wait broke. Asking the deadline only of a Run being told to wait places it instead,
+  which is what the fixture fails on.
+- `a-start-nobody-can-reach-is-refused-at-the-door` (green): one machine with every
+  Booking position taken and an interactive Run arriving into it with no wait behind
+  it. Both its bounds are still ahead of it and the record already says the machine
+  comes free in twenty five minutes, so the answer has stopped being worth producing
+  before anything was broken, and admission refuses it `DEADLINE_UNREACHABLE` at its
+  first pass. It is the only fixture that pins that reason, and the only branch that
+  can still produce it: `Admission.BoundAlreadyBroken` names the deadline only for a
+  wait that has already reached it, and every class states a queue delay shorter than
+  its own deadline, so a projected miss is the whole of it. Deleting the projected
+  miss from `deferOrRefuse` leaves the Run waiting on `NO_FEASIBLE_OFFER`, which is
+  what the fixture fails on, and left the rest of the tree green before it existed.
 - `a-cost-bound-refuses-the-machine-the-class-would-buy` (conformance): the same
   world under the real control plane, and the execution
   `safety.class_bounds_honoured` is falsifiable through. It asserts the refused
@@ -4022,11 +4090,14 @@ Phase 4 added:
   the bounds say how far. The maximum queue delay is deliberately not restated in
   it, because that promise is what `liveness.aging_prevents_starvation` is stated
   over and two laws over one bound let a repair satisfy one of them and be
-  believed. The deadline half is exercised at L0 and in the rule's own clause test
-  and nowhere at L1: every class's maximum queue delay is shorter than its
-  deadline, so a Run driven to its deadline in fine sweeps is refused at the earlier
-  bound first, and one driven there in a single advance is refused for the deadline
-  because both have gone by.
+  believed. The deadline half is exercised at L0 and in the rule's own clause tests
+  and nowhere at L1, and it cannot be reached by driving a Run to its deadline at all:
+  every class's maximum queue delay is shorter than its deadline, so a wait that
+  reaches the later bound broke the earlier one first and
+  `Admission.BoundAlreadyBroken` names the earlier one at both doors. What this law
+  catches is a placement past the moment, which is a decision rather than a refusal,
+  and its own deliberate failure is a Run placed 15000 seconds into a wait its class
+  bounds at 14400 with a failed launch in the middle of it.
 - `a-class-with-no-deadline-still-stops-waiting` (green): one machine with 200GB and
   an opportunistic Run asking for 900GB. Two hours and a minute later it is refused
   `QUEUE_DELAY_EXCEEDED`, which is the only bound that can end this wait: its class
@@ -4077,7 +4148,7 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 52 regression Blueprints: 49 green and 3 target, beside one demo,
+The corpus is 53 regression Blueprints: 50 green and 3 target, beside one demo,
 one minimized case, and twenty six conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
@@ -4149,6 +4220,77 @@ the launch.
 
 ## Verification evidence
 
+### Phase 4 the review of the queue review, and the three repairs that stopped short
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine on Ubuntu 26.04, against `beng/prediction-and-service-classes` at
+the four commits above `fc3fbdb`. `go build ./...`, `go vet ./...` and `go test ./...
+-count=1` all clean over 36 packages, and `go test -race -count=1` clean over
+`internal/domain`, `internal/lab`, `internal/orchestrator` and `internal/scenario/...`,
+`internal/lab` taking 198s of it.
+
+Every repair is red against the reading it replaces, mutated back one at a time.
+
+- Letting `waitsBegan` move the moment a wait began on a later deferral fails
+  `TestAReplacedRunIsHeldToTheDeadlineOfItsWholeWait`, which is a standard Run placed
+  15000 seconds into one wait against the 14400 its class states, with a placement and
+  a second deferral in the middle of it. Before the repair the law returned nothing on
+  that record and `replayQueueDepartures` beside it reported the same wait as 15000
+  seconds, which is the two readings that were in one file.
+- Dropping the placement from the fleet's answer fails
+  `TestAPlacementRevokesTheFleetExemption`, a batch Run measured unholdable at the
+  first deferral, given a machine at 600 seconds, refused at its bound at 3601, with an
+  interactive Run that had waited nothing admitted at 2000.
+- Reading that answer off the latest measurement rather than off all of them fails
+  `TestARefusedQueueDelayIsStarvationWhenTheFleetOnceHeldIt`, which is the same shape
+  without the placement: the fleet could hold the Run when its wait began and could not
+  when it ended.
+- Restoring the delete of the wait's own moment on a placement in `applyToQueue` fails
+  `TestAPlacementDoesNotRestartTheWaitTheQueueOrdersOn`, which reports the fresh
+  standard Run waiting on `NO_FEASIBLE_OFFER` where the batch Run twenty minutes into
+  its wait should have held it.
+- Deleting the projected-miss branch from `deferOrRefuse` fails
+  `a-start-nobody-can-reach-is-refused-at-the-door` in `internal/scenario` with
+  `expected outcome "refuse", and admission recorded ... reason "NO_FEASIBLE_OFFER"`.
+  The same deletion against `fc3fbdb` left all 36 packages green, which is the coverage
+  the reason change vacated.
+
+One existing case changed the world it states rather than the claim it makes.
+`TestARefusedQueueDelayIsNotStarvationWhenTheFleetCouldHoldNothing` built its opening
+deferral with the generic helper, which records a machine that could hold the Run, and
+then asserted the law is silent about a fleet too small. Under the reading that looks
+at every answer during the wait that is a fleet which could hold it, so the fixture now
+states the world its own comment describes and the case it used to state is the new
+deliberate failure beside it.
+`TestARefusedQueueDelayIsNotStarvationWhenTheFleetLastSaidItCouldHoldNothing` is
+renamed for the reading it exercises.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed` and
+`TestAStartBoundRefusesOnlyThePathThisNodeMeasured` pass against MinIO containers of
+the native engine, and `MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker
+-run TestIntegration` passes against real containers. Nothing in this pass needed a
+container of its own: what it changes is the control plane's own record and the laws
+stated over it. Mercator issue #165 does not reproduce here and was left alone.
+
+Named and not fixed here, unchanged from the entry below. `gofmt -l .` reports
+`internal/adapter/vast/client.go`, `internal/scheduler/scheduler.go` and
+`internal/scheduler/scheduler_test.go`, struct tag alignment left by `595f7b0` and
+`1e13518` earlier on this branch, untouched by this pass and still held in another
+session's stash against this worktree.
+
+The root corpus is 53 Blueprints, 50 of them green, with 26 conformance fixtures. One
+green Blueprint was added and no fixture moved classification.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/lab ./internal/orchestrator \
+  ./internal/scenario/...
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
 ### Phase 4 the queue slice under review, and the five readings it got wrong
 
 On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
@@ -4201,7 +4343,12 @@ whitespace commit under it would conflict for no gain.
 
 The root corpus is 52 Blueprints, 49 of them green, with 26 conformance fixtures. No
 fixture moved classification: one green Blueprint states a different refusal reason,
-which is the behaviour under repair.
+which is the behaviour under repair. That sentence was written as though the change
+were costless, and the review of this review established that it was not:
+`a-machine-that-came-free-too-late-is-not-a-start` was the only fixture in the tree
+asserting `DEADLINE_UNREACHABLE`, so the move left the reason pinned by nothing and the
+projected miss in `deferOrRefuse` deletable with the whole suite green. The entry above
+this one records the fixture that pins it.
 
 ```text
 go build ./... && go vet ./... && go test ./... -count=1
