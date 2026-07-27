@@ -19,6 +19,7 @@ const (
 	refusedCorpus           = "artifact:corpus:v9"
 
 	refusalIsPerMachineBlueprint = "a-refusal-on-one-machine-is-not-a-withdrawal-on-another"
+	restartedWithdrawalBlueprint = "a-restart-still-withdraws-what-nobody-waits-for"
 )
 
 // TestContentAMachineRefusedIsAskedForAgain is the whole of what a refusal means
@@ -78,6 +79,49 @@ func TestOneMachineRefusingIsNotEveryMachineStopping(t *testing.T) {
 	if replica, held := heldReplica(execution, "west", refusedCorpus); held {
 		t.Fatalf("the machine holds %+v, want a read that stopped when the Runs waiting for it went away", replica)
 	}
+}
+
+// TestARestartedControlPlaneStillWithdrawsWhatNobodyWaitsFor is speculation
+// meeting the one thing that empties Mercator's memory of it. The machine was
+// asked for a hundred gigabyte corpus and started reading, the Run that wanted it
+// was withdrawn, and Mercator restarted before it could act on that.
+//
+// What the restarted control plane wants is nothing, and nothing is also what a
+// control plane that has never asked for anything wants. Those two are the same
+// set and not the same fact, and a memory that cannot tell them apart says
+// nothing at all: the transfer nobody is waiting for runs to completion and the
+// machine's room comes back only once the bytes have landed.
+func TestARestartedControlPlaneStillWithdrawsWhatNobodyWaitsFor(t *testing.T) {
+	execution := driveRestartedWithdrawalExecution(t)
+
+	withdrawn := abandonedPreparations(t, execution)
+	if len(withdrawn) != 1 {
+		t.Fatalf("the ledger records %d withdrawals, want the transfer the restart left running: %+v", len(withdrawn), withdrawn)
+	}
+	if withdrawn[0].OfferID != "west" || withdrawn[0].Content != refusedCorpus {
+		t.Fatalf("the withdrawal names %q on %q, want the corpus the machine was still reading", withdrawn[0].Content, withdrawn[0].OfferID)
+	}
+	if replica, held := heldReplica(execution, "west", refusedCorpus); held {
+		t.Fatalf("the machine holds %+v, want a read that stopped when the Run waiting for it went away", replica)
+	}
+}
+
+// driveRestartedWithdrawalExecution runs the Blueprint a virtual minute at a
+// time, for longer than the withdrawn transfer would have taken to land.
+func driveRestartedWithdrawalExecution(t *testing.T) *Execution {
+	t.Helper()
+	execution := openConformanceExecution(t, restartedWithdrawalBlueprint)
+	t.Cleanup(func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	})
+	for range 40 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the execution: %v", err)
+		}
+	}
+	return execution
 }
 
 // driveRefusalIsPerMachineExecution runs the Blueprint a virtual minute at a

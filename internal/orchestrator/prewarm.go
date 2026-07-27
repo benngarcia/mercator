@@ -64,6 +64,13 @@ type PrewarmResult struct {
 // in-process on purpose: the desired set is derived from the event log every
 // time, so a restarted Mercator recomputes it and resends, which the far side
 // answers Duplicate. Persisting it would make a durable record of a cache.
+//
+// Nothing asked for and nothing wanted are held apart, which is the whole reason
+// a restart is survivable here. A restarted Mercator whose Runs were all
+// withdrawn while it was down computes a desire that names nothing, and a memory
+// that read its own absence as having already asked for nothing would answer that
+// the fleet is in the state it wants and stay quiet, leaving whatever was in
+// flight to run to completion for Runs that no longer exist.
 type prewarmMemory struct {
 	mu   sync.Mutex
 	sent map[string]map[string]bool
@@ -97,6 +104,12 @@ func (memory *prewarmMemory) tooSoon(workspaceID string, now time.Time, interval
 // made a refusal permanent: the desire is recomputed identically on the next sweep
 // and an unchanged desire is not resent.
 //
+// A desire that named nothing leaves the clock the rate bound reads alone. That
+// bound is on how often Mercator may begin preparing, and a withdrawal begins
+// nothing: letting one start the interval would have a control plane that came up
+// with no queued work refuse to prepare the first Run to arrive for as long as
+// the bound lasts.
+//
 // A refusal is matched by the identity the desire stated the item under, which
 // names the machine as well as the content. Matching on content alone let one
 // host's refusal forget the same content another host had taken on, and what a
@@ -120,7 +133,9 @@ func (memory *prewarmMemory) record(workspaceID string, wanted []adapter.Prepare
 	}
 	memory.sent[workspaceID] = asked
 	memory.key[workspaceID] = prewarmOperationKey(workspaceID, kept)
-	memory.at[workspaceID] = now
+	if len(wanted) > 0 {
+		memory.at[workspaceID] = now
+	}
 }
 
 // adds reports whether this desire names content the memory has not asked for.
@@ -398,13 +413,15 @@ func prewarmItemKey(item adapter.PrepareItem) string {
 // reaching the same answer produce the same key, which is what lets the far
 // side treat a redelivered desire as the same desire and lets this controller
 // stay quiet when nothing has changed.
+//
+// Wanting nothing has a key of its own, like every other desire. It is the one
+// desire a control plane that has never asked for anything might be mistaken for
+// holding, and the two are opposite instructions: one leaves a fleet alone and
+// the other stops everything speculative on it. So a Mercator that comes up with
+// no queued work sends one withdrawal of nothing, which costs a machine nothing
+// and is the only thing that stops a transfer whose Runs went away while this
+// control plane was down.
 func prewarmOperationKey(workspaceID string, wanted []adapter.PrepareItem) string {
-	// Wanting nothing is the empty key, which is what a control plane that has
-	// never asked for anything is already holding. Without that, every Mercator
-	// with no queued work would send one withdrawal of nothing at startup.
-	if len(wanted) == 0 {
-		return ""
-	}
 	keys := make([]string, 0, len(wanted))
 	for _, item := range wanted {
 		keys = append(keys, prewarmItemKey(item))
