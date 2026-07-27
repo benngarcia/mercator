@@ -577,14 +577,25 @@ func TestSchedulerPopulatesDeterministicCollectionAndCandidateAuditData(t *testi
 		RunID:        "run_1",
 		Workload:     schedulerRevision(),
 		Offers:       []domain.OfferSnapshot{offB, offA},
+		// The census is what the collection reported, and it is not derivable from
+		// the offers: conn_c was asked and published nothing, and conn_d was not
+		// asked at all. Derived from the offers those two were the same fact, and
+		// admission reads an empty answer as the strongest thing a fleet can say.
+		Collection: domain.CollectionReport{
+			ConnectionsQueried:  []string{"conn_a", "conn_b", "conn_c"},
+			ExcludedConnections: []string{"conn_d: not authorized"},
+		},
 		ModelVersion: "latency-v1",
 		EvaluatedAt:  now,
 	})
 	if err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
-	if got := strings.Join(decision.CollectionReport.ConnectionsQueried, ","); got != "conn_a,conn_b" {
-		t.Fatalf("expected deterministic collection report, got %+v", decision.CollectionReport)
+	if got := strings.Join(decision.CollectionReport.ConnectionsQueried, ","); got != "conn_a,conn_b,conn_c" {
+		t.Fatalf("expected the census the collection reported, got %+v", decision.CollectionReport)
+	}
+	if got := strings.Join(decision.CollectionReport.ExcludedConnections, ","); got != "conn_d: not authorized" {
+		t.Fatalf("expected the connection nobody asked, got %+v", decision.CollectionReport)
 	}
 	first := decision.Candidates[0]
 	if first.OfferSnapshotID != "off_a" || first.ConnectionID != "conn_a" || first.AdapterType != "fake" || first.NativeRef != "native_a" {

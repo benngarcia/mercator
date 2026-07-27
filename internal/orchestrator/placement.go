@@ -108,13 +108,14 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("orchestrator: list Rental Schedules: %w", err)
 	}
-	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{
+	collected, err := o.adapter.CollectOffers(ctx, adapter.OfferRequest{
 		WorkspaceID: workload.WorkspaceID,
 		Resources:   workload.Spec.Resources,
 	})
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("%w: %v", ErrOfferQuery, err)
 	}
+	offers := collected.Offers
 	artifacts, err := o.consumedArtifacts(ctx, workload.WorkspaceID, workload)
 	if err != nil {
 		return domain.BookingDecision{}, nil, nil, err
@@ -124,11 +125,15 @@ func (o *Orchestrator) evaluatePlacement(ctx context.Context, runID string, work
 		return domain.BookingDecision{}, nil, nil, fmt.Errorf("orchestrator: read the launch history: %w", err)
 	}
 	decision, err := o.scheduler.Evaluate(ctx, scheduler.SchedulingInput{
-		RunID:                    runID,
-		Workload:                 workload,
-		Image:                    o.imageManifest(ctx, workload),
-		Artifacts:                artifacts,
-		Offers:                   offers,
+		RunID:     runID,
+		Workload:  workload,
+		Image:     o.imageManifest(ctx, workload),
+		Artifacts: artifacts,
+		Offers:    offers,
+		Collection: domain.CollectionReport{
+			ConnectionsQueried:  collected.Queried,
+			ExcludedConnections: collected.Excluded,
+		},
 		Schedules:                schedules,
 		ExcludedOfferSnapshotIDs: request.excludedOfferSnapshotIDs,
 		Supersedes:               request.supersedes,

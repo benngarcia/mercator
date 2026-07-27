@@ -116,7 +116,12 @@ type Orchestrator struct {
 }
 
 type Adapter interface {
-	ListOffers(ctx context.Context, req adapter.OfferRequest) ([]domain.OfferSnapshot, error)
+	// CollectOffers is the placement read rather than a plain offer list, because
+	// a decision has to record who was asked. A connection that answered with
+	// nothing and a connection nobody contacted both publish no offer, so a census
+	// derived from the offers states the two identically, and admission reads an
+	// empty answer as the strongest thing a fleet can say about an ask.
+	CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error)
 	Launch(ctx context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error)
 	Observe(ctx context.Context, req adapter.ObserveRequest) (adapter.ExternalObservation, error)
 	Release(ctx context.Context, req adapter.ReleaseRequest) (adapter.ReleaseReceipt, error)

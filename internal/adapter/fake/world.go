@@ -686,6 +686,18 @@ func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.Offe
 	return offers, nil
 }
 
+// CollectOffers is this world answering as the whole fleet. It is stated here
+// rather than inherited from the embedded adapter, because Go resolves an
+// embedded method against the embedded value: a census built on the adapter's own
+// offer list would answer about a fleet this world does not have.
+func (w *World) CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := w.ListOffers(ctx, req)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{ConnectionID}}, nil
+}
+
 // Launch runs the workload and leaves what it fetched and what it opened on the
 // machine that ran it. Running is how a host becomes warm, for an image and for
 // a cache alike; capacity Mercator does not keep is cold again on the next Run.

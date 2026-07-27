@@ -100,7 +100,14 @@ func newReportingTestHarness(t *testing.T, signerKey []byte, extra ...Option) re
 	return newReportingTestHarnessWithProvider(t, signerKey, log, ad, ad, extra...)
 }
 
-func newReportingTestHarnessWithProvider(t *testing.T, signerKey []byte, log eventlog.EventLog, provider capability.EphemeralExecutor, ad *fake.Adapter, extra ...Option) reportingTestHarness {
+// fleetOfOne is a double that is both a backend and the whole fleet: it answers
+// an offer query and says which connection answered it.
+type fleetOfOne interface {
+	capability.EphemeralExecutor
+	CollectOffers(context.Context, adapter.OfferRequest) (adapter.OfferCollection, error)
+}
+
+func newReportingTestHarnessWithProvider(t *testing.T, signerKey []byte, log eventlog.EventLog, provider fleetOfOne, ad *fake.Adapter, extra ...Option) reportingTestHarness {
 	t.Helper()
 	sched := scheduler.New()
 	workspaceLog := workspaceTestLog{EventLog: log}
@@ -417,7 +424,7 @@ func TestCleanupFailureIsVisibleThroughRunAndEventAPIs(t *testing.T) {
 	offer := httpOffer("off_cleanup_failure", time.Now().UTC())
 	offer.Kind = domain.OfferKindProvisionable
 	base := fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
-	provider := &httpTerminateFailsOnceProvider{EphemeralExecutor: base}
+	provider := &httpTerminateFailsOnceProvider{Adapter: base}
 	harness := newReportingTestHarnessWithProvider(t, key32, log, provider, base)
 	runID := createReportingRun(t, harness.handler, "run_report_cleanup_failure")
 
@@ -585,7 +592,7 @@ func TestReportEndpointRunNotFound(t *testing.T) {
 }
 
 type httpTerminateFailsOnceProvider struct {
-	capability.EphemeralExecutor
+	*fake.Adapter
 	calls int
 }
 
@@ -594,5 +601,5 @@ func (p *httpTerminateFailsOnceProvider) Terminate(ctx context.Context, req adap
 	if p.calls == 1 {
 		return adapter.TerminateReceipt{}, errors.Join(adapter.ErrRetryableFailure, errors.New("provider secret"))
 	}
-	return p.EphemeralExecutor.Terminate(ctx, req)
+	return p.Adapter.Terminate(ctx, req)
 }

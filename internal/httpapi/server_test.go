@@ -13,7 +13,6 @@ import (
 
 	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
-	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/ociresolver"
@@ -721,7 +720,7 @@ func newHTTPTestServerWithOptions(t *testing.T, options ...Option) http.Handler 
 	return New(Deps{Orchestrator: orch, Offers: singleProviderOffers{provider: ad}, Workloads: workload.New(workspaceTestLog{EventLog: log}), Resolver: resolver}, options...)
 }
 
-func newHTTPTestServerForAdapter(t *testing.T, provider capability.EphemeralExecutor) http.Handler {
+func newHTTPTestServerForAdapter(t *testing.T, provider fleetOfOne) http.Handler {
 	t.Helper()
 	log, err := eventlog.OpenSQLite(context.Background(), "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {

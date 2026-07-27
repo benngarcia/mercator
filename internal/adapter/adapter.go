@@ -60,6 +60,26 @@ type OfferRequest struct {
 	Resources   domain.ResourceRequirements
 }
 
+// OfferCollection is one answer to an offer query together with the census of who
+// gave it: the connections that were asked, and the connections that were not.
+//
+// The census travels with the offers because the offers cannot carry it. A
+// connection that answered with nothing publishes no offer to be counted, and a
+// connection nobody contacted publishes none either, so a report derived from the
+// offers states the two identically. Placement reads an empty answer as the
+// strongest thing a fleet can say about an ask, and an operator reading that has
+// to be able to tell a marketplace that sells no machine of the shape from a
+// workspace whose providers were never asked.
+type OfferCollection struct {
+	Offers []domain.OfferSnapshot
+	// Queried is every connection that was asked, whatever it answered.
+	Queried []string
+	// Excluded is every connection that was not asked and why nobody asked it, one
+	// entry per connection. An operator de-authorising a provider is the case: the
+	// fleet answers with less, and nothing else in the record says so.
+	Excluded []string
+}
+
 type LaunchRequest struct {
 	OperationKey       string                      `json:"operation_key"`
 	RequestHash        string                      `json:"request_hash"`

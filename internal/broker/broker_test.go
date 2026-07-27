@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -330,6 +331,37 @@ func TestBrokerAggregatesOffersAcrossConnections(t *testing.T) {
 	}
 	if len(offers) != 2 {
 		t.Fatalf("expected 2 offers (authorized only), got %d", len(offers))
+	}
+}
+
+// TestACollectionNamesTheConnectionNobodyAsked is the census the offers cannot
+// carry. A de-authorised connection publishes no offer and neither does a
+// connection that was asked and had nothing, so a report derived from the offers
+// stated the two identically. Placement reads an empty answer as the strongest
+// thing a fleet can say about an ask, and an operator reading that has to be able
+// to tell a marketplace selling no machine of the shape from a workspace whose
+// provider nobody contacted.
+func TestACollectionNamesTheConnectionNobodyAsked(t *testing.T) {
+	conns := fakeConns{recs: []connection.Record{
+		{ID: "conn_a", AdapterType: "stub", Authorized: true},
+		{ID: "conn_unauth", AdapterType: "stub", Authorized: false},
+	}}
+	f := NewFactory()
+	f.Register(adapter.Manifest{Type: "stub"}, func(map[string]string, string) (capability.Backend, error) {
+		return recAdapter{id: "x"}, nil
+	})
+	b := NewBroker(conns, f, nilResolver{})
+
+	collection, err := b.CollectOffers(context.Background(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+
+	if err != nil {
+		t.Fatalf("collect offers: %v", err)
+	}
+	if got := strings.Join(collection.Queried, ","); got != "conn_a" {
+		t.Fatalf("the connections asked = %q, want the authorized one", got)
+	}
+	if got := strings.Join(collection.Excluded, ","); got != "conn_unauth: not authorized" {
+		t.Fatalf("the connections nobody asked = %q", got)
 	}
 }
 

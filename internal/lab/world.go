@@ -1189,6 +1189,18 @@ func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.Offer
 	return offers, nil
 }
 
+// CollectOffers is this world answering as the whole fleet: the offers it
+// publishes and the one connection it is. The census is stated rather than read
+// off the offers, because a world that published nothing would otherwise record
+// that nobody was asked, and admission reads those as different facts.
+func (world *simulatedWorld) CollectOffers(ctx context.Context, request adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := world.ListOffers(ctx, request)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{labConnection}}, nil
+}
+
 func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	world.mu.Lock()
 	defer world.mu.Unlock()

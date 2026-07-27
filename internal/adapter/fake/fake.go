@@ -145,6 +145,23 @@ func (a *Adapter) ListOffers(_ context.Context, _ adapter.OfferRequest) ([]domai
 	return append([]domain.OfferSnapshot(nil), a.offers...), nil
 }
 
+// ConnectionID is the one connection this adapter is when it stands in for a
+// whole fleet. A double that publishes no offer still has to say it was asked,
+// because an answer nobody was asked for is not an answer.
+const ConnectionID = "conn_fake"
+
+// CollectOffers is this adapter answering as a fleet of one. It states the
+// connection rather than leaving a reader to infer it from the offers: a search
+// that returned nothing would otherwise say nobody was asked, which is the
+// strongest thing a fleet can say and not what happened.
+func (a *Adapter) CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := a.ListOffers(ctx, req)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{ConnectionID}}, nil
+}
+
 func (a *Adapter) Launch(_ context.Context, req adapter.LaunchRequest) (adapter.LaunchReceipt, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

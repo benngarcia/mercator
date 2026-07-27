@@ -18,9 +18,17 @@ type Scheduler interface {
 }
 
 type SchedulingInput struct {
-	RunID                    string
-	Workload                 domain.WorkloadRevision
-	Offers                   []domain.OfferSnapshot
+	RunID    string
+	Workload domain.WorkloadRevision
+	Offers   []domain.OfferSnapshot
+	// Collection is who was asked for those offers. It is given rather than
+	// derived, because it cannot be derived: a connection that answered with
+	// nothing publishes no offer to be counted, and neither does a connection
+	// nobody contacted. Deriving the census from the offers stated the two
+	// identically, so an operator reading a Run that nothing matched could not
+	// tell a marketplace selling no machine of that shape from a workspace whose
+	// providers were never asked.
+	Collection               domain.CollectionReport
 	Schedules                map[string]domain.RentalSchedule
 	ExcludedOfferSnapshotIDs []string
 	ModelVersion             string
@@ -83,10 +91,8 @@ func (deterministicScheduler) Evaluate(_ context.Context, input SchedulingInput)
 		Weights:                weights,
 		Supersedes:             input.Supersedes,
 		SupersedesReason:       input.SupersedesReason,
-		CollectionReport: domain.CollectionReport{
-			ConnectionsQueried: connectionIDs(input.Offers),
-		},
-		Candidates: make([]domain.CandidateDecision, 0, len(input.Offers)),
+		CollectionReport:       input.Collection,
+		Candidates:             make([]domain.CandidateDecision, 0, len(input.Offers)),
 	}
 
 	bestIndex := -1
@@ -640,7 +646,7 @@ func contentFor(input SchedulingInput, offer domain.OfferSnapshot) candidateCont
 			FreeBytes:      offer.Resources.EphemeralDiskBytes,
 			FreeBytesKnown: offer.Resources.EphemeralDiskKnown,
 			ReservedBytes:  input.Workload.Spec.Resources.EphemeralDisk.MinBytes,
-			LandBytes:     work.TransferBytes + fetch + caches,
+			LandBytes:      work.TransferBytes + fetch + caches,
 			EstablishedLandBytes: enumerated(work.TransferBytes, locality != domain.LocalityUnknown) +
 				establishedFetchBytes(evidence) +
 				enumerated(caches, offer.Caches.Known),
@@ -1189,18 +1195,3 @@ func sortedOffers(offers []domain.OfferSnapshot) []domain.OfferSnapshot {
 	return out
 }
 
-func connectionIDs(offers []domain.OfferSnapshot) []string {
-	seen := map[string]struct{}{}
-	for _, offer := range offers {
-		if offer.ConnectionID == "" {
-			continue
-		}
-		seen[offer.ConnectionID] = struct{}{}
-	}
-	ids := make([]string, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}

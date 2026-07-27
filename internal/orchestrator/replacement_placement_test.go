@@ -568,3 +568,15 @@ func replacementEvents(t *testing.T, orch *Orchestrator, runID string) []eventlo
 	}
 	return events
 }
+
+// CollectOffers is this double answering as the whole fleet. Every double that
+// states its own offers has to state its own census too: Go resolves an embedded
+// method against the embedded value, so a census inherited from the fake adapter
+// would answer about offers this double does not publish.
+func (p *replacementProvider) CollectOffers(ctx context.Context, req adapter.OfferRequest) (adapter.OfferCollection, error) {
+	offers, err := p.ListOffers(ctx, req)
+	if err != nil {
+		return adapter.OfferCollection{}, err
+	}
+	return adapter.OfferCollection{Offers: offers, Queried: []string{fake.ConnectionID}}, nil
+}

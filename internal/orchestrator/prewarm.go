@@ -164,11 +164,11 @@ func (o *Orchestrator) prewarmDesire(ctx context.Context, workspaceID string) ([
 	if err != nil || len(queued) == 0 {
 		return nil, err
 	}
-	offers, err := o.adapter.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
+	collected, err := o.adapter.CollectOffers(ctx, adapter.OfferRequest{WorkspaceID: workspaceID})
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: read capacity to prepare: %w", err)
 	}
-	catalog := offersByID(offers)
+	catalog := offersByID(collected.Offers)
 	var wanted []adapter.PrepareItem
 	seen := map[string]bool{}
 	for _, placement := range queued {

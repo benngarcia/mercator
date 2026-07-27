@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -50,6 +51,13 @@ func (errs ConnectionErrors) OrNil() error {
 type OfferAggregation struct {
 	Offers   []domain.OfferSnapshot
 	Failures ConnectionErrors
+	// Queried is every connection this aggregation asked, whatever it answered,
+	// and Excluded is every connection it did not ask. They are the census the
+	// offers cannot carry: a connection that answered with nothing and a
+	// connection nobody contacted both publish no offer, and Placement reads an
+	// empty answer as the strongest thing a fleet can say about an ask.
+	Queried  []string
+	Excluded []string
 }
 
 type fanoutResult[T any] struct {
@@ -58,15 +66,22 @@ type fanoutResult[T any] struct {
 	err        error
 }
 
+// fanOut asks every connection this workspace holds and reports which ones it
+// asked. A connection an operator de-authorised is not asked, and it is named
+// rather than dropped: an answer nobody was asked for is not an answer, and a
+// reader of the record cannot otherwise tell one from a fleet that published
+// nothing.
 func fanOut[T any](
 	ctx context.Context,
 	connections []connection.Record,
 	query func(context.Context, connection.Record) ([]T, error),
-) []fanoutResult[T] {
+) ([]fanoutResult[T], []string) {
 	results := make(chan fanoutResult[T], len(connections))
+	excluded := []string{}
 	var group sync.WaitGroup
 	for _, record := range connections {
 		if !record.Authorized {
+			excluded = append(excluded, record.ID+": not authorized")
 			continue
 		}
 		group.Go(func() {
@@ -81,5 +96,6 @@ func fanOut[T any](
 	for result := range results {
 		collected = append(collected, result)
 	}
-	return collected
+	sort.Strings(excluded)
+	return collected, excluded
 }
