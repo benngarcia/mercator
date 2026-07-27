@@ -1008,7 +1008,8 @@ complete because it works against a live provider.
     there is nothing to read the refusal off at the daemon layer and
     `TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout` reads it from the
     daemon's own answer instead. That is its own gap in the explanation record
-    and is not fixed here.
+    and is not fixed here. It is fixed by the appended-decision entry below, and
+    that daemon case reads the recorded refusal now.
 - [x] 2026-07-25: Answer the review of the disk commit. Two reviewers falsified
   eight things, and three of them were one cause: `DiskDemand.Eviction` priced a
   remedy that cannot work. Deleting a layer this Run needs frees exactly as many
@@ -1088,7 +1089,8 @@ complete because it works against a live provider.
     nowhere for its own image and every generated world had nothing placeable in
     it. A Run that finds no feasible offer still records no Booking Decision, so
     the corpus states the double spend as a placement onto the machine with room
-    rather than as a world with none; that gap is older than this slice.
+    rather than as a world with none; that gap is older than this slice, and the
+    appended-decision entry below closes it.
 - [x] 2026-07-25: Say in the fleet listing what is known about a node's disk,
   and answer the review of it. A node that established no room wins no placement
   that declares a floor, which every Run does, so the listing showed a ready
@@ -2636,6 +2638,91 @@ complete because it works against a live provider.
   identity. Placement rejects an unstated lane, refuses to queue behind one-shot
   capacity, and records `launch_ephemeral`. All four backends declare ephemeral,
   which is what they do today.
+- [x] 2026-07-26: Append a decision rather than replacing one, and record the
+  decision a Run that found nothing was never given. A Booking Decision now names
+  what it supersedes and why, its identity is derived from its own recorded
+  content, and Placement weighing the whole fleet and placing the Run nowhere is a
+  fact in the record instead of a number thrown away.
+  - The audit hole this closes is one the plan disclosed twice and left open both
+    times, under the disk slice and again under its corpus judgment calls: a Run
+    that found no feasible offer recorded no Booking Decision at all. Its whole
+    account of itself was a reason code and two counts, so no candidate, no
+    rejection and no schedule the wait was projected from survived anywhere, and
+    every rule the rest of this phase needs reads decisions that were written.
+    `safety.locality_is_never_infeasibility` had nothing to read on the one kind of
+    Run whose refusal is the point.
+  - The refusal is recorded with the deferral it caused, in one commit, and is
+    suppressed with it. A Run waiting an hour against an unchanged fleet would
+    otherwise write sixty decisions nobody asked a different question of, and what
+    an operator needs is the evidence from the moment the answer last changed. A Run
+    held behind work that outranks it records none, because nothing weighed a
+    machine on its behalf and the queue is the whole of what happened to it.
+  - A re-decision names its predecessor and gives a reason a reader can check
+    against the Run's own stream: `PREVIOUS_LAUNCH_FAILED` where the machine the
+    last decision chose refused to start the work, and
+    `PREVIOUS_DECISION_SELECTED_NOTHING` where the last decision placed the Run
+    nowhere and the fleet was asked again. Those are the only two ways Mercator
+    decides twice about one Run, and both are facts already in the log, which is why
+    the reason is read off the state rather than passed down by the caller.
+  - Supersession is an input to the evaluation and part of the identity hash rather
+    than a field stamped on afterwards. Two answers about one unchanged fleet at one
+    instant are different decisions exactly because the second replaces the first,
+    and an identity that ignored that would give them one ID and one event ID, so
+    the second append would collide with the first inside a stream.
+  - `domain.BookingDecision.Identity` derives the ID from the record: the Run, the
+    revision, the moment, the model, the candidates, what was chosen, and what this
+    answer replaces. The Booking is deliberately outside it, because a Booking's own
+    identity is derived from the decision ID and a dispatched Booking carries a
+    state its decision never claimed.
+  - `safety.decisions_are_never_rewritten` and `safety.decision_is_reproducible` are
+    the two new laws, and they are the pair. One ID means one decision, and every
+    answer after the first names the record immediately before it and gives a
+    reason; and re-deriving an ID from the content the record carries yields the ID
+    the record carries. Without the second the first is defeatable by editing a
+    decision and its ID together, which is a chain of consistent-looking records
+    assembled after the fact.
+  - `GetBookingDecision` becomes `GetBookingDecisions`, the API answers with the
+    whole chain oldest first, and callers that want the current answer take its end
+    where a reader can see them doing it. The console keeps the chain in its own
+    projection and lists it under the decision that stands: holding one decision per
+    Run meant a re-placement erased the answer it replaced, and the refusal a queued
+    Run is waiting on vanished the moment anything else was decided. Conformance
+    evidence carries the chain for the same reason.
+  - The Run projection asks whether anything was chosen rather than whether anything
+    was decided. A queued Run has a decision now, and reading the presence of one as
+    placement reported every queued Run as requested again.
+  - `a-changed-decision-names-the-one-it-replaces` (green) is the corpus half: a
+    Rental whose schedule is full refuses the only Run in the world, the refusal is
+    recorded, six minutes later the running Booking finishes and a position opens,
+    and the answer that replaces the refusal names it. The re-decision is caused by
+    the fleet changing rather than by a machine refusing a launch, because a refused
+    launch is a fault and a placement fixture has none.
+  - The launch-failure half is stated at L1 by
+    `TestAReplacementNamesTheDecisionItReplaces` over
+    `a-published-rate-is-not-what-a-machine-does`, where the fleet does not change at
+    all and the machine refuses the start. Both answers survive with distinct
+    identities, and the one that no longer stands is the only record that the Run was
+    sent to the machine with the clean history first.
+  - `TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout` reads the refusal off the
+    decision route now, through the real daemon and a real enrolled node, rather than
+    off the daemon's own answer with the struck-out machine asserted one layer down.
+    That is the disclosure above closed at the layer it was disclosed at.
+  - Every claim has a case that fails without its fix, verified one at a time.
+    Dropping the supersession fails `safety.decisions_are_never_rewritten` by name on
+    the real launch-failure re-placement and fails the corpus Blueprint on both the
+    predecessor and the reason. Editing a recorded decision in place fails
+    `safety.decision_is_reproducible` on the canonical execution. Naming the wrong
+    reason for a refused launch fails the L1 case. Dropping the recorded refusal
+    answers `404 DECISION_NOT_FOUND` from the decision route in the daemon case and
+    leaves `an-impossible-ask-empties-no-fleet` with a Run nothing could place and no
+    decision to be explained from.
+  - Judgment calls. The corpus names a superseded decision by position and the runner
+    resolves the ID off the record there, because Mercator hashes decision IDs and a
+    fixture predicting one would be asserting the hash rather than the chain; the
+    predecessor is then checked by identity, since naming a decision is the claim. The
+    chain is required to be linear, each answer naming the record immediately before
+    it, because a chain that skips a link is one a reader cannot walk and they are
+    back to taking the last entry.
 
 ## Phase status
 
@@ -2644,7 +2731,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; the hierarchical estimator, owned economics, and replanning remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; the hierarchical estimator, owned economics, and replanning remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -3396,6 +3483,31 @@ Phase 4 added:
   a fabricated measurement would. It is the rate half of
   `safety.locality_provenance`, which explains the bytes: seconds are the product of
   the two, and either one can be invented.
+- `a-changed-decision-names-the-one-it-replaces` (green): a Rental whose schedule
+  already holds a running Booking and the maximum four waiting refuses the only Run in
+  the world, which is recorded as a decision rather than thrown away. Six minutes
+  later the running Booking finishes, a position opens, the Run is placed, and the
+  answer that replaces the refusal names it by ID and gives
+  `PREVIOUS_DECISION_SELECTED_NOTHING`. Both survive in the record. The re-decision is
+  caused by the fleet changing rather than by a machine refusing a launch, because a
+  refused launch is a fault and a placement fixture has none; the launch-failure half
+  is held at L1 by `TestAReplacementNamesTheDecisionItReplaces` over
+  `a-published-rate-is-not-what-a-machine-does`, where the fleet does not move and the
+  machine refuses the start.
+- `safety.decisions_are_never_rewritten` (Lab invariant): one decision ID means one
+  decision, and every answer after the first names the record immediately before it
+  and gives a reason. Two records under one ID that disagree are a decision edited
+  after the fact, and every account built on that ID, the predictions filed against it
+  and the audit of why a Run went where it did, is then an account of something that
+  never happened. The predecessor is checked as the immediate one rather than as any
+  earlier record, because a chain that skips a link is one a reader cannot walk.
+- `safety.decision_is_reproducible` (Lab invariant): re-deriving a decision's ID from
+  the content the record carries yields the ID the record carries. It is what makes
+  the rule above enforceable rather than defeatable by editing a decision and its ID
+  together, which is a chain of consistent-looking records assembled after the fact.
+  It reads every decision and not only the newest, because a superseded decision is
+  the part of the chain nobody is looking at any more, which is exactly where an edit
+  would go.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
@@ -3417,8 +3529,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 36 regression Blueprints: 33 green and 3 target, beside one demo,
-one minimized case, and twenty conformance Blueprints. The count is read off the
+The corpus is 46 regression Blueprints: 43 green and 3 target, beside one demo,
+one minimized case, and twenty three conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
@@ -3488,6 +3600,71 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 a decision is added, and a Run that found nothing gets one
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04. `go build ./...`, `go vet ./...` and
+`go test ./...` all clean, `go test -race` clean over `internal/orchestrator`,
+`internal/scheduler`, `internal/lab`, `internal/scenario`, `internal/httpapi`,
+`internal/domain`, `internal/conformance` and `internal/daemon`, and the console's
+typecheck, tests and build clean.
+
+The live half ran. `TestANodeReplicatesAnArtifactFromARealObjectStore` stands up
+MinIO in a container of this machine's own daemon and passes here, which is what
+establishes that this host's Docker is real and that the container-backed
+conformance path is available on it. Nothing in this slice needed a container of its
+own: what it changes is the control plane's own record, so its highest-fidelity level
+is the real daemon over HTTP with a real enrolled node, which is where
+`TestARunPlacesOnANodeWithRoomForItAndNotOnOneWithout` now reads the refusal.
+
+The two laws were both shown failing against the code before the fix, one at a time.
+
+Dropping the supersession, by making `runState.supersession` return nothing, fails
+`safety.decisions_are_never_rewritten` by name at L1 on the real launch-failure
+re-placement: `Run "run-unlucky": decision "dec_c30b5ca387bdf3f61" supersedes "", and
+the decision recorded before it was "dec_b392eef53b4daf83a"`. The same mutation fails
+the corpus Blueprint on both halves of the claim, once on the predecessor and once on
+the reason.
+
+Editing a recorded decision in place, by changing its model version after the
+identity was derived, fails `safety.decision_is_reproducible` on the canonical
+execution: `carries decision "dec_197f366a3d7d323dd", and re-deriving that decision's
+own inputs yields "dec_4e49890b611303c6a"`. Before the scheduler derived its ID
+through `domain.BookingDecision.Identity`, that law failed on every real decision in
+the tree, which is the same statement from the other side: an ID computed one way and
+checked another is a claim about the content that the content does not answer.
+
+Naming the wrong reason for a refused launch, by reporting
+`PREVIOUS_DECISION_SELECTED_NOTHING` there, fails
+`TestAReplacementNamesTheDecisionItReplaces`.
+
+Dropping the recorded refusal fails two layers at once. The daemon case answers `404
+DECISION_NOT_FOUND` from the decision route, which is exactly the hole this closes,
+and `an-impossible-ask-empties-no-fleet` reports the Run nothing could place having no
+recorded decision to be explained from.
+
+What the corpus Blueprint reported while it was red, before any of the production
+behaviour: `expected 1 recorded decisions, and the record holds 0` on the refusal, and
+`expected 2 recorded decisions, and the record holds 1` on the answer that replaces
+it. Everything else in that fixture, the deferral's reason, the five Bookings it names
+as work ahead, the count of machines weighed and the placement six minutes later, was
+already green, so what it added is only the two claims.
+
+One consequence that had to be fixed with it, and is worth recording because it is the
+kind of thing an appended record breaks. The Run projection decided a Run was queued
+by asking whether it had no decision. A Run nothing could place has one now, so that
+test reported every queued Run as `requested` again, and the phase asks whether
+anything was chosen instead. "Decided" and "placed" are separate questions from this
+slice onwards, and `runState.placed` is the one place that difference is stated.
+
+What is not closed. The suppression that keeps a Run from writing a decision every
+tick means the recorded refusal is the one from the moment the answer last changed,
+not from the latest evaluation: an operator reading a Run that has waited an hour
+against an unchanged fleet is reading evidence an hour old, and the deferral beside it
+says the same. That is the right trade for the log's size and it is a difference a
+reader cannot see, because nothing in the record says the fleet was asked again and
+gave the same answer.
 
 ### Phase 4 a rung of the ladder may not answer content it does not name
 
