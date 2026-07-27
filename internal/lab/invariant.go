@@ -154,6 +154,12 @@ func DefaultInvariantRegistry() InvariantRegistry {
 			check:       staleLeaseExpiry,
 		},
 		invariantRule{
+			id:          "liveness.orphan_convergence",
+			assumptions: []string{"provider ownership listing is complete"},
+			bound:       5 * time.Minute,
+			check:       orphanConvergence,
+		},
+		invariantRule{
 			id:          "liveness.superseded_booking_release",
 			assumptions: []string{"Rental Schedule commits remain available"},
 			bound:       5 * time.Minute,
@@ -2435,17 +2441,34 @@ func staleLeaseExpiry(observation InvariantObservation) error {
 	return nil
 }
 
+// orphanConvergence is the projection rule. Every execution this world is
+// running is work Mercator launched, so a Run this control plane can no longer
+// name is a projection that lost an execution rather than a provider that gained
+// one, and the machine goes on running with nothing that will ever come for it.
+//
+// It reads executions and never the capacity a world declared orphaned. Those are
+// deliberately different facts: an execution is Mercator's own and carries the
+// identities Mercator minted for it, and capacity nobody recognises is the
+// opposite statement, answered by the policy rule below.
+func orphanConvergence(observation InvariantObservation) error {
+	runs := runsByID(observation.Runs)
+	for _, execution := range observation.World.ActiveExecutions {
+		if runs[execution.RunID].ID == "" {
+			return fmt.Errorf("external execution %q has no projected Run %q", execution.LaunchKey, execution.RunID)
+		}
+	}
+	return nil
+}
+
 // orphanPolicyIsExplicit is the rule that makes reconciliation able to choose.
 // Capacity Mercator does not recognise is either taken back into the fleet or
 // destroyed, and whichever it was, the record names the policy that decided and
 // the reason it applied.
 //
-// It replaces a reading that could only ever fail. liveness.orphan_convergence
-// asked that no execution outlive the Run it belonged to, which says nothing about
-// what ought to happen to one that does: a world holding capacity nobody could
-// account for had exactly one lawful outcome and it was an error. The interesting
-// case is the capacity that is no longer here, so this asks what became of what
-// the world began holding rather than what the fleet looks like now.
+// It is the half orphanConvergence has nothing to say about. That rule asks that
+// no execution outlive the Run it belonged to, which is silent on what ought to
+// happen to capacity that was never Mercator's execution at all, so the two are
+// stated apart and a world holding an orphan is answered by this one.
 //
 // A machine still standing has not been decided about yet, which is not a
 // violation: a control plane that has not swept is a control plane that has not

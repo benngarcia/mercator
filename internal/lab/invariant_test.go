@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 44 {
-		t.Fatalf("latest invariant results = %d, want 44", len(latest))
+	if len(latest) != 45 {
+		t.Fatalf("latest invariant results = %d, want 45", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -310,11 +310,17 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				{LaunchKey: "launch-1", CompletesAt: now.Add(-6 * time.Minute)},
 			}
 		},
+		// An execution this world is running whose Run the control plane can no
+		// longer name, which is a projection that lost work rather than a provider
+		// that gained it.
+		"liveness.orphan_convergence": func(observation *InvariantObservation) {
+			observation.World.ActiveExecutions = []externalExecution{{RunID: "run-missing", LaunchKey: "launch-1"}}
+		},
 		// A machine this world was holding that Mercator did not recognise, gone
 		// from the fleet with nothing in the record saying who took it or why. That
 		// is a reconciliation that acted on capacity by no stated rule, which the
-		// reading this replaced could not express: it could only refuse to have an
-		// orphan at all.
+		// rule above has nothing to say about: it only ever reads work Mercator
+		// launched.
 		"safety.orphan_policy_is_explicit": func(observation *InvariantObservation) {
 			observation.SeededOrphans = map[string]bool{"launch-orphan": true}
 		},
