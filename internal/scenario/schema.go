@@ -1525,6 +1525,11 @@ type CandidateExpectation struct {
 	// nothing owe the same seconds, and this is what says whether the silence was
 	// charged once or twice.
 	Uncertainty *Bound `json:"uncertainty,omitempty"`
+	// Cost asserts what this candidate would be billed and which parts of a sale
+	// that price is made of. It is stated apart from the score because the score
+	// folds waiting and doubt in beside the dollars, and a fixture about what
+	// capacity costs has to be able to pin the dollars alone.
+	Cost *CostExpectation `json:"cost,omitempty"`
 	// ScoreUSD asserts what this candidate was worth to this Run, in dollars. It
 	// is the whole arithmetic in one number, which is what makes a fixture able to
 	// state that a class's exchange rate was applied rather than merely that the
@@ -1556,6 +1561,49 @@ type CandidateExpectation struct {
 // opposite things: nothing to do when an inventory answered, and nobody could say
 // when it did not, and only the source and the confidence beside it tell them
 // apart.
+// CostExpectation is what a candidate's price has to be and what it has to be
+// made of. The terms are stated by the name the record files each under, and a
+// term stated at zero is a real assertion: a machine charged nothing for the tail
+// of an increment is one whose Run ends where the increment does, which is a
+// different world from one that pays for the rest of the hour.
+type CostExpectation struct {
+	USD *Bound `json:"usd,omitempty"`
+	// Terms asserts what each named part of this price came to. Every term a
+	// priced candidate carries is checked against the domain's own list at load, so
+	// a fixture cannot assert a term nothing writes and read the silence as
+	// agreement.
+	Terms map[string]Bound `json:"terms,omitempty"`
+	// Unpriced asserts that nobody quoted this machine, so it carries no dollars
+	// and no terms at all. It is its own field because a price of zero and the
+	// absence of a price are the opposite claims, and this corpus has fixtures
+	// about both.
+	Unpriced bool `json:"unpriced,omitempty"`
+	// CommittedSeconds asserts how many seconds of an interval Mercator already
+	// owes rent for this placement would spend. It is the one input to the cost
+	// that two candidates can be wrong about together: an interval charged twice
+	// adds up on every candidate's record and looks right on each of them.
+	CommittedSeconds *Bound `json:"committed_seconds,omitempty"`
+}
+
+// validate refuses a cost assertion no record could satisfy. A fixture naming a
+// term the price is not made of is asserting an arithmetic that does not exist,
+// and one that says a machine is unpriced and then states its dollars is stating
+// two worlds.
+func (spec *CostExpectation) validate(owner string) error {
+	if spec == nil {
+		return nil
+	}
+	if spec.Unpriced && (spec.USD != nil || len(spec.Terms) > 0 || spec.CommittedSeconds != nil) {
+		return fmt.Errorf("%s: a candidate nobody quoted has no dollars, so cost states unpriced or states an amount", owner)
+	}
+	for name := range spec.Terms {
+		if !slices.Contains(domain.CostTermNames(), name) {
+			return fmt.Errorf("%s: cost term %q is not one a price is made of, which is %v", owner, name, domain.CostTermNames())
+		}
+	}
+	return nil
+}
+
 type StageExpectation struct {
 	Seconds    *Bound   `json:"seconds,omitempty"`
 	Source     string   `json:"source,omitempty"`
@@ -1801,6 +1849,19 @@ func (b Bound) MarshalJSON() ([]byte, error) {
 	}
 	type bare Bound
 	return json.Marshal(bare(b))
+}
+
+// String is what this bound asks for, so a failure about a record that states
+// nothing at all can say what was wanted.
+func (b Bound) String() string {
+	parts := make([]string, 0, 3)
+	for label, value := range map[string]*float64{"exactly": b.Exactly, "at least": b.AtLeast, "at most": b.AtMost} {
+		if value != nil {
+			parts = append(parts, fmt.Sprintf("%s %v", label, *value))
+		}
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, " and ")
 }
 
 // Check reports "" when actual satisfies the bound, else a description.
@@ -2892,6 +2953,9 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 			if err := want.Rate.validate(); err != nil {
 				return fmt.Errorf("candidate %q stage %q: %w", id, stage, err)
 			}
+		}
+		if err := candidate.Cost.validate("candidate " + id); err != nil {
+			return err
 		}
 		if candidate.Schedule != nil {
 			if !slices.ContainsFunc(w.Rentals, func(r RentalSpec) bool { return r.ID == id }) {

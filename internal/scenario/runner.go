@@ -699,6 +699,13 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 			fail("cache %q: expected %q, recorded %q", cache, want, found.Locality)
 		}
 	}
+	// The price is asserted term by term and not only as a total, because the
+	// total is the number two opposite mistakes agree on: an owned machine
+	// charged for nothing at all and one charged the whole hour it is committed
+	// to differ in which term the dollars sit in.
+	if want := expect.Cost; want != nil {
+		assertCost(fail, checkBound, candidate, *want)
+	}
 	// The uncertainty is read off the candidate's own recorded confidences rather
 	// than recomputed, because that record is the whole input to the term and a
 	// fixture reading anything else would assert a number the score was not
@@ -730,6 +737,38 @@ func assertCandidate(rec recordedDecision, bookings bookingNames, name, id strin
 		fail("records the risk history %+v, and nobody has measured this machine", candidate.Reliability)
 	}
 	return failures
+}
+
+// assertCost holds one candidate to the price a fixture says it carries and to
+// the parts of a sale that price is made of. A term the fixture names and the
+// record has none of is named as the absence it is: a candidate charged nothing
+// for the tail of a billing increment records no such term, and a bound read
+// against a missing term would pass on a zero the record never stated.
+func assertCost(fail func(string, ...any), checkBound func(string, *Bound, float64), candidate domain.CandidateDecision, want CostExpectation) {
+	if want.Unpriced {
+		if candidate.Priced() {
+			fail("cost: want a machine nobody quoted, recorded %.6f USD from %q", candidate.Estimates.CostUSD.Expected, candidate.Estimates.CostUSD.Source)
+		}
+		return
+	}
+	if !candidate.Priced() {
+		fail("cost: want a priced machine, and the record says nobody quoted this one")
+		return
+	}
+	checkBound("cost_usd", want.USD, candidate.Estimates.CostUSD.Expected)
+	for _, name := range domain.CostTermNames() {
+		bound, stated := want.Terms[name]
+		if !stated {
+			continue
+		}
+		charged, recorded := candidate.Estimates.CostTermUSD(name)
+		if !recorded {
+			fail("cost term %q: want %s, and the price is not made of that term at all", name, bound)
+			continue
+		}
+		checkBound("cost term "+name, &bound, charged)
+	}
+	checkBound("committed_seconds", want.CommittedSeconds, candidate.Estimates.Committed.Seconds)
 }
 
 // assertTransferRate holds one stage to the rate a fixture says it was priced at

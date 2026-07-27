@@ -1356,4 +1356,3 @@ func sortedOffers(offers []domain.OfferSnapshot) []domain.OfferSnapshot {
 	})
 	return out
 }
-

@@ -2380,7 +2380,7 @@ func labOffer(
 		// The Blueprint's own words translate to a price model in one place, so the
 		// two simulated worlds cannot disagree about which of a fixture's billing
 		// terms they read.
-		Pricing: billing.PriceModel(ratePerHourUSD),
+		Pricing:  billing.PriceModel(ratePerHourUSD),
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
 	// Only capacity Mercator keeps names a Rental, which is the same stamp

@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 42 {
-		t.Fatalf("latest invariant results = %d, want 42", len(latest))
+	if len(latest) != 44 {
+		t.Fatalf("latest invariant results = %d, want 44", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -539,6 +539,19 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				"run-1": {Spec: domain.WorkloadSpec{Placement: domain.PlacementPolicy{Class: domain.ClassInteractive}}},
 			}
 			observation.Effects = []EffectRecord{preemptionEffect(1, "rental-spot", "run-1")}
+		},
+		// An owned machine offered at no cost. Nothing new is billed for the hour it
+		// already sits inside, and the seconds are still the only ones this machine
+		// has, so a candidate priced at nothing wins every placement it is weighed in
+		// and the fleet reports having spent nothing on the box it put all its work on.
+		"safety.no_capacity_is_free": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{ownedMachinePricedAtNothing()}
+		},
+		// One committed hour charged in full to both of the Runs that spend it, which
+		// is what pricing a commitment from the moment of the decision produces instead
+		// of from the moment the Run gets the machine.
+		"safety.committed_cost_is_not_double_counted": func(observation *InvariantObservation) {
+			observation.MercatorEvents = oneCommittedHourSoldTwice()
 		},
 		// A decision whose ID says nothing about its content. Re-deriving the ID from
 		// the record that carries it yields another one, so the record cannot answer

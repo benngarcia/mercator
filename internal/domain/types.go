@@ -357,7 +357,7 @@ type OfferSnapshot struct {
 	Terms        CapacityTerms  `json:"capacity_terms,omitzero"`
 	Queue        *QueueSnapshot `json:"queue,omitempty"`
 	Provisioning *Estimate      `json:"provisioning,omitempty"`
-	Images       ImageInventory    `json:"images"`
+	Images       ImageInventory `json:"images"`
 	// Artifacts is the immutable content this host says it holds a local copy
 	// of. It is placement evidence and never a dependency's authority: a Run's
 	// inputs are durable in the object store or the Run does not go anywhere.
