@@ -116,9 +116,21 @@ func exportConsoleOrderedBundle(t *testing.T) RunBundle {
 	defer execution.Close()
 
 	ctx := context.Background()
-	for _, command := range []DriveCommand{Step(), Step(), Advance(30 * time.Minute)} {
+	for _, command := range []DriveCommand{Step(), Step()} {
 		if _, err := execution.Drive(ctx, command); err != nil {
 			t.Fatalf("drive to the restart boundary: %v", err)
+		}
+	}
+	// The console advances until the consumer's Booking is on the record rather
+	// than assuming how long that takes, so this does too. How long it takes is
+	// the world's answer: the consumer waits for its producer to publish and then
+	// queues behind it, both of which the class of work decides.
+	for range 8 {
+		if decided(ctx, t, execution) {
+			break
+		}
+		if _, err := execution.Drive(ctx, Advance(30*time.Minute)); err != nil {
+			t.Fatalf("advance to the consumer's Booking: %v", err)
 		}
 	}
 	if err := execution.Restart(ctx); err != nil {
@@ -134,6 +146,22 @@ func exportConsoleOrderedBundle(t *testing.T) RunBundle {
 		t.Fatalf("export Run Bundle: %v", err)
 	}
 	return bundle
+}
+
+// decided reports whether Mercator has recorded a Booking Decision for the
+// consumer, which is the event the console waits to see before it restarts.
+func decided(ctx context.Context, t *testing.T, execution *Execution) bool {
+	t.Helper()
+	bundle, err := execution.Export(ctx)
+	if err != nil {
+		t.Fatalf("export to read the consumer's Booking: %v", err)
+	}
+	facts, err := readProofFacts(bundle)
+	if err != nil {
+		t.Fatalf("read the decisions so far: %v", err)
+	}
+	_, exists := facts.decisions["run-consumer"]
+	return exists
 }
 
 func exportVerticalProofBundle(t *testing.T) RunBundle {

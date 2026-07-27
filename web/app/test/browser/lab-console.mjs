@@ -75,12 +75,24 @@ try {
   await assertCheckpoint("producer-placement-visible");
 
   await drive({ kind: "step" });
-  await drive({ kind: "advance", duration: "30m" });
-  await page
+  // When the consumer is placed is the world's answer too, for the same reason
+  // its closing is below. It waits for its producer to publish and then queues
+  // behind it on the one machine holding an input, so how long that takes is
+  // decided by the class of work the Blueprint says these Runs are and by what
+  // reading an Artifact costs. A single half-hour advance encoded one of those
+  // answers as a deadline and broke when the class weights started firing.
+  const decidedConsumer = page
     .locator("li")
     .filter({ hasText: "Booking decided" })
-    .filter({ hasText: "runs/run-consumer" })
-    .waitFor();
+    .filter({ hasText: "runs/run-consumer" });
+  for (
+    let advances = 0;
+    advances < 8 && (await decidedConsumer.count()) === 0;
+    advances += 1
+  ) {
+    await drive({ kind: "advance", duration: "30m" });
+  }
+  await decidedConsumer.waitFor();
   await assertCheckpoint("consumer-artifact-locality-visible");
 
   await restart();
