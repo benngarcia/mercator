@@ -175,8 +175,15 @@ func (registry *Registry) offer(record Record, occupied int) domain.OfferSnapsho
 		},
 		Network: domain.NetworkFacts{Download: host.Network},
 		Pricing: shadowPrice(record),
-		Queue:   &domain.QueueSnapshot{},
-		Images:  imageInventory(record.Facts, platform),
+		// What this machine was sold to Mercator on beyond its rate: the interval
+		// already owed for, the classes its operator holds it for, and the moment it
+		// stops being Mercator's. It is the operator's own configuration read against
+		// the clock, and it is what stops an interval Mercator has already committed to
+		// being charged to nobody and a machine held for watched work being priced for
+		// a sweep.
+		Terms:  record.Terms(registry.now().UTC()),
+		Queue:  &domain.QueueSnapshot{},
+		Images: imageInventory(record.Facts, platform),
 		// What copies this node holds is the node's own answer, carried through
 		// unchanged. The control plane has no second source for it and must not
 		// manufacture one: an inventory this projection marked enumerated from
@@ -216,7 +223,11 @@ func shadowPrice(record Record) domain.PriceModel {
 	return domain.PriceModel{
 		Currency:         "USD",
 		RatePerSecondUSD: record.ShadowPriceUSDPerHour / 3600,
-		Known:            true,
+		// The block of time this machine is bought in, which is what a placement is
+		// billed in whole multiples of. A machine bought in no increments states none,
+		// and its seconds are charged as they are spent.
+		GranularitySeconds: record.BillingIntervalSeconds,
+		Known:              true,
 	}
 }
 

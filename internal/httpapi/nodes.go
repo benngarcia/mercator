@@ -40,12 +40,36 @@ func (s *Server) InviteNode(ctx context.Context, request InviteNodeRequestObject
 				"so a node with no price would be refused as unpriced rather than treated as free.",
 		}, nil
 	}
+	if body.BillingIntervalSeconds < 0 {
+		return InviteNode400JSONResponse{
+			Code: "INVALID_REQUEST",
+			Message: "billing_interval_seconds cannot run backwards. A machine bought in no increments at all states none, " +
+				"and Mercator then holds it continuously rather than in blocks.",
+		}, nil
+	}
+	for _, class := range body.EligibleServiceClasses {
+		if !class.Known() {
+			return InviteNode400JSONResponse{
+				Code: "INVALID_REQUEST",
+				Message: "eligible_service_classes names \"" + string(class) + "\", which Mercator cannot price. " +
+					"Holding a machine for work Mercator refuses at the door is holding it for nothing.",
+			}, nil
+		}
+	}
 	invitation := node.Invitation{
-		WorkspaceID:           body.WorkspaceId,
-		NodeID:                body.NodeId,
-		RentalID:              body.RentalId,
-		Generation:            1,
-		ShadowPriceUSDPerHour: float64(body.ShadowPriceUsdPerHour),
+		WorkspaceID: body.WorkspaceId,
+		NodeID:      body.NodeId,
+		RentalID:    body.RentalId,
+		Generation:  1,
+		// What this machine costs and the rest of what it is bought on. The rate is one
+		// term of what a placement here spends: a machine billed in whole hours costs
+		// the hour whatever a Run uses of it, a machine an operator holds for watched
+		// work refuses every other class, and a machine that goes back to its owner at
+		// a stated moment takes no work that could still be running then.
+		ShadowPriceUSDPerHour:  float64(body.ShadowPriceUsdPerHour),
+		BillingIntervalSeconds: body.BillingIntervalSeconds,
+		EligibleClasses:        body.EligibleServiceClasses,
+		AvailableUntil:         body.AvailableUntil.UTC(),
 	}
 	bootstrap, err := s.nodes.Invite(ctx, invitation)
 	if err != nil {

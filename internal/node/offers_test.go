@@ -678,3 +678,114 @@ func readyNodeReporting(
 	}
 	return registry, enrollment
 }
+
+// TestANodeOffersTheTermsItWasBoughtOn is the economics half of a node offer. A
+// machine an operator holds is not one number: it is bought in blocks of time, it
+// may be held for particular work, and it may go back to its owner at a stated
+// moment. All three reach Placement through the offer, and none of them could be
+// stated before.
+//
+// The committed interval is the part that has to be derived rather than repeated.
+// An operator states how long a block is; where the current block ends is a
+// question about the clock, counted from the moment Mercator started paying for
+// this machine.
+func TestANodeOffersTheTermsItWasBoughtOn(t *testing.T) {
+	registry, clock := newRegistry(t)
+	enrolledAt := clock.Now()
+	inviteWithTerms(t, registry, node.Invitation{
+		WorkspaceID:            nodeWorkspace,
+		NodeID:                 "nod_terms",
+		RentalID:               "rnt_terms",
+		Generation:             1,
+		ShadowPriceUSDPerHour:  1.5,
+		BillingIntervalSeconds: 3600,
+		EligibleClasses:        []domain.ServiceClass{domain.ClassInteractive, domain.ClassStandard},
+		AvailableUntil:         enrolledAt.Add(6 * time.Hour),
+	}, clock)
+
+	// A minute in, which is as far as a node can be carried without another
+	// heartbeat: the machine has to still be inside its lease to be offered at all.
+	clock.Advance(time.Minute)
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("read offers: %v", err)
+	}
+
+	if len(offers) != 1 {
+		t.Fatalf("one enrolled machine published %d offers", len(offers))
+	}
+	terms := offers[0].Terms
+	if want := enrolledAt.Add(time.Hour); !terms.CommittedUntil.Equal(want) {
+		t.Fatalf("a minute into an hourly machine's first hour, the offer says Mercator owes rent until %s, and the hour ends at %s",
+			terms.CommittedUntil, want)
+	}
+	if terms.Admits(domain.ClassBatch) || !terms.Admits(domain.ClassStandard) {
+		t.Fatalf("a machine held for %v admits batch work: %v", terms.EligibleClasses, terms.Admits(domain.ClassBatch))
+	}
+	if !terms.AvailableUntil.Equal(enrolledAt.Add(6 * time.Hour)) {
+		t.Fatalf("the window this machine is Mercator's for closes at %s", terms.AvailableUntil)
+	}
+	// The increment reaches the price model too, because that is what a placement's
+	// dollars are rounded up to. An operator who says the machine is bought by the
+	// hour has said that twenty minutes of it costs an hour.
+	if offers[0].Pricing.GranularitySeconds != 3600 {
+		t.Fatalf("the price of an hourly machine is billed in blocks of %ds", offers[0].Pricing.GranularitySeconds)
+	}
+	if offers[0].Pricing.BilledSeconds(1200) != 3600 {
+		t.Fatalf("twenty minutes on an hourly machine is billed as %.0fs", offers[0].Pricing.BilledSeconds(1200))
+	}
+}
+
+// TestAMachineBoughtInNoIncrementsOwesNoInterval is the other answer, and it is an
+// answer rather than a default. An operator's own hardware is not bought in blocks:
+// Mercator holds it continuously, so no second of it is a fresh commitment, there
+// is no tail of an increment to charge, and the offer says so by stating no
+// interval at all.
+func TestAMachineBoughtInNoIncrementsOwesNoInterval(t *testing.T) {
+	registry, clock := newRegistry(t)
+	inviteWithTerms(t, registry, node.Invitation{
+		WorkspaceID:           nodeWorkspace,
+		NodeID:                "nod_owned",
+		RentalID:              "rnt_owned",
+		Generation:            1,
+		ShadowPriceUSDPerHour: 1.5,
+	}, clock)
+
+	offers, err := registry.Offers(context.Background(), nodeWorkspace)
+	if err != nil {
+		t.Fatalf("read offers: %v", err)
+	}
+
+	if !offers[0].Terms.CommittedUntil.IsZero() {
+		t.Fatalf("a machine bought in no increments owes rent until %s", offers[0].Terms.CommittedUntil)
+	}
+	if offers[0].Pricing.GranularitySeconds != 0 {
+		t.Fatalf("a machine bought in no increments is billed in blocks of %ds", offers[0].Pricing.GranularitySeconds)
+	}
+	if offers[0].Pricing.BilledSeconds(1200) != 1200 {
+		t.Fatalf("twenty minutes on a continuously held machine is billed as %.0fs", offers[0].Pricing.BilledSeconds(1200))
+	}
+}
+
+// inviteWithTerms enrolls one machine on the terms an operator stated for it, so a
+// case about economics states the sale rather than only the price.
+func inviteWithTerms(t *testing.T, registry *node.Registry, invitation node.Invitation, clock *testClock) {
+	t.Helper()
+	bootstrap, err := registry.Invite(context.Background(), invitation)
+	if err != nil {
+		t.Fatalf("invite node: %v", err)
+	}
+	if _, err := registry.Enroll(context.Background(), capability.EnrollmentRequest{
+		NodeID:          bootstrap.NodeID,
+		RentalID:        bootstrap.RentalID,
+		Generation:      bootstrap.Generation,
+		EnrollmentToken: bootstrap.EnrollmentToken,
+		AgentVersion:    "test",
+		Facts: capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host:       capability.HostFacts{OS: "linux", Architecture: "amd64", ContainerRuntime: "docker"},
+		},
+	}); err != nil {
+		t.Fatalf("enroll node: %v", err)
+	}
+}

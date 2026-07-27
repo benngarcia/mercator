@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 // DefaultLease is how long the control plane believes a node absent a
@@ -125,6 +126,15 @@ type Invitation struct {
 	// a price to weigh a node against fresh capacity, and a node without one is
 	// refused rather than treated as free.
 	ShadowPriceUSDPerHour float64
+	// BillingIntervalSeconds, EligibleClasses, and AvailableUntil are the rest of
+	// what this machine is bought on: the block of time it is billed in, the kinds
+	// of work its operator holds it for, and the moment it stops being Mercator's.
+	// Each is optional and each states an absence rather than a default: no
+	// increment is a machine held continuously, no classes is a machine held for
+	// nobody in particular, and no moment is a machine with no window.
+	BillingIntervalSeconds int64
+	EligibleClasses        []domain.ServiceClass
+	AvailableUntil         time.Time
 }
 
 // Invite reserves a node identity and mints the bootstrap material a machine
@@ -148,14 +158,17 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 		return capability.NodeBootstrap{}, err
 	}
 	record := Record{
-		ID:                    nodeID,
-		WorkspaceID:           invitation.WorkspaceID,
-		RentalID:              rentalID,
-		Generation:            generation,
-		State:                 StateEnrolling,
-		EnrollmentTokenID:     TokenID(token),
-		EnrollmentExpires:     expires,
-		ShadowPriceUSDPerHour: invitation.ShadowPriceUSDPerHour,
+		ID:                     nodeID,
+		WorkspaceID:            invitation.WorkspaceID,
+		RentalID:               rentalID,
+		Generation:             generation,
+		State:                  StateEnrolling,
+		EnrollmentTokenID:      TokenID(token),
+		EnrollmentExpires:      expires,
+		ShadowPriceUSDPerHour:  invitation.ShadowPriceUSDPerHour,
+		BillingIntervalSeconds: invitation.BillingIntervalSeconds,
+		EligibleClasses:        invitation.EligibleClasses,
+		AvailableUntil:         invitation.AvailableUntil,
 	}
 	if err := registry.store.Invite(ctx, record); err != nil {
 		return capability.NodeBootstrap{}, err

@@ -1117,6 +1117,48 @@ export interface components {
             /** Format: double */
             confidence: number;
         };
+        /**
+         * @description The kind of work a Run is, as its caller declared it. It is the only thing that can say what a second of waiting is worth, which is why it decides how a candidate is scored, and it is what capacity reserved for particular work is reserved by.
+         * @enum {string}
+         */
+        ServiceClass: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+        /** @description What a machine was sold on beyond its rate: the interval Mercator already owes rent for, the kinds of work it may be used for, and the moment it stops being available. Capacity nobody has allocated states none of it, because nothing is owed on a machine that does not exist yet, it is reserved for nobody, and it is available for as long as its listing is. */
+        CapacityTerms: {
+            /**
+             * Format: date-time
+             * @description When the interval Mercator already owes rent for ends. Rent inside it is money already spent, so the seconds a Run occupies are the cheapest in the fleet and the seconds nothing occupies are the most wasted. Absent is capacity nothing is owed on, which is a different answer from an interval that has already lapsed: a machine whose interval ended pays for its next second.
+             */
+            committed_until?: string;
+            /** @description Which service classes may run here, and absent is capacity held for nobody in particular. It is how reserved capacity is stated, and a class that is not listed is refused the machine outright rather than priced on it, because a reservation is a statement about what the machine is for and no amount of waiting changes it. */
+            eligible_classes?: components["schemas"]["ServiceClass"][];
+            /**
+             * Format: date-time
+             * @description When this capacity stops being Mercator's to use. It is a window somebody declared rather than capacity that can be reclaimed without notice: the moment is known, so work that finishes inside it is never at risk and work that could still be running then is refused before it starts.
+             */
+            available_until?: string;
+        };
+        /** @description One part of what a placement costs and what that part is worth. A price recorded as one number cannot be argued with: rent for seconds Mercator has already bought, rent the placement itself commits it to, and the tail of a billing increment nothing will use are three different claims about one machine. */
+        CostTerm: {
+            /**
+             * @description Which part of the sale this is. setup_fee is what a provider charges to hand over a machine, paid only by capacity Mercator has to acquire. committed_rent is rent for the seconds of this occupancy inside an interval Mercator already owes for, charged to the Run that spends them because nothing else can then have them. keep_alive is rent for the seconds beyond that interval, which this placement is what commits Mercator to. idle_tail is rent for seconds this placement forces Mercator to buy and nothing uses, which is the remainder of the last increment its publisher sells.
+             * @enum {string}
+             */
+            name: "setup_fee" | "committed_rent" | "keep_alive" | "idle_tail";
+            /** Format: double */
+            usd: number;
+        };
+        /** @description One machine's already-owed rent as one placement met it: when the interval ends, when this Run would start spending it, and how many of its seconds this Run would take. Capacity nothing is owed on carries none of it. */
+        CommittedInterval: {
+            /** Format: date-time */
+            until?: string;
+            /**
+             * Format: double
+             * @description How long after the decision this Run would begin occupying the machine. Two Runs on one machine spend disjoint stretches of one interval, and without the offset a record of the seconds each of them spent cannot be told from a record of the same seconds sold twice.
+             */
+            from_seconds?: number;
+            /** Format: double */
+            seconds?: number;
+        };
         /** @description The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. */
         ReliabilityEvidence: {
             /** @description How often this machine refuses to start the work it is given. Absent means nobody has measured that, which is what every provider in this tree publishes today. */
@@ -1153,6 +1195,7 @@ export interface components {
             capabilities: components["schemas"]["CapabilityProfile"];
             network: components["schemas"]["NetworkFacts"];
             pricing: components["schemas"]["PriceModel"];
+            capacity_terms?: components["schemas"]["CapacityTerms"];
             queue?: components["schemas"]["QueueSnapshot"];
             provisioning?: components["schemas"]["Estimate"];
             images: components["schemas"]["ImageInventory"];
@@ -1193,8 +1236,12 @@ export interface components {
             start_seconds: components["schemas"]["Estimate"];
             /** @description The part of the start prediction somebody established: queue and boot, which the offer states as facts, plus content an inventory actually answered about. It is what a hard start bound may strike a candidate out on, because refusing a machine over content it merely failed to enumerate refuses it for a guess. */
             established_start_seconds: components["schemas"]["Estimate"];
-            /** @description What this Run is billed for running here, over the runtime it declared. A machine whose price nobody published has no such number and predicts none: its source reads "unpriced", which is what the ranking reads to place it behind every candidate somebody priced. A rate of zero is a machine somebody says is free, which is a different answer. */
+            /** @description What Mercator's spend changes by if this Run occupies this machine, over the runtime it declared. A machine whose price nobody published has no such number and predicts none: its source reads "unpriced", which is what the ranking reads to place it behind every candidate somebody priced. A rate of zero is a machine somebody says is free, which is a different answer. */
             cost_usd: components["schemas"]["Estimate"];
+            /** @description What those dollars are made of, one entry per part of the price this candidate was charged for. A machine nobody quoted carries none. The total alone cannot be argued with: a machine charged the shadow price of one Run's seconds and a machine charged the whole hour it is committed to are the same claim to a reader who sees only dollars, and the difference is which term they are in. */
+            cost_terms?: components["schemas"]["CostTerm"][];
+            /** @description The interval Mercator already owed rent for on this machine and the seconds of it this placement would spend. Committed rent is money spent once however many candidates are weighed against it, so a reader holding only the dollars cannot tell one Run charged for an hour from four Runs charged for the same hour. */
+            committed_interval?: components["schemas"]["CommittedInterval"];
         };
         /** @description What Mercator took a candidate to be, as opposed to what the listing was called. A prediction claiming evidence about this exact candidate has to say which candidate it meant, and every field here is a fact a backend published rather than an identifier Mercator minted. A candidate that publishes nothing outliving its listing states only a provider and a lane, which is how the record says no history about it can ever be read again. */
         CandidateIdentity: {
@@ -1424,6 +1471,18 @@ export interface components {
             rental_id?: string;
             /** @description What holding this machine costs. Placement needs a price to weigh a node against fresh capacity; a node invited at zero has unknown pricing and is refused rather than treated as free. */
             shadow_price_usd_per_hour: number;
+            /**
+             * Format: int64
+             * @description The block of time this machine is bought in. Work that runs past the end of the interval Mercator has committed to commits it to the next whole one, and the part of that nothing uses is charged to the placement that bought it rather than to nobody. Omitted is a machine bought in no increments at all, which is an operator's own hardware: Mercator holds it continuously, so no second of it is a fresh commitment and there is no tail to charge.
+             */
+            billing_interval_seconds?: number;
+            /** @description The kinds of work this machine may be used for. Omitted is a machine held for nobody in particular. Work of any other class is refused this machine outright rather than priced on it. */
+            eligible_service_classes?: components["schemas"]["ServiceClass"][];
+            /**
+             * Format: date-time
+             * @description When this machine stops being Mercator's to use. Omitted is a machine with no such moment. Work that could still be running then is refused before it starts, judged against the runtime Mercator enforces rather than the one its caller expects.
+             */
+            available_until?: string;
         };
         NodeBootstrapResponse: {
             control_plane_url: string;

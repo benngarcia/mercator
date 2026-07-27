@@ -632,9 +632,14 @@ type CandidateDecisionImageLocality string
 
 // CandidateEstimates defines model for CandidateEstimates.
 type CandidateEstimates struct {
-	CostUsd                 Estimate `json:"cost_usd"`
-	EstablishedStartSeconds Estimate `json:"established_start_seconds"`
-	QueueSeconds            Estimate `json:"queue_seconds"`
+	// CommittedInterval One machine's already-owed rent as one placement met it: when the interval ends, when this Run would start spending it, and how many of its seconds this Run would take. Capacity nothing is owed on carries none of it.
+	CommittedInterval CommittedInterval `json:"committed_interval,omitempty"`
+
+	// CostTerms What those dollars are made of, one entry per part of the price this candidate was charged for. A machine nobody quoted carries none. The total alone cannot be argued with: a machine charged the shadow price of one Run's seconds and a machine charged the whole hour it is committed to are the same claim to a reader who sees only dollars, and the difference is which term they are in.
+	CostTerms               []CostTerm `json:"cost_terms,omitempty"`
+	CostUsd                 Estimate   `json:"cost_usd"`
+	EstablishedStartSeconds Estimate   `json:"established_start_seconds"`
+	QueueSeconds            Estimate   `json:"queue_seconds"`
 
 	// Stages What this candidate is predicted to spend on each stage of a launch. There are eight of them, and they are eight rather than four because each is answered by a different authority, fails for a different reason, and has an actual of its own.
 	Stages       LaunchStageEstimates `json:"stages"`
@@ -688,6 +693,9 @@ type CapacityEvidence struct {
 	Confidence float64 `json:"confidence"`
 }
 
+// CapacityTerms What a machine was sold on beyond its rate: the interval Mercator already owes rent for, the kinds of work it may be used for, and the moment it stops being available. Capacity nobody has allocated states none of it, because nothing is owed on a machine that does not exist yet, it is reserved for nobody, and it is available for as long as its listing is.
+type CapacityTerms = domain.CapacityTerms
+
 // CleanupError defines model for CleanupError.
 type CleanupError struct {
 	Code        string                  `json:"code"`
@@ -709,6 +717,9 @@ type CollectionReport struct {
 	ConnectionsQueried   []string `json:"connections_queried,omitempty"`
 	ExcludedConnections  []string `json:"excluded_connections,omitempty"`
 }
+
+// CommittedInterval One machine's already-owed rent as one placement met it: when the interval ends, when this Run would start spending it, and how many of its seconds this Run would take. Capacity nothing is owed on carries none of it.
+type CommittedInterval = domain.CommittedInterval
 
 // Confidence One answer a placement rested on and what its source said it was worth.
 type Confidence struct {
@@ -755,6 +766,9 @@ type ContainerSpec struct {
 	Platform   Platform              `json:"platform"`
 	Ports      []PortSpec            `json:"ports,omitempty"`
 }
+
+// CostTerm One part of what a placement costs and what that part is worth. A price recorded as one number cannot be argued with: rent for seconds Mercator has already bought, rent the placement itself commits it to, and the tail of a billing increment nothing will use are three different claims about one machine.
+type CostTerm = domain.CostTerm
 
 // CreateConnectionRequest defines model for CreateConnectionRequest.
 type CreateConnectionRequest struct {
@@ -901,6 +915,15 @@ type ImageInventory struct {
 
 // InviteNodeRequest defines model for InviteNodeRequest.
 type InviteNodeRequest struct {
+	// AvailableUntil When this machine stops being Mercator's to use. Omitted is a machine with no such moment. Work that could still be running then is refused before it starts, judged against the runtime Mercator enforces rather than the one its caller expects.
+	AvailableUntil time.Time `json:"available_until,omitempty"`
+
+	// BillingIntervalSeconds The block of time this machine is bought in. Work that runs past the end of the interval Mercator has committed to commits it to the next whole one, and the part of that nothing uses is charged to the placement that bought it rather than to nobody. Omitted is a machine bought in no increments at all, which is an operator's own hardware: Mercator holds it continuously, so no second of it is a fresh commitment and there is no tail to charge.
+	BillingIntervalSeconds int64 `json:"billing_interval_seconds,omitempty"`
+
+	// EligibleServiceClasses The kinds of work this machine may be used for. Omitted is a machine held for nobody in particular. Work of any other class is refused this machine outright rather than priced on it.
+	EligibleServiceClasses []ServiceClass `json:"eligible_service_classes,omitempty"`
+
 	// NodeId Node identity to reserve. Generated when omitted.
 	NodeId string `json:"node_id,omitempty"`
 
@@ -1254,6 +1277,9 @@ type ScoreWeights struct {
 	// UncertaintyPenaltyUsd What one whole point of doubt costs. A point is one answer worth nothing.
 	UncertaintyPenaltyUsd float64 `json:"uncertainty_penalty_usd,omitempty"`
 }
+
+// ServiceClass The kind of work a Run is, as its caller declared it. It is the only thing that can say what a second of waiting is worth, which is why it decides how a candidate is scored, and it is what capacity reserved for particular work is reserved by.
+type ServiceClass = domain.ServiceClass
 
 // SinkResult defines model for SinkResult.
 type SinkResult = sinks.Result

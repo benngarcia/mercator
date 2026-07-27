@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
+	"github.com/benngarcia/mercator/internal/domain"
 )
 
 // State is what the control plane believes about a node right now.
@@ -76,6 +77,63 @@ type Record struct {
 	// capacity; a node with none has unknown pricing and is refused rather than
 	// treated as free.
 	ShadowPriceUSDPerHour float64 `json:"shadow_price_usd_per_hour,omitempty"`
+	// BillingIntervalSeconds is the block of time this machine is bought in, as
+	// its operator states it. It is what makes an hour Mercator has committed to
+	// an hour it pays for whether or not a Run uses the rest of it: work that
+	// runs past the end of one interval commits Mercator to the next whole one,
+	// and the part of that nothing uses is charged to the placement that bought
+	// it rather than to nobody.
+	//
+	// Zero is a machine bought in no increments at all, which is the operator's own
+	// hardware: Mercator holds it continuously, so no second of it is a fresh
+	// commitment and there is no tail to charge. It is not a fallback for an
+	// operator who did not answer, it is the answer, and it is the same silence
+	// PriceModel.GranularitySeconds already means.
+	BillingIntervalSeconds int64 `json:"billing_interval_seconds,omitempty"`
+	// EligibleClasses is the kinds of work this machine may be used for, as its
+	// operator reserved it. Empty is a machine held for nobody in particular.
+	// Placement refuses every other class outright rather than pricing it, because
+	// a reservation is a statement about what the machine is for and no amount of
+	// waiting changes it.
+	EligibleClasses []domain.ServiceClass `json:"eligible_classes,omitempty"`
+	// AvailableUntil is the moment this machine stops being Mercator's to use, as
+	// its operator declared. Zero is a machine with no such moment. It is a window
+	// somebody stated rather than capacity that can vanish without notice, so work
+	// that could still be running then is refused before it starts and work that
+	// finishes inside it is never at risk.
+	AvailableUntil time.Time `json:"available_until,omitzero"`
+}
+
+// Terms is what this machine was sold to Mercator on, as the offer built from
+// this record publishes them. They are derived from the operator's own
+// configuration and from the moment Mercator started paying, because a billing
+// interval is a repeating block anchored to the beginning of the lease and
+// nothing else in the record can say where the current one ends.
+func (record Record) Terms(now time.Time) domain.CapacityTerms {
+	return domain.CapacityTerms{
+		CommittedUntil:  record.CommittedUntil(now),
+		EligibleClasses: record.EligibleClasses,
+		AvailableUntil:  record.AvailableUntil,
+	}
+}
+
+// CommittedUntil is the end of the billing interval this machine is inside right
+// now, and nothing for a machine bought in no increments: Mercator holds such a
+// machine continuously, so there is no interval whose end is a decision.
+//
+// The intervals are counted from enrollment, because that is the moment Mercator
+// started paying for this generation of this machine. A node that has not
+// enrolled is not being paid for and is not offered either.
+func (record Record) CommittedUntil(now time.Time) time.Time {
+	if record.BillingIntervalSeconds <= 0 || record.EnrolledAt.IsZero() {
+		return time.Time{}
+	}
+	interval := time.Duration(record.BillingIntervalSeconds) * time.Second
+	elapsed := now.Sub(record.EnrolledAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return record.EnrolledAt.Add((elapsed/interval + 1) * interval)
 }
 
 // Ref is this record's address in the capability contract.
