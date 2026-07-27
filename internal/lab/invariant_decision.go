@@ -23,11 +23,11 @@ type decisionRecord struct {
 	decision domain.BookingDecision
 }
 
-// recordedDecisionsByRun is every Booking Decision Mercator recorded, grouped by
-// the Run it is about and kept in the order it was appended. Both rules here are
-// about one Run's sequence of answers, and the log interleaves Runs.
-func recordedDecisionsByRun(observation InvariantObservation) (map[string][]decisionRecord, error) {
-	chains := map[string][]decisionRecord{}
+// recordedDecisionRecords is every Booking Decision Mercator recorded, in the
+// order it appended them, each still carrying the event that held it. It is the
+// one place the public log is read for decisions.
+func recordedDecisionRecords(observation InvariantObservation) ([]decisionRecord, error) {
+	var records []decisionRecord
 	for _, event := range observation.MercatorEvents {
 		if event.Type != orchestrator.EventBookingDecided {
 			continue
@@ -38,8 +38,23 @@ func recordedDecisionsByRun(observation InvariantObservation) (map[string][]deci
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
 			return nil, fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
 		}
-		runID := payload.Decision.RunID
-		chains[runID] = append(chains[runID], decisionRecord{eventID: event.ID, decision: payload.Decision})
+		records = append(records, decisionRecord{eventID: event.ID, decision: payload.Decision})
+	}
+	return records, nil
+}
+
+// recordedDecisionsByRun groups those records by the Run they are about, keeping
+// each Run's order. Both rules here are about one Run's sequence of answers, and
+// the log interleaves Runs.
+func recordedDecisionsByRun(observation InvariantObservation) (map[string][]decisionRecord, error) {
+	records, err := recordedDecisionRecords(observation)
+	if err != nil {
+		return nil, err
+	}
+	chains := map[string][]decisionRecord{}
+	for _, record := range records {
+		runID := record.decision.RunID
+		chains[runID] = append(chains[runID], record)
 	}
 	return chains, nil
 }
@@ -159,22 +174,20 @@ func sameDecisionContent(held, next domain.BookingDecision) (bool, error) {
 // decision is the part of the chain nobody is looking at any more, which is
 // exactly where an edit would go.
 func decisionIsReproducible(observation InvariantObservation) error {
-	chains, err := recordedDecisionsByRun(observation)
+	records, err := recordedDecisionRecords(observation)
 	if err != nil {
 		return err
 	}
-	for runID, chain := range chains {
-		for _, record := range chain {
-			identity, err := record.decision.Identity()
-			if err != nil {
-				return err
-			}
-			if identity != record.decision.ID {
-				return fmt.Errorf(
-					"Run %q: %s carries decision %q, and re-deriving that decision's own inputs yields %q",
-					runID, record.eventID, record.decision.ID, identity,
-				)
-			}
+	for _, record := range records {
+		identity, err := record.decision.Identity()
+		if err != nil {
+			return err
+		}
+		if identity != record.decision.ID {
+			return fmt.Errorf(
+				"Run %q: %s carries decision %q, and re-deriving that decision's own inputs yields %q",
+				record.decision.RunID, record.eventID, record.decision.ID, identity,
+			)
 		}
 	}
 	return nil

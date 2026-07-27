@@ -1384,18 +1384,13 @@ func describeCapacity(first, second domain.OfferSnapshot) string {
 // the decision is the thing under judgment, and it is the only place a candidate
 // Mercator refused leaves any trace at all.
 func recordedDecisions(observation InvariantObservation) ([]domain.BookingDecision, error) {
-	var decisions []domain.BookingDecision
-	for _, event := range observation.MercatorEvents {
-		if event.Type != orchestrator.EventBookingDecided {
-			continue
-		}
-		var payload struct {
-			Decision domain.BookingDecision `json:"decision"`
-		}
-		if err := json.Unmarshal(event.Data, &payload); err != nil {
-			return nil, fmt.Errorf("decode Booking Decision from %s: %w", event.ID, err)
-		}
-		decisions = append(decisions, payload.Decision)
+	records, err := recordedDecisionRecords(observation)
+	if err != nil {
+		return nil, err
+	}
+	decisions := make([]domain.BookingDecision, 0, len(records))
+	for _, record := range records {
+		decisions = append(decisions, record.decision)
 	}
 	return decisions, nil
 }
