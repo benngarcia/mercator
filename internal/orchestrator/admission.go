@@ -50,7 +50,19 @@ import (
 // deadline is a wait that broke the class's queue delay first, though, so naming
 // the deadline here said the later of two broken promises and left the earlier one
 // out of the only record the caller gets.
+//
+// The whole stage is one decision per workspace at a time, because it is the one
+// stage that reads a fact about every Run and writes to a single stream. A Run's
+// own version guards everything else it does, and the log refuses an append made
+// against a version somebody else has spent; a family's width has no such guard,
+// so a sweep submitted all at once had every member replay a queue none of the
+// others were in yet, and a family declared one wide took as many machines as it
+// had members. Ordering is always this Run's lock and then the workspace's, which
+// is the order AdvanceRun already holds them in.
 func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
+	unlock := o.admissionLocks.Lock(workspaceID)
+	defer unlock()
+
 	queue, err := o.admissionQueue(ctx, workspaceID)
 	if err != nil {
 		return false, err

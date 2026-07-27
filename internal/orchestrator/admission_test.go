@@ -340,6 +340,80 @@ func latestDeferral(t *testing.T, events []eventlog.StoredEvent) domain.Admissio
 	return domain.AdmissionDeferral{}
 }
 
+// TestAFamilyBurstSubmittedIsStillHeldToItsWidth is the family bound under the
+// arrival pattern it exists for. A sweep is submitted all at once, Intake advances
+// each Run inside its own request, and the bound is decided by replaying the
+// workspace log and then appending to one Run's own stream. Two members asked at
+// the same instant therefore both read a family holding nothing and both took a
+// machine, so a family declared one wide held two, and nothing in the corpus could
+// see it: the Lab drives admission one Run at a time and the daemon case submits in
+// sequence.
+//
+// The offers are provisionable on purpose. A queued Booking on an existing Rental
+// commits through a Rental Schedule whose version is checked, so two members
+// competing for one machine would be serialised by that check for a reason that has
+// nothing to do with the family. Provisioning mints a fresh Rental per Booking, so
+// there is no shared version anywhere and the width is the only thing that can hold
+// the second member back.
+func TestAFamilyBurstSubmittedIsStillHeldToItsWidth(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
+	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{
+		orchProvisionableOffer("off_one", now),
+		orchProvisionableOffer("off_two", now),
+	}))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	members := []string{"run_a", "run_b"}
+	for _, runID := range members {
+		submitInFamily(t, ctx, orch, runID, sweep)
+	}
+
+	advanced := make(chan error, len(members))
+	burst := make(chan struct{})
+	for _, runID := range members {
+		go func() {
+			<-burst
+			advanced <- orch.AdvanceRun(ctx, "ws_1", runID)
+		}()
+	}
+	close(burst)
+	for range members {
+		if err := <-advanced; err != nil {
+			t.Fatalf("advance a burst-submitted member of a family: %v", err)
+		}
+	}
+
+	if placed := placedRuns(t, ctx, orch, members); len(placed) != sweep.MaxParallel {
+		t.Fatalf("a family declared %d wide was given capacity for %v, and every member of it asked at the same instant",
+			sweep.MaxParallel, placed)
+	}
+}
+
+// placedRuns is the members of a family that were given capacity, read off each
+// Run's own stream rather than off a read model, because a decision that selected
+// a machine is the fact the bound is counted over.
+func placedRuns(t *testing.T, ctx context.Context, orch *Orchestrator, runIDs []string) []string {
+	t.Helper()
+	placed := []string{}
+	for _, runID := range runIDs {
+		for _, event := range runEvents(t, ctx, orch, runID) {
+			if event.Type != EventBookingDecided {
+				continue
+			}
+			var data bookingDecisionData
+			if err := json.Unmarshal(event.Data, &data); err != nil {
+				t.Fatalf("read the decision of %q: %v", runID, err)
+			}
+			if data.Decision.SelectedOfferSnapshotID != "" {
+				placed = append(placed, runID+" on "+data.Decision.SelectedOfferSnapshotID)
+			}
+		}
+	}
+	return placed
+}
+
 // TestAFamilyAtItsWidthHoldsItsOwnMembersBack is the group bound over the log the
 // queue is really replayed out of, and it states the reading the corpus cannot: the
 // member holding the family's one place has a queued Booking on a busy machine

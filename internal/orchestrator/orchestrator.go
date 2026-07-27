@@ -110,9 +110,22 @@ type Orchestrator struct {
 	reportingPublicURL string
 	reportingSigner    *reporting.Signer
 	runLocks           keyedMutex
-	prewarmer          Prewarmer
-	prewarmPolicy      PrewarmPolicy
-	prewarmed          prewarmMemory
+	// admissionLocks serialises admission within one workspace. Every other
+	// transition a Run makes is guarded by that Run's own stream version, and the
+	// log refuses an append written against a version somebody else has already
+	// spent. Admission is the one decision read over the whole workspace and
+	// written to a single Run, so nothing in the log can refuse it: two members of
+	// one family asked at the same instant each replay a queue the other is not in
+	// yet, and each appends a decision the log has no reason to reject.
+	//
+	// It is a lock in this process because the log is this process's own SQLite
+	// file, so a workspace's admissions are all decided here or not at all. A
+	// second control plane over one log would need the log to arbitrate, which is a
+	// different design rather than a wider mutex.
+	admissionLocks keyedMutex
+	prewarmer      Prewarmer
+	prewarmPolicy  PrewarmPolicy
+	prewarmed      prewarmMemory
 }
 
 type Adapter interface {
