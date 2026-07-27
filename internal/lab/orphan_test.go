@@ -134,3 +134,47 @@ func decisionFor(t *testing.T, decisions []janitor.OrphanConvergence, launchKey 
 	t.Fatalf("no decision names orphaned capacity %q", launchKey)
 	return janitor.OrphanConvergence{}
 }
+
+const disagreeingLaunchesBlueprint = "a-machine-two-launches-disagree-about-is-not-adopted"
+
+// TestCapacityNoRecordedLaunchAccountsForIsDestroyed is the policy meeting a Run
+// that was launched twice on opposite terms. The provider refused the start on
+// the machine Mercator provisioned, so the Run was placed again and took a slot
+// on a machine Mercator only borrows, and its record now says both that this
+// capacity does not outlive its workload and that it does. The machine holding
+// capacity that carries this Run and none of the launch identities Mercator
+// minted cannot be attributed to either of them.
+//
+// The fleet afterwards is the claim. Deciding it by the Run's last launch reads
+// the borrowed slot's rule over a machine that may be provisioned, hands a slot
+// back, and leaves it billing with no Run that could ever be placed on it.
+func TestCapacityNoRecordedLaunchAccountsForIsDestroyed(t *testing.T) {
+	execution := driveDisagreeingLaunchesExecution(t)
+
+	decided := decisionFor(t, orphanDecisions(t, execution), "orphan-of-replaced")
+	if decided.Outcome != janitor.OrphanTerminated || decided.Reason != "no_recorded_launch_accounts_for_it" {
+		t.Fatalf("the capacity two launches disagree about was converged as %+v, want it destroyed as capacity no launch accounts for", decided)
+	}
+	standing := offerIDs(execution.runtime.world.truthSnapshot().Offers)
+	if slices.Contains(standing, "unaccounted") {
+		t.Fatalf("the fleet is %v, and the machine no recorded launch accounts for is still billing", standing)
+	}
+}
+
+// driveDisagreeingLaunchesExecution runs the Blueprint a virtual minute at a
+// time, for longer than the Run it launches twice takes to finish and be swept.
+func driveDisagreeingLaunchesExecution(t *testing.T) *Execution {
+	t.Helper()
+	execution := openConformanceExecution(t, disagreeingLaunchesBlueprint)
+	t.Cleanup(func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	})
+	for range 30 {
+		if _, err := execution.Drive(context.Background(), Advance(time.Minute)); err != nil {
+			t.Fatalf("drive the execution: %v", err)
+		}
+	}
+	return execution
+}

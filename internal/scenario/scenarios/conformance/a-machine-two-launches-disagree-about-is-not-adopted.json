@@ -1,0 +1,86 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One Run is launched twice. The first launch takes a machine Mercator provisions for it and the provider refuses the start, so the Run is placed again, and the second launch takes a slot on a machine Mercator only borrows. Those two launches recorded opposite things about the capacity they took: the provisioned machine does not outlive its workload, and the borrowed slot does. A third machine is holding capacity that still carries this Run's identity and none of the launch identities Mercator minted, and the whole claim is that the record cannot say which of the two launches left it standing. A policy that read the Run's last launch would hand the slot back and keep a machine billing that no Run can ever be placed on, and reading the first would destroy a machine in a pool Mercator does not own. Capacity no recorded launch accounts for stops existing.",
+  "seed": "mercator-lab-disagreeing-launches-v1",
+  "world": {
+    "launch": {
+      "unpack": "1s",
+      "container_start": "1s"
+    },
+    "images": {
+      "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b": {
+        "layers": [
+          {"digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809", "size": "200MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "borrowed",
+        "rate_per_hour_usd": 9.0,
+        "cached_images": [
+          "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b"
+        ]
+      },
+      {
+        "id": "unaccounted",
+        "rate_per_hour_usd": 9.0
+      }
+    ],
+    "marketplace": [
+      {
+        "id": "provisioned",
+        "provider": "simcloud",
+        "rate_per_hour_usd": 0.5,
+        "provisioning": {
+          "expected": "1m",
+          "p90": "2m",
+          "acquisition": "20s",
+          "boot": "30s",
+          "agent_ready": "10s"
+        }
+      }
+    ],
+    "orphans": [
+      {"id": "orphan-of-replaced", "rental": "unaccounted", "run": "replaced"}
+    ],
+    "runtime_models": [
+      {
+        "run": "replaced",
+        "candidate": "borrowed",
+        "minimum": "10m",
+        "maximum": "10m"
+      },
+      {
+        "run": "replaced",
+        "candidate": "provisioned",
+        "minimum": "10m",
+        "maximum": "10m"
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "replaced",
+        "at": "0s",
+        "request": {
+          "image": "sweeper@sha256:7c1d9a4f0be5d2318a6f4b0c9e5d7a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+          "expected_runtime": "10m",
+          "max_runtime": "30m",
+          "max_pre_start_attempts": 2
+        }
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "the-machine-mercator-provisioned-refuses-the-start",
+      "trigger": {"operation": "provider.launch", "run": "replaced"},
+      "action": "reject_command"
+    }
+  ]
+}
