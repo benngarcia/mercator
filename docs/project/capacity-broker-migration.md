@@ -4651,6 +4651,15 @@ a reason rather than an omission.
   worth something to somebody else, which is why committed rent is charged to the Run
   that spends those seconds even though no invoice depends on the decision.
 
+The idle tail is deliberately conservative and this is where that shows. It charges the
+whole unused remainder of the increment a placement forces Mercator to buy, to the
+placement that forced it, and a later Run that used part of that remainder would be
+charged nothing for it. Splitting the tail between a Run that bought it and Runs that
+have not arrived needs a model of what arrives next, which nothing here has; the
+direction of the error is the safe one, because it overstates what committing to fresh
+capacity costs rather than understating it, and the alternative is the previous model,
+which charged the remainder to nobody.
+
 Named and not fixed here. The local Docker adapter publishes `RatePerSecondUSD: 0` with
 `Known: true`, which is the one production publisher of capacity somebody says is free,
 and `safety.no_capacity_is_free` cannot see it because invariants read Lab executions.
