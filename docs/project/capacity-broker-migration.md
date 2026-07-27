@@ -3496,6 +3496,22 @@ complete because it works against a live provider.
     that was really running was never sent.
     `a-refusal-on-one-machine-is-not-a-withdrawal-on-another` is the world that
     fails on it.
+  - Wanting nothing is a desire with a key of its own. It used to be the empty
+    key, which is also what a control plane holds for every workspace before it
+    has asked for anything, and those two are opposite instructions: one leaves a
+    fleet alone and the other stops everything speculative on it. So a Mercator
+    that restarted after the Runs waiting on a transfer were withdrawn computed a
+    desire naming nothing, read it as unchanged, and let a hundred gigabytes land
+    for Runs that no longer existed. The memory is in process on purpose and that
+    is still right, because the desire is derived from the log every time; what was
+    wrong was a memory that could not tell its own absence from a state it had
+    reached. A control plane with no queued work now sends one desire of nothing at
+    startup, which costs a machine nothing, and the rate bound does not count it,
+    because that bound is on how often Mercator may begin preparing and a
+    withdrawal begins nothing.
+    `a-restart-still-withdraws-what-nobody-waits-for` is the world that fails on it.
+    It stops at the Lab: withdrawal has no node command yet, so nothing at higher
+    fidelity can observe one.
   - The Lab world can refuse a fetch, under a `reject_command` fault on
     `node.prepare_image` or `node.prepare_artifact`, and holds the same rule the
     store now does: a refused fetch is not remembered as work it took on.
@@ -3510,24 +3526,45 @@ complete because it works against a live provider.
     machine billing that no Run could ever be placed on. A Run that closed with no
     cleanup ever asked for is converged too, which is the hole a sweep keyed on the
     cleanup request alone could only skip.
-  - The launch is what decides, whenever there is one. Reading the cleanup request
-    first destroyed the whole machine under a Run that reached a launch on a pool
-    Mercator does not own and then ended without anybody asking for its capacity
-    back, which is the ordinary end of a launch whose attempts ran out.
+  - The launch that took the capacity is what decides, whenever the record holds
+    one. Reading the cleanup request first destroyed the whole machine under a Run
+    that reached a launch on a pool Mercator does not own and then ended without
+    anybody asking for its capacity back, which is the ordinary end of a launch
+    whose attempts ran out.
     `closed_without_a_cleanup_request` is what is left for a Run that recorded no
     launch at all, and
     `an-orphan-is-adopted-or-destroyed-by-policy` states that combination.
+  - A Run holds one recorded launch per attempt, so reading its last one was
+    reading whichever attempt happened to be last. A Run replaced from a machine
+    Mercator provisioned onto a slot Mercator only borrows records terminate and
+    then release, and the machine the first attempt took was then handed back as a
+    slot and left billing with no Run that could ever be placed on it; the reverse
+    mix routed a terminate at a pool Mercator has no right to destroy. The launch is
+    now found by the identities the capacity itself carries, which is what every
+    adapter reads back off its own labels, tags, or environment. Capacity carrying
+    none of them is still decided by the record when every launch of the Run handed
+    capacity back the same way, and when they disagree nothing in the record can say
+    which machine this is, so it stops existing rather than being kept on a guess.
+    `a-machine-two-launches-disagree-about-is-not-adopted` states it.
   - The decision is recorded before the provider is asked to act on it, and a
     sweep that finds capacity already decided about carries out that decision
     rather than judging it again. Acting first left the one failure the rule calls
     a violation and cannot be recovered from: a terminated machine is never listed
-    again, so nothing remains for a later sweep to explain.
+    again, so nothing remains for a later sweep to explain. `internal/janitor`'s own
+    tests are the whole of what holds this, and no rule in the corpus can see it:
+    the two orderings differ only when a reclaim fails, the Lab world's provider
+    cannot be made to refuse one, and a sweep that returned an error would fail the
+    Lab control plane's tick rather than leave a state a rule could read. Making the
+    corpus hold it is owed.
   - A provider that answers `ErrTerminateUnsupported` is saying there is no
     machine of Mercator's to destroy, so the slot is given back and that is the
     whole of the capacity ceasing to exist. Local Docker answers exactly that, and
     stopping at the refusal returned before every later object in the same
     listing, so one container nothing could account for stopped every sweep of
-    that workspace from then on.
+    that workspace from then on. This one is a provider's vocabulary rather than a
+    world's, and `internal/janitor` and the Docker adapter are what hold it: every
+    machine in the Lab can be destroyed, so no Blueprint can state a provider that
+    refuses to.
   - `safety.orphan_policy_is_explicit` is stated beside `liveness.orphan_convergence`
     rather than in place of it. The two read different facts: one asks that no
     execution Mercator launched outlives the Run that owns it, and the other asks
@@ -3940,6 +3977,14 @@ Phase 3 added:
   hears a refusal as being about content rather than about one machine's copy of it
   forgets what the other machine took on, computes an empty desire it believes it
   never departed from, and sends no withdrawal at all.
+- `a-restart-still-withdraws-what-nobody-waits-for` (conformance): one busy machine
+  and two queued Runs reading the same hundred gigabyte corpus, which is asked for
+  once. Both callers withdraw at the same moment and Mercator restarts on the first
+  of them, so the restarted control plane's first reconciliation is the one that
+  wants nothing, and nothing is also what it would want if it had never asked for
+  anything. A control plane that cannot tell those apart sends no withdrawal and
+  the replica lands nineteen virtual minutes after the last Run that wanted it went
+  away.
 - `an-orphan-is-adopted-or-destroyed-by-policy` (conformance): four machines and
   two Runs. Three of them are holding something the control plane never launched,
   and the control plane restarts into that state. The one carrying a Run identity
@@ -3951,6 +3996,16 @@ Phase 3 added:
   machine stops existing. The fleet afterwards is the claim, because an adoption
   that quietly destroyed the machine and a termination that quietly kept it read
   the same in a count of things reclaimed.
+- `a-machine-two-launches-disagree-about-is-not-adopted` (conformance): one Run
+  launched twice, first on a machine Mercator provisions for it and whose provider
+  refuses the start, then on a slot Mercator borrows, so its record holds terminate
+  and release at once. A third machine holds capacity carrying that Run and neither
+  of its launch identities. It is destroyed, because no recorded launch accounts for
+  it. Deciding it by the Run's last launch adopts it on `recorded_disposition_release`
+  and leaves it standing and billing, which is what the corpus could not say before:
+  every other world holding an orphan holds a Run with exactly one launch, so the
+  rule that reads the launch that took the capacity and the rule that reads the last
+  one agreed everywhere.
 - `safety.orphan_policy_is_explicit` (Lab invariant): capacity a world began
   holding that Mercator never launched is either still standing or converged by a
   decision the record holds, and every such decision names a policy, a reason, and
@@ -4729,18 +4784,54 @@ had a policy, fails `an-orphan-is-adopted-or-destroyed-by-policy` with "the flee
 is [forgotten keeper stranded], and the machine the policy terminated is still
 billing".
 
-Reviewed and repaired the same day, before the slice was taken as done. Reading
-the cleanup request ahead of the recorded launch fails
-`an-orphan-is-adopted-or-destroyed-by-policy` with "the capacity of a Run that
-gave up was converged as terminated / closed_without_a_cleanup_request, want it
-adopted on its recorded disposition". Routing terminate at a provider that holds
-no machine of Mercator's fails with "sweep: adapter: terminate unsupported for
-standing capacity", which before the repair returned before every later object in
-the same listing. Acting before recording fails with "the record holds 0 orphan
-decisions, want exactly one" once the provider refuses one reclaim. Matching a
-refusal on content alone fails
-`a-refusal-on-one-machine-is-not-a-withdrawal-on-another` with "the ledger records
-0 withdrawals, want the transfer nothing was waiting for any more".
+Reviewed and repaired the same day, before the slice was taken as done. Two of
+those repairs are stated by the corpus and two are stated only by package tests,
+and they are listed apart, because a reader who takes the green corpus as the
+guard for all four would let a later refactor undo half of them in silence.
+
+The corpus states these two. Reading the cleanup request ahead of the recorded
+launch fails `an-orphan-is-adopted-or-destroyed-by-policy` with "the capacity of a
+Run that gave up was converged as terminated / closed_without_a_cleanup_request,
+want it adopted on its recorded disposition". Matching a refusal on content alone
+fails `a-refusal-on-one-machine-is-not-a-withdrawal-on-another` with "the ledger
+records 0 withdrawals, want the transfer nothing was waiting for any more".
+
+`internal/janitor` alone states the other two, and `go test ./internal/lab
+./internal/scenario` is fully green with either of them reverted. Acting before
+recording fails `TestJanitorRecordsItsDecisionBeforeItActsOnIt` with "the record
+holds 0 orphan decisions, want exactly one" once the provider refuses one reclaim.
+Routing terminate at a provider that holds no machine of Mercator's fails
+`TestJanitorReleasesTheSlotOfCapacityItsProviderCannotDestroy` with "sweep:
+adapter: terminate unsupported for standing capacity", which before the repair
+returned before every later object in the same listing. Both gaps are in the
+Blueprint vocabulary rather than in the rules: the Lab's provider destroys
+anything asked of it and cannot be made to refuse a reclaim, and a sweep that
+returned an error would fail the Lab control plane's tick rather than leave a
+state a rule could read. Earning those two a world is owed.
+
+Reviewed again and repaired the same day. Deciding capacity by a Run's last
+recorded launch rather than by the launch whose identity the capacity carries
+fails `a-machine-two-launches-disagree-about-is-not-adopted` with "the capacity two
+launches disagree about was converged as adopted / recorded_disposition_release,
+want it destroyed as capacity no launch accounts for", and fails
+`internal/janitor` on both mixes: the machine one attempt provisioned handed back
+as a slot, and a slot another attempt borrowed routed a terminate. It fails on
+this host's own Docker daemon too, through
+`TestIntegrationTheJanitorConvergesOneAttemptsContainerByThatAttemptsLaunch`, with
+"the sweep of this daemon reports {Found:1 Adopted:1 Terminated:0}". That case is
+the live half of the rule and it exists because nothing below the control plane
+tells the janitor which launch a container came from: the attempt and the launch
+key travel as labels the adapter writes and reads back, so the rule is only as
+true as that round trip through a real engine. Local Docker reaches the same
+daemon command either way, so the recorded reason is the assertion. Reading a
+control plane's own absence as a desire for nothing fails
+`a-restart-still-withdraws-what-nobody-waits-for` with "the ledger records 0
+withdrawals, want the transfer the restart left running", and the replica lands at
+00:31:40 for Runs withdrawn at 00:12. Counting a withdrawal against the rate bound
+fails the daemon's own `TestAQueuedRunPreparesTheMachineItIsGoingTo` with "the
+queued Run's host was never asked to prepare anything", because a control plane
+that sends one desire of nothing at startup then owes the interval before it may
+prepare anything real.
 
 What is left. The control plane's own second ask still rides on
 `PrepareReceipt.Refused`, and no production prepare lane fills it: `broker.Prepare`
@@ -4763,14 +4854,15 @@ MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegra
 go test ./internal/nodeagent ./internal/ociresolver -count=1
 ```
 
-The live half ran against this host's own daemon. `internal/adapter/docker`'s two
-integration cases are gated on `MERCATOR_DOCKER_INTEGRATION=1` and were run with
-it set; without it they skip. `internal/nodeagent` ran against a real daemon and a
-real MinIO object store, and `internal/ociresolver` against a real registry. The
-daemon suite is not part of that claim: `startFleet` empties `PATH` on purpose, so
-no local Docker connection is seeded and this slice's conformance case there runs
-against a scripted runtime. All green. #165 does not reproduce here and was left
-alone.
+The live half ran against this host's own daemon. `internal/adapter/docker`'s
+three integration cases are gated on `MERCATOR_DOCKER_INTEGRATION=1` and were run
+with it set; without it they skip. The third is the janitor sweeping a real
+container this adapter launched, which is where the per-launch rule meets a real
+engine's labels. `internal/nodeagent` ran against a real daemon and a real MinIO
+object store, and `internal/ociresolver` against a real registry. The daemon suite
+is not part of that claim: `startFleet` empties `PATH` on purpose, so no local
+Docker connection is seeded and this slice's conformance case there runs against a
+scripted runtime. All green. #165 does not reproduce here and was left alone.
 
 ### Phase 4 no capacity is free
 
