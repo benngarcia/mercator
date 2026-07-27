@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
   "summary": "A family of eight Runs arrives in one group whose caller said three of them may run at once, and the fleet has four idle machines warm for the image. Three are placed and the fourth is told to wait, on a bound nothing about the fleet can end: the record names GROUP_AT_PARALLELISM, the three siblings holding capacity, and no fleet answer at all, because no machine was weighed on its behalf. The ninth Run belongs to no family and takes the fourth machine, which is what makes this fixture about a declared width rather than about a fleet that ran out: the capacity the family may not use is free, and work outside the family uses it. Group was a word the arrival plan wrote and nothing read, so all eight ran at once and a caller's statement about how wide its sweep may run was worth nothing.",
-  "classification": "target",
-  "missing_capabilities": ["run_groups"],
+  "classification": "green",
   "world": {
     "images": {
       "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {

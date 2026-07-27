@@ -25,8 +25,15 @@ import (
 // may not proceed appends why, so the queue is a thing an operator can read
 // rather than a thing they can only infer from a Run that never starts.
 
-// stepAdmit is admission: the queue in front of this Run, the moment its class
-// says it must have started by, then Placement.
+// stepAdmit is admission: the width its own family declared, the queue in front
+// of this Run, the moment its class says it must have started by, then Placement.
+//
+// The family is asked first because it is the only one of the three that no
+// ordering and no machine can change. A Run whose group is already as wide as its
+// caller said may not be placed on the idlest fleet in the world, so recording it
+// as waiting behind work that outranks it would name the wrong cause, and letting
+// it hold the queue would stop unrelated work for a bound that has nothing to do
+// with capacity.
 //
 // The deadline is asked on both ways out. A Run being told to wait is asked by
 // deferOrRefuse below, which records what was holding it. A Run nothing is holding
@@ -49,6 +56,10 @@ func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string,
 		return false, err
 	}
 	waiting := queue.position(runID, state, o.now().UTC())
+	if siblings := queue.familyHolding(waiting); len(siblings) > 0 {
+		deferral := waiting.deferral(domain.DeferredGroupAtParallelism, siblings)
+		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, admissionAnswer{deferral: deferral})
+	}
 	if behind := queue.ahead(waiting); len(behind) > 0 {
 		deferral := waiting.deferral(domain.DeferredBehindHigherPriority, behind)
 		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, admissionAnswer{deferral: deferral})
@@ -81,7 +92,11 @@ func (o *Orchestrator) admissionQueue(ctx context.Context, workspaceID string) (
 	if err != nil {
 		return admissionQueue{}, fmt.Errorf("orchestrator: read the admission queue: %w", err)
 	}
-	replay := queueReplay{waiting: map[string]waitingRun{}, began: map[string]time.Time{}}
+	replay := queueReplay{
+		waiting: map[string]waitingRun{},
+		began:   map[string]time.Time{},
+		holding: map[string]domain.RunGroup{},
+	}
 	for event, err := range eventlog.ScanAll(ctx, o.log, head, filter) {
 		if err != nil {
 			return admissionQueue{}, fmt.Errorf("orchestrator: read the admission queue: %w", err)
@@ -90,7 +105,10 @@ func (o *Orchestrator) admissionQueue(ctx context.Context, workspaceID string) (
 			return admissionQueue{}, err
 		}
 	}
-	queue := admissionQueue{waiting: slices.Collect(maps.Values(replay.waiting))}
+	queue := admissionQueue{
+		waiting: slices.Collect(maps.Values(replay.waiting)),
+		holding: replay.holding,
+	}
 	slices.SortFunc(queue.waiting, func(left, right waitingRun) int {
 		return strings.Compare(left.runID, right.runID)
 	})
@@ -114,6 +132,16 @@ func (o *Orchestrator) admissionQueue(ctx context.Context, workspaceID string) (
 type queueReplay struct {
 	waiting map[string]waitingRun
 	began   map[string]time.Time
+	// holding is the family of every Run that has taken capacity and not finished
+	// with it, which is what a group's declared width is counted over. It is the
+	// same two facts as membership above, read for the opposite question: the queue
+	// is who is still owed an answer, and this is who has already been given one.
+	//
+	// A placement counts rather than an execution, and the difference is what makes
+	// the bound hold. A member given a queued Booking behind somebody else's work is
+	// not running yet and admission will never ask about it again, so counting only
+	// what is running would let a family commit six machines and then run six.
+	holding map[string]domain.RunGroup
 }
 
 // apply is one public fact moving a Run into or out of the queue. Leaving is every
@@ -140,17 +168,26 @@ func (replay queueReplay) apply(event eventlog.StoredEvent) error {
 	case EventAdmissionRefused, EventRunClosed:
 		delete(replay.waiting, event.StreamID)
 		delete(replay.began, event.StreamID)
+		delete(replay.holding, event.StreamID)
 	case EventBookingDecided:
 		var data struct {
 			Decision struct {
-				SelectedOfferSnapshotID string `json:"selected_offer_snapshot_id"`
+				SelectedOfferSnapshotID string                 `json:"selected_offer_snapshot_id"`
+				Policy                  domain.PlacementPolicy `json:"policy"`
 			} `json:"decision"`
 		}
 		if err := json.Unmarshal(event.Data, &data); err != nil {
 			return fmt.Errorf("orchestrator: read the admission queue: %w", err)
 		}
-		if data.Decision.SelectedOfferSnapshotID != "" {
-			delete(replay.waiting, event.StreamID)
+		if data.Decision.SelectedOfferSnapshotID == "" {
+			return nil
+		}
+		delete(replay.waiting, event.StreamID)
+		// The family is read off the decision rather than off the Run's workload,
+		// because the decision is what this replay already reads and because it is
+		// the record of what Mercator took the Run to be when it gave it capacity.
+		if data.Decision.Policy.Group.Declared() {
+			replay.holding[event.StreamID] = data.Decision.Policy.Group
 		}
 	}
 	return nil
@@ -161,6 +198,10 @@ func (replay queueReplay) apply(event eventlog.StoredEvent) error {
 // whoever is on it, and no priority takes that away.
 type admissionQueue struct {
 	waiting []waitingRun
+	// holding is every Run in this workspace that has capacity and belongs to a
+	// family, by Run ID. Work that is running is not in the queue above and is
+	// exactly what a family's width counts, which is why the two live side by side.
+	holding map[string]domain.RunGroup
 }
 
 // waitingRun is one Run in the queue: what class it is, when its wait began, and
@@ -191,8 +232,12 @@ type waitingRun struct {
 // queuePosition is one Run's standing in the queue at one moment: what its class
 // says, how long it has waited, and what that is worth.
 type queuePosition struct {
-	runID    string
-	class    domain.ServiceClass
+	runID string
+	class domain.ServiceClass
+	// group is the family this Run declared and the width it declared for it. It is
+	// read from the Run's own workload rather than from the queue, because the bound
+	// is the caller's statement about this Run and not something the queue can say.
+	group    domain.RunGroup
 	policy   domain.Admission
 	at       time.Time
 	queued   float64
@@ -209,11 +254,42 @@ func (queue admissionQueue) position(runID string, state runState, at time.Time)
 	return queuePosition{
 		runID:    runID,
 		class:    class,
+		group:    state.requested.Workload.Spec.Placement.Group,
 		policy:   policy,
 		at:       at,
 		queued:   queued,
 		priority: policy.EffectivePriority(queued),
 	}
+}
+
+// familyHolding is the members of this Run's own family that already have
+// capacity, where there are as many of them as the family said may run at once,
+// and nothing at all otherwise.
+//
+// The Run itself is never one of them. A Run being placed again after a launch
+// that failed for capacity nobody has still holds the decision that gave it a
+// machine, and counting that against its own family would make a member of a
+// family of one unplaceable for ever.
+//
+// The width is the one this Run declared. Every member states it, so members that
+// disagree are each held to their own answer, which is the only reading that needs
+// nothing registered in advance: Mercator holds the Runs, and a family is what
+// they say they belong to.
+func (queue admissionQueue) familyHolding(run queuePosition) []domain.QueuedAhead {
+	if !run.group.Declared() {
+		return nil
+	}
+	var holding []domain.QueuedAhead
+	for _, runID := range slices.Sorted(maps.Keys(queue.holding)) {
+		if runID == run.runID || queue.holding[runID].ID != run.group.ID {
+			continue
+		}
+		holding = append(holding, domain.QueuedAhead{RunID: runID})
+	}
+	if !run.group.Full(len(holding)) {
+		return nil
+	}
+	return holding
 }
 
 // ahead is everything already waiting that this Run may not be admitted past.

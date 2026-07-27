@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
   "summary": "Two idle machines warm for the image, and the cheap one is sold on terms that let its provider take it back. The standard Run goes first, while both are free, and it is refused the cheaper machine: its class does not permit interruption, so INTERRUPTION_NOT_PERMITTED strikes out capacity that can disappear and the Run pays half again as much for a machine nobody can reclaim. The batch Run behind it takes the reclaimable machine, because a class that would rather be cheap than early is a caller saying the work can be redone. No offer could state the term it was sold on and no class could state whether its work may be lost, so both Runs took the cheapest machine and the one that must not be interrupted was the one with most to lose.",
-  "classification": "target",
-  "missing_capabilities": ["interruption_permission"],
+  "classification": "green",
   "world": {
     "images": {
       "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {

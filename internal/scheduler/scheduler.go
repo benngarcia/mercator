@@ -403,6 +403,24 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	if !offer.Pricing.Known && !workload.Spec.Placement.AllowUnknownPricing {
 		violations = append(violations, domain.Violation{Code: "UNKNOWN_FACT", Path: "pricing", Required: "known", Offered: "unknown", Message: "Policy does not allow unknown pricing."})
 	}
+	// Capacity its provider may take back is refused to work whose class does not
+	// permit interruption. It is decided here, before the work starts, because that
+	// is the only moment there is a decision to make: nothing Mercator holds
+	// survives a machine being reclaimed, so by the time the provider says so the
+	// choice has been made for it.
+	//
+	// It refuses the machine for what it is rather than for what it is doing, so no
+	// amount of waiting ends it and the fleet answer counts this candidate among the
+	// machines that can never hold this Run.
+	if offer.Reclaimable && !workload.Spec.Placement.Class.Admission().PermitsInterruption {
+		violations = append(violations, domain.Violation{
+			Code:     "INTERRUPTION_NOT_PERMITTED",
+			Path:     "reclaimable",
+			Required: false,
+			Offered:  true,
+			Message:  "Offer capacity can be taken back by its provider, and this Run's class does not permit interruption.",
+		})
+	}
 	if exceedsStartSLO(workload.Spec.Placement.MaxP90StartSeconds, estimates.EstablishedStartSeconds) {
 		violations = append(violations, domain.Violation{
 			Code:     "LATENCY_SLO_EXCEEDED",
