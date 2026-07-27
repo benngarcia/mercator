@@ -351,6 +351,166 @@ func TestJanitorRecordsItsDecisionBeforeItActsOnIt(t *testing.T) {
 	}
 }
 
+// TestJanitorConvergesCapacityByTheLaunchThatTookIt is the policy meeting a Run
+// that was launched more than once. The first attempt took a machine Mercator
+// provisioned for it and was left behind by an indeterminate launch; the
+// replacement took a slot in a pool Mercator does not own, and the Run ended
+// there.
+//
+// The machine is the claim. Deciding this capacity by the Run's last launch reads
+// the slot's rule over the provisioned machine, hands the slot back, and leaves
+// the machine standing and billing with no Run that could ever be placed on it.
+func TestJanitorConvergesCapacityByTheLaunchThatTookIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := fake.New()
+	provisioned := attemptLaunch("run_replaced", "att_one", domain.DispositionTerminate)
+	if _, err := ad.Launch(ctx, provisioned); err != nil {
+		t.Fatalf("seed the machine the first attempt provisioned: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	appendLaunchesThenClose(t, log, "ws_1", "run_replaced",
+		provisioned,
+		attemptLaunch("run_replaced", "att_two", domain.DispositionRelease),
+	)
+
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if result.Terminated != 1 || result.Adopted != 0 {
+		t.Fatalf("sweep result = %+v, want the provisioned machine destroyed by its own launch's rule", result)
+	}
+	if ad.TerminateCount() != 1 || ad.ReleaseCount() != 0 {
+		t.Fatalf(
+			"the machine the first attempt provisioned was reclaimed with release=%d terminate=%d, want it destroyed",
+			ad.ReleaseCount(), ad.TerminateCount(),
+		)
+	}
+	convergence := onlyConvergence(t, log, "ws_1")
+	if convergence.Outcome != OrphanTerminated || convergence.Reason != reasonRecordedTerminate {
+		t.Fatalf("the record says %+v, want the disposition the launch that took this capacity recorded", convergence)
+	}
+}
+
+// TestJanitorKeepsAMachineTheReplacedLaunchDidNotProvision is the same Run with
+// its attempts the other way round. The capacity left behind is a slot in a pool
+// Mercator does not own, and the replacement went on to provision a machine, so
+// deciding by the last launch would destroy a machine Mercator has no right to
+// and take every other Booking on it down with it.
+func TestJanitorKeepsAMachineTheReplacedLaunchDidNotProvision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := fake.New()
+	borrowed := attemptLaunch("run_moved", "att_one", domain.DispositionRelease)
+	if _, err := ad.Launch(ctx, borrowed); err != nil {
+		t.Fatalf("seed the slot the first attempt borrowed: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	appendLaunchesThenClose(t, log, "ws_1", "run_moved",
+		borrowed,
+		attemptLaunch("run_moved", "att_two", domain.DispositionTerminate),
+	)
+
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if result.Adopted != 1 || result.Terminated != 0 {
+		t.Fatalf("sweep result = %+v, want the borrowed slot given back and its machine kept", result)
+	}
+	if ad.ReleaseCount() != 1 || ad.TerminateCount() != 0 {
+		t.Fatalf(
+			"a slot in a pool Mercator does not own was reclaimed with release=%d terminate=%d, want the slot released",
+			ad.ReleaseCount(), ad.TerminateCount(),
+		)
+	}
+}
+
+// TestJanitorDestroysCapacityNoRecordedLaunchAccountsFor is the capacity that
+// carries a Run identity and none of the launch identities Mercator minted for
+// it. The Run's launches took capacity on opposite terms, so the record cannot
+// say which of them this machine came from, and a policy that guessed would
+// either keep a machine that must be destroyed or destroy a slot Mercator only
+// borrowed.
+func TestJanitorDestroysCapacityNoRecordedLaunchAccountsFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := fake.New()
+	_, err := ad.Launch(ctx, adapter.LaunchRequest{
+		OperationKey:       "launch_unnamed",
+		RequestHash:        "sha256:unnamed",
+		WorkspaceID:        "ws_1",
+		RunID:              "run_disagreeing",
+		AttemptID:          "att_the_provider_minted",
+		OwnershipToken:     "own_unnamed",
+		LaunchKey:          "launch_the_provider_minted",
+		CleanupLocator:     "cleanup_unnamed",
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+	})
+	if err != nil {
+		t.Fatalf("seed capacity naming no launch: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	appendLaunchesThenClose(t, log, "ws_1", "run_disagreeing",
+		attemptLaunch("run_disagreeing", "att_one", domain.DispositionTerminate),
+		attemptLaunch("run_disagreeing", "att_two", domain.DispositionRelease),
+	)
+
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if result.Terminated != 1 {
+		t.Fatalf("sweep result = %+v, want capacity no launch accounts for destroyed", result)
+	}
+	convergence := onlyConvergence(t, log, "ws_1")
+	if convergence.Reason != reasonNoLaunchAccountsFor {
+		t.Fatalf("the record gives reason %q, want the launches that cannot account for it", convergence.Reason)
+	}
+}
+
+// attemptLaunch is one attempt of a Run as Mercator recorded launching it, with
+// the identities Mercator minted for that attempt's capacity.
+func attemptLaunch(runID, attemptID string, disposition domain.Disposition) adapter.LaunchRequest {
+	return adapter.LaunchRequest{
+		OperationKey:       "launch_" + attemptID,
+		RequestHash:        "sha256:" + attemptID,
+		WorkspaceID:        "ws_1",
+		RunID:              runID,
+		AttemptID:          attemptID,
+		OwnershipToken:     "own_" + attemptID,
+		LaunchKey:          "launch_" + attemptID,
+		CleanupLocator:     "cleanup_" + attemptID,
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+		Disposition:        disposition,
+	}
+}
+
+// appendLaunchesThenClose is a Run that was launched once per attempt and then
+// ended, which is what a Run replaced onto other capacity leaves in the record.
+func appendLaunchesThenClose(t *testing.T, log eventlog.EventLog, workspaceID, runID string, launches ...adapter.LaunchRequest) {
+	t.Helper()
+	events := make([]eventlog.NewEvent, 0, len(launches)+1)
+	for _, launch := range launches {
+		private, err := json.Marshal(launch)
+		if err != nil {
+			t.Fatalf("marshal intent: %v", err)
+		}
+		event := runEvent(workspaceID, runID, "intent_"+launch.AttemptID, "compute.run.launch_intent_recorded.v1")
+		event.PrivateData = private
+		events = append(events, event)
+	}
+	appendRunHistory(t, log, workspaceID, runID,
+		append(events, runEvent(workspaceID, runID, "closed", "compute.run.closed.v1"))...,
+	)
+}
+
 // standingPool is a provider holding no machine of Mercator's, which is what
 // local Docker is: there is a slot to give back and nothing to destroy.
 type standingPool struct {

@@ -51,6 +51,7 @@ const (
 	reasonRecordedTerminate   = "recorded_disposition_terminate"
 	reasonUnattributed        = "unattributed"
 	reasonNoRecordedRun       = "no_recorded_run"
+	reasonNoLaunchAccountsFor = "no_recorded_launch_accounts_for_it"
 	reasonClosedWithoutAsking = "closed_without_a_cleanup_request"
 )
 
@@ -188,7 +189,7 @@ func (j *Janitor) decide(ctx context.Context, object adapter.OwnedExternalObject
 	if err != nil {
 		return orphanDecision{}, err
 	}
-	return recorded.converge()
+	return recorded.converge(object)
 }
 
 // terminate is capacity that stops existing, for a reason that is not a recorded
@@ -199,12 +200,70 @@ func terminate(reason string) orphanDecision {
 
 // recordedRun is what Mercator's own log says about the Run one owned object
 // names: whether there is a record at all, whether it is over, whether anybody
-// ever asked for its capacity back, and how the launch said to hand it back.
+// ever asked for its capacity back, and every launch it made.
+//
+// The launches are kept as the several they are. A Run that was placed again
+// after a launch failed has one recorded launch per attempt, each with the
+// disposition its own offer decided, so a Run that ran out of fresh capacity and
+// was replaced onto a pool Mercator does not own holds both dispositions at once.
+// Keeping only the last of them converged one attempt's capacity by another
+// attempt's rule, which either destroys a machine in a pool Mercator does not own
+// or leaves a machine Mercator provisioned billing forever.
 type recordedRun struct {
 	exists       bool
 	closed       bool
 	cleanupAsked bool
-	disposition  domain.Disposition
+	launches     []recordedLaunch
+}
+
+// recordedLaunch is one launch as Mercator wrote it down: the identities it
+// minted for the capacity, and how that capacity is handed back.
+type recordedLaunch struct {
+	attemptID   string
+	launchKey   string
+	disposition domain.Disposition
+}
+
+// took reports whether this launch is the one that took the capacity in hand.
+// Capacity carries the identities Mercator minted for the launch that created
+// it, and a provider hands back whichever of them it was able to keep, so either
+// one naming this launch is this launch.
+func (launch recordedLaunch) took(object adapter.OwnedExternalObject) bool {
+	if object.AttemptID != "" && object.AttemptID == launch.attemptID {
+		return true
+	}
+	return object.LaunchKey != "" && object.LaunchKey == launch.launchKey
+}
+
+// launchTaking is the launch that decides one piece of capacity: the one whose
+// identities the capacity carries.
+//
+// Capacity carrying none of them is still decided by the record when every launch
+// this Run made handed capacity back the same way, because then there is nothing
+// for the several launches to disagree about. When they disagree, nothing in the
+// record says which of them this machine came from, and picking one is picking
+// between keeping a machine that must be destroyed and destroying a slot in a
+// pool Mercator does not own.
+func (recorded recordedRun) launchTaking(object adapter.OwnedExternalObject) (recordedLaunch, bool) {
+	for _, launch := range recorded.launches {
+		if launch.took(object) {
+			return launch, true
+		}
+	}
+	return recorded.agreedLaunch()
+}
+
+func (recorded recordedRun) agreedLaunch() (recordedLaunch, bool) {
+	if len(recorded.launches) == 0 {
+		return recordedLaunch{}, false
+	}
+	agreed := recorded.launches[0]
+	for _, launch := range recorded.launches {
+		if launch.disposition != agreed.disposition {
+			return recordedLaunch{}, false
+		}
+	}
+	return agreed, true
 }
 
 // over reports whether Mercator still holds live work on this capacity. A Run
@@ -212,22 +271,28 @@ type recordedRun struct {
 // difference between them is who noticed, and the policy does not turn on that.
 func (recorded recordedRun) over() bool { return recorded.cleanupAsked || recorded.closed }
 
-// converge is what this record says to do with the capacity the Run was given.
-// The launch is what decides: it recorded how this capacity is handed back, and
-// that is what says whether there is a machine left to keep once the workload on
-// it is reclaimed. Reading the cleanup request instead would destroy a rented
-// machine every time a Run ended without one, which is the ordinary end of a
-// launch that failed after its attempts ran out.
-func (recorded recordedRun) converge() (orphanDecision, error) {
+// converge is what this record says to do with one piece of the capacity the Run
+// was given. The launch that took that capacity is what decides: it recorded how
+// this capacity is handed back, and that is what says whether there is a machine
+// left to keep once the workload on it is reclaimed. Reading the cleanup request
+// instead would destroy a rented machine every time a Run ended without one,
+// which is the ordinary end of a launch that failed after its attempts ran out.
+func (recorded recordedRun) converge(object adapter.OwnedExternalObject) (orphanDecision, error) {
+	launch, taken := recorded.launchTaking(object)
 	switch {
 	case !recorded.exists:
 		return terminate(reasonNoRecordedRun), nil
 	case !recorded.over():
 		return orphanDecision{}, nil
-	case recorded.disposition != "":
-		return byRecordedDisposition(recorded.disposition)
+	case taken:
+		return byRecordedDisposition(launch.disposition)
+	case len(recorded.launches) > 0:
+		// Capacity of a Run whose launches disagree, carrying the identity of none
+		// of them. The record cannot say which launch left this machine standing, so
+		// nothing here says it survives being reclaimed.
+		return terminate(reasonNoLaunchAccountsFor), nil
 	case recorded.cleanupAsked:
-		return orphanDecision{}, fmt.Errorf("janitor: cleanup requires a valid recorded disposition, got %q", recorded.disposition)
+		return orphanDecision{}, fmt.Errorf("janitor: cleanup requires a recorded launch, and Run %q recorded none", object.RunID)
 	default:
 		// A Run that ended with no launch of its own recorded is the case a sweep
 		// keyed on the cleanup request alone could only skip, so the machine ran on
@@ -264,11 +329,11 @@ func (j *Janitor) recordedRun(ctx context.Context, object adapter.OwnedExternalO
 	for _, event := range history.Events {
 		switch event.Type {
 		case "compute.run.launch_intent_recorded.v1":
-			disposition, err := recordedDisposition(event)
+			launch, err := recordedLaunchOf(event)
 			if err != nil {
 				return recordedRun{}, err
 			}
-			recorded.disposition = disposition
+			recorded.launches = append(recorded.launches, launch)
 		case "compute.run.cleanup_requested.v1", "compute.run.cleanup_confirmed.v1":
 			recorded.cleanupAsked = true
 		case "compute.run.closed.v1":
@@ -278,18 +343,20 @@ func (j *Janitor) recordedRun(ctx context.Context, object adapter.OwnedExternalO
 	return recorded, nil
 }
 
-func recordedDisposition(event eventlog.StoredEvent) (domain.Disposition, error) {
+func recordedLaunchOf(event eventlog.StoredEvent) (recordedLaunch, error) {
 	payload := event.PrivateData
 	if len(payload) == 0 {
 		payload = event.Data
 	}
 	var intent struct {
+		AttemptID   string             `json:"attempt_id"`
+		LaunchKey   string             `json:"launch_key"`
 		Disposition domain.Disposition `json:"disposition"`
 	}
 	if err := json.Unmarshal(payload, &intent); err != nil {
-		return "", fmt.Errorf("janitor: decode recorded launch intent: %w", err)
+		return recordedLaunch{}, fmt.Errorf("janitor: decode recorded launch intent: %w", err)
 	}
-	return intent.Disposition, nil
+	return recordedLaunch{attemptID: intent.AttemptID, launchKey: intent.LaunchKey, disposition: intent.Disposition}, nil
 }
 
 // reclaim carries out one decision against the provider. Adopting gives the slot
