@@ -3,6 +3,7 @@ package janitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -198,6 +199,183 @@ func TestJanitorTerminatesCapacityLeftBehindByAClosedRun(t *testing.T) {
 	}
 }
 
+// TestJanitorAdoptsCapacityAClosedRunLeftOnAMachineMercatorDoesNotOwn is the
+// combination the policy is stated over and the cleanup request says nothing
+// about. The Run reached a launch on a machine in a pool Mercator does not own,
+// so its own record says the machine outlives the workload, and then it ended
+// without anybody asking for the capacity back, which is the ordinary end of a
+// launch whose attempts ran out.
+//
+// Reading the cleanup request first destroyed the whole machine here, and other
+// work already placed on it lost its host.
+func TestJanitorAdoptsCapacityAClosedRunLeftOnAMachineMercatorDoesNotOwn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := fake.New()
+	_, err := ad.Launch(ctx, adapter.LaunchRequest{
+		OperationKey:       "launch_stranded",
+		RequestHash:        "sha256:stranded",
+		WorkspaceID:        "ws_1",
+		RunID:              "run_stranded",
+		AttemptID:          "att_stranded",
+		OwnershipToken:     "own_stranded",
+		LaunchKey:          "launch_stranded",
+		CleanupLocator:     "cleanup_stranded",
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+		Disposition:        domain.DispositionRelease,
+	})
+	if err != nil {
+		t.Fatalf("seed stranded execution: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	appendLaunchThenClose(t, log, "ws_1", "run_stranded", domain.DispositionRelease)
+
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if result.Adopted != 1 || result.Terminated != 0 {
+		t.Fatalf("sweep result = %+v, want the machine kept because the launch said it outlives the workload", result)
+	}
+	if ad.ReleaseCount() != 1 || ad.TerminateCount() != 0 {
+		t.Fatalf(
+			"capacity whose launch recorded release was reclaimed with release=%d terminate=%d, want its slot released and the machine kept",
+			ad.ReleaseCount(), ad.TerminateCount(),
+		)
+	}
+	convergence := onlyConvergence(t, log, "ws_1")
+	if convergence.Outcome != OrphanAdopted || convergence.Reason != reasonRecordedRelease {
+		t.Fatalf("the record says %+v, want an adoption on the recorded disposition", convergence)
+	}
+}
+
+// TestJanitorReleasesTheSlotOfCapacityItsProviderCannotDestroy is the policy
+// meeting a provider that holds no machine of Mercator's. Local Docker is one:
+// it is a standing pool, so there is nothing to destroy and the container is the
+// whole of what Mercator has there.
+//
+// Stopping at the provider's refusal left that container standing and returned an
+// error before anything later in the same listing was looked at, so one object
+// nothing could account for stopped every sweep of the workspace from then on.
+func TestJanitorReleasesTheSlotOfCapacityItsProviderCannotDestroy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := &standingPool{Adapter: fake.New()}
+	_, err := ad.Launch(ctx, adapter.LaunchRequest{
+		OperationKey:       "launch_forgotten",
+		RequestHash:        "sha256:forgotten",
+		WorkspaceID:        "ws_1",
+		RunID:              "run_forgotten",
+		AttemptID:          "att_forgotten",
+		OwnershipToken:     "own_forgotten",
+		LaunchKey:          "launch_forgotten",
+		CleanupLocator:     "cleanup_forgotten",
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+	})
+	if err != nil {
+		t.Fatalf("seed capacity nothing recorded: %v", err)
+	}
+	log := openJanitorTestLog(t)
+
+	result, err := New(ad, WithEventLog(log)).Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if result.Terminated != 1 {
+		t.Fatalf("sweep result = %+v, want the capacity nothing recorded gone", result)
+	}
+	if ad.ReleaseCount() != 1 {
+		t.Fatalf("a provider that cannot destroy this capacity was asked to release it %d times, want once", ad.ReleaseCount())
+	}
+	owned, err := ad.ListOwned(ctx, adapter.OwnershipQuery{WorkspaceID: "ws_1"})
+	if err != nil {
+		t.Fatalf("list owned: %v", err)
+	}
+	if len(owned) != 0 {
+		t.Fatalf("the provider still holds %+v, want the slot given back", owned)
+	}
+}
+
+// TestJanitorRecordsItsDecisionBeforeItActsOnIt is the ordering the whole policy
+// rests on. Reclaiming is not reversible and a machine that stops existing is
+// never listed again, so a sweep that destroyed one and then failed to write down
+// why would leave capacity gone under no stated rule, and no later sweep could
+// repair it: the object it would have to explain is not there to be found.
+//
+// The provider fails the first reclaim. The decision is in the record anyway, the
+// capacity is still there to be finished, and the sweep that finishes it acts on
+// the decision already taken rather than writing a second one.
+func TestJanitorRecordsItsDecisionBeforeItActsOnIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ad := &refusesFirstReclaim{Adapter: fake.New()}
+	_, err := ad.Launch(ctx, adapter.LaunchRequest{
+		OperationKey:       "launch_unrecorded",
+		RequestHash:        "sha256:unrecorded",
+		WorkspaceID:        "ws_1",
+		RunID:              "run_unrecorded",
+		AttemptID:          "att_unrecorded",
+		OwnershipToken:     "own_unrecorded",
+		LaunchKey:          "launch_unrecorded",
+		CleanupLocator:     "cleanup_unrecorded",
+		WorkloadID:         "wl_1",
+		WorkloadRevisionID: "wrev_1",
+	})
+	if err != nil {
+		t.Fatalf("seed capacity nothing recorded: %v", err)
+	}
+	log := openJanitorTestLog(t)
+	janitor := New(ad, WithEventLog(log))
+
+	if _, err := janitor.Sweep(ctx, "ws_1"); err == nil {
+		t.Fatal("the sweep hid a provider that would not reclaim the capacity")
+	}
+
+	decided := onlyConvergence(t, log, "ws_1")
+	if decided.Outcome != OrphanTerminated || decided.Reason != reasonNoRecordedRun {
+		t.Fatalf("the record says %+v, want the decision the failed sweep took", decided)
+	}
+	result, err := janitor.Sweep(ctx, "ws_1")
+	if err != nil {
+		t.Fatalf("second sweep: %v", err)
+	}
+	if result.Terminated != 1 {
+		t.Fatalf("second sweep result = %+v, want the capacity decided about finished", result)
+	}
+	if again := onlyConvergence(t, log, "ws_1"); again != decided {
+		t.Fatalf("the record now says %+v, want the one decision already taken", again)
+	}
+}
+
+// standingPool is a provider holding no machine of Mercator's, which is what
+// local Docker is: there is a slot to give back and nothing to destroy.
+type standingPool struct {
+	*fake.Adapter
+}
+
+func (standingPool) Terminate(context.Context, adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	return adapter.TerminateReceipt{}, adapter.ErrTerminateUnsupported
+}
+
+// refusesFirstReclaim is a provider that fails the first cleanup it is asked for,
+// which is what a sweep interrupted between deciding and acting meets.
+type refusesFirstReclaim struct {
+	*fake.Adapter
+	asked bool
+}
+
+func (r *refusesFirstReclaim) Terminate(ctx context.Context, request adapter.TerminateRequest) (adapter.TerminateReceipt, error) {
+	if !r.asked {
+		r.asked = true
+		return adapter.TerminateReceipt{}, errors.New("provider is unreachable")
+	}
+	return r.Adapter.Terminate(ctx, request)
+}
+
 // onlyConvergence is the one orphan decision this workspace's record holds. It
 // reads the public log rather than the sweep's return value, because the record is
 // what an operator and every rule about the policy actually see.
@@ -336,45 +514,65 @@ func TestJanitorRejectsCleanupWithoutRecordedDisposition(t *testing.T) {
 	}
 }
 
+// appendLaunchIntent is a Run that launched and whose capacity Mercator then
+// asked back, which is how work ordinarily ends.
 func appendLaunchIntent(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
 	t.Helper()
-	intent := adapter.LaunchRequest{
-		AttemptID:   "att_" + runID,
-		LaunchKey:   "launch_" + runID,
-		Disposition: disposition,
-	}
-	private, err := json.Marshal(intent)
-	if err != nil {
-		t.Fatalf("marshal intent: %v", err)
-	}
-	_, err = log.Append(context.Background(), eventlog.AppendRequest{
+	appendRunHistory(t, log, workspaceID, runID,
+		launchIntentEvent(t, runID, disposition),
+		runEvent(workspaceID, runID, "cleanup", "compute.run.cleanup_requested.v1"),
+	)
+}
+
+// appendLaunchThenClose is a Run that launched and then ended with nobody asking
+// for its capacity back, which is what a launch whose attempts ran out leaves in
+// the record.
+func appendLaunchThenClose(t *testing.T, log eventlog.EventLog, workspaceID, runID string, disposition domain.Disposition) {
+	t.Helper()
+	appendRunHistory(t, log, workspaceID, runID,
+		launchIntentEvent(t, runID, disposition),
+		runEvent(workspaceID, runID, "closed", "compute.run.closed.v1"),
+	)
+}
+
+func appendRunHistory(t *testing.T, log eventlog.EventLog, workspaceID, runID string, events ...eventlog.NewEvent) {
+	t.Helper()
+	_, err := log.Append(context.Background(), eventlog.AppendRequest{
 		Stream:                eventlog.StreamKey{WorkspaceID: workspaceID, Type: "run", ID: runID},
 		ExpectedStreamVersion: 0,
 		CommandKey:            "seed:intent:" + runID,
 		RequestHash:           "sha256:seed_intent",
 		CorrelationID:         runID,
 		CausationID:           "seed",
-		Events: []eventlog.NewEvent{
-			{
-				ID:            "evt_" + workspaceID + "_" + runID + "_intent",
-				Type:          "compute.run.launch_intent_recorded.v1",
-				SchemaVersion: 1,
-				OccurredAt:    time.Now().UTC(),
-				Visibility:    eventlog.VisibilityPublic,
-				Data:          []byte(`{}`),
-				PrivateData:   private,
-			},
-			{
-				ID:            "evt_" + workspaceID + "_" + runID + "_cleanup",
-				Type:          "compute.run.cleanup_requested.v1",
-				SchemaVersion: 1,
-				OccurredAt:    time.Now().UTC(),
-				Visibility:    eventlog.VisibilityPublic,
-				Data:          []byte(`{}`),
-			},
-		},
+		Events:                events,
 	})
 	if err != nil {
-		t.Fatalf("append launch intent: %v", err)
+		t.Fatalf("append run history: %v", err)
+	}
+}
+
+func launchIntentEvent(t *testing.T, runID string, disposition domain.Disposition) eventlog.NewEvent {
+	t.Helper()
+	private, err := json.Marshal(adapter.LaunchRequest{
+		AttemptID:   "att_" + runID,
+		LaunchKey:   "launch_" + runID,
+		Disposition: disposition,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent: %v", err)
+	}
+	event := runEvent("ws_1", runID, "intent", "compute.run.launch_intent_recorded.v1")
+	event.PrivateData = private
+	return event
+}
+
+func runEvent(workspaceID, runID, name, eventType string) eventlog.NewEvent {
+	return eventlog.NewEvent{
+		ID:            "evt_" + workspaceID + "_" + runID + "_" + name,
+		Type:          eventType,
+		SchemaVersion: 1,
+		OccurredAt:    time.Now().UTC(),
+		Visibility:    eventlog.VisibilityPublic,
+		Data:          []byte(`{}`),
 	}
 }

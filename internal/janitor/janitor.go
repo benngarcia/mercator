@@ -3,6 +3,7 @@ package janitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/benngarcia/mercator/internal/adapter"
@@ -121,17 +122,14 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 			// swept workspace; requests need it to route through the broker.
 			object.WorkspaceID = workspaceID
 		}
-		decision, err := j.decide(ctx, object)
+		decision, err := j.converge(ctx, object)
 		if err != nil {
 			return result, err
 		}
 		if decision.outcome == "" {
 			continue
 		}
-		if err := j.reclaim(ctx, object, decision.action); err != nil {
-			return result, err
-		}
-		if err := j.record(ctx, object, decision); err != nil {
+		if err := j.reclaim(ctx, object, decision.outcome); err != nil {
 			return result, err
 		}
 		if decision.outcome == OrphanAdopted {
@@ -143,14 +141,41 @@ func (j *Janitor) Sweep(ctx context.Context, workspaceID string) (Result, error)
 	return result, nil
 }
 
-// orphanDecision is one application of the policy: what it decided, why, and
-// which cleanup action carries it out. An empty outcome is not a decision at all,
-// which is what live work gets: Mercator still holds the Run this capacity is
-// executing, and that Run's own lifecycle converges it.
+// orphanDecision is one application of the policy: what it decided and why. An
+// empty outcome is not a decision at all, which is what live work gets: Mercator
+// still holds the Run this capacity is executing, and that Run's own lifecycle
+// converges it.
+//
+// How the provider is asked is deliberately not part of it. Adopting releases a
+// slot and terminating destroys a machine, so the outcome already says which
+// command carries it, and a decision that also carried the command could state
+// one the provider cannot perform.
 type orphanDecision struct {
 	outcome OrphanOutcome
 	reason  string
-	action  domain.Disposition
+}
+
+// converge is the decision this sweep will carry out, written down before
+// anything acts on it. A decision the record already holds is read back rather
+// than made again.
+//
+// The order is the whole point. Reclaiming is not reversible and a terminated
+// machine never appears in a listing again, so a sweep that destroyed one and
+// then failed to say why would leave capacity gone with no rule naming what took
+// it, and no later sweep could ever repair that: the object it would have to
+// explain is no longer there to be found. Deciding first leaves the opposite
+// failure, which is a machine still standing under a decision that has not been
+// carried out yet, and the next sweep finishes it.
+func (j *Janitor) converge(ctx context.Context, object adapter.OwnedExternalObject) (orphanDecision, error) {
+	decided, err := j.recordedDecision(ctx, object)
+	if err != nil || decided.outcome != "" {
+		return decided, err
+	}
+	decision, err := j.decide(ctx, object)
+	if err != nil || decision.outcome == "" {
+		return decision, err
+	}
+	return decision, j.record(ctx, object, decision)
 }
 
 // decide applies the policy to one owned object. Nothing here reaches the
@@ -163,45 +188,13 @@ func (j *Janitor) decide(ctx context.Context, object adapter.OwnedExternalObject
 	if err != nil {
 		return orphanDecision{}, err
 	}
-	switch {
-	case !recorded.exists:
-		return terminate(reasonNoRecordedRun), nil
-	case recorded.cleanupAsked:
-		return convergeByRecord(recorded.disposition)
-	case recorded.closed:
-		// A Run that ended without Mercator ever asking for its capacity back is
-		// the case a sweep keyed on the cleanup request alone could only skip, so
-		// the machine ran on with nothing left that would ever reclaim it.
-		return terminate(reasonClosedWithoutAsking), nil
-	default:
-		return orphanDecision{}, nil
-	}
+	return recorded.converge()
 }
 
-// convergeByRecord is the adopt half of the policy. The launch recorded how this
-// capacity is handed back, and that is what says whether there is a machine left
-// to keep once the workload on it is reclaimed.
-func convergeByRecord(disposition domain.Disposition) (orphanDecision, error) {
-	switch disposition {
-	case domain.DispositionRelease:
-		return orphanDecision{
-			outcome: OrphanAdopted,
-			reason:  reasonRecordedRelease,
-			action:  domain.DispositionRelease,
-		}, nil
-	case domain.DispositionTerminate:
-		return orphanDecision{
-			outcome: OrphanTerminated,
-			reason:  reasonRecordedTerminate,
-			action:  domain.DispositionTerminate,
-		}, nil
-	default:
-		return orphanDecision{}, fmt.Errorf("janitor: cleanup requires a valid recorded disposition, got %q", disposition)
-	}
-}
-
+// terminate is capacity that stops existing, for a reason that is not a recorded
+// disposition.
 func terminate(reason string) orphanDecision {
-	return orphanDecision{outcome: OrphanTerminated, reason: reason, action: domain.DispositionTerminate}
+	return orphanDecision{outcome: OrphanTerminated, reason: reason}
 }
 
 // recordedRun is what Mercator's own log says about the Run one owned object
@@ -212,6 +205,50 @@ type recordedRun struct {
 	closed       bool
 	cleanupAsked bool
 	disposition  domain.Disposition
+}
+
+// over reports whether Mercator still holds live work on this capacity. A Run
+// that closed and a Run whose capacity was asked back are both over: the
+// difference between them is who noticed, and the policy does not turn on that.
+func (recorded recordedRun) over() bool { return recorded.cleanupAsked || recorded.closed }
+
+// converge is what this record says to do with the capacity the Run was given.
+// The launch is what decides: it recorded how this capacity is handed back, and
+// that is what says whether there is a machine left to keep once the workload on
+// it is reclaimed. Reading the cleanup request instead would destroy a rented
+// machine every time a Run ended without one, which is the ordinary end of a
+// launch that failed after its attempts ran out.
+func (recorded recordedRun) converge() (orphanDecision, error) {
+	switch {
+	case !recorded.exists:
+		return terminate(reasonNoRecordedRun), nil
+	case !recorded.over():
+		return orphanDecision{}, nil
+	case recorded.disposition != "":
+		return byRecordedDisposition(recorded.disposition)
+	case recorded.cleanupAsked:
+		return orphanDecision{}, fmt.Errorf("janitor: cleanup requires a valid recorded disposition, got %q", recorded.disposition)
+	default:
+		// A Run that ended with no launch of its own recorded is the case a sweep
+		// keyed on the cleanup request alone could only skip, so the machine ran on
+		// with nothing left that would ever reclaim it. Nothing says this capacity
+		// survives being reclaimed, so nothing can be bound to what is left of it.
+		return terminate(reasonClosedWithoutAsking), nil
+	}
+}
+
+// byRecordedDisposition is the launch's own statement about the capacity it
+// took: a slot in a pool Mercator does not own outlives the workload and is
+// adopted, and a machine Mercator provisioned for this work does not.
+func byRecordedDisposition(disposition domain.Disposition) (orphanDecision, error) {
+	switch disposition {
+	case domain.DispositionRelease:
+		return orphanDecision{outcome: OrphanAdopted, reason: reasonRecordedRelease}, nil
+	case domain.DispositionTerminate:
+		return orphanDecision{outcome: OrphanTerminated, reason: reasonRecordedTerminate}, nil
+	default:
+		return orphanDecision{}, fmt.Errorf("janitor: cleanup requires a valid recorded disposition, got %q", disposition)
+	}
 }
 
 func (j *Janitor) recordedRun(ctx context.Context, object adapter.OwnedExternalObject) (recordedRun, error) {
@@ -255,28 +292,47 @@ func recordedDisposition(event eventlog.StoredEvent) (domain.Disposition, error)
 	return intent.Disposition, nil
 }
 
-// reclaim carries out one decision against the provider. Release gives the slot
-// back and keeps the machine; Terminate destroys it. Both are addressed by the
+// reclaim carries out one decision against the provider. Adopting gives the slot
+// back and keeps the machine; terminating destroys it. Both are addressed by the
 // launch key and the ownership token, so a reconciler never acts on a resource it
 // merely resembles.
-func (j *Janitor) reclaim(ctx context.Context, object adapter.OwnedExternalObject, action domain.Disposition) error {
-	if action == domain.DispositionRelease {
-		request := adapter.ReleaseRequest{
-			WorkspaceID:       object.WorkspaceID,
-			ConnectionID:      object.ConnectionID,
-			OperationKey:      "janitor:release:" + object.LaunchKey,
-			LaunchKey:         object.LaunchKey,
-			OwnershipToken:    object.OwnershipToken,
-			LaunchRequestHash: object.RequestHash,
-		}
-		hash, err := domain.CanonicalHash(request)
-		if err != nil {
-			return err
-		}
-		request.RequestHash = hash
-		_, err = j.adapter.Release(ctx, request)
+//
+// A provider that answers that this capacity cannot be destroyed is stating that
+// there is no machine of Mercator's here to destroy: what Mercator holds in a
+// pool it does not own is a slot, and giving the slot back is the whole of that
+// capacity ceasing to exist. Stopping at the refusal instead is what left one
+// container standing in front of every later object in the same listing, on the
+// local Docker connection every developer machine seeds.
+func (j *Janitor) reclaim(ctx context.Context, object adapter.OwnedExternalObject, outcome OrphanOutcome) error {
+	if outcome == OrphanAdopted {
+		return j.release(ctx, object)
+	}
+	err := j.terminate(ctx, object)
+	if errors.Is(err, adapter.ErrTerminateUnsupported) {
+		return j.release(ctx, object)
+	}
+	return err
+}
+
+func (j *Janitor) release(ctx context.Context, object adapter.OwnedExternalObject) error {
+	request := adapter.ReleaseRequest{
+		WorkspaceID:       object.WorkspaceID,
+		ConnectionID:      object.ConnectionID,
+		OperationKey:      "janitor:release:" + object.LaunchKey,
+		LaunchKey:         object.LaunchKey,
+		OwnershipToken:    object.OwnershipToken,
+		LaunchRequestHash: object.RequestHash,
+	}
+	hash, err := domain.CanonicalHash(request)
+	if err != nil {
 		return err
 	}
+	request.RequestHash = hash
+	_, err = j.adapter.Release(ctx, request)
+	return err
+}
+
+func (j *Janitor) terminate(ctx context.Context, object adapter.OwnedExternalObject) error {
 	request := adapter.TerminateRequest{
 		WorkspaceID:       object.WorkspaceID,
 		ConnectionID:      object.ConnectionID,
@@ -297,18 +353,49 @@ func (j *Janitor) reclaim(ctx context.Context, object adapter.OwnedExternalObjec
 // OrphanConvergence is the recorded decision about one piece of capacity. It is
 // the whole of what an operator or a rule reads back: which policy applied, what
 // it decided, why, and which capacity it decided about.
+//
+// It states no provider command. The outcome is what happened to the capacity,
+// and how the provider was asked for it is the provider's own vocabulary: a pool
+// that holds no machine of Mercator's gives a slot back where a provisioned
+// machine is destroyed, and both are that capacity ceasing to exist.
 type OrphanConvergence struct {
-	Policy       string             `json:"policy"`
-	Outcome      OrphanOutcome      `json:"outcome"`
-	Reason       string             `json:"reason"`
-	Action       domain.Disposition `json:"action"`
-	ExternalID   string             `json:"external_id,omitempty"`
-	LaunchKey    string             `json:"launch_key,omitempty"`
-	ConnectionID string             `json:"connection_id,omitempty"`
-	RunID        string             `json:"run_id,omitempty"`
+	Policy       string        `json:"policy"`
+	Outcome      OrphanOutcome `json:"outcome"`
+	Reason       string        `json:"reason"`
+	ExternalID   string        `json:"external_id,omitempty"`
+	LaunchKey    string        `json:"launch_key,omitempty"`
+	ConnectionID string        `json:"connection_id,omitempty"`
+	RunID        string        `json:"run_id,omitempty"`
 }
 
-// record writes the decision down before the sweep moves on. It is its own
+// recordedDecision is the decision this control plane already wrote down about
+// one piece of capacity, and an empty outcome is none. It is read before the
+// policy is applied again, so capacity decided by a sweep that then died is
+// finished under the rule that decided it rather than judged a second time
+// against a record that has moved on.
+func (j *Janitor) recordedDecision(ctx context.Context, object adapter.OwnedExternalObject) (orphanDecision, error) {
+	history, err := eventlog.ReadFullStream(ctx, j.log, eventlog.StreamKey{
+		WorkspaceID: object.WorkspaceID,
+		Type:        "orphan",
+		ID:          orphanIdentity(object),
+	})
+	if err != nil {
+		return orphanDecision{}, err
+	}
+	for _, event := range history.Events {
+		if event.Type != EventOrphanConverged {
+			continue
+		}
+		var convergence OrphanConvergence
+		if err := json.Unmarshal(event.Data, &convergence); err != nil {
+			return orphanDecision{}, fmt.Errorf("janitor: decode recorded orphan convergence: %w", err)
+		}
+		return orphanDecision{outcome: convergence.Outcome, reason: convergence.Reason}, nil
+	}
+	return orphanDecision{}, nil
+}
+
+// record writes the decision down before anything acts on it. It is its own
 // stream keyed by the capacity rather than an entry on a Run, because the
 // capacity is what the decision was about and the whole point of the
 // unattributed case is that there is no Run to file it under.
@@ -317,7 +404,6 @@ func (j *Janitor) record(ctx context.Context, object adapter.OwnedExternalObject
 		Policy:       OrphanPolicy,
 		Outcome:      decision.outcome,
 		Reason:       decision.reason,
-		Action:       decision.action,
 		ExternalID:   object.ExternalID,
 		LaunchKey:    object.LaunchKey,
 		ConnectionID: object.ConnectionID,
