@@ -2724,6 +2724,113 @@ complete because it works against a live provider.
     it, because a chain that skips a link is one a reader cannot walk and they are
     back to taking the last entry.
 
+- [x] 2026-07-26: Answer the second review of the appended-decision commit. Two
+  reviewers refuted five things in it, one blocking. All five were real, and the
+  blocking one is a workspace-emptying stall the exemption two entries above this one
+  was supposed to have removed.
+  - A fleet that publishes nothing an ask matches was recorded as
+    `NO_FEASIBLE_OFFER`, a wait for capacity to come free, which is the one wait the
+    queue makes every other Run respect. So the strongest impossible ask there is was
+    the only one nothing exempted. An offer query is a search on the shape asked for,
+    which `internal/adapter/vast` builds out of `req.Resources`, so a Run asking for
+    eight GPUs nobody sells gets zero offers, zero candidates, and a wait that keeps
+    the queue, ages past standard work in about eleven minutes and past interactive in
+    thirty, and holds every other Run in the workspace for as long as its own class
+    allows. Twenty four hours for batch. The fleet meanwhile goes on selling exactly
+    what the work behind it asked for. The state never self-corrects, because the
+    reason and the empty `Behind` list are unchanged on every later tick and the
+    deferral is therefore recorded once.
+  - The root cause is the shape of the record rather than either reading of it. The
+    deferral carried the fleet's answer as two loose integers, and their zero value
+    meant two opposite things: a fleet that published nothing an ask matches weighed
+    no machines, and so did a wait the queue caused on its own account. Neither side
+    could tell them apart and each guessed differently. Production guessed from the
+    reason code. The Lab guessed from the counts, keeping whatever was previously
+    established whenever nothing was weighed, so it could not see the zero-offer ask
+    at all and the corpus could never go red on the stall; and on a zero-weighed
+    answer following a `NO_CAPACITY_FITS` one the two guesses contradicted each other
+    in the other direction, with the Lab failing a history production wrote on purpose.
+  - So the answer is typed where it is created. `domain.AdmissionDeferral.Fleet` is a
+    `*FleetAnswer` that is absent when the fleet was never asked,
+    `AdmissionDeferral.HoldsNoQueue` is the one rule both sides read off it, and the
+    reason code is derived from that rule rather than decided beside it. A fleet that
+    published nothing an ask matches is `NO_CAPACITY_FITS`, which is what it always
+    meant. A Blueprint states the answer as `"fleet": {"weighed": n, "could_hold": m}`
+    or as `"fleet": {"absent": true}`, and asking for two zeroes is no longer a way to
+    say either.
+  - `safety.nothing_waits_behind_an_impossible_ask` is a law about the ordering now,
+    which is what its name says, and it reads the same rule production orders the
+    queue on. Its previous claim to be independent of that rule was worth less than it
+    looked: what it was independent of was the reason code, and the price was a second
+    reading of the evidence that disagreed in both directions at once.
+  - `an-ask-nothing-matches-holds-no-queue` is the new claim, red before and green
+    after: the patient ask waits, twelve minutes promote it past the class that arrives
+    next, and the Run that arrives is not ordered behind an ask nothing in the fleet
+    even matches.
+  - `a-queue-restates-what-it-waits-behind` used an empty fleet as a convenient way to
+    get three Runs queued, so every ordering it asserted was one that should not have
+    existed. It has a machine with every Booking position taken now, so the work behind
+    really is waiting for the same machine, and the two orchestrator cases that made
+    the same assumption get a machine whose own capacity evidence says it is busy. That
+    is a better fixture for each of their subjects.
+  - The deferral suppression claimed to fire on an unchanged fleet and compared two
+    labels. A Run waiting on `NO_CAPACITY_FITS` has an empty `Behind` list by
+    construction and a reason that does not move, so exactly one decision is ever
+    recorded for such a Run however the fleet changes underneath it. That is an audit
+    hole and a blind spot: every law about Placement is stated over recorded decisions,
+    so a machine that arrives while a Run waits and is struck out for unknown locality
+    is named in a decision nothing ever appended, and
+    `safety.locality_is_never_infeasibility` reads recorded decisions. Suppression now
+    compares `domain.BookingDecision.FleetVerdict`, the machines weighed and what each
+    was refused for. The numbers beside them are left out deliberately: a projected
+    start a minute nearer than it was is the same answer about the same fleet, and
+    comparing a decision whole would record one on every tick of the sweep.
+    `a-fleet-that-changed-is-recorded-again` states it through an idle lease that runs
+    out under a waiting Run.
+  - The chain claim was unconstrained at every production read path. Three one-line
+    reversions each left the tree green: collapsing `GetBookingDecisions` to its last
+    entry, truncating the decision route's response, and having the console reducer
+    keep only the newest decision. The Lab corpus and the launch-failure case both read
+    `booking_decided` events straight out of the log, and the only conformance
+    assertion on the chain required exactly one entry.
+    `TestTheChainAReaderGetsHoldsEveryAnswer` reads the chain of three a Run gets when
+    two machines refuse it in turn, and `TestTheDecisionRouteAnswersWithTheWholeChain`
+    reads the same thing over HTTP through the real daemon.
+  - The console had a second defect under the same claim. Its live event schema dropped
+    `supersedes` and `supersedes_reason` on decode, and `DecisionPanel` reads both, so
+    a supersession only ever rendered for a page that had refetched the chain over
+    REST. A console watching a Run be re-placed showed two answers with nothing saying
+    that either replaced anything.
+  - The conformance evidence keeps the whole chain and no longer claims a length it
+    cannot produce. A trial asks for one launch on one machine and states
+    `MaxPreStartAttempts` of 1, so its chain has one entry by construction. A claim
+    stated where it cannot be reached is the defect, and it is held at the two layers
+    above instead.
+  - `safety.decisions_are_never_rewritten` had four clauses and one deliberate failing
+    case, which drives the clause that returns first.
+    `TestEveryClauseOfTheSupersessionRuleCanFail` shows each of the four failing on the
+    one record it exists to catch, including the linearity the entry above states by
+    name: nothing in the tree produced a chain longer than two, and two is the length
+    at which a chain that skips a link and a chain that does not are the same chain.
+    This is the treatment `TestEveryClauseOfTheCandidateIdentityRuleCanFail` already
+    exists for, and the multi-clause law was added without it.
+  - Every claim has a case that fails without its fix, each verified by mutating the
+    production code and running the case: the classification as a red Blueprint on the
+    zero-offer ask, the suppression as a red Blueprint on a fleet one machine smaller,
+    the chain at both read paths as the reviewers' own reversions, and each of the three
+    supersession clauses as the reviewer's own mutation.
+  - Judgment calls. Exempting a zero-weighed ask costs the one thing the old reading
+    bought: while a fleet publishes nothing to anybody, class ordering is not enforced,
+    so the first machine to arrive can go to whichever Run the sweep reaches first
+    rather than to the one worth most. That is worth paying. Telling a Run it waits
+    behind another when no machine exists is a queue an operator cannot act on, the
+    ordering is restored the moment anything is published that either Run could use,
+    and the alternative is a workspace held for a day by one ask for a shape nobody
+    sells. `FleetVerdict` leaving out the estimates is the same kind of call in the
+    other direction: it still suppresses a candidate whose refusals are unchanged and
+    whose established start moved, which is a far narrower hole than sixty decisions an
+    hour, and every change the laws read is a change to a refusal.
+
 ## Phase status
 
 | Phase | What it delivers | Status |
@@ -3508,6 +3615,21 @@ Phase 4 added:
   It reads every decision and not only the newest, because a superseded decision is
   the part of the chain nobody is looking at any more, which is exactly where an edit
   would go.
+- `an-ask-nothing-matches-holds-no-queue` (green): a fleet that answers an ask with
+  nothing at all, which is the strongest thing a fleet can say and was the one wait
+  nothing exempted. An offer query is a search on the shape asked for, so a
+  marketplace that returned no machine has said it sells none of that shape. The
+  patient ask waits, twelve minutes of waiting promote it past the class that arrives
+  next, and the Run that arrives is not ordered behind it. Recording that wait as one
+  for capacity to come free is what let one submission for a shape nobody sells hold a
+  whole workspace for a day while the fleet went on selling what the work behind it
+  asked for.
+- `a-fleet-that-changed-is-recorded-again` (green): two machines too small for the ask
+  and one of them on an idle lease that runs out. The wait does not change, and a Run
+  in that wait has an empty list of work ahead of it by construction, so suppression
+  stated over the reason and that list threw away the decision naming the fleet as it
+  now is. It is stated over the fleet's own verdict now, the machines weighed and what
+  each was refused for, which is what every law about Placement reads.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
