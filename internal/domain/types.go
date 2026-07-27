@@ -1125,6 +1125,19 @@ const (
 	// nowhere. The Run waited, the fleet was asked again, and this answer stands in
 	// for the refusal rather than erasing it.
 	SupersededSelectedNothing = "PREVIOUS_DECISION_SELECTED_NOTHING"
+	// SupersededCapacityReclaimed is capacity the previous decision took and
+	// Mercator gave back: a machine a provider allocated and is billing for that
+	// never became executable inside the patience the capacity stated, so Mercator
+	// stopped waiting, handed it back, and asked the fleet again.
+	//
+	// It is a separate reason from SupersededLaunchFailed because the two state
+	// opposite things about the world. A launch that failed left nothing behind,
+	// which is what makes its offer safe to retry elsewhere and its machine nothing
+	// to account for. This one is a machine that exists, and the reclamation is the
+	// fact in the record a reader checks it against: without a confirmed cleanup on
+	// the capacity the previous decision named, the reason claims something the Run's
+	// own stream contradicts.
+	SupersededCapacityReclaimed = "PREVIOUS_CAPACITY_RECLAIMED"
 )
 
 // Identity is the decision ID derived from the decision's own recorded content:

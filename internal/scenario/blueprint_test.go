@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/benngarcia/mercator/internal/capability"
 	"github.com/benngarcia/mercator/internal/domain"
@@ -156,8 +157,18 @@ func TestTheEnrolledNodeTargetWaitsOnTheProvisionedToEnrolledTransition(t *testi
 // absent stages described an indefinite wait: a control plane that provisions the
 // silent machine and then does nothing at all satisfies every one of those, so the
 // fixture would have been promoted to green as evidence of a reclamation nobody
-// built. Only a second appended decision, naming the first and saying why it no
-// longer stands, can tell giving up from waiting.
+// built.
+//
+// Three things together make that half sayable, and each of them was found by an
+// expectation that could not fail. A reconcile on both sides of the stated deadline,
+// because a fixture that only looked afterwards would read the same against a
+// control plane that gave up on any machine whose start it had not yet seen, which
+// would abandon the healthy machine in this very world. A confirmed terminate on the
+// silent machine before the work moves, because giving up on capacity and rerunning
+// the work are two acts and only the first ends the bill. And a reason of its own,
+// because the launch failure this fixture used to name means the provider refused
+// and created nothing, which is the opposite of what happened to a machine Mercator
+// is being billed for.
 func TestTheStrandedCapacityTargetStatesBothHalvesOfItsOwnName(t *testing.T) {
 	blueprint, err := LoadBlueprint("scenarios/provisioned-capacity-enrolls-or-is-reclaimed.json")
 	if err != nil {
@@ -187,17 +198,69 @@ func TestTheStrandedCapacityTargetStatesBothHalvesOfItsOwnName(t *testing.T) {
 			patient.ID, patient.RatePerHourUSD, patient.Bootstrap)
 	}
 
-	gaveUp := *blueprint.Timeline[len(blueprint.Timeline)-1].Expect
+	patience := stranded.Bootstrap.Deadline.Duration()
+	looks := reconcilesByMoment(blueprint.Timeline)
+	if len(looks) < 2 {
+		t.Fatalf("the fixture reconciles %d times, and patience is only patience if it is read from both sides", len(looks))
+	}
+	waiting, gaveUp := looks[0], looks[len(looks)-1]
 
-	if gaveUp.Offer != patient.ID {
-		t.Errorf("the last step expects offer %q, and a machine nobody gave up on is still the answer", gaveUp.Offer)
+	if waiting.at >= patience || gaveUp.at <= patience {
+		t.Fatalf("the fixture reconciles at %v and %v, and the deadline it is about is %v", waiting.at, gaveUp.at, patience)
 	}
-	if gaveUp.Decision == nil || gaveUp.Decision.Recorded != 2 || gaveUp.Decision.Supersedes != 1 {
-		t.Fatalf("the last step expects decisions %+v, and a re-decision is what separates reclaiming from waiting", gaveUp.Decision)
+	if waiting.expect.Offer != stranded.ID {
+		t.Errorf("inside the patience the fixture expects offer %q, and Mercator said it would wait", waiting.expect.Offer)
 	}
-	if gaveUp.Decision.SupersedesReason != domain.SupersededLaunchFailed {
-		t.Errorf("the re-decision gives reason %q, want the capacity's own failure to start the work", gaveUp.Decision.SupersedesReason)
+	if waiting.expect.Decision == nil || waiting.expect.Decision.Recorded != 1 || waiting.expect.Decision.Supersedes != 0 {
+		t.Errorf("inside the patience the fixture expects decisions %+v, want the first answer still standing", waiting.expect.Decision)
 	}
+	if gaveUp.expect.Offer != patient.ID {
+		t.Errorf("the last step expects offer %q, and a machine nobody gave up on is still the answer", gaveUp.expect.Offer)
+	}
+	if gaveUp.expect.Decision == nil || gaveUp.expect.Decision.Recorded != 2 || gaveUp.expect.Decision.Supersedes != 1 {
+		t.Fatalf("the last step expects decisions %+v, and a re-decision is what separates reclaiming from waiting", gaveUp.expect.Decision)
+	}
+	if gaveUp.expect.Decision.SupersedesReason != domain.SupersededCapacityReclaimed {
+		t.Errorf("the re-decision gives reason %q, want the capacity Mercator handed back", gaveUp.expect.Decision.SupersedesReason)
+	}
+	// The bill ends before the work moves. Without this the whole chain is equally
+	// true of a control plane that runs the Run again on the dearer machine and
+	// leaves the silent one to the provider's backstop.
+	reclaimed := gaveUp.expect.Reclaimed
+	if reclaimed == nil || reclaimed.Offer != stranded.ID || reclaimed.Disposition != domain.DispositionTerminate {
+		t.Errorf("the last step reclaims %+v, want the silent machine terminated", reclaimed)
+	}
+	// And the listing whose machine was just given back is struck out of the answer
+	// that replaces it, because the cheaper listing would otherwise win the work
+	// straight back and strand it again.
+	struckOut, weighed := gaveUp.expect.Candidates[stranded.ID]
+	if !weighed || struckOut.Feasible == nil || *struckOut.Feasible || len(struckOut.Rejected) == 0 {
+		t.Errorf("the last step weighs %q as %+v, want it refused with a reason", stranded.ID, struckOut)
+	}
+}
+
+// timedReconcile is one reconcile in a timeline and how far into the world it
+// happens. A fixture about a bound Mercator waits out has to be read this way: the
+// expectations alone cannot say whether a step is inside the patience or past it,
+// and a fixture whose every look happens after the deadline states nothing about the
+// deadline.
+type timedReconcile struct {
+	at     time.Duration
+	expect ExpectSpec
+}
+
+func reconcilesByMoment(timeline []StepSpec) []timedReconcile {
+	var elapsed time.Duration
+	var looks []timedReconcile
+	for _, step := range timeline {
+		if step.Advance != nil {
+			elapsed += step.Advance.Duration()
+		}
+		if step.Reconcile != "" && step.Expect != nil {
+			looks = append(looks, timedReconcile{at: elapsed, expect: *step.Expect})
+		}
+	}
+	return looks
 }
 
 // TestLoadBlueprintRefusesACapacityAccountNoProviderCouldKeep holds the two

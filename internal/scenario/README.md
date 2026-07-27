@@ -171,10 +171,13 @@ opens a session, which has to be stated because an omitted `agent_ready` stage
 already means enrolment that costs nothing: a listing that says its agent never
 enrols states no `agent_ready` at all. The world honours it. Mercator has no
 session to such a machine, so nothing can create a container there: no launch onto
-it ever reports a start, no workload on it ever reports readiness, and it holds
-none of the image, because no agent was ever there to fetch it. Provisioning does
-not complete, so it is never the listing that provisions fastest. `deadline` is how
-long Mercator goes on
+it ever reports a start and no workload on it ever reports readiness. Provisioning
+does not complete, so it is never the listing that provisions fastest. Such a
+machine also holds nothing, and that follows from a rule rather than from a second
+behaviour: content is recorded only for capacity Mercator keeps, and it keeps a
+machine through the agent enrolled on it, so the simulated world refuses to build
+capacity it keeps out of a machine nothing enrols on. `deadline` is how long
+Mercator goes on
 expecting that session, and `reclaim_after` is the provider's own backstop that
 destroys the machine whatever the control plane does. A listing whose agent never
 enrols must name one of the two, because a machine nobody gives up on bills for
@@ -363,6 +366,16 @@ record files each part under (`setup_fee`, `committed_rent`, `keep_alive`,
 placement spends, and `unpriced` for a machine nobody quoted. A term nothing
 charges is refused at load, because the record carries only the terms it charged
 and a fixture naming another would read the absence as agreement.
+
+`reclaimed` states that capacity an earlier decision took was handed back before
+this decision was recorded, as `{"offer": "silent-4090", "disposition":
+"terminate"}`. It is read out of the Run's own stream, from the confirmed cleanup
+and the launch intent that names the machine the cleanup ended, and the order is
+the assertion: a control plane that runs the work again elsewhere and leaves the
+first machine to its provider's backstop records every other fact a reclamation
+does. `terminate` destroys a machine Mercator provisioned and `release` ends only
+the workload on a machine it does not own, so a fixture about provisioned capacity
+states the first.
 
 `world.rental_schedules` belongs to Mercator and references Rentals by ID. A nonempty schedule has a positive version, exactly one running
 Booking, and at most four ordered queued Bookings.

@@ -2890,9 +2890,13 @@ complete because it works against a live provider.
     against the Run's own stream: `PREVIOUS_LAUNCH_FAILED` where the machine the
     last decision chose refused to start the work, and
     `PREVIOUS_DECISION_SELECTED_NOTHING` where the last decision placed the Run
-    nowhere and the fleet was asked again. Those are the only two ways Mercator
-    decides twice about one Run, and both are facts already in the log, which is why
-    the reason is read off the state rather than passed down by the caller.
+    nowhere and the fleet was asked again. Those are the two ways Mercator decides
+    twice about one Run today, and both are facts already in the log, which is why the
+    reason is read off the state rather than passed down by the caller. The vocabulary
+    holds a third, `PREVIOUS_CAPACITY_RECLAIMED`, which nothing produces until an
+    agent bootstraps on provisioned capacity in phase 5: it is capacity Mercator took,
+    gave back, and asked the fleet again about, and the fact a reader checks it
+    against is the confirmed cleanup on the machine the previous decision named.
   - Supersession is an input to the evaluation and part of the identity hash rather
     than a field stamped on afterwards. Two answers about one unchanged fleet at one
     instant are different decisions exactly because the second replaces the first,
@@ -3971,15 +3975,15 @@ complete because it works against a live provider.
     stays redeemable once whatever the ledger does: that guard is the registry's.
   - The simulated world now honours `bootstrap.never_enrolls` instead of noting it
     and enrolling anyway. Nothing can create a container on a machine Mercator has no
-    session to, so such a machine records no start moment, reports no readiness, and
-    holds none of the image, because no agent was ever there to fetch it. Refusing
-    the statement in `Compile` alone was a guard in the wrong place: no placement
-    fixture uses that path, so a green Blueprint could state `never_enrolls` and read
-    green while its world booted the machine, started the workload, and reported it
-    ready at eight minutes twelve. It also settles what the exemption from stating
-    `agent_ready` was worth: provisioning does not complete on such a machine, so it
-    is never the listing that provisions fastest, and the published `expected` and
-    `p90` the scheduler predicts from are stated as they are for every other listing.
+    session to, so such a machine records no start moment and reports no readiness.
+    Refusing the statement in `Compile` alone was a guard in the wrong place: no
+    placement fixture uses that path, so a green Blueprint could state `never_enrolls`
+    and read green while its world booted the machine, started the workload, and
+    reported it ready at eight minutes twelve. It also settles what the exemption from
+    stating `agent_ready` was worth: provisioning does not complete on such a machine,
+    so it is never the listing that provisions fastest, and the published `expected`
+    and `p90` the scheduler predicts from are stated as they are for every other
+    listing.
   - `provisioned-capacity-enrolls-or-is-reclaimed` asserts the reclaim half its name
     promises. Stating only the outcome, the offer, and the two absent stages described
     an indefinite wait: a control plane that provisions the silent machine and then
@@ -3987,10 +3991,45 @@ complete because it works against a live provider.
     statement the fixture read as passing and would have been promoted to green as
     evidence of a reclamation nobody built. It now carries a second, dearer listing
     whose agent does arrive, and its last step expects the work to move there under an
-    appended decision that names the first and gives `PREVIOUS_LAUNCH_FAILED`. That
-    decision is the only thing in the record that separates giving up from waiting.
+    appended decision that names the first.
   - `capacity` and `bootstrap` are refused on an `ephemeral` listing, recorded with
     the rule itself in the entry above.
+- [x] 2026-07-27: Fix what two reviewers refuted in the fix above. Both findings held
+  and both were the same class the entry above claims to have fixed: an expectation
+  that could not fail.
+  - The world's claim that a stranded machine holds none of the image was a property
+    of the fixture rather than of the guard. Content is recorded only for capacity
+    that keeps what it runs, so no provisionable machine in that world holds anything
+    whatever its bootstrap does, and the assertion passed with the guard deleted. What
+    is true is stronger and belongs at the world's door: Mercator keeps a machine
+    through the agent enrolled on it, so `AddMachine` refuses capacity it keeps
+    alongside an agent that never enrols, and there is now no world state in which one
+    can ask whether a stranded machine got warm. The readiness half was vacuous too,
+    because the world under test never said its applications come up at all, so no
+    launch in it recorded readiness; the world now says they do, and the enrolled
+    machine beside the stranded one is the control the silence is read against.
+  - `provisioned-capacity-enrolls-or-is-reclaimed` asserted nothing that depended on
+    time, so shortening its `advance` from twelve minutes to thirty seconds produced a
+    byte-identical failure list: it could not tell reclamation after the stated
+    deadline from giving up on any machine whose start has not been observed yet,
+    which in that fixture's own world would abandon the healthy machine too. It now
+    reconciles on both sides of the ten minutes, and the earlier look expects the
+    first answer still standing.
+  - The target pinned `PREVIOUS_LAUNCH_FAILED`, which in this tree means the launch
+    call failed with a side effect of `none`: nothing was created, which is the
+    opposite of a machine a provider allocated and is billing for.
+    `SupersededCapacityReclaimed` is the reason it states now, and it is checkable
+    against the Run's own record rather than taken on trust, because the step also
+    asserts the confirmed terminate on that machine before the work moved. The
+    expectation vocabulary gained `reclaimed` for that, read out of the cleanup and
+    the launch intent that names the machine the cleanup ended. Nothing produces the
+    new reason yet, which is the point of a target; the public contract is unchanged
+    until the behaviour that emits it lands with `node_bootstrap`.
+  - Neither half of the corpus could exercise `reclaimed` from both sides, because a
+    Run's cleanup is the last thing that happens to it and no world in the corpus
+    hands capacity back and then decides again. It is read from both sides through
+    `Run` against a replayed stream instead: handed back before the answer changed,
+    handed back after it, and released rather than terminated.
 
 ## Phase status
 
@@ -5164,7 +5203,9 @@ capacity, which is phase 5. `provisioned-capacity-enrolls-or-is-reclaimed` needs
 the other half of the same transition: a machine the provider allocates and boots
 whose agent never opens a session, where nothing can create a container and no
 workload begins, which is the failure a real provider bills for until its own
-backstop fires. `queued-booking-deadline-expiry` needs
+backstop fires. What it is red on is bounded patience and what follows it, which is
+Mercator waiting out the deadline the capacity stated, terminating the machine, and
+deciding again with that listing struck out. `queued-booking-deadline-expiry` needs
 `schedule_advancement`, which is a Booking expiring past its latest start and its
 Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
 publish host facts a machine then contradicts.

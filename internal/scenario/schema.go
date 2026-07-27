@@ -1522,6 +1522,27 @@ type ExpectSpec struct {
 	// rewritten, so a Run answered twice holds two records and a fixture has to be
 	// able to say so.
 	Decision *DecisionExpectation `json:"decision,omitempty"`
+	// Reclaimed asserts that capacity an earlier decision took was handed back
+	// before this decision was recorded. It is what separates reclaiming stranded
+	// capacity from running the work again somewhere else while the provider goes on
+	// billing for the machine nobody could reach: every other fact a re-decision
+	// records is equally true of a control plane that abandons the first machine to
+	// whatever backstop its provider happens to have.
+	Reclaimed *ReclaimExpectation `json:"reclaimed,omitempty"`
+}
+
+// ReclaimExpectation is one piece of capacity Mercator gave back, as the Run's own
+// stream records it: the machine, and what handing it back meant.
+type ReclaimExpectation struct {
+	// Offer is the capacity that was handed back, by the fixture's own ID for it.
+	// A fixture names it rather than saying that some cleanup happened, because a
+	// Run that moved between two machines has two of them to account for.
+	Offer string `json:"offer"`
+	// Disposition is what giving it back meant: a machine Mercator provisioned is
+	// terminated, and a slot in a pool it does not own is released. Stating it is
+	// the point of the assertion on provisioned capacity: releasing a container on
+	// a machine Mercator allocated ends the workload and leaves the bill running.
+	Disposition domain.Disposition `json:"disposition"`
 }
 
 // DecisionExpectation is what the record must say about this Run's chain of
@@ -3088,6 +3109,14 @@ func (w WorldSpec) validExpect(expect ExpectSpec) error {
 	if expect.Decision != nil {
 		if err := expect.Decision.validate(); err != nil {
 			return err
+		}
+	}
+	if reclaimed := expect.Reclaimed; reclaimed != nil {
+		if !ids[reclaimed.Offer] {
+			return fmt.Errorf("reclaimed capacity %q is not in the world", reclaimed.Offer)
+		}
+		if !reclaimed.Disposition.Valid() {
+			return fmt.Errorf("capacity is handed back as \"release\" or \"terminate\", got %q", reclaimed.Disposition)
 		}
 	}
 	if booking := expect.Booking; booking != nil {
