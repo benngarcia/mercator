@@ -320,6 +320,10 @@ func noPlacementOverItsBudget(observation InvariantObservation) error {
 	return nil
 }
 
+// placedInsideItsBudget compares the two numbers the way the check that should have
+// refused this candidate compares them, with no tolerance between them. Nothing is
+// re-derived here: both come off one record, so a tolerance would only buy an
+// overshoot production had already refused.
 func placedInsideItsBudget(decision domain.BookingDecision, selected domain.CandidateDecision, budget float64) error {
 	cost := selected.Estimates.CostUSD
 	switch {
@@ -328,7 +332,7 @@ func placedInsideItsBudget(decision domain.BookingDecision, selected domain.Cand
 			"Run %q of class %q was placed on candidate %q under a bound of %.4f USD, and nobody quoted what that machine costs",
 			decision.RunID, decision.Policy.Class, selected.OfferSnapshotID, budget,
 		)
-	case cost.Expected > budget+arithmeticTolerance:
+	case cost.Expected > budget:
 		return fmt.Errorf(
 			"Run %q of class %q was placed on candidate %q at %.4f USD, and its caller allowed %.4f",
 			decision.RunID, decision.Policy.Class, selected.OfferSnapshotID, cost.Expected, budget,
