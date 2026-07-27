@@ -63,15 +63,38 @@ func TestASecondRunIsPredictedFromTheFirstRunsMeasuredLaunch(t *testing.T) {
 	if !strings.Contains(learned.Key, "machine=") || strings.Contains(learned.Key, "rental-measured") {
 		t.Fatalf("the answer was read under %q, and rental-measured is this fixture's name for a lease", learned.Key)
 	}
-	// The machine nobody has used falls past the level it has no key for. These
-	// Rentals publish no region, so there is nothing between this exact candidate
-	// and everything the provider has done.
+	// The unmeasured machine beside it falls one rung, to what this provider has
+	// done in this place. That rung exists only because the offer states a region,
+	// and this is where the region has to survive the whole production path: the
+	// adapter publishes it, aggregation carries it, the decision records it inside
+	// the identity, and the estimator files a launch under it.
 	spare := candidateByOffer(t, second, "rental-spare").Estimates.Stages.ApplicationReady
-	if spare.Level != domain.LevelProvider || spare.SampleCount != 1 || spare.Expected != 45 {
-		t.Fatalf("the machine nobody has measured was answered %+v", spare)
+	if spare.Level != domain.LevelProviderAndRegion || spare.SampleCount != 1 || spare.Expected != 45 {
+		t.Fatalf("the unmeasured machine in the measured machine's own region was answered %+v", spare)
+	}
+	if spare.Key != "lane=reusable;provider=lab;region=US-CA" {
+		t.Fatalf("the region rung answered under %q", spare.Key)
+	}
+	// The unmeasured machine somewhere else falls past that rung, because nothing
+	// in its region has been measured, to everything the provider has done
+	// anywhere. Same samples, coarser level, and less confidence for the breadth.
+	elsewhere := candidateByOffer(t, second, "rental-elsewhere").Estimates.Stages.ApplicationReady
+	if elsewhere.Level != domain.LevelProvider || elsewhere.SampleCount != 1 || elsewhere.Expected != 45 {
+		t.Fatalf("the unmeasured machine in an unmeasured region was answered %+v", elsewhere)
+	}
+	// All three answers are the same forty-five seconds from the same single
+	// launch, because there is only one launch in this world. What separates them
+	// is what each rung is worth, and a record that stated the seconds alone would
+	// read identically for a machine measured and a machine two rungs away from
+	// anything measured.
+	if !(elsewhere.Confidence < spare.Confidence && spare.Confidence < learned.Confidence) {
+		t.Fatalf(
+			"the three rungs are worth %v, %v and %v, and a coarser rung answers about other machines",
+			elsewhere.Confidence, spare.Confidence, learned.Confidence,
+		)
 	}
 	if result := invariantResultByID(t, latestInvariantResults(execution.invariants), "safety.prediction_states_its_provenance"); result.Status != InvariantPassed {
-		t.Fatalf("the provenance rule failed on a world that measured one of its two machines: %s", result.Violation)
+		t.Fatalf("the provenance rule failed on a world that measured one of its three machines: %s", result.Violation)
 	}
 }
 

@@ -3292,7 +3292,12 @@ Phase 4 added:
   where both halves of the answer are Mercator reading Mercator. The identity is the
   one its own Booking Decision recorded and the seconds are the difference between two
   moments its own Run stream adopted, one stated by the machine holding the container
-  and one stated by the application inside it.
+  and one stated by the application inside it. All three keyed rungs answer here: the
+  machine that ran the first Run at the exact candidate, an unmeasured machine in its
+  region at the provider and place, and an unmeasured machine in another region at the
+  provider, for the same seconds at less confidence. The middle rung is what holds a
+  region to surviving every production step between the backend that states it and the
+  identity the decision records.
 - `safety.prediction_states_its_provenance` (Lab invariant): every stage of every
   recorded candidate names the level its answer came from and how many measured
   launches stand behind it; a keyed level names a key and a positive count, a prior
@@ -3470,6 +3475,59 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 the middle rung of the ladder, held through the real control plane
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2. The hierarchical estimator was re-verified end to end
+rather than reimplemented, because it had already landed with its two reviews. Four
+of the deliberate breaks the entry below records were re-run on this host and each
+reported what that entry says it reports, with two figures changed by the slices that
+landed on top of it: `History.Predict` short-circuited to the prior now fails the
+placement Blueprint twenty ways across five candidates rather than twenty-four,
+because the transfer stages the fixture later gained answer the prior in both the
+broken and the whole tree, and at L1 the offer-ID break is now reported by
+`safety.candidate_identity_recurs` before the provenance rule reaches the same
+record. Both rules fail on it; the driver stops at the first.
+
+One thing the estimator's own ladder had no coverage for above the Lab. The three
+keyed rungs were held at L0 by the placement Blueprint and directly by the
+invariant's deliberate cases, and the L1 conformance asserted the exact candidate and
+the provider with nothing between them, because its two Rentals published no region.
+That left the rung the region exists to create untested through the production path,
+which is the path with steps in it: an adapter states the region, aggregation carries
+the offer, the decision records the identity, and the estimator files a launch under
+the key. Any of those dropping the field would collapse the region rung onto the
+provider rung and no test above a unit test would have said so.
+
+The fixture now states a region on its two Rentals and adds a third in another
+region, so the second Run's decision answers at all three levels at L1: the machine
+that ran the first Run at the exact candidate, its unmeasured neighbour at the
+provider and place, and the machine elsewhere at the provider, all three for the same
+forty-five seconds out of the same single launch, at strictly declining confidence.
+That the seconds are equal across the three is the point of asserting the level and
+the confidence beside them: the seconds alone read identically for a machine measured
+and a machine two rungs away from anything measured.
+
+The new coverage fails two ways. Dropping the region from `CandidateIdentityOf`
+answers the neighbour at `provider` from a key naming only the lane and the provider,
+which is the collapse described above. Moving the far Rental into the measured region
+answers it at `provider_and_region`, which holds that the third machine is
+discriminated by where it is rather than by being third.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/lab ./internal/scenario/...
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+```
+
+The live half ran on this host's own engine: both Docker integration cases pass
+against Engine 29.6.2, including the one holding that a daemon reached twice through
+two endpoints is one machine, which is the identity half of the estimator against
+real hardware. What still has not run live is the learning half, for the reason the
+entry below gives: the readiness callback is authenticated per Run and the daemon
+fixture configures no reporting. Mercator issue #165 does not reproduce here and was
+left alone.
 
 ### Phase 4 a transfer is not a stage a launch history can answer
 

@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "The same claim as history-answers-for-the-machine-it-was-measured-on, driven through the real orchestrator, event log, Run projection and Effect Ledger. Two idle Rentals hold the image assembled and one Run goes to the cheaper of them, declaring it will be ready in two minutes; the application on that machine takes three quarters of a minute, which is what the world spends and what the workload then reports. Half an hour later a second Run of the same image arrives, and the machine that ran the first is predicted from its own launch rather than from the second Run's declaration, at the exact candidate, with the count of launches behind it. The other Rental, which nobody has measured, falls to what this provider has done anywhere, because these machines publish no region to fall to in between. What this holds at L1 that the placement corpus cannot is where the measurement came from: the moments are the ones the control plane adopted through its own Run stream, and the identity is the one its own Booking Decision recorded, so a prediction here is answered by Mercator reading Mercator rather than by a harness handing it an answer.",
+  "summary": "The same claim as history-answers-for-the-machine-it-was-measured-on, driven through the real orchestrator, event log, Run projection and Effect Ledger. Two idle Rentals hold the image assembled and one Run goes to the cheaper of them, declaring it will be ready in two minutes; the application on that machine takes three quarters of a minute, which is what the world spends and what the workload then reports. Half an hour later a second Run of the same image arrives, and the machine that ran the first is predicted from its own launch rather than from the second Run's declaration, at the exact candidate, with the count of launches behind it. Two Rentals nobody has measured say what the rungs below that are worth: one in the measured machine's own region falls to what this provider has done in this place, and one in another region falls past that to what it has done anywhere, for the same seconds at less confidence. The middle rung is here because the machines publish a region, so this is also where a region has to survive every step between the backend that states it and the decision that records it. What this holds at L1 that the placement corpus cannot is where the measurement came from: the moments are the ones the control plane adopted through its own Run stream, and the identity is the one its own Booking Decision recorded, so a prediction here is answered by Mercator reading Mercator rather than by a harness handing it an answer.",
   "seed": "mercator-lab-learned-history-v1",
   "world": {
     "images": {
@@ -19,13 +19,21 @@
     "rentals": [
       {
         "id": "rental-measured",
+        "region": "US-CA",
         "cached_images": ["server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e"],
         "rate_per_hour_usd": 4.0
       },
       {
         "id": "rental-spare",
+        "region": "US-CA",
         "cached_images": ["server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e"],
         "rate_per_hour_usd": 4.5
+      },
+      {
+        "id": "rental-elsewhere",
+        "region": "EU-DE",
+        "cached_images": ["server@sha256:9e2f5d7b3a1c4e6089bd2f7a5c3e1d0b8a6f4c2e0d9b7a5f3c1e9d7b5a3f1c9e"],
+        "rate_per_hour_usd": 5.0
       }
     ],
     "runtime_models": [
