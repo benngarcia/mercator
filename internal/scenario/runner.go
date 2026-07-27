@@ -400,6 +400,11 @@ func fleetAnswerProblems(want FleetExpectation, answer *domain.FleetAnswer) []st
 			problems = append(problems, "the machines that could hold this Run once free: "+problem)
 		}
 	}
+	if want.Unstated != nil {
+		if problem := want.Unstated.Check(float64(answer.Unstated)); problem != "" {
+			problems = append(problems, "the machines that said too little to tell: "+problem)
+		}
+	}
 	return problems
 }
 

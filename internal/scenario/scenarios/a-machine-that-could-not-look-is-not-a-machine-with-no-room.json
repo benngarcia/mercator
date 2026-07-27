@@ -1,0 +1,63 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One machine in the workspace, holding the image, and its disk probe failed. It reports everything else, because its liveness and the containers it is running are facts the fleet needs whatever anyone knows about its filesystem, and it establishes no room. Placement refuses it, which is right: landing content on a disk nobody measured is a launch nobody can promise. What the refusal says is the point. A machine that could not look is not a machine with no room, so the wait names the silence and the fleet's answer counts the machine as one that said too little to tell rather than as one that can never hold this work. Every Run carries a disk floor, so reading the failed measurement as a full disk made every Run in this workspace an ask no machine can ever hold, which is the strongest thing a fleet can say and the one wait other work does not have to respect. The whole workspace then lost its ordering to one failed statfs: when the next heartbeat measured the disk, the machine went to whichever Run the sweep reached first. So the second Run here is the assertion. It arrives later, it is worth less than the Run that has been waiting, and it is told it waits behind it.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"},
+          {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-that-could-not-look",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk_unmeasured": true},
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "waits-on-a-machine-that-said-nothing",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "50GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "CAPACITY_UNSTATED",
+          "behind": [],
+          "fleet": {"weighed": 1, "could_hold": 0, "unstated": 1},
+          "projected_wait_seconds": 0
+        }
+      }
+    },
+    {"advance": "1m"},
+    {
+      "submit": "arrives-later-and-waits-its-turn",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "standard",
+        "resources": {"disk": "50GB"},
+        "expected_runtime": "10m",
+        "max_runtime": "20m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "BEHIND_HIGHER_PRIORITY",
+          "behind": ["waits-on-a-machine-that-said-nothing"],
+          "fleet": {"absent": true}
+        }
+      }
+    }
+  ]
+}

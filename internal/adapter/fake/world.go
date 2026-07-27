@@ -671,7 +671,7 @@ func (w *World) Machine(id string) (*Machine, bool) {
 // clock's now: machines whose lease has not expired, each stating what it holds
 // and whether it is busy. Busy machines advertise unavailable capacity and
 // their remaining maximum runtime as queue evidence.
-func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+func (w *World) ListOffers(_ context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	now := w.clock.Now()
@@ -680,7 +680,14 @@ func (w *World) ListOffers(context.Context, adapter.OfferRequest) ([]domain.Offe
 		if machine.leaseExpiredAt(now) {
 			continue
 		}
-		offers = append(offers, w.machineOffer(machine, now))
+		offer := w.machineOffer(machine, now)
+		// A marketplace listing is a search result, so this world answers the shape
+		// it was asked about. Capacity Mercator holds is listed whole and refused in
+		// the record. See domain.OfferSnapshot.PublishedTo.
+		if !offer.PublishedTo(request.Resources) {
+			continue
+		}
+		offers = append(offers, offer)
 	}
 	sort.Slice(offers, func(i, j int) bool { return offers[i].ID < offers[j].ID })
 	return offers, nil

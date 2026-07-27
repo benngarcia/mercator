@@ -1262,15 +1262,21 @@ type FleetExpectation struct {
 	Absent    bool   `json:"absent,omitempty"`
 	Weighed   *Bound `json:"weighed,omitempty"`
 	CouldHold *Bound `json:"could_hold,omitempty"`
+	// Unstated is how many of the machines weighed refused this Run only for facts
+	// nobody published. A node that could not measure its disk is the case, and it
+	// is a third count because it is a third answer: not capacity to wait for, not
+	// capacity that can never hold the work, and counting it as either lets one
+	// failed measurement say a whole fleet has nothing.
+	Unstated *Bound `json:"unstated,omitempty"`
 }
 
 // validate refuses a fleet assertion that says both things at once.
 func (expect FleetExpectation) validate() error {
-	if expect.Absent && (expect.Weighed != nil || expect.CouldHold != nil) {
+	if expect.Absent && (expect.Weighed != nil || expect.CouldHold != nil || expect.Unstated != nil) {
 		return fmt.Errorf("a wait resting on no fleet answer has no machines to count")
 	}
-	if !expect.Absent && expect.Weighed == nil && expect.CouldHold == nil {
-		return fmt.Errorf("a fleet assertion states the machines weighed, the machines that could hold, or that there is no answer")
+	if !expect.Absent && expect.Weighed == nil && expect.CouldHold == nil && expect.Unstated == nil {
+		return fmt.Errorf("a fleet assertion states the machines weighed, the machines that could hold, the machines that said too little, or that there is no answer")
 	}
 	return nil
 }

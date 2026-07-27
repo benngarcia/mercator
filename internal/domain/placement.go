@@ -256,3 +256,53 @@ func round(value float64, places int) float64 {
 	factor := math.Pow10(places)
 	return math.Round(value*factor) / factor
 }
+
+// PublishedTo reports whether a marketplace search for this shape would return
+// this listing. It is the world model of a provider offer query, and it exists
+// because an offer query is a search: every marketplace adapter in this tree
+// hands the provider the shape asked for and gets back only what matches, so a
+// fleet answers one ask with a listing and another with nothing at all.
+//
+// The whole classification of a wait rests on that. A Run the fleet published
+// nothing for is waiting for capacity to be added, and a Run refused by machines
+// the fleet did publish is waiting for one of those machines. A simulated world
+// that returned its whole inventory whatever was asked could state the second and
+// never the first, so the corpus could not go red on the case that empties a
+// workspace.
+//
+// It is asked only of a listing, which is a search result. Capacity Mercator
+// holds is not searched for: an enrolled node and a Rental under lease are
+// machines the control plane knows about, they are listed whole, and the decision
+// records why each was refused. That is the difference between a catalog and a
+// fleet, and both simulated worlds keep it.
+//
+// It filters on room and on cards, which is what the real searches filter on, and
+// on nothing else. A predicate stricter than the scheduler's own checks would
+// withhold a machine the scheduler would have taken.
+func (offer OfferSnapshot) PublishedTo(resources ResourceRequirements) bool {
+	if offer.Kind != OfferKindProvisionable {
+		return true
+	}
+	if offer.Resources.EphemeralDiskKnown && offer.Resources.EphemeralDiskBytes < resources.EphemeralDisk.MinBytes {
+		return false
+	}
+	return offer.Resources.AcceleratorCount() >= requestedAcceleratorCount(resources)
+}
+
+// AcceleratorCount is how many cards this machine reports across every inventory
+// entry it publishes, which is what a search filtering on card count reads.
+func (inventory ResourceInventory) AcceleratorCount() int {
+	cards := 0
+	for _, entry := range inventory.Accelerators {
+		cards += entry.Count
+	}
+	return cards
+}
+
+func requestedAcceleratorCount(resources ResourceRequirements) int {
+	cards := 0
+	for _, requirement := range resources.Accelerators {
+		cards += requirement.Count
+	}
+	return cards
+}

@@ -297,3 +297,81 @@ func eventOccurredAt(event eventlog.CloudEvent) (time.Time, error) {
 	}
 	return at.UTC(), nil
 }
+
+// aSilenceIsNotAnAnswerAboutCapacity reads every recorded wait against the
+// decision it was read off, and recounts the fleet's answer from the refusals.
+//
+// The strongest thing a fleet can say about an ask is that nothing it published
+// can ever hold it, and that answer is the one the whole queue is ordered on: work
+// that fits the fleet as it stands is not competing with such a Run for anything.
+// It may not be said over a machine that published nothing. A node whose disk
+// probe failed reports no room and has not said it is full, and every Run carries
+// a disk floor, so reading that silence as a measurement made every Run in the
+// workspace an ask no capacity can ever hold and took the ordering away from all
+// of them at once.
+//
+// It recounts rather than trusting the answer beside the reason, which is the same
+// reason silenceWasTakenBackOut recomputes what a candidate was charged: a
+// scheduler that miscounts its own evidence agrees with itself perfectly, and the
+// only reading that can catch it is one taken off the record's other half.
+//
+// A wait carrying no fleet answer is a wait the queue caused on its own account
+// and there is nothing to recount. A decision that selected a machine placed the
+// Run and is not a wait at all.
+func aSilenceIsNotAnAnswerAboutCapacity(observation InvariantObservation) error {
+	weighed := map[string]domain.BookingDecision{}
+	for _, event := range observation.MercatorEvents {
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		switch event.Type {
+		case orchestrator.EventBookingDecided:
+			decision, err := recordedDecision(event)
+			if err != nil {
+				return err
+			}
+			// Filed under the Run the decision names rather than under the event's
+			// subject: a decision says which Run it is about, and that is the half of
+			// the pairing that has to be right for this reading to be independent.
+			weighed[decision.RunID] = decision
+		case orchestrator.EventAdmissionDeferred, orchestrator.EventAdmissionRefused:
+			deferral, err := recordedDeferral(event)
+			if err != nil {
+				return err
+			}
+			if err := fleetAnswerMatchesItsEvidence(runID, deferral, weighed[runID]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// fleetAnswerMatchesItsEvidence recounts one recorded answer off the candidates
+// the decision beside it recorded.
+func fleetAnswerMatchesItsEvidence(runID string, deferral domain.AdmissionDeferral, decision domain.BookingDecision) error {
+	if deferral.Fleet == nil || decision.RunID != runID || decision.SelectedOfferSnapshotID != "" {
+		return nil
+	}
+	counted, silent := 0, 0
+	for _, candidate := range decision.Candidates {
+		switch candidate.Standing() {
+		case domain.StandingCouldHold:
+			counted++
+		case domain.StandingUnstated:
+			silent++
+		case domain.StandingNeverHolds:
+		}
+	}
+	if deferral.Fleet.CouldHold != counted || deferral.Fleet.Unstated != silent {
+		return fmt.Errorf(
+			"Run %q: the wait records a fleet of %d machines that could hold it and %d that said too little, and its decision weighed %d and %d",
+			runID, deferral.Fleet.CouldHold, deferral.Fleet.Unstated, counted, silent,
+		)
+	}
+	if deferral.Fleet.HoldsNothing() && silent > 0 {
+		return fmt.Errorf(
+			"Run %q: the wait says no machine in this fleet can ever hold it, and %d of the machines weighed published nothing to say it about",
+			runID, silent,
+		)
+	}
+	return nil
+}

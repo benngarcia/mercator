@@ -1174,6 +1174,14 @@ func (world *simulatedWorld) ListOffers(_ context.Context, request adapter.Offer
 	world.mu.Lock()
 	defer world.mu.Unlock()
 	offers := world.publishedOffers()
+	// A marketplace listing is a search result, so this world answers the shape it
+	// was asked about and capacity Mercator holds is listed whole. Returning the
+	// whole inventory whatever was asked meant no world here could answer one ask
+	// with nothing while publishing machines for another, which is the case that
+	// empties a workspace. See domain.OfferSnapshot.PublishedTo.
+	offers = slices.DeleteFunc(offers, func(offer domain.OfferSnapshot) bool {
+		return !offer.PublishedTo(request.Resources)
+	})
 	world.recordEffect(
 		OperationProviderListOffers,
 		"list-offers/"+request.WorkspaceID,

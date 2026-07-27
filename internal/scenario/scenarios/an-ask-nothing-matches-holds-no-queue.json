@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "A fleet that answers an ask with nothing at all, which is the strongest thing a fleet can say and was the one wait nothing exempted. An offer query is a search on the shape asked for, so a marketplace that returned no machine has said it sells nothing of that shape: no amount of waiting for the fleet as it stands turns that into a machine, and the ask is waiting for capacity to be added exactly as an ask every published machine was weighed against and refused is. The patient Run arrives first and is told so, and the record states the evidence beside the reason: no machine weighed, none that could hold it. Twelve minutes later a Run of a class that starts far above it arrives, and by then waiting has promoted the first Run past that class. Everything the queue does next used to turn on a fleet that published nothing being read as a wait for capacity to come free. The ask kept the queue, so the second Run was ordered behind an ask nothing in the fleet even matches, and stayed there for the twenty four hours the patient class allows: one submission for a shape nobody sells stalled every other Run in the workspace, while the fleet went on selling exactly what that work asked for. The classification is read off the fleet's own answer now rather than off the word Mercator wrote beside it, so both Runs wait on their own account and neither is behind the other.",
+  "summary": "A fleet that answers one ask with nothing at all while going on selling exactly what the work behind it asked for. An offer query is a search on the shape asked for, so the marketplace here publishes a 200GB machine and returns nothing whatever to a Run reserving 900GB: no candidate, no refusal, no machine to be waiting behind. That is the strongest thing a fleet can say and it was the one wait nothing exempted. The patient ask arrives first and is told so, with the evidence beside the reason: no machine weighed, none that could hold it. Twelve minutes of waiting promote it past the class that arrives next, and the Run that arrives fits what this fleet sells. Everything the queue does next used to turn on a fleet that published nothing being read as a wait for capacity to come free: the ask kept the queue, the work behind it was ordered behind an ask nothing in the fleet even matches, and it stayed there for the twenty four hours the patient class allows while the machine it wanted went unsold. So the assertion is the second Run, and it is placed. The world half of this matters as much as the control-plane half. Both simulated worlds answer the shape they were asked about now, because a world that returned its whole inventory whatever anybody asked could state a fleet nobody can use and never a fleet that answers one ask with nothing while answering another with a machine, which is the shape production reaches through a shape-filtered search rather than through an empty fleet.",
   "classification": "green",
   "world": {
     "images": {
@@ -10,7 +10,22 @@
           {"digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee", "size": "20MB"}
         ]
       }
-    }
+    },
+    "marketplace": [
+      {
+        "id": "sells-two-hundred-gigabytes",
+        "provider": "simcloud",
+        "resources": {"disk": "200GB"},
+        "rate_per_hour_usd": 2.0,
+        "provisioning": {
+          "expected": "4m",
+          "p90": "8m",
+          "acquisition": "24s",
+          "boot": "3m",
+          "agent_ready": "36s"
+        }
+      }
+    ]
   },
   "timeline": [
     {
@@ -18,6 +33,7 @@
       "request": {
         "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
         "service_class": "batch",
+        "resources": {"disk": "900GB"},
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },
@@ -34,21 +50,18 @@
     },
     {"advance": "12m"},
     {
-      "submit": "fits-anything-this-fleet-sells",
+      "submit": "fits-what-this-fleet-sells",
       "request": {
         "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
         "service_class": "standard",
+        "resources": {"disk": "100GB"},
         "expected_runtime": "10m",
         "max_runtime": "20m"
       },
       "expect": {
-        "outcome": "defer",
-        "deferral": {
-          "reason": "NO_CAPACITY_FITS",
-          "behind": [],
-          "effective_priority": 50,
-          "fleet": {"weighed": 0, "could_hold": 0}
-        }
+        "outcome": "place",
+        "offer": "sells-two-hundred-gigabytes",
+        "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"]
       }
     }
   ]

@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 38 {
-		t.Fatalf("latest invariant results = %d, want 38", len(latest))
+	if len(latest) != 39 {
+		t.Fatalf("latest invariant results = %d, want 39", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -465,6 +465,31 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 					Fleet: &domain.FleetAnswer{Weighed: 1, CouldHold: 0},
 				}),
 				deferredForEvent("run-fits", now.Add(2*time.Minute), domain.ClassStandard, domain.DeferredBehindHigherPriority, "run-impossible"),
+			}
+		},
+		// A machine that could not measure its disk, and a wait recorded as the
+		// strongest thing a fleet can say. Every Run carries a disk floor, so a
+		// silence read as a full disk turns one failed measurement into a workspace
+		// of Runs no capacity can ever hold, and every one of them then loses its
+		// place in the queue to whatever arrives next.
+		"safety.a_silence_is_not_an_answer_about_capacity": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				bookingDecidedEvent("weighed-a-silent-machine", domain.BookingDecision{
+					ID:    "dec_silent",
+					RunID: "run-1",
+					Candidates: []domain.CandidateDecision{{
+						OfferSnapshotID: "offer-said-nothing",
+						Rejections: []domain.Violation{{
+							Code:     "UNKNOWN_FACT",
+							Path:     "resources.ephemeral_disk",
+							Unstated: true,
+						}},
+					}},
+				}),
+				deferralEvent("run-1", now, domain.AdmissionDeferral{
+					Reason: domain.DeferredNoCapacityFits, Class: domain.ClassStandard,
+					Fleet: &domain.FleetAnswer{Weighed: 1, CouldHold: 0},
+				}),
 			}
 		},
 		// One decision edited in place: the same ID recorded twice, once placing the
