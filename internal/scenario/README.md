@@ -156,9 +156,14 @@ whether a destroyed machine can still be looked at. A set that contradicts itsel
 is refused at load by the contract that owns it, so a fixture cannot state a
 provider Mercator would refuse to build a connection for: a resume without a stop,
 a persistent disk without a stop, and no deduplication with no owned listing are
-each impossible. A reusable listing that states any of it must also name its
-`machine`, because every promise in the set is about one machine keeping its
-identity and a listing ID is numbered afresh on every search.
+each impossible. `capacity` and `bootstrap` belong to the reusable lane and are
+refused on an `ephemeral` listing, because `Declare` admits a `CapacityProvider`
+only alongside a `NodeRuntime` and stamps every such connection reusable: a
+one-shot execution product holds nothing after its workload exits, so it has no
+machine to stop, no machine to bring back, and no agent to enrol. A listing that
+states any of it must also name its `machine`, because every promise in the set is
+about one machine keeping its identity and a listing ID is numbered afresh on every
+search.
 
 A listing's `bootstrap` is how the node agent arrives on a fresh machine.
 `never_enrolls` is a machine the provider allocates and boots whose agent never

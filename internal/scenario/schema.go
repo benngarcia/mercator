@@ -899,16 +899,34 @@ func (spec MarketplaceOfferSpec) validateProvisioningStages() error {
 // that owns it, so a Blueprint cannot state a provider Mercator would refuse to
 // build a connection for.
 func (spec MarketplaceOfferSpec) validateCapacityLifecycle() error {
+	if spec.Capacity == nil && spec.Bootstrap == nil {
+		return nil
+	}
+	// A capacity lifecycle and a node agent are the reusable lane, and stating
+	// either on a one-shot execution product is a backend capability.Declare
+	// refuses outright. Declare admits a CapacityProvider only alongside a
+	// NodeRuntime and stamps every such connection reusable, so capacity implies
+	// the lane rather than accompanying a choice of one, and an ephemeral product
+	// holds nothing after its workload exits and has no agent to enrol. Without
+	// this the corpus could describe a one-shot execution that suspends a machine,
+	// brings the same one back, and keeps its disk between Runs, which is the
+	// conflation ADR 0005 exists to prevent.
+	if !spec.ExecutionLane().Reusable() {
+		return fmt.Errorf(
+			"marketplace offer %q is a %s execution and states a capacity lifecycle: a product Mercator cannot hold between workloads has no machine to stop, resume, or enrol an agent on",
+			spec.ID, spec.ExecutionLane(),
+		)
+	}
 	if spec.Capacity != nil {
 		if err := spec.Capacity.Validate(); err != nil {
 			return fmt.Errorf("marketplace offer %q: %w", spec.ID, err)
 		}
 		// Every promise in the set is about one machine's identity surviving
-		// something: a stop, a resume, a repeated provision, a terminate. A reusable
-		// listing that makes them and names no machine is a fixture whose capacity
-		// lifecycle could not be recorded against anything, because a listing ID is
-		// numbered afresh on every search.
-		if spec.ExecutionLane().Reusable() && spec.Machine == "" {
+		// something: a stop, a resume, a repeated provision, a terminate. A listing
+		// that makes them and names no machine is a fixture whose capacity lifecycle
+		// could not be recorded against anything, because a listing ID is numbered
+		// afresh on every search.
+		if spec.Machine == "" {
 			return fmt.Errorf(
 				"marketplace offer %q states what its provider does with capacity and names no machine: every promise in that set is about one machine keeping its identity",
 				spec.ID,

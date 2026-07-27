@@ -189,6 +189,14 @@ func TestLoadBlueprintRefusesACapacityAccountNoProviderCouldKeep(t *testing.T) {
 			path: "testdata/blueprints/invalid/bootstrap-nobody-gives-up-on.json",
 			want: "a machine nobody gives up on bills for ever",
 		},
+		{
+			path: "testdata/blueprints/invalid/ephemeral-listing-that-stops-and-resumes.json",
+			want: "has no machine to stop, resume, or enrol an agent on",
+		},
+		{
+			path: "testdata/blueprints/invalid/ephemeral-listing-whose-agent-never-enrols.json",
+			want: "has no machine to stop, resume, or enrol an agent on",
+		},
 	} {
 		_, err := LoadBlueprint(testCase.path)
 

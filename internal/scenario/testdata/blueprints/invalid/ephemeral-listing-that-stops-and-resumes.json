@@ -1,0 +1,40 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "classification": "green",
+  "summary": "A one-shot execution product that suspends a machine, brings the same one back, and keeps its disk between Runs. capability.Declare refuses that backend outright: a CapacityProvider is admitted only alongside a NodeRuntime, and every connection that provides capacity is stamped reusable, so this listing describes a provider Mercator would never build a connection for.",
+  "world": {
+    "images": {
+      "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+        "layers": [
+          {
+            "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": "1GB"
+          }
+        ]
+      }
+    },
+    "marketplace": [
+      {
+        "id": "ask-a",
+        "lane": "ephemeral",
+        "rate_per_hour_usd": 1.0,
+        "provisioning": {"expected": "5m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
+        "capacity": {
+          "stop": true,
+          "resume": true,
+          "persistent_disk": true,
+          "exact_pricing": true,
+          "idempotent_provision": "operation_key",
+          "list_owned": true
+        }
+      }
+    ]
+  },
+  "request": {
+    "image": "app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expect": {
+    "outcome": "place",
+    "offer": "ask-a"
+  }
+}
