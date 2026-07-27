@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/adapter"
 	"github.com/benngarcia/mercator/internal/adapter/fake"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
@@ -442,12 +443,18 @@ func TestAFamilyAtItsWidthHoldsItsOwnMembersBack(t *testing.T) {
 	}
 }
 
-// TestAMemberBackInTheQueueLeavesRoomForItsFamily is the other side of counting
-// placements. A member re-placed after a launch that failed is back in the queue and
-// holds nothing, so its family has room again; leaving it counted would hold its
-// siblings behind a machine nobody has, for as long as the queue in front of it
-// lasted.
-func TestAMemberBackInTheQueueLeavesRoomForItsFamily(t *testing.T) {
+// TestAMemberThatGaveItsCapacityBackLeavesRoomForItsFamily is the other side of the
+// count: the fact that takes a member out of it. A launch that failed gives the
+// Booking back in the same commit, so the member holds nothing and its family has
+// room again.
+//
+// The record it is stated over is a member whose launch has failed and which nothing
+// has decided about since, which is the state a sweep interrupted between the failure
+// and the replacement leaves behind. That is where the two readings differ.
+// a-member-that-gave-its-capacity-back-leaves-room drives the whole thing under the
+// real control plane, where the replacement follows in the same pass, and this is the
+// moment in the middle of it.
+func TestAMemberThatGaveItsCapacityBackLeavesRoomForItsFamily(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	now := time.Now().UTC()
@@ -458,7 +465,7 @@ func TestAMemberBackInTheQueueLeavesRoomForItsFamily(t *testing.T) {
 	submitInFamily(t, ctx, orch, "run_second", sweep)
 
 	if err := orch.AdvanceRun(ctx, "ws_1", "run_second"); err != nil {
-		t.Fatalf("advance a member whose sibling is back in the queue: %v", err)
+		t.Fatalf("advance a member whose sibling gave its capacity back: %v", err)
 	}
 
 	second := runEvents(t, ctx, orch, "run_second")
@@ -468,8 +475,15 @@ func TestAMemberBackInTheQueueLeavesRoomForItsFamily(t *testing.T) {
 }
 
 // appendMemberPlacedInFamily states one member of a family as the log carries it:
-// admission told it to wait, a decision took a machine for it, and, where the wait
-// began again, admission told it to wait a second time.
+// admission told it to wait, a decision took a machine for it, and, where the
+// machine refused to start the work, the launch failed and admission told it to
+// wait a second time.
+//
+// The launch failure is what gives the capacity back, and it is stated here because
+// it is stated in production: both paths that record it complete the Run's Booking
+// in the same commit. A fixture that wrote the second deferral without it would be
+// asserting that admission alone says a Run holds nothing, which is the reading
+// this file is here to keep out of the count.
 func appendMemberPlacedInFamily(
 	t *testing.T,
 	ctx context.Context,
@@ -477,7 +491,7 @@ func appendMemberPlacedInFamily(
 	runID string,
 	group domain.RunGroup,
 	now time.Time,
-	waitedAgain bool,
+	launchFailed bool,
 ) {
 	t.Helper()
 	policy := domain.PlacementPolicy{Class: domain.ClassBatch, Group: group}
@@ -497,13 +511,22 @@ func appendMemberPlacedInFamily(
 	if err != nil {
 		t.Fatalf("state the placement: %v", err)
 	}
+	refused, err := json.Marshal(domain.ProviderError{
+		Code:       "ADAPTER_CAPACITY_UNAVAILABLE",
+		Retryable:  true,
+		SideEffect: string(adapter.SideEffectNone),
+		LaunchKey:  "launch_" + runID,
+	})
+	if err != nil {
+		t.Fatalf("state the launch failure: %v", err)
+	}
 	events := []eventlog.NewEvent{
 		{ID: "admission_1", Type: EventAdmissionDeferred, SchemaVersion: 1, OccurredAt: now.Add(-20 * time.Minute), Data: deferral},
 		{ID: "decided_1", Type: EventBookingDecided, SchemaVersion: 1, OccurredAt: now.Add(-2 * time.Minute), Data: placed},
 	}
-	if waitedAgain {
+	if launchFailed {
 		events = append(events, eventlog.NewEvent{
-			ID: "admission_2", Type: EventAdmissionDeferred, SchemaVersion: 1, OccurredAt: now.Add(-time.Minute), Data: deferral,
+			ID: "launch_failed_1", Type: EventLaunchFailed, SchemaVersion: 1, OccurredAt: now.Add(-90 * time.Second), Data: refused,
 		})
 	}
 	if _, err := orch.log.Append(ctx, eventlog.AppendRequest{

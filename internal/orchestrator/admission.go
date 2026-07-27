@@ -84,8 +84,10 @@ func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string,
 }
 
 // admissionQueue is every Run in this workspace admission has already told to
-// wait, built from the four public facts that put a Run in the queue and take it
-// out again. It reads those facts rather than the Run read model on purpose: the
+// wait, built from the five public facts that put a Run in the queue or in the
+// count of the capacity a family holds, and take it out of either again.
+//
+// It reads those facts rather than the Run read model on purpose: the
 // read model is derived by reducing each Run's whole stream, so one Run carrying
 // an event Mercator cannot read would stop every other Run in the workspace from
 // being placed, and a queue nobody can join is worse than no queue at all.
@@ -98,7 +100,9 @@ func (o *Orchestrator) admissionQueue(ctx context.Context, workspaceID string) (
 	filter := eventlog.EventFilter{
 		WorkspaceID: workspaceID,
 		StreamTypes: []string{"run"},
-		EventTypes:  []string{EventAdmissionDeferred, EventAdmissionRefused, EventBookingDecided, EventRunClosed},
+		EventTypes: []string{
+			EventAdmissionDeferred, EventAdmissionRefused, EventBookingDecided, EventLaunchFailed, EventRunClosed,
+		},
 	}
 	head, err := o.log.LatestPosition(ctx, filter)
 	if err != nil {
@@ -144,21 +148,33 @@ func (o *Orchestrator) admissionQueue(ctx context.Context, workspaceID string) (
 type queueReplay struct {
 	waiting map[string]waitingRun
 	began   map[string]time.Time
-	// holding is the family of every Run that has taken capacity and not finished
-	// with it, which is what a group's declared width is counted over. It is the
-	// same two facts as membership above, read for the opposite question: the queue
-	// is who is still owed an answer, and this is who has already been given one.
+	// holding is the family of every Run that has taken capacity and not given it
+	// back, which is what a group's declared width is counted over.
 	//
 	// A placement counts rather than an execution, and the difference is what makes
 	// the bound hold. A member given a queued Booking behind somebody else's work is
 	// not running yet and admission will never ask about it again, so counting only
 	// what is running would let a family commit six machines and then run six.
+	// a-family-place-is-taken-by-a-member-that-waits-its-turn is that world.
+	//
+	// Every fact that puts a Run in here or takes it out is a fact about capacity, and
+	// that is deliberate. It used to leave on a deferral instead, on the argument that
+	// admission is only ever asked of a Run that still needs a machine. That was true
+	// of the one path in the tree that re-admits a Run, and it was an argument about
+	// today's control flow standing in for a fact in the log: widening replacement to
+	// a launch whose side effect nobody can determine, or re-placing a Booking past
+	// its latest start, would re-admit a Run whose container may still be running and
+	// quietly let its family commit a second machine. A Booking is given back in the
+	// same commit as the launch failure that ended it, so the log says when the
+	// capacity went, and this reads that rather than inferring it.
 	holding map[string]domain.RunGroup
 }
 
-// apply is one public fact moving a Run into or out of the queue. Leaving is every
-// way a Run stops waiting on a decision: it was placed, it was refused, or it is
-// over. Only the last two end the wait itself.
+// apply is one public fact moving a Run into or out of the queue, or into and out of
+// the capacity its family is counted on. Leaving the queue is every way a Run stops
+// waiting on a decision: it was placed, it was refused, or it is over, and only the
+// last two end the wait itself. Leaving the count is the capacity going back: the
+// launch that failed, the refusal, or the end of the Run.
 func (replay queueReplay) apply(event eventlog.StoredEvent) error {
 	switch event.Type {
 	case EventAdmissionDeferred:
@@ -177,11 +193,14 @@ func (replay queueReplay) apply(event eventlog.StoredEvent) error {
 			since:        replay.began[event.StreamID],
 			holdsNoQueue: data.Deferral.HoldsNoQueue(),
 		}
-		// A Run admission is deferring is a Run holding no capacity, whatever it held
-		// before. Admission is only asked of a Run that still needs a machine, so a
-		// member re-placed after a launch that failed is back in the queue and its
-		// family has room again. Leaving it counted would hold its siblings behind a
-		// machine nobody has, for as long as the queue in front of it lasted.
+	case EventLaunchFailed:
+		// A launch that failed is a Booking given back: the Run's capacity is completed
+		// in the same commit as this fact, on both paths that record one. So a member
+		// whose machine refused to start the work no longer holds its family's place,
+		// and leaving it counted would hold a sibling behind a machine nobody has until
+		// something asks about this Run again. A launch nobody can determine the outcome
+		// of records a different fact and keeps its capacity, which is the reading this
+		// one exists to keep honest.
 		delete(replay.holding, event.StreamID)
 	case EventAdmissionRefused, EventRunClosed:
 		delete(replay.waiting, event.StreamID)

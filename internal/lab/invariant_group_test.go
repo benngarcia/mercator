@@ -155,6 +155,66 @@ func TestAFamilyNarrowerThanItsClassPatienceStillDrains(t *testing.T) {
 	}
 }
 
+// TestAMemberThatGaveItsCapacityBackLeavesRoom is a launch failure inside a family,
+// which nothing in the corpus produced before. A family of two one wide, one warm
+// machine, and that machine refuses the first member's launch.
+//
+// What takes a member out of the count is the capacity going back. The Booking is
+// completed in the same commit as the failure, so the family has room and the second
+// member is admitted onto the machine the first one gave back. The first member has
+// nowhere else to go, because Mercator will not offer it the snapshot that just
+// refused it, so it ends failed and its sibling is the one that runs. The order they
+// ran in is the claim: without the family making room, the second member would have
+// waited behind a machine nobody was holding.
+func TestAMemberThatGaveItsCapacityBackLeavesRoom(t *testing.T) {
+	execution := openConformanceExecution(t, "a-member-that-gave-its-capacity-back-leaves-room")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	if _, err := execution.DriveToCompletion(context.Background()); err != nil {
+		t.Fatalf("drive the execution: %v", err)
+	}
+
+	// The machine refused the first member, which is the fact the rest rests on.
+	if failures := countRunEvents(t, execution, "run-first", orchestrator.EventLaunchFailed); failures == 0 {
+		t.Fatal("the world accepted the first member's launch, and this case needs a machine that refused it")
+	}
+	first := projectedRun(t, execution, "run-first")
+	if first.StartedAt != nil {
+		t.Fatalf("the first member started at %v, and the only machine in this world refused its launch", first.StartedAt)
+	}
+	// And the sibling ran on the capacity the first member gave back.
+	second := projectedRun(t, execution, "run-second")
+	if second.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("the second member ended %q in phase %q, and the machine its sibling gave back was free for it",
+			second.Outcome, second.Phase)
+	}
+	if peak := peakConcurrentLaunches(t, execution); peak != 1 {
+		t.Fatalf("the ledger says %d members held capacity at once, and the family declared one", peak)
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("check invariants: %v", err)
+	}
+	if result := invariantResultByID(t, latestInvariantResults(execution.invariants), "safety.group_parallelism_respected"); result.Status != InvariantPassed {
+		t.Fatalf("the group law reports %+v", result)
+	}
+}
+
+// countRunEvents is how many times one Run's own stream carries a fact.
+func countRunEvents(t *testing.T, execution *Execution, runID, eventType string) int {
+	t.Helper()
+	count := 0
+	for _, event := range publicRunEvents(t, execution) {
+		if event.Type == eventType && strings.HasSuffix(event.StreamID, runID) {
+			count++
+		}
+	}
+	return count
+}
+
 // TestAPreemptibleRunIsTheOneInterrupted is the world taking capacity back, which
 // is the first thing in this corpus that happens to Mercator rather than because of
 // it. Two Runs differ in one thing, what their class says about being interrupted,

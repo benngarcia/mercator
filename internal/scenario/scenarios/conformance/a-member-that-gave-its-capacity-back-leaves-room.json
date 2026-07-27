@@ -1,0 +1,62 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "A family of two whose caller said one of them may run at once, and one warm machine to run them on. The first member takes the family's place, the machine refuses its launch, and the Booking is given back in the same commit as the failure. So the family has room again: the second member is admitted onto the machine the first one gave back, runs, and finishes, and the first member waits behind its own sibling and runs after it. The order the two members ran in is the whole claim. What takes a member out of the count is the capacity going back rather than admission being asked about it again, and no Blueprint in the corpus produced a launch failure for a member of a family, so the count could leave on a deferral and everything stayed green.",
+  "seed": "mercator-lab-family-launch-failure-v1",
+  "world": {
+    "images": {
+      "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "2GB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-1",
+        "cached_images": ["sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11"],
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "runtime_models": [
+      {"candidate": "rental-1", "minimum": "20m", "maximum": "20m30s"}
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "first",
+        "at": "0s",
+        "request": {
+          "image": "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11",
+          "service_class": "batch",
+          "group": {"id": "sweep", "max_parallel": 1},
+          "expected_runtime": "20m",
+          "max_runtime": "30m",
+          "max_pre_start_attempts": 3
+        }
+      },
+      {
+        "name": "second",
+        "at": "0s",
+        "request": {
+          "image": "sweeper@sha256:9c8bd52ce9e1b4dfd0e2ac2e0e0f0d19ba2cbd9f4bbd9dc0e0f2c85ce7d3cf11",
+          "service_class": "batch",
+          "group": {"id": "sweep", "max_parallel": 1},
+          "expected_runtime": "20m",
+          "max_runtime": "30m",
+          "max_pre_start_attempts": 3
+        }
+      }
+    ]
+  },
+  "faults": [
+    {
+      "id": "the-machine-refuses-the-first-member",
+      "trigger": {"operation": "provider.launch", "run": "first", "attempt": 1},
+      "action": "reject_command"
+    }
+  ]
+}
