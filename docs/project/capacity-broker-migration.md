@@ -3410,6 +3410,52 @@ complete because it works against a live provider.
     the same question whoever caused the delay. A Run its family holds holds no queue
     anyway, so the only thing this decides is what such a Run is worth when it competes
     again.
+- [x] 2026-07-27: No capacity is free. A candidate's price was a rate times one Run's
+  seconds, plus a setup fee charged to every machine whether or not Mercator had to buy
+  one, and both mistakes point the direction that spends money: they make capacity
+  Mercator already holds look cheaper than it is. A price is now four terms and the
+  record carries all of them.
+  - Rent for seconds inside an interval Mercator has already committed to is charged to
+    whoever spends those seconds. The invoice arrives either way, so the money is not
+    what the decision changes; the seconds are, because nothing else can have them
+    afterwards. That is what an owned machine's shadow price states, and it is why an
+    idle owned machine is not free.
+  - Rent beyond that interval is what the placement itself commits Mercator to, bought
+    in whatever increment the publisher sells, and the part of that increment nothing
+    will use is the idle tail. An hourly machine asked for twenty minutes costs the
+    hour; billing the twenty minutes reported two thirds of the bill to nobody.
+    `PriceModel.GranularitySeconds` is what the increment is read from. All four
+    adapters have written it since they were authored and nothing had ever read it, so
+    no fixture could state a world where the increment mattered.
+  - The setup fee and the minimum charge are asked only of capacity Mercator has to
+    acquire. Charging them to a standing machine priced a machine already running as
+    though it were being bought again.
+  - The seconds a Run spends of a commitment are counted from the Run's own start rather
+    than from the decision's moment. Two Runs queued on one machine occupy different
+    seconds of one interval, and charging each of them everything still outstanding
+    would count the same money twice and report a fleet costing more than the invoices
+    it will get. `safety.committed_cost_is_not_double_counted` states that over the
+    placements Mercator took, and `TestTwoRunsMaySpendOneCommittedHourBetweenThem` is
+    the lawful half, so the law is not a ban on committed rent.
+  - Two terms of a sale are refusals rather than prices, because there is nothing to
+    trade off. Capacity held for particular service classes refuses every other class
+    outright, which is how reserved capacity is stated, and capacity that stops being
+    Mercator's at a declared moment refuses work that could still be holding it then.
+    The window is judged against the runtime Mercator enforces rather than the one the
+    caller guessed, because admitting on the guess puts work on a machine that goes away
+    underneath it whenever the guess is short.
+  - An operator states the rest of the sale at invitation, `node.Purchase`: the block
+    the machine is bought in, the classes they hold it for, and the moment it stops
+    being Mercator's. Every part is optional and every absence is an answer rather than
+    a default. No increment is a machine bought in no blocks at all, which is an
+    operator's own hardware: Mercator holds it continuously, so no second of it is a
+    fresh commitment and there is no tail to charge, and that is the same silence
+    `GranularitySeconds` already meant. Where the current block ends is derived from
+    enrolment rather than configured, because that is the moment Mercator started paying
+    for this generation of this machine.
+  - Three of the terms this slice was scoped to carry are not priced, and the reasons are
+    in the section below rather than left as silence: stopped-state storage, preemption
+    risk, and warm-capacity opportunity cost as a term of its own.
 
 
 ## Phase status
@@ -3419,7 +3465,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; the hierarchical estimator, owned economics, replanning, affinity, and a production publisher for reclaimable capacity remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; the hierarchical estimator, replanning, affinity, stopped-state storage, preemption-risk pricing, and a production publisher for reclaimable capacity remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -4416,6 +4462,34 @@ Phase 4 added:
   3660 of 7320 charged to Mercator. Against the reading it replaces the member is
   closed failed at the handoff, for a wait Mercator had kept it in for no time at all.
   It needs a world event because the plan-driven Lab has no way to give capacity back.
+- `an-idle-machine-is-not-free` (green): an enrolled node at 1 USD an hour bought by the
+  hour, ten minutes into the hour Mercator has already paid for, against a one-shot sold
+  by the minute at 1.60 with a 5 cent fee to hand it over. Four steps. The half-hour Run
+  is 1.17 USD on the node against 0.85 on the one-shot and flips away from the node,
+  which is the whole slice: under a rate times one Run's seconds it is 0.50 and the node
+  wins. The sweep behind it is refused the node `CLASS_NOT_ELIGIBLE` rather than priced
+  there. The long Run wins the node back, because fifty-five minutes uses the hour the
+  node costs either way. The last Run is refused the node `AVAILABILITY_WINDOW_CLOSES`
+  while the long one is still on it, because the window that machine is Mercator's for
+  closes before this Run's turn could end. It is the first fixture in the corpus to
+  state a billing increment, a commitment, a reservation, or a window, and the first to
+  assert a price term by term.
+- `an-owned-hour-is-charged-to-somebody` (conformance): the flip and the reservation
+  through the real control plane, with every term of the node's price asserted rather
+  than the total, and both economics laws read off the recorded decisions. Against the
+  reading it replaces the Run lands on the node and the test fails on its first line.
+- `safety.no_capacity_is_free` (Lab invariant): every candidate somebody quoted carries
+  positive dollars accounted for by the terms recorded beside it. An owned machine is
+  the case it exists for: nothing new is billed for an hour already paid for, so a model
+  asking what this decision adds to the bill reaches zero honestly and is wrong, because
+  the seconds are the scarce thing and a candidate priced at nothing wins every
+  placement it is weighed in. A machine nobody quoted is exempt and carries no terms,
+  because pricing the absence of a price is the fabrication the law is against.
+- `safety.committed_cost_is_not_double_counted` (Lab invariant): one second of one
+  committed interval belongs to one Run. It is stated over the placements Mercator took
+  rather than the candidates it weighed, because candidates are alternatives and neither
+  has spent anything, and it also refuses committed rent charged past the end of the
+  interval, which is the keep-alive term wearing the committed term's discount.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
@@ -4437,8 +4511,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 55 regression Blueprints: 52 green and 3 target, beside one demo,
-one minimized case, and twenty eight conformance Blueprints. The count is read off the
+The corpus is 59 regression Blueprints: 56 green and 3 target, beside two demo
+documents, one minimized case, and thirty two conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
@@ -4508,6 +4582,101 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 no capacity is free
+
+On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2 on Ubuntu 26.04, against
+`beng/prediction-and-service-classes` at the four commits above `515f995`.
+`go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
+packages, and `go test -race -count=1` clean over `internal/domain`,
+`internal/scheduler`, `internal/node`, `internal/scenario/...`, `internal/httpapi`,
+`internal/storage/sqlite`, `internal/lab` and `internal/daemon`. `cd web/app && bun
+run typecheck && bun run test && bun run build` clean, because the contract was
+regenerated from `openapi.json` rather than hand edited.
+
+The root corpus is 59 Blueprints, 56 of them green, with 32 conformance fixtures. Two
+Blueprints were added and no fixture moved classification.
+
+The Blueprint is red under the one-number shadow price, which is the acceptance this
+slice was set. With the commitment and the increment unpriced and the setup fee charged
+to everything, `an-idle-machine-is-not-free` reports the placement itself as well as
+the arithmetic: `expected "ask-minute" to win, but the decision placed on "node-owned"`,
+`candidate "node-owned": cost_usd: want at least 1.16, got 0.5`, `cost term
+committed_rent: want at least 0.166, got 0`, `cost term idle_tail: want at least 0.666,
+got 0`, and then the fourth step never gets a decision at all, because the node is
+still running the first Run. The same mutation fails
+`TestAnIdleMachineIsNotFreeAtL1` on its first line, with the half-hour Run landing on
+the node through the real control plane.
+
+Both laws are red against the record they exist to forbid, and the failing cases are
+permanent rather than mutations.
+
+- `safety.no_capacity_is_free` fails on `ownedMachinePricedAtNothing`, an owned machine
+  weighed for a Run and priced at nothing because the hour it sits inside was already
+  paid for. `TestAPriceItsOwnTermsDoNotAddUpToIsRefused` is the accounting half, a
+  candidate priced at 0.85 USD out of terms adding up to 0.80, and
+  `TestAnUnquotedMachineCarriesNoPriceToAccountFor` is the exemption, so the law cannot
+  be satisfied by inventing dollars for a machine nobody quoted.
+- `safety.committed_cost_is_not_double_counted` fails on `oneCommittedHourSoldTwice`,
+  two placements on one machine each charged everything still outstanding when its own
+  decision was taken, which is what pricing a commitment from the decision's moment
+  produces. `TestCommittedRentStopsAtTheEndOfTheInterval` is the single-placement form
+  of the same overselling, and `TestTwoRunsMaySpendOneCommittedHourBetweenThem` is the
+  lawful case that keeps the law from being a ban on committed rent.
+
+Per-candidate oracle agreement still holds with the new terms, and the reference model
+derives every one of them independently: its own occupancy, its own overlap with the
+committed interval, its own rounding up to the increment, and its own reading of what
+has to be acquired. A reference model that called the production pricing function would
+agree with it about a bug in the rounding, which is the one thing an independent model
+is for.
+
+Three terms this slice was scoped to carry are not priced, and each is a decision with
+a reason rather than an omission.
+
+- Stopped-state storage has no horizon anything states. A machine Mercator stops rather
+  than releases costs its disk until something uses it again, and nothing here predicts
+  when that is; every honest-looking substitute made a longer Run cheaper than a shorter
+  one, because it charged the part of a commitment the placement did not consume.
+- Preemption risk is not priced, and the corpus already argued this out under
+  `a-published-risk-history-ranks-nothing`: expected redo cost is a probability times a
+  predicted redo, and what the probability multiplies is the placement the work would be
+  redone on rather than this one. A published interruption rate is a rate rather than a
+  hazard over the length of a Run, so nothing here can say how much of a Run is lost
+  when a machine drops it. The availability window is the part of that risk that can be
+  stated without inventing either: the moment is declared, so it is a refusal.
+- Warm-capacity opportunity cost is not a term of its own, because it would double
+  count. An owned machine's shadow price is exactly the statement that its seconds are
+  worth something to somebody else, which is why committed rent is charged to the Run
+  that spends those seconds even though no invoice depends on the decision.
+
+Named and not fixed here. The local Docker adapter publishes `RatePerSecondUSD: 0` with
+`Known: true`, which is the one production publisher of capacity somebody says is free,
+and `safety.no_capacity_is_free` cannot see it because invariants read Lab executions.
+The honest answer is either a configured shadow price on the connection, as a node has,
+or an unpriced offer that a Run must allow, and both change where every local Run lands.
+It wants a slice of its own. `gofmt -l .` still reports
+`internal/adapter/vast/client.go` and `internal/scheduler/scheduler_test.go`, struct tag
+alignment left earlier on this branch.
+
+The live half ran on this host's own daemon rather than in simulation:
+`MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration`
+launches, observes, and releases a real container on the native engine. Nothing in this
+pass needed a container of its own, because what it changes is arithmetic over
+published facts and what an operator can say about a machine they own; the highest
+fidelity that means anything for it is the real node protocol over the real event log
+and SQLite, which the two `internal/daemon` cases drive. Mercator issue #165 does not
+reproduce here and was left alone.
+
+```text
+go build ./... && go vet ./... && go test ./... -count=1
+go test -race -count=1 ./internal/domain ./internal/scheduler ./internal/node \
+  ./internal/scenario/... ./internal/httpapi ./internal/storage/sqlite
+go test -race -count=1 -timeout 900s ./internal/lab ./internal/daemon
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
+cd web/app && bun run typecheck && bun run test && bun run build
+```
 
 ### Phase 4 the divided wait, and the six findings
 

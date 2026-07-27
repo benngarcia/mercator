@@ -863,28 +863,13 @@ func startingStages(stages domain.LaunchStageEstimates) []domain.Estimate {
 // really spends it: a Run queued behind an hour of work occupies the second hour
 // of a commitment, not the first.
 func occupancy(input SchedulingInput, start domain.Estimate) domain.Occupancy {
-	_, maximum := runtimeBounds(input.Workload)
+	expected, maximum := runtimeBounds(input.Workload)
 	return domain.Occupancy{
 		At:                input.EvaluatedAt,
 		StartSeconds:      start.Expected,
-		RuntimeSeconds:    billedRuntimeSeconds(input.Workload),
+		RuntimeSeconds:    expected,
 		MaxRuntimeSeconds: maximum,
 	}
-}
-
-// billedRuntimeSeconds is how long this Run is priced for. It is the caller's own
-// expectation where there is one, the bound Mercator enforces where there is not,
-// and a second where a revision states neither, because a placement priced at no
-// seconds at all would rank every machine in the fleet identically.
-func billedRuntimeSeconds(workload domain.WorkloadRevision) float64 {
-	seconds := workload.Spec.Placement.ExpectedRuntimeSeconds
-	if seconds <= 0 {
-		seconds = float64(workload.Spec.Execution.MaxRuntimeSeconds)
-	}
-	if seconds <= 0 {
-		seconds = 1
-	}
-	return seconds
 }
 
 // costEstimate is what Mercator's spend changes by if this Run occupies this

@@ -294,16 +294,15 @@ func referenceEstimates(input scheduler.SchedulingInput, offer domain.OfferSnaps
 // second of an already-committed interval is worth to a Run depends on whether
 // the Run is there for it.
 func referenceOccupancy(input scheduler.SchedulingInput, start domain.Estimate) domain.Occupancy {
-	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
-	if runtime <= 0 {
-		runtime = float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
-	}
-	if runtime <= 0 {
-		runtime = 1
-	}
 	maximum := float64(input.Workload.Spec.Execution.MaxRuntimeSeconds)
 	if maximum <= 0 {
 		maximum = float64(domain.DefaultMaxRuntimeSeconds)
+	}
+	// A Run that stated no expectation is priced over the bound Mercator would
+	// enforce, because that is the only statement about its length anybody made.
+	runtime := input.Workload.Spec.Placement.ExpectedRuntimeSeconds
+	if runtime <= 0 {
+		runtime = maximum
 	}
 	return domain.Occupancy{
 		At:                input.EvaluatedAt,
