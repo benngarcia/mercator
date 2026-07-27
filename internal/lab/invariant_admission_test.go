@@ -246,7 +246,15 @@ func TestAgingLiftsABatchRunPastSustainedArrivals(t *testing.T) {
 		}
 	}()
 
-	driveInSweeps(t, execution, 30*time.Second, 150)
+	// Driven until the batch Run has run rather than for a fixed count, bounded so
+	// a fixture that never lets it run fails instead of hanging. Every claim below
+	// is about what has happened by then, and the sweeps after it are the most
+	// expensive in the suite: the queue is re-decided against the whole event log
+	// on each one, and this test alone was forty five percent of the package's
+	// time under the race detector.
+	driveInSweepsUntil(t, execution, 30*time.Second, 150, func() bool {
+		return runSucceeded(t, execution, "run-quiet")
+	})
 
 	// The proof is that the arrivals were overtaken while they were still arriving,
 	// and it is read off an interactive Run being told it waits behind the batch Run.
@@ -694,10 +702,40 @@ func TestARefusedQueueDelayIsNotStarvationWhenOlderWorkWasAdmitted(t *testing.T)
 // every moment between the last arrival and the next completion, which is where the
 // ordering is decided and where a class bound falls, happens in one advance with no
 // sweep inside it.
+// runSucceeded reports whether the projection already holds this Run as
+// succeeded. A Run that has not arrived yet has no record, which is an answer of
+// not yet rather than a fixture mistake, so this asks without failing.
+func runSucceeded(t *testing.T, execution *Execution, runID string) bool {
+	t.Helper()
+	records, err := execution.runtime.allRuns(context.Background())
+	if err != nil {
+		t.Fatalf("read Run projection: %v", err)
+	}
+	for _, record := range records {
+		if record.ID == runID {
+			return record.Outcome == domain.RunOutcomeSucceeded
+		}
+	}
+	return false
+}
+
 func driveInSweeps(t *testing.T, execution *Execution, step time.Duration, sweeps int) {
+	t.Helper()
+	driveInSweepsUntil(t, execution, step, sweeps, func() bool { return false })
+}
+
+// driveInSweepsUntil advances one sweep at a time until the world has answered
+// the question the caller is asking, and gives up after sweeps of them. The
+// bound is what separates a slow execution from a stuck one, so a fixture that
+// never produces the answer fails on its own assertion rather than running to
+// the count and passing for the wrong reason.
+func driveInSweepsUntil(t *testing.T, execution *Execution, step time.Duration, sweeps int, answered func() bool) {
 	t.Helper()
 	start := execution.now
 	for range sweeps {
+		if answered() {
+			return
+		}
 		if _, err := execution.Drive(context.Background(), Advance(step)); err != nil {
 			t.Fatalf("advance to %s: %v", execution.now.Add(step).Sub(start), err)
 		}

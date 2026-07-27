@@ -73,7 +73,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test -race ./internal/lab ./internal/scenario ./cmd/mercator -count=1
+      # The race detector over a deterministic simulation suite is slow by
+      # nature, and Go's implicit ten minute default is a cliff this job kept
+      # falling off: internal/lab alone runs about three and a half minutes here
+      # and roughly twice that on a two core runner. The budget is stated so a
+      # suite that outgrows it fails saying so, rather than being killed at an
+      # arbitrary boundary nobody chose.
+      - run: go test -race ./internal/lab ./internal/scenario ./cmd/mercator -count=1 -timeout 25m
       - run: go test ./internal/lab -run '^$' -fuzz '^FuzzGeneratedBlueprintCompilesAndPreservesInvariants$' -fuzztime=10s -parallel=1
 
   image:
