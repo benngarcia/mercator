@@ -165,6 +165,12 @@ func (replay queueReplay) apply(event eventlog.StoredEvent) error {
 			since:        replay.began[event.StreamID],
 			holdsNoQueue: data.Deferral.HoldsNoQueue(),
 		}
+		// A Run admission is deferring is a Run holding no capacity, whatever it held
+		// before. Admission is only asked of a Run that still needs a machine, so a
+		// member re-placed after a launch that failed is back in the queue and its
+		// family has room again. Leaving it counted would hold its siblings behind a
+		// machine nobody has, for as long as the queue in front of it lasted.
+		delete(replay.holding, event.StreamID)
 	case EventAdmissionRefused, EventRunClosed:
 		delete(replay.waiting, event.StreamID)
 		delete(replay.began, event.StreamID)

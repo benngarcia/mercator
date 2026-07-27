@@ -339,3 +339,115 @@ func latestDeferral(t *testing.T, events []eventlog.StoredEvent) domain.Admissio
 	t.Fatalf("admission recorded nothing about this Run: %v", eventTypes(events))
 	return domain.AdmissionDeferral{}
 }
+
+// TestAFamilyAtItsWidthHoldsItsOwnMembersBack is the group bound over the log the
+// queue is really replayed out of, and it states the reading the corpus cannot: the
+// member holding the family's one place has a queued Booking on a busy machine
+// rather than a running container. Counting what runs instead of what was placed
+// would let a family of one commit a second machine here and then run two.
+func TestAFamilyAtItsWidthHoldsItsOwnMembersBack(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
+	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	appendMemberPlacedInFamily(t, ctx, orch, "run_first", sweep, now, false)
+	submitInFamily(t, ctx, orch, "run_second", sweep)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_second"); err != nil {
+		t.Fatalf("advance the second member of a family already at its width: %v", err)
+	}
+
+	second := runEvents(t, ctx, orch, "run_second")
+	if reason := deferralReason(t, second); reason != domain.DeferredGroupAtParallelism {
+		t.Fatalf("the second member was told it waits for %q, and what holds it is the width its caller declared", reason)
+	}
+	if behind := deferralBehind(t, second); len(behind) != 1 || behind[0] != "run_first" {
+		t.Fatalf("the record says the second member waits behind %v, and the member holding the family's one place is run_first", behind)
+	}
+}
+
+// TestAMemberBackInTheQueueLeavesRoomForItsFamily is the other side of counting
+// placements. A member re-placed after a launch that failed is back in the queue and
+// holds nothing, so its family has room again; leaving it counted would hold its
+// siblings behind a machine nobody has, for as long as the queue in front of it
+// lasted.
+func TestAMemberBackInTheQueueLeavesRoomForItsFamily(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	now := time.Now().UTC()
+	sweep := domain.RunGroup{ID: "sweep", MaxParallel: 1}
+	provider := fake.New(fake.WithOffers([]domain.OfferSnapshot{orchOccupiedOffer("off_busy", now)}))
+	orch := New(openOrchestratorLog(t), scheduler.New(), provider, WithClock(func() time.Time { return now }))
+	appendMemberPlacedInFamily(t, ctx, orch, "run_first", sweep, now, true)
+	submitInFamily(t, ctx, orch, "run_second", sweep)
+
+	if err := orch.AdvanceRun(ctx, "ws_1", "run_second"); err != nil {
+		t.Fatalf("advance a member whose sibling is back in the queue: %v", err)
+	}
+
+	second := runEvents(t, ctx, orch, "run_second")
+	if reason := deferralReason(t, second); reason == domain.DeferredGroupAtParallelism {
+		t.Fatalf("the second member is held by a family whose only other member holds no capacity: %v", deferralBehind(t, second))
+	}
+}
+
+// appendMemberPlacedInFamily states one member of a family as the log carries it:
+// admission told it to wait, a decision took a machine for it, and, where the wait
+// began again, admission told it to wait a second time.
+func appendMemberPlacedInFamily(
+	t *testing.T,
+	ctx context.Context,
+	orch *Orchestrator,
+	runID string,
+	group domain.RunGroup,
+	now time.Time,
+	waitedAgain bool,
+) {
+	t.Helper()
+	policy := domain.PlacementPolicy{Class: domain.ClassBatch, Group: group}
+	deferral, err := json.Marshal(admissionDeferredData{Deferral: domain.AdmissionDeferral{
+		Reason: domain.DeferredNoFeasibleOffer,
+		Class:  policy.Class,
+		Fleet:  &domain.FleetAnswer{Weighed: 1, CouldHold: 1},
+	}})
+	if err != nil {
+		t.Fatalf("state the wait: %v", err)
+	}
+	placed, err := json.Marshal(bookingDecisionData{Decision: domain.BookingDecision{
+		RunID:                   runID,
+		SelectedOfferSnapshotID: "off_busy",
+		Policy:                  policy,
+	}})
+	if err != nil {
+		t.Fatalf("state the placement: %v", err)
+	}
+	events := []eventlog.NewEvent{
+		{ID: "admission_1", Type: EventAdmissionDeferred, SchemaVersion: 1, OccurredAt: now.Add(-20 * time.Minute), Data: deferral},
+		{ID: "decided_1", Type: EventBookingDecided, SchemaVersion: 1, OccurredAt: now.Add(-2 * time.Minute), Data: placed},
+	}
+	if waitedAgain {
+		events = append(events, eventlog.NewEvent{
+			ID: "admission_2", Type: EventAdmissionDeferred, SchemaVersion: 1, OccurredAt: now.Add(-time.Minute), Data: deferral,
+		})
+	}
+	if _, err := orch.log.Append(ctx, eventlog.AppendRequest{
+		Stream:      eventlog.StreamKey{WorkspaceID: "ws_1", Type: "run", ID: runID},
+		CommandKey:  "state:" + runID,
+		RequestHash: "sha256:" + runID,
+		Events:      events,
+	}); err != nil {
+		t.Fatalf("state the placement of %q: %v", runID, err)
+	}
+}
+
+// submitInFamily submits one Run that belongs to a family of work and states how
+// wide that family may run.
+func submitInFamily(t *testing.T, ctx context.Context, orch *Orchestrator, runID string, group domain.RunGroup) {
+	t.Helper()
+	revision := orchRevision()
+	revision.Spec.Placement.Class = domain.ClassBatch
+	revision.Spec.Placement.Group = group
+	submitRevision(t, ctx, orch, runID, revision)
+}
