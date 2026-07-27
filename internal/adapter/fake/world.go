@@ -147,13 +147,16 @@ type Machine struct {
 	// NeverEnrolls is a machine this world allocates and boots whose node agent
 	// never opens its session: an image with no agent in it, a startup script that
 	// ran before the network was up, an outbound path something blocks. Mercator
-	// has no session to it, so nothing can create a container there, no bytes are
-	// ever fetched onto it, and no workload launched here ever begins.
+	// has no session to it, so nothing can create a container there and no workload
+	// launched here ever begins.
 	//
 	// Provisioning does not complete on such a machine, which is why this is a
 	// separate fact from a ProvisionSpend of any length. A stage that never
 	// finishes has no seconds to state, and stating none would make the failure a
 	// provider bills for the fastest possible success.
+	//
+	// It is refused on capacity Mercator keeps, which is where the claim that such
+	// a machine fetches nothing lives: see AddMachine.
 	NeverEnrolls bool
 	// UnpackSpend is what this machine takes to turn content on its disk into a
 	// layer chain a container can start on, and ContainerStartSpend is what its
@@ -657,6 +660,18 @@ func (w *World) AddMachine(m *Machine) error {
 		return fmt.Errorf(
 			"fake: machine %q holds %d bytes of content and has %d bytes of disk",
 			m.Offer.ID, resident, m.Offer.Resources.EphemeralDiskBytes,
+		)
+	}
+	// Capacity Mercator keeps is a machine it holds through an enrolled agent, so a
+	// machine whose agent never opens a session can never be any. Refusing the pair
+	// here is what makes the rest of this world's account of a stranded machine
+	// true: content is recorded only for capacity that keeps what it runs, so a
+	// machine nothing enrols on holds nothing without a second rule saying so, and
+	// there is no state in which one asks whether a stranded machine got warm.
+	if m.NeverEnrolls && m.Offer.KeepsWhatItRuns() {
+		return fmt.Errorf(
+			"fake: machine %q states an agent that never enrols and capacity Mercator keeps, and it holds capacity through that agent",
+			m.Offer.ID,
 		)
 	}
 	w.mu.Lock()

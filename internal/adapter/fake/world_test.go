@@ -3,6 +3,7 @@ package fake
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,17 +160,29 @@ func TestWorldMarketplaceOfferOwesFullImagePull(t *testing.T) {
 // TestWorldStrandedCapacityNeverStartsTheWorkItWasBilledFor is the machine a
 // provider allocates, boots, and bills for, whose node agent never opens a
 // session. Mercator has no session to it, so nothing can create a container
-// there: an hour after the launch was accepted no start has been observed, no
-// readiness has come due, and the machine holds none of the image, because
-// nothing was ever pulled onto it.
+// there: an hour after the launch was accepted no start has been observed and no
+// readiness has come due.
 //
-// The Rental beside it runs the same image and starts within the second, which is
-// what makes this an answer about the bootstrap rather than about the pull. Both
-// halves matter: a world that answered a start moment here would make a stranded
-// machine indistinguishable from a machine that came up, and a world that made it
-// hold the image would credit it with locality no agent ever fetched.
+// The Rental beside it runs the same image, starts within the second, and reports
+// itself ready, which is what makes this an answer about the bootstrap rather than
+// about the pull or about a world whose applications never speak. Both halves
+// matter: a world that answered a start moment here would make a stranded machine
+// indistinguishable from one that came up, and a world that delivered a readiness
+// report for a container that never existed would let the application's own
+// callback stand in for a launch nobody performed.
+//
+// What such a machine holds is not asserted here, and it is not an omission. It is
+// AddMachine that refuses to build capacity Mercator keeps out of a machine
+// nothing enrols on, so a stranded machine is always capacity this world records no
+// content for at all: see TestWorldRefusesCapacityItKeepsWithAnAgentThatNeverEnrols.
 func TestWorldStrandedCapacityNeverStartsTheWorkItWasBilledFor(t *testing.T) {
 	world := newLayeredWorld(t)
+	// The applications in this world do report they can do work, which is what
+	// gives the silence about the stranded one something to be measured against: a
+	// world whose workloads never speak has no readiness for any launch, and an
+	// assertion about this one would hold there for a reason that has nothing to do
+	// with the bootstrap.
+	world.ApplicationBecomesReady = true
 	stranded := &Machine{
 		Offer:        domain.OfferSnapshot{ID: "silent-vm", Kind: domain.OfferKindProvisionable, Lane: domain.LaneReusable},
 		NeverEnrolls: true,
@@ -192,13 +205,32 @@ func TestWorldStrandedCapacityNeverStartsTheWorkItWasBilledFor(t *testing.T) {
 	if started := worldStartedAt(t, world, "launch-silent-vm"); started != nil {
 		t.Fatalf("the stranded machine reported a start at %s, and nothing ever opened a session to it", started)
 	}
-	for _, report := range world.DueReadinessReports() {
-		if report.RunID == "run-silent-vm" {
-			t.Fatalf("a workload that never started reported itself ready: %+v", report)
-		}
+	ready := world.DueReadinessReports()
+	if len(ready) != 1 || ready[0].RunID != "run-rental-enrolled" {
+		t.Fatalf("the readiness due here is %+v, want the enrolled machine's workload and nothing else", ready)
 	}
-	if held := stranded.inventory(world.Clock().Now()); len(held.ImageDigests) > 0 || len(held.LayerDigests) > 0 {
-		t.Fatalf("the stranded machine holds %+v, and no agent was ever there to fetch it", held)
+}
+
+// TestWorldRefusesCapacityItKeepsWithAnAgentThatNeverEnrols is where this world
+// says that a stranded machine fetches nothing. Content is recorded only for
+// capacity that keeps what it runs, and Mercator keeps a machine through the agent
+// enrolled on it, so the two statements together are impossible: a world that
+// accepted the pair would have to answer whether a machine nothing ever opened a
+// session to got warm, and any answer it gave would be an answer about a machine
+// that cannot exist.
+//
+// The Rental beside it is the same statement with the bootstrap left out, so what
+// this refuses is the pair and not the kind.
+func TestWorldRefusesCapacityItKeepsWithAnAgentThatNeverEnrols(t *testing.T) {
+	world := newLayeredWorld(t)
+
+	err := world.AddMachine(&Machine{Offer: rentalOffer("rental-stranded"), NeverEnrolls: true})
+
+	if err == nil || !strings.Contains(err.Error(), "it holds capacity through that agent") {
+		t.Fatalf("adding a Rental whose agent never enrols gave %v, want a refusal naming the agent it is held through", err)
+	}
+	if err := world.AddMachine(&Machine{Offer: rentalOffer("rental-enrolled")}); err != nil {
+		t.Fatalf("add a Rental whose agent enrolled: %v", err)
 	}
 }
 
