@@ -3577,7 +3577,59 @@ complete because it works against a live provider.
     recognises look like a launch with half its identity missing, which is what
     `safety.owned_external_resources` exists to refuse. The Lab control plane runs
     the janitor after the Runs settle, for the same reason production does.
-
+- [x] 2026-07-27: Close phase 4. The whole verification was run on the amd64 Linux
+  workstation rather than the arm64 macOS laptop the phase 3 slices were built on,
+  and no test failed for a platform reason. What follows is the set of judgment
+  calls the phase made that a reader would otherwise have to reconstruct from
+  twelve slices of commit messages.
+  - The score weights are alive, and the class is what populates them. This was
+    the phase's stated debt: `SchedulingInput.Weights` reached production with
+    only `StartLatencyUSDPerSecond` set, to 0.0005 for the balanced objective, so
+    the reliability, uncertainty, and completion-latency terms were multiplied by
+    zero and phase 3 slice 9 deliberately declined to route a new answer through
+    them. The exchange rates are now stated by the ServiceClass, and the decision
+    records the weights it was scored at, so the score can be recomputed from the
+    record rather than trusted. `safety.score_is_reproducible_from_the_record` is
+    the rule, and the oracle derives the same score independently rather than by
+    calling the scheduler.
+  - A transfer's seconds may never come from launch history. This is the phase's
+    least obvious rule and the one most likely to be undone by a well-meaning
+    change. A duration is a byte count over a throughput, and the byte count
+    belongs to the launch rather than to the candidate: `CandidateIdentity` names
+    the machine and the image, and can name neither the bytes already resident nor
+    the Run's inputs. So `levelKeys` files and answers nothing for `image_fetch`,
+    `unpack`, or `artifact_fetch`, and `safety.prediction_states_its_provenance`
+    refuses a transfer answered from launches. Without that rule a host holding
+    every byte of a 40GB dataset was charged the full cold fetch out of history
+    and struck out on the latency bound.
+  - A wait is charged to whoever caused it. The maximum queue delay is a promise
+    about what Mercator does, so it is asked of the part Mercator caused; the
+    deadline is about when the answer stops being worth having, so it is asked of
+    the whole wait. Ordering still ages on the whole wait, because ordering is
+    about which work has gone longest without an answer rather than about who is
+    to blame. `domain.Wait` carries both numbers and the record states the
+    division.
+  - The idle tail is deliberately conservative. The unused remainder of a billing
+    increment is charged whole to the placement that forced Mercator to buy it,
+    and a later Run that uses part of that remainder is charged nothing. Splitting
+    it needs a model of what arrives next, and every substitute tried made a
+    longer Run cheaper than a shorter one. The error is in the safe direction, and
+    the alternative was charging the remainder to nobody.
+  - A declared field nothing reads is a defect this plan has deleted repeatedly,
+    so the ServiceClass declares only what has a reader. Priority, aging, maximum
+    queue delay, deadline, and backfill eligibility are on `domain.Admission` and
+    read by the queue. Maximum cost stays on `PlacementPolicy`, because a budget
+    is per Run rather than per class and a second copy would be two authorities
+    for one refusal. Group parallelism, interruption permission, and the
+    queue-on-warm preference each become a field in the slice that prices them.
+  - Three economics terms named in the phase goal are deliberately unpriced, each
+    for a stated reason rather than for want of time. Stopped-state storage needs a
+    next-arrival model. Preemption-risk pricing needs a hazard over the length of a
+    Run, and what the probability multiplies is the placement the work would move
+    to rather than this one. Warm-capacity opportunity cost would double count,
+    because an owned machine's shadow price already says its seconds are worth
+    something to somebody else. Reserved capacity is delivered as eligible service
+    classes rather than as a concept of its own, and is not deferred.
 
 ## Phase status
 
@@ -3586,7 +3638,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; the hierarchical estimator, affinity, stopped-state storage, preemption-risk pricing, and a production publisher for reclaimable capacity remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -4686,10 +4738,27 @@ refuses any Booking whose Run has no record, which is true of every seeded Booki
 by construction.
 
 The corpus is 59 regression Blueprints: 56 green and 3 target, beside two demo
-documents, one minimized case, and thirty two conformance Blueprints. The count is read off the
+documents, one minimized case, and thirty seven conformance Blueprints, all of
+them green. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.
+`internal/scenario/blueprint_test.go` asserts the three regression figures, so a
+Blueprint added without a classification fails the build rather than drifting the
+number quoted here.
+
+The three targets are the capabilities no simulated world performs yet.
+`enrolled-node-survives-its-first-run` needs an agent to bootstrap on provisioned
+capacity, which is phase 5. `queued-booking-deadline-expiry` needs
+`schedule_advancement`, which is a Booking expiring past its latest start and its
+Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
+publish host facts a machine then contradicts.
+
+The Lab registry holds forty four invariants, thirty seven safety and seven
+liveness. Every one carries a deliberate failing case, which
+`TestEveryDefaultInvariantHasADeliberatelyFailingCase` requires of the registry
+itself: an invariant nothing can make fail is not evidence, so one cannot be
+registered without the world that breaks it.
 
 ## What phase 2 does not yet do
 
@@ -4756,6 +4825,58 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 4 close-out
+
+Run on 2026-07-27 at `e9db9c9` in the `beng/prediction-and-service-classes`
+worktree, on an amd64 Linux workstation with Go 1.25.11 and Docker Engine 29.6.2,
+which is not the arm64 macOS the phase 3 slices were built on. Every command
+below was executed and its real outcome recorded. Nothing is quoted from an
+earlier run.
+
+`go build ./...` and `go vet ./...` both exit zero with no output.
+
+`go test ./...` exits zero across all 41 packages, 8 of which have no test files.
+The suite terminates. That matters, because an earlier slice on this branch
+recorded that `go test ./...` did not terminate: `internal/daemon` spun forever on
+a Run with no feasible offer, because `stepAdmit` reported progress while
+`recordDeferral` suppressed the repeated deferral and returned nil, so
+`AdvanceRun` looped on unchanged state re-scanning the event log. The queue slices
+that followed replaced that path, and `internal/daemon` now completes in 9.0s.
+The slowest packages are `internal/lab` at 16.2s, `internal/daemon` at 9.0s, and
+`internal/conformance` at 1.9s.
+
+`go test -race -count=1` over all 27 packages this phase touched, which is every
+package holding a file changed between `beng/artifact-locality` and this branch,
+exits zero. No data race is reported anywhere. `internal/lab` takes 237.9s under
+the race detector, `internal/cli` 31.7s, `internal/ociresolver` 16.4s,
+`internal/daemon` 15.9s, and `internal/orchestrator` 15.5s. The package list is
+derived from the diff rather than typed by hand, so a package this phase touched
+cannot be omitted by forgetting it.
+
+The corpus is 59 regression Blueprints, 56 green and 3 target, and 37 conformance
+Blueprints, all green. Those figures are asserted by
+`internal/scenario/blueprint_test.go` rather than counted by eye, and it passes.
+The three targets each name the capability no simulated world performs yet:
+`enrolled-node-survives-its-first-run` (agent bootstrap, phase 5),
+`queued-booking-deadline-expiry` (`schedule_advancement`), and
+`bad-host-facts-rejected-loudly`.
+
+The web console changed in this phase, so its checks were run too. In `web/app`,
+`bun run typecheck` is clean under `tsc --noEmit`, `bun run test` passes 17 tests
+across 6 files under vitest 4.1.10, and `bun run build` produces the three
+artifacts into `web/static`.
+
+Two limits on what this evidence covers, stated rather than left to be inferred.
+The live half of the phase ran against a real local Docker daemon, a real
+`registry:2` container, and a real MinIO container, so the node, disk, registry,
+artifact-replication, and janitor-sweep paths were exercised against real
+software. No marketplace was contacted: this host holds no Vast, Shadeform, or
+RunPod credential, so the claim that a provider's own identifier recurs across
+listings, which is what the prediction key rests on, is held by unit cases against
+recorded response shapes and by the Lab, and by nothing live. And
+`TestRegistryResolverAgreesWithDockerAboutAPublicImage` still skips, because
+Docker Hub rate-limits this host.
 
 ### Phase 4 replanning by explicit policy
 

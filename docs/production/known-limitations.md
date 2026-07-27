@@ -23,18 +23,10 @@ limits.
 
 ## Capacity Reuse
 
-- Every current backend is in the ephemeral lane. Docker, RunPod, Shadeform, and
-  Vast each create capacity for one workload and destroy it afterwards, so no
-  machine survives a Run and nothing is warm for the next one. Reusable capacity
-  needs the Mercator node runtime, which is not implemented
-  ([#155](https://github.com/benngarcia/mercator/issues/155) phase 2).
 - An ephemeral execution still commits a Booking against a single-use Rental
   identity. Placement makes that binding unqueueable and records the honest
   `launch_ephemeral` disposition, but the Booking record type is shared with
   reusable placements, so a reader of the schema alone cannot tell them apart.
-- Rental Schedules exist in the domain model and the console, but nothing
-  populates them across Runs yet: queueing behind a running Booking is a target
-  scenario, not shipped behavior.
 - Reuse works only on nodes an operator enrolled by hand. Provisioned capacity
   arrives with no agent on it, so renting a machine still produces one-shot
   execution. Bootstrapping the agent through a provider is
@@ -42,27 +34,82 @@ limits.
 - Enrolling a node is a manual two-step: `POST /v1/nodes` for the bootstrap,
   then run `mercator-node` with it. There is no CLI command and no quickstart
   step.
-- A node's price is the shadow price configured at invitation, and nothing else.
-  Committed billing intervals, idle-tail expectation, and warm-capacity
-  opportunity cost are not modelled, so a node's cost in a Booking Decision is
-  a flat rate rather than an economic estimate.
-- A node runs one workload at a time and Rental Schedules are not populated, so
-  a second Run arriving while a node is busy provisions elsewhere instead of
-  queueing behind it.
-- Nothing resolves an image's layer list in production, so Mercator cannot tell
-  a warm candidate from a cold one on a real deployment. Every candidate's
-  transfer estimate is recorded as unknown, which leaves the comparison
-  unaffected and understates absolute start latency. Registry-backed manifest
-  resolution is the next slice
-  ([#125](https://github.com/benngarcia/mercator/issues/125) is the related
-  credential work).
-- The Docker adapter can enumerate what its daemon holds and does not, so a
-  Docker offer reports a silent inventory rather than its real content.
+- A node runs one workload at a time. A second Run arriving while a node is busy
+  queues behind its Booking rather than provisioning elsewhere, which is the
+  Rental Schedule working, but the node still executes them one after another.
+- Nothing enforces `max_runtime_seconds`. The node agent passes it to Docker as
+  `--stop-timeout`, which governs how long a stop waits before killing, not how
+  long a container may run. A workload that never exits runs until something
+  else stops it, and it holds its machine's Rental Schedule slot while it does.
+  Every overrun rule in the scheduler exists for that world and none of them
+  terminates anything.
+- The local Docker adapter publishes `RatePerSecondUSD: 0` with the price marked
+  known, which is the one production publisher of free capacity left. It makes a
+  local machine unconditionally the cheapest candidate. Both honest repairs, a
+  configured shadow price on the connection or an unpriced offer a Run must opt
+  into, change where every local Run lands.
 - A Run placed on a node that then goes quiet stays open indefinitely. The node
   stops being offered for new work, but the Run already on it is never
   adjudicated: nothing re-places it and nothing fails it. Adjudicating a lost
   node's Bookings needs a declared grace window and restart policy, which is
   replanning work ([#163](https://github.com/benngarcia/mercator/issues/163)).
+
+## Prediction And Scheduling
+
+- The prediction key has never been tested against a live marketplace. The whole
+  hierarchical estimator rests on a provider's own identifier for a machine shape
+  recurring across listings, and that claim is held by unit cases against recorded
+  Vast and Shadeform response shapes and by the Lab, not by a real account. This
+  host holds no Vast, Shadeform, or RunPod credential. If a provider mints a fresh
+  identifier per listing, every candidate falls to the region rung or the global
+  prior and the exact-candidate level is dead weight. Check the recorded fallback
+  level on real decisions before trusting a p50.
+- Nothing production-side has ever populated launch history for the three
+  transfer stages, and by design nothing will: `image_fetch`, `unpack`, and
+  `artifact_fetch` are priced from missing bytes over a measured path rather than
+  answered from history, because a duration keyed on the candidate cannot know
+  what bytes that candidate is missing. A transfer answered from history is a
+  Lab invariant violation. The consequence for operators is that transfer
+  estimates are only as good as the published path throughput, and an unmeasured
+  path falls back to a stated assumption.
+- Predicted-versus-actual is recorded but nothing calibrates on it. No feedback
+  loop adjusts a prior that is consistently wrong, so a systematically optimistic
+  global prior stays optimistic until somebody reads the Run Bundles. Calibration
+  is phase 6.
+- Soft and hard affinity are not implemented. The phase scoped a thin dependency
+  model and delivered artifact dependencies, blocked-until-ready, group
+  parallelism, queueing, interruptibility, deadline, and service class. Affinity
+  has no field, no scheduler term, and no scenario, so a Run cannot ask to land
+  near or away from anything.
+- Three capacity-economics terms are deliberately unpriced, so a Booking
+  Decision's cost is an underestimate in known directions. Stopped-state storage
+  is not charged, so a machine kept stopped looks free. Preemption risk is not
+  priced into the score; it is expressed only as a hard refusal when a class
+  forbids interruption on capacity the provider may reclaim. Warm-capacity
+  opportunity cost is folded into the shadow price rather than modelled
+  separately.
+- The idle tail is charged whole to the placement that forced Mercator to buy the
+  billing increment, and a later Run that uses part of that remainder is charged
+  nothing. A short Run that triggers a purchase therefore looks expensive and its
+  successors look cheap. The error is deliberate and in the safe direction.
+- The availability window is decided once, at placement, against the runtime
+  Mercator enforces. A Booking queued behind another one is projected from where
+  that predecessor sits at that moment, so a predecessor that overruns can push a
+  queued Booking's end past a window that was clear when it was admitted. Nothing
+  reconciles that afterwards.
+- A Run that no machine in the fleet can ever hold stays queued until its
+  deadline refuses it, rather than being refused when it exceeds its class's
+  maximum queue delay. What admission should do at that bound is an unmade
+  refusal-policy decision.
+- The operator API silently drops an unknown `objective` field. A caller who kept
+  sending the retired `fastest_start` after the ServiceClass migration is scored
+  as `standard` with nothing in the record saying their request was reinterpreted.
+  The Blueprint loader refuses the retired vocabulary by name; the HTTP door does
+  not.
+- Two rules of the orphan-adoption policy are held only by package tests, not by
+  the scenario corpus: that the janitor records its decision before acting on it,
+  and that it releases the slot of capacity whose provider cannot destroy it. A
+  refactor that undoes either leaves the whole corpus green.
 
 ## Adapters And Workloads
 
