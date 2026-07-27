@@ -3,6 +3,7 @@ package domain
 import (
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -173,29 +174,47 @@ func (candidate CandidateDecision) Standing() FleetStanding {
 }
 
 // FleetVerdict is what this decision said about the fleet: every machine it
-// weighed, and what each of them was struck out for. It answers "has the fleet
+// weighed, and what each of them said about this Run. It answers "has the fleet
 // said anything different", which is the only reason a Run still waiting for the
 // same thing needs its evidence recorded again.
 //
-// It is the machines and the refusals and nothing else. Every number beside them
-// moves on its own, so a decision compared whole would be recorded on every tick
-// of the sweep: a projected start a minute nearer than it was is the same answer
-// about the same fleet. A machine that arrived, a machine that went away, or a
-// machine struck out for something it was not struck out for before is a different
-// answer, and each of those is a fact the laws that read Booking Decisions exist to
+// The refusals alone were not enough, and the version of this that compared only
+// them left the audit hole it was written to close. Every law about Placement is
+// stated over recorded decisions, and the ones about locality read no refusal at
+// all: what a machine holds is priced rather than refused, on purpose, so a
+// candidate whose locality went from known to a silence produced a byte-identical
+// list of refusals and the decision that broke the law was never appended. So the
+// verdict is what each machine was struck out for, what it was found holding, and
+// what every answer it gave was worth, which together are the evidence those laws
 // read.
+//
+// The numbers beside them are still left out, because they move on their own and a
+// decision compared whole would be recorded on every tick of the sweep: a
+// projected start a minute nearer than it was is the same answer about the same
+// fleet. What is here changes when the fleet does.
 func (decision BookingDecision) FleetVerdict() string {
 	verdicts := make([]string, 0, len(decision.Candidates))
 	for _, candidate := range decision.Candidates {
-		refusals := make([]string, 0, len(candidate.Rejections))
-		for _, refusal := range candidate.Rejections {
-			refusals = append(refusals, refusal.Code+" at "+refusal.Path)
-		}
-		slices.Sort(refusals)
-		verdicts = append(verdicts, candidate.OfferSnapshotID+": "+strings.Join(refusals, ", "))
+		verdicts = append(verdicts, candidate.verdict())
 	}
 	slices.Sort(verdicts)
 	return strings.Join(verdicts, "; ")
+}
+
+// verdict is one machine's whole answer about one Run, as the fleet's own account
+// of it: the refusals it was struck out for, the locality it was found at, and the
+// confidence every answer it published was scored at.
+func (candidate CandidateDecision) verdict() string {
+	said := make([]string, 0, len(candidate.Rejections)+len(candidate.Confidences)+1)
+	for _, refusal := range candidate.Rejections {
+		said = append(said, refusal.Code+" at "+refusal.Path)
+	}
+	said = append(said, "holds "+string(candidate.ImageLocality))
+	for _, confidence := range candidate.Confidences {
+		said = append(said, confidence.Answer+" worth "+strconv.FormatFloat(confidence.Value, 'f', -1, 64))
+	}
+	slices.Sort(said)
+	return candidate.OfferSnapshotID + ": " + strings.Join(said, ", ")
 }
 
 // Preferred reports whether this candidate is the better placement. It is a
