@@ -4587,13 +4587,14 @@ the launch.
 
 On 2026-07-27, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
 native Docker Engine 29.6.2 on Ubuntu 26.04, against
-`beng/prediction-and-service-classes` at the four commits above `515f995`.
+`beng/prediction-and-service-classes` at the eight commits above `515f995`.
 `go build ./...`, `go vet ./...` and `go test ./... -count=1` all clean over 36
 packages, and `go test -race -count=1` clean over `internal/domain`,
-`internal/scheduler`, `internal/node`, `internal/scenario/...`, `internal/httpapi`,
-`internal/storage/sqlite`, `internal/lab` and `internal/daemon`. `cd web/app && bun
-run typecheck && bun run test && bun run build` clean, because the contract was
-regenerated from `openapi.json` rather than hand edited.
+`internal/scheduler`, `internal/scenario/...`, `internal/node`, `internal/httpapi`,
+`internal/storage/sqlite`, `internal/daemon` and `internal/lab`, `internal/lab`
+taking 216s of it. `cd web/app && bun run typecheck && bun run test && bun run
+build` clean, because the contract was regenerated from `openapi.json` rather than
+hand edited.
 
 The root corpus is 59 Blueprints, 56 of them green, with 32 conformance fixtures. Two
 Blueprints were added and no fixture moved classification.
@@ -4680,9 +4681,9 @@ reproduce here and was left alone.
 
 ```text
 go build ./... && go vet ./... && go test ./... -count=1
-go test -race -count=1 ./internal/domain ./internal/scheduler ./internal/node \
-  ./internal/scenario/... ./internal/httpapi ./internal/storage/sqlite
-go test -race -count=1 -timeout 900s ./internal/lab ./internal/daemon
+go test -race -count=1 -timeout 900s ./internal/domain ./internal/scheduler \
+  ./internal/scenario/... ./internal/node ./internal/httpapi \
+  ./internal/storage/sqlite ./internal/daemon ./internal/lab
 MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
 cd web/app && bun run typecheck && bun run test && bun run build
 ```

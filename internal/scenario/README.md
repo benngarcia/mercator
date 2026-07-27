@@ -303,6 +303,32 @@ taking one back, as `{"rental": "rental-spot", "at": "5m"}`, and it may only nam
 Rental this world declared reclaimable: a world reclaiming anything else would be
 describing a provider breaking its own contract. Whatever was running there is
 gone, and Mercator learns of it the way it does in production, by looking.
+A machine's `billing` says how it is charged rather than how much: `setup_fee_usd`
+to hand it over, `minimum_charge` for the shortest allocation its publisher sells,
+and `granularity` for the block of time it bills in. A machine sold by the hour
+charges the hour for twenty minutes of use, and the part of the block nothing uses
+is charged to the placement that bought it. Stating no granularity is a publisher
+that bills continuously.
+
+A Rental's `terms` are what it was sold on beyond its price, every duration
+measured from the world's own start. `committed_for` is how long Mercator already
+owes rent whatever it does with the machine, which is what makes a Run that fits
+inside the interval cheap and a Run that overruns it expensive.
+`eligible_service_classes` is the work the machine is held for, and every other
+class is refused it with `CLASS_NOT_ELIGIBLE` rather than priced on it.
+`available_for` is how long the capacity stays Mercator's, and work Mercator would
+let hold the machine past that moment is refused with
+`AVAILABILITY_WINDOW_CLOSES` before it starts. A marketplace listing carries none of
+them, because nothing is owed on a machine that does not exist yet.
+
+A candidate expectation states `cost` to pin what a machine costs and which parts
+of a sale that price is made of: `usd` for the total, `terms` by the name the
+record files each part under (`setup_fee`, `committed_rent`, `keep_alive`,
+`idle_tail`), `committed_seconds` for how much of an already-owed interval the
+placement spends, and `unpriced` for a machine nobody quoted. A term nothing
+charges is refused at load, because the record carries only the terms it charged
+and a fixture naming another would read the absence as agreement.
+
 `world.rental_schedules` belongs to Mercator and references Rentals by ID. A nonempty schedule has a positive version, exactly one running
 Booking, and at most four ordered queued Bookings.
 
