@@ -3581,7 +3581,18 @@ against MinIO containers and busybox writes of the native engine. The full suite
 green three times, `internal/daemon` is green over 25 runs of the package, and the
 race detector is green over the packages this pass touched, `internal/lab` at 77s
 among them. The root corpus is unchanged at 45 Blueprints, 42 of them green, and no
-fixture moved: the one that changed gained assertions and lost none.
+fixture moved: the one that changed gained assertions and lost none. The console's
+generated contract was regenerated, because it is derived from `openapi.json` and the
+commit that changed that description had left it behind, so the two clients carried
+two wordings of one field.
+
+One failure in this pass was somebody else's. `TestRegistryResolverAgreesWithDockerAboutAPublicImage`
+failed once with `toomanyrequests: You have reached your unauthenticated pull rate
+limit` from Docker Hub, in a `go test ./...` between two green ones, and passed again
+immediately. It is written down rather than folded in: the case compares Mercator's
+resolver against `docker manifest inspect` over the public registry, so it depends on
+an allowance this host shares with everything else that pulls, and a case that cannot
+tell that apart from a resolver defect is its own thing to fix.
 
 Named and not fixed here. The operator console's event stream is still the same shape
 of long-lived read as a node session, and `Runtime.Shutdown` still waits for one.
@@ -3593,6 +3604,7 @@ go test -race -count=1 ./internal/prediction ./internal/scheduler ./internal/dom
   ./internal/lab ./internal/scenario/... ./internal/node ./internal/nodeagent \
   ./internal/daemon ./internal/orchestrator
 go test ./internal/daemon -count=25
+cd web/app && bun run generate:api && bun run typecheck && bun run test
 ```
 
 ### Phase 4 three defects two reviewers found under the transfer-path pass
