@@ -303,6 +303,22 @@ func (policy Admission) BoundAlreadyBroken(queuedSeconds float64) string {
 	}
 }
 
+// DeadlineOnlyAlreadyBroken names the bound a wait the caller imposed on itself
+// has gone past, which is the deadline and never the queue delay. A family already
+// as wide as it declared is the whole of that case, and
+// AdmissionDeferral.SelfImposed is where the difference is stated.
+//
+// It is a second entry point rather than a flag on the one above so that each door
+// reads the bound it means. A caller's own declaration cannot break Mercator's
+// promise about waiting for capacity, and the answer this class states a moment
+// for stops being worth having whoever caused the delay.
+func (policy Admission) DeadlineOnlyAlreadyBroken(queuedSeconds float64) string {
+	if policy.DeadlinePassed(queuedSeconds) {
+		return RefusedDeadlineUnreachable
+	}
+	return ""
+}
+
 // SelectionReason names the class whose exchange rates ranked the candidates, so
 // the decision record says what it was scored for. A Run that asked for an
 // interactive start and got the costliest machine is explained by its own class,

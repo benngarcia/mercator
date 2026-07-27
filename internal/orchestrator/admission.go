@@ -362,6 +362,25 @@ func (run queuePosition) deferral(reason string, behind []domain.QueuedAhead) do
 	}
 }
 
+// boundAlreadyBroken is the promise this wait has already gone past, and which of
+// the two bounds its class states this wait is held to at all.
+//
+// A wait the caller's own declaration is holding is charged the deadline and never
+// the queue delay, which domain.AdmissionDeferral.SelfImposed is the statement of.
+// Charging a family's declared width against the class's queue delay closed the
+// later members of every family narrower than its class's patience: the eight
+// members of a family three wide taking half an hour each reach a third wave an
+// hour into the sweep, and each of those members was refused QUEUE_DELAY_EXCEEDED
+// while the machine that would have run it stood idle. Mercator had kept nobody
+// waiting there. The caller had said so itself, and the record already reads that
+// wait as asserting nothing about capacity.
+func (run queuePosition) boundAlreadyBroken(deferral domain.AdmissionDeferral) string {
+	if deferral.SelfImposed() {
+		return run.policy.DeadlineOnlyAlreadyBroken(run.queued)
+	}
+	return run.policy.BoundAlreadyBroken(run.queued)
+}
+
 // deferOrRefuse is what admission does with a Run it will not admit now. It
 // waits, unless one of the two bounds its class states about waiting has gone by,
 // in which case waiting is a promise the record says is already broken and the Run
@@ -380,10 +399,10 @@ func (run queuePosition) deferral(reason string, behind []domain.QueuedAhead) do
 // there as well, because it is a different question: whether the answer is still
 // worth producing at all.
 //
-// Which of the two a refused wait is named for is Admission.BoundAlreadyBroken's
-// answer, and it is the same answer stepAdmit's own door gets. The projected miss
-// below is the one thing only this door can see: a wait still inside both bounds,
-// which the record says cannot end in time.
+// Which of the two a refused wait is named for is boundAlreadyBroken's answer, and
+// for every wait about capacity it is the same answer stepAdmit's own door gets.
+// The projected miss below is the one thing only this door can see: a wait still
+// inside both bounds, which the record says cannot end in time.
 func (o *Orchestrator) deferOrRefuse(
 	ctx context.Context,
 	workspaceID, runID string,
@@ -392,7 +411,7 @@ func (o *Orchestrator) deferOrRefuse(
 	run queuePosition,
 	answer admissionAnswer,
 ) error {
-	if reason := run.policy.BoundAlreadyBroken(run.queued); reason != "" {
+	if reason := run.boundAlreadyBroken(answer.deferral); reason != "" {
 		answer.deferral.Reason = reason
 		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)
 	}

@@ -519,6 +519,38 @@ func TestARefusedQueueDelayIsNotStarvationWhenNothingEverHeldIt(t *testing.T) {
 	}
 }
 
+// TestAWaitItsOwnFamilyHoldsIsNoStarvation is the exemption the first half of this
+// law carries, stated on the record the projection holds rather than on the log. A
+// batch member is still queued an hour and ten minutes into a wait its class bounds
+// at an hour, and the last thing admission said about it is that its own family is
+// already as wide as its caller declared.
+//
+// It is the exemption the second half already carried, for the same reason: the
+// width counts members rather than machines, so no ordering could have ended the
+// wait and a fleet standing idle beside it changes nothing. The paired failure is in
+// TestInvariantsFailOnBrokenExecutions, where the identical record waits on
+// NO_FEASIBLE_OFFER instead and this law reports it.
+func TestAWaitItsOwnFamilyHoldsIsNoStarvation(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	queuedSince := now.Add(-70 * time.Minute)
+	observation := admissionObservation(now, nil, nil)
+	observation.Runs = []domain.RunRecord{{
+		ID:           "run-member-003",
+		Phase:        "queued",
+		ServiceClass: domain.ClassBatch,
+		QueuedSince:  &queuedSince,
+		Admission: &domain.AdmissionDeferral{
+			Reason: domain.DeferredGroupAtParallelism,
+			Class:  domain.ClassBatch,
+			Behind: []domain.QueuedAhead{{RunID: "run-member-002"}},
+		},
+	}}
+
+	if err := agingPreventsStarvation(observation); err != nil {
+		t.Fatalf("a member held by the width its own caller declared was read as Mercator starving it: %v", err)
+	}
+}
+
 // TestAReplacedRunIsHeldToTheDeadlineOfItsWholeWait is the deliberate failure of
 // safety.class_bounds_honoured on the shape a failed launch produces, and it is the
 // record the third law in this file could not see.

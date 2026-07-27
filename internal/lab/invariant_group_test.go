@@ -76,6 +76,85 @@ func TestAFamilyOfEightRunsThreeAtATime(t *testing.T) {
 	}
 }
 
+// TestAFamilyNarrowerThanItsClassPatienceStillDrains is the wait a caller's own
+// declaration causes, held to the bound that belongs to the caller and not to the
+// one Mercator states about capacity. A family of three one wide, forty minutes a
+// member, takes two hours to drain, and its members declared a class that says
+// Mercator may keep work waiting an hour. So the third member is held by its own
+// siblings for longer than that bound, and it waits and then runs.
+//
+// The sweep is what makes this an execution rather than a moment. Admission refuses
+// a wait past its bound only when it is asked again while the wait is still on, and
+// nothing in the corpus reaches that: the driver advances to the next thing the
+// world does, which is always the moment room appears, so a held member is asked
+// exactly when its family makes way for it. Advancing to the middle of a member's
+// runtime is the minute sweep production runs, and it is the only way this tree can
+// ask a held Run a question at a moment nothing else is happening.
+func TestAFamilyNarrowerThanItsClassPatienceStillDrains(t *testing.T) {
+	execution := openConformanceExecution(t, "a-family-narrower-than-its-class-patience-still-drains")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	// Forty-five minutes in, the first member is over and the second holds the
+	// family's one place. The third has waited three quarters of an hour, which is
+	// inside the hour its class states.
+	if _, err := execution.Drive(context.Background(), Advance(45*time.Minute)); err != nil {
+		t.Fatalf("drive the family to its second member: %v", err)
+	}
+	held := deferralRecord(t, execution, memberRunID(3))
+	if held.Reason != domain.DeferredGroupAtParallelism {
+		t.Fatalf("the third member waits on %q, and what holds it is the width its caller declared", held.Reason)
+	}
+	// Seventy minutes in, it has waited past the whole queue delay its class states,
+	// and this is the sweep that used to close it as a failed Run.
+	checkpoint, err := execution.Drive(context.Background(), Advance(25*time.Minute))
+	if err != nil {
+		t.Fatalf("drive the family past its class's queue delay: %v", err)
+	}
+	record := projectedRun(t, execution, memberRunID(3))
+	if record.QueuedSince == nil {
+		t.Fatalf("the third member is %q and the record says nothing about it waiting", record.Phase)
+	}
+	waited := checkpoint.Now.Sub(record.QueuedSince.UTC()).Seconds()
+	bound := record.ServiceClass.Admission().MaxQueueDelaySeconds
+	if waited <= bound {
+		t.Fatalf("the third member had waited %.0fs against the %.0fs its class allows, and this case is about a wait longer than that", waited, bound)
+	}
+	if record.Closed {
+		t.Fatalf("the third member is %q with outcome %q after waiting %.0fs, and what kept it waiting is its own family rather than any promise Mercator made",
+			record.Phase, record.Outcome, waited)
+	}
+
+	if _, err := execution.DriveToCompletion(context.Background()); err != nil {
+		t.Fatalf("drive the execution: %v", err)
+	}
+
+	// Every member ran, one at a time, and the second machine was never taken:
+	// the family was held by its own width throughout and by nothing else.
+	for index := 1; index <= 3; index++ {
+		member := memberRunID(index)
+		record := projectedRun(t, execution, member)
+		if record.Outcome != domain.RunOutcomeSucceeded {
+			t.Fatalf("member %q ended %q in phase %q, and a family narrower than its class's patience still runs", member, record.Outcome, record.Phase)
+		}
+	}
+	if peak := peakConcurrentLaunches(t, execution); peak != 1 {
+		t.Fatalf("the ledger says %d members held capacity at once, and the family declared one", peak)
+	}
+	if launched := launchedOffers(t, execution); slices.Contains(launched, "rental-2") {
+		t.Fatalf("the family ran on %v, and the second machine is the capacity it was not allowed to use", launched)
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("check invariants: %v", err)
+	}
+	if result := invariantResultByID(t, latestInvariantResults(execution.invariants), "safety.group_parallelism_respected"); result.Status != InvariantPassed {
+		t.Fatalf("the group law reports %+v", result)
+	}
+}
+
 // TestAPreemptibleRunIsTheOneInterrupted is the world taking capacity back, which
 // is the first thing in this corpus that happens to Mercator rather than because of
 // it. Two Runs differ in one thing, what their class says about being interrupted,

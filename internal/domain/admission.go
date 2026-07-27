@@ -211,10 +211,30 @@ func (answer FleetAnswer) Reason() string {
 // drifted apart in both directions at once: one of them called a fleet that
 // published nothing an ordinary wait, and the other could not see the ask at all.
 func (deferral AdmissionDeferral) HoldsNoQueue() bool {
-	if deferral.Reason == DeferredGroupAtParallelism {
+	if deferral.SelfImposed() {
 		return true
 	}
 	return deferral.Fleet != nil && deferral.Fleet.HoldsNothing()
+}
+
+// SelfImposed reports whether this wait is one the caller's own declaration is
+// holding rather than one Mercator's queue or Mercator's fleet is. A family
+// already as wide as its caller said may run is the only one: every other wait
+// here is Mercator failing to find the Run a machine, and this one is Mercator
+// doing exactly what it was asked.
+//
+// The difference decides which of the class's two bounds may end the wait, which
+// is why it is a rule of its own rather than a comparison at each door. The
+// maximum queue delay is Mercator's promise about how long it may keep work
+// waiting for capacity, so charging a caller's own declaration against it refused
+// the later members of every family narrower than its class's patience: the
+// record then said Mercator broke a promise, about a wait the caller asked for,
+// while a machine that could have taken the work stood idle. The deadline is a
+// different question and still applies, because it asks whether the answer is
+// worth producing at all and an answer nobody is waiting for is worth nothing
+// however the waiting was caused.
+func (deferral AdmissionDeferral) SelfImposed() bool {
+	return deferral.Reason == DeferredGroupAtParallelism
 }
 
 // QueuedAhead is one piece of work a deferred Run is waiting behind: either a

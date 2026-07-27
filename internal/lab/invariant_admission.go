@@ -80,9 +80,21 @@ func agingPreventsStarvation(observation InvariantObservation) error {
 // what it is about is the state a Run is in now, and the projection is where
 // Mercator says what that is. A Run that left the queue at any point is not
 // starving whatever happened to it since.
+//
+// A wait the caller's own declaration is holding is exempt, which is the exemption
+// noRefusalYoungerWorkOvertook already carries below and for the same reason: a
+// family's width counts members rather than machines, so no ordering could have
+// ended the wait and a fleet standing idle beside it changes nothing. Stating it in
+// one half and not the other had the two halves demanding opposite things of one
+// record. This half could only be satisfied by refusing the held member at the
+// bound, and that refusal closed the later members of every family narrower than
+// its class's patience as failed Runs, on a promise Mercator had not broken. Both
+// halves now say what the other says: a caller whose declared width outlasts its
+// own class's patience has contradicted itself, and that is not Mercator starving
+// anybody.
 func noWaitPastItsClassBound(observation InvariantObservation) error {
 	for _, run := range observation.Runs {
-		if run.Closed || run.Admission == nil || run.QueuedSince == nil {
+		if run.Closed || run.Admission == nil || run.QueuedSince == nil || run.Admission.SelfImposed() {
 			continue
 		}
 		waited := observation.Now.Sub(run.QueuedSince.UTC())
