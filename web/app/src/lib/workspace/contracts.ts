@@ -220,10 +220,16 @@ export const OfferSnapshot = Schema.Struct({
     available: Schema.Boolean,
     confidence: Schema.Number,
   }),
-  reliability: Schema.Struct({
-    start_failures: Schema.optionalKey(StatedRate),
-    interruptions: Schema.optionalKey(StatedRate),
-  }),
+  // Absent when this machine's publisher has measured nothing, which is every
+  // provider in this tree today. No history and a history of zeroes are
+  // different answers, so the whole object is an optional key rather than a
+  // required one holding two absent rates.
+  reliability: Schema.optionalKey(
+    Schema.Struct({
+      start_failures: Schema.optionalKey(StatedRate),
+      interruptions: Schema.optionalKey(StatedRate),
+    }),
+  ),
 });
 
 const Violation = Schema.Struct({

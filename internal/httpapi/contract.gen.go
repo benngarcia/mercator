@@ -611,7 +611,7 @@ type CandidateDecision struct {
 	OfferSnapshotId string                         `json:"offer_snapshot_id"`
 	Rejections      []Violation                    `json:"rejections,omitempty"`
 
-	// Reliability The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero.
+	// Reliability The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. The whole history is absent when a publisher has measured nothing, which is every provider in this tree today, so a reader must treat no history and a history of zeroes as different answers.
 	Reliability ReliabilityEvidence `json:"reliability,omitempty"`
 
 	// RentalSchedule One Rental Schedule as a placement decision read it: the version that answered, the Booking holding the Rental, the Bookings already waiting in front of this Run, and the wait that projects from them. A schedule moves, so the wait a Run was priced was read from one version of it at one moment, and a decision that recorded only the seconds leaves nobody able to retrace them.
@@ -1145,7 +1145,7 @@ type QueueSnapshot struct {
 // QueuedAhead defines model for QueuedAhead.
 type QueuedAhead = domain.QueuedAhead
 
-// ReliabilityEvidence The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero.
+// ReliabilityEvidence The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. The whole history is absent when a publisher has measured nothing, which is every provider in this tree today, so a reader must treat no history and a history of zeroes as different answers.
 type ReliabilityEvidence struct {
 	// Interruptions One share of a machine's history somebody measured, and how much the publisher of that measurement stands behind it. The confidence is what says the measurement happened at all: a rate of zero stated at a confidence somebody owns is a machine measured and never seen to fail, and a rate nobody stands behind is silence.
 	Interruptions StatedRate `json:"interruptions,omitempty"`

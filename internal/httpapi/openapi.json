@@ -4420,7 +4420,7 @@
       },
       "ReliabilityEvidence": {
         "type": "object",
-        "description": "The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero.",
+        "description": "The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. The whole history is absent when a publisher has measured nothing, which is every provider in this tree today, so a reader must treat no history and a history of zeroes as different answers.",
         "properties": {
           "start_failures": {
             "$ref": "#/components/schemas/StatedRate",
@@ -4450,8 +4450,7 @@
           "pricing",
           "images",
           "artifacts",
-          "capacity",
-          "reliability"
+          "capacity"
         ],
         "properties": {
           "id": {

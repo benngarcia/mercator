@@ -1159,7 +1159,7 @@ export interface components {
             /** Format: double */
             seconds?: number;
         };
-        /** @description The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. */
+        /** @description The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero. The whole history is absent when a publisher has measured nothing, which is every provider in this tree today, so a reader must treat no history and a history of zeroes as different answers. */
         ReliabilityEvidence: {
             /** @description How often this machine refuses to start the work it is given. Absent means nobody has measured that, which is what every provider in this tree publishes today. */
             start_failures?: components["schemas"]["StatedRate"];
@@ -1204,7 +1204,7 @@ export interface components {
             capacity: components["schemas"]["CapacityEvidence"];
             /** @description Whether the provider of this capacity says it may take the machine back while Mercator is still using it, which is the term a spot ask and an interruptible listing are sold on. It is stated by the backend that sold the capacity rather than inferred from the interruption rate in reliability: a rate is how often a machine has been seen to fail, and work that may not be interrupted has to be refused on what the capacity is. A Run whose service class does not permit interruption is struck out here with INTERRUPTION_NOT_PERMITTED, because nothing Mercator holds survives a machine being reclaimed and there is no decision left once the provider says so. */
             reclaimable?: boolean;
-            reliability: components["schemas"]["ReliabilityEvidence"];
+            reliability?: components["schemas"]["ReliabilityEvidence"];
         };
         CollectionReport: {
             connections_queried?: string[];

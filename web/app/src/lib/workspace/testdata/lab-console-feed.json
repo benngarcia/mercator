@@ -1,0 +1,1674 @@
+[
+  {
+    "event": "offers_replaced",
+    "data": {
+      "workspace_id": "ws_lab",
+      "revision": "sha256:78af1c31432df19d4fcff7475aa97f33b0b0922b763ec7d78ddb35d7bd54a11d",
+      "observed_at": "2026-07-27T18:20:24.303901465Z",
+      "offers": [
+        {
+          "id": "fresh-4090",
+          "connection_id": "connection:lab",
+          "adapter_type": "simcloud",
+          "kind": "provisionable",
+          "lane": "reusable",
+          "native_ref": "fresh-4090",
+          "observed_at": "2030-01-01T00:00:00Z",
+          "expires_at": "2030-01-01T00:05:00Z",
+          "platform": {
+            "os": "linux",
+            "architecture": "amd64"
+          },
+          "resources": {
+            "cpu_millis": 8000,
+            "memory_bytes": 32000000000,
+            "ephemeral_disk_bytes": 200000000000,
+            "ephemeral_disk_known": true
+          },
+          "capabilities": {
+            "container": {
+              "max_containers": 1,
+              "supports_digest_refs": true,
+              "supports_entrypoint_override": true,
+              "max_environment_bytes": 32768
+            },
+            "lifecycle": {
+              "idempotent_launch": "launch_key",
+              "list_owned": true,
+              "provider_ttl": false,
+              "cancel_queued": false
+            },
+            "resources": {},
+            "network": {
+              "inbound": "none",
+              "protocols": [
+                "tcp"
+              ],
+              "public_ipv4": false
+            },
+            "pricing": {
+              "known": true
+            },
+            "observability": {
+              "logs": "",
+              "metrics": "",
+              "shell": ""
+            }
+          },
+          "network": {},
+          "pricing": {
+            "currency": "USD",
+            "setup_fee_usd": 0,
+            "rate_per_second_usd": 0.0005555555555555556,
+            "minimum_charge_seconds": 0,
+            "granularity_seconds": 0,
+            "known": true
+          },
+          "provisioning": {
+            "p90": 480,
+            "expected": 240,
+            "source": "lab-world"
+          },
+          "images": {
+            "known": false
+          },
+          "artifacts": {
+            "known": false
+          },
+          "capacity": {
+            "available": true,
+            "confidence": 1
+          }
+        },
+        {
+          "id": "rental-warm",
+          "rental_id": "rental-warm",
+          "machine_id": "node-1",
+          "connection_id": "connection:lab",
+          "adapter_type": "lab",
+          "kind": "standing",
+          "lane": "reusable",
+          "native_ref": "rental-warm",
+          "observed_at": "2030-01-01T00:00:00Z",
+          "expires_at": "2030-01-01T00:05:00Z",
+          "platform": {
+            "os": "linux",
+            "architecture": "amd64"
+          },
+          "resources": {
+            "cpu_millis": 8000,
+            "memory_bytes": 32000000000,
+            "ephemeral_disk_bytes": 170000000000,
+            "ephemeral_disk_known": true
+          },
+          "capabilities": {
+            "container": {
+              "max_containers": 1,
+              "supports_digest_refs": true,
+              "supports_entrypoint_override": true,
+              "max_environment_bytes": 32768
+            },
+            "lifecycle": {
+              "idempotent_launch": "launch_key",
+              "list_owned": true,
+              "provider_ttl": false,
+              "cancel_queued": false
+            },
+            "resources": {},
+            "network": {
+              "inbound": "none",
+              "protocols": [
+                "tcp"
+              ],
+              "public_ipv4": false
+            },
+            "pricing": {
+              "known": true
+            },
+            "observability": {
+              "logs": "",
+              "metrics": "",
+              "shell": ""
+            }
+          },
+          "network": {},
+          "pricing": {
+            "currency": "USD",
+            "setup_fee_usd": 0,
+            "rate_per_second_usd": 0.0006944444444444445,
+            "minimum_charge_seconds": 0,
+            "granularity_seconds": 0,
+            "known": true
+          },
+          "images": {
+            "known": true,
+            "observed_at": "2030-01-01T00:00:00Z",
+            "layer_digests": [
+              "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            ]
+          },
+          "artifacts": {
+            "known": true,
+            "observed_at": "2030-01-01T00:00:00Z",
+            "replicas": [
+              {
+                "artifact_id": "artifact:tokenizer:v1",
+                "content_digest": "sha256:70707070707070707070707070707070707070707070707070707070707070ab",
+                "size_bytes": 4000000000,
+                "state": "verified",
+                "verified_at": "2030-01-01T00:00:00Z"
+              }
+            ]
+          },
+          "caches": {
+            "known": true,
+            "observed_at": "2030-01-01T00:00:00Z",
+            "mounts": [
+              {
+                "workspace_id": "ws_lab",
+                "name": "compiler-cache",
+                "compatibility_key": "cuda-12.4",
+                "created_at": "2030-01-01T00:00:00Z"
+              }
+            ]
+          },
+          "capacity": {
+            "available": true,
+            "confidence": 1
+          }
+        }
+      ],
+      "failures": []
+    }
+  },
+  {
+    "event": "ready",
+    "data": {
+      "through_global_position": 0
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_requested",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.requested.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 1,
+      "globalposition": 1,
+      "correlationid": "run-producer",
+      "causationid": "create:run-producer",
+      "data": {
+        "run_id": "run-producer",
+        "workload_revision": {
+          "id": "wrev_run-producer",
+          "workspace_id": "ws_lab",
+          "workload_id": "wrk_run-producer",
+          "digest": "sha256:run-producer",
+          "spec": {
+            "containers": [
+              {
+                "name": "main",
+                "image": "producer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "platform": {
+                  "os": "linux",
+                  "architecture": "amd64"
+                }
+              }
+            ],
+            "resources": {
+              "cpu": {
+                "min_millis": 250
+              },
+              "memory": {
+                "min_bytes": 268435456
+              },
+              "ephemeral_disk": {
+                "min_bytes": 1073741824
+              }
+            },
+            "network": {
+              "inbound": "none"
+            },
+            "placement": {
+              "service_class": "standard",
+              "expected_runtime_seconds": 480
+            },
+            "execution": {
+              "max_runtime_seconds": 1200,
+              "max_pre_start_attempts": 1
+            },
+            "artifacts": {
+              "produces": [
+                "artifact:model-checkpoint:v1"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_booking_decided_dec_7c510589d88961f8f",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.booking_decided.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 2,
+      "globalposition": 2,
+      "correlationid": "run-producer",
+      "causationid": "advance:placement:bkg_e0a72ad5dcb2d705d",
+      "data": {
+        "decision": {
+          "id": "dec_7c510589d88961f8f",
+          "run_id": "run-producer",
+          "workload_revision_digest": "sha256:run-producer",
+          "evaluated_at": "2030-01-01T00:00:00Z",
+          "model_version": "latency-v1",
+          "policy": {
+            "service_class": "standard",
+            "expected_runtime_seconds": 480
+          },
+          "weights": {
+            "start_latency_usd_per_second": 0.0005,
+            "uncertainty_penalty_usd": 0.03
+          },
+          "collection_report": {
+            "connections_queried": [
+              "connection:lab"
+            ]
+          },
+          "candidates": [
+            {
+              "offer_snapshot_id": "rental-warm",
+              "connection_id": "connection:lab",
+              "adapter_type": "lab",
+              "native_ref": "rental-warm",
+              "candidate": {
+                "lane": "reusable",
+                "machine": "node-1",
+                "provider": "lab",
+                "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "disposition": "run_now_existing_rental",
+              "feasible": true,
+              "image_locality": "partial",
+              "cache_evidence": [
+                {
+                  "name": "compiler-cache",
+                  "locality": "hot",
+                  "held_compatibility_key": "cuda-12.4"
+                }
+              ],
+              "disk": {
+                "free_bytes": 170000000000,
+                "free_bytes_known": true,
+                "reserved_bytes": 1073741824,
+                "land_bytes": 80000000,
+                "established_land_bytes": 80000000
+              },
+              "estimates": {
+                "queue_seconds": {
+                  "source": "offer",
+                  "model_version": "latency-v1"
+                },
+                "stages": {
+                  "acquisition_seconds": {
+                    "source": "machine_exists",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "boot_seconds": {
+                    "source": "machine_exists",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "agent_ready_seconds": {
+                    "source": "machine_exists",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "image_fetch_seconds": {
+                    "p50": 1.78,
+                    "p90": 2.67,
+                    "expected": 1.78,
+                    "confidence": 0.5,
+                    "source": "image_inventory",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "unpack_seconds": {
+                    "p50": 0.32,
+                    "p90": 0.48,
+                    "expected": 0.32,
+                    "confidence": 0.5,
+                    "source": "image_inventory",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "artifact_fetch_seconds": {
+                    "source": "workload_reads_nothing",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "container_start_seconds": {
+                    "p50": 1,
+                    "p90": 1.25,
+                    "expected": 1,
+                    "source": "scheduler",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "application_ready_seconds": {
+                    "source": "workload_states_none",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  }
+                },
+                "start_seconds": {
+                  "p50": 3.1,
+                  "p90": 4.4,
+                  "expected": 3.1,
+                  "source": "scheduler",
+                  "model_version": "latency-v1"
+                },
+                "established_start_seconds": {
+                  "p50": 1,
+                  "p90": 1.25,
+                  "expected": 1,
+                  "source": "scheduler",
+                  "model_version": "latency-v1"
+                },
+                "cost_usd": {
+                  "expected": 0.33333333333333337,
+                  "source": "price_model",
+                  "model_version": "latency-v1"
+                },
+                "cost_terms": [
+                  {
+                    "name": "setup_fee",
+                    "usd": 0
+                  },
+                  {
+                    "name": "committed_rent",
+                    "usd": 0
+                  },
+                  {
+                    "name": "keep_alive",
+                    "usd": 0.33333333333333337
+                  },
+                  {
+                    "name": "idle_tail",
+                    "usd": 0
+                  }
+                ]
+              },
+              "transfer_rates": [
+                {
+                  "stage": "image_fetch",
+                  "scope": "registry",
+                  "mbps": 500,
+                  "bytes": 80000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_registry_rate"
+                },
+                {
+                  "stage": "unpack",
+                  "mbps": 2000,
+                  "bytes": 80000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_unpack_rate"
+                }
+              ],
+              "confidences": [
+                {
+                  "answer": "capacity",
+                  "value": 1
+                },
+                {
+                  "answer": "image_fetch_seconds",
+                  "value": 0.5
+                },
+                {
+                  "answer": "unpack_seconds",
+                  "value": 0.5
+                }
+              ],
+              "score_usd": 0.364883
+            },
+            {
+              "offer_snapshot_id": "fresh-4090",
+              "connection_id": "connection:lab",
+              "adapter_type": "simcloud",
+              "native_ref": "fresh-4090",
+              "candidate": {
+                "lane": "reusable",
+                "provider": "simcloud",
+                "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "disposition": "provision_fresh_rental",
+              "feasible": true,
+              "image_locality": "unknown",
+              "cache_evidence": [
+                {
+                  "name": "compiler-cache",
+                  "locality": "unknown"
+                }
+              ],
+              "disk": {
+                "free_bytes": 200000000000,
+                "free_bytes_known": true,
+                "reserved_bytes": 1073741824,
+                "land_bytes": 26080000000
+              },
+              "estimates": {
+                "queue_seconds": {
+                  "source": "offer",
+                  "model_version": "latency-v1"
+                },
+                "stages": {
+                  "acquisition_seconds": {
+                    "source": "unpublished",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "boot_seconds": {
+                    "p50": 240,
+                    "p90": 480,
+                    "expected": 240,
+                    "source": "offer",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "agent_ready_seconds": {
+                    "source": "unpublished",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "image_fetch_seconds": {
+                    "p50": 289.78,
+                    "p90": 434.66999999999996,
+                    "expected": 289.78,
+                    "confidence": 0.5,
+                    "source": "inventory_unknown",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "unpack_seconds": {
+                    "p50": 72.32,
+                    "p90": 108.47999999999999,
+                    "expected": 72.32,
+                    "confidence": 0.5,
+                    "source": "inventory_unknown",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "artifact_fetch_seconds": {
+                    "source": "workload_reads_nothing",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "container_start_seconds": {
+                    "p50": 1,
+                    "p90": 1.25,
+                    "expected": 1,
+                    "source": "scheduler",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "application_ready_seconds": {
+                    "source": "workload_states_none",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  }
+                },
+                "start_seconds": {
+                  "p50": 603.0999999999999,
+                  "p90": 1024.4,
+                  "expected": 603.0999999999999,
+                  "source": "scheduler",
+                  "model_version": "latency-v1"
+                },
+                "established_start_seconds": {
+                  "p50": 241,
+                  "p90": 481.25,
+                  "expected": 241,
+                  "source": "scheduler",
+                  "model_version": "latency-v1"
+                },
+                "cost_usd": {
+                  "expected": 0.26666666666666666,
+                  "source": "price_model",
+                  "model_version": "latency-v1"
+                },
+                "cost_terms": [
+                  {
+                    "name": "setup_fee",
+                    "usd": 0
+                  },
+                  {
+                    "name": "committed_rent",
+                    "usd": 0
+                  },
+                  {
+                    "name": "keep_alive",
+                    "usd": 0.26666666666666666
+                  },
+                  {
+                    "name": "idle_tail",
+                    "usd": 0
+                  }
+                ]
+              },
+              "transfer_rates": [
+                {
+                  "stage": "image_fetch",
+                  "scope": "registry",
+                  "mbps": 500,
+                  "bytes": 18080000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_registry_rate"
+                },
+                {
+                  "stage": "unpack",
+                  "mbps": 2000,
+                  "bytes": 18080000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_unpack_rate"
+                }
+              ],
+              "confidences": [
+                {
+                  "answer": "capacity",
+                  "value": 1
+                },
+                {
+                  "answer": "image_fetch_seconds",
+                  "value": 0.5
+                },
+                {
+                  "answer": "unpack_seconds",
+                  "value": 0.5
+                }
+              ],
+              "score_usd": 0.598217
+            }
+          ],
+          "selected_offer_snapshot_id": "rental-warm",
+          "booking": {
+            "id": "bkg_e0a72ad5dcb2d705d",
+            "run_id": "run-producer",
+            "rental_id": "rental-warm",
+            "state": "running",
+            "schedule_version": 1
+          },
+          "selection_reason_codes": [
+            "FEASIBLE",
+            "SERVICE_CLASS_STANDARD",
+            "REUSE_EXISTING_RENTAL"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_attempt_created_att_ws_lab_run-producer_1_3fa7f19862b1",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.attempt_created.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 3,
+      "globalposition": 3,
+      "correlationid": "run-producer",
+      "causationid": "advance:placement:bkg_e0a72ad5dcb2d705d",
+      "data": {
+        "attempt_id": "att_ws_lab_run-producer_1_3fa7f19862b1",
+        "launch_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "ownership_token": "own_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "cleanup_locator": "cleanup_att_ws_lab_run-producer_1_3fa7f19862b1"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_launch_intent_recorded_att_ws_lab_run-producer_1_3fa7f19862b1",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.launch_intent_recorded.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 4,
+      "globalposition": 4,
+      "correlationid": "run-producer",
+      "causationid": "advance:placement:bkg_e0a72ad5dcb2d705d",
+      "data": {
+        "operation_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "request_hash": "sha256:88792446548be112e7542a0ecccfb6ccba19669a0e3d523be9b74a10ff10a82c",
+        "workspace_id": "ws_lab",
+        "run_id": "run-producer",
+        "attempt_id": "att_ws_lab_run-producer_1_3fa7f19862b1",
+        "workload_id": "wrk_run-producer",
+        "workload_revision_id": "wrev_run-producer",
+        "ownership_token": "own_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "launch_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "cleanup_locator": "cleanup_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "image": "producer@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "platform": {
+          "os": "linux",
+          "architecture": "amd64"
+        },
+        "resources": {
+          "cpu": {
+            "min_millis": 250
+          },
+          "memory": {
+            "min_bytes": 268435456
+          },
+          "ephemeral_disk": {
+            "min_bytes": 1073741824
+          }
+        },
+        "cache_mounts": [
+          {
+            "name": "compiler-cache",
+            "compatibility_key": "cuda-12.4",
+            "size_bytes": 8000000000
+          }
+        ],
+        "max_runtime_seconds": 1200,
+        "selected_offer_snapshot_id": "rental-warm",
+        "selected_offer_connection_id": "connection:lab",
+        "selected_offer_adapter_type": "lab",
+        "selected_offer_native_ref": "rental-warm",
+        "selected_offer_lane": "reusable",
+        "disposition": "release"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_launch_indeterminate_att_ws_lab_run-producer_1_3fa7f19862b1",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.launch_indeterminate.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 5,
+      "globalposition": 5,
+      "correlationid": "run-producer",
+      "causationid": "advance:launch_indeterminate:att_ws_lab_run-producer_1_3fa7f19862b1",
+      "data": {
+        "code": "ADAPTER_LAUNCH_INDETERMINATE",
+        "message": "Adapter operation failed.",
+        "retryable": true,
+        "side_effect": "indeterminate",
+        "launch_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_external_state_observed_6",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.external_state_observed.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 6,
+      "globalposition": 6,
+      "correlationid": "run-producer",
+      "causationid": "advance:observe:5",
+      "data": {
+        "external_id": "lab-att_ws_lab_run-producer_1_3fa7f19862b1",
+        "launch_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "phase": "running",
+        "observed_at": "2030-01-01T00:00:00Z",
+        "native_json": "{\"adapter\":\"lab\",\"external_id\":\"lab-att_ws_lab_run-producer_1_3fa7f19862b1\"}"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_requested",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.requested.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T00:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 1,
+      "globalposition": 7,
+      "correlationid": "run-consumer",
+      "causationid": "create:run-consumer",
+      "data": {
+        "run_id": "run-consumer",
+        "workload_revision": {
+          "id": "wrev_run-consumer",
+          "workspace_id": "ws_lab",
+          "workload_id": "wrk_run-consumer",
+          "digest": "sha256:run-consumer",
+          "spec": {
+            "containers": [
+              {
+                "name": "main",
+                "image": "consumer@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "platform": {
+                  "os": "linux",
+                  "architecture": "amd64"
+                }
+              }
+            ],
+            "resources": {
+              "cpu": {
+                "min_millis": 250
+              },
+              "memory": {
+                "min_bytes": 268435456
+              },
+              "ephemeral_disk": {
+                "min_bytes": 1073741824
+              }
+            },
+            "network": {
+              "inbound": "none"
+            },
+            "placement": {
+              "service_class": "standard",
+              "expected_runtime_seconds": 360
+            },
+            "execution": {
+              "max_runtime_seconds": 1200,
+              "max_pre_start_attempts": 1
+            },
+            "artifacts": {
+              "consumes": [
+                "artifact:model-checkpoint:v1",
+                "artifact:tokenizer:v1"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_reported_7",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.reported.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 7,
+      "globalposition": 8,
+      "correlationid": "run-producer",
+      "causationid": "report",
+      "data": {
+        "type": "ready",
+        "data": {
+          "ready_at": "2030-01-01T00:00:01.28Z"
+        }
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_booking_decided_dec_71cf0d8d420ba8f6c",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.booking_decided.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 2,
+      "globalposition": 9,
+      "correlationid": "run-consumer",
+      "causationid": "advance:placement:bkg_fab802c7887e1f8da",
+      "data": {
+        "decision": {
+          "id": "dec_71cf0d8d420ba8f6c",
+          "run_id": "run-consumer",
+          "workload_revision_digest": "sha256:run-consumer",
+          "evaluated_at": "2030-01-01T00:30:00Z",
+          "model_version": "latency-v1",
+          "policy": {
+            "service_class": "standard",
+            "expected_runtime_seconds": 360
+          },
+          "weights": {
+            "start_latency_usd_per_second": 0.0005,
+            "uncertainty_penalty_usd": 0.03
+          },
+          "collection_report": {
+            "connections_queried": [
+              "connection:lab"
+            ]
+          },
+          "candidates": [
+            {
+              "offer_snapshot_id": "rental-warm",
+              "connection_id": "connection:lab",
+              "adapter_type": "lab",
+              "native_ref": "rental-warm",
+              "candidate": {
+                "lane": "reusable",
+                "machine": "node-1",
+                "provider": "lab",
+                "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "disposition": "queue_existing_rental",
+              "feasible": false,
+              "rejections": [
+                {
+                  "code": "CAPACITY_UNAVAILABLE",
+                  "path": "capacity.available",
+                  "required": true,
+                  "offered": false,
+                  "message": "Offer capacity evidence says the capacity is not currently available.",
+                  "ended_by_waiting": true
+                }
+              ],
+              "image_locality": "partial",
+              "artifact_evidence": [
+                {
+                  "artifact_id": "artifact:model-checkpoint:v1",
+                  "locality": "cold",
+                  "fetch_bytes": 40000000000
+                },
+                {
+                  "artifact_id": "artifact:tokenizer:v1",
+                  "locality": "hot"
+                }
+              ],
+              "disk": {
+                "free_bytes": 169920000000,
+                "free_bytes_known": true,
+                "reserved_bytes": 1073741824,
+                "land_bytes": 40040000000,
+                "established_land_bytes": 40040000000
+              },
+              "rental_schedule": {
+                "version": 2,
+                "running": {
+                  "booking_id": "bkg_e0a72ad5dcb2d705d",
+                  "run_id": "run-producer",
+                  "remaining_max_runtime_seconds": 0,
+                  "remaining_expected_runtime_seconds": 0,
+                  "overrun_seconds": 600
+                },
+                "projected_start_seconds": 0
+              },
+              "estimates": {
+                "queue_seconds": {
+                  "source": "offer",
+                  "model_version": "latency-v1"
+                },
+                "stages": {
+                  "acquisition_seconds": {
+                    "source": "machine_exists",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "boot_seconds": {
+                    "source": "machine_exists",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "agent_ready_seconds": {
+                    "source": "machine_exists",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "image_fetch_seconds": {
+                    "p50": 1.1400000000000001,
+                    "p90": 1.7100000000000002,
+                    "expected": 1.1400000000000001,
+                    "confidence": 0.5,
+                    "source": "image_inventory",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "unpack_seconds": {
+                    "p50": 0.16,
+                    "p90": 0.24,
+                    "expected": 0.16,
+                    "confidence": 0.5,
+                    "source": "image_inventory",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "artifact_fetch_seconds": {
+                    "p50": 640,
+                    "p90": 960,
+                    "expected": 640,
+                    "confidence": 0.5,
+                    "source": "artifact_inventory",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "container_start_seconds": {
+                    "p50": 1,
+                    "p90": 1.25,
+                    "expected": 1,
+                    "source": "scheduler",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "application_ready_seconds": {
+                    "source": "workload_states_none",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  }
+                },
+                "start_seconds": {
+                  "p50": 642.3,
+                  "p90": 963.2,
+                  "expected": 642.3,
+                  "source": "scheduler",
+                  "model_version": "latency-v1"
+                },
+                "established_start_seconds": {
+                  "p50": 1,
+                  "p90": 1.25,
+                  "expected": 1,
+                  "source": "scheduler",
+                  "model_version": "latency-v1"
+                },
+                "cost_usd": {
+                  "expected": 0.25,
+                  "source": "price_model",
+                  "model_version": "latency-v1"
+                },
+                "cost_terms": [
+                  {
+                    "name": "setup_fee",
+                    "usd": 0
+                  },
+                  {
+                    "name": "committed_rent",
+                    "usd": 0
+                  },
+                  {
+                    "name": "keep_alive",
+                    "usd": 0.25
+                  },
+                  {
+                    "name": "idle_tail",
+                    "usd": 0
+                  }
+                ]
+              },
+              "transfer_rates": [
+                {
+                  "stage": "image_fetch",
+                  "scope": "registry",
+                  "mbps": 500,
+                  "bytes": 40000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_registry_rate"
+                },
+                {
+                  "stage": "unpack",
+                  "mbps": 2000,
+                  "bytes": 40000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_unpack_rate"
+                },
+                {
+                  "stage": "artifact_fetch",
+                  "scope": "object_store",
+                  "mbps": 500,
+                  "bytes": 40000000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_object_store_rate"
+                }
+              ],
+              "confidences": [
+                {
+                  "answer": "capacity",
+                  "value": 1
+                },
+                {
+                  "answer": "image_fetch_seconds",
+                  "value": 0.5
+                },
+                {
+                  "answer": "unpack_seconds",
+                  "value": 0.5
+                },
+                {
+                  "answer": "artifact_fetch_seconds",
+                  "value": 0.5
+                }
+              ]
+            },
+            {
+              "offer_snapshot_id": "fresh-4090",
+              "connection_id": "connection:lab",
+              "adapter_type": "simcloud",
+              "native_ref": "fresh-4090",
+              "candidate": {
+                "lane": "reusable",
+                "provider": "simcloud",
+                "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "disposition": "provision_fresh_rental",
+              "feasible": true,
+              "image_locality": "unknown",
+              "artifact_evidence": [
+                {
+                  "artifact_id": "artifact:model-checkpoint:v1",
+                  "locality": "unknown",
+                  "fetch_bytes": 40000000000
+                },
+                {
+                  "artifact_id": "artifact:tokenizer:v1",
+                  "locality": "unknown",
+                  "fetch_bytes": 4000000000
+                }
+              ],
+              "disk": {
+                "free_bytes": 200000000000,
+                "free_bytes_known": true,
+                "reserved_bytes": 1073741824,
+                "land_bytes": 62040000000
+              },
+              "estimates": {
+                "queue_seconds": {
+                  "source": "offer",
+                  "model_version": "latency-v1"
+                },
+                "stages": {
+                  "acquisition_seconds": {
+                    "source": "unpublished",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "boot_seconds": {
+                    "p50": 240,
+                    "p90": 480,
+                    "expected": 240,
+                    "source": "offer",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "agent_ready_seconds": {
+                    "source": "unpublished",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "image_fetch_seconds": {
+                    "p50": 289.14,
+                    "p90": 433.71,
+                    "expected": 289.14,
+                    "confidence": 0.5,
+                    "source": "inventory_unknown",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "unpack_seconds": {
+                    "p50": 72.16,
+                    "p90": 108.24,
+                    "expected": 72.16,
+                    "confidence": 0.5,
+                    "source": "inventory_unknown",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "artifact_fetch_seconds": {
+                    "p50": 704,
+                    "p90": 1056,
+                    "expected": 704,
+                    "confidence": 0.5,
+                    "source": "inventory_unknown",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "container_start_seconds": {
+                    "p50": 1,
+                    "p90": 1.25,
+                    "expected": 1,
+                    "source": "scheduler",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  },
+                  "application_ready_seconds": {
+                    "source": "workload_states_none",
+                    "model_version": "latency-v1",
+                    "level": "prior"
+                  }
+                },
+                "start_seconds": {
+                  "p50": 1306.3,
+                  "p90": 2079.2,
+                  "expected": 1306.3,
+                  "source": "scheduler",
+                  "model_version": "latency-v1"
+                },
+                "established_start_seconds": {
+                  "p50": 241,
+                  "p90": 481.25,
+                  "expected": 241,
+                  "source": "scheduler",
+                  "model_version": "latency-v1"
+                },
+                "cost_usd": {
+                  "expected": 0.2,
+                  "source": "price_model",
+                  "model_version": "latency-v1"
+                },
+                "cost_terms": [
+                  {
+                    "name": "setup_fee",
+                    "usd": 0
+                  },
+                  {
+                    "name": "committed_rent",
+                    "usd": 0
+                  },
+                  {
+                    "name": "keep_alive",
+                    "usd": 0.2
+                  },
+                  {
+                    "name": "idle_tail",
+                    "usd": 0
+                  }
+                ]
+              },
+              "transfer_rates": [
+                {
+                  "stage": "image_fetch",
+                  "scope": "registry",
+                  "mbps": 500,
+                  "bytes": 18040000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_registry_rate"
+                },
+                {
+                  "stage": "unpack",
+                  "mbps": 2000,
+                  "bytes": 18040000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_unpack_rate"
+                },
+                {
+                  "stage": "artifact_fetch",
+                  "scope": "object_store",
+                  "mbps": 500,
+                  "bytes": 44000000000,
+                  "confidence": 0.5,
+                  "assumption": "assumed_object_store_rate"
+                }
+              ],
+              "confidences": [
+                {
+                  "answer": "capacity",
+                  "value": 1
+                },
+                {
+                  "answer": "image_fetch_seconds",
+                  "value": 0.5
+                },
+                {
+                  "answer": "unpack_seconds",
+                  "value": 0.5
+                },
+                {
+                  "answer": "artifact_fetch_seconds",
+                  "value": 0.5
+                }
+              ],
+              "score_usd": 0.89815
+            }
+          ],
+          "selected_offer_snapshot_id": "fresh-4090",
+          "booking": {
+            "id": "bkg_fab802c7887e1f8da",
+            "run_id": "run-consumer",
+            "rental_id": "rnt_1925349fab9d2d314",
+            "state": "running",
+            "schedule_version": 1
+          },
+          "selection_reason_codes": [
+            "FEASIBLE",
+            "SERVICE_CLASS_STANDARD",
+            "PROVISION_FRESH_RENTAL"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_attempt_created_att_ws_lab_run-consumer_1_487d3794377a",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.attempt_created.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 3,
+      "globalposition": 10,
+      "correlationid": "run-consumer",
+      "causationid": "advance:placement:bkg_fab802c7887e1f8da",
+      "data": {
+        "attempt_id": "att_ws_lab_run-consumer_1_487d3794377a",
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "ownership_token": "own_att_ws_lab_run-consumer_1_487d3794377a",
+        "cleanup_locator": "cleanup_att_ws_lab_run-consumer_1_487d3794377a"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_launch_intent_recorded_att_ws_lab_run-consumer_1_487d3794377a",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.launch_intent_recorded.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 4,
+      "globalposition": 11,
+      "correlationid": "run-consumer",
+      "causationid": "advance:placement:bkg_fab802c7887e1f8da",
+      "data": {
+        "operation_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "request_hash": "sha256:e290b099c13d373dac842f2ce3a273541107cfe59e0f6e5b30a87737dd117da5",
+        "workspace_id": "ws_lab",
+        "run_id": "run-consumer",
+        "attempt_id": "att_ws_lab_run-consumer_1_487d3794377a",
+        "workload_id": "wrk_run-consumer",
+        "workload_revision_id": "wrev_run-consumer",
+        "ownership_token": "own_att_ws_lab_run-consumer_1_487d3794377a",
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "cleanup_locator": "cleanup_att_ws_lab_run-consumer_1_487d3794377a",
+        "image": "consumer@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "platform": {
+          "os": "linux",
+          "architecture": "amd64"
+        },
+        "resources": {
+          "cpu": {
+            "min_millis": 250
+          },
+          "memory": {
+            "min_bytes": 268435456
+          },
+          "ephemeral_disk": {
+            "min_bytes": 1073741824
+          }
+        },
+        "max_runtime_seconds": 1200,
+        "selected_offer_snapshot_id": "fresh-4090",
+        "selected_offer_connection_id": "connection:lab",
+        "selected_offer_adapter_type": "simcloud",
+        "selected_offer_native_ref": "fresh-4090",
+        "selected_offer_lane": "reusable",
+        "disposition": "terminate"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_launch_accepted_att_ws_lab_run-consumer_1_487d3794377a",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.launch_accepted.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 5,
+      "globalposition": 12,
+      "correlationid": "run-consumer",
+      "causationid": "advance:launch_accepted:att_ws_lab_run-consumer_1_487d3794377a",
+      "data": {
+        "external_id": "lab-att_ws_lab_run-consumer_1_487d3794377a",
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "ownership_token": "own_att_ws_lab_run-consumer_1_487d3794377a",
+        "cleanup_locator": "cleanup_att_ws_lab_run-consumer_1_487d3794377a",
+        "phase": "running",
+        "accepted_at": "2030-01-01T00:30:00Z",
+        "duplicate": false
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_external_state_observed_6",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.external_state_observed.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 6,
+      "globalposition": 13,
+      "correlationid": "run-consumer",
+      "causationid": "advance:observe:5",
+      "data": {
+        "external_id": "lab-att_ws_lab_run-consumer_1_487d3794377a",
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "phase": "running",
+        "observed_at": "2030-01-01T00:30:00Z",
+        "native_json": "{\"adapter\":\"lab\",\"external_id\":\"lab-att_ws_lab_run-consumer_1_487d3794377a\"}"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_external_state_observed_8",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.external_state_observed.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 8,
+      "globalposition": 14,
+      "correlationid": "run-producer",
+      "causationid": "advance:observe:7",
+      "data": {
+        "external_id": "lab-att_ws_lab_run-producer_1_3fa7f19862b1",
+        "launch_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "phase": "succeeded",
+        "observed_at": "2030-01-01T00:30:00Z",
+        "started_at": "2030-01-01T00:00:01.28Z",
+        "exit_code": 0,
+        "native_json": "{\"adapter\":\"lab\",\"external_id\":\"lab-att_ws_lab_run-producer_1_3fa7f19862b1\"}"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_execution_started_8",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.execution_started.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 9,
+      "globalposition": 15,
+      "correlationid": "run-producer",
+      "causationid": "advance:observe:7",
+      "data": {
+        "launch_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "started_at": "2030-01-01T00:00:01.28Z"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_outcome_recorded",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.outcome_recorded.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 10,
+      "globalposition": 16,
+      "correlationid": "run-producer",
+      "causationid": "advance:terminal",
+      "data": {
+        "outcome": "succeeded"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_cleanup_requested",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.cleanup_requested.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 11,
+      "globalposition": 17,
+      "correlationid": "run-producer",
+      "causationid": "advance:terminal",
+      "data": {
+        "launch_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_cleanup_confirmed",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.cleanup_confirmed.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 12,
+      "globalposition": 18,
+      "correlationid": "run-producer",
+      "causationid": "advance:cleanup",
+      "data": {
+        "launch_key": "launch_att_ws_lab_run-producer_1_3fa7f19862b1",
+        "disposition": "release"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-producer_closed",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.closed.v1",
+      "subject": "runs/run-producer",
+      "time": "2030-01-01T00:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 13,
+      "globalposition": 19,
+      "correlationid": "run-producer",
+      "causationid": "advance:cleanup",
+      "data": {
+        "closed": true
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_reported_7",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.reported.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T01:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 7,
+      "globalposition": 20,
+      "correlationid": "run-consumer",
+      "causationid": "report",
+      "data": {
+        "type": "ready",
+        "data": {
+          "ready_at": "2030-01-01T00:44:40Z"
+        }
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_external_state_observed_8",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.external_state_observed.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T01:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 8,
+      "globalposition": 21,
+      "correlationid": "run-consumer",
+      "causationid": "advance:observe:7",
+      "data": {
+        "external_id": "lab-att_ws_lab_run-consumer_1_487d3794377a",
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "phase": "running",
+        "observed_at": "2030-01-01T01:00:00Z",
+        "started_at": "2030-01-01T00:44:40Z",
+        "native_json": "{\"adapter\":\"lab\",\"external_id\":\"lab-att_ws_lab_run-consumer_1_487d3794377a\"}"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_execution_started_8",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.execution_started.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T01:00:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 9,
+      "globalposition": 22,
+      "correlationid": "run-consumer",
+      "causationid": "advance:observe:7",
+      "data": {
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "started_at": "2030-01-01T00:44:40Z"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_external_state_observed_10",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.external_state_observed.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T01:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 10,
+      "globalposition": 23,
+      "correlationid": "run-consumer",
+      "causationid": "advance:observe:9",
+      "data": {
+        "external_id": "lab-att_ws_lab_run-consumer_1_487d3794377a",
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "phase": "succeeded",
+        "observed_at": "2030-01-01T01:30:00Z",
+        "started_at": "2030-01-01T00:44:40Z",
+        "exit_code": 0,
+        "native_json": "{\"adapter\":\"lab\",\"external_id\":\"lab-att_ws_lab_run-consumer_1_487d3794377a\"}"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_outcome_recorded",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.outcome_recorded.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T01:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 11,
+      "globalposition": 24,
+      "correlationid": "run-consumer",
+      "causationid": "advance:terminal",
+      "data": {
+        "outcome": "succeeded"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_cleanup_requested",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.cleanup_requested.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T01:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 12,
+      "globalposition": 25,
+      "correlationid": "run-consumer",
+      "causationid": "advance:terminal",
+      "data": {
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_cleanup_confirmed",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.cleanup_confirmed.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T01:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 13,
+      "globalposition": 26,
+      "correlationid": "run-consumer",
+      "causationid": "advance:cleanup",
+      "data": {
+        "launch_key": "launch_att_ws_lab_run-consumer_1_487d3794377a",
+        "disposition": "terminate"
+      }
+    }
+  },
+  {
+    "event": "domain_event",
+    "data": {
+      "specversion": "1.0",
+      "id": "evt_ws_lab_run-consumer_closed",
+      "source": "compute-control-plane/workspaces/ws_lab",
+      "type": "compute.run.closed.v1",
+      "subject": "runs/run-consumer",
+      "time": "2030-01-01T01:30:00Z",
+      "workspaceid": "ws_lab",
+      "streamversion": 14,
+      "globalposition": 27,
+      "correlationid": "run-consumer",
+      "causationid": "advance:cleanup",
+      "data": {
+        "closed": true
+      }
+    }
+  }
+]
