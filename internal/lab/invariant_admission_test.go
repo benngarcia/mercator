@@ -557,6 +557,48 @@ func TestAWaitItsOwnFamilyHoldsIsNoStarvation(t *testing.T) {
 	}
 }
 
+// TestAFamilyHeldMemberIsStillHeldToProgress is the bound on the one wait no class
+// bound reaches. Opportunistic work states no deadline, which is deliberate: waiting
+// is free and the answer does not expire. So a member of a family whose sibling
+// never gives the place back is bounded by neither of the two bounds its class
+// states, and refusing it would be Mercator naming a moment its caller declined to
+// state, in the words of a promise about capacity that nothing here broke.
+//
+// What bounds it is that Mercator is still holding the Run at all.
+// liveness.admitted_run_progress reads the phase not at all: a Run of a declared
+// arrival still open a day into an execution is reported whatever it is waiting for,
+// and its own family is no more of an excuse than an empty fleet is.
+func TestAFamilyHeldMemberIsStillHeldToProgress(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	queuedSince := now
+	held := domain.AdmissionDeferral{
+		Reason: domain.DeferredGroupAtParallelism,
+		Class:  domain.ClassOpportunistic,
+		Behind: []domain.QueuedAhead{{RunID: "run-member-001"}},
+	}
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		deferralEvent("run-member-002", queuedSince, held),
+	})
+	observation.Now = now.Add(25 * time.Hour)
+	observation.RunRequirements = map[string]RunArrival{"run-member-002": {Name: "sweep-2"}}
+	observation.Runs = []domain.RunRecord{{
+		ID:           "run-member-002",
+		Phase:        "queued",
+		ServiceClass: domain.ClassOpportunistic,
+		QueuedSince:  &queuedSince,
+		Admission:    &held,
+	}}
+
+	if err := agingPreventsStarvation(observation); err != nil {
+		t.Fatalf("a wait its own family held was read as Mercator starving it: %v", err)
+	}
+	err := admittedRunProgress(observation)
+	if err == nil {
+		t.Fatal("a member of a family sat unplaced for a day and the liveness rules allowed it")
+	}
+	t.Logf("violation: %v", err)
+}
+
 // TestAFleetStarvedWaitIsNotExcusedByASibling is the other direction of the same
 // division, and it is what exempting a record on its latest answer hid. The fleet
 // held this member for seventy minutes, which is past the hour its class allows, and
