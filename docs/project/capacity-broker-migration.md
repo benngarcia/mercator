@@ -3624,7 +3624,7 @@ geolocation reaching `lane=ephemeral;provider=vast;region=US-CA`,
 `TestOneRegionNameInTwoCloudsIsTwoPlaces` pins Shadeform's cloud and region reaching
 the same rung as one key, and `TestOneProductInTwoCloudsIsTwoCandidates` pins a RunPod
 catalog naming no datacenter having no such rung at all. What the conformance fixture holds is
-the rest of the path, from the offer to the recorded identity to the key, in a world
+the offer reaching the recorded identity and the identity reaching the key, in a world
 whose reusable backend states a place because the Blueprint schema has always let one.
 That is the target ontology this corpus is written against, and the machine half of it
 is now stated as a fact of its own: `TestAnEnrolledMachineStatesNoPlaceAndSaysSo`
@@ -3647,9 +3647,34 @@ which is the collapse described above. Moving the far Rental into the measured r
 answers it at `provider_and_region`, which holds that the third machine is
 discriminated by where it is rather than by being third.
 
+Two further reviewers refuted this entry again, and both were right. It still counted
+aggregation among the steps the conformance fixture holds, and the Lab runs no
+aggregation at all: `internal/lab/control_plane.go` hands the simulated world to
+`orchestrator.New` as the Adapter, where `internal/daemon/runtime.go` hands it the
+Broker. So the one production step that rewrites an offer was covered nowhere, and for
+that step this entry was wrong in the stronger direction: no test at any level would
+have said so, not merely no test above a unit test. The four adapter suites stamp the
+adapter type and the lane with their own local `aggregated()` helper rather than through
+broker code, and no test in the repository carried a non-empty region through
+`broker.AggregateOffers`. Verified by breaking it on this host: dropping the region
+inside the rewrite loop left `go test ./... -count=1` completely green.
+
+`TestAggregationCarriesWhatACandidateCanBeLearnedAbout` now holds that step where it
+happens. A marketplace ask shaped like the ones Vast publishes, a place and a card and
+no machine, goes through `broker.ListOffers`, and the identity derived from what comes
+out has to equal the identity derived from what the backend stated, plus the lane and
+the provider that aggregation itself stamps. Asserting the derived identity rather than
+the fields is deliberate: it holds a rewrite that reprojects the snapshot instead of
+mutating it in place, which is the shape the second reviewer proposed as the realistic
+way this field gets lost. It fails both ways. Dropping the region in the existing
+rewrite loop and reprojecting the snapshot without it each report the ask as learnable
+in no place, against a backend that named one. The L1 comment and this entry now say
+which steps the fixture holds and where the other two are held, so no reader takes the
+conformance corpus for coverage of the Broker.
+
 ```text
 go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
-go test -race -count=1 ./internal/lab ./internal/scenario/...
+go test -race -count=1 ./internal/lab ./internal/scenario/... ./internal/broker
 MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration
 ```
 
@@ -3660,6 +3685,16 @@ real hardware. What still has not run live is the learning half, for the reason 
 entry below gives: the readiness callback is authenticated per Run and the daemon
 fixture configures no reporting. Mercator issue #165 does not reproduce here and was
 left alone.
+
+One flake to name rather than to hide, seen once while re-verifying this on the
+workstation. `TestTheFleetListingReportsTheRoomThisMachineReallyHas` compares what the
+production agent measured against a second reading of the same live filesystem, and it
+allows a thousandth of the total for the drift between them. On this host that is 3.4GB
+of a 3.5TB disk, and a full `go test ./...` writing a cold build cache moved 7.4GB of
+free space between the two readings. It passed three times in isolation and again on a
+repeat full run, and it is measuring a quantity that genuinely moves, so nothing was
+changed here: the tolerance is a property of that live test and belongs to whoever
+tightens it, not to a locality slice touching the Broker.
 
 ### Phase 4 a transfer is not a stage a launch history can answer
 

@@ -196,6 +196,58 @@ func TestBrokerListOffersScopesOfferIdentityToConnection(t *testing.T) {
 	}
 }
 
+// TestAggregationCarriesWhatACandidateCanBeLearnedAbout is the one step between a
+// backend stating where its capacity is and a prediction being filed under that
+// place.
+//
+// Aggregation rewrites every provider offer: it stamps the lane from the
+// Declaration the backend negotiated, the adapter type and connection from the
+// record the offer came through, a snapshot ID scoped to that connection, and a
+// Rental for reusable standing capacity. Everything a candidate can be learned
+// about has to come out the other side as the backend stated it, because this is
+// the last place it can be lost before a Booking Decision records it. A rewrite
+// that dropped the region would collapse the provider-and-region rung of the
+// ladder onto the provider rung, and a Vast machine measured in one place would
+// answer for every machine Vast sells anywhere.
+//
+// The assertion is the derived identity rather than the fields, so a rewrite that
+// reprojects the snapshot instead of mutating it in place is held to the same
+// thing.
+func TestAggregationCarriesWhatACandidateCanBeLearnedAbout(t *testing.T) {
+	const image = "sha256:0b1c2d3e4f5061728394a5b6c7d8e9f00112233445566778899aabbccddeeff01"
+	// A marketplace ask, shaped like the ones Vast publishes: a place and a card,
+	// no product name, and no machine that exists yet.
+	listing := domain.OfferSnapshot{
+		ID:     "ask-4471",
+		Kind:   domain.OfferKindProvisionable,
+		Region: "US-CA",
+		Resources: domain.ResourceInventory{Accelerators: []domain.AcceleratorInventory{
+			{Vendor: "nvidia", Model: "RTX 5090", CanonicalModel: "nvidia-rtx-5090", Count: 1, MemoryBytes: 34359738368},
+		}},
+	}
+	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
+		"marketplace": fanoutAdapter{listOffers: func(context.Context) ([]domain.OfferSnapshot, error) {
+			return []domain.OfferSnapshot{listing}, nil
+		}},
+	})
+
+	offers, err := broker.ListOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
+
+	if err != nil {
+		t.Fatalf("list offers: %v", err)
+	}
+	stated := domain.CandidateIdentityOf(listing, image)
+	stated.Lane = domain.LaneEphemeral
+	stated.Provider = "stub"
+	aggregated := domain.CandidateIdentityOf(offers[0], image)
+	if aggregated != stated {
+		t.Fatalf("the aggregated offer is learnable as %+v, and the backend stated %+v", aggregated, stated)
+	}
+	if rung := aggregated.ProviderAndRegion(true); rung != "lane=ephemeral;provider=stub;region=US-CA;image="+image {
+		t.Fatalf("the place this ask is in answers under %q", rung)
+	}
+}
+
 func TestBrokerListOffersPropagatesCancellation(t *testing.T) {
 	broker := fanoutBroker(t, map[string]capability.EphemeralExecutor{
 		"slow": fanoutAdapter{listOffers: func(ctx context.Context) ([]domain.OfferSnapshot, error) {
