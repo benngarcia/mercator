@@ -375,8 +375,16 @@ func describeQueuedAhead(ahead []domain.QueuedAhead) string {
 // model, because the question is about a moment that has passed. What matters is
 // who was waiting when the decision was taken, and the projection only ever says
 // who is waiting now.
+//
+// Two facts are replayed and not one, because production keeps two. Membership of
+// the queue ends when a Run takes a machine, is refused, or is over, which is what
+// admissionQueue reads out of the log. The moment a Run's own wait began outlives
+// that, because runState.queuedSince is set once and nothing clears it, so a Run
+// placed again after a launch that failed is weighed at the standing of its whole
+// wait rather than as an arrival.
 func serviceClassAdmissionOrder(observation InvariantObservation) error {
 	queue := map[string]queuedRun{}
+	began := map[string]time.Time{}
 	for _, event := range observation.MercatorEvents {
 		runID := strings.TrimPrefix(event.Subject, "runs/")
 		switch event.Type {
@@ -393,13 +401,15 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 			// does: a Run whose fleet filled up while it waited is waiting for
 			// something the ordering has to respect, and one whose fleet emptied is
 			// not.
-			held := queue[runID]
-			if held.since.IsZero() {
-				held.since = at
+			if began[runID].IsZero() {
+				began[runID] = at
 			}
-			held.class = deferral.Class
-			held.heldByNothing = deferral.HoldsNoQueue()
-			queue[runID] = held
+			queue[runID] = queuedRun{
+				workspace:     event.WorkspaceID,
+				class:         deferral.Class,
+				since:         began[runID],
+				heldByNothing: deferral.HoldsNoQueue(),
+			}
 		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
 			delete(queue, runID)
 		case orchestrator.EventBookingDecided:
@@ -419,7 +429,14 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 			if err != nil {
 				return err
 			}
-			if err := admittedInClassOrder(observation, queue, decision.RunID, at); err != nil {
+			admitted := admittedRun{
+				runID:     decision.RunID,
+				workspace: event.WorkspaceID,
+				class:     observation.Workloads[decision.RunID].Spec.Placement.Class,
+				at:        at,
+				waited:    waitedBy(began[decision.RunID], at),
+			}
+			if err := admittedInClassOrder(queue, admitted); err != nil {
 				return err
 			}
 			delete(queue, decision.RunID)
@@ -430,8 +447,12 @@ func serviceClassAdmissionOrder(observation InvariantObservation) error {
 
 // queuedRun is one Run waiting at one point in the replay.
 type queuedRun struct {
-	class domain.ServiceClass
-	since time.Time
+	// workspace is whose queue this is. Mercator orders each tenant's queue on its
+	// own, building it with the workspace in the event filter, so a Run is weighed
+	// against the waits beside it and against nothing in another tenant.
+	workspace string
+	class     domain.ServiceClass
+	since     time.Time
 	// heldByNothing is what the record last established about the fleet's answer
 	// to this Run: asked about it, and holding no machine that could ever take it.
 	// A Run in that state is waiting for capacity to be added, so the ordering is
@@ -439,23 +460,18 @@ type queuedRun struct {
 	heldByNothing bool
 }
 
-func admittedInClassOrder(observation InvariantObservation, queue map[string]queuedRun, runID string, at time.Time) error {
-	class := observation.Workloads[runID].Spec.Placement.Class
-	policy := class.Admission()
-	admitted := 0.0
-	if held, waiting := queue[runID]; waiting {
-		admitted = at.Sub(held.since).Seconds()
-	}
-	priority := policy.EffectivePriority(admitted)
+func admittedInClassOrder(queue map[string]queuedRun, admitted admittedRun) error {
+	policy := admitted.class.Admission()
+	priority := policy.EffectivePriority(admitted.waited)
 	for _, other := range slices.Sorted(maps.Keys(queue)) {
-		if other == runID {
+		if other == admitted.runID {
 			continue
 		}
 		held := queue[other]
-		if held.heldByNothing {
+		if held.workspace != admitted.workspace || held.heldByNothing {
 			continue
 		}
-		waited := at.Sub(held.since).Seconds()
+		waited := admitted.at.Sub(held.since).Seconds()
 		otherPolicy := held.class.Admission()
 		otherPriority := otherPolicy.EffectivePriority(waited)
 		if otherPriority <= priority {
@@ -466,7 +482,7 @@ func admittedInClassOrder(observation InvariantObservation, queue map[string]que
 		}
 		return fmt.Errorf(
 			"Run %q of class %q was admitted at effective priority %.2f while %q of class %q had waited %.0fs to %.2f",
-			runID, class, priority, other, held.class, waited, otherPriority,
+			admitted.runID, admitted.class, priority, other, held.class, waited, otherPriority,
 		)
 	}
 	return nil

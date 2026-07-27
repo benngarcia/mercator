@@ -56,6 +56,25 @@ func TestBackfillMayNotTakeTheSlotAStarvedRunIsWaitingFor(t *testing.T) {
 	t.Logf("violation: %v", err)
 }
 
+// TestTheOrderingIsOverOneTenantsQueue is the same flat reading in the ordering
+// law, on the world it convicts. Mercator orders each workspace's queue on its own,
+// so an interactive Run waiting in ws_alpha is not work an opportunistic Run in
+// ws_beta was admitted past: no ordering relates them, and Rentals being shared
+// across tenants is what makes such an execution expressible.
+func TestTheOrderingIsOverOneTenantsQueue(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, map[string]domain.WorkloadRevision{
+		"run-spare": classedWorkload(domain.ClassOpportunistic),
+	}, []eventlog.CloudEvent{
+		inWorkspace(admissionDeferredEvent("run-watched", now, domain.ClassInteractive), "ws_alpha"),
+		inWorkspace(admittedDecisionEvent("run-spare", now.Add(6*time.Minute)), "ws_beta"),
+	})
+
+	if err := serviceClassAdmissionOrder(observation); err != nil {
+		t.Fatalf("a Run admitted in another tenant was ordered against a queue it is not in: %v", err)
+	}
+}
+
 // TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane is the queue's second
 // law at L1. The placement corpus can show admission ordering two Runs; only this
 // shows the machines actually running the other two, through the offer catalog, with
