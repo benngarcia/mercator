@@ -747,13 +747,19 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 		Produces: slices.Clone(req.ProducesArtifacts),
 	}
 	spec.Caches = req.CacheRequirements()
-	return domain.WorkloadRevision{
+	// Normalised for the same reason the operator API normalises: a Blueprint
+	// states what a caller states, and a caller who says nothing about the kind of
+	// work a Run is gets standard. Building the revision raw let a Blueprint
+	// produce a Run production cannot, carrying the empty class through every
+	// reader that had been promised one of five words, and the console's own
+	// decoder is the reader that refused it.
+	return domain.NormalizeWorkloadRevision(domain.WorkloadRevision{
 		ID:          "wrev_" + runID,
 		WorkspaceID: workspaceID,
 		WorkloadID:  "wrk_" + runID,
 		Digest:      "sha256:" + runID,
 		Spec:        spec,
-	}
+	})
 }
 
 // alwaysActiveWorkspaceLog treats every workspace as active: scenarios have
