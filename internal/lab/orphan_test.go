@@ -13,8 +13,8 @@ import (
 const orphanPolicyBlueprint = "an-orphan-is-adopted-or-destroyed-by-policy"
 
 // TestOneOrphanIsAdoptedAndTheOtherIsDestroyed is the policy half of
-// reconciliation. Both machines are holding something this control plane never
-// launched and does not recognise, and the two are converged in opposite
+// reconciliation. All three machines are holding something this control plane
+// never launched and does not recognise, and they are converged in opposite
 // directions because Mercator's own record says different things about them: the
 // capacity whose launch says the machine outlives its workload keeps its machine,
 // and the capacity nothing can be bound to loses it.
@@ -26,7 +26,7 @@ func TestOneOrphanIsAdoptedAndTheOtherIsDestroyed(t *testing.T) {
 	execution := driveOrphanPolicyExecution(t)
 
 	decisions := orphanDecisions(t, execution)
-	if len(decisions) != 2 {
+	if len(decisions) != 3 {
 		t.Fatalf("the record holds %d orphan decisions, want one for each machine: %+v", len(decisions), decisions)
 	}
 	adopted := decisionFor(t, decisions, "orphan-of-ghost")
@@ -43,6 +43,29 @@ func TestOneOrphanIsAdoptedAndTheOtherIsDestroyed(t *testing.T) {
 	}
 	if slices.Contains(standing, "forgotten") {
 		t.Fatalf("the fleet is %v, and the machine the policy terminated is still billing", standing)
+	}
+}
+
+// TestAMachineIsKeptWhenTheRunOnItGaveUpBeforeAnybodyAskedForItBack is the
+// combination the cleanup request says nothing about. The provider refused this
+// Run's start until its attempts ran out, so it ended with no cleanup ever
+// requested, and its launch recorded that the machine is handed back by releasing
+// its slot.
+//
+// The machine is what the claim is about. A policy that read whether cleanup had
+// been asked for before reading what the launch recorded destroys a rented
+// machine every time a launch gives up, and every other Booking on it loses its
+// host.
+func TestAMachineIsKeptWhenTheRunOnItGaveUpBeforeAnybodyAskedForItBack(t *testing.T) {
+	execution := driveOrphanPolicyExecution(t)
+
+	adopted := decisionFor(t, orphanDecisions(t, execution), "orphan-of-refused")
+	if adopted.Outcome != janitor.OrphanAdopted || adopted.Reason != "recorded_disposition_release" {
+		t.Fatalf("the capacity of a Run that gave up was converged as %+v, want it adopted on its recorded disposition", adopted)
+	}
+	standing := offerIDs(execution.runtime.world.truthSnapshot().Offers)
+	if !slices.Contains(standing, "abandoned") {
+		t.Fatalf("the fleet is %v, and the machine whose launch said it outlives the workload is not in it", standing)
 	}
 }
 
