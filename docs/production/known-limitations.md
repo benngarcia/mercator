@@ -257,9 +257,18 @@ on that host and still hold.
   behaviour rests on the recorded fixtures in each adapter's tests and on
   `mercator verify` being run by an operator who holds a key. See
   `docs/production/provider-conformance.md`.
-- The browser-driven console checkpoints skip without
-  `MERCATOR_BROWSER_TEST=1` and a Playwright Chromium install, so the console
-  half of the Lab acceptance flow was proven by CI rather than locally.
+- The browser-driven console checkpoints cannot run on this workstation at all.
+  Playwright's Chromium needs system libraries that are not installed and there
+  is no sudo to add them, so the console half of the Lab acceptance flow is
+  proven by CI and never locally. That gap is not theoretical: four defects in
+  the phase 4 close-out were found only when CI ran that flow, including one
+  where the console rendered nothing at all because the offer catalog frame
+  failed to decode. Two of them now have non-browser regression tests
+  (`feed.contract.test.ts` decodes the captured feed,
+  `TestVerticalProofHoldsInTheOrderTheConsoleDrivesIt` drives the console's
+  order without a browser), so the same class of break fails locally next time.
+  Anyone changing an event payload, a schema, or a placement weight should
+  assume the console is affected and cannot confirm it here.
 - Provisioned reusable capacity has no live coverage at all, because no provider
   bootstraps a node agent yet. Everything about a node that a real daemon proves
   here was proven on this workstation's own daemon.

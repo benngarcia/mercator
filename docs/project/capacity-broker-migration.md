@@ -5137,6 +5137,61 @@ that the Run had never been placed. It had been placed the whole time, on the
 machine the case named, and the case would have gone on reporting a placement
 failure for an API change. It reads the last entry of the chain now.
 
+CI then found four more defects that no command on this workstation could reach,
+because the browser proof needs a Chromium this host cannot launch: Playwright's
+system libraries are absent and there is no sudo to install them. All four are
+recorded here rather than in the merge entry above, because they are what the
+phase's own changes did to the console and they were invisible until a machine
+with a browser ran them.
+
+The first was a Run the Lab can build and production cannot. ServiceClass
+replaced the placement objective outright, so every reader downstream of a Run
+was promised one of five words, and the operator API keeps that promise by
+normalising an omitted class to standard before validation sees it.
+`WorkloadForRun` cast a Blueprint's request straight into the domain instead, so
+three Blueprints produced revisions carrying the empty class.
+`TestEveryArrivingRunStatesAClassMercatorKnows` is the rule now, over every
+arriving Run in the corpus, with the fixture that states an unknown class on
+purpose excluded by name.
+
+The second is what actually blanked the console, and the first fix did not
+address it. `OfferSnapshot.Reliability` is `omitzero`, so a machine whose
+publisher has measured nothing sends no `reliability` key at all, which is every
+provider in this tree. openapi.json listed it as required anyway and the
+console's hand-written decoder mirrored the document rather than the wire, so the
+offer catalog frame failed to decode, the feed ended before `ready`, and the
+canvas drew its skeleton for ever. Phase 4 exposed it by turning reliability from
+one confidence that always serialised into two rates that are absent when nobody
+measured them. Fixed in the document, both generated readers, and the
+hand-written decoder. `feed.contract.test.ts` decodes the real captured feed,
+all forty frames of it, in `bun run test` rather than behind a browser, because
+what broke was two documents disagreeing about one payload.
+
+The third is the one worth remembering. Normalising the class turned the score
+weights on for the demo Blueprint, which had been ranked on dollars alone, and
+the consumer stopped choosing the machine holding its input. The Blueprint now
+states that these Runs are batch work, which is what they are and which is the
+only one of the five classes for which the demo's claim holds: dataset gravity
+decides exactly when a caller can afford to wait for it. The coverage gap
+underneath it is the finding.
+`TestVerifyVerticalProofPassesEveryDeclaredCheckpoint` steps once, restarts, and
+drives to completion, so every placement happens after the restart, and it stays
+green through the whole regression. The console steps twice, advances, restarts,
+and then advances until the Run closes, so the consumer is placed before the
+restart against a fleet the other order never presents.
+`TestVerticalProofHoldsInTheOrderTheConsoleDrivesIt` asks the same fifteen
+checkpoints in the console's order, carries no browser, and fails on it.
+
+The fourth is the Lab job being killed at Go's implicit ten minute test timeout.
+`TestAgingLiftsABatchRunPastSustainedArrivals` drove a fixed hundred and fifty
+sweeps for a Run that succeeds on the eighty fifth, and the remaining sixty five
+assert nothing while being the most expensive in the suite, because each
+re-decides the queue against an event log that is longest at the end. It was a
+hundred and twenty three of the package's two hundred and seventy five seconds
+under the race detector, and is fifty four now that it stops when the Run has
+run. The step also states a twenty five minute budget, because ten minutes was a
+boundary nobody chose that this job happened to sit on.
+
 Run on 2026-07-27 on the merged tree, in the
 `beng/prediction-and-service-classes` worktree, on an amd64 Linux workstation
 with Go 1.25.11 and Docker Engine 29.6.2, which is not the arm64 macOS the phase
