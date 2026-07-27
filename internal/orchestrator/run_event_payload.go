@@ -239,6 +239,11 @@ func invalidBookingDecision(data bookingDecisionData) string {
 		return "decision.booking.state is invalid"
 	case data.Decision.Booking != nil && data.Decision.Booking.ScheduleVersion == 0:
 		return "decision.booking.schedule_version is required"
+	// A supersession is a name and a reason. One without the other is a decision
+	// claiming to stand in for something a reader cannot find, or a reason for
+	// replacing nothing, and both are worse than a decision that says neither.
+	case (data.Decision.Supersedes == "") != (data.Decision.SupersedesReason == ""):
+		return "decision.supersedes and decision.supersedes_reason are stated together"
 	default:
 		return ""
 	}
