@@ -3021,6 +3021,102 @@ complete because it works against a live provider.
     the door, or making the whole operator API strict about unknown fields, and
     which of those is right is a decision about the wire rather than about the class.
 
+- [x] 2026-07-27: Make waiting a phase that ends, and prove aging is what ends it in
+  the Run's favour. This closes the one thing this plan has disclosed under three
+  separate entries and deferred each time: a Run kept waiting longer than its class
+  allows went on waiting.
+  - The maximum queue delay was the one number on a class that nothing acted on. The
+    ordering derives its aging rate from it, `liveness.aging_prevents_starvation` holds
+    every execution to it, and admission itself only ever ended a wait at the class
+    deadline. So standard work waited four hours past a thirty minute promise, and
+    opportunistic work, which declares no deadline at all, waited for ever. A caller
+    learned nothing while Mercator spent the whole interval deciding it could not help.
+    `domain.RefusedQueueDelayExceeded` is the answer, and `deferOrRefuse` is the one
+    door it is asked at.
+  - It is asked only where waiting continues, which is a judgment call. A Run whose
+    capacity came free a moment after the bound has stopped waiting, and refusing it
+    there would spend the whole wait and then throw away the answer it was for. The
+    deadline is asked at both doors because it is a different question: whether the
+    answer is still worth producing at all.
+  - It is measured off elapsed time rather than off a projection, exactly as
+    `DeadlinePassed` is. A bound that has gone by is a fact about the clock, and the
+    tree already has the case for refusing on a projected wait nobody measured:
+    `a-wait-nobody-can-end-is-not-a-missed-deadline` is a Run closed at its first pass
+    on somebody else's runtime.
+  - `liveness.aging_prevents_starvation` had to be strengthened rather than left
+    alone, and this is the finding that mattered most in the slice. The law said no Run
+    sits queued past its class bound, which a refusal at that bound satisfies by
+    construction: once admission ends every wait it cannot honour, refusing everything
+    is a passing execution and the law has no teeth left. Its second half now reads the
+    refusals. A wait ended at the bound is starvation unless the record says the wait
+    could not have ended, and the whole of that exemption is the fleet answer saying no
+    machine it published could ever hold the Run.
+  - The second half is deliberately stated over waits and never over effective
+    priority. Production orders the queue on `Admission.EffectivePriority`, and a law
+    that read the same function would be checking the aging term against itself:
+    deleting the term makes the ordering wrong and every reading of it agree, which is
+    the mutation this slice is required to be red for. What the law reads instead is the
+    derivation the rate is built from, that a Run outranks anything arriving once it has
+    waited half its own bound, and the only thing it takes from the class table is that
+    bound. Work admitted past such a Run must itself have waited half of its own.
+  - That reading is also what keeps a fleet too small from being called starvation. A
+    machine serving less interactive work than arrives refuses the excess, and every Run
+    admitted ahead of one of those had waited longer than it had, so the law is silent.
+    A Run stepped over by arrivals that had waited nothing is the opposite record, and
+    that is the one it fails on.
+  - `a-batch-run-eventually-runs` is the proof the phase goal asks for, and it is a
+    green conformance Blueprint rather than a repair: aging has existed since the class
+    replaced the objective, and nothing in the corpus asserted it. Every queue fixture
+    before it states one moment of an ordering, and starvation is a claim about what an
+    hour of arrivals does to a Run. One machine, forty one interactive Runs arriving
+    over an hour, and one batch Run at a base priority of twenty. At thirty minutes and
+    thirty seconds the batch Run is worth a hundred and one, the next arrival is the
+    first told it waits behind it, and it takes the position that comes free.
+  - It is driven in thirty second advances rather than to completion, which is a
+    judgment call about the driver. `DriveToCompletion` jumps to whatever the world
+    still owes, so the sweeps between the last arrival and the next completion happen
+    inside one advance with nothing reasoning in the middle of them, and those sweeps
+    are the entire fixture: a freed Booking position is given to whatever outranks the
+    rest of the queue on the sweep that notices it. It is also why
+    `an-impossible-ask-empties-no-fleet` still records `DEADLINE_UNREACHABLE` rather
+    than the earlier bound. Driven to the world's horizon it reaches five hours in one
+    advance, where both bounds have gone by and `stepAdmit` names the stronger one.
+  - `a-class-with-no-deadline-still-stops-waiting` is the refusal at L0 and
+    `conformance/a-queue-delay-bound-is-refused-loudly` is the same claim at L1. Both
+    are the opportunistic case on purpose, because it is the one where nothing else can
+    end the wait, and the second is what the starvation law's exemption is falsifiable
+    through. It landed as a target Blueprint declaring `refused_queue_delay` and was
+    promoted with the production change, so the corpus was red for the behaviour before
+    the behaviour existed.
+  - The public contract had never described the queue at all. `phase` was an
+    undocumented string, and `service_class`, `queued_since`, and `admission` were
+    emitted over `GET /v1/runs` and absent from `openapi.json`, so the state a queued
+    Run is in was readable in practice and unstated in the contract. That is a gap the
+    queued-phase and class-rename slices left, and this is where the new refusal reason
+    an operator reads had to go, so all of it is described now: the phase enum, the six
+    admission reasons, the fleet answer a wait rests on, and the work named ahead.
+  - The invariant names the slice asked for, `liveness.no_run_starves` and
+    `safety.class_ordering_respected`, are the two laws this tree already holds under
+    `liveness.aging_prevents_starvation` and `safety.service_class_admission_order`.
+    They are the same rules over the same records, the second is already stated as an
+    overlap in time, and renaming them would have been thirty documentation lines and
+    two test files of churn for no change in what is checked.
+  - The bound is unchanged at `longestClassQueueDelay()`, which is two hours, and that
+    is chosen with `longestBound()` in mind: `liveness.admitted_run_progress` already
+    holds every execution to twenty four, so this rule lengthens nothing. A bound past
+    that one would have made every fixture in the tree longer to state a rule about the
+    queue.
+  - Every claim has a case that fails without its fix, verified one at a time. Deleting
+    the aging term from `Admission.EffectivePriority` fails
+    `a-batch-run-eventually-runs` on `liveness.aging_prevents_starvation` by name,
+    naming the arrival that overtook the batch Run and the wait it had accumulated.
+    Deleting the queue-delay branch from `deferOrRefuse` fails
+    `conformance/a-queue-delay-bound-is-refused-loudly` on the same law's first half.
+    The strengthened clause has its own three cases in `internal/lab`: younger work
+    admitted past a Run later refused is a violation, a fleet that could hold nothing is
+    not, and older work admitted ahead of a Run later refused is not.
+
+
 ## Phase status
 
 | Phase | What it delivers | Status |
@@ -3028,7 +3124,7 @@ complete because it works against a live provider.
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
-| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; the hierarchical estimator, owned economics, and replanning remain |
+| 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; the hierarchical estimator, owned economics, and replanning remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
@@ -3876,8 +3972,38 @@ Phase 4 added:
   over and two laws over one bound let a repair satisfy one of them and be
   believed. The deadline half is exercised at L0 and in the rule's own clause test
   and nowhere at L1: every class's maximum queue delay is shorter than its
-  deadline, so a Run that reaches its deadline has already starved and the
-  starvation law says so, which is the open question below.
+  deadline, so a Run driven to its deadline in fine sweeps is refused at the earlier
+  bound first, and one driven there in a single advance is refused for the deadline
+  because both have gone by.
+- `a-class-with-no-deadline-still-stops-waiting` (green): one machine with 200GB and
+  an opportunistic Run asking for 900GB. Two hours and a minute later it is refused
+  `QUEUE_DELAY_EXCEEDED`, which is the only bound that can end this wait: its class
+  states that its value does not expire, so it declares no deadline, and before the
+  maximum queue delay was a refusal this Run waited for ever.
+- `a-queue-delay-bound-is-refused-loudly` (conformance): the same claim at L1, and the
+  execution the starvation law's exemption is falsifiable through. Deleting the
+  queue-delay branch from `deferOrRefuse` fails it on
+  `liveness.aging_prevents_starvation` naming a Run two hours and five minutes into a
+  wait its class caps at two hours.
+- `a-batch-run-eventually-runs` (conformance): one machine, forty one interactive
+  Runs arriving over an hour, and one batch Run that base priority alone leaves behind
+  every one of them. At thirty minutes and thirty seconds of its own wait it is worth
+  a hundred and one, the next arrival is the first told it waits behind it, and it
+  takes the position that comes free and runs. It is the only fixture in either
+  simulator that states starvation, which is a claim about what a stream of arrivals
+  does to a Run over half an hour rather than about one moment of an ordering.
+  Deleting the aging term from `Admission.EffectivePriority` fails it by name.
+- `liveness.aging_prevents_starvation` (Lab invariant, strengthened): no Run sits
+  queued past the longest wait its own class allows, and no wait admission ended at
+  that bound was one the record says could have ended. The second half is what keeps
+  the first from being satisfied by refusing everything, and it is stated over waits
+  rather than over effective priority: production orders the queue on
+  `Admission.EffectivePriority`, so a law reading the same function would agree with a
+  deleted aging term. What it reads is the derivation the rate is built from, that
+  half a class bound of waiting outranks anything arriving, so work admitted past such
+  a Run must itself have waited half of its own bound. A fleet that published no
+  machine which could ever hold the Run is the whole of the exemption, which is what
+  separates a fleet too small from a queue that wronged somebody.
 
 No Lab invariant reads a seeded schedule, and none can. Invariants are evaluated
 only over the Lab's `InvariantObservation`, the placement harness at L0 evaluates
@@ -3899,8 +4025,8 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 51 regression Blueprints: 48 green and 3 target, beside one demo,
-one minimized case, and twenty four conformance Blueprints. The count is read off the
+The corpus is 52 regression Blueprints: 49 green and 3 target, beside one demo,
+one minimized case, and twenty six conformance Blueprints. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
 subdirectories beside them hold the demo and the one minimized case.

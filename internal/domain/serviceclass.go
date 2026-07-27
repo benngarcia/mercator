@@ -202,10 +202,17 @@ func (policy Admission) EffectivePriority(queuedSeconds float64) float64 {
 	return policy.Priority + policy.AgingPerSecond()*queuedSeconds
 }
 
-// Starved reports whether this Run has waited longer than its class allows.
+// Starved reports whether this Run has waited longer than its class allows, which
+// is the one bound with a consequence at both ends of the queue.
+//
 // Nothing may be admitted past a Run in that state, backfill included: the
 // exemption that lets spare capacity be taken is about capacity going spare, and
 // capacity a starved Run is waiting for is not spare.
+//
+// The Run itself is refused rather than kept, because the wait is already longer
+// than the class agreed to and going on with it promises nothing. That is the whole
+// of what the number means: a class states how long Mercator may make it wait, and
+// a bound with no consequence is a comment.
 func (policy Admission) Starved(queuedSeconds float64) bool {
 	return policy.MaxQueueDelaySeconds > 0 && queuedSeconds > policy.MaxQueueDelaySeconds
 }

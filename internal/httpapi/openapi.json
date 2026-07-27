@@ -2503,6 +2503,136 @@
 		  }
 		}
 	  },
+      "Admission": {
+        "type": "object",
+        "required": [
+          "reason",
+          "service_class",
+          "effective_priority",
+          "base_priority",
+          "queued_seconds",
+          "max_queue_delay_seconds"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why this Run is not running. NO_FEASIBLE_OFFER is a wait for capacity to come free, and what holds it is named in behind. NO_CAPACITY_FITS is a wait for capacity to be added, because every machine the fleet published was weighed against this Run and none of them could hold it once what they are spending now came back. CAPACITY_UNSTATED is a wait on a machine that has not said enough for anybody to tell, which is what an enrolled node whose disk probe failed publishes. BEHIND_HIGHER_PRIORITY is work Mercator already owes an answer to outranking this Run. The last two end the wait rather than describe it, and the Run is closed with them: QUEUE_DELAY_EXCEEDED is a Run Mercator has already kept waiting longer than its class allows, and DEADLINE_UNREACHABLE is a Run whose class says the answer has stopped being worth having.",
+            "enum": [
+              "NO_FEASIBLE_OFFER",
+              "NO_CAPACITY_FITS",
+              "CAPACITY_UNSTATED",
+              "BEHIND_HIGHER_PRIORITY",
+              "QUEUE_DELAY_EXCEEDED",
+              "DEADLINE_UNREACHABLE"
+            ]
+          },
+          "service_class": {
+            "type": "string",
+            "enum": [
+              "interactive",
+              "standard",
+              "batch",
+              "experimental",
+              "opportunistic"
+            ]
+          },
+          "effective_priority": {
+            "type": "number",
+            "format": "double",
+            "description": "What this Run was worth at the moment it was asked: what its class starts at plus everything waiting has added to it. It is recorded rather than derived on read, because it is the number the ordering was decided on, and a reader deriving it from a class table somebody has since edited would be checking today's policy against yesterday's decision."
+          },
+          "base_priority": {
+            "type": "number",
+            "format": "double"
+          },
+          "queued_seconds": {
+            "type": "number",
+            "format": "double",
+            "description": "How long this Run had been waiting when it was asked, measured from the first time admission deferred it."
+          },
+          "max_queue_delay_seconds": {
+            "type": "number",
+            "format": "double",
+            "description": "The longest its class allows this Run to be kept waiting. A wait past it is refused QUEUE_DELAY_EXCEEDED rather than held any longer."
+          },
+          "projected_wait_seconds": {
+            "type": "number",
+            "format": "double",
+            "description": "The shortest wait this Run faces, projected from the Bookings Mercator holds on the capacity that could hold it. Absent where nothing that could hold this Run carried a schedule to project from, which is a wait nobody measured rather than a wait of nothing."
+          },
+          "fleet": {
+            "$ref": "#/components/schemas/FleetAnswer"
+          },
+          "behind": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueuedAhead"
+            }
+          }
+        },
+        "x-go-type": "domain.AdmissionDeferral",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
+        }
+      },
+      "FleetAnswer": {
+        "type": "object",
+        "required": [
+          "weighed",
+          "could_hold"
+        ],
+        "properties": {
+          "weighed": {
+            "type": "integer",
+            "description": "How many machines the fleet published that this Run was measured against."
+          },
+          "could_hold": {
+            "type": "integer",
+            "description": "How many of those could have taken this Run once the capacity they are spending now comes back. A machine that is both busy and too small counts in weighed and never here."
+          },
+          "unstated": {
+            "type": "integer",
+            "description": "How many of them refused this Run only for facts nobody published. A node that could not measure its disk is what this exists for, and counting it among the machines that can never hold the work lets one failed measurement say a whole fleet has nothing."
+          }
+        },
+        "x-go-type": "domain.FleetAnswer",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
+        }
+      },
+      "QueuedAhead": {
+        "type": "object",
+        "required": [
+          "run_id"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "service_class": {
+            "type": "string",
+            "enum": [
+              "interactive",
+              "standard",
+              "batch",
+              "experimental",
+              "opportunistic"
+            ]
+          },
+          "effective_priority": {
+            "type": "number",
+            "format": "double",
+            "description": "What the work ahead was worth at the same moment. It is zero for a Run that is already running, which is not a ranking: work that holds the machine is ahead because it is there rather than because it outranks anybody."
+          }
+        },
+        "x-go-type": "domain.QueuedAhead",
+        "x-go-type-import": {
+          "path": "github.com/benngarcia/mercator/internal/domain",
+          "name": "domain"
+        }
+      },
       "Run": {
         "type": "object",
         "required": [
@@ -2524,7 +2654,35 @@
             "type": "string"
           },
           "phase": {
-            "type": "string"
+            "type": "string",
+            "description": "Where this Run is in its lifecycle. \"queued\" is a Run admission is holding, which is a state rather than a gap: before it, a Run nothing could place read as \"requested\" for ever and was indistinguishable from one Mercator had not reached yet. A queued Run says why in admission.",
+            "enum": [
+              "requested",
+              "queued",
+              "launching",
+              "running",
+              "cleaning_up",
+              "closed"
+            ]
+          },
+          "service_class": {
+            "type": "string",
+            "description": "The kind of work this Run said it is, which is what decides where it sits in the queue and what a second of waiting is worth to it.",
+            "enum": [
+              "interactive",
+              "standard",
+              "batch",
+              "experimental",
+              "opportunistic"
+            ]
+          },
+          "queued_since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When admission first told this Run to wait. It never moves once set, because both bounds its class states about waiting are measured from it, and it survives the Run leaving the queue so a reader can still see how long the Run waited."
+          },
+          "admission": {
+            "$ref": "#/components/schemas/Admission"
           },
           "outcome": {
             "type": "string",

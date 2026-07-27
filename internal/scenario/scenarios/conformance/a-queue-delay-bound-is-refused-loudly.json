@@ -1,0 +1,47 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "One machine with 100GB of room under the real control plane, and an opportunistic Run asking for 900GB. The class is the whole point of the world. Opportunistic work states that waiting costs it nothing and that its value does not expire, so it declares no deadline at all, and the deadline was the only bound admission ever ended a wait at. This Run therefore waited for ever: it was told the same thing about the same fleet every sweep, the answer was suppressed as unchanged, and liveness.aging_prevents_starvation called every execution that observed it after two hours a starvation, which is the hole the plan disclosed under three separate entries. The maximum queue delay is now the other door admission leaves by, so two hours into the wait the Run is refused QUEUE_DELAY_EXCEEDED, its outcome is recorded and it is closed, and a caller learns the answer is not coming from the Run rather than from the Run never starting. The starvation law is silent about this refusal, because the wait it ended names a fleet that weighed one machine and could hold the work on none of them: no ordering places work nothing can hold, and a refusal on that evidence is Mercator reporting a fleet too small rather than a queue that wronged somebody. It is driven in five minute advances rather than to completion, because the bound is a moment in the middle of a wait and driving from the last arrival to the world's own horizon steps over it.",
+  "seed": "mercator-lab-queue-delay-v1",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {
+            "digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55",
+            "size": "4GB"
+          },
+          {
+            "digest": "sha256:f1d435bc2d3bf19d42eee5b748585a319aac0bc640e9753ab14f8afea9aef5ee",
+            "size": "20MB"
+          }
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "resources": {"disk": "100GB"},
+        "rate_per_hour_usd": 1.0
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "spare",
+        "at": "0s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "opportunistic",
+          "resources": {"disk": "900GB"},
+          "expected_runtime": "5m",
+          "max_runtime": "10m"
+        }
+      }
+    ]
+  }
+}

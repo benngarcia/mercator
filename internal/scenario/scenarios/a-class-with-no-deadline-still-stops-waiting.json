@@ -1,8 +1,7 @@
 {
   "schema": "mercator.lab/blueprint.v1",
   "summary": "One machine with 200GB of room, and a Run of the one class that declares no deadline asking for 900GB. Nothing this fleet published can hold it, so admission queues it and says so: NO_CAPACITY_FITS is a wait for capacity to be added. Then two hours and a minute pass and the Run is asked again. Opportunistic work states that waiting costs it nothing and that its value does not expire, so it carries no deadline at all, and the maximum queue delay its class does state was a number nothing in admission ever acted on. The wait was ended by the deadline or by nothing, so this Run waited for ever, and liveness.aging_prevents_starvation called every execution that looked at it inside that window a starvation. The bound is now the other door admission leaves by: a Run kept waiting longer than its class allows is refused QUEUE_DELAY_EXCEEDED, with the wait and the bound it passed both in the record, rather than being kept on a promise Mercator has already broken. It is asked only of a Run being told to wait again, because the bound is on waiting: a Run whose capacity arrived a moment after the bound has stopped waiting, and refusing it there would spend the wait and throw the answer away.",
-  "classification": "target",
-  "missing_capabilities": ["refused_queue_delay"],
+  "classification": "green",
   "world": {
     "images": {
       "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {

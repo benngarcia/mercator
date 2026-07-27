@@ -237,15 +237,27 @@ func (run queuePosition) deferral(reason string, behind []domain.QueuedAhead) do
 }
 
 // deferOrRefuse is what admission does with a Run it will not admit now. It
-// waits, unless its class states a moment it must have started by that the wait
-// in front of it is already past, in which case waiting is a promise the record
-// says cannot be kept and the Run is refused instead.
+// waits, unless one of the two bounds its class states about waiting has gone by,
+// in which case waiting is a promise the record says is already broken and the Run
+// is refused instead.
 //
 // It is asked of every wait and not only of the one Placement caused. A Run held
 // behind work that outranks it is waiting exactly as much as a Run no machine
-// would take, and admission that checked the deadline on one and not the other
-// would keep a Run queued for ever past the moment its own class says the answer
-// stopped being worth having.
+// would take, and admission that checked a bound on one and not the other would
+// keep a Run queued for ever past the moment its own class says the answer stopped
+// being worth having.
+//
+// This is the only door the queue delay is asked at, because that bound is on
+// waiting and nothing else. A Run whose capacity came free has stopped waiting, so
+// stepAdmit asks it nothing on the way to Placement; refusing it there would spend
+// the whole wait and then discard the answer it was for. The deadline is asked
+// there as well, because it is a different question: whether the answer is still
+// worth producing at all.
+//
+// The queue delay is asked first, and every class states one shorter than its
+// deadline, so a wait that reaches a bound reaches this one. The order matters
+// only for a class somebody later gives a deadline inside its queue delay, and the
+// earlier bound is the honest thing to name in that record.
 func (o *Orchestrator) deferOrRefuse(
 	ctx context.Context,
 	workspaceID, runID string,
@@ -254,6 +266,10 @@ func (o *Orchestrator) deferOrRefuse(
 	run queuePosition,
 	answer admissionAnswer,
 ) error {
+	if run.policy.Starved(run.queued) {
+		answer.deferral.Reason = domain.RefusedQueueDelayExceeded
+		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)
+	}
 	if run.policy.DeadlineUnreachable(run.queued, answer.deferral.ProjectedWaitSeconds, answer.projected) {
 		answer.deferral.Reason = domain.RefusedDeadlineUnreachable
 		return o.recordRefusal(ctx, workspaceID, runID, version, state, answer)

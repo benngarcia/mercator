@@ -180,6 +180,278 @@ func TestACostBoundRefusesTheMachineTheClassWouldBuyAtL1(t *testing.T) {
 	}
 }
 
+// TestAgingLiftsABatchRunPastSustainedArrivals is the claim the phase goal asks to
+// be proved, under the real control plane. The placement corpus can show one moment
+// of an ordering; starvation is a claim about what half an hour of arrivals does to
+// a Run, so only an execution can state it.
+//
+// One machine, twenty four interactive Runs arriving on it over half an hour, and
+// one batch Run whose base priority of twenty leaves it behind every one of them.
+// What lifts it is the age of its own wait, and the fixture is only about that: the
+// arrivals never stop, and the machine never has a moment free that nothing else
+// wants.
+//
+// It is driven in thirty second advances rather than to completion, because this
+// queue is decided between arrivals. A freed Booking position is given to whatever
+// outranks the rest of the queue on the sweep that notices it, and driving from one
+// arrival to the world's next horizon steps over every one of those sweeps.
+func TestAgingLiftsABatchRunPastSustainedArrivals(t *testing.T) {
+	execution := openConformanceExecution(t, "a-batch-run-eventually-runs")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	driveInSweeps(t, execution, 30*time.Second, 150)
+
+	// The proof is that the arrivals were overtaken while they were still arriving,
+	// and it is read off an interactive Run being told it waits behind the batch Run.
+	// Interactive work starts at the highest priority any class declares, so nothing
+	// but the age of its own wait can put a batch Run in front of one.
+	overtaken := deferredBehind(t, execution, "run-quiet")
+	if len(overtaken) == 0 {
+		t.Fatal("no interactive Run was ever told it waits behind the batch Run, so nothing was overtaken")
+	}
+	// It waited half an hour to get there, which is what makes the fixture about
+	// aging rather than about a machine that happened to be free.
+	waited := admittedAfterWaiting(t, execution, "run-quiet")
+	if waited < 25*time.Minute {
+		t.Fatalf("the batch Run was admitted after waiting %s, and a wait this fixture can explain by anything other than aging proves nothing", waited)
+	}
+	// And it ran, which is the whole claim. A batch Run merely told to wait less
+	// often is a batch Run that starved.
+	quiet := projectedRun(t, execution, "run-quiet")
+	if quiet.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("the batch Run ended %q in phase %q, and aging is supposed to have let it run", quiet.Outcome, quiet.Phase)
+	}
+	starvation := invariantResultByID(t, latestInvariantResults(execution.invariants), "liveness.aging_prevents_starvation")
+	if starvation.Status != InvariantPassed {
+		t.Fatalf("the starvation law reports %+v", starvation)
+	}
+}
+
+// TestAQueueDelayBoundIsRefusedLoudlyUnderTheRealControlPlane is the other door
+// admission leaves by, at L1. The class here declares no deadline, so its maximum
+// queue delay is the only thing that can end this wait: before the bound was a
+// refusal, this Run waited for ever against a fleet that had already said it holds
+// no machine which could ever take it.
+//
+// The starvation law has to stay silent about the refusal, which is the half of the
+// rule that keeps it from calling a fleet too small a queue that wronged somebody.
+func TestAQueueDelayBoundIsRefusedLoudlyUnderTheRealControlPlane(t *testing.T) {
+	execution := openConformanceExecution(t, "a-queue-delay-bound-is-refused-loudly")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	driveInSweeps(t, execution, 5*time.Minute, 25)
+
+	refusal := refusalRecord(t, execution, "run-spare")
+	if refusal.Reason != domain.RefusedQueueDelayExceeded {
+		t.Fatalf("the wait ended as %q, and what this Run passed is the longest wait its class allows", refusal.Reason)
+	}
+	if refusal.QueuedSeconds <= refusal.MaxQueueDelaySeconds {
+		t.Fatalf("the refusal says the Run waited %.0fs against a bound of %.0fs, which is not a bound anything passed",
+			refusal.QueuedSeconds, refusal.MaxQueueDelaySeconds)
+	}
+	// Loudly means the caller can read it off the Run. A refusal that left the Run
+	// open would be the wait it replaced with more words in the log.
+	spare := projectedRun(t, execution, "run-spare")
+	if !spare.Closed || spare.Outcome != domain.RunOutcomeFailed {
+		t.Fatalf("the refused Run is recorded closed=%v outcome=%q", spare.Closed, spare.Outcome)
+	}
+	starvation := invariantResultByID(t, latestInvariantResults(execution.invariants), "liveness.aging_prevents_starvation")
+	if starvation.Status != InvariantPassed {
+		t.Fatalf("the starvation law read a fleet that can hold nothing as a Run somebody stepped over: %+v", starvation)
+	}
+}
+
+// TestARefusedQueueDelayIsStarvationWhenYoungerWorkOvertookIt is the deliberate
+// failure of the clause that keeps the starvation law from being satisfied by
+// refusing everything. It is the world deleting the aging term produces: a batch
+// Run refused an hour into its wait, and arrivals admitted past it long after the
+// moment its own class promises to have promoted it above anything arriving.
+func TestARefusedQueueDelayIsStarvationWhenYoungerWorkOvertookIt(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		admissionDeferredEvent("run-quiet", now, domain.ClassBatch),
+		admittedForClassEvent("run-urgent", domain.ClassInteractive, now.Add(31*time.Minute)),
+		refusedForQueueDelayEvent("run-quiet", now.Add(61*time.Minute), domain.ClassBatch, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}),
+	})
+
+	err := agingPreventsStarvation(observation)
+	if err == nil {
+		t.Fatal("a batch Run was refused for a wait a fresh arrival was admitted in the middle of, and the rule allowed it")
+	}
+	t.Logf("violation: %v", err)
+}
+
+// TestARefusedQueueDelayIsNotStarvationWhenTheFleetCouldHoldNothing is the whole of
+// the exemption. Every machine the fleet published was weighed against this Run and
+// none of them can ever take it, so no ordering could have placed it and the refusal
+// is Mercator reporting a fleet too small.
+func TestARefusedQueueDelayIsNotStarvationWhenTheFleetCouldHoldNothing(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		admissionDeferredEvent("run-impossible", now, domain.ClassBatch),
+		admittedForClassEvent("run-urgent", domain.ClassInteractive, now.Add(31*time.Minute)),
+		refusedForQueueDelayEvent("run-impossible", now.Add(61*time.Minute), domain.ClassBatch, &domain.FleetAnswer{Weighed: 1}),
+	})
+
+	if err := agingPreventsStarvation(observation); err != nil {
+		t.Fatalf("a fleet that can hold nothing was read as a queue that wronged somebody: %v", err)
+	}
+}
+
+// TestARefusedQueueDelayIsNotStarvationWhenOlderWorkWasAdmitted is the other thing
+// the clause has to leave alone, and it is the state the aging fixture's own fleet
+// spends half an hour in. More interactive work is arriving than one machine can
+// serve, so the excess is refused at a bound Mercator cannot honour. Every Run
+// admitted ahead of one of them had waited longer than it had, which is the queue
+// working rather than anybody being stepped over.
+func TestARefusedQueueDelayIsNotStarvationWhenOlderWorkWasAdmitted(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	observation := admissionObservation(now, nil, []eventlog.CloudEvent{
+		admissionDeferredEvent("run-older", now.Add(-100*time.Second), domain.ClassInteractive),
+		admissionDeferredEvent("run-watched", now, domain.ClassInteractive),
+		admittedForClassEvent("run-older", domain.ClassInteractive, now.Add(200*time.Second)),
+		refusedForQueueDelayEvent("run-watched", now.Add(301*time.Second), domain.ClassInteractive, &domain.FleetAnswer{Weighed: 1, CouldHold: 1}),
+	})
+
+	if err := agingPreventsStarvation(observation); err != nil {
+		t.Fatalf("a fleet too small for its arrivals was read as starvation: %v", err)
+	}
+}
+
+// driveInSweeps advances the execution in fixed steps, which is how a fixture about
+// a queue is driven. DriveToCompletion jumps to whatever the world still owes, so
+// every moment between the last arrival and the next completion, which is where the
+// ordering is decided and where a class bound falls, happens in one advance with no
+// sweep inside it.
+func driveInSweeps(t *testing.T, execution *Execution, step time.Duration, sweeps int) {
+	t.Helper()
+	start := execution.now
+	for range sweeps {
+		if _, err := execution.Drive(context.Background(), Advance(step)); err != nil {
+			t.Fatalf("advance to %s: %v", execution.now.Add(step).Sub(start), err)
+		}
+	}
+}
+
+// admittedAfterWaiting is how long the record says one Run waited before a decision
+// took a machine for it, measured the way the class bounds are: from the first time
+// admission told it to wait.
+func admittedAfterWaiting(t *testing.T, execution *Execution, runID string) time.Duration {
+	t.Helper()
+	var since time.Time
+	for _, event := range publicRunEvents(t, execution) {
+		if !strings.HasSuffix(event.StreamID, runID) {
+			continue
+		}
+		switch event.Type {
+		case orchestrator.EventAdmissionDeferred:
+			if since.IsZero() {
+				since = event.OccurredAt.UTC()
+			}
+		case orchestrator.EventBookingDecided:
+			var payload struct {
+				Decision domain.BookingDecision `json:"decision"`
+			}
+			if err := json.Unmarshal(event.Data, &payload); err != nil {
+				t.Fatalf("read the decision: %v", err)
+			}
+			if payload.Decision.SelectedOfferSnapshotID == "" || since.IsZero() {
+				continue
+			}
+			return event.OccurredAt.UTC().Sub(since)
+		}
+	}
+	t.Fatalf("nothing in the record ever placed Run %q", runID)
+	return 0
+}
+
+// deferredBehind is every Run the record says was told it waits behind this one.
+func deferredBehind(t *testing.T, execution *Execution, runID string) []string {
+	t.Helper()
+	var behind []string
+	for _, event := range publicRunEvents(t, execution) {
+		if event.Type != orchestrator.EventAdmissionDeferred {
+			continue
+		}
+		var payload struct {
+			Deferral domain.AdmissionDeferral `json:"deferral"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			t.Fatalf("read the deferral: %v", err)
+		}
+		for _, ahead := range payload.Deferral.Behind {
+			if ahead.RunID == runID {
+				behind = append(behind, strings.TrimPrefix(event.StreamID, "runs/"))
+			}
+		}
+	}
+	return behind
+}
+
+// refusalRecord is the wait admission refused to go on holding, read off the public
+// log.
+func refusalRecord(t *testing.T, execution *Execution, runID string) domain.AdmissionDeferral {
+	t.Helper()
+	for _, event := range publicRunEvents(t, execution) {
+		if event.Type != orchestrator.EventAdmissionRefused || !strings.HasSuffix(event.StreamID, runID) {
+			continue
+		}
+		var payload struct {
+			Deferral domain.AdmissionDeferral `json:"deferral"`
+		}
+		if err := json.Unmarshal(event.Data, &payload); err != nil {
+			t.Fatalf("read the refusal: %v", err)
+		}
+		return payload.Deferral
+	}
+	t.Fatalf("admission never refused Run %q", runID)
+	return domain.AdmissionDeferral{}
+}
+
+func publicRunEvents(t *testing.T, execution *Execution) []eventlog.StoredEvent {
+	t.Helper()
+	events, err := execution.runtime.mercatorEvents(context.Background())
+	if err != nil {
+		t.Fatalf("read Mercator events: %v", err)
+	}
+	return events
+}
+
+// admittedForClassEvent is a Booking Decision that took a machine for a Run of a
+// stated class. The class is on the decision because that is where the starvation
+// rule reads it: what a Run was worth when it was admitted is a fact about the
+// decision rather than about today's class table.
+func admittedForClassEvent(runID string, class domain.ServiceClass, at time.Time) eventlog.CloudEvent {
+	event := bookingDecidedEvent("decided-"+runID, domain.BookingDecision{
+		RunID:                   runID,
+		SelectedOfferSnapshotID: "offer-1",
+		Policy:                  domain.PlacementPolicy{Class: class},
+	})
+	event.Subject = "runs/" + runID
+	event.Time = at.Format(time.RFC3339Nano)
+	return event
+}
+
+// refusedForQueueDelayEvent is admission ending a wait at the class bound, carrying
+// the fleet answer the wait rested on.
+func refusedForQueueDelayEvent(runID string, at time.Time, class domain.ServiceClass, fleet *domain.FleetAnswer) eventlog.CloudEvent {
+	event := deferralEvent(runID, at, domain.AdmissionDeferral{
+		Reason: domain.RefusedQueueDelayExceeded,
+		Class:  class,
+		Fleet:  fleet,
+	})
+	event.Type = orchestrator.EventAdmissionRefused
+	return event
+}
+
 // admissionRecord is the first thing admission said about one Run, read off the
 // public log the way an operator reads it, and whether it said anything at all: a
 // Run the fleet had room for on arrival was never told to wait.

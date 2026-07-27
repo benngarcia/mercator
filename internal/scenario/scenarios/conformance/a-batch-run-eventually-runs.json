@@ -288,6 +288,176 @@
           "expected_runtime": "2m",
           "max_runtime": "3m"
         }
+      },
+      {
+        "name": "watched-25",
+        "at": "2020s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-26",
+        "at": "2120s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-27",
+        "at": "2220s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-28",
+        "at": "2320s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-29",
+        "at": "2420s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-30",
+        "at": "2520s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-31",
+        "at": "2620s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-32",
+        "at": "2720s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-33",
+        "at": "2820s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-34",
+        "at": "2920s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-35",
+        "at": "3020s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-36",
+        "at": "3120s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-37",
+        "at": "3220s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-38",
+        "at": "3320s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-39",
+        "at": "3420s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-40",
+        "at": "3520s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
+      },
+      {
+        "name": "watched-41",
+        "at": "3620s",
+        "request": {
+          "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+          "service_class": "interactive",
+          "expected_runtime": "2m",
+          "max_runtime": "3m"
+        }
       }
     ]
   }

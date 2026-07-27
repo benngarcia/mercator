@@ -62,6 +62,25 @@ const (
 	// refused rather than queued, because queueing it would be promising a
 	// start the record already says cannot happen.
 	RefusedDeadlineUnreachable = "DEADLINE_UNREACHABLE"
+	// RefusedQueueDelayExceeded is a Run Mercator has already kept waiting longer
+	// than its class allows. The maximum queue delay was the one bound in the class
+	// nothing acted on: the ordering derived its aging rate from it and the Lab held
+	// executions to it, while admission itself only ever ended a wait at the class
+	// deadline. So work of a class that declares no deadline waited for ever, and
+	// work of a class that declares one waited hours past a promise already broken,
+	// which is a caller told nothing while Mercator spends the whole interval
+	// deciding it cannot help.
+	//
+	// It is asked only of a Run being told to wait again, because the bound is on
+	// waiting and nothing else. A Run whose capacity came free a moment after the
+	// bound has stopped waiting, and refusing it there would spend the entire wait
+	// and then throw away the answer it was for.
+	//
+	// It is measured off what has elapsed rather than off a projection, exactly as
+	// DeadlinePassed is. A bound that has gone by is a fact about the clock, and
+	// refusing a Run for a wait nobody measured is how the deadline rule used to
+	// close Runs at their first pass on somebody else's runtime.
+	RefusedQueueDelayExceeded = "QUEUE_DELAY_EXCEEDED"
 )
 
 // AdmissionDeferral is one moment admission told a Run to wait, or refused to

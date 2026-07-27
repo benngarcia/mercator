@@ -486,11 +486,77 @@ export interface components {
             /** @enum {string} */
             disposition: "release" | "terminate";
         };
+        Admission: {
+            /**
+             * @description Why this Run is not running. NO_FEASIBLE_OFFER is a wait for capacity to come free, and what holds it is named in behind. NO_CAPACITY_FITS is a wait for capacity to be added, because every machine the fleet published was weighed against this Run and none of them could hold it once what they are spending now came back. CAPACITY_UNSTATED is a wait on a machine that has not said enough for anybody to tell, which is what an enrolled node whose disk probe failed publishes. BEHIND_HIGHER_PRIORITY is work Mercator already owes an answer to outranking this Run. The last two end the wait rather than describe it, and the Run is closed with them: QUEUE_DELAY_EXCEEDED is a Run Mercator has already kept waiting longer than its class allows, and DEADLINE_UNREACHABLE is a Run whose class says the answer has stopped being worth having.
+             * @enum {string}
+             */
+            reason: "NO_FEASIBLE_OFFER" | "NO_CAPACITY_FITS" | "CAPACITY_UNSTATED" | "BEHIND_HIGHER_PRIORITY" | "QUEUE_DELAY_EXCEEDED" | "DEADLINE_UNREACHABLE";
+            /** @enum {string} */
+            service_class: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+            /**
+             * Format: double
+             * @description What this Run was worth at the moment it was asked: what its class starts at plus everything waiting has added to it. It is recorded rather than derived on read, because it is the number the ordering was decided on, and a reader deriving it from a class table somebody has since edited would be checking today's policy against yesterday's decision.
+             */
+            effective_priority: number;
+            /** Format: double */
+            base_priority: number;
+            /**
+             * Format: double
+             * @description How long this Run had been waiting when it was asked, measured from the first time admission deferred it.
+             */
+            queued_seconds: number;
+            /**
+             * Format: double
+             * @description The longest its class allows this Run to be kept waiting. A wait past it is refused QUEUE_DELAY_EXCEEDED rather than held any longer.
+             */
+            max_queue_delay_seconds: number;
+            /**
+             * Format: double
+             * @description The shortest wait this Run faces, projected from the Bookings Mercator holds on the capacity that could hold it. Absent where nothing that could hold this Run carried a schedule to project from, which is a wait nobody measured rather than a wait of nothing.
+             */
+            projected_wait_seconds?: number;
+            fleet?: components["schemas"]["FleetAnswer"];
+            behind?: components["schemas"]["QueuedAhead"][];
+        };
+        FleetAnswer: {
+            /** @description How many machines the fleet published that this Run was measured against. */
+            weighed: number;
+            /** @description How many of those could have taken this Run once the capacity they are spending now comes back. A machine that is both busy and too small counts in weighed and never here. */
+            could_hold: number;
+            /** @description How many of them refused this Run only for facts nobody published. A node that could not measure its disk is what this exists for, and counting it among the machines that can never hold the work lets one failed measurement say a whole fleet has nothing. */
+            unstated?: number;
+        };
+        QueuedAhead: {
+            run_id: string;
+            /** @enum {string} */
+            service_class?: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+            /**
+             * Format: double
+             * @description What the work ahead was worth at the same moment. It is zero for a Run that is already running, which is not a ranking: work that holds the machine is ahead because it is there rather than because it outranks anybody.
+             */
+            effective_priority?: number;
+        };
         Run: {
             id: string;
             workspace_id: string;
             workload_revision_id: string;
-            phase: string;
+            /**
+             * @description Where this Run is in its lifecycle. "queued" is a Run admission is holding, which is a state rather than a gap: before it, a Run nothing could place read as "requested" for ever and was indistinguishable from one Mercator had not reached yet. A queued Run says why in admission.
+             * @enum {string}
+             */
+            phase: "requested" | "queued" | "launching" | "running" | "cleaning_up" | "closed";
+            /**
+             * @description The kind of work this Run said it is, which is what decides where it sits in the queue and what a second of waiting is worth to it.
+             * @enum {string}
+             */
+            service_class?: "interactive" | "standard" | "batch" | "experimental" | "opportunistic";
+            /**
+             * Format: date-time
+             * @description When admission first told this Run to wait. It never moves once set, because both bounds its class states about waiting are measured from it, and it survives the Run leaving the queue so a reader can still see how long the Run waited.
+             */
+            queued_since?: string;
+            admission?: components["schemas"]["Admission"];
             /** @enum {string} */
             outcome?: "succeeded" | "failed" | "cancelled";
             exit_code?: number;

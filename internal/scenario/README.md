@@ -161,8 +161,10 @@ state on purpose rather than by leaving a number out.
 
 The other bounds are the class's own and no request states them: how long a Run
 may be kept waiting, and the moment it must have started by. Both are measured
-from when admission first told the Run to wait, so a fixture states them by
-letting virtual time pass and asserting the `refuse` below.
+from when admission first told the Run to wait, both end the wait rather than
+describe it, and a fixture states either by letting virtual time pass and
+asserting the `refuse` below. The queue delay is the earlier of the two in every
+class, and it is the only one a class that declares no deadline has.
 
 `outcome` is one of four sentences about one Run. `place` and `fail` are about a
 Booking Decision: an offer was selected, or none was. `defer` and `refuse` are
@@ -187,9 +189,11 @@ because nothing the fleet published can hold this Run, whether it weighed machin
 and refused every one of them or published nothing this ask even matches,
 `CAPACITY_UNSTATED` for a wait on a machine that has not said enough for anybody to
 tell, which is what an enrolled node whose disk probe failed publishes,
-`BEHIND_HIGHER_PRIORITY` for a Run the queue in front of it
-outranks, and `DEADLINE_UNREACHABLE` for the one a `refuse` states, where the
-moment the Run's class says it must have started by is already past. `behind`
+and `BEHIND_HIGHER_PRIORITY` for a Run the queue in front of it
+outranks. Two reasons are what a `refuse` states, and each is a bound on waiting
+that has gone by: `QUEUE_DELAY_EXCEEDED` for a Run Mercator has already kept
+waiting longer than its class allows, and `DEADLINE_UNREACHABLE` for one where the
+moment its class says it must have started by is already past. `behind`
 names the work the record says is in front of it, by the fixture's own names for
 those Runs, and it is a whole-set assertion: a deferral naming half of what a Run
 waits for is a queue an operator cannot read. `effective_priority` and

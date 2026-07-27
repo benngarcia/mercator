@@ -37,21 +37,46 @@ func longestClassQueueDelay() time.Duration {
 	return longest
 }
 
-// agingPreventsStarvation is the promise every class's maximum queue delay makes:
-// a Run Mercator accepted and told to wait is admitted inside its own class's
-// bound, however much work of a higher class arrives behind it.
+// agingPreventsStarvation is the promise every class's maximum queue delay makes,
+// in the two halves it takes to state it once the bound is a refusal.
 //
-// It replaced the exemption that let a Run sit in phase "queued" for ever inside
+// The first half is that no Run is left waiting past the bound. It replaced the
+// exemption that let a Run sit in phase "queued" for ever inside
 // admitted_run_progress. That exemption was written when nothing could reach the
 // queued phase, so it cost nothing and read as a reasonable carve-out; the moment
 // a Run could actually be queued it would have made starvation the one thing the
 // liveness rules explicitly permit.
 //
+// The second half is what stops the first from being satisfied by refusing
+// everything. Admission now ends a wait it cannot honour, so a Run stepped over
+// for an hour and a Run whose fleet was never big enough both leave the queue
+// inside the bound, and only the second of those is Mercator working. A refusal at
+// the bound is therefore read as starvation whenever the record says the wait
+// could have ended and younger work was admitted past it after the moment the
+// Run's own class promises to have promoted it.
+//
+// That second half is deliberately stated over waits rather than over effective
+// priority. Production orders the queue on the number EffectivePriority returns,
+// and a law reading the same function would be checking the aging term against
+// itself: deleting the term makes the ordering wrong and makes every reading of it
+// agree. What this reads instead is the derivation the rate is built from, that a
+// Run outranks anything that could arrive once it has waited half its own bound,
+// and the only thing it takes from the class table is that bound.
+func agingPreventsStarvation(observation InvariantObservation) error {
+	if err := noWaitPastItsClassBound(observation); err != nil {
+		return err
+	}
+	return noRefusalYoungerWorkOvertook(observation)
+}
+
+// noWaitPastItsClassBound is a Run Mercator accepted and told to wait still
+// waiting past the longest wait its own class allows.
+//
 // It is stated against the read model rather than against the event log because
 // what it is about is the state a Run is in now, and the projection is where
 // Mercator says what that is. A Run that left the queue at any point is not
 // starving whatever happened to it since.
-func agingPreventsStarvation(observation InvariantObservation) error {
+func noWaitPastItsClassBound(observation InvariantObservation) error {
 	for _, run := range observation.Runs {
 		if run.Closed || run.Admission == nil || run.QueuedSince == nil {
 			continue
@@ -67,6 +92,181 @@ func agingPreventsStarvation(observation InvariantObservation) error {
 		)
 	}
 	return nil
+}
+
+// noRefusalYoungerWorkOvertook holds every wait admission ended at the class
+// bound to the reason it is allowed to end there. A fleet that never published a
+// machine which could take this Run is one, and it is the whole of the exemption:
+// no ordering could have placed work nothing can hold, so the refusal is Mercator
+// reporting a fleet too small rather than a queue that wronged somebody.
+//
+// Anything else refused at the bound has to be explained by what was admitted
+// while it waited, and the rule is the one the aging rate is derived from. Once a
+// Run has waited half its own maximum queue delay it is worth more than any class
+// starting fresh, so work admitted past it from that moment on must itself have
+// waited at least half of its own bound. Work that had not is younger work that
+// stepped over it, which is exactly the starvation the derivation exists to
+// prevent.
+//
+// It is replayed out of the public log because it is about moments that have
+// passed: which Runs took capacity while this one waited, and how long each of
+// them had waited when they did. The projection only says who is waiting now.
+func noRefusalYoungerWorkOvertook(observation InvariantObservation) error {
+	admitted, refused, err := replayQueueDepartures(observation)
+	if err != nil {
+		return err
+	}
+	for _, wait := range refused {
+		if err := agingShouldHaveTaken(wait, admitted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// replayQueueDepartures is every way this log says a wait ended: the Runs that
+// left it by taking capacity, with how long each had waited when it did, and the
+// Runs admission would not hold any longer.
+//
+// Every moment is read only where the rule needs one, which is why the timestamp
+// is parsed inside each case rather than beside the event. A record whose
+// admission facts cannot state when they happened is a record this rule fails on,
+// and the rest of the stream is none of its business.
+func replayQueueDepartures(observation InvariantObservation) ([]admittedRun, []refusedWait, error) {
+	waiting := map[string]time.Time{}
+	var admitted []admittedRun
+	var refused []refusedWait
+	for _, event := range observation.MercatorEvents {
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		switch event.Type {
+		case orchestrator.EventAdmissionDeferred:
+			at, err := eventOccurredAt(event)
+			if err != nil {
+				return nil, nil, err
+			}
+			// The moment a wait began never moves, for the reason the queue itself
+			// reads it that way: a Run told to wait for a second reason has not
+			// started waiting again.
+			if _, held := waiting[runID]; !held {
+				waiting[runID] = at
+			}
+		case orchestrator.EventAdmissionRefused:
+			deferral, err := recordedDeferral(event)
+			if err != nil {
+				return nil, nil, err
+			}
+			if deferral.Reason == domain.RefusedQueueDelayExceeded {
+				at, err := eventOccurredAt(event)
+				if err != nil {
+					return nil, nil, err
+				}
+				refused = append(refused, refusedWait{
+					runID: runID, class: deferral.Class, since: waiting[runID], at: at,
+					fleetHeldNothing: deferral.HoldsNoQueue(),
+				})
+			}
+			delete(waiting, runID)
+		case orchestrator.EventRunClosed:
+			delete(waiting, runID)
+		case orchestrator.EventBookingDecided:
+			decision, err := recordedDecision(event)
+			if err != nil {
+				return nil, nil, err
+			}
+			// A decision that selected nothing admitted nothing, and it is also the
+			// shape every synthetic Booking Decision in this tree carries, so asking
+			// for its timestamp first would fail this rule on records it has nothing
+			// to say about.
+			if decision.SelectedOfferSnapshotID == "" {
+				continue
+			}
+			at, err := eventOccurredAt(event)
+			if err != nil {
+				return nil, nil, err
+			}
+			admitted = append(admitted, admittedRun{
+				runID: decision.RunID, class: decision.Policy.Class, at: at,
+				waited: waitedBy(waiting[decision.RunID], at),
+			})
+			delete(waiting, decision.RunID)
+		}
+	}
+	return admitted, refused, nil
+}
+
+// admittedRun is one Run taking capacity at one moment, and how long it had
+// itself been kept waiting when it did.
+type admittedRun struct {
+	runID  string
+	class  domain.ServiceClass
+	at     time.Time
+	waited float64
+}
+
+// refusedWait is one wait admission ended at the class bound: whose it was, when
+// it began and ended, and whether the fleet had said there was nothing here to
+// wait for.
+type refusedWait struct {
+	runID            string
+	class            domain.ServiceClass
+	since            time.Time
+	at               time.Time
+	fleetHeldNothing bool
+}
+
+// agingShouldHaveTaken adjudicates one refused wait against every admission taken
+// during it. A wait this replay never saw begin is not judged, because there is no
+// moment to measure anything from and a Run refused without ever having been
+// deferred waited for nothing.
+func agingShouldHaveTaken(wait refusedWait, admissions []admittedRun) error {
+	if wait.fleetHeldNothing || wait.since.IsZero() {
+		return nil
+	}
+	promoted := halfTheBound(wait.class)
+	if promoted <= 0 {
+		return nil
+	}
+	for _, admission := range admissions {
+		if admission.runID == wait.runID || admission.at.Before(wait.since) || admission.at.After(wait.at) {
+			continue
+		}
+		waited := admission.at.Sub(wait.since).Seconds()
+		if waited <= promoted {
+			continue
+		}
+		// Work that had itself aged to the top of the queue is not younger work
+		// stepping over anybody, and capacity going spare may be taken by a class
+		// that declared itself eligible for it right up to the moment the Run
+		// waiting for it is past its own bound.
+		if ahead := halfTheBound(admission.class); ahead > 0 && admission.waited >= ahead {
+			continue
+		}
+		if admission.class.Admission().BackfillEligible && !wait.class.Admission().Starved(waited) {
+			continue
+		}
+		return fmt.Errorf(
+			"Run %q of class %q was refused after waiting %.0fs, and %q of class %q was admitted %.0fs into that wait having waited %.0fs, which is past the %.0fs at which this class promises to have promoted a Run above anything arriving",
+			wait.runID, wait.class, wait.at.Sub(wait.since).Seconds(),
+			admission.runID, admission.class, waited, admission.waited, promoted,
+		)
+	}
+	return nil
+}
+
+// halfTheBound is the moment a class's own aging rate has promoted a Run of it
+// above every class starting fresh. It is half the maximum queue delay because
+// that is what Admission.AgingPerSecond is derived from, and it is recomputed
+// here rather than read off that function so the derivation and the rule built on
+// it cannot be broken by one edit.
+func halfTheBound(class domain.ServiceClass) float64 {
+	return class.Admission().MaxQueueDelaySeconds / 2
+}
+
+func waitedBy(since, at time.Time) float64 {
+	if since.IsZero() {
+		return 0
+	}
+	return at.Sub(since).Seconds()
 }
 
 func describeQueuedAhead(ahead []domain.QueuedAhead) string {

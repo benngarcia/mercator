@@ -170,10 +170,25 @@ func DefaultInvariantRegistry() InvariantRegistry {
 			check:       admittedRunProgress,
 		},
 		invariantRule{
-			id:          "liveness.aging_prevents_starvation",
-			assumptions: []string{"virtual time advances", "capacity eventually frees"},
-			bound:       longestClassQueueDelay(),
-			check:       agingPreventsStarvation,
+			id: "liveness.aging_prevents_starvation",
+			// The list is what the rule is allowed to assume rather than a summary of
+			// it, in the shape liveness.prefetch_converges states its own. The last
+			// two are what the second half of this rule rests on: a refusal that says
+			// nothing about the fleet cannot be told apart from a fleet too small, and
+			// the promise that half a bound of waiting outranks any arrival is what
+			// makes younger admitted work a violation rather than a policy choice.
+			assumptions: []string{
+				"virtual time advances",
+				"capacity that could hold the Run eventually frees",
+				"a wait names the fleet it was last measured against",
+				"each class ages above every arriving class within half its own maximum queue delay",
+			},
+			// The longest wait any class declares, which is two hours, and well
+			// inside the twenty four hours admitted_run_progress already holds every
+			// execution to. A bound past that one would have lengthened every
+			// execution in the tree to state a rule about the queue.
+			bound: longestClassQueueDelay(),
+			check: agingPreventsStarvation,
 		},
 	)
 	if err != nil {

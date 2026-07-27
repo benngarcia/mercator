@@ -468,6 +468,9 @@ type AdapterListResponse struct {
 // AdapterManifest An adapter's self-description for onboarding surfaces. Lives next to the adapter's code; carries no per-connection state and never any secret material.
 type AdapterManifest = adapter.Manifest
 
+// Admission defines model for Admission.
+type Admission = domain.AdmissionDeferral
+
 // ArtifactEvidence What one candidate was found holding of one Artifact the Run reads, and what it would still have to read out of the object store. Only the control plane can state it: the host says which copy it has and what that copy was checked against, the catalog says what the version is, and the answer is whether those two agree. There is no partial, because an Artifact version is one immutable object.
 type ArtifactEvidence struct {
 	ArtifactId string `json:"artifact_id"`
@@ -869,6 +872,9 @@ type ExecutionPolicy struct {
 	MaxRuntimeSeconds   int64 `json:"max_runtime_seconds"`
 }
 
+// FleetAnswer defines model for FleetAnswer.
+type FleetAnswer = domain.FleetAnswer
+
 // ImageInventory What this host says it holds. It answers what is here and never what is missing: what a Run would still have to fetch depends on which image is being asked about, and only the scheduler holds both halves.
 type ImageInventory struct {
 	// ImageDigests Image manifests this host holds whole and has unpacked, so it can start a container on one now.
@@ -1109,6 +1115,9 @@ type QueueSnapshot struct {
 	ActiveSlots       int     `json:"active_slots"`
 	QueuedWorkSeconds float64 `json:"queued_work_seconds"`
 }
+
+// QueuedAhead defines model for QueuedAhead.
+type QueuedAhead = domain.QueuedAhead
 
 // ReliabilityEvidence The risk history a machine's publisher states about it. Each rate stands on its own measurement, because a publisher measures what it measures, and an unmeasured rate is absent rather than zero.
 type ReliabilityEvidence struct {
