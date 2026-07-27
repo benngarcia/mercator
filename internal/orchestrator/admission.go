@@ -370,9 +370,10 @@ func workAhead(candidates []domain.CandidateDecision) []domain.QueuedAhead {
 // suppression because the first deferral is always recorded.
 //
 // The decision it was read off is appended with it, and is suppressed with it. A
-// Run waiting an hour on an unchanged fleet would otherwise write sixty decisions
-// nobody asked a different question of, and the evidence for the wait an operator
-// is reading is the evidence recorded when the answer last changed.
+// Run waiting an hour on a fleet that keeps saying the same thing would otherwise
+// write sixty decisions nobody asked a different question of, and the evidence for
+// the wait an operator is reading is the evidence recorded when the answer last
+// changed.
 func (o *Orchestrator) recordDeferral(
 	ctx context.Context,
 	workspaceID, runID string,
@@ -380,7 +381,7 @@ func (o *Orchestrator) recordDeferral(
 	state runState,
 	answer admissionAnswer,
 ) error {
-	if state.deferral != nil && sameDeferral(*state.deferral, answer.deferral) {
+	if state.deferral != nil && sameAnswer(state, answer) {
 		return nil
 	}
 	events := append(answer.evidence(runID, o.now()),
@@ -430,6 +431,34 @@ func admissionEventID(state runState) string {
 // recording the (n-1)th, so the key says which one it is.
 func admissionCommand(state runState, outcome string) string {
 	return "advance:" + admissionEventID(state) + ":" + outcome
+}
+
+// sameAnswer reports whether admission has already recorded this answer: the same
+// wait, read off the same verdict about the same fleet.
+//
+// Both halves are needed because the deferral is a label and the decision is the
+// evidence, and every law about Placement reads the evidence. Comparing the two
+// labels alone dropped decisions whose candidate set had changed underneath them: a
+// Run waiting on NO_CAPACITY_FITS has an empty Behind list by construction and a
+// reason that does not move, so a machine that arrived while it waited and was
+// struck out for something a rule exists to forbid was named in a decision nothing
+// ever appended, and the rule reads recorded decisions.
+func sameAnswer(state runState, answer admissionAnswer) bool {
+	return sameDeferral(*state.deferral, answer.deferral) &&
+		sameFleetVerdict(state.bookingDecision, answer.decision)
+}
+
+// sameFleetVerdict compares the fleet's verdict where this answer rests on one. A
+// Run held behind work that outranks it weighed no machine at all, so it has no
+// verdict of its own for anything to have changed.
+func sameFleetVerdict(recorded, next *domain.BookingDecision) bool {
+	if next == nil {
+		return true
+	}
+	if recorded == nil {
+		return false
+	}
+	return recorded.FleetVerdict() == next.FleetVerdict()
 }
 
 // sameDeferral reports whether two deferrals say the same thing. The seconds and

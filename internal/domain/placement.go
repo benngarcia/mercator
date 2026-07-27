@@ -1,6 +1,10 @@
 package domain
 
-import "math"
+import (
+	"math"
+	"slices"
+	"strings"
+)
 
 // This file is the score. One number decides a placement, and the whole of it is
 // stated here: the dollars the Run will be billed, plus the dollars its
@@ -143,6 +147,32 @@ func (candidate CandidateDecision) CouldHoldOnceFree() bool {
 		}
 	}
 	return true
+}
+
+// FleetVerdict is what this decision said about the fleet: every machine it
+// weighed, and what each of them was struck out for. It answers "has the fleet
+// said anything different", which is the only reason a Run still waiting for the
+// same thing needs its evidence recorded again.
+//
+// It is the machines and the refusals and nothing else. Every number beside them
+// moves on its own, so a decision compared whole would be recorded on every tick
+// of the sweep: a projected start a minute nearer than it was is the same answer
+// about the same fleet. A machine that arrived, a machine that went away, or a
+// machine struck out for something it was not struck out for before is a different
+// answer, and each of those is a fact the laws that read Booking Decisions exist to
+// read.
+func (decision BookingDecision) FleetVerdict() string {
+	verdicts := make([]string, 0, len(decision.Candidates))
+	for _, candidate := range decision.Candidates {
+		refusals := make([]string, 0, len(candidate.Rejections))
+		for _, refusal := range candidate.Rejections {
+			refusals = append(refusals, refusal.Code+" at "+refusal.Path)
+		}
+		slices.Sort(refusals)
+		verdicts = append(verdicts, candidate.OfferSnapshotID+": "+strings.Join(refusals, ", "))
+	}
+	slices.Sort(verdicts)
+	return strings.Join(verdicts, "; ")
 }
 
 // Preferred reports whether this candidate is the better placement. It is a
