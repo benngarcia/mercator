@@ -1,0 +1,67 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "summary": "One machine, busy, and an interactive Run that will not wait more than a minute to start. The machine is ten minutes into work of its own, so the only candidate is struck out as too slow to start and the Run waits: nothing here can end that wait sooner, and nothing projects when it ends either, so admission keeps the Run rather than refusing it on a guess. Then the machine comes free at ten minutes and a quarter, and the Run is asked again half a minute after that. Interactive work states that it must have started within ten minutes of being told to wait, and the machine came free after that, so the answer this Run was waiting for stopped being worth having before the capacity arrived. It is refused DEADLINE_UNREACHABLE. The deadline used to be asked only of a Run being told to wait again, so a Run whose capacity arrived one sweep after its own moment was placed by the very pass that should have refused it, and it spent the money and produced an answer nobody was waiting for any more.",
+  "classification": "green",
+  "world": {
+    "images": {
+      "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068": {
+        "layers": [
+          {"digest": "sha256:5c2b313f06aa19cbef688a164fae5bffb1a5a1d7d25355970d57ea04f25deb55", "size": "4GB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-only",
+        "cached_images": ["worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068"],
+        "rate_per_hour_usd": 2.0
+      }
+    ],
+    "rental_schedules": [
+      {
+        "rental": "rental-only",
+        "version": 1,
+        "running": {
+          "booking": "booking-active",
+          "run": "run-active",
+          "remaining_max_runtime": "11m",
+          "remaining_expected_runtime": "10m",
+          "completes_after": "10m15s"
+        }
+      }
+    ]
+  },
+  "timeline": [
+    {
+      "submit": "watched",
+      "request": {
+        "image": "worker@sha256:e22b5bf8e02c6f40b09dbd378c2a94bd62221d4dd2bd6552522cbf8501b37068",
+        "service_class": "interactive",
+        "max_start_latency": "1m",
+        "expected_runtime": "5m",
+        "max_runtime": "10m"
+      },
+      "expect": {
+        "outcome": "defer",
+        "deferral": {
+          "reason": "NO_CAPACITY_FITS",
+          "queued_seconds": 0,
+          "fleet": {"weighed": 1, "could_hold": 0}
+        }
+      }
+    },
+    {
+      "advance": "10m30s"
+    },
+    {
+      "reconcile": "watched",
+      "expect": {
+        "outcome": "refuse",
+        "deferral": {
+          "reason": "DEADLINE_UNREACHABLE",
+          "queued_seconds": 630
+        }
+      }
+    }
+  ]
+}

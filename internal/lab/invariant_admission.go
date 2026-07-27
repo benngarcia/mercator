@@ -13,9 +13,11 @@ import (
 	"github.com/benngarcia/mercator/internal/orchestrator"
 )
 
-// This file is the three laws the admission queue has to hold: that waiting ends,
-// that it ends in the order the classes declared, and that nothing is made to wait
-// behind a wait nobody can end.
+// This file is the laws about what a Run's class says: that waiting ends, that it
+// ends in the order the classes declared, that nothing is made to wait behind a
+// wait nobody can end, that a wait rests on an answer somebody gave about
+// capacity, and that the bounds a Run carried into admission are honoured or
+// refused.
 //
 // They are stated over the public record rather than over the control plane's
 // own bookkeeping. The queue Mercator orders against is built inside a
@@ -268,6 +270,136 @@ func nothingAheadIsImpossible(impossible map[string]bool, runID string, deferral
 		)
 	}
 	return nil
+}
+
+// classBoundsHonoured is the standing guard on the two bounds a Run carries into
+// admission: the money its caller allowed it to spend, and the moment its class
+// says the answer stops being worth having. A Run that cannot run inside them is
+// refused, and the refusal is in the record; what this forbids is running past one
+// of them with nothing said.
+//
+// The two are one law because they are the same failure. A bound is a caller's
+// declaration that Mercator may not decide against, and a class is a caller's
+// declaration that Mercator scores every candidate on, so the class can always be
+// talked into a costlier or a later machine and the bounds are what say how far.
+// Everything else in this registry reads the ranking; this reads the limits the
+// ranking was allowed to work inside.
+//
+// The maximum queue delay is deliberately not restated here. It is the promise
+// liveness.aging_prevents_starvation is stated over, and two laws over one bound
+// would let a repair satisfy one of them and be believed.
+func classBoundsHonoured(observation InvariantObservation) error {
+	if err := noPlacementOverItsBudget(observation); err != nil {
+		return err
+	}
+	return noPlacementPastItsDeadline(observation)
+}
+
+// noPlacementOverItsBudget reads what the Run was placed on against the bound the
+// same record says its caller set. Both halves come off the decision, which is what
+// makes it checkable at all: the policy states the number and the selected
+// candidate states its own cost estimate.
+//
+// A machine nobody quoted fails it under any bound. A bound on dollars is not
+// cleared by a candidate that has none, and pricing that absence at zero is how an
+// unquoted machine passed every budget a Run could state.
+func noPlacementOverItsBudget(observation InvariantObservation) error {
+	decisions, err := recordedDecisions(observation)
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		budget, selected := decision.Policy.MaxExpectedCostUSD, selectedCandidate(decision)
+		if budget == nil || selected == nil {
+			continue
+		}
+		if err := placedInsideItsBudget(decision, *selected, *budget); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func placedInsideItsBudget(decision domain.BookingDecision, selected domain.CandidateDecision, budget float64) error {
+	cost := selected.Estimates.CostUSD
+	switch {
+	case cost.Source == domain.CostUnpriced:
+		return fmt.Errorf(
+			"Run %q of class %q was placed on candidate %q under a bound of %.4f USD, and nobody quoted what that machine costs",
+			decision.RunID, decision.Policy.Class, selected.OfferSnapshotID, budget,
+		)
+	case cost.Expected > budget+arithmeticTolerance:
+		return fmt.Errorf(
+			"Run %q of class %q was placed on candidate %q at %.4f USD, and its caller allowed %.4f",
+			decision.RunID, decision.Policy.Class, selected.OfferSnapshotID, cost.Expected, budget,
+		)
+	default:
+		return nil
+	}
+}
+
+// noPlacementPastItsDeadline replays the waits out of the public log and holds each
+// placement to the moment the placed Run's own class states. A class deadline is
+// measured from when admission first told the Run to wait, so the log is where both
+// ends of it are: the first deferral, and the decision that took a machine.
+//
+// A Run nothing ever deferred has no such moment and is not judged here, which is
+// what the class means by it. Waiting is what a deadline bounds.
+//
+// The world this exists to catch is the one the tree was in: the deadline was asked
+// only of a Run being told to wait, so a Run whose capacity came free after its own
+// moment was placed by the very pass that should have refused it. Nothing else in
+// this registry reads a class deadline at all, and the refusal that should have been
+// recorded is an absence, which no rule about what a record says can see.
+func noPlacementPastItsDeadline(observation InvariantObservation) error {
+	waitingSince := map[string]time.Time{}
+	for _, event := range observation.MercatorEvents {
+		runID := strings.TrimPrefix(event.Subject, "runs/")
+		switch event.Type {
+		case orchestrator.EventAdmissionDeferred:
+			at, err := eventOccurredAt(event)
+			if err != nil {
+				return err
+			}
+			// The moment a wait began never moves, for the reason the queue itself
+			// reads it that way: a Run told to wait for a second reason has not
+			// started waiting again.
+			if _, waiting := waitingSince[runID]; !waiting {
+				waitingSince[runID] = at
+			}
+		case orchestrator.EventAdmissionRefused, orchestrator.EventRunClosed:
+			delete(waitingSince, runID)
+		case orchestrator.EventBookingDecided:
+			decision, err := recordedDecision(event)
+			if err != nil {
+				return err
+			}
+			since, waited := waitingSince[decision.RunID]
+			if decision.SelectedOfferSnapshotID == "" || !waited {
+				continue
+			}
+			at, err := eventOccurredAt(event)
+			if err != nil {
+				return err
+			}
+			if err := placedInsideItsDeadline(decision, at.Sub(since).Seconds()); err != nil {
+				return err
+			}
+			delete(waitingSince, decision.RunID)
+		}
+	}
+	return nil
+}
+
+func placedInsideItsDeadline(decision domain.BookingDecision, queuedSeconds float64) error {
+	policy := decision.Policy.Class.Admission()
+	if !policy.DeadlinePassed(queuedSeconds) {
+		return nil
+	}
+	return fmt.Errorf(
+		"Run %q of class %q was placed on %q after waiting %.0fs, and its class states it must have started within %.0fs of being told to wait",
+		decision.RunID, decision.Policy.Class, decision.SelectedOfferSnapshotID, queuedSeconds, policy.DeadlineSeconds,
+	)
 }
 
 func recordedDeferral(event eventlog.CloudEvent) (domain.AdmissionDeferral, error) {

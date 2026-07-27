@@ -129,6 +129,57 @@ func TestAnImpossibleAskEmptiesNoFleetUnderTheRealControlPlane(t *testing.T) {
 	}
 }
 
+// TestACostBoundRefusesTheMachineTheClassWouldBuyAtL1 is the caller's maximum cost
+// under the real control plane. The placement corpus shows the refusal in a recorded
+// decision; this shows the Run running on the machine it was left with, through the
+// offer catalog, the real orchestrator, and every law in the registry.
+//
+// The class and the bound disagree here on purpose. Interactive work prices a second
+// of waiting at twenty times the rent, so it buys the warm machine on the five
+// minutes of pulling the cold one owes, and the bound is the only thing that says
+// how far that reasoning may go.
+func TestACostBoundRefusesTheMachineTheClassWouldBuyAtL1(t *testing.T) {
+	execution := openConformanceExecution(t, "a-cost-bound-refuses-the-machine-the-class-would-buy")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	if _, err := execution.DriveToCompletion(context.Background()); err != nil {
+		t.Fatalf("drive a Run whose caller bounded what it may cost: %v", err)
+	}
+
+	decision := bookingDecisions(t, execution)["run-watched"]
+	if decision.SelectedOfferSnapshotID != "rental-cold" {
+		t.Fatalf("the interactive Run landed on %q, and the machine its class prefers costs more than its caller allowed",
+			decision.SelectedOfferSnapshotID)
+	}
+	warm := candidateFor(t, decision, "rental-warm")
+	if warm.Feasible {
+		t.Fatalf("the machine over the bound was feasible, scored %.4f, and cost %.4f USD",
+			warm.ScoreUSD, warm.Estimates.CostUSD.Expected)
+	}
+	if warm.Rejections[0].Code != "COST_LIMIT_EXCEEDED" || warm.Rejections[0].Path != "placement.max_expected_cost_usd" {
+		t.Fatalf("the record says the machine was refused as %+v, and what it exceeded is the bound on cost", warm.Rejections[0])
+	}
+	// The case is only about a bound if the class would have bought the machine the
+	// bound refused. A world where the cheap machine also wins on score asserts
+	// nothing about a limit.
+	cold := candidateFor(t, decision, "rental-cold")
+	if warm.ScoreUSD >= cold.ScoreUSD {
+		t.Fatalf("the refused machine scored %.4f against the selected machine's %.4f, and this Run's class is supposed to prefer the one it may not have",
+			warm.ScoreUSD, cold.ScoreUSD)
+	}
+	if _, err := execution.Check(context.Background()); err != nil {
+		t.Fatalf("check invariants: %v", err)
+	}
+	bounds := invariantResultByID(t, latestInvariantResults(execution.invariants), "safety.class_bounds_honoured")
+	if bounds.Status != InvariantPassed {
+		t.Fatalf("the bounds law reports %+v", bounds)
+	}
+}
+
 // admissionRecord is the first thing admission said about one Run, read off the
 // public log the way an operator reads it, and whether it said anything at all: a
 // Run the fleet had room for on arrival was never told to wait.

@@ -1,0 +1,44 @@
+{
+  "schema": "mercator.lab/blueprint.v1",
+  "kind": "conformance",
+  "classification": "green",
+  "summary": "A caller's maximum cost at L1. Two Rentals: the warm one holds the whole 18GB image and is a second from ready at 4 USD an hour, the cold one holds none of it at 2 USD an hour and is five minutes of pulling away. The Run is interactive, which prices a second of waiting at twenty times what the machine doing the waiting costs, so its class buys the warm machine on those five minutes alone. Its caller allowed one dollar, and twenty minutes on the warm machine is 1.33, so the machine the class would have paid for is refused COST_LIMIT_EXCEEDED and the Run runs on the cold one for 0.67. This is the world safety.class_bounds_honoured is falsifiable through: stop enforcing the bound and the interactive Run takes the machine over its caller's limit, and the law fails on the record of it.",
+  "seed": "mercator-lab-cost-bound-v1",
+  "world": {
+    "images": {
+      "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58": {
+        "layers": [
+          {"digest": "sha256:2d0fa50ae86c5b612afb532d93850529d2c65dad1e40e8b8904b0967309984de", "size": "18GB"},
+          {"digest": "sha256:c39e206407e6147a1d84e5bc2995b0c1489e8d72a8be663b850ae5e4d38bd948", "size": "40MB"}
+        ]
+      }
+    },
+    "rentals": [
+      {
+        "id": "rental-warm",
+        "cached_images": ["trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58"],
+        "rate_per_hour_usd": 4.0
+      },
+      {
+        "id": "rental-cold",
+        "rate_per_hour_usd": 2.0
+      }
+    ]
+  },
+  "arrivals": {
+    "type": "fixed",
+    "runs": [
+      {
+        "name": "watched",
+        "at": "0s",
+        "request": {
+          "image": "trainer@sha256:5d7e0dc3bcc75e4b3639ed8b3badf9b610b97221c7f8013edc0beebcf34fbc58",
+          "service_class": "interactive",
+          "expected_runtime": "20m",
+          "max_runtime": "1h",
+          "max_cost_usd": 1.0
+        }
+      }
+    ]
+  }
+}

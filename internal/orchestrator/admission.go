@@ -25,7 +25,16 @@ import (
 // may not proceed appends why, so the queue is a thing an operator can read
 // rather than a thing they can only infer from a Run that never starts.
 
-// stepAdmit is admission: the queue in front of this Run, then Placement.
+// stepAdmit is admission: the queue in front of this Run, the moment its class
+// says it must have started by, then Placement.
+//
+// The deadline is asked on both ways out. A Run being told to wait is asked by
+// deferOrRefuse below, which records what was holding it. A Run nothing is holding
+// is asked here, because the deadline used to bound only waiting: a Run whose
+// capacity arrived after its own moment was placed by the very pass that should
+// have refused it, so it spent the money to produce an answer nobody was waiting
+// for, and how long a Run could overshoot by was however long the sweep interval
+// is.
 func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string, version uint64, state runState) (bool, error) {
 	queue, err := o.admissionQueue(ctx, workspaceID)
 	if err != nil {
@@ -35,6 +44,10 @@ func (o *Orchestrator) stepAdmit(ctx context.Context, workspaceID, runID string,
 	if behind := queue.ahead(waiting); len(behind) > 0 {
 		deferral := waiting.deferral(domain.DeferredBehindHigherPriority, behind)
 		return false, o.deferOrRefuse(ctx, workspaceID, runID, version, state, waiting, admissionAnswer{deferral: deferral})
+	}
+	if waiting.policy.DeadlinePassed(waiting.queued) {
+		refusal := waiting.deferral(domain.RefusedDeadlineUnreachable, nil)
+		return false, o.recordRefusal(ctx, workspaceID, runID, version, state, admissionAnswer{deferral: refusal})
 	}
 	return o.stepPlace(ctx, workspaceID, runID, version, state, waiting)
 }

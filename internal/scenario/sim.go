@@ -729,6 +729,10 @@ func WorkloadForRun(workspaceID, runID string, req RequestSpec) domain.WorkloadR
 	if req.MaxStartLatency != nil {
 		spec.Placement.MaxP90StartSeconds = req.MaxStartLatency.Duration().Seconds()
 	}
+	if req.MaxCostUSD != nil {
+		budget := *req.MaxCostUSD
+		spec.Placement.MaxExpectedCostUSD = &budget
+	}
 	if req.Download != nil {
 		spec.Network.Download = req.Download.Requirement()
 	}

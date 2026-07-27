@@ -1039,6 +1039,15 @@ type RequestSpec struct {
 	// what makes it the one place a candidate can be struck out for what it was
 	// found to hold.
 	MaxStartLatency *Duration `json:"max_start_latency,omitempty"`
+	// MaxCost is the most this Run's caller will spend running it once, over the
+	// runtime the Run declared. It is the bound the class cannot argue with: a
+	// class states what a second of waiting is worth and can therefore always be
+	// talked into a costlier machine, and this is the number that says how far.
+	//
+	// The corpus could state no such bound, so COST_LIMIT_EXCEEDED was enforced in
+	// production and reachable by no Blueprint, and everything this corpus could
+	// say about money was which machine won on price.
+	MaxCostUSD *float64 `json:"max_cost_usd,omitempty"`
 	// Download is the floor this Run states on how fast a candidate reaches
 	// content over one link, and what it says about running on a machine nobody
 	// measured. The corpus could state no download floor at all, so no Blueprint
@@ -2562,6 +2571,12 @@ func (w WorldSpec) validRequest(req RequestSpec) error {
 			"request asks for %d cards across %d inventory entries, and a workload states what it needs rather than how a machine reported it",
 			gpu.Count, gpu.Entries,
 		)
+	}
+	// A budget of nothing is not a Run that may spend nothing: it is a fixture
+	// whose bound refuses every machine anybody quoted, which is a world it can
+	// state on purpose and never by leaving a number out.
+	if budget := req.MaxCostUSD; budget != nil && *budget <= 0 {
+		return fmt.Errorf("request states a max_cost_usd of %v, and a bound on spending is a positive number of dollars", *budget)
 	}
 	if download := req.Download; download != nil {
 		if download.Scope == "" || download.MinP10Mbps <= 0 {

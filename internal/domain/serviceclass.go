@@ -210,6 +210,18 @@ func (policy Admission) Starved(queuedSeconds float64) bool {
 	return policy.MaxQueueDelaySeconds > 0 && queuedSeconds > policy.MaxQueueDelaySeconds
 }
 
+// DeadlinePassed reports whether the moment this class says a Run of it must have
+// started by is already behind Mercator. It needs nothing predicted and nothing
+// measured: a deadline that has elapsed is a fact about the clock.
+//
+// It is the half of the rule that governs a Run about to be placed. A Run whose
+// capacity arrives after its own moment is a Run whose answer stopped being worth
+// having before the machine was there, and starting it then spends the money to
+// produce an answer nobody is waiting for.
+func (policy Admission) DeadlinePassed(queuedSeconds float64) bool {
+	return policy.DeadlineSeconds > 0 && queuedSeconds >= policy.DeadlineSeconds
+}
+
 // DeadlineUnreachable reports whether this Run can no longer start in time, from
 // what has already elapsed and what the record says is in front of it.
 //
@@ -217,14 +229,13 @@ func (policy Admission) Starved(queuedSeconds float64) bool {
 // projected one it answers no: a Run refused capacity by machines that publish
 // no schedule is a Run whose wait nobody measured, and refusing it would turn
 // that silence into a missed deadline by arithmetic. The elapsed half needs
-// nothing measured at all, because a deadline already behind Mercator is not a
-// prediction.
+// nothing measured at all, which is DeadlinePassed above.
 func (policy Admission) DeadlineUnreachable(queuedSeconds, waitSeconds float64, projected bool) bool {
 	switch {
+	case policy.DeadlinePassed(queuedSeconds):
+		return true
 	case policy.DeadlineSeconds <= 0:
 		return false
-	case queuedSeconds >= policy.DeadlineSeconds:
-		return true
 	default:
 		return projected && queuedSeconds+waitSeconds > policy.DeadlineSeconds
 	}

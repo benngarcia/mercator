@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 39 {
-		t.Fatalf("latest invariant results = %d, want 39", len(latest))
+	if len(latest) != 40 {
+		t.Fatalf("latest invariant results = %d, want 40", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -442,6 +442,16 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				admittedDecisionEvent("run-urgent", now.Add(10*time.Minute)),
 			}
 		},
+		// A Run placed on a machine costing more than its caller allowed. The class
+		// is what scores the candidates and a class can always be talked into a
+		// costlier machine, so the bound is the only thing that says how far. Every
+		// other rule here reads the ranking; this reads the limits the ranking was
+		// allowed to work inside.
+		"safety.class_bounds_honoured": func(observation *InvariantObservation) {
+			observation.MercatorEvents = []eventlog.CloudEvent{
+				placedUnderABudget("run-watched", domain.ClassInteractive, 1.00, pricedAt(1.3333)),
+			}
+		},
 		// One impossible submission emptying a workspace: a Run nothing in the fleet
 		// can hold is queued, and the Run that does fit the fleet is then told it is
 		// waiting behind it. The machine stands idle beside work it could run, and
@@ -809,6 +819,148 @@ func TestEveryClauseOfTheSupersessionRuleCanFail(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEveryClauseOfTheClassBoundsRuleCanFail reads the bounds rule the way both of
+// its halves have to be readable. The registry's one deliberate case drives the
+// money, and the deadline is the bound the tree was actually broken on: it was
+// asked only of a Run being told to wait, so a Run whose capacity came free after
+// its own moment was placed by the pass that should have refused it.
+//
+// The deadline clause is only here and in the fast placement corpus. A Lab
+// execution of the world it catches cannot be green, because every class's maximum
+// queue delay is shorter than its deadline, so a Run that reaches its deadline has
+// already starved and liveness.aging_prevents_starvation says so.
+func TestEveryClauseOfTheClassBoundsRuleCanFail(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	for name, testCase := range map[string]struct {
+		events []eventlog.CloudEvent
+		says   string
+	}{
+		// Twenty minutes on a four dollar machine against a caller who allowed one
+		// dollar. Interactive work prices a second of waiting at twenty times the
+		// rent, so its own class buys that machine every time.
+		"a machine costing more than its caller allowed": {
+			events: []eventlog.CloudEvent{
+				placedUnderABudget("run-watched", domain.ClassInteractive, 1.00, pricedAt(1.3333)),
+			},
+			says: "its caller allowed",
+		},
+		// A bound on dollars against a candidate that has none. Pricing that absence
+		// at zero is how an unquoted machine passed every budget a Run could state.
+		"a machine nobody quoted under a bound on dollars": {
+			events: []eventlog.CloudEvent{
+				placedUnderABudget("run-watched", domain.ClassInteractive, 1.00, unpriced()),
+			},
+			says: "nobody quoted",
+		},
+		// Capacity that came free eleven minutes into a wait the interactive class
+		// caps at ten. The Run is started to produce an answer nobody is waiting for.
+		"capacity that came free after the moment the class states": {
+			events: []eventlog.CloudEvent{
+				admissionDeferredEvent("run-watched", now, domain.ClassInteractive),
+				placedForClassAt("run-watched", domain.ClassInteractive, now.Add(11*time.Minute)),
+			},
+			says: "must have started within",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := boundsObservation(now, testCase.events)
+
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(observation),
+				"safety.class_bounds_honoured",
+			)
+
+			if result.Status != InvariantFailed {
+				t.Fatalf("%s was reported as a Run inside the bounds it declared: %+v", name, result)
+			}
+			if !strings.Contains(result.Violation, testCase.says) {
+				t.Fatalf("violation = %q, want it to say %q", result.Violation, testCase.says)
+			}
+		})
+	}
+}
+
+// TestABoundedRunPlacedInsideItsBoundsIsNotAViolation is the counterpart. A rule
+// about limits that failed the placements production is supposed to make could be
+// satisfied by refusing every Run, and the two records here are the ones a working
+// control plane writes: a placement inside both bounds, and a Run nothing ever kept
+// waiting, which has no moment for a deadline to be measured from.
+func TestABoundedRunPlacedInsideItsBoundsIsNotAViolation(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	for name, events := range map[string][]eventlog.CloudEvent{
+		"a machine inside the bound its caller set": {
+			placedUnderABudget("run-watched", domain.ClassInteractive, 1.00, pricedAt(0.6667)),
+		},
+		"a Run placed long after it arrived and never told to wait": {
+			placedForClassAt("run-watched", domain.ClassInteractive, now.Add(11*time.Minute)),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := invariantResultByID(t,
+				DefaultInvariantRegistry().Evaluate(boundsObservation(now, events)),
+				"safety.class_bounds_honoured",
+			)
+
+			if result.Status != InvariantPassed {
+				t.Fatalf("%s was reported as a bound Mercator broke: %s", name, result.Violation)
+			}
+		})
+	}
+}
+
+func boundsObservation(now time.Time, events []eventlog.CloudEvent) InvariantObservation {
+	return InvariantObservation{
+		StartedAt:       now,
+		Now:             now,
+		World:           WorldTruthSnapshot{At: now},
+		Workloads:       map[string]domain.WorkloadRevision{},
+		RentalSchedules: map[string]domain.RentalSchedule{},
+		RunRequirements: map[string]RunArrival{},
+		ArtifactCatalog: map[string]domain.ArtifactVersion{},
+		SeededLocality:  map[string]map[string]bool{},
+		MercatorEvents:  events,
+	}
+}
+
+// placedUnderABudget is a Run placed on the machine it was scored onto, under a
+// stated maximum cost, with the selected candidate's own cost estimate beside it.
+// Both numbers the rule compares are in the one record, which is what makes it
+// checkable by a reader holding nothing else.
+func placedUnderABudget(runID string, class domain.ServiceClass, budget float64, cost domain.Estimate) eventlog.CloudEvent {
+	event := bookingDecidedEvent("decided-"+runID, domain.BookingDecision{
+		RunID:  runID,
+		Policy: domain.PlacementPolicy{Class: class, MaxExpectedCostUSD: &budget, ExpectedRuntimeSeconds: 1200},
+		Candidates: []domain.CandidateDecision{{
+			OfferSnapshotID: "rental-warm",
+			Estimates:       domain.CandidateEstimates{CostUSD: cost},
+		}},
+		SelectedOfferSnapshotID: "rental-warm",
+	})
+	event.Subject = "runs/" + runID
+	return event
+}
+
+// placedForClassAt is a Run placed at a stated moment, stating the class it was
+// scored for, which is the half of the deadline the record has to carry.
+func placedForClassAt(runID string, class domain.ServiceClass, at time.Time) eventlog.CloudEvent {
+	event := bookingDecidedEvent("decided-"+runID, domain.BookingDecision{
+		RunID:                   runID,
+		Policy:                  domain.PlacementPolicy{Class: class},
+		SelectedOfferSnapshotID: "rental-only",
+	})
+	event.Subject = "runs/" + runID
+	event.Time = at.Format(time.RFC3339Nano)
+	return event
+}
+
+func pricedAt(usd float64) domain.Estimate {
+	return domain.Estimate{Expected: usd, Source: "price_model"}
+}
+
+func unpriced() domain.Estimate {
+	return domain.Estimate{Source: domain.CostUnpriced}
 }
 
 // TestAnAnsweredStageAndAPriorAreBothHonestProvenance is the counterpart: the

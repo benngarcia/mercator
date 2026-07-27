@@ -149,6 +149,21 @@ listing IDs.
 that advances virtual time or submits several Runs uses `timeline`; each step
 is exactly one `submit`, `advance`, or `reconcile`.
 
+`request.service_class` is the kind of work the Run says it is, which is the only
+thing that says what a second of waiting is worth to it and therefore what the
+score is computed over. `request.max_cost_usd` and `request.max_start_latency`
+are the two bounds the class cannot argue with: a class states an exchange rate
+and can always be talked into a costlier or a later machine, and these say how
+far. A candidate over the cost bound is refused `COST_LIMIT_EXCEEDED` at
+`placement.max_expected_cost_usd`, and a bound of zero dollars is refused at
+load, because a fixture whose budget refuses every quoted machine is a world to
+state on purpose rather than by leaving a number out.
+
+The other bounds are the class's own and no request states them: how long a Run
+may be kept waiting, and the moment it must have started by. Both are measured
+from when admission first told the Run to wait, so a fixture states them by
+letting virtual time pass and asserting the `refuse` below.
+
 `outcome` is one of four sentences about one Run. `place` and `fail` are about a
 Booking Decision: an offer was selected, or none was. `defer` and `refuse` are
 about admission, which decides before Placement is asked, and each states a

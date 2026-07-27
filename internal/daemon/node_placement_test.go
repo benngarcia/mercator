@@ -591,6 +591,20 @@ func (f *fleet) submitRunNeedingDisk(t *testing.T, bytes int64) string {
 	})
 }
 
+// submitRunUnderBudget submits a Run whose caller bounded what running it once may
+// cost. The bound sits on the same policy the class does, and it is the one thing
+// the class cannot argue with: a class states what a second of waiting is worth and
+// can always be talked into a costlier machine.
+func (f *fleet) submitRunUnderBudget(t *testing.T, usd float64) string {
+	t.Helper()
+	return f.submitWorkload(t, func(name string) map[string]any {
+		revision := workloadRevision(name, f.image)
+		placement := revision["spec"].(map[string]any)["placement"].(map[string]any)
+		placement["max_expected_cost_usd"] = usd
+		return revision
+	})
+}
+
 func (f *fleet) submitWorkload(t *testing.T, revision func(name string) map[string]any) string {
 	t.Helper()
 	f.submitted++
@@ -699,7 +713,7 @@ func workloadRevision(name, image string) map[string]any {
 				"ephemeral_disk": map[string]any{"min_bytes": 1 << 30},
 			},
 			"network":   map[string]any{"inbound": "none"},
-			"placement": map[string]any{"objective": "balanced", "expected_runtime_seconds": 60},
+			"placement": map[string]any{"service_class": "standard", "expected_runtime_seconds": 60},
 			"execution": map[string]any{"max_runtime_seconds": 600, "max_pre_start_attempts": 3},
 		},
 	}
@@ -1807,4 +1821,45 @@ func dockerRootFilesystem(t *testing.T, docker string) (total, free int64) {
 	}
 	block := int64(filesystem.Bsize)
 	return int64(filesystem.Blocks) * block, int64(filesystem.Bavail) * block
+}
+
+// TestABoundOnCostRefusesTheOnlyMachineInThisFleet is the caller's maximum cost
+// through the public API, against a machine whose price an operator configured when
+// they invited it. The placement corpus states the refusal in a recorded decision and
+// the Lab states it under the real control plane over a simulated fleet; this states
+// it where the price actually comes from, and holds the node to never having been
+// asked to run the work.
+//
+// The two Runs differ in one number. The first allows five cents and runs on this
+// node; the second allows one, and a minute at the node's 1.25 USD an hour is two
+// cents, so the same machine that just ran the same workload is refused for the
+// second one. That is what makes the bound the cause rather than the fleet.
+func TestABoundOnCostRefusesTheOnlyMachineInThisFleet(t *testing.T) {
+	fleet := startFleet(t)
+
+	affordable := fleet.submitRunUnderBudget(t, 0.05)
+	fleet.completeWorkload(t, affordable, 0)
+	fleet.awaitOutcome(t, affordable, "succeeded")
+	pinched := fleet.submitRunUnderBudget(t, 0.01)
+	fleet.queueForWantOfCapacity(t, pinched)
+
+	if selected := fleet.decision(t, affordable).SelectedOfferSnapshotID; selected != fleet.nodeID {
+		t.Fatalf("the Run that could afford this node landed on %q", selected)
+	}
+	refusal := fleet.decision(t, pinched)
+	if refusal.SelectedOfferSnapshotID != "" {
+		t.Fatalf("a Run allowing one cent was placed on %q, which costs two", refusal.SelectedOfferSnapshotID)
+	}
+	refused := refusal.candidate(t, fleet.nodeID)
+	if refused.Feasible {
+		t.Fatalf("the recorded refusal calls the node feasible for a Run that cannot afford it: %+v", refused)
+	}
+	if !slices.ContainsFunc(refused.Rejections, func(rejection domain.Violation) bool {
+		return rejection.Code == "COST_LIMIT_EXCEEDED" && rejection.Path == "placement.max_expected_cost_usd"
+	}) {
+		t.Fatalf("the recorded refusal says %+v, and what this machine exceeded is the bound on cost", refused.Rejections)
+	}
+	if launched := fleet.runtime.launchedRuns(); slices.Contains(launched, pinched) {
+		t.Fatalf("a Run whose caller allowed one cent was sent to the machine anyway: %v", launched)
+	}
 }

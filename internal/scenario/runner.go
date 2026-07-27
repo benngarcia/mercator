@@ -314,6 +314,18 @@ func assertDecisionChain(events []eventlog.StoredEvent, name string, expect Expe
 	return failures
 }
 
+// placedInstead names the machine a Run the fixture said would be waiting was
+// actually placed on. Being placed appends no admission fact of its own, so the
+// last thing admission said about such a Run is the wait it was in beforehand, and
+// a diagnostic reading only that reports a Run that ran as a Run still queued.
+func placedInstead(events []eventlog.StoredEvent) string {
+	rec, ok := latestDecision(events)
+	if !ok || rec.decision.SelectedOfferSnapshotID == "" {
+		return ""
+	}
+	return fmt.Sprintf(", and the Run was then placed on %q", rec.decision.SelectedOfferSnapshotID)
+}
+
 // assertAdmission reads what admission recorded about a Run that is not running:
 // the last thing it said, and whether it said it as a wait or as a refusal. Both
 // are read off the Run's own stream, which is the only place an operator has to
@@ -334,7 +346,8 @@ func assertAdmission(events []eventlog.StoredEvent, name string, expect ExpectSp
 		fail("expected outcome %q, and admission recorded nothing at all about this Run waiting", expect.Outcome)
 		return failures
 	case recordedAs != wanted:
-		fail("expected outcome %q, and admission recorded %q with reason %q", expect.Outcome, recordedAs, deferral.Reason)
+		fail("expected outcome %q, and admission recorded %q with reason %q%s",
+			expect.Outcome, recordedAs, deferral.Reason, placedInstead(events))
 		return failures
 	}
 	want := *expect.Deferral
