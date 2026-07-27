@@ -2831,13 +2831,133 @@ complete because it works against a live provider.
     whose established start moved, which is a far narrower hole than sixty decisions an
     hour, and every change the laws read is a change to a refusal.
 
+- [x] 2026-07-26: Answer the third review of the appended-decision commit. Two
+  reviewers refuted eight things in it, one blocking. Seven were real. All seven
+  were the same mistake in different places: a record claiming more than the
+  evidence under it could support.
+  - The blocking one is what an empty offer answer means. The whole classification
+    rests on the premise that a search returning nothing has said the fleet sells no
+    machine of that shape, and neither marketplace adapter in the tree published an
+    answer that could carry it. `internal/adapter/vast` filtered on machines nobody
+    is on, so every sold-out moment answered exactly as a shape Vast does not sell,
+    and on a marketplace a popular card is rented most of the time: a Run against a
+    sold-out market lost its place in the queue, and the first machine to come free
+    went to whichever Run the sweep reached first. Shadeform filtered on
+    availability twice over, in the query and per region, on the phase 5 conformance
+    provider. Both search for the machines now and publish the ones somebody else is
+    on as capacity that is not available, which is how every other occupied machine
+    in this tree is published and which the scheduler already refuses as a wait
+    rather than as an impossibility. Vast orders the free ones first so the limit
+    still spends itself on capacity a Run can have today.
+  - Vast also asked for exactly the accelerator count, and it sells asks against
+    power-of-two partitions of a machine, so a Run wanting three cards matched
+    nothing in a market abundantly selling two, four and eight. It asks for at least
+    what the Run needs. The ask publishes its true card count and its true price, so
+    a larger partition is ranked on what it costs rather than excluded from the
+    fleet's answer, which is the same fix as the one above: the search may not decide
+    on the fleet's behalf that a machine is not for sale.
+  - A node that could not measure its disk published the zero its failed
+    measurement left behind. `capability.DiskFacts` carries `Known` precisely so a
+    machine that could not look is distinguishable from a machine with no room, and
+    the offer threw that half away. Every Run carries a disk floor, so every Run in
+    that workspace was refused, every refusal read as a machine that can never hold
+    the work, and the whole workspace was recorded as work no capacity can ever take
+    and lost its queue ordering until a heartbeat happened to succeed. The offer
+    states both halves now, and a machine that answered nothing is a third answer
+    in the fleet's own account of a wait: `FleetAnswer.Unstated`, reason
+    `CAPACITY_UNSTATED`, which holds the queue because the machine may be able to
+    take the Run the moment it speaks. Placement still refuses it, because landing
+    content on a disk nobody measured is a launch nobody can promise.
+  - The queue exemption was a standing claim. `HoldsNoQueue` kept whatever was last
+    established whenever a deferral carried no fleet answer, and a deferral the queue
+    caused carries none by construction, so a Run outranked by a steady stream of
+    arrivals never asked the fleet again and its exemption outlived every machine
+    that arrived afterwards. Work of its own class that arrived later overtook it.
+    Only the latest answer may make the claim now. Losing it on a queue-caused wait
+    costs nothing that was not already lost: a Run only fails to renew it while
+    something outranks it, and whatever it would have held up is held up by that work
+    anyway.
+  - The suppression rewrite did not close the blind spot it was written for. Its
+    justification was that every change the laws read is a change to a refusal, and
+    the law it named reads no refusal at all: what a machine holds is priced rather
+    than refused, on purpose, so a candidate whose image locality went from known to
+    a silence produced a byte-identical list of refusals against the same bound on
+    the same path, the decision was suppressed, and
+    `safety.locality_is_never_infeasibility` reads recorded decisions. `FleetVerdict`
+    is now what each machine was struck out for, what it was found holding, and what
+    every answer it published was scored at. The numbers are still left out, because
+    they move on their own.
+  - A present `FleetAnswer` asserted the fleet was asked and the record could not
+    support it. `CollectionReport.ConnectionsQueried` was derived from the offers, so
+    a connection that answered with nothing and a connection nobody contacted
+    produced the same empty list, and `ExcludedConnections` existed for exactly that
+    distinction and was written nowhere. The console renders all three lists, so the
+    fabrication was operator-facing. The census travels with the offers now, because
+    it cannot be derived from them: `broker.fanOut` names every connection it
+    skipped, and the orchestrator reads placement capacity through `CollectOffers`.
+  - `an-ask-nothing-matches-holds-no-queue` could not model the failure it claimed,
+    because neither simulated world read the requested shape. Both answer it now for
+    marketplace listings, and only for those: a listing is a search result and a real
+    search filters it, while capacity Mercator holds is listed whole and refused in
+    the record, which is the difference between a catalog and a fleet. The Blueprint
+    publishes a 200GB machine, answers a 900GB ask with nothing, and its second Run
+    is placed, which is the stall the case exists for.
+    `a-machine-that-could-not-look-is-not-a-machine-with-no-room` is the disk silence
+    at the same level, which no fixture could state before.
+  - `safety.a_silence_is_not_an_answer_about_capacity` recounts every recorded wait
+    off the decision it was read off, the way `silenceWasTakenBackOut` recomputes what
+    a candidate was charged. A scheduler that miscounts its own evidence agrees with
+    itself perfectly, and only a reading taken from the record's other half catches
+    it.
+  - Partly upheld: the console. The defect the last entry recorded was not
+    producible. `DecisionPanel` is only ever fed by `useRunDecisions`, which resolves
+    the chain over REST through a contract that already carried the supersession, so
+    no page could show two live answers. The projection the fix was aimed at,
+    `Workspace.runs[].decisions`, was written by the reducer and read by no
+    component, so it is deleted: it was a second store of facts the Run's own page
+    already reads. The reviewer's replacement claim does not hold.
+    `resourceKey.runDecision` is invalidated on `booking_decided` in
+    `Workspace.invalidateMessage` and has been since the canvas became the console
+    entry point.
+  - Rejected: that `a-fleet-that-changed-is-recorded-again` is unreliable on this
+    host. It was reported failing once at `20d3bb0` on amd64 Linux and could not be
+    reproduced in more than five hundred further executions here, single and heavily
+    parallel, on the case alone, across the whole corpus, and across the four packages
+    together. The harness is
+    single threaded on a scripted clock, the event log is read in global-position
+    order rather than by timestamp, and the only way the reported failure can occur is
+    for the second evaluation to have seen two machines, which requires the world
+    clock not to have advanced past the idle lease. Nothing on that path reads a real
+    clock. The candidates the reviewer named are both ruled out: the in-memory SQLite
+    log is opened under a fresh name per session, and the `occurred_at` fallback
+    cannot reorder a scan that orders by position. Left open with the evidence rather
+    than papered over with a retry.
+  - Judgment calls. `domain.ResourceInventory` states whether a disk was measured
+    rather than leaving it to be inferred from the bytes, so a publisher that sold a
+    disk says so and a publisher that forgets is refused loudly. A double that states
+    its own offers states its own census, because Go resolves an embedded method
+    against the embedded value and a census inherited from the fake adapter answers
+    about offers the double does not publish; that bit immediately in ten
+    orchestrator cases and a green Blueprint, which is the right way for it to bite.
+    A Vast launch is refused by name when its ask has been taken since the decision,
+    rather than being attempted and failing at the provider, because the search no
+    longer excludes those asks and a create Vast refuses would reach the record as a
+    provider failure instead of as somebody getting there first.
+  - Every claim has a case that fails without its fix, each verified by mutating the
+    production code and running the case: the locality flip as a domain case on
+    `FleetVerdict`, the disk silence as a red Blueprint four ways over, the shape
+    filter and the zero-offer exemption as the two halves of one red Blueprint, the
+    exemption's freshness as the ordering in
+    `a-wait-the-queue-caused-says-nothing-about-capacity`, and the recount as the
+    deliberate failing case beside every other invariant.
+
 ## Phase status
 
 | Phase | What it delivers | Status |
 | --- | --- | --- |
 | 1 | Contract split under simulation | done |
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
-| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
+| 3 | Exact OCI and artifact locality; prefetch; producer affinity | image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of and whether anybody measured it, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; a production object-store client and producer affinity remain |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; the hierarchical estimator, owned economics, and replanning remain |
 | 5 | One true VM provider with agent bootstrap and conformance | not started |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
@@ -3608,6 +3728,14 @@ Phase 4 added:
   and the audit of why a Run went where it did, is then an account of something that
   never happened. The predecessor is checked as the immediate one rather than as any
   earlier record, because a chain that skips a link is one a reader cannot walk.
+- `safety.a_silence_is_not_an_answer_about_capacity` (Lab invariant): every recorded
+  wait recounted off the decision it was read off, so a fleet that says nothing it
+  published can ever hold this Run has to have weighed a machine that said so. A node
+  whose disk probe failed reports no room and has not said it is full. It recounts
+  rather than trusting the answer beside the reason, for the reason
+  `silenceWasTakenBackOut` recomputes what a candidate was charged: a scheduler that
+  miscounts its own evidence agrees with itself perfectly, and only a reading taken
+  from the record's other half catches it.
 - `safety.decision_is_reproducible` (Lab invariant): re-deriving a decision's ID from
   the content the record carries yields the ID the record carries. It is what makes
   the rule above enforceable rather than defeatable by editing a decision and its ID
@@ -3615,15 +3743,27 @@ Phase 4 added:
   It reads every decision and not only the newest, because a superseded decision is
   the part of the chain nobody is looking at any more, which is exactly where an edit
   would go.
-- `an-ask-nothing-matches-holds-no-queue` (green): a fleet that answers an ask with
-  nothing at all, which is the strongest thing a fleet can say and was the one wait
-  nothing exempted. An offer query is a search on the shape asked for, so a
-  marketplace that returned no machine has said it sells none of that shape. The
-  patient ask waits, twelve minutes of waiting promote it past the class that arrives
-  next, and the Run that arrives is not ordered behind it. Recording that wait as one
-  for capacity to come free is what let one submission for a shape nobody sells hold a
-  whole workspace for a day while the fleet went on selling what the work behind it
-  asked for.
+- `an-ask-nothing-matches-holds-no-queue` (green): a marketplace publishing a 200GB
+  machine and answering a 900GB ask with nothing at all, which is the strongest thing
+  a fleet can say and was the one wait nothing exempted. The patient ask waits, twelve
+  minutes of waiting promote it past the class that arrives next, and the Run that
+  arrives fits what this fleet sells and is placed. That last part is the case:
+  recording the ask's wait as one for capacity to come free is what let one submission
+  for a shape nobody sells hold a whole workspace for a day while the machine behind
+  it went unsold. Both simulated worlds answer the shape they were asked about for
+  this reason, because a world that returned its whole inventory whatever anybody
+  asked could state a fleet nobody can use and never a fleet that answers one ask with
+  nothing while answering another with a machine, which is the shape production
+  reaches through a shape-filtered search rather than through an empty fleet.
+- `a-machine-that-could-not-look-is-not-a-machine-with-no-room` (green): one machine,
+  holding the image, whose disk probe failed. Placement refuses it, because landing
+  content on a disk nobody measured is a launch nobody can promise, and the refusal
+  names the silence rather than a shortfall: the fleet's answer counts it as a machine
+  that said too little to tell. Every Run carries a disk floor, so reading that as a
+  full disk made every Run in the workspace an ask no capacity can ever hold and took
+  the ordering away from all of them at once. The second Run is the assertion. It
+  arrives later, it is worth less than the Run already waiting, and it is told it waits
+  behind it.
 - `a-fleet-that-changed-is-recorded-again` (green): two machines too small for the ask
   and one of them on an idle lease that runs out. The wait does not change, and a Run
   in that wait has an empty list of work ahead of it by construction, so suppression
@@ -5982,6 +6122,54 @@ halves of the invariant inspect real content and neither objects.
 go build ./... && go vet ./... && go test ./...
 go test -race ./internal/lab ./internal/scenario ./internal/adapter/fake ./internal/daemon -count=1
 ```
+
+### Phase 3 and 4 fleet answers
+
+On 2026-07-26, on amd64 Linux with a real Docker daemon, so nothing skipped:
+
+```text
+go build ./... && go vet ./... && go test ./...
+go test -race ./internal/domain ./internal/scheduler ./internal/lab ./internal/scenario \
+  ./internal/adapter/fake ./internal/adapter/vast ./internal/adapter/shadeform \
+  ./internal/node ./internal/nodeagent ./internal/daemon ./internal/orchestrator \
+  ./internal/broker ./internal/capability ./internal/conformance -count=1
+cd web/app && bun run typecheck && bun run test && bun run build
+```
+
+Each fix answering the third round of review was measured by breaking it and reading
+what failed.
+
+- deleting the locality and the confidences from `FleetVerdict` fails
+  `TestALocalityThatWentSilentIsADifferentVerdict` with `a machine that stopped saying
+  what it holds gave the same verdict as one that said: off_only_machine:
+  LATENCY_SLO_EXCEEDED at placement.max_p90_start_seconds`, which is the reviewer's
+  own scenario read off the record. The two cases beside it hold the suppression the
+  verdict exists for, so the widening cannot be answered by comparing decisions whole;
+- reading an unmeasured disk as a shortfall fails
+  `a-machine-that-could-not-look-is-not-a-machine-with-no-room` four ways at once:
+  the reason, the count of machines that said too little, and both halves of the
+  ordering the second Run asserts;
+- removing the shape filter from the fake world fails
+  `an-ask-nothing-matches-holds-no-queue` with `the machines weighed: want exactly 0,
+  got 1`; requiring a weighed machine before a fleet may say it holds nothing fails
+  the same case with `no booking decision recorded` for the Run that fits. Both halves
+  are load-bearing, which is the point: the world has to be able to answer one ask
+  with nothing while answering another with a machine;
+- carrying the queue exemption forward through a wait that asked the fleet nothing
+  fails `a-wait-the-queue-caused-says-nothing-about-capacity` on the ordering its last
+  Run states;
+- `safety.a_silence_is_not_an_answer_about_capacity` fails on the record its
+  deliberate case builds: one machine refused for a disk nobody measured, and a wait
+  claiming no machine in the fleet can ever hold the Run;
+- adding `CollectOffers` to the orchestrator's seam failed ten orchestrator cases and
+  a green Blueprint before every double that states its own offers stated its own
+  census, because Go resolves an embedded method against the embedded value.
+
+What this round could not reach. Neither marketplace adapter has a conformance trial,
+because both need credentials and real money, so the corrected offer queries are held
+by unit cases against recorded response shapes and by the two Blueprints that state
+what an empty answer means. The claim that an empty answer means the shape is not sold
+is now true of every adapter in the tree, and nothing yet holds a new adapter to it.
 
 ### Phase 2 placement
 

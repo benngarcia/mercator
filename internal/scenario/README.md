@@ -170,6 +170,8 @@ about admission, which decides before Placement is asked, and each states a
 capacity to come free, `NO_CAPACITY_FITS` for a wait on capacity to be added
 because nothing the fleet published can hold this Run, whether it weighed machines
 and refused every one of them or published nothing this ask even matches,
+`CAPACITY_UNSTATED` for a wait on a machine that has not said enough for anybody to
+tell, which is what an enrolled node whose disk probe failed publishes,
 `BEHIND_HIGHER_PRIORITY` for a Run the queue in front of it
 outranks, and `DEADLINE_UNREACHABLE` for the one a `refuse` states, where the
 moment the Run's class says it must have started by is already past. `behind`
@@ -184,7 +186,11 @@ reason is derived from and the classification the queue is ordered on. Its
 `weighed` and `could_hold` are how many machines the fleet published that this Run
 was measured against and how many of those could have taken it once the capacity
 they are spending came back, and a machine that is both busy and too small counts
-in the first and never in the second. `"absent": true` states the opposite: this
+in the first and never in the second. `unstated` is how many of them refused this
+Run only for facts nobody published, which is a third answer rather than either of
+the other two: a machine that could not measure its disk is not a machine with no
+room, and counting it as one lets a failed measurement say a whole fleet has
+nothing. `"absent": true` states the opposite: this
 wait rests on no answer about capacity at all, because the fleet was never asked.
 A fixture says that rather than asking for two zeroes, because a fleet that
 published nothing an ask matches also weighed no machines and the two are opposite
@@ -253,8 +259,12 @@ one refusal and the redo that follows it takes `2`.
   otherwise. Placement deadlines are offsets such as `"+6m"`.
 
 Rentals default to a generous GPU-box inventory. State only resources relevant
-to the scenario. `world.rental_schedules` belongs to Mercator and references
-Rentals by ID. A nonempty schedule has a positive version, exactly one running
+to the scenario. `resources.disk_unmeasured` is the machine that could not measure
+its disk at all, which is a different fixture from a machine with no room and is
+refused as a silence rather than as a shortfall. A marketplace listing is a search
+result, so both worlds publish one only to an ask its room and its cards match;
+capacity Mercator holds is listed whole and refused in the record.
+`world.rental_schedules` belongs to Mercator and references Rentals by ID. A nonempty schedule has a positive version, exactly one running
 Booking, and at most four ordered queued Bookings.
 
 Every Booking carries stable Booking and Run IDs. Max runtimes are enforced
