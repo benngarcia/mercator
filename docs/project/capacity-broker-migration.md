@@ -2336,6 +2336,48 @@ complete because it works against a live provider.
     start budget is mostly unpacking is admitted unverified rather than refused. The
     answer is a measured unpack rate, which is a node slice and a calibration
     question, not a constant promoted to a measurement here.
+- [x] 2026-07-26: Stop answering a transfer from a launch history. Two reviewers
+  refuted the transfer-path repair above at its own trigger. Four of five findings
+  were real, and the central one is that the repair had fixed the wrong half.
+  - The estimator was the lying half. `stages.Answered` replaced a transfer's
+    prediction with what measured launches of the candidate spent, with no regard to
+    what this launch has to move, so a machine holding a verified copy of the whole
+    forty gigabyte dataset was charged 920 seconds and refused `LATENCY_SLO_EXCEEDED`
+    at `Offered 937.25` against a bound of 180, with `Locality:hot FetchBytes:0` in the
+    same record. The image side is the same defect: a host reporting every layer was
+    charged the pull it had already performed. A transfer is a byte count over a
+    throughput and the byte count belongs to the launch, so `image_fetch`, `unpack` and
+    `artifact_fetch` are filed under no key at all and the rate the entry above deleted
+    comes back. Nothing measured is lost, because what recurs about a transfer is the
+    throughput, and an enrolled node already publishes that as a fact with a validity
+    window.
+  - `safety.locality_is_never_infeasibility` was failing a lawful refusal at the same
+    trigger, because `pricedSilenceSeconds` multiplies a share of bytes by seconds
+    those bytes did not produce. It needs no clause of its own once no transfer's
+    seconds arrive from anywhere else, and the Lab refuses the answer outright instead,
+    in `safety.prediction_states_its_provenance`, so no other law has to ask first
+    whether the seconds it reads are a transfer's seconds.
+  - The rate law was silent by omission about the transfers a decision recorded no rate
+    for at all, which is a cheaper way out than inventing a measurement.
+    `everyTransferNamesItsRate` reads the seconds instead of a byte count, and fails on
+    each of the three stages on its own.
+  - The corpus can catch the change that brings it back.
+    `history-answers-for-the-machine-it-was-measured-on` asks its two measured machines
+    what they will spend pulling, and the answer is the prior with the throughput it was
+    divided by. It cannot fail on this tree, because nothing in a Lab world produces a
+    timed transfer; it fails the day `Launch.Observations` emits one and the estimator
+    files it, which is exactly the regression review named.
+  - The disk conformance case released half a gigabyte inside its own measured window,
+    by removing an interrupted run's leftover container after taking the reading it
+    compares against. Reproduced here as `fell by 0 bytes` with the node correct both
+    times.
+  - `Registry.draining` and the `OpenSession` refusal it gates were asked for by
+    nothing, and both are the difference between a fifteen second shutdown and a clean
+    one. Two cases at the registry now fail without them.
+  - Open, and named rather than fixed. A transfer becomes learnable again when the key
+    names what a transfer is, the bytes this launch is missing and the path they cross,
+    which is the slice where a node reports the stages it performs. Until then a timed
+    fetch is filed nowhere rather than filed wrong.
 - [x] 2026-07-26: Answer the second review of the risk-history commit. Two reviewers
   refuted seven claims on it, five of which the first review of that commit had
   already fixed and which reproduce nowhere in this tree. The two that survive are
@@ -3429,6 +3471,130 @@ the launch.
 
 ## Verification evidence
 
+### Phase 4 a transfer is not a stage a launch history can answer
+
+On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
+native Docker Engine 29.6.2, against the working tree of
+`beng/prediction-and-service-classes`. Two independent reviewers refuted the entry
+below it. Four of the five findings were real, one was refused with its evidence, and
+the central one is that the entry below fixed the wrong half of the collision it
+found.
+
+**The estimator was lying, not only the record.** The entry below found the transfer
+law reading an assumption's name over seconds an assumption did not produce, and it
+deleted the rate. The seconds were the invented half. `stages.Answered` replaces a
+transfer's prediction with what measured launches of this candidate spent, with no
+regard to what this launch has to move, so a machine holding a verified copy of the
+whole forty gigabyte dataset was charged 920 seconds from two launches of itself and
+refused: `LATENCY_SLO_EXCEEDED`, `Offered 937.25` against a bound of 180, with its own
+`ArtifactEvidence` reading `Locality:hot FetchBytes:0` in the same record. The same
+reproduces on the image side, where a host reporting every layer of the image was
+charged the pull it had already performed and struck out for it. That inverts the
+premise of Artifact locality: a host that holds the data is the reason the data is
+worth holding.
+
+A transfer is a byte count over a throughput, and the byte count belongs to the launch
+rather than to the candidate: what a host still has to move is whatever it does not
+already hold at the moment it is asked. A `CandidateIdentity` names the machine and
+the image and can name neither what is resident on the disk now nor which Artifact
+versions the Run consumes, so a warm launch and a cold launch of one machine land in
+one bucket. So `image_fetch`, `unpack` and `artifact_fetch` are filed nowhere and
+answer nothing, `prediction.contentStage` is left holding the one stage it is true of,
+and the deleted rate comes back: every stage with bytes to move records the throughput
+it was divided by, with no exception, which is the account both
+`safety.transfer_rate_is_attributed` and `safety.locality_is_never_infeasibility`
+read.
+
+Nothing measured is lost. What recurs about a transfer is the throughput of the path,
+and an enrolled node already measures it on the reads it performs and publishes it as
+a fact with a validity window, which the inventory's byte count is multiplied by when
+the decision is taken. Seconds over a whole stage are that product with both factors
+thrown away, and `TestANodeMeasuresTheObjectStorePathItJustCrossed` is that half
+against a real store.
+
+**The Lab reported a lawful refusal as a violation, and it needed no clause of its
+own.** The second finding was `safety.locality_is_never_infeasibility` failing a host
+that could not enumerate its copies and had its fetch answered from history: `charged
+920.00s for content nobody could describe, of which only 0.00s was left out of the
+established start`, because `pricedSilenceSeconds` multiplies a share of bytes by
+seconds those bytes did not produce. Once no transfer's seconds come from anywhere but
+bytes and a rate, the share is again a share of the quantity that produced them, and
+the same fixture now passes with 640 predicted seconds and 1.25 established. Refusing
+the answer outright is what the Lab states instead, in
+`safety.prediction_states_its_provenance`, so no other law has to ask first whether
+the seconds it is reading are a transfer's seconds.
+
+**A conformance case freed the bytes it was about to measure.** The disk case removed
+any container an interrupted earlier run had left behind, and it did so after taking
+the reading it compares against. The leftover holds the same half gigabyte the case
+writes, so `before` counted those bytes as used, the removal freed them, and the new
+write took them again: `a workload wrote 512MiB and the room this node reports fell by
+0 bytes`, reproduced on this host by recreating the container with the case's own
+`dd`, and green three runs over with the removal hoisted in front of the first
+reading. The node's measurement was correct both times. Review's wider point stands
+and is now written into the case: the surviving lower bound is an assertion about the
+rest of the machine too, in the other direction, and it stays because it is the claim.
+
+**Half of the drain was asked for by nothing.** `Registry.draining` and the
+`OpenSession` refusal it gates could both be deleted with `go test ./internal/node
+./internal/daemon -count=26` green, which review demonstrated. The guard is not a
+race in the production binary: `http.Server` closes its listeners and leaves every
+open keep-alive connection usable, and the agent posts events and opens its session
+over one `http.Transport`, so a session request arriving on a connection the sweep did
+not close begins a fresh long-lived read that `Shutdown` waits out for the whole
+fifteen seconds. `TestADrainedRegistryOpensNoFurtherSession` fails with the flag and
+the refusal deleted, and `TestADrainEndsTheSessionANodeIsHoldingOpen` fails with the
+sweep deleted, both at the object that owns the sessions rather than through an HTTP
+server.
+
+**The corpus can now catch the change that brings the defect back.** The fifth finding
+was that the transfer-rate change was adjudicated by one Go fixture and by nothing in
+the executable specification, and that is true and half of it stays true.
+`history-answers-for-the-machine-it-was-measured-on` now asks its two measured
+machines what they will spend pulling as well as what they spend coming up, and the
+answer is the prior with the throughput it was divided by. Asserting the exact
+candidate instead fails on both machines, and asserting a measured path fails on both
+rates, so the assertion binds. Nothing in the world produces a timed transfer today,
+so it cannot fail on this tree; the moment `Launch.Observations` emits one and the
+estimator files it, that Blueprint's third Run reports a machine's own pull history
+answering a stage it may not answer. The rest of the finding is answered by giving the
+rate law the stage it was silent about: its three clauses are all stated over recorded
+rates, so charging seconds and leaving the throughput off the record was a cheaper way
+out than inventing a measurement, and `everyTransferNamesItsRate` now fails on each of
+the three transfer stages on its own. One hand-stated fixture was charging
+`artifact_fetch` while pricing `unpack`, which is a record no decision writes.
+
+What is refused, with its evidence. Nothing here is deferred on the grounds that a
+Blueprint could have said it: no Blueprint can, because `Launch.Observations` emits
+`application_ready` alone, so no Lab world can produce the timed transfer that would
+be answered from. The four unit and Lab cases drive the production scheduler and the
+production registry, and the corpus assertion above is what will fail on the day the
+world can. The slice that makes it corpus-adjudicable is the one where a node reports
+the stages it performs, and it is named in the plan rather than smuggled in here.
+
+The live half ran on this host's own daemon rather than in simulation.
+`TestANodeReplicatesAnArtifactFromARealObjectStore`,
+`TestACopyThatIsNotTheContentItWasAskedForIsNotWarmth`,
+`TestANodeMeasuresTheObjectStorePathItJustCrossed`,
+`TestTheDiskANodeReportsIsTheDiskItsWorkloadsGet` and the disk case above all pass
+against MinIO containers and busybox writes of the native engine. The full suite is
+green three times, `internal/daemon` is green over 25 runs of the package, and the
+race detector is green over the packages this pass touched, `internal/lab` at 77s
+among them. The root corpus is unchanged at 45 Blueprints, 42 of them green, and no
+fixture moved: the one that changed gained assertions and lost none.
+
+Named and not fixed here. The operator console's event stream is still the same shape
+of long-lived read as a node session, and `Runtime.Shutdown` still waits for one.
+Mercator issue #165 still does not reproduce on this host and was left alone.
+
+```text
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+go test -race -count=1 ./internal/prediction ./internal/scheduler ./internal/domain \
+  ./internal/lab ./internal/scenario/... ./internal/node ./internal/nodeagent \
+  ./internal/daemon ./internal/orchestrator
+go test ./internal/daemon -count=25
+```
+
 ### Phase 4 three defects two reviewers found under the transfer-path pass
 
 On 2026-07-26, on the amd64 Linux workstation, with Go 1.25.11 and this host's own
@@ -3455,7 +3621,9 @@ fifteen and then exited 1 on a deadline it could never have met.
 through `RegisterOnShutdown` so it runs while the drain waits rather than before it or
 after it. `TestADaemonDrainsWhileANodeHoldsItsSessionOpen` fails at the deadline
 without it and returns in 0.076s with it. A drained node loses nothing, because a
-command is durable before it reaches a session.
+command is durable before it reaches a session. Only the sweep was asked for by
+anything: review deleted the refusal and the flag with every package green, and the
+entry above is where they are asked for.
 
 The second cause is the case's own bound. `net/http` keeps a connection that was
 accepted and has sent nothing out of its quiescent set for five seconds, so a client
@@ -3479,20 +3647,18 @@ estimate it produced is worth 0.60 where a duration over an unmeasured rate is w
 most 0.50`. Neither acceptance break of the slice below could reach it, because both
 mutate the rate rather than the answer.
 
-The record was the half that was lying. A `TransferRate` is the provenance of a
-duration, and a stage answered out of history was not priced from a throughput at all,
-so it now records none, for the same reason a stage with nothing to move records none.
-The law is untouched and is exactly as strong for every stage a rate really did price.
-`TestAStageAnsweredFromHistoryIsNotPricedFromAPathAtAll` drives the production
-scheduler with two `artifact_fetch` observations of one candidate and an offer
-publishing nothing about its path, and reports the violation above without the fix.
+This pass concluded the record was the half that was lying and deleted the rate, and
+review refuted that: the estimate was lying too, a machine holding every byte was
+charged the transfer it performed the last time it held none, and the entry above is
+the correction. The reproduced violation quoted here is real and its cause is one
+level down. The rate is back, and it is the answer that is refused.
 
 It was invisible because `prediction.Launch.Observations` emits `application_ready`
 alone and that stage carries no rate. Nothing pinned that, and the estimator already
-declares `artifact_fetch` a content stage, so the collision arrives with the first node
-that reports a fetch it timed, and routinely after: a measured link is valid for an
-hour while launch history is unbounded, so a machine that fetched yesterday answers the
-stage from history with nothing standing about its path.
+declared `artifact_fetch` a content stage, so the collision arrived with the first node
+that reported a fetch it timed. That is still the trigger, and what arrives there now
+is a transfer priced from its own bytes: the corpus asserts it of the two machines it
+has measured, and the entry above says what it took.
 
 **A conformance case asserted the rest of the machine was quiet.**
 `TestTheDiskANodeReportsFallsAsItsWorkloadsWriteToIt` asserted that writing 512MiB
@@ -3503,7 +3669,9 @@ on demand with one neighbouring container retaining 300MiB chunks: the room fell
 package beside this one, which is what took a full-suite run down. The lower bound is
 what the case is about and stays. Which filesystem the number describes is already
 pinned by the total size beside it and by a container's own root in the case before it,
-so the upper bound caught nothing the rest of the file does not.
+so the upper bound caught nothing the rest of the file does not. What this pass missed
+is that the case released half a gigabyte inside its own window, which review
+reproduced and the entry above fixes.
 
 The live half ran on this host's own daemon again rather than in simulation.
 `TestANodeReplicatesAnArtifactFromARealObjectStore`,
