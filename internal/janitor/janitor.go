@@ -303,8 +303,21 @@ func (recorded recordedRun) converge(object adapter.OwnedExternalObject) (orphan
 }
 
 // byRecordedDisposition is the launch's own statement about the capacity it
-// took: a slot in a pool Mercator does not own outlives the workload and is
-// adopted, and a machine Mercator provisioned for this work does not.
+// took: capacity the record says outlives its workload is adopted, and capacity
+// the record says does not stops existing.
+//
+// Both a slot in a pool Mercator does not own and a machine Mercator holds a
+// lease on record release, and both are adopted here, which is a wider set than
+// this rule used to cover. Until phase 5 a provisioned machine recorded
+// terminate, so this sweep destroyed one it found unaccounted for; now only a
+// one-shot execution product does, because only that is capacity a Run's own
+// ending was ever meant to take with it. Adopting a leased machine is the
+// correct answer to the question this sweep asks, and it is not the whole
+// answer an operator needs: nothing yet ends a Rental generation when the work
+// on it stops, so an adopted machine is held until something does. That is
+// issue #206 and it is a Rental's rule rather than a sweep's, because a sweep
+// that destroyed a leased machine on the strength of one finished Run would be
+// the phase 5 defect again with a different caller.
 func byRecordedDisposition(disposition domain.Disposition) (orphanDecision, error) {
 	switch disposition {
 	case domain.DispositionRelease:
