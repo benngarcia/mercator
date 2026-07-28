@@ -192,7 +192,7 @@ func TestANodeHoldsTheImageItRan(t *testing.T) {
 	fleet.completeWorkload(t, runID, 0)
 	fleet.awaitOutcome(t, runID, "succeeded")
 
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Holds(trainerIndexDigest)
 	}, "the node never reported holding the image it ran, so a second Run would be priced a pull it does not owe")
 }
@@ -349,7 +349,7 @@ func TestANodeThatGoesQuietStopsBeingOffered(t *testing.T) {
 	// Offers expire on the age of the node's last facts, which is sooner than
 	// the lease, so the catalog stops advertising it without waiting for the
 	// control plane to give up entirely.
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		offers := fleet.offers(t)
 		for _, offer := range offers {
 			if offer.ID == fleet.nodeID && offer.ExpiresAt.After(time.Now().UTC()) {
@@ -417,7 +417,13 @@ type fleet struct {
 	soldOn map[string]any
 	// prewarm is what this fleet's control plane is allowed to have in flight for
 	// work it has not admitted. Nil is the production default.
-	prewarm   *orchestrator.PrewarmPolicy
+	prewarm *orchestrator.PrewarmPolicy
+	// budget is how long every wait on this fleet gets, and it belongs to the
+	// fleet because what a wait is really on is the runtime its agent drives. The
+	// same awaitOffer is a scripted answer from memory in most cases here and this
+	// host's whole Docker inventory in the live ones, so a budget chosen at the
+	// call site states it for the wrong one of them.
+	budget    time.Duration
 	stop      context.CancelFunc
 	submitted int
 }
@@ -448,10 +454,6 @@ func renewingEvery(session time.Duration) fleetOption {
 	return func(f *fleet) { f.session = session }
 }
 
-// runningOn hands the agent a real container runtime instead of the scripted
-// one, at a heartbeat a machine can keep up with: reading a whole daemon's
-// image inventory fifty times a second is a load test of Docker rather than a
-// case about Mercator.
 // keepingAClockAhead makes this fleet's machine read a wall clock ahead of the
 // control plane's, which is what a host with a skewed clock is. Every moment it
 // states, its container's start and its own read alike, comes off that clock.
@@ -473,11 +475,24 @@ func preparingAt(policy orchestrator.PrewarmPolicy) fleetOption {
 	return func(f *fleet) { f.prewarm = &policy }
 }
 
+// runningOn hands the agent a real container runtime instead of the scripted one.
 func runningOn(runtime nodeagent.Runtime) fleetOption {
-	return func(f *fleet) {
-		f.agentRuntime = runtime
-		f.heartbeat = 250 * time.Millisecond
-	}
+	return func(f *fleet) { f.drivesRealDocker(runtime) }
+}
+
+// drivesRealDocker points this fleet's agent at a container daemon this host
+// really runs, and states the two things that follow from it.
+//
+// The heartbeat is one a machine can keep up with: reading a whole daemon's image
+// inventory fifty times a second is a load test of Docker rather than a case about
+// Mercator. The budget is the live one, because from here on every wait on this
+// fleet covers work this host performs rather than work the harness scripts,
+// starting with the enrolment wait that stands between startFleet and its first
+// offer.
+func (f *fleet) drivesRealDocker(runtime nodeagent.Runtime) {
+	f.agentRuntime = runtime
+	f.heartbeat = 250 * time.Millisecond
+	f.budget = liveDockerBudget
 }
 
 func startFleet(t *testing.T, options ...fleetOption) *fleet {
@@ -499,6 +514,7 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 		}),
 		heartbeat: 20 * time.Millisecond,
 		lease:     30 * time.Second,
+		budget:    scriptedBudget,
 	}
 	harness.agentRuntime = harness.runtime
 	for _, option := range options {
@@ -543,7 +559,7 @@ func (f *fleet) enrollAnother(t *testing.T, priceUSDPerHour float64) machine {
 // have said so rather than for the command that asked for it.
 func (f *fleet) awaitOccupied(t *testing.T, nodeID string) {
 	t.Helper()
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		for _, offer := range f.offers(t) {
 			if offer.ID == nodeID {
 				return !offer.Capacity.Available
@@ -558,7 +574,7 @@ func (f *fleet) awaitOccupied(t *testing.T, nodeID string) {
 // heartbeat lands.
 func (f *fleet) awaitOffer(t *testing.T, nodeID string) {
 	t.Helper()
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		for _, offer := range f.offers(t) {
 			if offer.ID == nodeID {
 				return true
@@ -744,7 +760,7 @@ func (f *fleet) completeWorkload(t *testing.T, runID string, exitCode int) {
 	t.Helper()
 	f.runtime.awaitLaunch(t, runID)
 	f.runtime.exit(runID, exitCode)
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		var refreshed struct {
 			Run struct {
 				Outcome string `json:"outcome"`
@@ -763,7 +779,7 @@ func (f *fleet) awaitOutcome(t *testing.T, runID, want string) {
 			Closed  bool   `json:"closed"`
 		} `json:"run"`
 	}
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		f.call(t, http.MethodGet, "/v1/runs/"+runID+"?workspace_id="+daemon.DefaultWorkspaceID, nil, &run, http.StatusOK)
 		return run.Run.Outcome == want
 	}, fmt.Sprintf("Run %s never reached outcome %q (last outcome %q)", runID, want, run.Run.Outcome))
@@ -780,7 +796,7 @@ func (f *fleet) awaitAdmission(t *testing.T, runID string) {
 			Phase string `json:"phase"`
 		} `json:"run"`
 	}
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		f.call(t, http.MethodPost, "/v1/runs/"+runID+"/refresh?workspace_id="+daemon.DefaultWorkspaceID, nil, &response, http.StatusOK)
 		return response.Run.Phase != "queued"
 	}, "Run "+runID+" was never admitted after the capacity it was waiting for came back")
@@ -795,7 +811,7 @@ func (f *fleet) awaitStartMoment(t *testing.T, runID string) time.Time {
 			StartedAt *time.Time `json:"started_at"`
 		} `json:"run"`
 	}
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		// The refresh is an advance, which is what asks the node what its container
 		// is doing. Waiting for the minute reconcile sweep instead would make this a
 		// case about the sweep's cadence.
@@ -1146,22 +1162,35 @@ func (f *fleet) call(t *testing.T, method, path string, body, into any, wantStat
 	}
 }
 
-func waitFor(t *testing.T, satisfied func() bool, message string) {
+// scriptedBudget is how long a wait on the harness's own script gets. Nothing
+// behind one leaves this process, so ten seconds is a wedged machine rather than
+// a busy one.
+const scriptedBudget = 10 * time.Second
+
+// liveDockerBudget is how long a wait on this host's own Docker daemon gets.
+// Behind one are docker info, a whole daemon's image inventory described an image
+// at a time, a registry pull, and containers created, run and reaped, and how long
+// that takes is how busy this host is. A deadline that decides whether the suite is
+// green by how busy the host is measures the host: the live listing case enrols in
+// half a second on an idle workstation, in five under this tree's other Docker
+// suites, and failed at ten with twenty four cores spinning.
+//
+// It does not make a live case immune to the whole tree running at once, and it was
+// not meant to: several suites drive this host's one Docker daemon, which is
+// mercator#212.
+const liveDockerBudget = time.Minute
+
+// waitFor waits on this fleet's machine inside the budget its runtime earns.
+func (f *fleet) waitFor(t *testing.T, satisfied func() bool, message string) {
 	t.Helper()
-	waitWithin(t, 10*time.Second, satisfied, message)
+	waitWithin(t, f.budget, satisfied, message)
 }
 
-// waitWithin is waitFor with the budget stated, for the cases whose wait covers
-// something this host really does rather than something the harness scripts.
-//
-// Ten seconds is plenty for a scripted runtime answering in memory, and it is a
-// bet on a loaded machine when the wait covers a registry pull and two container
-// runs: the live case here passes in six seconds alone, in nine under two other
-// suites, and failed at ten when the whole tree ran at once on a twenty four core
-// workstation. A deadline that decides whether the suite is green by how busy the
-// host is measures the host.
 func waitWithin(t *testing.T, budget time.Duration, satisfied func() bool, message string) {
 	t.Helper()
+	if budget <= 0 {
+		t.Fatal("a wait with no budget: this fleet was built without saying what its waits are on")
+	}
 	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		if satisfied() {
@@ -1470,7 +1499,7 @@ func (runtime *scriptedRuntime) launchedRuns() []string {
 
 func (runtime *scriptedRuntime) awaitLaunch(t *testing.T, runID string) {
 	t.Helper()
-	waitFor(t, func() bool {
+	waitWithin(t, scriptedBudget, func() bool {
 		runtime.mu.Lock()
 		defer runtime.mu.Unlock()
 		_, launched := runtime.observations[runID]
@@ -1542,7 +1571,7 @@ func TestPlacementPricesAWarmNodeFromTheResolvedManifest(t *testing.T) {
 	first := fleet.submitRun(t)
 	fleet.completeWorkload(t, first, 0)
 	fleet.awaitOutcome(t, first, "succeeded")
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return len(fleet.nodeOffer(t).Images.LayerDiffIDs) == 2
 	}, "the node never reported the layers it unpacked")
 
@@ -1581,7 +1610,7 @@ func TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds(t *testing.T) {
 	first := fleet.submitRun(t)
 	fleet.completeWorkload(t, first, 0)
 	fleet.awaitOutcome(t, first, "succeeded")
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Holds(trainerIndexDigest)
 	}, "the node never reported holding the image it ran")
 
@@ -1605,7 +1634,7 @@ func TestPlacementChargesNothingForAnImageTheNodeAlreadyHolds(t *testing.T) {
 func TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked(t *testing.T) {
 	fleet := startFleet(t)
 	fleet.runtime.holdUnassembled(trainerIndexDigest, domain.Platform{OS: "linux", Architecture: "amd64"})
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Pulled(trainerIndexDigest)
 	}, "the node never reported the image it fetched and never assembled")
 	if fleet.nodeOffer(t).Images.Holds(trainerIndexDigest) {
@@ -1647,7 +1676,7 @@ func TestPlacementChargesAssemblyForAnImageTheNodeHasNotUnpacked(t *testing.T) {
 func TestPlacementRecordsWhatANodeCouldNotSayAsSilence(t *testing.T) {
 	fleet := startFleet(t)
 	fleet.runtime.holdUndescribed(trainerIndexDigest)
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Undescribed(trainerIndexDigest)
 	}, "the node never reported the image it could not account for")
 
@@ -1679,7 +1708,7 @@ func TestPlacementChargesTheWholePullForAnotherPlatformsBuild(t *testing.T) {
 	fleet := startFleet(t)
 	fleet.runtime.hold(trainerIndexDigest, domain.Platform{OS: "linux", Architecture: "arm64"},
 		[]string{trainerArmBaseDiffID, trainerArmTopDiffID})
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return slices.Contains(fleet.nodeOffer(t).Images.LayerDiffIDs, trainerArmBaseDiffID)
 	}, "the node never reported the build an operator put on it")
 	if fleet.nodeOffer(t).Images.Holds(trainerIndexDigest) {

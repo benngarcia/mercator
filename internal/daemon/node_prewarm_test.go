@@ -42,7 +42,7 @@ func TestAQueuedRunPreparesTheMachineItIsGoingTo(t *testing.T) {
 	if launched := fleet.runtime.launchedRuns(); len(launched) != 1 {
 		t.Fatalf("the machine ran %v, and the queued Run has not been dispatched: preparation is not execution", launched)
 	}
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return fleet.nodeOffer(t).Images.Holds(rebuiltIndexDigest)
 	}, "the machine never reported holding the image it was asked to prepare")
 	if queued == "" {
@@ -77,7 +77,7 @@ func TestAQueuedRunIsPreparedForWithoutWaitingForASweep(t *testing.T) {
 	// was never given the machine. Those are two different answers and they used
 	// to arrive as one message.
 	fleet.awaitQueuedOn(t, queued, fleet.nodeID)
-	waitFor(t, func() bool {
+	fleet.waitFor(t, func() bool {
 		return len(fleet.runtime.preparedImages()) > 0
 	}, "the queued Run's host was never asked to prepare anything, and this case never swept")
 	if prepared := fleet.runtime.preparedImages(); len(prepared) != 1 || prepared[0] != rebuiltIndexDigest {
@@ -117,7 +117,7 @@ func (f *fleet) awaitPredictedStart(t *testing.T, runID string) {
 func (f *fleet) awaitQueuedOn(t *testing.T, runID, offerSnapshotID string) {
 	t.Helper()
 	placed := ""
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		placed = f.placedOn(t, runID)
 		return placed == offerSnapshotID
 	}, fmt.Sprintf(
@@ -149,7 +149,7 @@ func (f *fleet) placedOn(t *testing.T, runID string) string {
 func (f *fleet) launchRecordedAt(t *testing.T, runID string) time.Time {
 	t.Helper()
 	var recorded time.Time
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		var response struct {
 			Events []struct {
 				Type string    `json:"type"`
@@ -256,7 +256,7 @@ func TestAPreparedMachineIsWarmForARunThatNeverExecutedThere(t *testing.T) {
 func (f *fleet) holdsImageAlready(t *testing.T, digest string) {
 	t.Helper()
 	f.runtime.hold(digest, domain.Platform{OS: "linux", Architecture: "amd64"}, []string{trainerBaseDiffID, trainerTopDiffID})
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		return f.nodeOffer(t).Images.Holds(digest)
 	}, "the machine never reported the image it was given")
 }

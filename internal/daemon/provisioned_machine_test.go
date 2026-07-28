@@ -86,7 +86,7 @@ func startProvisionedFleet(t *testing.T, provider *bootstrappingProvider, docker
 	t.Setenv("PATH", t.TempDir())
 	harness, _ := startDaemonServing(t, map[string]capability.Backend{"machines": provider})
 	harness.image = image
-	harness.heartbeat = 250 * time.Millisecond
+	harness.drivesRealDocker(nodeagent.NewDockerRuntime(docker))
 	harness.authorize(t, "conn_machines", "machines")
 
 	bootstrap := harness.invite(t, 1.25)
@@ -102,7 +102,11 @@ func startProvisionedFleet(t *testing.T, provider *bootstrappingProvider, docker
 		t.Fatalf("provision capacity: %v", err)
 	}
 	harness.nodeID = bootstrap.NodeID
-	harness.stop = harness.startAgent(t, provider.delivered(t), nodeagent.NewDockerRuntime(docker))
+	harness.stop = harness.startAgent(t, provider.delivered(t), harness.agentRuntime)
+	// The wait this ends on is the first one this case makes and the longest one
+	// it used to get wrong: before the control plane hears anything, the agent
+	// enrols by asking this host's Docker for its facts, which is docker info, the
+	// content store, and one description per image the daemon holds.
 	harness.awaitOffer(t, harness.nodeID)
 	return harness
 }
@@ -156,25 +160,13 @@ func (f *fleet) submitRunRunning(t *testing.T, image string) string {
 	})
 }
 
-// liveDockerBudget is how long the two waits in this case are given. They cover
-// work this workstation really performs: a registry pull of an image the case
-// deliberately took off the daemon, and two containers created, run, and reaped.
-// The rest of this package waits ten seconds because it waits on a scripted
-// runtime answering in memory, and that budget is a bet on the load when the wait
-// is on Docker.
-//
-// It does not make this case immune to the whole tree running at once, and it was
-// not meant to: several suites drive this host's one Docker daemon and one of them
-// removes an image from under the others, which is mercator#212.
-const liveDockerBudget = time.Minute
-
 // awaitHolding waits until the machine has told the control plane it holds the
 // image. What a node holds is its own fact and travels by heartbeat, so a case
 // that needs a warm candidate waits for the machine to have said so rather than
 // for the workload that put it there to have ended.
 func (f *fleet) awaitHolding(t *testing.T, image string) {
 	t.Helper()
-	waitWithin(t, liveDockerBudget, func() bool {
+	f.waitFor(t, func() bool {
 		return f.nodeOffer(t).Images.Holds(domain.ReferenceDigest(image))
 	}, "the machine never reported holding "+image+" after running it")
 }
@@ -186,7 +178,7 @@ func (f *fleet) awaitHolding(t *testing.T, image string) {
 func (f *fleet) awaitRealOutcome(t *testing.T, runID, want string) {
 	t.Helper()
 	outcome := ""
-	waitWithin(t, liveDockerBudget, func() bool {
+	f.waitFor(t, func() bool {
 		var refreshed struct {
 			Run struct {
 				Outcome string `json:"outcome"`

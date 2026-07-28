@@ -178,7 +178,7 @@ func (f *fleet) authorize(t *testing.T, connectionID, adapterType string) {
 func (f *fleet) awaitDecision(t *testing.T, runID string) recordedDecision {
 	t.Helper()
 	var latest recordedDecision
-	waitFor(t, func() bool {
+	f.waitFor(t, func() bool {
 		var response struct {
 			Decisions []recordedDecision `json:"decisions"`
 		}
@@ -252,7 +252,10 @@ func startDaemonServing(t *testing.T, backends map[string]capability.Backend) (*
 			t.Fatalf("serve returned: %v", err)
 		}
 	})
-	return &fleet{token: "operator-token", address: listener.Addr().String()}, runtime
+	// A fleet with no agent of its own waits only on this control plane, which
+	// answers in this process. A case that goes on to point it at a container
+	// daemon says so, and buys the live budget with it.
+	return &fleet{token: "operator-token", address: listener.Addr().String(), budget: scriptedBudget}, runtime
 }
 
 // machineProvider allocates machines and executes nothing. It implements the

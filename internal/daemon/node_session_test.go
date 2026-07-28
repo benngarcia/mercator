@@ -32,7 +32,7 @@ import (
 func TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses(t *testing.T) {
 	fleet := startFleet(t, renewingEvery(2*time.Second))
 
-	waitFor(t, func() bool { return fleet.renewals.Load() >= 2 }, "the agent never renewed its session twice, so nothing outlived one credential")
+	fleet.waitFor(t, func() bool { return fleet.renewals.Load() >= 2 }, "the agent never renewed its session twice, so nothing outlived one credential")
 	runID := fleet.submitRun(t)
 	fleet.completeWorkload(t, runID, 0)
 
@@ -53,7 +53,7 @@ func TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses(t *testing.T)
 // that copied a whole command.
 func TestNothingAnOperatorCanReadCarriesTheInvitationAMachineJoinedWith(t *testing.T) {
 	fleet := startFleet(t, renewingEvery(2*time.Second))
-	waitFor(t, func() bool { return fleet.renewals.Load() >= 2 }, "the agent never renewed its session twice, so nothing outlived one credential")
+	fleet.waitFor(t, func() bool { return fleet.renewals.Load() >= 2 }, "the agent never renewed its session twice, so nothing outlived one credential")
 	runID := fleet.submitRun(t)
 	fleet.completeWorkload(t, runID, 0)
 
