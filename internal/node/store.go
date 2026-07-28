@@ -16,6 +16,13 @@ var ErrNotFound = errors.New("node: not found")
 // than a replay of the old one.
 var ErrEnrollmentSpent = errors.New("node: enrollment token already redeemed")
 
+// ErrEnrollmentInvalid is returned when the material presented is not this
+// node's invitation, or is one whose window has closed. It is a different answer
+// from ErrEnrollmentSpent on purpose: the two are independent doors, and which
+// one refused a machine is the difference between a bootstrap that arrived too
+// late and a bootstrap somebody is replaying.
+var ErrEnrollmentInvalid = errors.New("node: enrollment token is not valid")
+
 // ErrIdentityExists is returned when an invitation names a node identity that
 // is already reserved. Identity is immutable, so reusing one would let a second
 // machine claim the first one's history.

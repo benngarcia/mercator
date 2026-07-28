@@ -4556,6 +4556,50 @@ complete because it works against a live provider.
     action seam is answered there or in #208 rather than by a check that no caller
     can currently reach.
 
+- [x] 2026-07-28: Make a bootstrapped machine keep its session. An agent whose
+  session credential lapsed re-enrolled by replaying the invitation it joined
+  with, which the store had already spent and the signer refuses on its own, so a
+  real node stopped being able to authenticate about thirty minutes after
+  bootstrapping while its containers went on running. No test noticed, because
+  every one of them finished inside the window.
+  - The registry gained `RenewSession`, over `POST
+    /v1/node-agent/{node}/session/renew`, authenticated by the credential being
+    replaced. It writes nothing: a session credential is signed rather than
+    stored, the fencing token does not move, and no invitation is spent, which is
+    what makes renewing a different act from enrolling rather than a gentler one.
+    A retired machine renews nothing, and that is the whole of what bounds a
+    leaked bearer credential.
+  - The agent asks for a credential at each use rather than holding one for the
+    life of a connection, and renews when less than two heartbeat intervals of
+    its life remain. Two heartbeats is enough for one failed attempt to be retried
+    before anything it sends could outlive the credential carrying it, and it
+    scales with the cadence the agent was configured for instead of a constant
+    that would be wasteful or too late depending on it.
+  - A defect this uncovered: the registry told a node a session expiry its
+    credential did not have. A token carries whole seconds, so an expiry with a
+    fraction in it was truncated at signing and the node renewed against the
+    moment it was told rather than the moment the credential died. `Signer.Expiry`
+    is now what every window is computed through. It is invisible at thirty
+    minutes and it is exactly what made the first conformance run fail.
+  - Enrollment's two doors are told apart. `ErrEnrollmentSpent` is the store's
+    record that this invitation was redeemed; `ErrEnrollmentInvalid` is the
+    signer refusing material that is not this node's or whose window has closed.
+    Inside the window only the first fires, so collapsing them would leave a
+    replayed bootstrap accepted for the rest of its window. The HTTP answer stays
+    opaque on purpose.
+  - Evidence. `a-machine-keeps-working-past-its-first-session` is a green
+    conformance Blueprint whose Run outlives one session lifetime, and the ledger
+    holds one `node.enrolled` and a `node.session_renewed` recorded while the work
+    was still running. At L2, a real `nodeagent.Agent` against the daemon's own
+    server with a two second session renews twice on the wire, then places and
+    completes a Run, and redeemed exactly one invitation. Removing the renewal
+    from the agent turns that into a loop of `ENROLLMENT_REFUSED`, which is
+    `ErrEnrollmentSpent` behind the deliberately opaque answer.
+  - Found and not fixed here: `Reinvite` has no operator surface. The only caller
+    is the orchestrator's own provisioning path, so an operator whose machine lost
+    its state has no supported way to reinvite that identity. Recorded in
+    docs/production/node-agent.md rather than papered over.
+
 ## Phase status
 
 | Phase | What it delivers | Status |
@@ -4564,7 +4608,7 @@ complete because it works against a live provider.
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. No provider allocates a machine yet, the launch is not yet addressed to the machine a provisioning built, and nothing yet ends the lease of a machine nobody is using |
+| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. A Run that ends on a machine provisioned to hold a Rental now releases its workload and leaves the host standing, because the cleanup disposition reads the execution lane as well as the offer kind: only a one-shot product Mercator allocated is destroyed by the end of its own Run. A bootstrapped machine now keeps its session for as long as it works: the registry renews a credential over the node protocol, the agent renews ahead of each lapse, and the invitation it joined with is redeemed exactly once and appears in no event, ledger entry, or Run Bundle. Before it, a real node stopped being able to authenticate about thirty minutes after bootstrapping while its containers went on running, and no test could see it. No provider allocates a machine yet, the launch is not yet addressed to the machine a provisioning built, and nothing yet ends the lease of a machine nobody is using |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -4603,6 +4647,27 @@ Phase 1 added:
   work. Added in phase 5 slice 3, together with the Lab world recording
   `node.enrolled` for the Rentals it holds, which is the first writer that operation
   has ever had.
+- `a-machine-keeps-working-past-its-first-session` (conformance, green): one
+  provisioned machine, an agent that enrols four minutes in, and a forty five
+  minute Run, so the credential the agent joined with lapses while the container
+  is still running. The ledger holds one `node.enrolled` and a
+  `node.session_renewed` recorded while the work was still going. Nothing in the
+  corpus reached that state before, because every fixture finished inside one
+  session lifetime. Added in phase 5 slice 4.
+- `safety.bootstrap_credential_is_short_lived_and_single_use` (Lab invariant):
+  one machine holds a given enrollment token, it is redeemed once, and it appears
+  nowhere in Mercator's own record. Each clause is read off World Truth, because
+  the world is the only thing that knows what it handed each machine. A double
+  redemption is deliberately not producible through the Lab's own registry, which
+  refuses it exactly as production does, and that refusal is asserted so the
+  clause is not left checking a state nothing can reach. Added in phase 5 slice 4.
+- `safety.secrets_absent` (Lab invariant, strengthened in phase 5 slice 4): it
+  matched field names, so material in a field called credential, password, or
+  secret was caught and the same material in a field called enrollment_token was
+  not, which is the field a bootstrap would honestly be filed under. It now also
+  refuses a signed URL wherever it appears, because a presigned read is a bearer
+  credential written as a location, and any credential the world minted whatever
+  field it is filed under.
 - `safety.enrolment_names_the_generation_it_was_invited_for` (Lab invariant): an
   agent that opened a session on a machine a provider allocated enrolled under the
   generation that machine was invited for. A generation is what fences a lease, so
@@ -5838,6 +5903,73 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 5 the session a machine keeps
+
+The defect was that a node stopped being able to authenticate about thirty
+minutes after it bootstrapped. `nodeagent.Agent.session` treated an expired
+credential as no credential and enrolled again, presenting the invitation the
+machine was bootstrapped with. `memoryStore.Enroll` clears `EnrollmentTokenID`
+when it redeems it, so the replay answered `ErrEnrollmentSpent`, and past thirty
+minutes the signer refused the same material on its own. The machine went on
+running containers that nothing could reach and nothing could stop.
+
+Why nothing caught it. Every case in the tree finishes inside `DefaultSession`.
+The agent suite runs for milliseconds, the daemon fleet for seconds, and the Lab
+had no notion of a session at all. A defect whose earliest possible symptom is
+thirty minutes in is invisible to a suite whose longest case is thirty seconds,
+which is why the shortened window is configuration rather than a test double:
+`daemon.Config.NodeSession` and `node.WithSession` make the lapse a thing a case
+states.
+
+Renewal is its own act, in the ledger and in the code. `node.session_renewed` is
+a separate operation from `node.enrolled` because the two have different material
+behind them and different consequences: enrolling redeems a single-use invitation
+and moves the fencing token, renewing spends nothing and moves nothing. Filed
+under one name, a machine working for a day would read as a machine that joined
+the fleet forty eight times, and the question the ledger exists to answer, which
+invitation made this machine executable, would have no answer.
+
+The truncation defect the conformance run found. The first L2 run failed with the
+daemon refusing every renewal, and the cause was not renewal at all: `Signer.mint`
+formats the expiry as whole Unix seconds, and the registry was telling the node a
+moment with a fraction in it. At a two second session the credential died up to a
+second before the moment the node was renewing against. At thirty minutes it is
+invisible, and it would have stayed invisible until a clock skew or a slow round
+trip made the difference matter on a real machine. `Signer.Expiry` is now what
+every credential window is computed through, so a node is told the moment its
+credential really has.
+
+What the record is held to. `safety.bootstrap_credential_is_short_lived_and_single_use`
+reads three things off World Truth: how many accepted allocations carried each
+credential, how many times each was redeemed, and whether the bytes turn up in
+Mercator's event log or Effect Ledger. The Lab world keeps every token it ever
+minted, keyed by the token, because the interesting one is the credential a
+reinvitation superseded: an invitation nobody is offering any more is exactly the
+one that must not be redeemable a second time. The credentials travel on the
+invariant observation and never on `WorldTruthSnapshot`, which the Lab's own HTTP
+surface serves.
+
+`safety.secrets_absent` was a rule about vocabulary. It searched for the field
+names credential, password, and secret, so a token filed under `enrollment_token`
+passed it, which is the name a bootstrap would honestly be filed under. It now
+scans values as well: any credential this world minted wherever it is filed, and
+any signed URL, because a presigned read is a bearer credential written as a
+location and recording one would put a working read of the object store into
+every exported bundle.
+
+Evidence, in order of fidelity. At L1,
+`a-machine-keeps-working-past-its-first-session` drives forty minutes of virtual
+time and the ledger holds one enrolment and a renewal sequenced after the launch
+and before the Run ends; deleting the renewal from the world's sweep fails it with
+"the machine outlived its first session credential and the ledger holds no
+renewal". A byte scan of the exported Run Bundle finds no credential material. At
+L2, `TestAMachineGoesOnWorkingAfterItsFirstSessionCredentialLapses` runs a real
+`nodeagent.Agent` against the daemon's own HTTP server with a two second session,
+counts two renewals on the wire, then places and completes a Run, and asserts
+exactly one invitation was redeemed; restoring the old behaviour turns it into a
+loop of `ENROLLMENT_REFUSED` and fails on the renewal count.
+`go test -race ./internal/daemon/ ./internal/lab/` is green, at 31s and 253s.
 
 ### Phase 5 the machine a listing becomes
 

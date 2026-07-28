@@ -56,6 +56,10 @@ type Config struct {
 	// heartbeat. Zero takes the registry's default. Tests shorten it so lease
 	// expiry is stated rather than waited for.
 	NodeLease time.Duration
+	// NodeSession is how long one node session credential stays valid before its
+	// agent has to renew. Zero takes the registry's default. Tests shorten it so a
+	// machine outliving its first session is stated rather than waited out.
+	NodeSession time.Duration
 	// Prewarm bounds the preparation this Mercator may have in flight for work
 	// it has not admitted. Nil takes DefaultPrewarmPolicy.
 	Prewarm *orchestrator.PrewarmPolicy
@@ -152,6 +156,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 	}
 	if cfg.NodeLease > 0 {
 		nodeOptions = append(nodeOptions, node.WithLease(cfg.NodeLease))
+	}
+	if cfg.NodeSession > 0 {
+		nodeOptions = append(nodeOptions, node.WithSession(cfg.NodeSession))
 	}
 	nodes := node.NewRegistry(
 		storage.Nodes(),

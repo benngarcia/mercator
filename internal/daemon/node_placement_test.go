@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -388,6 +389,26 @@ type fleet struct {
 	// lease turns every case into a bet on how busy the host running the suite
 	// is. The one case about a machine going quiet states the lease it needs.
 	lease time.Duration
+	// session is how long one of this daemon's node session credentials lasts.
+	// Zero is the production thirty minutes, which is longer than any case here
+	// runs for: the one case about a machine outliving its credential shortens it,
+	// so what happens after the lapse is stated rather than waited out.
+	session time.Duration
+	// renewals counts the session renewals this fleet's agents really performed,
+	// tallied off the wire rather than off anything an agent says about itself. It
+	// is the evidence that a machine past its first credential renewed instead of
+	// re-enrolling, and it is a count because the interesting claim is the second
+	// one.
+	renewals atomic.Int64
+	// enrolments counts the invitations this fleet's agents really redeemed,
+	// tallied off the same wire. One machine joins the fleet once, so a second one
+	// is an agent that answered a lapsed credential by replaying material the
+	// registry already spent.
+	enrolments atomic.Int64
+	// bootstrapToken is the credential this fleet's first machine was handed. It
+	// is kept so a case can search the operator's record for it, and it is the one
+	// string in this harness that must never turn up anywhere else.
+	bootstrapToken string
 	// soldOn is what an operator states this fleet's machine is bought on beyond its
 	// price: the block of time it is billed in, the classes it is held for, and the
 	// moment it stops being Mercator's. Empty is a machine bought in no increments,
@@ -417,6 +438,14 @@ func reporting(disk capability.DiskFacts) fleetOption {
 // is what a case about a machine going quiet is measured in.
 func leasedFor(lease time.Duration) fleetOption {
 	return func(f *fleet) { f.lease = lease }
+}
+
+// renewingEvery is how long one session credential lasts on this fleet's daemon.
+// It is what a case about a machine that goes on working past its first
+// credential is measured in, because at the production thirty minutes every case
+// in this package finishes inside the window and none of them can see the lapse.
+func renewingEvery(session time.Duration) fleetOption {
+	return func(f *fleet) { f.session = session }
 }
 
 // runningOn hands the agent a real container runtime instead of the scripted
@@ -475,9 +504,10 @@ func startFleet(t *testing.T, options ...fleetOption) *fleet {
 	for _, option := range options {
 		option(harness)
 	}
-	harness.address, harness.control = startRuntimeWithLease(t, harness.lease, harness.prewarm)
+	harness.address, harness.control = startRuntimeWithNodeWindows(t, harness.lease, harness.session, harness.prewarm)
 	bootstrap := harness.invite(t, 1.25)
 	harness.nodeID = bootstrap.NodeID
+	harness.bootstrapToken = bootstrap.EnrollmentToken
 	harness.stop = harness.startAgent(t, bootstrap, harness.agentRuntime)
 	harness.awaitOffer(t, harness.nodeID)
 	return harness
@@ -585,7 +615,7 @@ func (f *fleet) startAgent(t *testing.T, bootstrap capability.NodeBootstrap, run
 			AgentVersion:    "test",
 		},
 		runtime,
-		nodeagent.NewHTTPTransport(bootstrap.ControlPlaneURL, nil),
+		nodeagent.NewHTTPTransport(bootstrap.ControlPlaneURL, f.countingClient()),
 		state,
 		nodeagent.WithHeartbeat(f.heartbeat),
 		nodeagent.WithReconnectBackoff(5*time.Millisecond),
@@ -597,6 +627,33 @@ func (f *fleet) startAgent(t *testing.T, bootstrap capability.NodeBootstrap, run
 }
 
 func (f *fleet) stopAgent() { f.stop() }
+
+// countingClient is the agent's real HTTP client with a tally on it. Nothing
+// about the exchange changes: the agent builds its own requests, the daemon
+// answers them, and this counts the ones that renewed a session as they cross the
+// wire. A count taken anywhere else would be the agent being asked to report on
+// itself.
+func (f *fleet) countingClient() *http.Client {
+	return &http.Client{Transport: countingRoundTripper{fleet: f, next: http.DefaultTransport}}
+}
+
+type countingRoundTripper struct {
+	fleet *fleet
+	next  http.RoundTripper
+}
+
+func (counter countingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := counter.next.RoundTrip(request)
+	if err == nil && response.StatusCode == http.StatusOK {
+		switch {
+		case strings.HasSuffix(request.URL.Path, "/session/renew"):
+			counter.fleet.renewals.Add(1)
+		case strings.HasSuffix(request.URL.Path, "/node-agent/enroll"):
+			counter.fleet.enrolments.Add(1)
+		}
+	}
+	return response, err
+}
 
 func (f *fleet) submitRun(t *testing.T) string {
 	t.Helper()

@@ -89,6 +89,44 @@ func (registry *Registry) OpenSession(ctx context.Context, nodeID, sessionToken 
 	return session, nil
 }
 
+// RenewSession mints a fresh credential for a node that still holds a valid one.
+// It is how a machine keeps working past the thirty minutes its first credential
+// is good for, and it is the only way: the invitation the agent joined with is
+// spent, so an agent that let its session lapse has nothing left to present and
+// stops being able to speak to a control plane whose machine is still running.
+//
+// It writes nothing. A session credential is signed rather than stored, and
+// renewing changes no fact about the node: the fencing token does not move, the
+// lease is not touched, and the node is the node it was a moment before. That is
+// what makes this a different act from enrolling rather than a gentler one.
+//
+// A retired machine renews nothing, which is the rule every door in this file
+// keeps: asking for something is refused, reporting what already happened is
+// kept. Retirement is also the whole of what bounds a stolen credential here. A
+// bearer token can be presented by whoever holds it, so the answer to a leak is
+// ending the generation, and a renewal that outlived the generation would take
+// that answer away.
+func (registry *Registry) RenewSession(ctx context.Context, nodeID, sessionToken string) (capability.SessionRenewal, error) {
+	record, err := registry.authenticate(ctx, nodeID, sessionToken)
+	if err != nil {
+		return capability.SessionRenewal{}, err
+	}
+	if record.Retired() {
+		return capability.SessionRenewal{}, fmt.Errorf("%w: %s renews no session on a Rental generation that is over", ErrRetired, record.ID)
+	}
+	expires := registry.signer.Expiry(registry.now().UTC().Add(registry.session))
+	token, err := registry.signer.Session(record.ID, record.FencingToken, expires)
+	if err != nil {
+		return capability.SessionRenewal{}, err
+	}
+	return capability.SessionRenewal{
+		NodeID:         record.ID,
+		SessionToken:   token,
+		SessionExpires: expires,
+		FencingToken:   record.FencingToken,
+	}, nil
+}
+
 // Drain ends every open session and refuses to open another. It is what a
 // control plane shutting down says to the object that owns the sessions.
 //

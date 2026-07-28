@@ -109,6 +109,29 @@ type Enrollment struct {
 	Duplicate bool `json:"duplicate"`
 }
 
+// SessionRenewal is a fresh credential for a session that already exists. It is
+// deliberately not an Enrollment. Enrolling redeems a single-use invitation and
+// moves the fencing token, which supersedes whatever the node was doing;
+// renewing spends nothing, moves nothing, and leaves the machine exactly as it
+// was a moment before.
+//
+// A node holds one of these because both credentials it ever has are short
+// lived. The invitation is spent the moment it is redeemed, so an agent whose
+// session lapsed has nothing left to present: it renews ahead of the lapse, or
+// it stops being able to speak to the control plane at all while its machine
+// goes on running.
+//
+// It carries the fencing token so the agent can see that renewing did not move
+// it. A renewal that came back with a different one would mean something
+// superseded this node while it was asking, and the agent's memory of what it
+// has already applied would no longer line up with the control plane's.
+type SessionRenewal struct {
+	NodeID         string    `json:"node_id"`
+	SessionToken   string    `json:"session_token"`
+	SessionExpires time.Time `json:"session_expires"`
+	FencingToken   uint64    `json:"fencing_token"`
+}
+
 // NodeFacts is everything the node reports about itself. Each group has one
 // authority: the node observes its own host and inventory, and nothing else
 // does.

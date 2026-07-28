@@ -6,6 +6,12 @@
 // and its short-lived enrollment token arrive through the bootstrap the
 // capacity provider delivered, or through the environment for a machine an
 // operator enrolls by hand.
+//
+// The enrollment token is the only credential it is ever given, and it is spent
+// the moment it is redeemed. Everything after that runs on a session credential
+// the agent renews for itself ahead of each lapse, so a machine that has been
+// working for a week is holding material minted this half hour and nothing older.
+// See docs/production/node-agent.md.
 package main
 
 import (

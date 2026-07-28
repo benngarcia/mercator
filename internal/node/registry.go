@@ -69,6 +69,14 @@ func WithLease(lease time.Duration) Option {
 	return func(registry *Registry) { registry.lease = lease }
 }
 
+// WithSession sets how long one session credential stays valid. Tests shorten it
+// so a machine outliving its first session is stated rather than waited out: at
+// the production thirty minutes, every case in the tree finishes inside the
+// window and none of them can see what happens after it.
+func WithSession(session time.Duration) Option {
+	return func(registry *Registry) { registry.session = session }
+}
+
 // WithAgentVersion pins the node agent build a bootstrap asks for.
 func WithAgentVersion(version string) Option {
 	return func(registry *Registry) { registry.agentVersion = version }
@@ -147,7 +155,7 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 	if rentalID == "" {
 		rentalID = "rnt_" + registry.identity()
 	}
-	expires := registry.now().UTC().Add(registry.invitation)
+	expires := registry.signer.Expiry(registry.now().UTC().Add(registry.invitation))
 	token, err := registry.signer.Enrollment(nodeID, rentalID, generation, expires)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
@@ -208,6 +216,20 @@ func (registry *Registry) EnrolledAt(ctx context.Context, ref capability.NodeRef
 // Enroll redeems an invitation for an authenticated session. Identity is not
 // negotiable: the request must name the node and generation the invitation was
 // minted for, and the invitation is spent by redeeming it.
+//
+// Two independent doors refuse a replay, and they refuse it for two different
+// reasons. The signer answers whether this material is this node's invitation and
+// whether its window is still open, which needs nothing durable and holds even
+// against a store that lost the record. The store answers whether this exact
+// invitation has already been redeemed, which holds inside the window, where the
+// signature is still perfectly good. A machine whose session lapsed presents
+// material both of them refuse eventually and only the second refuses at once, so
+// collapsing them would leave a replayed bootstrap accepted for the rest of its
+// window.
+//
+// The way back for a machine with nothing left to present is Reinvite, which is a
+// fresh invitation for the same identity, and never this route being made
+// forgiving.
 func (registry *Registry) Enroll(ctx context.Context, request capability.EnrollmentRequest) (capability.Enrollment, error) {
 	now := registry.now().UTC()
 	record, err := registry.lookupInvited(ctx, request)
@@ -215,7 +237,10 @@ func (registry *Registry) Enroll(ctx context.Context, request capability.Enrollm
 		return capability.Enrollment{}, err
 	}
 	if !registry.signer.VerifyEnrollment(request.NodeID, request.RentalID, request.Generation, request.EnrollmentToken, now) {
-		return capability.Enrollment{}, fmt.Errorf("node: enrollment token is not valid for %q generation %d", request.NodeID, request.Generation)
+		return capability.Enrollment{}, fmt.Errorf(
+			"%w: the material presented for %q generation %d is not this node's invitation or its window has closed",
+			ErrEnrollmentInvalid, request.NodeID, request.Generation,
+		)
 	}
 	enrolled, err := registry.store.Enroll(ctx, record.WorkspaceID, record.ID, Enrollment{
 		EnrollmentTokenID: TokenID(request.EnrollmentToken),
@@ -230,7 +255,7 @@ func (registry *Registry) Enroll(ctx context.Context, request capability.Enrollm
 	// A new enrollment supersedes any open session. Closing it here is what
 	// makes the fencing token meaningful rather than advisory.
 	registry.closeSession(enrolled.WorkspaceID, enrolled.ID)
-	sessionExpires := now.Add(registry.session)
+	sessionExpires := registry.signer.Expiry(now.Add(registry.session))
 	token, err := registry.signer.Session(enrolled.ID, enrolled.FencingToken, sessionExpires)
 	if err != nil {
 		return capability.Enrollment{}, err
@@ -428,7 +453,7 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 	if record.Retired() {
 		return capability.NodeBootstrap{}, fmt.Errorf("node: %q is retired and cannot be invited again", nodeID)
 	}
-	expires := registry.now().UTC().Add(registry.invitation)
+	expires := registry.signer.Expiry(registry.now().UTC().Add(registry.invitation))
 	token, err := registry.signer.Enrollment(record.ID, record.RentalID, record.Generation, expires)
 	if err != nil {
 		return capability.NodeBootstrap{}, err
