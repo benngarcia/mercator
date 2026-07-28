@@ -70,7 +70,7 @@ func validateSmallWorld(input scheduler.SchedulingInput) error {
 
 func referenceFeasible(input scheduler.SchedulingInput, offer domain.OfferSnapshot) bool {
 	container := input.Workload.Spec.Containers[0]
-	if slices.Contains(input.ExcludedOfferSnapshotIDs, offer.ID) ||
+	if _, struck := domain.ExcludedOffer(input.Excluded, offer.ID); struck ||
 		!offer.ExpiresAt.IsZero() && !offer.ExpiresAt.After(input.EvaluatedAt) ||
 		offer.Platform != container.Platform ||
 		offer.Capabilities.Container.MaxContainers < 1 ||

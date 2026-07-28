@@ -90,6 +90,10 @@ var runEventTypes = map[string]bool{
 	EventCleanupConfirmed:      true,
 	EventRunClosed:             true,
 	EventRunReported:           true,
+	EventCapacityRequested:     true,
+	EventCapacityAccepted:      true,
+	EventCapacityStageObserved: true,
+	EventCapacityReclaimed:     true,
 }
 
 // IsRunEventType reports whether candidate names a Run lifecycle event the
@@ -127,6 +131,11 @@ type Orchestrator struct {
 	prewarmPolicy    PrewarmPolicy
 	prewarmed        prewarmMemory
 	preparationClock PreparationClock
+	// capacity is the machine lease, and inviter the node registry a fresh
+	// machine is invited through. They are separate from adapter because a lease
+	// is not an execution: see Capacity.
+	capacity Capacity
+	inviter  Inviter
 }
 
 type Adapter interface {
@@ -474,6 +483,12 @@ func (o *Orchestrator) step(ctx context.Context, workspaceID, runID string, vers
 			return false, err
 		}
 		return o.stepAdmit(ctx, workspaceID, runID, version, state)
+	case state.capacity != nil && !state.nodeEnrolled:
+		// A placement that chose to provision has to build the machine before
+		// anything can be launched on it. Until an agent enrols there is no
+		// session to create a container through, whatever the provider says about
+		// the allocation.
+		return o.stepBuildCapacity(ctx, workspaceID, runID, version, state)
 	case !state.launchAccepted && state.launchFailure == nil:
 		return o.stepLaunch(ctx, workspaceID, runID, version, state)
 	default:
@@ -558,9 +573,9 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 	attemptNumber := state.attemptCount + 1
 	supersedes, supersedesReason := state.supersession()
 	decision, attempt, selectedOffer, schedule, err := o.decide(ctx, workspaceID, *state.requested, runID, attemptNumber, placementRequest{
-		excludedOfferSnapshotIDs: state.excludedOfferSnapshotIDs,
-		supersedes:               supersedes,
-		supersedesReason:         supersedesReason,
+		excluded:         state.excluded,
+		supersedes:       supersedes,
+		supersedesReason: supersedesReason,
 	})
 	if err != nil {
 		return false, err
@@ -603,6 +618,13 @@ func (o *Orchestrator) stepPlace(ctx context.Context, workspaceID, runID string,
 		mustEvent(runID, "attempt_created_"+attempt.AttemptID, EventAttemptCreated, attempt, o.now()),
 		mustPrivateEvent(runID, "launch_intent_recorded_"+attempt.AttemptID, EventLaunchIntentRecorded, publicLaunchRequest(launchReq), launchReq, o.now()),
 	)
+	// What this answer commits Mercator to allocating, written down with the
+	// answer itself and before any provider is asked for anything. A machine
+	// allocated by a command whose response never came back is reconcilable
+	// because this is already durable.
+	if plan := capacityPlan(decision, selectedOffer, o.now().UTC()); plan != nil {
+		events = append(events, mustEvent(runID, "capacity_requested_"+plan.RentalID, EventCapacityRequested, *plan, o.now()))
+	}
 	request, err := runAppendRequest(nil, workspaceID, runID, version, commandKey, events)
 	if err != nil {
 		return false, err

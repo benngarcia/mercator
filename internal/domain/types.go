@@ -358,7 +358,12 @@ type OfferSnapshot struct {
 	Terms        CapacityTerms  `json:"capacity_terms,omitzero"`
 	Queue        *QueueSnapshot `json:"queue,omitempty"`
 	Provisioning *Estimate      `json:"provisioning,omitempty"`
-	Images       ImageInventory `json:"images"`
+	// Bootstrap is what this publisher says about the gap between allocating a
+	// machine and Mercator being able to run anything on it. Capacity that
+	// already exists states none: there is no agent still to arrive on a machine
+	// an agent is already enrolled on.
+	Bootstrap *CapacityBootstrap `json:"bootstrap,omitempty"`
+	Images    ImageInventory     `json:"images"`
 	// Artifacts is the immutable content this host says it holds a local copy
 	// of. It is placement evidence and never a dependency's authority: a Run's
 	// inputs are durable in the object store or the Run does not go anywhere.
@@ -1027,6 +1032,39 @@ type CapacityEvidence struct {
 	Confidence float64 `json:"confidence"`
 }
 
+// CapacityBootstrap is what stands between a provider allocating a machine and
+// Mercator being able to run anything on it: the agent has to boot on it and
+// open a session, and until it does the machine is billing with nothing that
+// will come for it.
+//
+// Both bounds are about giving up rather than about how long the arrival takes,
+// which is the provisioning estimate beside them. They come apart because they
+// belong to different parties. Mercator stops expecting the agent at
+// EnrolmentDeadlineSeconds and hands the machine back; the provider destroys it
+// at ReclaimAfterSeconds whatever Mercator does, which is what stops capacity
+// nobody enrolled on from billing for ever when the control plane is the thing
+// that went away.
+type CapacityBootstrap struct {
+	// EnrolmentDeadlineSeconds is how long after the provider accepts the
+	// allocation Mercator goes on expecting the agent's session. Zero is a
+	// publisher that named no patience, and Mercator uses its own.
+	EnrolmentDeadlineSeconds float64 `json:"enrolment_deadline_seconds,omitempty"`
+	// ReclaimAfterSeconds is the provider's own backstop. Zero is a provider
+	// that has none, which is a machine only Mercator will ever give back.
+	ReclaimAfterSeconds float64 `json:"reclaim_after_seconds,omitempty"`
+}
+
+// EnrolmentDeadline is when Mercator stops expecting the agent on a machine
+// accepted at acceptedAt, given the patience Mercator holds for a publisher
+// that named none. A machine nobody gives up on bills for ever, so there is no
+// answer that means "wait indefinitely".
+func (bootstrap *CapacityBootstrap) EnrolmentDeadline(acceptedAt time.Time, patience time.Duration) time.Time {
+	if bootstrap != nil && bootstrap.EnrolmentDeadlineSeconds > 0 {
+		patience = time.Duration(bootstrap.EnrolmentDeadlineSeconds * float64(time.Second))
+	}
+	return acceptedAt.Add(patience)
+}
+
 // StatedRate is one share of a machine's history somebody measured, and how much
 // the publisher of that measurement stands behind it. The confidence is what says
 // the measurement happened at all: a rate nobody stands behind is silence, which
@@ -1139,6 +1177,65 @@ const (
 	// own stream contradicts.
 	SupersededCapacityReclaimed = "PREVIOUS_CAPACITY_RECLAIMED"
 )
+
+// OfferExclusion is one offer an earlier attempt on this Run proved unusable,
+// and what it proved. The two travel together because a later evaluation has to
+// say why a candidate it can see is not one it may take, and the reasons are
+// not interchangeable: a machine that refused the launch left nothing behind,
+// and capacity Mercator reclaimed is a machine a provider allocated, billed
+// for, and has now destroyed.
+type OfferExclusion struct {
+	OfferSnapshotID string               `json:"offer_snapshot_id"`
+	Reason          OfferExclusionReason `json:"reason"`
+}
+
+type OfferExclusionReason string
+
+const (
+	// OfferRefusedTheLaunch is the machine behind this offer having said it had
+	// nothing to run the work on.
+	OfferRefusedTheLaunch OfferExclusionReason = "launch_refused"
+	// OfferCapacityReclaimed is capacity allocated from this offer that never
+	// became executable inside the patience it stated, which Mercator handed
+	// back. Taking the same listing again would allocate another one.
+	OfferCapacityReclaimed OfferExclusionReason = "capacity_reclaimed"
+)
+
+// Violation is how a candidate struck out by this exclusion is refused, said in
+// the vocabulary a decision record is read in.
+func (reason OfferExclusionReason) Violation(offerSnapshotID string) Violation {
+	violation := Violation{
+		Path:     "offer_snapshot_id",
+		Required: "offer not rejected by an earlier attempt",
+		Offered:  offerSnapshotID,
+	}
+	switch reason {
+	case OfferCapacityReclaimed:
+		violation.Code = "PREVIOUS_ATTEMPT_CAPACITY_RECLAIMED"
+		violation.Message = "Capacity allocated from this offer never enrolled a node and was reclaimed by an earlier attempt."
+		// Nothing here was spent on somebody else's work. Mercator allocated the
+		// machine, waited out the patience the capacity stated, and destroyed it,
+		// so a Run struck out by this waited on a machine of its own.
+		return violation
+	default:
+		violation.Code = "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE"
+		violation.Message = "Offer was rejected as unavailable by an earlier launch attempt."
+		// What this machine refused was a launch, and what it said was that it
+		// had nothing to run it on. That is capacity somebody else is spending.
+		violation.EndedByWaiting = true
+		return violation
+	}
+}
+
+// ExcludedOffer reports which exclusion, if any, strikes one offer out.
+func ExcludedOffer(exclusions []OfferExclusion, offerSnapshotID string) (OfferExclusion, bool) {
+	for _, exclusion := range exclusions {
+		if exclusion.OfferSnapshotID == offerSnapshotID {
+			return exclusion, true
+		}
+	}
+	return OfferExclusion{}, false
+}
 
 // Identity is the decision ID derived from the decision's own recorded content:
 // what was asked, when it was asked, what was weighed, what was chosen, and what
@@ -1458,6 +1555,13 @@ var LaunchStages = []LaunchStage{
 	StageContainerStart,
 	StageApplicationReady,
 }
+
+// ProvisioningStages is the three a machine that does not exist yet goes
+// through before anything can be fetched onto it, in order. They are the stages
+// no capacity Mercator already holds spends anything on, and the only ones with
+// an actual the provider and the node registry can establish between them
+// rather than a container runtime.
+var ProvisioningStages = []LaunchStage{StageAcquisition, StageBoot, StageAgentReady}
 
 // LaunchStageEstimates is what this candidate is predicted to spend on each
 // stage of a launch. Every stage carries its own distribution, because a

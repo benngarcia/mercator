@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -173,6 +174,25 @@ func (registry *Registry) Invite(ctx context.Context, invitation Invitation) (ca
 		EnrollmentToken: token,
 		AgentVersion:    registry.agentVersion,
 	}, nil
+}
+
+// Enrolled reports whether the machine invited under this identity has opened
+// its session. It is the one authority on the question: a provider can say a
+// machine is active and an operator can say an image has an agent in it, and
+// neither is a session Mercator can create a container through.
+//
+// An identity nobody has heard from is not an error. A node invited and never
+// filled is exactly the state provisioning waits in, and reporting it as a
+// failure would make every look at a machine still booting an incident.
+func (registry *Registry) Enrolled(ctx context.Context, ref capability.NodeRef) (bool, error) {
+	record, err := registry.record(ctx, ref)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return record.State == StateReady, nil
 }
 
 // Enroll redeems an invitation for an authenticated session. Identity is not

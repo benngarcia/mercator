@@ -2,6 +2,8 @@ package broker
 
 import (
 	"context"
+	"errors"
+	"sort"
 
 	"github.com/benngarcia/mercator/internal/capability"
 )
@@ -85,4 +87,50 @@ func (b *Broker) providerFor(
 		return nil, err
 	}
 	return backend.CapacityFor(operation)
+}
+
+// ListOwnedCapacity is every machine this workspace's capacity connections say
+// they are holding, whatever Mercator's own record has. It is the answer a lost
+// response is reconciled against: a provider that allocated a machine and could
+// not tell Mercator so still knows it did, and the Rental identity travelled
+// with the command precisely so this listing names it.
+//
+// A connection that promised no owned listing is skipped rather than failing the
+// sweep. Its machines are reconcilable by nothing else, which is exactly what
+// CapacitySupport.Validate refuses a provider for; a connection that got here
+// without the promise is one that deduplicates provisions instead.
+func (b *Broker) ListOwnedCapacity(ctx context.Context, query capability.OwnershipQuery) ([]capability.OwnedCapacity, error) {
+	records, err := b.conns.List(ctx, query.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	var owned []capability.OwnedCapacity
+	for _, record := range records {
+		backend, err := b.build(ctx, query.WorkspaceID, record)
+		if err != nil {
+			return nil, err
+		}
+		provider, err := backend.CapacityFor(capability.CapacityListOwned)
+		if errors.Is(err, capability.ErrCapabilityUnsupported) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		held, err := provider.ListOwnedCapacity(ctx, query)
+		if err != nil {
+			return nil, ConnectionErrors{{ConnectionID: record.ID, AdapterType: record.AdapterType, Err: err}}.OrNil()
+		}
+		for i := range held {
+			held[i].ConnectionID = record.ID
+		}
+		owned = append(owned, held...)
+	}
+	sort.Slice(owned, func(i, j int) bool {
+		if owned[i].ConnectionID != owned[j].ConnectionID {
+			return owned[i].ConnectionID < owned[j].ConnectionID
+		}
+		return owned[i].NativeRef < owned[j].NativeRef
+	})
+	return owned, nil
 }

@@ -28,11 +28,16 @@ type SchedulingInput struct {
 	// identically, so an operator reading a Run that nothing matched could not
 	// tell a marketplace selling no machine of that shape from a workspace whose
 	// providers were never asked.
-	Collection               domain.CollectionReport
-	Schedules                map[string]domain.RentalSchedule
-	ExcludedOfferSnapshotIDs []string
-	ModelVersion             string
-	EvaluatedAt              time.Time
+	Collection domain.CollectionReport
+	Schedules  map[string]domain.RentalSchedule
+	// Excluded is what earlier attempts on this Run proved about offers this
+	// evaluation can still see, each carrying what it proved. A bare list of IDs
+	// could only ever say "an earlier attempt refused this", which reads a machine
+	// somebody else was using and a machine Mercator allocated and destroyed as
+	// one fact.
+	Excluded     []domain.OfferExclusion
+	ModelVersion string
+	EvaluatedAt  time.Time
 	// Image is the content every candidate is being asked to run. It travels
 	// with the request because it is a property of the image: an offer that
 	// restated it could disagree with the others about the same image.
@@ -305,17 +310,8 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	var violations []domain.Violation
 	workload := input.Workload
 	container := workload.Spec.Containers[0]
-	if slices.Contains(input.ExcludedOfferSnapshotIDs, offer.ID) {
-		violations = append(violations, domain.Violation{
-			Code:     "PREVIOUS_ATTEMPT_CAPACITY_UNAVAILABLE",
-			Path:     "offer_snapshot_id",
-			Required: "offer not rejected by an earlier attempt",
-			Offered:  offer.ID,
-			Message:  "Offer was rejected as unavailable by an earlier launch attempt.",
-			// What this machine refused was a launch, and what it said was that it
-			// had nothing to run it on. That is capacity somebody else is spending.
-			EndedByWaiting: true,
-		})
+	if exclusion, struck := domain.ExcludedOffer(input.Excluded, offer.ID); struck {
+		violations = append(violations, exclusion.Reason.Violation(offer.ID))
 	}
 	if !offer.Lane.Valid() {
 		violations = append(violations, domain.Violation{
