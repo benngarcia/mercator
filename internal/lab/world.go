@@ -639,6 +639,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		world.truth[rental.ID] = cloneHostState(state)
 		world.seedReplicas(rental.ID, rental.ArtifactReplicas, tape.InitialWorld, tape.Start)
 		world.seedCaches(rental.ID, rental.CacheMounts, tape.Start)
+		world.enrollTheAgentThisMachineIsHeldThrough(state.offer)
 	}
 	for index, host := range tape.InitialWorld.Hosts {
 		state := hostState{
@@ -813,6 +814,47 @@ func (world *simulatedWorld) seedCaches(offerID string, held []scenario.HeldCach
 		state.Identity = domain.CacheIdentity(state.WorkspaceID, declared.Requirement())
 		world.cacheMounts[offerID][state.Identity] = state
 	}
+}
+
+// enrollTheAgentThisMachineIsHeldThrough is the session an operator already opened
+// on a machine this world holds. A Rental in a Blueprint is capacity somebody
+// enrolled by hand before the world's clock started, and the agent is what makes
+// it capacity Mercator can launch on at all: nothing else can create a container
+// there, enumerate what the disk holds, attach a cache, or fetch and hash an
+// Artifact copy.
+//
+// It is written into the ledger rather than left implicit in the offer's shape,
+// because the ledger is the only account of what really happened on the machine.
+// safety.reusable_capacity_has_an_enrolled_runtime is the reader, and a rule that
+// took the offer's own standing-and-reusable shape as its evidence would be asking
+// the world whether it agreed with itself.
+//
+// The node identity is this world's own, exactly as it is the registry's in
+// production, and it is minted from the machine rather than from the lease: an
+// operator may invite a second machine against one lease when a generation ends,
+// and a node named after the lease could not tell the two apart. There is no
+// operation key, because an enrolment is not a command Mercator issued for a
+// provider to deduplicate; see OperationNodeEnrolled.
+func (world *simulatedWorld) enrollTheAgentThisMachineIsHeldThrough(offer domain.OfferSnapshot) {
+	const generation = 1
+	nodeID := DeterministicID(world.seed, "node", offer.MachineID)
+	world.recordEffect(
+		OperationNodeEnrolled,
+		fmt.Sprintf("%s/generation-%d", nodeID, generation),
+		EffectCommandAccepted,
+		EffectResponseDelivered,
+		"",
+		offer.MachineID,
+		"",
+		map[string]any{
+			"machine_id": offer.MachineID,
+			"rental_id":  offer.RentalID,
+			"node_id":    nodeID,
+			"generation": generation,
+		},
+		map[string]any{"node_id": nodeID, "fencing_token": generation},
+		"",
+	)
 }
 
 // publishOfferFacts is one machine being handed what this world says about it,

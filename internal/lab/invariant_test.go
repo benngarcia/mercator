@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 46 {
-		t.Fatalf("latest invariant results = %d, want 46", len(latest))
+	if len(latest) != 47 {
+		t.Fatalf("latest invariant results = %d, want 47", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -263,6 +263,33 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		},
 		"safety.ephemeral_capacity_not_reused": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{queuedBehindOneShotCapacity()}
+		},
+		// The world this exists to catch is the one provisioning walks into: a
+		// machine a provider allocated and billed for, whose agent never opened a
+		// session, publishing an image inventory and a queue anyway. Both are the
+		// agent's own work, so both are invented here, and every reader downstream
+		// takes them as warmth to prefer and a Booking to dispatch. The Run that
+		// wins the queue is then launched at a host nothing can reach.
+		"safety.reusable_capacity_has_an_enrolled_runtime": func(observation *InvariantObservation) {
+			observation.World.Offers = []domain.OfferSnapshot{{
+				ID:        "rental-nobody-is-on",
+				MachineID: "simcloud-4090-a17c",
+				Kind:      domain.OfferKindStanding,
+				Lane:      domain.LaneReusable,
+				RentalID:  "rnt_never_enrolled",
+				Images: domain.ImageInventory{
+					Known:        true,
+					LayerDigests: []string{"sha256:nobody-enumerated-this"},
+				},
+			}}
+			observation.RentalSchedules["rnt_never_enrolled"] = domain.RentalSchedule{
+				RentalID: "rnt_never_enrolled",
+				Version:  2,
+				Bookings: []domain.ScheduledBooking{
+					{Booking: domain.Booking{ID: "booking-running", State: domain.BookingStateRunning, ScheduleVersion: 1}},
+					{Booking: domain.Booking{ID: "booking-waiting", State: domain.BookingStateQueued, ScheduleVersion: 2}},
+				},
+			}
 		},
 		// A marketplace template publishing a lease. The machine does not exist
 		// yet, nothing has allocated it, and the Rental identity it carries is a
@@ -685,22 +712,43 @@ func TestTheLedgerReadsTheCapacityLifecycleItWillBeAskedToRecord(t *testing.T) {
 // replayed token is refused with ErrEnrollmentSpent rather than answered as a
 // duplicate, so a token stays redeemable once whatever this rule does. Counted
 // here, a node that came back from a reboot would be a violation.
+//
+// Each record states the request projection its operation really carries, which is
+// what the enrolment case needs to be an enrolment at all:
+// safety.reusable_capacity_has_an_enrolled_runtime reads which machine and which
+// lease a session was opened for, so an entry with no projection is not an
+// enrolment this world would ever write, and asserting about one would be asserting
+// about nothing.
 func TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
-	for operation, answers := range map[string][2]string{
-		OperationCapacityObserve:   {`{"state":"starting"}`, `{"state":"active"}`},
-		OperationCapacityListOwned: {`{"owned":1}`, `{"owned":2}`},
-		OperationNodeEnrolled:      {`{"fencing_token":1}`, `{"fencing_token":2}`},
+	for operation, record := range map[string]struct {
+		request string
+		answers [2]string
+	}{
+		OperationCapacityObserve: {
+			request: `{"native_ref":"machine-1"}`,
+			answers: [2]string{`{"state":"starting"}`, `{"state":"active"}`},
+		},
+		OperationCapacityListOwned: {
+			request: `{"workspace_id":"ws_lab"}`,
+			answers: [2]string{`{"owned":1}`, `{"owned":2}`},
+		},
+		OperationNodeEnrolled: {
+			request: `{"machine_id":"machine-1","rental_id":"rnt_1","node_id":"nod_1","generation":7}`,
+			answers: [2]string{`{"fencing_token":1}`, `{"fencing_token":2}`},
+		},
 	} {
 		t.Run(operation, func(t *testing.T) {
 			observation := handWrittenLedger(now,
 				EffectRecord{
 					Operation: operation, OperationID: "nod_1/generation-7",
-					Command: EffectCommandAccepted, Consequence: []byte(answers[0]),
+					Command: EffectCommandAccepted,
+					Request: []byte(record.request), Consequence: []byte(record.answers[0]),
 				},
 				EffectRecord{
 					Operation: operation, OperationID: "nod_1/generation-7",
-					Command: EffectCommandAccepted, Consequence: []byte(answers[1]),
+					Command: EffectCommandAccepted,
+					Request: []byte(record.request), Consequence: []byte(record.answers[1]),
 				},
 			)
 

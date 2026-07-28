@@ -122,6 +122,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
+		invariantRule{id: "safety.reusable_capacity_has_an_enrolled_runtime", check: reusableCapacityHasAnEnrolledRuntime},
 		invariantRule{id: "safety.a_rental_identity_is_capacity_mercator_holds", check: aRentalIdentityIsCapacityMercatorHolds},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{id: "safety.transfer_rate_is_attributed", check: transferRateIsAttributed},
@@ -1044,6 +1045,163 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 				len(schedule.Bookings),
 			)
 		}
+	}
+	return nil
+}
+
+// reusableCapacityHasAnEnrolledRuntime is the lane split read from the side the
+// machines are on. safety.ephemeral_capacity_not_reused holds that a one-shot
+// product accumulates nothing once its workload exits. This holds the converse:
+// the capacity that does accumulate is capacity Mercator can reach, because every
+// way a machine accumulates anything runs through an agent of Mercator's on it.
+//
+// Each of the four is that agent's own work. An image inventory is what the agent
+// enumerated on its own disk. A cache is a volume the agent attached. A verified
+// Artifact copy is a fetch the agent performed and hashed on arrival. A second
+// Booking is a promise that the next Run will be launched here, and a launch is a
+// command that travels down the node's own outbound session. A machine no agent
+// enrolled on can do none of the four, so a world that shows one doing any of them
+// is a world where Mercator is counting warmth, room, or a queue on a host it has
+// no way to speak to, and the Run that inherits it begins by discovering there is
+// nobody there.
+//
+// What the World Tape seeded is exempt for images and Artifact copies, exactly as
+// safety.locality_provenance exempts it: a machine Mercator borrows a slot on may
+// well already be sitting on the content, and that is a fact about the host rather
+// than something an agent of Mercator's put there. A cache has no such exemption
+// and needs none. A cache exists only where a workload wrote it, so a fixture
+// stating one is stating that Mercator ran something on that machine and the
+// machine kept what it wrote, which is the claim an enrolment stands behind.
+//
+// The queue clause is asked of the enrolments rather than of the fleet as it
+// stands, because a Rental whose machine has gone is the case most worth asking
+// about: the lease and the Bookings waiting on it outlive the offer, and a rule
+// that read the current fleet would fall silent about a queue at the moment the
+// machine holding it stopped being published.
+func reusableCapacityHasAnEnrolledRuntime(observation InvariantObservation) error {
+	enrolled, err := enrolledRuntimes(observation.Effects)
+	if err != nil {
+		return err
+	}
+	for _, offer := range observation.World.Offers {
+		if err := accumulationRunsThroughAnAgent(
+			offer,
+			enrolled,
+			observation.SeededLocality[offer.ID],
+			observation.SeededReplicas[offer.ID],
+		); err != nil {
+			return err
+		}
+	}
+	return everyQueueHasAnAgentToDispatchThrough(observation.RentalSchedules, enrolled)
+}
+
+// enrolledRuntime is every machine an agent of Mercator's has opened a session
+// for, and every lease those sessions were invited under. Both are read out of the
+// ledger rather than off the offers, because the ledger is the only account of
+// what really happened on the machine: an offer that claimed an enrolled runtime
+// would be the world agreeing with itself, which is the one thing a rule here may
+// never rest on.
+//
+// The two sets are kept apart because the two clauses ask different questions. An
+// inventory belongs to the machine that enumerated it, and a queue belongs to the
+// lease, and one lease may be invited against a second machine when its first
+// generation ends.
+type enrolledRuntime struct {
+	machines map[string]bool
+	rentals  map[string]bool
+}
+
+func enrolledRuntimes(effects []EffectRecord) (enrolledRuntime, error) {
+	enrolled := enrolledRuntime{machines: map[string]bool{}, rentals: map[string]bool{}}
+	for _, effect := range effects {
+		if effect.Operation != OperationNodeEnrolled || effect.Command != EffectCommandAccepted {
+			continue
+		}
+		var session struct {
+			MachineID string `json:"machine_id"`
+			RentalID  string `json:"rental_id"`
+		}
+		if err := json.Unmarshal(effect.Request, &session); err != nil {
+			return enrolledRuntime{}, fmt.Errorf("decode enrolment %s: %w", effect.ID, err)
+		}
+		if session.MachineID != "" {
+			enrolled.machines[session.MachineID] = true
+		}
+		if session.RentalID != "" {
+			enrolled.rentals[session.RentalID] = true
+		}
+	}
+	return enrolled, nil
+}
+
+// accumulationRunsThroughAnAgent holds the three clauses about one machine. The
+// machine is named by its own handle rather than by the offer it was published
+// under, because an enrolment is about a machine: a listing names a machine that
+// does not exist yet, so a listing that has accumulated anything has no handle to
+// match and fails here on the strongest reading of the same rule.
+func accumulationRunsThroughAnAgent(
+	offer domain.OfferSnapshot,
+	enrolled enrolledRuntime,
+	seeded, seededCopies map[string]bool,
+) error {
+	if enrolled.machines[offer.MachineID] {
+		return nil
+	}
+	for _, digest := range heldDigests(offer.Images) {
+		if seeded[digest] {
+			continue
+		}
+		return fmt.Errorf(
+			"offer %q holds %s, and %s, so nothing of Mercator's fetched or enumerated it",
+			offer.ID, digest, describeUnenrolledMachine(offer),
+		)
+	}
+	for _, mount := range offer.Caches.Mounts {
+		return fmt.Errorf(
+			"offer %q holds cache %q for workspace %q, and %s, so no workload of Mercator's ever wrote it there",
+			offer.ID, mount.Name, mount.WorkspaceID, describeUnenrolledMachine(offer),
+		)
+	}
+	for _, replica := range offer.Artifacts.Replicas {
+		if seededCopies[replica.ArtifactID] {
+			continue
+		}
+		return fmt.Errorf(
+			"offer %q holds a copy of Artifact %q, and %s, so nothing of Mercator's fetched those bytes or checked them",
+			offer.ID, replica.ArtifactID, describeUnenrolledMachine(offer),
+		)
+	}
+	return nil
+}
+
+// describeUnenrolledMachine says which of the two ways this machine is out of
+// reach, because an operator reading the violation acts on them differently. A
+// machine with a handle and no session is capacity the record says exists with
+// nobody on it. A machine with no handle at all is a listing, and content on a
+// listing is content on a host nothing has allocated yet.
+func describeUnenrolledMachine(offer domain.OfferSnapshot) string {
+	if offer.MachineID == "" {
+		return "names no machine, because the machine does not exist yet"
+	}
+	return fmt.Sprintf("no agent has enrolled on machine %q", offer.MachineID)
+}
+
+// everyQueueHasAnAgentToDispatchThrough holds the fourth clause. One Booking on a
+// lease is the Run that took the capacity, and the launch path answers for it. A
+// second is Mercator promising a Run it will be started on that machine when the
+// one ahead of it finishes, and the only thing that can start it is a command down
+// the node's own session.
+func everyQueueHasAnAgentToDispatchThrough(schedules map[string]domain.RentalSchedule, enrolled enrolledRuntime) error {
+	for _, rentalID := range slices.Sorted(maps.Keys(schedules)) {
+		schedule := schedules[rentalID]
+		if len(schedule.Bookings) < 2 || enrolled.rentals[rentalID] {
+			continue
+		}
+		return fmt.Errorf(
+			"Rental %q holds %d Bookings and no agent ever enrolled against it, so the Runs waiting there wait for a dispatch nothing can carry",
+			rentalID, len(schedule.Bookings),
+		)
 	}
 	return nil
 }
