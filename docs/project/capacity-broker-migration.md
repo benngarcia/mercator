@@ -5897,6 +5897,28 @@ codes, and it fails with the check removed.
 minute bound and asserted the overrun Rental was still a candidate, which was the
 hole written down; its advance is now ten minutes, which is what it meant.
 
+The higher-fidelity half, and the live run.
+`TestAMachineItsProviderBootstrappedIsWarmCapacityForTheNextRun` in
+`internal/daemon` is the same claim against this workstation's own Docker daemon.
+A real capacity connection holding a real `capability.CapacityProvider` is
+authorized over the API, the real node registry mints a bootstrap, the provision
+command carries it to that provider, and the production `nodeagent.Agent` is
+started from the provider's own copy of it and no other input, so an identity the
+provider was never handed could not enrol. The machine then appears as placeable
+standing capacity, a Run lands on it and really pulls `alpine:3.20` from Docker
+Hub, and a second Run lands on the same machine charged zero boot and zero image
+fetch from `image_inventory`. The image is taken off this host before the fleet
+starts: a case that placed content the workstation already held would charge the
+first Run nothing either, and would pass against a control plane that learned
+nothing at all from the execution. Publishing an empty image inventory from
+`Registry.offer` fails it, on the machine never reporting what it ran.
+
+What that case deliberately does not do is let Placement choose to provision. A
+capacity connection publishes no candidate, which is mercator#200, and the launch
+that follows one cannot be addressed at the machine that was built, which is
+mercator#207. The one act a placement would perform is performed by the case;
+everything after it is production's.
+
 ### Phase 5 a Run that ends without taking its machine
 
 Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
