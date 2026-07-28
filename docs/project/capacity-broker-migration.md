@@ -4154,6 +4154,12 @@ Phase 1 added:
 - `safety.ephemeral_capacity_not_reused` (Lab invariant): no Run is ever queued
   behind one-shot capacity, and capacity held for a one-shot execution never
   accumulates a second Booking.
+- `safety.a_rental_identity_is_capacity_mercator_holds` (Lab invariant): an offer
+  carrying a Rental identity is capacity Mercator holds, standing and in the
+  reusable lane. A Rental Schedule is keyed by Rental identity, so a template for a
+  machine that does not exist yet publishing one gives Placement somewhere to put a
+  Booking and the next Run somewhere to wait, behind a machine nothing will free.
+  Added in the second review round of phase 5 slice 2.
 
 Phase 3 added:
 
@@ -5421,13 +5427,36 @@ is the discipline this project holds an invariant to.
 
 ```text
 publish the listing again        -> broker TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn
+                                   broker TestNoAdapterListingBringsALeaseIntoPlacement
                                    daemon TestACapacityConnectionIsHeldByTheProductionControlPlane
 report machines to the sweep     -> broker TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked
                                    daemon TestReconcilingAWorkspaceHoldingCapacityConvergesTheExecutionsThatLeaked
                                    (failing with the reviewer's exact error)
 keep the adapter's rental_id     -> capability TestNoAdapterCanStateARentalIdentity
-mint one from OfferKind again    -> broker TestNoAdapterListingCarriesARentalIdentityIntoPlacement
+                                   broker TestNoAdapterListingBringsALeaseIntoPlacement
+count an unasked connection      -> broker TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn
+  as asked                         daemon TestACapacityConnectionIsHeldByTheProductionControlPlane
+publish a lease on capacity      -> Lab safety.a_rental_identity_is_capacity_mercator_holds
+  Mercator does not hold           (13 Lab cases, against labOffer minting for every offer)
+mint one from OfferKind again    -> nothing, and this row said otherwise
 ```
+
+The last row is the correction. Restoring the deleted aggregation mint verbatim
+leaves the whole suite green, which two reviewers demonstrated in a copy of the
+worktree and this round reproduced before changing anything. The named test could
+not fail: its double is a one-shot executor, so its offer is stamped ephemeral and
+the reusable branch never ran, and the assertion passed because `StampLane` had
+cleared the field rather than because aggregation minted nothing. After the slice
+the branch is unreachable by construction, because `Backend.ListOffers` publishes
+nothing for a capacity connection and every other declaration is ephemeral.
+
+So the rule is now stated as the construction it rests on.
+`TestNoAdapterListingBringsALeaseIntoPlacement` holds two things that can fail:
+an adapter's stated `rental_id` does not survive aggregation, which fails when
+`StampLane` stops clearing it, and every candidate an adapter published arrives in
+the ephemeral lane, which fails the moment a capacity connection publishes its
+listing again. A future slice that re-mints a Rental identity from `OfferKind` now
+lands on a test with something to say about it.
 
 Every finding was confirmed. One proposed remedy was not taken: consulting
 `ListOwnedCapacity` during aggregation to decide which listing earns a Rental
@@ -5435,6 +5464,91 @@ identity. A provider saying it owns a machine is not Mercator holding a lease on
 one, so that would have replaced the wrong evidence with different wrong evidence.
 The machines Mercator holds are the ones its own agents enrolled on, and the
 identity comes from the invitation that named the Rental.
+
+### Phase 5 the second review round
+
+Two reviewers refuted the round above. Four of the seven findings were real and are
+fixed here; the rest are answered rather than changed, and each answer is a
+measurement.
+
+The census was recording an unasked question. `Backend.ListOffers` returns no
+candidates for a capacity connection and makes no call to reach that answer, and
+aggregation named the connection in `connections_queried` regardless, so a Booking
+Decision stated that a provider had been consulted about a Run nothing had
+contacted it about. `Backend.ListOffers` now answers with a `Publication` carrying
+either the offers or the reason nobody asked for any, and aggregation files the
+second under `excluded_connections`, where a de-authorised connection already goes.
+`fanOut` carries one value per connection rather than a slice, which is what lets
+the answer be typed where it is known. `StampLane` moved into `Backend.ListOffers`
+with it, because that is where the offers cross out of the adapter.
+
+The aggregation mint had no falsifying test, and the evidence table above said it
+did. That row is corrected in place, and the rule is restated as the construction
+it rests on.
+
+One host is genuinely published twice, and this plan and ADR 0005 both asserted the
+opposite. Reproduced live here through the production daemon, with a real Docker
+daemon and the production agent enrolled on this same workstation:
+
+```text
+offer=nod_VSeQSRVTJ4IE9bJR connection=connection:nodes adapter=node
+  machine=nod_VSeQSRVTJ4IE9bJR lane=reusable max_containers=1
+  rate=0.00034722 available=true
+offer=off_960b765d…e81e759e connection=docker adapter=docker
+  machine=aa8e26d6-09e8-4870-91e9-c3979dc55ab9 lane=ephemeral max_containers=8
+  rate=0 available=true
+```
+
+Two offers, one physical machine, no shared machine identity to deduplicate on: the
+node names it by node ID and the Docker connection by the Docker daemon's ID. The
+free copy wins every cost-based ranking and can hold eight containers on a host
+whose runtime declares one, and per-machine learning splits across the two keys.
+That is [#201](https://github.com/benngarcia/mercator/issues/201), with the
+reproduction, and ADR 0005 now says nothing correlates the two rather than that the
+registry supersedes the connection. It is not the capacity lane: a provider listing
+publishes nothing at all.
+
+An enrolled node's offer does not state what its runtime reported. Three of the five
+capability facts, `container.max_containers`, `capacity.available` and the
+digest-ref, entrypoint-override and `operation_id` launch promises, come from
+`Registry.NodeSupport`, a static literal describing the agent Mercator ships, and
+`capability.NodeSupport` never crosses the enrolment. ADR 0005 called all five the
+agent's own report; it now attributes each one, and
+[#202](https://github.com/benngarcia/mercator/issues/202) puts the set on the
+enrolment. It is the same defect as the lane guard deleted in the round above, one
+level down, and it is a wire change rather than a comment.
+
+The corpus is blind to the offer route, and that stays true. The Lab serves
+`/v1/offers` from `labOfferAggregator` and reads placement from
+`simulatedWorld.CollectOffers`, so no scenario executes `broker.AggregateOffers`,
+`Backend.ListOffers`, or `capability.StampLane`, and the four publication rules are
+held by package tests. Closing it is not a comment fix: the Lab world is the
+provider and the enrolled fleet at once, `capability.Declare` refuses one backend
+that is both, and its standing reusable offers would have to come from a node
+registry, which is the enrolment half of #200.
+[#203](https://github.com/benngarcia/mercator/issues/203) records it, in the shape
+#193 already records two orphan-policy rules held the same way.
+
+What did land in the corpus is the half that fits it.
+`safety.a_rental_identity_is_capacity_mercator_holds` fails when either simulated
+world publishes a Rental identity on capacity Mercator does not hold, which is the
+production rule stated over a fleet. Its deliberate failing case is in the registry
+test, and it was also shown failing against the real corpus: minting an identity for
+every offer in `labOffer`, which is the defect in the shape production had it, fails
+thirteen Lab cases and names the offer and the reason each time.
+
+Rejected, with the reason. Consulting `ListCapacity` during a placement read so a
+broken provider fails the collection closed: a connection with no candidate to
+contribute cannot change a placement, so failing every Run in a workspace over an
+unreachable provider replaces an inaccurate census with an outage. A revoked
+credential is caught by `Verify` at authorize time and by provisioning in #200,
+which is the first caller `ListCapacity` gets. And the claim that
+`ephemeral-execution-is-never-a-rental` is a false green: it is a `green` blueprint
+because it passes, and it specifies the acquisition path production does not have
+yet, which is #200, the same way twenty-five other fixtures in the corpus do. The
+Lab spends `acquisition`, `boot` and `agent_ready` on a reusable listing and hands
+back placeable capacity; what is missing is production, not the specification.
+
 
 ```text
 go build ./... && go vet ./... && go test ./...
