@@ -4458,6 +4458,61 @@ complete because it works against a live provider.
     a provisioned Run cannot launch at all until the launch is re-addressed to the
     machine that was built, which is #207. Both are named in the slice list below.
 
+- [x] 2026-07-28: Fix what two reviewers refuted in the disposition entry above.
+  Three findings held and two were rejected with the evidence that refutes them.
+  The one that mattered is that the rule was made to read a fact the Blueprint was
+  allowed to leave unsaid.
+  - A Blueprint's `lane` is stated or the Blueprint is refused. It carried a silent
+    default of `reusable`, and that default was inert only for as long as cleanup
+    read the offer kind alone. The entry above made cleanup read the lane, so
+    twenty-five fixtures were deciding whether a machine gets destroyed on a key
+    none of them had written. ADR 0005 says of the production path that an offer
+    stating no lane is infeasible with `UNKNOWN_FACT` and that there is no default,
+    "because a silent default is exactly how the previous conflation survived"; the
+    Blueprint contract now says the same thing, `MarketplaceOfferSpec.ExecutionLane`
+    is deleted, and every listing in the corpus says what it sells.
+  - Each of those twenty-five was written as `reusable`, which is a transcription
+    rather than a decision: it is the lane they were already running under, it is
+    what their expectations were computed from, and it is what they mean, because a
+    listing whose candidate disposition is `provision_fresh_rental` is a fresh
+    Rental by construction. What changed is that a reader can see it.
+    `listing-that-states-no-lane` is the deliberate failing case, and it is a
+    Blueprint refused at load rather than a rule refuted at L1, because a fixture
+    that got past that door would be asserting the money decision instead of
+    describing it.
+  - `TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost` swept the whole
+    forty-five virtual minutes for a `capacity.terminate` and failed if it ever found
+    one, which required the machine to still be billing ten minutes after its only
+    Run ended. That is the #206 leak written down as a requirement, and the #206 fix
+    would have had to delete the case to land. It is now bounded at the moment the
+    Run's cleanup is confirmed, which is the only moment this case is about, and a
+    lease that ends its own generation afterwards passes it.
+  - `janitor.byRecordedDisposition` maps `release` to adoption, so a provisioned
+    machine an operator's sweep finds unaccounted for is now kept rather than
+    destroyed. That is the correct answer to the question a sweep asks, and the
+    janitor's own comment said the opposite of it, so the comment is fixed and names
+    what the wider set costs: adoption is not reclamation, and until #206 ends the
+    lease an adopted machine is held. The alternative, destroying a leased machine
+    because one Run on it finished, is the defect the entry above fixed wearing a
+    different caller.
+  - Rejected, with the evidence. First, that no green fixture would catch a
+    regression flipping a one-shot placement to `release`:
+    `ephemeral-execution-is-never-a-rental` and `ephemeral-execution-holds-nothing`
+    are both green, both sell a provisionable ephemeral listing, and both assert
+    `terminate` on it, and `TestAOneShotExecutionStillTakesItsHostWithIt` reads the
+    same answer out of the Effect Ledger in the green conformance world
+    `an-owned-hour-is-charged-to-somebody`. Collapsing the rule that way was shown
+    failing on all three in the evidence section. Second, that the sweep
+    lost its coverage of a provisioned machine. The janitor reads the recorded
+    disposition and cannot see a lane, so a leased machine and a borrowed slot are
+    the same input to it, and `TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives`
+    already drives that input both ways. A second case with identical inputs would
+    be a copy, not coverage.
+  - The plan's claim that the Lab suite carries a live half was false and is
+    corrected where it was made. `internal/lab` holds no Docker and no object-store
+    case; the live cases in this tree are `internal/nodeagent`'s and
+    `internal/adapter/docker`'s, and this slice touched neither.
+
 ## Phase status
 
 | Phase | What it delivers | Status |
@@ -5745,9 +5800,13 @@ the launch.
 Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
 `go vet`, and `go test ./...` are green, and so is `go test -race -count=1` over
 `internal/domain`, `internal/orchestrator`, `internal/scenario`, `internal/httpapi`,
-`internal/broker`, and `internal/lab`. Nothing in `web/app` was touched. The Lab
-suite includes the live half on this host, so the Docker and object-store cases in
-it are evidence rather than simulation.
+`internal/broker`, and `internal/lab`. Nothing in `web/app` was touched. No live
+half ran for this rule, and there was none to run: `internal/lab` drives the
+tape-driven simulated world end to end and holds no Docker and no object-store
+case, and the live cases in the tree are `internal/nodeagent`'s and
+`internal/adapter/docker`'s, which this slice did not touch. Cleanup disposition
+is a control-plane decision, so what stands behind it is the corpus and the two
+Lab cases below rather than a real daemon.
 
 The behaviour was shown failing from both sides, which is what this rule needs: a
 disposition has two wrong answers and each of them is invisible to the test that
@@ -5788,12 +5847,17 @@ Ledger, because Mercator's own record cannot answer this. The record says a
 cleanup was confirmed under a recorded disposition; only the ledger says which
 command the world received and what became of the machine.
 `TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost` drives
-`provisioned-capacity-becomes-a-machine-mercator-holds` for forty-five virtual
-minutes, past the end of the twenty-minute Run the other cases in that world stop
-short of, and holds four things together: the Run succeeded and was cleaned up,
+`provisioned-capacity-becomes-a-machine-mercator-holds` until that Run's cleanup
+is confirmed, past the end of the twenty-minute Run the other cases in that world
+stop short of, and holds four things together at that moment: the Run succeeded,
 the workload was released, no `provider.terminate` and no `capacity.terminate`
-appear anywhere in the ledger, and the lease is still held with its agent's
-session open. `TestAOneShotExecutionStillTakesItsHostWithIt` asks the same
+had been carried out, and the lease is still held with its agent's session open.
+The bound is the cleanup rather than the end of virtual time, and that is the
+whole difference between a case about the end of a Run and a case that pins the
+#206 leak in place: a Rental that ends its own generation when the last Booking
+on it completes destroys this machine later, correctly, and would fail an
+assertion swept over the whole ledger.
+`TestAOneShotExecutionStillTakesItsHostWithIt` asks the same
 question of `an-owned-hour-is-charged-to-somebody`, where the Run wins an
 ephemeral listing, and requires the terminate that world's machine has coming.
 
@@ -5814,6 +5878,55 @@ carried by its queue clause alone and asks nothing about the machine that was
 built. That is the same missing publication the second Run of
 `enrolled-node-survives-its-first-run` waits on, and the rule gets its full
 reading over provisioned capacity when that lands rather than by being rewritten.
+
+### Phase 5 the disposition, under the third review
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet`, and `go test -count=1 ./...` are green, and so is `go test -race
+-count=1` over `internal/domain`, `internal/scenario`, `internal/lab`,
+`internal/janitor`, and `internal/orchestrator`. Nothing in `web/app` was touched,
+and no live half ran, for the same reason as above: this is a control-plane
+decision and `internal/lab` holds no Docker and no object-store case to run it
+against.
+
+Requiring the lane has its own deliberate failing case, and it is a Blueprint
+rather than a rule. Deleting the refusal in `validateWorld` and loading
+`testdata/blueprints/invalid/listing-that-states-no-lane.json`:
+
+```text
+scenario     TestLoadBlueprintRefusesACapacityAccountNoProviderCouldKeep
+               loading listing-that-states-no-lane.json gave <nil>, want a
+               refusal naming "the end of a Run destroys one lane and hands the
+               other back"
+```
+
+The bounded Lab case still refuses both wrong cleanups, which is the thing the
+bound had to keep. Restoring the kind-only rule so a provisioned placement
+terminates again, the case fails on the recorded disposition; with that assertion
+suppressed it fails because nothing released the workload; with that one
+suppressed too it fails on the ledger itself:
+
+```text
+lab          TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost
+               the Run recorded disposition "terminate", and a machine held
+               under a lease is not a Run's to destroy
+               nothing released the workload, so nothing took Mercator's
+               container off a machine it means to keep
+               effect_0a880782f1d37c272c55b4f2 destroyed the machine by the time
+               this Run was cleaned up, and the Run ending is not the lease ending
+```
+
+Collapsing the rule the other way, so nothing ever terminates, still fails on
+all three of the green one-shot worlds the reviewers said were not there:
+
+```text
+lab          TestAOneShotExecutionStillTakesItsHostWithIt
+               the Run recorded disposition "release" on a one-shot execution,
+               which holds nothing once its workload exits
+scenario     ephemeral-execution-holds-nothing
+             ephemeral-execution-is-never-a-rental
+             an-idle-machine-is-not-free
+```
 
 ### Phase 5 the generation binding and the measured stage, under the second review
 
