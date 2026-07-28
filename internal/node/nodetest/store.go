@@ -304,6 +304,83 @@ func RunStoreSuite(t *testing.T, newStore NewStore) {
 		}
 	})
 
+	// The three cases below are one promise read from three sides: the generation
+	// this identity was invited for is over, so nothing brings the machine back
+	// into the fleet. It is the promise the Rental lifecycle rests on, because
+	// ending a generation is how Mercator gives a machine up and the record is the
+	// only thing that stops the agent on it being answered as though it had not.
+	t.Run("a retired node can never enroll again", func(t *testing.T) {
+		store := invited(t, newStore)
+		mustEnroll(t, store, "token-1")
+		if err := store.Reinvite(context.Background(), workspaceID, nodeID, "token-2", start.Add(time.Hour)); err != nil {
+			t.Fatalf("reinvite: %v", err)
+		}
+		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+			t.Fatalf("retire node: %v", err)
+		}
+
+		_, err := store.Enroll(context.Background(), workspaceID, nodeID, enrollment("token-2"))
+
+		if !errors.Is(err, node.ErrRetired) {
+			t.Fatalf("enrolling a retired node = %v, want ErrRetired", err)
+		}
+		record, err := store.Get(context.Background(), workspaceID, nodeID)
+		if err != nil {
+			t.Fatalf("get retired node: %v", err)
+		}
+		if record.State != node.StateRetired {
+			t.Fatalf("state = %q, want %q", record.State, node.StateRetired)
+		}
+	})
+
+	t.Run("a retired node renews no lease with its next heartbeat", func(t *testing.T) {
+		store := invited(t, newStore)
+		mustEnroll(t, store, "token-1")
+		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+			t.Fatalf("retire node: %v", err)
+		}
+
+		_, err := store.Heartbeat(context.Background(), workspaceID, nodeID, capability.NodeFacts{
+			ObservedAt: start.Add(time.Minute),
+			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker"},
+		}, start.Add(2*time.Hour))
+
+		if !errors.Is(err, node.ErrRetired) {
+			t.Fatalf("heartbeat from a retired node = %v, want ErrRetired", err)
+		}
+		record, err := store.Get(context.Background(), workspaceID, nodeID)
+		if err != nil {
+			t.Fatalf("get retired node: %v", err)
+		}
+		if record.State != node.StateRetired {
+			t.Fatalf("state = %q, want the node to stay %q", record.State, node.StateRetired)
+		}
+	})
+
+	t.Run("retiring a retired node changes nothing", func(t *testing.T) {
+		store := invited(t, newStore)
+		mustEnroll(t, store, "token-1")
+		if err := store.Retire(context.Background(), workspaceID, nodeID); err != nil {
+			t.Fatalf("retire node: %v", err)
+		}
+
+		err := store.Retire(context.Background(), workspaceID, nodeID)
+
+		if err != nil {
+			t.Fatalf("retiring a retired node = %v, want a generation's end to be repeatable", err)
+		}
+	})
+
+	t.Run("an identity nobody invited cannot be retired", func(t *testing.T) {
+		store := newStore(t)
+
+		err := store.Retire(context.Background(), workspaceID, "nod_missing")
+
+		if !errors.Is(err, node.ErrNotFound) {
+			t.Fatalf("retiring an unknown identity = %v, want ErrNotFound", err)
+		}
+	})
+
 	t.Run("an unknown node is not found rather than empty", func(t *testing.T) {
 		store := newStore(t)
 

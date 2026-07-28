@@ -21,6 +21,12 @@ var ErrEnrollmentSpent = errors.New("node: enrollment token already redeemed")
 // machine claim the first one's history.
 var ErrIdentityExists = errors.New("node: identity already exists")
 
+// ErrRetired is returned when a node whose Rental generation is over is asked to
+// enroll or to renew its lease. Retirement is terminal: the machine the identity
+// was minted for is gone, and the way back is a fresh generation with a fresh
+// identity rather than this one coming round again.
+var ErrRetired = errors.New("node: retired")
+
 // ErrFenced is returned when a command carries a superseded fencing token. It
 // is the durable half of the fencing guarantee: even if a partitioned session
 // reaches the control plane, its work is refused rather than applied late.
@@ -46,6 +52,15 @@ type Store interface {
 	// Reinvite replaces an existing identity's redeemable invitation without
 	// disturbing its current enrollment.
 	Reinvite(ctx context.Context, workspaceID, nodeID, enrollmentTokenID string, expires time.Time) error
+	// Retire ends a node's working life, because the Rental generation it was
+	// invited for is over. It can never enroll again, it renews no lease, and it
+	// is offered as capacity no more, whatever state it was in: a generation can
+	// end before its machine ever answered.
+	//
+	// Retiring a retired node changes nothing. A generation's end is reached
+	// again by any reconciliation that lost its answer, and telling the second
+	// pass it failed would leave a caller retrying work already done.
+	Retire(ctx context.Context, workspaceID, nodeID string) error
 	// Heartbeat renews a lease and stores the node's latest facts.
 	Heartbeat(ctx context.Context, workspaceID, nodeID string, facts capability.NodeFacts, leaseExpires time.Time) (Record, error)
 	// RecordEvent stores one node-authored fact, reporting false when this

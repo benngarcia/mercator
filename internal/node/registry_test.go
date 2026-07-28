@@ -559,6 +559,63 @@ func TestADrainEndsTheSessionANodeIsHoldingOpen(t *testing.T) {
 	}
 }
 
+// TestRetiringARuntimeEndsTheSessionItIsHoldingOpen is the live half of a
+// generation's end. The record refuses the machine everything else, and this is
+// what stops the connection it already has from carrying one more command down to
+// a host Mercator gave up.
+func TestRetiringARuntimeEndsTheSessionItIsHoldingOpen(t *testing.T) {
+	registry, _ := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	session := openSession(t, registry, bootstrap.NodeID, enrollment.SessionToken)
+
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	select {
+	case <-session.Done():
+	default:
+		t.Fatal("a retired runtime was left holding its session open")
+	}
+}
+
+// TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet is the resurrection
+// this rule exists to stop. An agent whose machine is being torn down keeps
+// reporting on the session credential it already has, and a heartbeat is what
+// puts a node back into the one state the registry publishes as capacity. Read as
+// an ordinary report it would undo the retirement every time the agent spoke.
+func TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet(t *testing.T) {
+	registry, clock := newRegistry(t)
+	bootstrap := invite(t, registry)
+	enrollment := enroll(t, registry, bootstrap)
+	if err := registry.Retire(context.Background(), testWorkspace, bootstrap.NodeID); err != nil {
+		t.Fatalf("retire the runtime: %v", err)
+	}
+
+	clock.Advance(time.Minute)
+	err := registry.RecordEvents(context.Background(), bootstrap.NodeID, enrollment.SessionToken, []node.Event{{
+		ID:         "evt-heartbeat-after-retirement",
+		Kind:       node.EventHeartbeat,
+		ObservedAt: clock.Now(),
+		Facts: &capability.NodeFacts{
+			ObservedAt: clock.Now(),
+			Host:       capability.HostFacts{OS: "linux", ContainerRuntime: "docker"},
+		},
+	}})
+
+	if !errors.Is(err, node.ErrRetired) {
+		t.Fatalf("heartbeat from a retired runtime = %v, want ErrRetired", err)
+	}
+	offers, err := registry.Offers(context.Background(), testWorkspace)
+	if err != nil {
+		t.Fatalf("read the offers: %v", err)
+	}
+	if len(offers) != 0 {
+		t.Fatalf("offers = %+v, want a machine Mercator gave up published to nobody", offers)
+	}
+}
+
 // Helpers below keep each case to arrange, act, assert.
 
 const (

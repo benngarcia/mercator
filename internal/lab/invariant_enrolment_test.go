@@ -115,55 +115,90 @@ func TestAnEnrolledMachineAccumulatesFreely(t *testing.T) {
 }
 
 // TestContentTheWorldTapeSeededNeedsNoEnrolment is the exemption stated as its own
-// case, because it is what keeps the rule from refusing every borrowed host in the
-// corpus. A machine Mercator rents a slot on may already be sitting on the image
-// and on the dataset, and that is a fact about the host rather than something an
-// agent of Mercator's fetched.
+// case, because it is what keeps the rule from refusing every Rental in the
+// corpus. A machine Mercator holds may already have been sitting on the image and
+// on the dataset when the world's clock started, and that is a fact about the host
+// rather than something an agent of Mercator's fetched.
 func TestContentTheWorldTapeSeededNeedsNoEnrolment(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	observation := enrolmentObservation(now)
-	observation.SeededLocality["local-docker"] = map[string]bool{strandedLayer: true}
-	observation.SeededReplicas["local-docker"] = map[string]bool{strandedDataset: true}
-	observation.World.Offers = []domain.OfferSnapshot{{
-		ID:        "local-docker",
-		MachineID: "daemon-1",
-		Kind:      domain.OfferKindStanding,
-		Lane:      domain.LaneEphemeral,
-		Images:    domain.ImageInventory{Known: true, LayerDigests: []string{strandedLayer}},
-		Artifacts: domain.ArtifactInventory{Known: true, ObservedAt: now, Replicas: []domain.ArtifactReplica{{
+	observation.SeededLocality["rental-nobody-is-on"] = map[string]bool{strandedLayer: true}
+	observation.SeededReplicas["rental-nobody-is-on"] = map[string]bool{strandedDataset: true}
+	observation.World.Offers = []domain.OfferSnapshot{strandedOffer(func(offer *domain.OfferSnapshot) {
+		offer.Images = domain.ImageInventory{Known: true, LayerDigests: []string{strandedLayer}}
+		offer.Artifacts = domain.ArtifactInventory{Known: true, ObservedAt: now, Replicas: []domain.ArtifactReplica{{
 			ArtifactID: strandedDataset,
 			State:      domain.ArtifactReplicaVerified,
 			VerifiedAt: now,
-		}}},
-	}}
+		}}}
+	})}
 
 	if err := reusableCapacityHasAnEnrolledRuntime(observation); err != nil {
-		t.Fatalf("a borrowed host was refused the content the World Tape put on it: %v", err)
+		t.Fatalf("a machine was refused the content the World Tape put on it: %v", err)
 	}
 }
 
-// TestAListingThatAccumulatedAnythingNamesNoMachineToHaveEnrolledOn is the reading
-// the rule gives a marketplace template, and it is the reason the clause is keyed
-// on the machine handle rather than on the offer. A listing describes a machine
-// that does not exist yet, so there is no handle any enrolment could have named,
-// and content on one is content on a host nothing has allocated.
-func TestAListingThatAccumulatedAnythingNamesNoMachineToHaveEnrolledOn(t *testing.T) {
+// TestCapacityThatKeepsNothingIsAnsweredByTheRuleAboutKeeping is the division of
+// labour between this rule and safety.locality_provenance, and it is the reason
+// this rule asks only capacity that keeps what it runs. A listing describes a
+// machine that does not exist yet and a one-shot host holds nothing once its
+// workload exits, so neither has an agent to enrol: reading them here would
+// answer first with a remedy the ephemeral lane must never apply, and the rule
+// that owns them names the reason that is actually theirs.
+func TestCapacityThatKeepsNothingIsAnsweredByTheRuleAboutKeeping(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	for name, offer := range map[string]domain.OfferSnapshot{
+		"a listing nobody allocated": {
+			ID:     "listing-nobody-rented",
+			Kind:   domain.OfferKindProvisionable,
+			Lane:   domain.LaneReusable,
+			Images: domain.ImageInventory{Known: true, LayerDigests: []string{strandedLayer}},
+		},
+		"a one-shot host": {
+			ID:        "local-docker",
+			MachineID: "daemon-1",
+			Kind:      domain.OfferKindStanding,
+			Lane:      domain.LaneEphemeral,
+			Images:    domain.ImageInventory{Known: true, LayerDigests: []string{strandedLayer}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := enrolmentObservation(now)
+			observation.Effects = []EffectRecord{enrolmentEffect()}
+			observation.World.Offers = []domain.OfferSnapshot{offer}
+
+			if err := reusableCapacityHasAnEnrolledRuntime(observation); err != nil {
+				t.Fatalf("capacity that keeps nothing was refused an enrolment it could never have: %v", err)
+			}
+			if err := localityProvenance(observation); err == nil {
+				t.Fatal("capacity that keeps nothing accumulated content and no rule objected")
+			}
+		})
+	}
+}
+
+// TestAnEnrolmentThatNamesNoMachineIsRefusedRatherThanDropped is what stops this
+// rule from weakening in silence. A session is opened on one machine under one
+// lease, so a ledger entry that names neither is a record the rule cannot read,
+// and skipping it would have made every listing in the world pass on the strength
+// of one malformed entry somewhere else.
+func TestAnEnrolmentThatNamesNoMachineIsRefusedRatherThanDropped(t *testing.T) {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	observation := enrolmentObservation(now)
-	observation.Effects = []EffectRecord{enrolmentEffect()}
-	observation.World.Offers = []domain.OfferSnapshot{{
-		ID:     "listing-nobody-rented",
-		Kind:   domain.OfferKindProvisionable,
-		Lane:   domain.LaneReusable,
-		Images: domain.ImageInventory{Known: true, LayerDigests: []string{strandedLayer}},
+	observation.Effects = []EffectRecord{{
+		Operation:   OperationNodeEnrolled,
+		OperationID: "nod_nameless/generation-1",
+		Command:     EffectCommandAccepted,
+		Request:     []byte(`{"node_id":"nod_nameless","generation":1}`),
+		Consequence: []byte(`{"node_id":"nod_nameless","fencing_token":1}`),
 	}}
 
 	err := reusableCapacityHasAnEnrolledRuntime(observation)
 
 	if err == nil {
-		t.Fatal("a listing for a machine nobody allocated reported an inventory and nothing objected")
+		t.Fatal("an enrolment naming neither a machine nor a lease was read as an enrolment")
 	}
-	if want := "names no machine, because the machine does not exist yet"; !strings.Contains(err.Error(), want) {
+	if want := "an enrolment names both"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("violation = %q, want it to say %q", err, want)
 	}
 }

@@ -408,6 +408,25 @@ func (registry *Registry) Reinvite(ctx context.Context, workspaceID, nodeID stri
 	}, nil
 }
 
+// Retire ends this node's working life because the Rental generation it was
+// invited for is over. The identity stays in the fleet as history: what it was
+// told and what it reported is what a later reconciliation reads, and deleting it
+// would leave the machine's last word nowhere.
+//
+// The record is written before the session is ended, in that order. A record that
+// says retired refuses the next enrolment and the next heartbeat whether or not
+// the session was ever closed, so a control plane that stops in between still
+// offers the machine to nobody. Ending the session first and failing to write
+// would leave the agent reconnecting to an identity the registry still believes
+// in, which is exactly the machine this is supposed to stop offering.
+func (registry *Registry) Retire(ctx context.Context, workspaceID, nodeID string) error {
+	if err := registry.store.Retire(ctx, workspaceID, nodeID); err != nil {
+		return err
+	}
+	registry.closeSession(workspaceID, nodeID)
+	return nil
+}
+
 // WithIdentitySource replaces how the registry mints identities for machines an
 // operator did not name. Production uses random material; the Lab and tests
 // inject a deterministic source so an invitation replays identically.

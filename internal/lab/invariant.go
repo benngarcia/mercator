@@ -1078,6 +1078,15 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 // about: the lease and the Bookings waiting on it outlive the offer, and a rule
 // that read the current fleet would fall silent about a queue at the moment the
 // machine holding it stopped being published.
+//
+// Only capacity that keeps what it runs is asked, which is what the name of this
+// rule says and what an earlier revision did not do. A listing and a one-shot
+// host are refused the same three things by safety.locality_provenance, over
+// exactly the same worlds, and that rule names the reason an operator has to act
+// on: the machine does not exist yet, or it holds nothing once its workload
+// exits. Neither has an agent to enrol, so answering first with a violation about
+// an enrolment sent a reader after the one remedy the ephemeral lane must never
+// apply.
 func reusableCapacityHasAnEnrolledRuntime(observation InvariantObservation) error {
 	enrolled, err := enrolledRuntimes(observation.Effects)
 	if err != nil {
@@ -1125,27 +1134,38 @@ func enrolledRuntimes(effects []EffectRecord) (enrolledRuntime, error) {
 		if err := json.Unmarshal(effect.Request, &session); err != nil {
 			return enrolledRuntime{}, fmt.Errorf("decode enrolment %s: %w", effect.ID, err)
 		}
-		if session.MachineID != "" {
-			enrolled.machines[session.MachineID] = true
+		// An enrolment that names neither is a record this rule cannot use, and
+		// dropping it quietly is how the rule would weaken without anything saying
+		// so. The listing clause below is keyed on a machine handle being absent,
+		// so one such record read as an enrolment of the empty handle would clear
+		// every listing in the world at once.
+		if session.MachineID == "" || session.RentalID == "" {
+			return enrolledRuntime{}, fmt.Errorf(
+				"enrolment %s opened a session on machine %q under lease %q, and an enrolment names both",
+				effect.ID, session.MachineID, session.RentalID,
+			)
 		}
-		if session.RentalID != "" {
-			enrolled.rentals[session.RentalID] = true
-		}
+		enrolled.machines[session.MachineID] = true
+		enrolled.rentals[session.RentalID] = true
 	}
 	return enrolled, nil
 }
 
 // accumulationRunsThroughAnAgent holds the three clauses about one machine. The
 // machine is named by its own handle rather than by the offer it was published
-// under, because an enrolment is about a machine: a listing names a machine that
-// does not exist yet, so a listing that has accumulated anything has no handle to
-// match and fails here on the strongest reading of the same rule.
+// under, because an enrolment is about a machine and an offer is one publication
+// of it.
+//
+// Capacity that keeps nothing is not asked. A listing describes a machine that
+// does not exist yet and a one-shot host holds nothing once its workload exits,
+// so neither has an agent to enrol, and safety.locality_provenance refuses both
+// the same three things while naming the reason that is actually theirs.
 func accumulationRunsThroughAnAgent(
 	offer domain.OfferSnapshot,
 	enrolled enrolledRuntime,
 	seeded, seededCopies map[string]bool,
 ) error {
-	if enrolled.machines[offer.MachineID] {
+	if !offer.KeepsWhatItRuns() || enrolled.machines[offer.MachineID] {
 		return nil
 	}
 	for _, digest := range heldDigests(offer.Images) {
@@ -1153,14 +1173,14 @@ func accumulationRunsThroughAnAgent(
 			continue
 		}
 		return fmt.Errorf(
-			"offer %q holds %s, and %s, so nothing of Mercator's fetched or enumerated it",
-			offer.ID, digest, describeUnenrolledMachine(offer),
+			"offer %q holds %s, and no agent has enrolled on machine %q, so nothing of Mercator's fetched or enumerated it",
+			offer.ID, digest, offer.MachineID,
 		)
 	}
-	for _, mount := range offer.Caches.Mounts {
+	if len(offer.Caches.Mounts) > 0 {
 		return fmt.Errorf(
-			"offer %q holds cache %q for workspace %q, and %s, so no workload of Mercator's ever wrote it there",
-			offer.ID, mount.Name, mount.WorkspaceID, describeUnenrolledMachine(offer),
+			"offer %q holds cache %q for workspace %q, and no agent has enrolled on machine %q, so no workload of Mercator's ever wrote it there",
+			offer.ID, offer.Caches.Mounts[0].Name, offer.Caches.Mounts[0].WorkspaceID, offer.MachineID,
 		)
 	}
 	for _, replica := range offer.Artifacts.Replicas {
@@ -1168,23 +1188,11 @@ func accumulationRunsThroughAnAgent(
 			continue
 		}
 		return fmt.Errorf(
-			"offer %q holds a copy of Artifact %q, and %s, so nothing of Mercator's fetched those bytes or checked them",
-			offer.ID, replica.ArtifactID, describeUnenrolledMachine(offer),
+			"offer %q holds a copy of Artifact %q, and no agent has enrolled on machine %q, so nothing of Mercator's fetched those bytes or checked them",
+			offer.ID, replica.ArtifactID, offer.MachineID,
 		)
 	}
 	return nil
-}
-
-// describeUnenrolledMachine says which of the two ways this machine is out of
-// reach, because an operator reading the violation acts on them differently. A
-// machine with a handle and no session is capacity the record says exists with
-// nobody on it. A machine with no handle at all is a listing, and content on a
-// listing is content on a host nothing has allocated yet.
-func describeUnenrolledMachine(offer domain.OfferSnapshot) string {
-	if offer.MachineID == "" {
-		return "names no machine, because the machine does not exist yet"
-	}
-	return fmt.Sprintf("no agent has enrolled on machine %q", offer.MachineID)
 }
 
 // everyQueueHasAnAgentToDispatchThrough holds the fourth clause. One Booking on a

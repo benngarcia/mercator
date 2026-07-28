@@ -91,7 +91,7 @@ func (store *memoryStore) Enroll(_ context.Context, workspaceID, nodeID string, 
 		return Record{}, fmt.Errorf("%w: %s", ErrNotFound, nodeID)
 	}
 	if record.State == StateRetired {
-		return Record{}, fmt.Errorf("node: %q is retired and cannot enroll again", nodeID)
+		return Record{}, fmt.Errorf("%w: %s cannot enroll again", ErrRetired, nodeID)
 	}
 	if record.EnrollmentTokenID != enrollment.EnrollmentTokenID {
 		return Record{}, fmt.Errorf("%w: %s", ErrEnrollmentSpent, nodeID)
@@ -122,6 +122,19 @@ func (store *memoryStore) Reinvite(_ context.Context, workspaceID, nodeID, enrol
 	return nil
 }
 
+func (store *memoryStore) Retire(_ context.Context, workspaceID, nodeID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := nodeKey(workspaceID, nodeID)
+	record, ok := store.records[key]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, nodeID)
+	}
+	record.State = StateRetired
+	store.records[key] = record
+	return nil
+}
+
 func (store *memoryStore) Heartbeat(
 	_ context.Context,
 	workspaceID, nodeID string,
@@ -134,6 +147,13 @@ func (store *memoryStore) Heartbeat(
 	record, ok := store.records[key]
 	if !ok {
 		return Record{}, fmt.Errorf("%w: %s", ErrNotFound, nodeID)
+	}
+	// A retired node reports on a Rental generation that is over. Renewing its
+	// lease here would put it back in StateReady, which is the one state the
+	// registry publishes as capacity, so the machine Mercator gave up would be
+	// offered again by its own agent's next heartbeat.
+	if record.State == StateRetired {
+		return Record{}, fmt.Errorf("%w: %s", ErrRetired, nodeID)
 	}
 	record.State = StateReady
 	record.Facts = facts

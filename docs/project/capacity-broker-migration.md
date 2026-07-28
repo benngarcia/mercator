@@ -4124,6 +4124,61 @@ complete because it works against a live provider.
     `ReconcileWorkspace`, which is what the one-minute reconcile loop calls, over a
     workspace holding a capacity connection and a one-shot connection that leaked an
     execution, and holds the sweep to reclaiming the execution.
+- [x] 2026-07-28: A Rental is a domain aggregate with generations, and a generation
+  ending retires its node. The lease Mercator provisions had no type at all:
+  `node.StateRetired` was read in three places and written in none, `node.Store` had
+  no `Retire`, and nothing in the tree could say which machine a lease was on or what
+  it had been through. This is the vocabulary step the rest of phase 5 slice 3 is
+  written in, and nothing provisions yet.
+  - `domain.Rental` is the lease and `domain.RentalGeneration` is one lifecycle cycle
+    of the machine under it. A lease is not a machine: capacity that stops and resumes
+    comes back as a different machine with a different runtime on it, which is why a
+    Node is bound to a generation rather than to the Rental. Generations are kept in
+    order and never rewritten, so a lease says what it has been through rather than
+    only what it is now.
+  - An ending says which of three things happened, because they license different
+    next steps. A stop suspends capacity that is still Mercator's and a later
+    generation resumes it. A termination is capacity Mercator destroyed and a
+    reclamation is capacity the provider took back, and both release the lease,
+    because a lease over a machine that no longer exists is not capacity anything may
+    be placed on.
+  - The identity is minted before the provider is asked, so `Acquire` is a separate
+    act: until the provider answers, the lease says what was asked for and cannot say
+    what was got. Answering twice with the same machine changes nothing, which is what
+    makes a retried provision safe, and answering with a second machine is refused
+    rather than quietly replacing the first, which would leave the first billing with
+    nothing able to name it.
+  - `rental.Store` has a memory and a SQLite implementation held to one conformance
+    suite in `internal/rental/rentaltest`, exactly as `node.Store` is. A write states
+    the version it replaces, so two controllers ending one generation is a conflict
+    rather than a last-writer-wins, and a lease Mercator could not have reached is
+    refused before it is written.
+  - Ending a generation retires the node bound to it, which is the first write of
+    `node.StateRetired` in the tree. It is one act across two authorities, so it lives
+    on `rental.Leases`: the lease records that the machine stopped being Mercator's,
+    and only the registry can stop the runtime being offered and answered as capacity.
+  - The runtime is retired before the lease is written, and the two failures are not
+    symmetric. Retiring first and failing to write leaves a machine nothing offers
+    under a generation the record still calls open, and the next attempt ends it,
+    because retirement is idempotent. Writing first and failing to retire leaves a
+    runtime publishing itself as capacity for a machine the record says Mercator gave
+    up, and the Run that wins it starts by discovering there is nobody there.
+  - A retired node renews no lease. `Heartbeat` set `StateReady` unconditionally in
+    both stores, which is the one state the registry publishes as capacity, so an
+    agent on a machine being torn down would have put itself back in the fleet with
+    its next report and retirement would have been a no-op against any live agent.
+    Retiring also ends the session the node is holding open, so the connection it
+    already has carries no further command.
+  - No Blueprint and no Lab invariant, and neither is a gap. A Rental that nothing
+    provisions decides nothing, so a Blueprint asserting on it would be a fixture
+    about a struct, and an invariant over a store with no world behind it is one
+    `TestEveryDefaultInvariantHasADeliberatelyFailingCase` refuses. The two target
+    Blueprints stay red on purpose.
+  - `safety.reusable_capacity_has_an_enrolled_runtime` was reviewed adversarially
+    before anything was built on it, because the run that landed it died with both
+    reviewers in flight. Three findings were fixed at the root and one was rejected
+    with the evidence that refutes it; the corpus is still red without the world's
+    enrolment, on the same 48 cases and the same three clauses.
 
 ## Phase status
 
@@ -4133,7 +4188,7 @@ complete because it works against a live provider.
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. No provider allocates a machine yet |
+| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. A Rental is now a domain aggregate with generations, held in a memory and a SQLite store under one conformance suite, and ending a generation retires the runtime bound to it, which is the first write of `node.StateRetired` in the tree and the first thing that stops a machine Mercator gave up being published as capacity. No provider allocates a machine yet |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -5430,6 +5485,90 @@ machine and which lease a session was opened for. An enrolment naming no machine
 is not a record this world would ever write, so the fixture now states the
 projection each of its three operations really carries.
 
+### Phase 5 the Rental aggregate and the node a generation's end retires
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet`, and `go test ./...` are green, and so is `go test -race` over
+`internal/domain`, `internal/rental`, `internal/node`, `internal/storage/sqlite`,
+and `internal/lab`. Nothing in `web/app` was touched.
+
+Every behaviour was shown failing with the production code broken.
+
+```text
+Retire leaves the record alone          -> nodetest "a retired node can never enroll again"
+  (both stores)                            nodetest "a retired node renews no lease ..."
+                                           rental TestEndingAGenerationRetiresTheRuntimeItWasServing
+                                           rental TestARetiredRuntimeIsNoLongerPublishableAsCapacity
+                                           node   TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet
+Heartbeat sets StateReady               -> nodetest "a retired node renews no lease ..." (both stores)
+  unconditionally again                    node   TestARetiredRuntimeCannotHeartbeatItselfBackIntoTheFleet
+Save keeps only the current generation   -> rentaltest "a lease comes back with the generations
+                                             it has been through" (both stores)
+Save ignores the version it replaces     -> rentaltest "a write that does not follow the version
+                                             the store holds is refused" (both stores)
+                                           rentaltest "a lease identity is taken once" (both stores)
+End the generation before retiring      -> rental TestALeaseNothingCanWriteRetiresNoRuntime
+  its runtime
+A destroyed machine leaves the lease     -> domain TestAnEndingThatLeavesNothingReleasesTheLease
+  held                                     domain "a destroyed machine still held"
+                                           rentaltest "a released lease comes back released"
+Two generations may be open at once      -> domain "two generations open at once"
+                                           rentaltest "a lease Mercator could not have reached
+                                             is refused before it is written"
+```
+
+The resurrection is the one worth stating on its own, because it made the whole
+retirement a no-op against any live agent. `Heartbeat` wrote `StateReady`
+unconditionally in both stores, and `StateReady` inside its lease is exactly what
+`Registry.Offers` publishes, so an agent on a machine being torn down put itself
+back into the fleet with its next report. Both stores now refuse it, and the
+SQLite one matches the state inside the statement rather than reading it first, so
+a retirement landing between the two cannot be missed.
+
+### Phase 5 the enrolment rule under review
+
+`safety.reusable_capacity_has_an_enrolled_runtime` landed in be301d5 and was never
+refuted, because that run died with both reviewers in flight. It was read
+adversarially before anything was built on it. Three findings were fixed at the
+root and one was rejected.
+
+Fixed. An enrolment naming no machine or no lease was skipped rather than refused.
+It was a silent weakening in the one direction that matters: the listing clause
+was keyed on a machine handle being absent, so one such record read as an
+enrolment of the empty handle would have cleared every listing in the world at
+once. It is now a violation naming the effect, held by
+`TestAnEnrolmentThatNamesNoMachineIsRefusedRatherThanDropped`.
+
+Fixed. The rule asked every offer although its name says reusable capacity, and it
+is registered ahead of `safety.locality_provenance`, which owns exactly the same
+worlds for a listing and for a one-shot host and refuses them the same three
+things. A driver reports the first broken rule, so a bad ephemeral world was
+answered with "no agent has enrolled on machine X", and enrolling an agent is the
+one remedy the ephemeral lane must never apply. The rule now asks only capacity
+that keeps what it runs, which deleted `describeUnenrolledMachine` and the listing
+branch with it. The division of labour is asserted in
+`TestCapacityThatKeepsNothingIsAnsweredByTheRuleAboutKeeping`, which holds that
+this rule stays quiet and `localityProvenance` objects. Removing the world's
+enrolment still fails the same 48 Lab cases on the same three clauses, so the
+narrowing cost the corpus nothing.
+
+Fixed. The Lab world recorded the machine handle as the enrolment's causation ID
+and left its correlation ID empty, which is backwards from every other writer in
+`world.go`: the correlation is what an entry is about and the causation is what
+brought it about. These were the only entries in the ledger a Run Bundle could not
+tie to anything. They are now correlated on the machine and caused by the
+enrolment.
+
+Rejected. The commit message explains the change to
+`TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated` as an
+ontological correction, and the mechanical reason is that without a request
+projection the rule reports `decode enrolment : unexpected end of JSON input` as a
+failed invariant rather than as a violation. That was reproduced directly. It is
+not this commit's defect: every effect reader in `invariant.go` returns a decode
+error the same way, and turning a tree-wide convention over in a vocabulary slice
+would bury it. The fixture change is correct on its own terms either way, because
+an enrolment naming no machine is now refused outright.
+
 ### What phase 5 slice 3 does not yet do
 
 The rest of the slice is not built, and none of it is half built. The two target
@@ -5440,11 +5579,11 @@ into an enrolled machine and the second Run in
 boot and 289 seconds of image fetch. The counts stay at 60 regression Blueprints,
 56 green and 4 target.
 
-What is missing, in the order it has to land:
+What is missing, in the order it has to land. The Rental aggregate, its two
+stores, and the node retirement a generation's end performs landed on 2026-07-28
+and are struck from this list; the rest is not built, and none of it is half
+built.
 
-- A Rental as a domain aggregate with generations, its store, and the node
-  retirement a generation's end performs. Nothing in the tree writes
-  `node.StateRetired` yet, and `node.Store` has no `Retire`.
 - A provisioning path in the orchestrator: minting the Rental identity and the
   node invitation, handing the provider the bootstrap verbatim, carrying the
   offer's rate into the invitation, observing acquisition, boot, and agent

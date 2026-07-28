@@ -835,6 +835,13 @@ func (world *simulatedWorld) seedCaches(offerID string, held []scenario.HeldCach
 // and a node named after the lease could not tell the two apart. There is no
 // operation key, because an enrolment is not a command Mercator issued for a
 // provider to deduplicate; see OperationNodeEnrolled.
+//
+// The record is correlated with the machine and caused by the enrolment, in that
+// order, because that is what every other writer here means by the two: the
+// correlation is what the entry is about, and the causation is what brought it
+// about. An earlier revision put the machine handle in the causation and left the
+// correlation empty, which made these the only entries in the ledger a Run Bundle
+// could not tie to anything.
 func (world *simulatedWorld) enrollTheAgentThisMachineIsHeldThrough(offer domain.OfferSnapshot) {
 	const generation = 1
 	nodeID := DeterministicID(world.seed, "node", offer.MachineID)
@@ -843,8 +850,8 @@ func (world *simulatedWorld) enrollTheAgentThisMachineIsHeldThrough(offer domain
 		fmt.Sprintf("%s/generation-%d", nodeID, generation),
 		EffectCommandAccepted,
 		EffectResponseDelivered,
-		"",
 		offer.MachineID,
+		"enrolment",
 		"",
 		map[string]any{
 			"machine_id": offer.MachineID,
