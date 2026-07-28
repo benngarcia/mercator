@@ -28,7 +28,7 @@ func (b *Broker) ProvisionCapacity(ctx context.Context, command capability.Provi
 	if err != nil {
 		return capability.CapacityReceipt{}, err
 	}
-	return provider.Provision(ctx, command)
+	return provider.ProvisionCapacity(ctx, command)
 }
 
 // ObserveCapacity reads the provider's own view of one machine. It is the

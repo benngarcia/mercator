@@ -347,13 +347,20 @@ func assertCapacityHandedBack(events []eventlog.StoredEvent, name string, expect
 }
 
 // handedBackBefore is the capacity this Run gave back before the event at index,
-// by the machine it was taken on and what the confirmed cleanup did with it.
+// by the machine it was taken on and what handing it back did with it.
 //
-// The two halves come from two events. A cleanup names the launch key alone, and
-// the machine that key was launched on is named on the intent that recorded it, so
-// the stream is read forwards and the key resolved through the intent it belongs
-// to. A cleanup Mercator requested and never confirmed is deliberately not here:
-// capacity is handed back when the provider says it is.
+// There are two ways a Run gives capacity back and they are read from two
+// different events, because they are two different acts. A cleanup ends a Run
+// that ran, names the launch key alone, and the machine that key was launched on
+// is named on the intent that recorded it, so the stream is read forwards and the
+// key resolved through the intent it belongs to. A reclamation ends a machine a
+// Run never started on, so there is no launch key to resolve and it names the
+// listing itself.
+//
+// Neither is recorded until the provider has confirmed it. A cleanup Mercator
+// requested and never confirmed is deliberately absent for the same reason a
+// terminate that failed leaves the reclamation unrecorded: capacity is handed
+// back when the provider says it is.
 func handedBackBefore(events []eventlog.StoredEvent, index int) map[string]domain.Disposition {
 	offers := map[string]string{}
 	handed := map[string]domain.Disposition{}
@@ -364,6 +371,7 @@ func handedBackBefore(events []eventlog.StoredEvent, index int) map[string]domai
 		var payload struct {
 			LaunchKey   string             `json:"launch_key"`
 			Offer       string             `json:"selected_offer_snapshot_id"`
+			Listing     string             `json:"offer_snapshot_id"`
 			Disposition domain.Disposition `json:"disposition"`
 		}
 		if err := json.Unmarshal(event.Data, &payload); err != nil {
@@ -374,6 +382,8 @@ func handedBackBefore(events []eventlog.StoredEvent, index int) map[string]domai
 			offers[payload.LaunchKey] = payload.Offer
 		case orchestrator.EventCleanupConfirmed:
 			handed[offers[payload.LaunchKey]] = payload.Disposition
+		case orchestrator.EventCapacityReclaimed:
+			handed[payload.Listing] = payload.Disposition
 		}
 	}
 	return handed

@@ -325,6 +325,7 @@ func (runtime *controlPlane) admitRun(ctx context.Context, arrival RunArrival) e
 
 func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 	runtime.world.setNow(now)
+	runtime.deliverEnrolments()
 	if err := runtime.deliverReadiness(ctx); err != nil {
 		return err
 	}
@@ -352,6 +353,13 @@ func (runtime *controlPlane) advance(ctx context.Context, now time.Time) error {
 // that is what application readiness is: the workload is the only authority, and
 // routing it through the provider seam would make a running process and a serving
 // one the same fact again.
+// deliverEnrolments is the agents in this world opening their sessions. It runs
+// before the Runs are advanced, for the reason readiness does: an agent that has
+// arrived is a fact about a machine the same sweep then reasons over, and a
+// registry that only learned of one when somebody asked would make the answer a
+// property of how often Mercator asks.
+func (runtime *controlPlane) deliverEnrolments() { runtime.world.deliverEnrolments() }
+
 func (runtime *controlPlane) deliverReadiness(ctx context.Context) error {
 	for _, report := range runtime.world.dueReadinessReports() {
 		ready, err := orchestrator.NewApplicationReadyReport(report.ReadyAt)
@@ -404,6 +412,11 @@ func (runtime *controlPlane) restartOrchestrator() {
 		orchestrator.WithPrewarm(runtime.world, runtime.prewarm, runtime.storage.Preparation()),
 		orchestrator.WithRentalSchedules(runtime.storage.RentalSchedules()),
 		orchestrator.WithRunProjection(runtime.storage.Runs()),
+		// Placement choosing to provision is an act, and these are the seams it
+		// acts through: the lease that allocates a machine, and the registry that
+		// says which node it will be and whether an agent ever arrived.
+		orchestrator.WithCapacity(runtime.world),
+		orchestrator.WithInviter(runtime.world),
 	)
 }
 

@@ -259,6 +259,12 @@ type hostState struct {
 	// each stage has its own prediction to be measured against. Standing capacity
 	// spends none of it, because the machine is already there.
 	provisioning scenario.ProvisioningSpec
+	// neverEnrolls is a listing whose provider allocates and boots the machine
+	// and whose node agent never opens a session. Mercator has no session to it,
+	// so nothing can create a container there and no workload launched on it ever
+	// begins. It is stated rather than read out of a missing agent_ready stage,
+	// because silence there already means a stage that costs nothing.
+	neverEnrolls bool
 	// clockAhead is how far this machine's wall clock runs ahead of Mercator's. It
 	// changes nothing about when anything here happens and everything about the
 	// moment this machine states when asked: a host does not know its clock is
@@ -464,6 +470,11 @@ type simulatedWorld struct {
 	// alternative ADR 0004 rejects.
 	observed   map[string]hostState
 	observedAt time.Time
+	// leases is every machine this world holds under the capacity contract, keyed
+	// by the Rental it was allocated for, and invitations the node identities
+	// reserved for them. See capacity.go.
+	leases      map[string]*capacityLease
+	invitations map[string]*labInvitation
 	// pulls is image content still moving onto a host.
 	pulls []pendingPull
 	runs  map[string]RunArrival
@@ -576,6 +587,8 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		launchCount:    map[string]int{},
 		faults:         slices.Clone(tape.Faults),
 		usedFaults:     map[string]bool{},
+		leases:         map[string]*capacityLease{},
+		invitations:    map[string]*labInvitation{},
 	}
 	for reference, image := range tape.InitialWorld.Images {
 		world.images[reference] = scenario.ImageSpec{Layers: slices.Clone(image.Layers), Registry: image.Registry}
@@ -696,6 +709,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			// published below, because a world that spent its provider's own
 			// expectation would make that expectation right by construction.
 			provisioning: marketplace.Provisioning,
+			neverEnrolls: marketplace.NeverEnrolls(),
 		}
 		world.publishOfferFacts(&state.offer, tape.InitialWorld, marketplace.ID, marketplace.Available)
 		world.seededLocality[marketplace.ID] = state.seededDigests()
@@ -1243,6 +1257,18 @@ func (world *simulatedWorld) executionHorizon() time.Time {
 			horizon = upload.completesAt
 		}
 	}
+	// A machine still being built is work in flight too. Without it the driver
+	// would find nothing owed the moment a Run was placed on capacity that does
+	// not exist yet, settle instantly, and end the execution at the liveness
+	// bound with the Run still waiting for a machine nobody advanced time toward.
+	for _, lease := range world.leases {
+		if lease.Terminated || lease.Enrolled {
+			continue
+		}
+		if arrives := lease.arrivesAt(world.truth[lease.OfferID].provisioning); arrives.After(horizon) {
+			horizon = arrives
+		}
+	}
 	return horizon
 }
 
@@ -1459,19 +1485,22 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		}
 	}
 	execution := externalExecution{
-		ExternalID:        "lab-" + request.AttemptID,
-		RunID:             request.RunID,
-		AttemptID:         request.AttemptID,
-		LaunchKey:         request.LaunchKey,
-		OwnershipToken:    request.OwnershipToken,
-		RequestHash:       request.RequestHash,
-		OfferID:           request.SelectedOfferSnapshotID,
-		WorkspaceID:       request.WorkspaceID,
-		CacheMounts:       slices.Clone(request.CacheMounts),
-		Disposition:       request.Disposition,
-		Phase:             adapter.ExternalPhaseRunning,
-		AcceptedAt:        world.now,
-		ReadyAt:           world.now.Add(offer.provisioning.Spend()),
+		ExternalID:     "lab-" + request.AttemptID,
+		RunID:          request.RunID,
+		AttemptID:      request.AttemptID,
+		LaunchKey:      request.LaunchKey,
+		OwnershipToken: request.OwnershipToken,
+		RequestHash:    request.RequestHash,
+		OfferID:        request.SelectedOfferSnapshotID,
+		WorkspaceID:    request.WorkspaceID,
+		CacheMounts:    slices.Clone(request.CacheMounts),
+		Disposition:    request.Disposition,
+		Phase:          adapter.ExternalPhaseRunning,
+		AcceptedAt:     world.now,
+		// The machine exists by now: acquisition, boot, and the agent's arrival are
+		// spent under the capacity lease, before anything is launched here. What a
+		// launch still owes is content and a container.
+		ReadyAt:           world.now,
 		ReservedDiskBytes: request.Resources.EphemeralDisk.MinBytes,
 	}
 	if offer.offer.Kind == domain.OfferKindStanding {
@@ -1479,9 +1508,8 @@ func (world *simulatedWorld) Launch(_ context.Context, request adapter.LaunchReq
 		world.truth[request.SelectedOfferSnapshotID] = offer
 	}
 	// A process cannot execute bytes that have not landed, and that is as true
-	// of the Artifacts it reads as of the image it runs. Neither can be fetched
-	// before there is a machine to fetch them onto, so both transfers start when
-	// the world has finished acquiring, booting, and enrolling this host.
+	// of the Artifacts it reads as of the image it runs. Both transfers start on
+	// the machine Mercator already holds, which is what a launch is now handed.
 	execution.ImageAt = world.pullRunImage(execution, request.Image, execution.ReadyAt)
 	execution.ArtifactsAt = world.readRunArtifacts(execution, arrival.Request.ConsumesArtifacts, execution.ReadyAt)
 	// Bytes on a disk are not a layer chain, and a container runtime asked for a
@@ -2672,6 +2700,7 @@ func cloneHostState(state hostState) hostState {
 		reportsDiffIDs: state.reportsDiffIDs,
 		leaseExpiresAt: state.leaseExpiresAt,
 		provisioning:   state.provisioning,
+		neverEnrolls:   state.neverEnrolls,
 		clockAhead:     state.clockAhead,
 	}
 }

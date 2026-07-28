@@ -27,6 +27,8 @@ func TestRebuildRunProjectionReproducesClosedRunRecords(t *testing.T) {
 			fake.WithLaunchOutcome(adapter.ExternalPhaseSucceeded),
 		),
 		WithRunProjection(projection),
+
+		withTestCapacity(),
 	)
 	createRun(t, ctx, orch)
 	for attempt := 0; attempt < 10; attempt++ {
@@ -41,7 +43,7 @@ func TestRebuildRunProjectionReproducesClosedRunRecords(t *testing.T) {
 			break
 		}
 	}
-	historyReader := New(log, scheduler.New(), fake.New())
+	historyReader := New(log, scheduler.New(), fake.New(), withTestCapacity())
 	before, err := historyReader.ListRuns(ctx, "ws_1", runprojection.PageRequest{})
 	if err != nil {
 		t.Fatalf("list before rebuild: %v", err)

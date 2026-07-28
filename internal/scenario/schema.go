@@ -894,6 +894,23 @@ func (spec MarketplaceOfferSpec) validateProvisioningStages() error {
 	return nil
 }
 
+// CapacityBootstrap is the patience this listing states, in the shape an offer
+// carries it. A listing that states no bootstrap carries none, and Mercator
+// holds it to its own patience instead.
+func (spec MarketplaceOfferSpec) CapacityBootstrap() *domain.CapacityBootstrap {
+	if spec.Bootstrap == nil {
+		return nil
+	}
+	bootstrap := &domain.CapacityBootstrap{}
+	if spec.Bootstrap.Deadline != nil {
+		bootstrap.EnrolmentDeadlineSeconds = spec.Bootstrap.Deadline.Duration().Seconds()
+	}
+	if spec.Bootstrap.ReclaimAfter != nil {
+		bootstrap.ReclaimAfterSeconds = spec.Bootstrap.ReclaimAfter.Duration().Seconds()
+	}
+	return bootstrap
+}
+
 // NeverEnrolls reports whether this world allocates and boots the machine and its
 // node agent never opens a session. A listing that says nothing about its
 // bootstrap has an agent that arrives, which is every listing in this corpus

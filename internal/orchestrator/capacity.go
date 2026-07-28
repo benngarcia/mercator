@@ -382,7 +382,9 @@ func capacityStageEvents(runID string, state runState, observation capability.Ca
 		if state.capacityStages[stage] || !reached[stage] {
 			continue
 		}
-		events = append(events, mustEvent(runID, "capacity_stage_"+string(stage), EventCapacityStageObserved, capacityStageObservedData{
+		// Identified by the machine as well as the stage, because a Run whose first
+		// machine was reclaimed goes through all three again on the next one.
+		events = append(events, mustEvent(runID, "capacity_stage_"+state.capacity.RentalID+"_"+string(stage), EventCapacityStageObserved, capacityStageObservedData{
 			Stage:      stage,
 			ObservedAt: now,
 			Seconds:    now.Sub(since).Seconds(),

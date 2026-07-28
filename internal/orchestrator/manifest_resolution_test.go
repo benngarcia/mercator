@@ -33,7 +33,7 @@ func (resolver *recordingResolver) ResolveManifest(ctx context.Context, _ string
 // otherwise keep the handler running long after the caller has given up.
 func TestPlacementBoundsWhatItWaitsForAManifest(t *testing.T) {
 	resolver := &recordingResolver{answer: domain.ImageManifest{Known: true}}
-	orch := New(openOrchestratorLog(t), scheduler.New(), fake.New(), WithImageManifests(resolver))
+	orch := New(openOrchestratorLog(t), scheduler.New(), fake.New(), WithImageManifests(resolver), withTestCapacity())
 
 	if _, err := orch.PreviewPlacement(context.Background(), "ws_1", "run_preview", orchRevision()); err != nil {
 		t.Fatalf("preview placement: %v", err)
@@ -78,6 +78,8 @@ func TestPlacementRecordsWhyAManifestCouldNotBeRead(t *testing.T) {
 				scheduler.New(),
 				fake.New(fake.WithOffers([]domain.OfferSnapshot{offer})),
 				WithImageManifests(resolver),
+
+				withTestCapacity(),
 			)
 
 			decision, err := orch.PreviewPlacement(context.Background(), "ws_1", "run_preview", orchRevision())

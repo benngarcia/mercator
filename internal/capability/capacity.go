@@ -22,7 +22,10 @@ type CapacityProvider interface {
 	// nothing.
 	Verify(ctx context.Context) error
 	ListCapacity(ctx context.Context, query CapacityQuery) ([]domain.OfferSnapshot, error)
-	Provision(ctx context.Context, command ProvisionCommand) (CapacityReceipt, error)
+	// ProvisionCapacity allocates fresh capacity for one Rental. It is named
+	// for the lease like every other act here, because a provider that also
+	// launches workloads has two things it could be asked to provision.
+	ProvisionCapacity(ctx context.Context, command ProvisionCommand) (CapacityReceipt, error)
 	ObserveCapacity(ctx context.Context, ref CapacityRef) (CapacityObservation, error)
 	// StartCapacity resumes stopped capacity. Providers without SupportsResume
 	// return ErrCapabilityUnsupported.

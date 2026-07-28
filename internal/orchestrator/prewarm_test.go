@@ -90,6 +90,8 @@ func queuedBehindRunningWork(t *testing.T) preparedFleet {
 		openOrchestratorLog(t), scheduler.New(), provider,
 		WithClock(func() time.Time { return at }),
 		WithPrewarm(prepared, PrewarmPolicy{MaxConcurrent: 4}, &memoryPreparationClock{}),
+
+		withTestCapacity(),
 	)
 	createScheduledRun(t, ctx, orch, "run-active")
 	if err := orch.AdvanceRun(ctx, "ws_1", "run-active"); err != nil {

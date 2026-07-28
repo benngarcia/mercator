@@ -38,7 +38,7 @@ func TestGetRunRejectsInvalidPersistedEvents(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 			log := openOrchestratorLog(t)
-			orch := New(log, scheduler.New(), fake.New())
+			orch := New(log, scheduler.New(), fake.New(), withTestCapacity())
 			createRun(t, ctx, orch)
 
 			eventID := "evt_run_1_invalid"
@@ -75,7 +75,7 @@ func TestGetRunRejectsInvalidPersistedEvents(t *testing.T) {
 func TestGetRunRejectsClosedRunWithoutOutcome(t *testing.T) {
 	ctx := context.Background()
 	log := openOrchestratorLog(t)
-	orch := New(log, scheduler.New(), fake.New())
+	orch := New(log, scheduler.New(), fake.New(), withTestCapacity())
 	createRun(t, ctx, orch)
 
 	_, err := log.Append(ctx, eventlog.AppendRequest{
@@ -145,7 +145,7 @@ func assertGetRunRejectsStoredEventPayloads(t *testing.T, eventType string, data
 	t.Helper()
 	ctx := context.Background()
 	log := openOrchestratorLog(t)
-	orch := New(log, scheduler.New(), fake.New())
+	orch := New(log, scheduler.New(), fake.New(), withTestCapacity())
 	createRun(t, ctx, orch)
 
 	eventID := "evt_run_1_invalid_" + strings.ReplaceAll(eventType, ".", "_")

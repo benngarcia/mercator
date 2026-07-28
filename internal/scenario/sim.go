@@ -13,6 +13,7 @@ import (
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/eventlog"
 	"github.com/benngarcia/mercator/internal/gpunorm"
+	"github.com/benngarcia/mercator/internal/node"
 	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/rentalschedule"
 	"github.com/benngarcia/mercator/internal/scheduler"
@@ -73,7 +74,12 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 			Offer: simMarketplaceOffer(spec, offer),
 			// What this world spends making the machine, read from the stages the
 			// Blueprint states rather than from the estimate the offer publishes.
-			ProvisionSpend:      offer.Provisioning.Spend(),
+			// The three are kept apart because Mercator now measures them apart: a
+			// provider answers for the first two and only the node registry can
+			// answer for the third.
+			AcquisitionSpend:    offer.Provisioning.AcquisitionSpend(),
+			BootSpend:           offer.Provisioning.BootSpend(),
+			AgentReadySpend:     offer.Provisioning.AgentReadySpend(),
 			UnpackSpend:         spec.Launch.UnpackSpend(),
 			ContainerStartSpend: spec.Launch.ContainerStartSpend(),
 			// What a workload takes to come up here, where this machine says it is
@@ -93,10 +99,7 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 			session.note("offer %q declares host facts, but no offer field can carry them yet", offer.ID)
 		}
 		if offer.Capacity != nil {
-			session.note("offer %q negotiates a capacity capability set, and no provider seam reads one yet", offer.ID)
-		}
-		if offer.Bootstrap != nil && offer.Bootstrap.Deadline != nil {
-			session.note("offer %q bounds how long Mercator expects its agent, and nothing gives up on a machine yet", offer.ID)
+			session.note("offer %q negotiates a capacity capability set, and this harness reaches its provider without a Broker to negotiate against", offer.ID)
 		}
 	}
 	log, err := eventlog.OpenSQLite(context.Background(), "file:scenario-"+uuid.NewString()+"?mode=memory&cache=shared")
@@ -104,6 +107,18 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		return nil, err
 	}
 	session.log = log
+	// The real node registry, because provisioning is only an act if the identity
+	// it mints is one a machine can really redeem. The agents in this world enrol
+	// through it with the token their provider was handed, so an invitation spent
+	// twice, claimed for the wrong generation, or never redeemed at all behaves
+	// here exactly as it does in production.
+	nodes := node.NewRegistry(
+		node.NewMemoryStore(),
+		node.NewSigner(node.DeriveKey([]byte("mercator-scenario-node-key"))),
+		"https://scenario.mercator.test",
+		node.WithClock(clock.Now),
+	)
+	world.Enroller = nodes
 	schedules, err := simSchedules(spec, alwaysActiveWorkspaceLog{log})
 	if err != nil {
 		return nil, err
@@ -117,6 +132,11 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 		orchestrator.WithImageManifests(world),
 		orchestrator.WithArtifactCatalog(world),
 		orchestrator.WithRentalSchedules(schedules.store),
+		// Placement choosing to provision is an act, and these are the two seams it
+		// acts through: the lease that allocates a machine, and the registry that
+		// says which node it will be and whether an agent ever arrived.
+		orchestrator.WithCapacity(world),
+		orchestrator.WithInviter(nodes),
 	)
 	return session, nil
 }
@@ -456,6 +476,13 @@ func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.Offe
 		provisioning.P90 = spec.Provisioning.P90.Duration().Seconds()
 	}
 	offer.Provisioning = provisioning
+	// How long Mercator waits for the agent on a machine allocated from this
+	// listing, and when its provider destroys one nobody enrolled on. Both are
+	// terms of the sale rather than predictions, which is why they are stated
+	// beside the estimate and never derived from it: a listing that takes nine
+	// minutes at p90 and gives up at ten is a different provider from one that
+	// gives up at four.
+	offer.Bootstrap = spec.CapacityBootstrap()
 	// What the provider of this listing has measured about the machine behind it is
 	// a property of that history rather than of the moment the offer was read, so
 	// it is stated once here and carried through, exactly as a Rental's capacity
@@ -615,6 +642,18 @@ func (s *simSession) note(format string, args ...any) {
 	s.notes = append(s.notes, fmt.Sprintf(format, args...))
 }
 
+// advance drives one Run and lets this world's agents open their sessions
+// first. Enrolment is an inbound call the machine makes, exactly as readiness
+// is, so it is delivered before the control plane looks rather than discovered
+// by looking: a registry that only learned of an agent when somebody asked
+// would make the answer a property of how often Mercator asks.
+func (s *simSession) advance(runID string) error {
+	if err := s.world.DeliverEnrolments(context.Background()); err != nil {
+		return err
+	}
+	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
+}
+
 func (s *simSession) Submit(name string, req RequestSpec) error {
 	if req.Image == "" {
 		return fmt.Errorf("requests need an image")
@@ -630,7 +669,7 @@ func (s *simSession) Submit(name string, req RequestSpec) error {
 	if err != nil {
 		return err
 	}
-	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
+	return s.advance(runID)
 }
 
 func (s *simSession) Reconcile(name string) error {
@@ -638,11 +677,14 @@ func (s *simSession) Reconcile(name string) error {
 	if !ok {
 		return fmt.Errorf("run %q was never submitted", name)
 	}
-	return s.orch.AdvanceRun(context.Background(), simWorkspace, runID)
+	return s.advance(runID)
 }
 
 func (s *simSession) AdvanceClock(d time.Duration) error {
 	s.world.Clock().Advance(d)
+	if err := s.world.DeliverEnrolments(context.Background()); err != nil {
+		return err
+	}
 	if err := s.deliverReadiness(); err != nil {
 		return err
 	}

@@ -137,13 +137,20 @@ type Machine struct {
 	// lease bound. An expired machine stops being offered, standing in for
 	// janitor termination until the rental lifecycle exists.
 	LeaseExpiresAt time.Time
-	// ProvisionSpend is what this world takes to turn a listing into a machine
-	// that can run a container: acquisition, boot, and agent enrollment together.
-	// It is deliberately not the estimate the offer publishes, which is a claim
-	// the scheduler predicts from; a world that spent its own published
-	// expectation would make that expectation right by construction. Standing
-	// capacity spends none of it, because the machine is already there.
-	ProvisionSpend time.Duration
+	// AcquisitionSpend, BootSpend, and AgentReadySpend are what this world takes
+	// to turn a listing into a machine Mercator can execute on: the provider
+	// allocating it, it reaching a usable operating system, and a node agent on it
+	// opening a session. They are three rather than one because they are answered
+	// by three different authorities and fail three different ways, and because a
+	// control plane that measures them has to have something to measure.
+	//
+	// They are deliberately not the estimate the offer publishes, which is a claim
+	// the scheduler predicts from; a world that spent its own published expectation
+	// would make that expectation right by construction. Standing capacity spends
+	// none of them, because the machine is already there.
+	AcquisitionSpend time.Duration
+	BootSpend        time.Duration
+	AgentReadySpend  time.Duration
 	// NeverEnrolls is a machine this world allocates and boots whose node agent
 	// never opens its session: an image with no agent in it, a startup script that
 	// ran before the network was up, an outbound path something blocks. Mercator
@@ -239,13 +246,12 @@ func (m *Machine) startExecution(image string, layers []Layer, caches []domain.C
 			bytes += layer.Bytes
 		}
 	}
-	// Nothing can be fetched onto a machine that does not exist yet, so the world
-	// spends acquisition, boot, and agent enrollment before the pull begins. Bytes
-	// that land are then applied, and only then does a runtime hand back a
-	// process: a launch is a waterfall, and a stage that costs nothing here is a
-	// stage no prediction of it could ever be measured against.
-	readyAt := now.Add(m.ProvisionSpend)
-	startsAt := readyAt.
+	// The machine exists by the time anything is launched on it: acquisition,
+	// boot, and the agent's arrival are spent under the capacity lease, before
+	// this. Bytes that land are then applied, and only then does a runtime hand
+	// back a process: a launch is a waterfall, and a stage that costs nothing here
+	// is a stage no prediction of it could ever be measured against.
+	startsAt := now.
 		Add(transferDuration(bytes, m.linkMbps(domain.NetworkScopeRegistry))).
 		Add(m.assemblySpend(bytes, layers)).
 		Add(m.ContainerStartSpend)
@@ -580,6 +586,13 @@ type World struct {
 	// when it is handed over: a report re-delivered on every look would tell
 	// Mercator the same thing forever.
 	readiness map[string]ReadinessReport
+	// allocations is every machine this world holds under the capacity lease,
+	// keyed by the Rental it was allocated for. See capacity.go.
+	allocations map[string]*allocation
+	// Enroller is the control plane's node registry as the agents in this world
+	// reach it. A world without one has no registry to enrol against, so its
+	// machines are allocated and never become executable.
+	Enroller Enroller
 }
 
 // ReadinessReport is one workload telling Mercator it can do work, with the
@@ -604,6 +617,7 @@ func NewWorld(clock *Clock, options ...Option) *World {
 		readyAt:      map[string]time.Time{},
 		statedStarts: map[string]time.Time{},
 		readiness:    map[string]ReadinessReport{},
+		allocations:  map[string]*allocation{},
 	}
 }
 

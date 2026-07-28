@@ -107,11 +107,11 @@ func TestOpenCatalogPreservesPlacementClassifications(t *testing.T) {
 	if regressions != 60 {
 		t.Errorf("regression Blueprints = %d, want 60", regressions)
 	}
-	if counts[ClassificationGreen] != 56 {
-		t.Errorf("green Blueprints = %d, want 56", counts[ClassificationGreen])
+	if counts[ClassificationGreen] != 57 {
+		t.Errorf("green Blueprints = %d, want 57", counts[ClassificationGreen])
 	}
-	if counts[ClassificationTarget] != 4 {
-		t.Errorf("target Blueprints = %d, want 4", counts[ClassificationTarget])
+	if counts[ClassificationTarget] != 3 {
+		t.Errorf("target Blueprints = %d, want 3", counts[ClassificationTarget])
 	}
 }
 
@@ -146,7 +146,7 @@ func TestTheEnrolledNodeTargetWaitsOnTheProvisionedToEnrolledTransition(t *testi
 	}
 }
 
-// TestTheStrandedCapacityTargetStatesBothHalvesOfItsOwnName reads the target that
+// TestTheStrandedCapacityCaseStatesBothHalvesOfItsOwnName reads the case that
 // the corpus could not describe at all: a provider that allocates and boots a
 // machine whose agent never opens a session. Silence about the enrolment stage
 // already means a stage that costs nothing, so without a word for it the failure a
@@ -169,17 +169,17 @@ func TestTheEnrolledNodeTargetWaitsOnTheProvisionedToEnrolledTransition(t *testi
 // because the launch failure this fixture used to name means the provider refused
 // and created nothing, which is the opposite of what happened to a machine Mercator
 // is being billed for.
-func TestTheStrandedCapacityTargetStatesBothHalvesOfItsOwnName(t *testing.T) {
+func TestTheStrandedCapacityCaseStatesBothHalvesOfItsOwnName(t *testing.T) {
 	blueprint, err := LoadBlueprint("scenarios/provisioned-capacity-enrolls-or-is-reclaimed.json")
 	if err != nil {
 		t.Fatalf("load Blueprint: %v", err)
 	}
 
-	if blueprint.Classification != ClassificationTarget {
-		t.Errorf("classification = %q, want target", blueprint.Classification)
+	if blueprint.Classification != ClassificationGreen {
+		t.Errorf("classification = %q, want green", blueprint.Classification)
 	}
-	if !slices.Equal(blueprint.MissingCapabilities, []Capability{CapabilityNodeBootstrap}) {
-		t.Fatalf("the target waits on %v, want the bootstrap alone", blueprint.MissingCapabilities)
+	if len(blueprint.MissingCapabilities) != 0 {
+		t.Fatalf("the case still waits on %v, and a green Blueprint waits on nothing", blueprint.MissingCapabilities)
 	}
 	stranded, patient := blueprint.World.Marketplace[0], blueprint.World.Marketplace[1]
 	if !stranded.NeverEnrolls() {

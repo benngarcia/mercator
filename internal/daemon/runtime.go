@@ -187,6 +187,13 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, err error) {
 		// does, which is what makes the prepare half of capability.NodeRuntime
 		// reachable from the control plane at all.
 		orchestrator.WithPrewarm(providerBroker, prewarmPolicy(cfg.Prewarm), storage.Preparation()),
+		// A placement that chose to provision allocates a machine through the
+		// Broker's capacity lease and invites the node it will be through the
+		// registry. They are two seams because they are two contracts: the Broker
+		// owns what a provider allocates, and only the registry can say whether an
+		// agent ever opened a session on it.
+		orchestrator.WithCapacity(providerBroker),
+		orchestrator.WithInviter(nodes),
 	)
 	if signer.Enabled() && cfg.PublicURL != "" {
 		orchestratorOptions = append(orchestratorOptions, orchestrator.WithReporting(cfg.PublicURL, signer))
