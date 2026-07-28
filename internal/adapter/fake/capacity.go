@@ -79,22 +79,27 @@ func (w *World) Verify(_ context.Context) error { return nil }
 
 // ListCapacity is the capacity this world sells, which is what a search of the
 // marketplace returns. A capacity connection publishes no placement candidate of
-// its own: what ListCapacity returns is capacity to acquire, and capacity held
-// under a lease has already been acquired. Selling it again would offer a
-// workspace a machine it is already paying for, under a lease it already holds.
+// its own: what ListCapacity returns is capacity to acquire, and a machine that
+// already exists is not something to acquire.
 //
 // The fleet is the other question and ListOffers is where it is asked. A machine
-// this world allocated, and a Rental a Blueprint declared, are both in that
-// answer and neither is in this one.
+// this world allocated, a Rental a Blueprint declared, and a host Mercator merely
+// reaches are all in that answer and none of them is in this one. The test is
+// what the capacity is rather than whether this world happens to hold a lease on
+// it: a filter on the lease sold a standing host back to the workspace that was
+// already running work on it, because capacity that keeps nothing carries no
+// Rental identity to be filtered by.
 func (w *World) ListCapacity(ctx context.Context, query capability.CapacityQuery) ([]domain.OfferSnapshot, error) {
 	offers, err := w.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: query.WorkspaceID, Resources: query.Resources})
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(offers, leased), nil
+	return slices.DeleteFunc(offers, machineThatAlreadyExists), nil
 }
 
-func leased(offer domain.OfferSnapshot) bool { return offer.RentalID != "" }
+func machineThatAlreadyExists(offer domain.OfferSnapshot) bool {
+	return offer.Kind != domain.OfferKindProvisionable
+}
 
 // Provision allocates the machine behind one listing and holds the bootstrap it
 // was handed. The same operation key twice allocates one machine and says so,
@@ -113,6 +118,15 @@ func (w *World) ProvisionCapacity(_ context.Context, command capability.Provisio
 	listing, exists := w.machines[command.OfferSnapshotID]
 	if !exists {
 		return capability.CapacityReceipt{}, fmt.Errorf("fake: no listing %q to allocate from", command.OfferSnapshotID)
+	}
+	// Only a listing can be bought. A machine that already exists is a host this
+	// world is publishing rather than capacity for sale, and allocating one minted
+	// a lease over a machine already in the fleet: the same host then answered
+	// twice, once under the name it was published as and once under the provider's
+	// handle for it, and taking one of them off the market took a machine somebody
+	// was already running work on with it.
+	if listing.Offer.Kind != domain.OfferKindProvisionable {
+		return capability.CapacityReceipt{}, fmt.Errorf("fake: offer %q is a machine this world already has rather than capacity to acquire", command.OfferSnapshotID)
 	}
 	nativeRef := machineHandle(listing, command.RentalID)
 	if holder, taken := w.holderOf(nativeRef); taken {
@@ -167,8 +181,15 @@ func machineHandle(listing *Machine, rentalID string) string {
 // record having refused it, and the product is on sale again the moment the
 // lease ends. The machine itself is untouched here, because it is standing
 // capacity under a lease rather than a listing of anything.
+//
+// What this answer is not is a statement about the host's room. The listing goes
+// on publishing what a buyer of it would get, which is a whole machine, while
+// the machine Mercator holds publishes the room it has left, and the two are
+// different questions with different true answers. Which of them a Run waiting
+// for capacity is waiting on is decided where the refusal is read rather than
+// here: see domain.HolderOfMachine.
 func (w *World) sold(offer domain.OfferSnapshot) domain.OfferSnapshot {
-	if offer.RentalID != "" || offer.MachineID == "" {
+	if offer.Kind != domain.OfferKindProvisionable || offer.MachineID == "" {
 		return offer
 	}
 	if _, taken := w.holderOf(offer.MachineID); taken {
@@ -249,11 +270,15 @@ func (w *World) TerminateCapacity(_ context.Context, command capability.Capacity
 	duplicate := held.terminated
 	if !duplicate {
 		// The moment the machine was destroyed, which a repeat of the same command
-		// does not move: the bill ended once.
+		// does not move: the bill ended once. The withdrawal is here with it and
+		// never on the repeat, because a listing that names a machine yields the
+		// same handle to the lease that buys it next: a second terminate of a dead
+		// lease was withdrawing a live lease's machine, leaving this world owning
+		// and billing a host it published nowhere.
 		held.terminatedAt = w.clock.Now()
+		delete(w.machines, held.nativeRef)
 	}
 	held.terminated = true
-	delete(w.machines, held.nativeRef)
 	return capability.CapacityReceipt{
 		NativeRef:  held.nativeRef,
 		State:      capability.CapacityStateTerminated,

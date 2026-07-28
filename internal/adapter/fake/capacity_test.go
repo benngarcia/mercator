@@ -212,11 +212,7 @@ func TestWorldStopsPublishingAMachineItDestroyed(t *testing.T) {
 	world, _ := listedWorld(t)
 	provisionAndEnrol(t, world, "rnt_first", "own-first")
 
-	if _, err := world.TerminateCapacity(context.Background(), capability.CapacityCommand{
-		CapacityRef: capability.CapacityRef{RentalID: "rnt_first"},
-	}); err != nil {
-		t.Fatalf("terminate: %v", err)
-	}
+	terminate(t, world, "rnt_first")
 
 	offers := worldOffers(t, world)
 	if machine, published := offers[listedMachine]; published {
@@ -224,6 +220,96 @@ func TestWorldStopsPublishingAMachineItDestroyed(t *testing.T) {
 	}
 	if listing := offers["reusable-4090"]; !listing.Capacity.Available {
 		t.Errorf("the listing is still refused as sold, and Mercator gave the machine back")
+	}
+}
+
+// TestARepeatedTerminateWithdrawsNothingTheNextLeaseBought is the other half of
+// that withdrawal, and the reason it belongs to the terminate that performed it
+// rather than to every terminate of the same lease. A listing that names a
+// machine hands the same handle to whoever buys it next, so a second terminate
+// of a dead lease was destroying a live lease's machine: the provider then owned
+// and billed a host it published nowhere, no launch could resolve a host for it,
+// and any Run on it was unplaceable while still leased. That is the mirror of the
+// state the withdrawal above exists to prevent.
+//
+// The repeat is a real path and not a hypothesis. Reclaim issues the terminate
+// and then commits the events that record it, and a commit that fails leaves the
+// next sweep re-entering the same branch under the same operation key, which is
+// what the receipt's Duplicate field is for.
+func TestARepeatedTerminateWithdrawsNothingTheNextLeaseBought(t *testing.T) {
+	world, _ := listedWorld(t)
+	provisionAndEnrol(t, world, "rnt_first", "own-first")
+	terminate(t, world, "rnt_first")
+	provisionAndEnrol(t, world, "rnt_second", "own-second")
+
+	repeat := terminate(t, world, "rnt_first")
+
+	if !repeat.Duplicate {
+		t.Errorf("a second terminate of one lease reported %+v, want a duplicate", repeat)
+	}
+	if _, published := worldOffers(t, world)[listedMachine]; !published {
+		t.Errorf("giving Rental %q back a second time destroyed the machine Rental %q is holding", "rnt_first", "rnt_second")
+	}
+	owned, err := world.ListOwnedCapacity(context.Background(), capability.OwnershipQuery{WorkspaceID: "ws_fake"})
+	if err != nil {
+		t.Fatalf("list owned: %v", err)
+	}
+	if len(owned) != 1 || owned[0].RentalID != "rnt_second" || owned[0].NativeRef != listedMachine {
+		t.Fatalf("this world owns %+v, want the one live lease and the machine it is billed for", owned)
+	}
+}
+
+func terminate(t *testing.T, world *World, rentalID string) capability.CapacityReceipt {
+	t.Helper()
+	receipt, err := world.TerminateCapacity(context.Background(), capability.CapacityCommand{
+		CapacityRef:  capability.CapacityRef{RentalID: rentalID},
+		OperationKey: "reclaim_" + rentalID,
+	})
+	if err != nil {
+		t.Fatalf("terminate %s: %v", rentalID, err)
+	}
+	return receipt
+}
+
+// TestWorldRefusesToSellAMachineThatAlreadyExists holds the other half of what
+// ListCapacity answers. Capacity to acquire is a listing, and a machine that
+// already exists is a host this world publishes rather than a product on sale.
+// The filter that stated this by the lease let a standing host through, because
+// capacity that keeps nothing carries no Rental identity: the host was offered
+// for sale, allocating it minted a lease over a machine already in the fleet,
+// and the fleet then held that one host twice, once under the name it was
+// published as and once under the provider's handle, with the pre-existing one
+// silently taken off the market.
+func TestWorldRefusesToSellAMachineThatAlreadyExists(t *testing.T) {
+	world, _ := listedWorld(t)
+	if err := world.AddMachine(&Machine{Offer: domain.OfferSnapshot{
+		ID:        "a-host-mercator-does-not-control",
+		MachineID: "host-1",
+		Kind:      domain.OfferKindStanding,
+		Lane:      domain.LaneEphemeral,
+		Resources: domain.ResourceInventory{EphemeralDiskBytes: 100 << 30, EphemeralDiskKnown: true},
+	}}); err != nil {
+		t.Fatalf("add host: %v", err)
+	}
+
+	forSale, err := world.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_fake"})
+	if err != nil {
+		t.Fatalf("list capacity: %v", err)
+	}
+	_, refused := world.ProvisionCapacity(context.Background(), capability.ProvisionCommand{
+		WorkspaceID: "ws_fake", RentalID: "rnt_host", OfferSnapshotID: "a-host-mercator-does-not-control",
+		OwnershipToken: "own-host",
+		Bootstrap:      capability.NodeBootstrap{NodeID: "nod_host", RentalID: "rnt_host", Generation: 1},
+	})
+
+	if len(forSale) != 1 || forSale[0].ID != "reusable-4090" {
+		t.Fatalf("capacity for sale = %+v, want the listing alone", forSale)
+	}
+	if refused == nil {
+		t.Fatal("this world leased a machine it was already publishing")
+	}
+	if !strings.Contains(refused.Error(), "rather than capacity to acquire") {
+		t.Fatalf("refusal = %q, want the offer named as a machine this world already has", refused)
 	}
 }
 
