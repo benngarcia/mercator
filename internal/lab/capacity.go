@@ -45,6 +45,20 @@ type capacityLease struct {
 	Enrolled       bool
 }
 
+// leaseState is what this world still holds for one Rental: whether the machine
+// is there at all, and whether an agent ever opened a session on it. It answers
+// with a copy, because the lease is this world's own record of what happened to
+// a machine and a caller holding the pointer could rewrite it.
+func (world *simulatedWorld) leaseState(rentalID string) (capacityLease, bool) {
+	world.mu.Lock()
+	defer world.mu.Unlock()
+	lease, exists := world.leases[rentalID]
+	if !exists {
+		return capacityLease{}, false
+	}
+	return *lease, true
+}
+
 // capacityProgress is how far this world has got with one machine and the moment
 // it got there. The two travel together because a provider that reports a state
 // without dating it leaves its caller measuring the interval between two looks

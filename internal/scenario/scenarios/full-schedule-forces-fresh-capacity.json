@@ -58,7 +58,7 @@
   "expect": {
     "outcome": "place",
     "offer": "fresh-slow",
-    "disposition": "terminate",
+    "disposition": "release",
     "candidates": {
       "rental-warm": {
         "feasible": false,

@@ -4475,7 +4475,7 @@
               "standing",
               "provisionable"
             ],
-            "description": "Who owns the host: standing capacity Mercator borrows a slot on, or provisionable capacity Mercator creates and must destroy."
+            "description": "Whether the host exists yet: standing capacity Mercator can reach now, or provisionable capacity a provider allocates when Mercator asks. Whether the end of a Run destroys it is answered by the lane, not by this."
           },
           "lane": {
             "type": "string",

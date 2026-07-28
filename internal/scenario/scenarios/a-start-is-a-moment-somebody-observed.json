@@ -57,7 +57,7 @@
           "FEASIBLE",
           "SERVICE_CLASS_OPPORTUNISTIC"
         ],
-        "disposition": "terminate",
+        "disposition": "release",
         "no_start_observed": true,
         "candidates": {
           "rental-warm": {

@@ -1764,11 +1764,11 @@ func (cleanupError CleanupError) Validate() error {
 // re-inferred from live offers/state at cleanup time. This is what makes
 // teardown crash-safe and orphan-free.
 //
-//   - DispositionTerminate: the run created a resource WE OWN (a provisioned
-//     host/instance) that MUST be destroyed on cleanup.
-//   - DispositionRelease: the run occupies a slot in a pool we DON'T own (a
-//     standing pool); cleanup removes only our job/container and never touches
-//     the host.
+//   - DispositionTerminate: the end of the Run is the end of the machine, so
+//     cleanup destroys it.
+//   - DispositionRelease: cleanup takes Mercator's workload off the host and
+//     leaves the host standing, because something other than this Run decides
+//     when the machine goes.
 type Disposition string
 
 const (
@@ -1780,16 +1780,34 @@ func (disposition Disposition) Valid() bool {
 	return disposition == DispositionRelease || disposition == DispositionTerminate
 }
 
-// DispositionForOfferKind maps the selected offer's ownership model to its
-// required cleanup action.
-func DispositionForOfferKind(kind OfferKind) (Disposition, error) {
-	switch kind {
-	case OfferKindProvisionable:
+// CleanupDisposition is what the end of a Run on this capacity does to the
+// machine under it. It reads both facts the offer states about itself, because
+// either one alone answers a different question and gets this wrong in a way
+// that costs money.
+//
+// A one-shot product Mercator allocated is the only capacity a Run's end
+// destroys. That is what the ephemeral lane is: nothing survives the workload,
+// so nothing is left to hand back, and cleanup terminates. Kind alone used to
+// decide this, and kind alone says only that the machine did not exist before
+// Mercator asked for it. That is equally true of the fresh machine a reusable
+// Rental is built on, and terminating there destroys the whole point of the
+// reusable lane: the machine outlives the Run, the lease owns when it goes, and
+// a Run that took its host with it would leave the next Run provisioning again
+// and an operator paying the boot twice.
+//
+// Everything else releases. A slot in a pool Mercator does not own is not
+// Mercator's to destroy, and a machine Mercator holds a lease on is destroyed by
+// that lease ending rather than by a workload finishing on it.
+func (offer OfferSnapshot) CleanupDisposition() (Disposition, error) {
+	switch {
+	case !offer.Lane.Valid():
+		return "", fmt.Errorf("domain: offer %q states execution lane %q, and cleanup cannot be decided without one", offer.ID, offer.Lane)
+	case offer.Kind != OfferKindProvisionable && offer.Kind != OfferKindStanding:
+		return "", fmt.Errorf("domain: cleanup disposition for unknown offer kind %q", offer.Kind)
+	case offer.Kind == OfferKindProvisionable && !offer.Lane.Reusable():
 		return DispositionTerminate, nil
-	case OfferKindStanding:
-		return DispositionRelease, nil
 	default:
-		return "", fmt.Errorf("domain: cleanup disposition for unknown offer kind %q", kind)
+		return DispositionRelease, nil
 	}
 }
 

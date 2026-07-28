@@ -204,15 +204,20 @@ Every run records, at launch time, a cleanup **disposition** that determines
 what teardown does. This is a cost-safety contract borrowed from the adapter
 boundary:
 
-- **`terminate`** — the run provisioned a resource **we own** (a host/instance
-  from a *provisionable* offer). Cleanup must **destroy that host**.
-- **`release`** — the run occupies a slot in a pool **we do not own** (a
-  *standing* offer, e.g. local Docker). Cleanup removes **only our
-  job/container** and never touches the host.
+- **`terminate`** — the run took a **one-shot execution product** Mercator
+  allocated (a *provisionable* offer in the *ephemeral* lane). Nothing survives
+  the workload, so there is no host to hand back and cleanup **destroys it**.
+- **`release`** — the host outlives the run. Cleanup removes **only our
+  job/container** and never touches the host. This covers both a slot in a pool
+  we do not own (a *standing* offer, e.g. local Docker) and a machine Mercator
+  provisioned to hold a Rental: the lease decides when that machine goes, and a
+  run finishing is not a lease ending.
 
-The disposition is derived from the selected offer's `kind`
-(`provisionable -> terminate`, `standing -> release`) and **recorded explicitly
-on the `compute.run.launch_intent_recorded.v1` event at launch time**. It is
+The disposition is derived from the selected offer's `kind` **and** its
+execution `lane`, and **recorded explicitly on the
+`compute.run.launch_intent_recorded.v1` event at launch time**. Reading the kind
+alone terminated the fresh machine a Rental was built on, because a machine that
+did not exist before Mercator asked for it is provisionable either way. It is
 surfaced on the run object as `.run.disposition`:
 
 ```sh

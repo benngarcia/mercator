@@ -300,7 +300,7 @@ func TestAdvanceRunDoesNotInjectReportingEnvWhenNotConfigured(t *testing.T) {
 
 func TestCancelRunAfterLaunchRecordsCancelledOutcomeAndCleansUp(t *testing.T) {
 	ctx := context.Background()
-	offer := orchProvisionableOffer("offer_cancel", time.Now().UTC())
+	offer := orchOneShotOffer("offer_cancel", time.Now().UTC())
 	ad := fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
 	orch := newTestOrchestrator(t, ad)
 	rev := orchRevision()
@@ -879,10 +879,22 @@ func orchRevision() domain.WorkloadRevision {
 	}
 }
 
+// orchProvisionableOffer is a listing for a machine that does not exist yet and
+// becomes a Rental once it does. It carries no Rental identity, because a lease
+// over a machine nobody has allocated is a queue the next Run could wait in.
 func orchProvisionableOffer(id string, now time.Time) domain.OfferSnapshot {
 	offer := orchOffer(id, now)
 	offer.Kind = domain.OfferKindProvisionable
 	offer.RentalID = ""
+	return offer
+}
+
+// orchOneShotOffer is a provider-native execution product: Mercator allocates it
+// and holds nothing once the workload exits. It is the only capacity a Run's own
+// cleanup destroys, which is what the tests about termination are about.
+func orchOneShotOffer(id string, now time.Time) domain.OfferSnapshot {
+	offer := orchProvisionableOffer(id, now)
+	offer.Lane = domain.LaneEphemeral
 	return offer
 }
 

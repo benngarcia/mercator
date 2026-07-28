@@ -75,7 +75,7 @@
       "expect": {
         "outcome": "place",
         "offer": "fresh-4090",
-        "disposition": "terminate",
+        "disposition": "release",
         "candidates": {
           "rental-warm": {
             "queue_seconds": 1500,

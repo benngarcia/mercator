@@ -92,7 +92,10 @@ func newReportingTestHarness(t *testing.T, signerKey []byte, extra ...Option) re
 	})
 	now := time.Now().UTC()
 	offer := httpOffer("off_rep", now)
+	// A one-shot execution: Mercator allocated it and holds nothing once the
+	// workload exits, which is the capacity whose cleanup destroys the machine.
 	offer.Kind = domain.OfferKindProvisionable
+	offer.Lane = domain.LaneEphemeral
 	ad := fake.New(
 		fake.WithOffers([]domain.OfferSnapshot{offer}),
 		fake.WithLaunchOutcome(adapter.ExternalPhaseRunning),
@@ -423,6 +426,7 @@ func TestCleanupFailureIsVisibleThroughRunAndEventAPIs(t *testing.T) {
 	t.Cleanup(func() { _ = log.Close() })
 	offer := httpOffer("off_cleanup_failure", time.Now().UTC())
 	offer.Kind = domain.OfferKindProvisionable
+	offer.Lane = domain.LaneEphemeral
 	base := fake.New(fake.WithOffers([]domain.OfferSnapshot{offer}), fake.WithLaunchOutcome(adapter.ExternalPhaseRunning))
 	provider := &httpTerminateFailsOnceProvider{Adapter: base}
 	harness := newReportingTestHarnessWithProvider(t, key32, log, provider, base)

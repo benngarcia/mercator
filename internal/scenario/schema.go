@@ -1497,7 +1497,9 @@ type ExpectSpec struct {
 	Reasons []string            `json:"reasons,omitempty"`
 	Booking *BookingExpectation `json:"booking,omitempty"`
 	// Disposition asserts the recorded cleanup intent on the launch intent:
-	// "release" for standing rentals, "terminate" for provisioned hosts.
+	// "terminate" for a one-shot execution, which holds nothing once its workload
+	// exits, and "release" for every host that outlives the Run, whether Mercator
+	// borrows a slot on it or holds the lease that decides when it goes.
 	Disposition string `json:"disposition,omitempty"`
 	// StartLatency asserts how long this Run waited between its launch being
 	// accepted and its workload actually beginning, read out of Mercator's own run

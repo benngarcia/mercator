@@ -560,6 +560,13 @@ func offerFromDecision(decision domain.BookingDecision) (domain.OfferSnapshot, e
 			AdapterType:  candidate.AdapterType,
 			NativeRef:    candidate.NativeRef,
 			Kind:         domain.OfferKindStanding,
+			// A Booking waits on a Rental, and only reusable capacity may become
+			// one, which is what the candidate disposition checked just above
+			// already established. It is stated rather than left empty because the
+			// launch path dispatches on it: an empty lane sends a Run that queued on
+			// an enrolled node down the ephemeral seam, to look for a provider
+			// connection under the node registry's own connection id.
+			Lane: domain.LaneReusable,
 		}, nil
 	}
 	return domain.OfferSnapshot{}, fmt.Errorf("orchestrator: selected candidate %q is missing", decision.SelectedOfferSnapshotID)
@@ -1005,7 +1012,7 @@ func newAttempt(workspaceID, runID string, attemptNumber int) attemptData {
 
 func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, attempt attemptData, selectedOffer domain.OfferSnapshot, reportPublicURL, reportToken string) (adapter.LaunchRequest, error) {
 	container := requested.Workload.Spec.Containers[0]
-	disposition, err := domain.DispositionForOfferKind(selectedOffer.Kind)
+	disposition, err := selectedOffer.CleanupDisposition()
 	if err != nil {
 		return adapter.LaunchRequest{}, err
 	}
@@ -1042,9 +1049,9 @@ func buildLaunchRequest(workspaceID, runID string, requested runRequestedData, a
 		SelectedOfferAdapterType:  selectedOffer.AdapterType,
 		SelectedOfferNativeRef:    selectedOffer.NativeRef,
 		SelectedOfferLane:         selectedOffer.Lane,
-		// Derive the cleanup disposition from the selected offer's Kind and RECORD
-		// it on the launch intent now. This recorded value — not the offer kind
-		// looked up later — is the source of truth for cleanup.
+		// Derive the cleanup disposition from what the selected offer says it is,
+		// and RECORD it on the launch intent now. This recorded value is the source
+		// of truth for cleanup, never the offer looked up again later.
 		Disposition: disposition,
 	}
 	hash, err := domain.CanonicalHash(launchReq)

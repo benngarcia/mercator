@@ -1,6 +1,6 @@
 {
   "schema": "mercator.lab/blueprint.v1",
-  "summary": "No rentals exist. The broker collects marketplace offers, weighs boot time and pull cost against price, provisions the best one, and records the terminate disposition: today's full decide-and-provision path. Neither candidate is a machine that exists, so neither records a Rental Schedule: evidence for capacity with no Rental behind it would publish a queue read off a schedule that does not exist.",
+  "summary": "No rentals exist. The broker collects marketplace offers, weighs boot time and pull cost against price, provisions the best one, and records the release disposition: today's full decide-and-provision path. The machine is fresh and it is still not the Run's to destroy. This listing sells reusable capacity, so what the placement takes is a lease, and cleanup takes Mercator's workload off the host and leaves the lease standing. A listing selling a one-shot execution instead would record a terminate here, which is the only kind of capacity a Run's own ending takes with it. Neither candidate is a machine that exists, so neither records a Rental Schedule: evidence for capacity with no Rental behind it would publish a queue read off a schedule that does not exist.",
   "classification": "green",
   "world": {
     "images": {
@@ -47,7 +47,7 @@
     "outcome": "place",
     "offer": "fresh-quick",
     "reasons": ["FEASIBLE", "SERVICE_CLASS_STANDARD"],
-    "disposition": "terminate",
+    "disposition": "release",
     "candidates": {
       "fresh-quick": {
         "feasible": true,

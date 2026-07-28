@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "One Run is launched twice. The first launch takes a machine Mercator provisions for it and the provider refuses the start, so the Run is placed again, and the second launch takes a slot on a machine Mercator only borrows. Those two launches recorded opposite things about the capacity they took: the provisioned machine does not outlive its workload, and the borrowed slot does. A third machine is holding capacity that still carries this Run's identity and none of the launch identities Mercator minted, and the whole claim is that the record cannot say which of the two launches left it standing. A policy that read the Run's last launch would hand the slot back and keep a machine billing that no Run can ever be placed on, and reading the first would destroy a machine in a pool Mercator does not own. Capacity no recorded launch accounts for stops existing.",
+  "summary": "One Run is launched twice. The first launch takes a one-shot execution Mercator allocates for it and the provider refuses the start, so the Run is placed again, and the second launch takes a slot on a machine Mercator only borrows. Those two launches recorded opposite things about the capacity they took: the one-shot product does not outlive its workload and is destroyed when the Run ends, and the borrowed slot does outlive it and is only handed back. The lane is what makes them disagree, and it is stated here rather than left to the default: a fresh machine allocated to hold a Rental is provisioned too and is released like the borrowed slot, because a lease decides when that machine goes. A third machine is holding capacity that still carries this Run's identity and none of the launch identities Mercator minted, and the whole claim is that the record cannot say which of the two launches left it standing. A policy that read the Run's last launch would hand the slot back and keep a machine billing that no Run can ever be placed on, and reading the first would destroy a machine in a pool Mercator does not own. Capacity no recorded launch accounts for stops existing.",
   "seed": "mercator-lab-disagreeing-launches-v1",
   "world": {
     "launch": {
@@ -33,6 +33,7 @@
       {
         "id": "provisioned",
         "provider": "simcloud",
+        "lane": "ephemeral",
         "rate_per_hour_usd": 0.5,
         "provisioning": {
           "expected": "1m",
