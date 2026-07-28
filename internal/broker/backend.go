@@ -69,6 +69,10 @@ type Publication struct {
 	NotAsked string
 }
 
+// notAskedForCandidates is what the decision record says about a capacity
+// connection: it sells machines to acquire, and acquiring one is mercator#200.
+const notAskedForCandidates = "sells capacity to acquire and publishes no placement candidate (mercator#200)"
+
 // ListOffers asks this connection for the candidates Placement may choose among,
 // in the lane this connection sells. A one-shot executor answers with the
 // executions it can run, and the lane is stamped here rather than by the caller,
@@ -110,10 +114,6 @@ func (backend Backend) ListOffers(ctx context.Context, request adapter.OfferRequ
 	}
 	return Publication{Offers: capability.StampLane(backend.Declaration, offers)}, nil
 }
-
-// notAskedForCandidates is what the decision record says about a capacity
-// connection: it sells machines to acquire, and acquiring one is mercator#200.
-const notAskedForCandidates = "sells capacity to acquire and publishes no placement candidate (mercator#200)"
 
 // ListOwned asks this connection which workloads of Mercator's it is still
 // running, which is what the ownership sweep converges: a one-shot execution left

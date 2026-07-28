@@ -189,40 +189,24 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		aggregation.Offers = append(aggregation.Offers, nodeOffers...)
 	}
 	for _, result := range results {
-		if result.err != nil {
+		switch {
+		case result.err != nil:
 			aggregation.Queried = append(aggregation.Queried, result.connection.ID)
 			aggregation.Failures = append(aggregation.Failures, connectionError(result))
-			continue
-		}
 		// A connection nobody asked is named where the record says nobody asked
 		// it. Counting it among the asked stated that a provider had been
 		// consulted about this Run, when nothing had contacted it and no answer
 		// of its could have changed the placement.
-		if result.value.NotAsked != "" {
+		case result.value.NotAsked != "":
 			aggregation.Excluded = append(aggregation.Excluded, result.connection.ID+": "+result.value.NotAsked)
-			continue
-		}
-		aggregation.Queried = append(aggregation.Queried, result.connection.ID)
-		// A listing gets the connection that published it and an identity of
-		// Mercator's minting, and no Rental identity at all: Backend.ListOffers
-		// stamped the lane and cleared whatever lease the adapter claimed. A
-		// Rental is a lease Mercator holds, and the only capacity it holds is the
-		// machines its own agents enrolled on, which the node registry publishes
-		// above with the Rental its invitation named. Minting one here from the
-		// offer's kind bound a Booking to a lease nobody had allocated: OfferKind
-		// says who owns the host, so a marketplace listing of somebody else's
-		// idle machine is standing, and Runs queued behind it waited for a Rental
-		// that never existed.
-		for i := range result.value.Offers {
-			result.value.Offers[i].ConnectionID = result.connection.ID
-			result.value.Offers[i].AdapterType = result.connection.AdapterType
-			id, err := offerSnapshotID(result.connection.ID, result.value.Offers[i].ID)
+		default:
+			aggregation.Queried = append(aggregation.Queried, result.connection.ID)
+			published, err := publishedBy(result.connection, result.value.Offers)
 			if err != nil {
 				return OfferAggregation{}, err
 			}
-			result.value.Offers[i].ID = id
+			aggregation.Offers = append(aggregation.Offers, published...)
 		}
-		aggregation.Offers = append(aggregation.Offers, result.value.Offers...)
 	}
 	sort.Slice(aggregation.Offers, func(i, j int) bool {
 		if aggregation.Offers[i].ConnectionID != aggregation.Offers[j].ConnectionID {
@@ -234,6 +218,32 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 	sort.Strings(aggregation.Queried)
 	sort.Strings(aggregation.Excluded)
 	return aggregation, nil
+}
+
+// publishedBy names one connection's listings the way Mercator refers to them:
+// the connection that published each one, and an identity of Mercator's own
+// minting, derived from the connection and the adapter's own offer ID so the same
+// listing from the same connection is the same snapshot twice.
+//
+// No Rental identity is added here, and none survives: Backend.ListOffers stamped
+// the lane and cleared whatever lease the adapter claimed. A Rental is a lease
+// Mercator holds, and the only capacity it holds is the machines its own agents
+// enrolled on, which the node registry publishes with the Rental its invitation
+// named. Minting one here from the offer's kind bound a Booking to a lease nobody
+// had allocated: OfferKind says who owns the host, so a marketplace listing of
+// somebody else's idle machine is standing, and Runs queued behind it waited for a
+// Rental that never existed.
+func publishedBy(record connection.Record, offers []domain.OfferSnapshot) ([]domain.OfferSnapshot, error) {
+	for index := range offers {
+		offers[index].ConnectionID = record.ID
+		offers[index].AdapterType = record.AdapterType
+		id, err := offerSnapshotID(record.ID, offers[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		offers[index].ID = id
+	}
+	return offers, nil
 }
 
 func offerSnapshotID(connectionID, adapterOfferID string) (string, error) {
