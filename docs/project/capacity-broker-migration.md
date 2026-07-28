@@ -5742,7 +5742,7 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 60 regression Blueprints: 58 green and 2 target, beside two demo
+The corpus is 61 regression Blueprints: 59 green and 2 target, beside two demo
 documents, one minimized case, and forty one conformance Blueprints, all of
 them green. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
@@ -5860,13 +5860,41 @@ to call a machine reusable without.
 
 What the machine is called. The offer ID is the provider's own handle for the
 machine, which is the `machine` a Blueprint's listing declares:
-`simcloud-4090-0f31` rather than `reusable-4090`. The listing is untouched beside
-it and stays provisionable, because a marketplace goes on selling the product a
-machine was allocated from, so the second Run sees two candidates and has to
-choose between them. Naming the machine after the listing would have made reuse
-an arithmetic identity rather than a decision, and would have filed a launch
-history under a product. `WorldSpec.candidateIDs` now admits a listing's declared
-machine so a fixture can name the winner.
+`simcloud-4090-0f31` rather than `reusable-4090`. Naming the machine after the
+listing would have made reuse an arithmetic identity rather than a decision, and
+would have filed a launch history under a product. `WorldSpec.candidateIDs` now
+admits a listing's declared machine so a fixture can name the winner.
+
+A listing that declares no machine is a product rather than a host, and the
+machine it yields is one nothing has named yet, so `fake.machineHandle` mints one
+from the lease that bought it. The first version of this reached for the
+listing's own ID, which replaced the product: the catalog entry stopped being
+sold, the provisioning stages it published vanished, and two green fixtures were
+doing it silently.
+
+One machine is sold once, which is the rule the naming above rests on. A listing
+that names a machine is a listing of that machine, so `ProvisionCapacity` refuses
+a second purchase by name, and every listing of a machine under a live lease
+answers `Capacity.Available: false`. Two listings of one machine are refused the
+same way, which is a shape this corpus already contains on purpose:
+`history-answers-for-the-machine-it-was-measured-on` publishes `machine-77` under
+two ask IDs, because an ask ID is a fresh integer for every search. The first
+version of this sold the machine as many times as the listing was bought, and
+each publication overwrote the last: the second lease inherited the first
+machine's identity and lost its layers, its busy window and its Rental.
+
+A sold listing is refused rather than withdrawn, for the same reason
+`TerminateCapacity` leaves the listing alone: a decision has to see an offer to
+record having refused it, and the product is on sale again the moment the lease
+ends. `ListCapacity` is the other question and answers only capacity to acquire,
+which is what its own doc comment already claimed and what mercator#200 will
+read.
+
+`TerminateCapacity` withdraws the machine, which is the inverse the publication
+owed. Without it a provider went on advertising available standing reusable
+capacity it had destroyed, while `ListOwnedCapacity` in the same world reported
+nothing owned, so a later Run could be placed on, and recorded as having
+successfully executed on, a host nobody is billed for.
 
 Where a workload runs. A Run placed on a listing is launched at the listing, and
 `fake.World.executionHost` sends it to the machine that listing was allocated
@@ -5891,7 +5919,16 @@ the reservation, which failed the whole placement rather than striking out one
 candidate. The two answers come from different authorities and can disagree,
 which is why the schedule is now asked in its own right:
 `RENTAL_SCHEDULE_EXHAUSTED` in `feasibility`, beside the availability check
-rather than behind it. `an-overrun-booking-is-not-an-empty-queue` states both
+rather than behind it. It does not end by waiting, which the first version of it
+got wrong. The refusal's own message says the schedule cannot promise a start,
+and that is not the claim that the capacity comes back when the work spending it
+finishes: every projection off an exhausted schedule reads zero, so a refusal
+counted as a wait deferred a Run behind a Booking that had already overrun, named
+that Booking's Run as work ahead of it, and dated the wait at nothing. That is
+the head-of-line block `domain.Violation` names as the reason the flag is false
+by default. `an-exhausted-schedule-is-not-a-queue-to-wait-in` states the reason,
+the work ahead and the fleet's own count, and fails on all three with the flag
+put back. `an-overrun-booking-is-not-an-empty-queue` states both
 codes, and it fails with the check removed.
 `registry-manifest-bridges-digest-spaces` advanced thirty minutes past a twenty
 minute bound and asserted the overrun Rental was still a candidate, which was the
@@ -6343,8 +6380,9 @@ an enrolment naming no machine is now refused outright.
 `enrolled-node-survives-its-first-run` is green as of 2026-07-28. Its four pending
 assertions are gone: the second Run wins the machine rather than the listing, at a
 boot and an image fetch of exactly zero, on a Rental Schedule that did not exist
-when the first Run was placed. The counts move to 60 regression Blueprints, 58
-green and 2 target.
+when the first Run was placed. The listing beside it is refused as capacity
+already leased rather than weighed and rejected on price. The counts move to 61
+regression Blueprints, 59 green and 2 target.
 
 What is missing, in the order it has to land. The Rental aggregate, its two
 stores, the node retirement a generation's end performs, the provisioning path in
@@ -6386,6 +6424,14 @@ none of it is half built.
   offer and the decision's selected offer become legitimately different strings,
   which several invariants compare. Nothing in the conformance corpus runs two
   Runs against one provisioned machine today, so it has no reader yet.
+- A stop this world performs, filed as #210. `fake.World.StopCapacity` returns a receipt saying
+  the machine is stopped and changes nothing: the allocation carries no stopped
+  state, `capacityStateAt` never reports one, and the machine goes on publishing
+  itself as available capacity somebody could launch on. The negotiated capability
+  set says this provider stops and resumes, so nothing refuses a Blueprint that
+  asks it to. It predates the publication and is untouched by it, and the machine
+  a stop should hold with its disk is now a thing this world has, which is what
+  makes stating it worthwhile. Terminate's own half landed on 2026-07-28.
 - `safety.capacity_lifecycle_is_negotiated` and
   `liveness.provisioned_capacity_enrolls_or_is_reclaimed`. Neither can be stated
   without a world that issues capacity commands, so both wait on the item above
@@ -6570,6 +6616,53 @@ case that would catch the sweep change breaking a real reclamation. The daemon
 case that stands up the production agent against this host's own Docker daemon and
 reads the disk it really has passed as well. All green. #165 does not reproduce
 here and was left alone.
+
+### Phase 5 the publication under review
+
+Two reviewers refuted parts of the commit that published the machine a listing
+becomes. Seven findings arrived and five are distinct: the same collision and the
+same missing withdrawal were each described twice from two angles. Every one was
+reproduced against the tree before anything changed, on this amd64 Linux
+workstation with Go 1.25.11.
+
+What the reproductions showed. `history-answers-for-the-machine-it-was-measured-on`
+had grown two candidates the commit never touched it to state, and it stayed green
+only because its measuring Runs held Bookings 2100 and 600 seconds past the
+runtime Mercator enforces and nothing in that world could ever end one; stating
+runtimes for those Runs made it fail on the winner. A second purchase from one
+listing produced a second Rental on the same handle and a fresh `machineBehind`
+that wiped the first machine's layers, its busy window and its Rental. A
+terminated Rental went on publishing itself as available standing reusable
+capacity while `ListOwnedCapacity` in the same world reported nothing owned.
+`ListCapacity` offered a workspace a machine it was already leasing. And the
+scheduler's new `RENTAL_SCHEDULE_EXHAUSTED` was stamped `EndedByWaiting`, which
+made a machine 2100 seconds past its bound count as capacity that comes back.
+
+All five are fixed at the root and all five are stated in the corpus above. One
+attribution in the findings is wrong and is recorded here rather than accepted:
+`ListCapacity` selling capacity the querying workspace already holds was not
+introduced by the publication. `w.machines` is this world's whole fleet and
+`ListOffers` is the fleet census, so a Rental a Blueprint declares was already in
+`ListCapacity`'s answer before any machine was ever published, under its own
+Rental ID. That was reproduced directly. The publication added one more machine
+to a list that was already the wrong list. The fix is the same either way and it
+landed.
+
+The reviewers also missed the same collision in its other form, which the fix
+covers: a listing that declares no `machine` was having its own catalog entry
+replaced by the machine it yielded, because the publication key fell back to the
+listing's ID. Two green fixtures were doing it silently on every run.
+
+```
+go test ./... -count=1
+go test ./internal/daemon -run TestAMachineItsProviderBootstrappedIsWarmCapacityForTheNextRun -count=1
+```
+
+The live half ran. Docker here is native on Linux at 29.6.2 on amd64, and the
+daemon case that bootstraps the production `nodeagent.Agent` from the provider's
+own copy of the invitation, runs two Runs on the machine it enrolled, and reads
+the second one warm off the first passed against it. #165 does not reproduce here
+and was left alone.
 
 ### Phase 4 close-out
 
