@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -25,6 +26,14 @@ import (
 // answer it. The record says a cleanup was confirmed under a recorded
 // disposition; only the ledger says which command the world actually received
 // and what became of the machine.
+//
+// The claim is bounded at the moment the cleanup was carried out, and it is
+// bounded there on purpose. What this case is about is the end of a Run, and a
+// case that swept the whole ledger for a terminate would also refuse the lease
+// lifecycle #206 owes: a Rental that ends its own generation when the last
+// Booking on it completes destroys this machine later, correctly, and would
+// fail an assertion written over all of virtual time. A leak held in place by a
+// green test is worse than a leak nothing tests.
 func TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost(t *testing.T) {
 	execution := openConformanceExecution(t, "provisioned-capacity-becomes-a-machine-mercator-holds")
 	defer func() {
@@ -33,12 +42,10 @@ func TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost(t *testing.T
 		}
 	}()
 
-	driveFor(t, execution, 45*time.Minute)
+	run := driveUntilCleanedUp(t, execution, "run-builder", 45*time.Minute)
 
-	run := projectedRun(t, execution, "run-builder")
-	if run.Outcome != domain.RunOutcomeSucceeded || run.Cleanup != domain.CleanupConfirmed {
-		t.Fatalf("the Run ended %q with cleanup %q, and this case is about a Run that finished and was cleaned up",
-			run.Outcome, run.Cleanup)
+	if run.Outcome != domain.RunOutcomeSucceeded {
+		t.Fatalf("the Run ended %q, and this case is about a Run that finished and was cleaned up", run.Outcome)
 	}
 	if run.Disposition != domain.DispositionRelease {
 		t.Fatalf("the Run recorded disposition %q, and a machine held under a lease is not a Run's to destroy", run.Disposition)
@@ -51,7 +58,7 @@ func TestAReusableProvisionedRunReleasesItsWorkloadAndLeavesItsHost(t *testing.T
 	}
 	for _, destroyer := range []string{OperationProviderTerminate, OperationCapacityTerminate} {
 		if effect, found := acceptedEffect(ledger, destroyer); found {
-			t.Fatalf("%s destroyed the machine, and the Run ending is not the lease ending", effect.ID)
+			t.Fatalf("%s destroyed the machine by the time this Run was cleaned up, and the Run ending is not the lease ending", effect.ID)
 		}
 	}
 
@@ -95,6 +102,25 @@ func TestAOneShotExecutionStillTakesItsHostWithIt(t *testing.T) {
 	if _, terminated := acceptedEffect(ledger, OperationProviderTerminate); !terminated {
 		t.Fatal("the one-shot execution was never terminated, so a product that holds nothing was left holding a machine")
 	}
+}
+
+// driveUntilCleanedUp advances this world until one Run's cleanup is confirmed,
+// and gives up at the ceiling. It exists so a case about the end of a Run can
+// stop looking there instead of at the end of virtual time: what a lease does
+// with its machine afterwards is a different rule with a different owner, and a
+// case that kept driving would be asserting about that one too.
+func driveUntilCleanedUp(t *testing.T, execution *Execution, runID string, ceiling time.Duration) domain.RunRecord {
+	t.Helper()
+	for range int(ceiling / labReconcileInterval) {
+		if _, err := execution.Drive(context.Background(), Advance(labReconcileInterval)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
+		if run := projectedRun(t, execution, runID); run.Cleanup == domain.CleanupConfirmed {
+			return run
+		}
+	}
+	t.Fatalf("Run %q was not cleaned up within %s, and this case is about what its cleanup did", runID, ceiling)
+	return domain.RunRecord{}
 }
 
 // acceptedEffect is the first effect of one operation this world carried out.
