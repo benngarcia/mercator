@@ -767,7 +767,7 @@ func (w *World) ListOffers(_ context.Context, request adapter.OfferRequest) ([]d
 		if machine.leaseExpiredAt(now) {
 			continue
 		}
-		offer := w.machineOffer(machine, now)
+		offer := w.sold(w.machineOffer(machine, now))
 		// A marketplace listing is a search result, so this world answers the shape
 		// it was asked about. Capacity Mercator holds is listed whole and refused in
 		// the record. See domain.OfferSnapshot.PublishedTo.

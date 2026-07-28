@@ -2,6 +2,7 @@ package fake
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,9 +72,9 @@ func provisionAndEnrol(t *testing.T, world *World, rentalID, ownershipToken stri
 // TestWorldPublishesTheMachineOneListingBecameBesideTheListing is the whole of
 // the transition this world could not describe: a machine that does not exist
 // becomes standing reusable capacity of its own, under the provider's handle for
-// the machine and against the lease the invitation named. The listing is
-// untouched beside it, because a marketplace goes on selling the product a
-// machine was allocated from.
+// the machine and against the lease the invitation named. The listing is still
+// published beside it and is no longer capacity anybody can buy, which is what
+// one machine sold under one name comes to once Mercator holds it.
 func TestWorldPublishesTheMachineOneListingBecameBesideTheListing(t *testing.T) {
 	world, _ := listedWorld(t)
 
@@ -93,12 +94,160 @@ func TestWorldPublishesTheMachineOneListingBecameBesideTheListing(t *testing.T) 
 	if machine.Provisioning != nil {
 		t.Errorf("the machine still publishes %+v to spend coming into existence, and it is already up", machine.Provisioning)
 	}
-	listing, stillSold := offers["reusable-4090"]
-	if !stillSold || listing.Kind != domain.OfferKindProvisionable {
-		t.Errorf("the listing is now %+v, and a marketplace goes on selling what it sold", listing)
+	listing, stillPublished := offers["reusable-4090"]
+	if !stillPublished || listing.Kind != domain.OfferKindProvisionable {
+		t.Errorf("the listing is now %+v, and a decision has to see it to record refusing it", listing)
 	}
 	if listing.RentalID != "" {
 		t.Errorf("the listing names Rental %q, and a listing is a product rather than a lease", listing.RentalID)
+	}
+	if listing.Capacity.Available {
+		t.Errorf("the listing still sells machine %q, which this workspace is already leasing", listing.MachineID)
+	}
+}
+
+// TestWorldRefusesToSellOneMachineTwice is the rule the publication above rests
+// on, said where a caller can be refused by it. A listing that names a machine is
+// a listing of that machine, and two listings of it are two names for capacity
+// that can be bought once. Allocating it twice handed Mercator a lease on a host
+// another lease was already running work on, and the second publication then
+// wiped the first machine's warm content, its busy window and its Rental
+// identity, so a world that erased what a machine held on the next purchase was
+// the evidence the reuse corpus was reading.
+func TestWorldRefusesToSellOneMachineTwice(t *testing.T) {
+	world, _ := listedWorld(t)
+	provisionAndEnrol(t, world, "rnt_first", "own-first")
+	launch := worldLaunch("reusable-4090", "trainer:v1")
+	launch.OwnershipToken = "own-first"
+	if _, err := world.Launch(context.Background(), launch); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	world.Clock().Advance(time.Hour)
+
+	_, err := world.ProvisionCapacity(context.Background(), capability.ProvisionCommand{
+		WorkspaceID:     "ws_fake",
+		RentalID:        "rnt_second",
+		OfferSnapshotID: "reusable-4090",
+		OwnershipToken:  "own-second",
+		Bootstrap:       capability.NodeBootstrap{NodeID: "nod_second", RentalID: "rnt_second", Generation: 1},
+	})
+
+	if err == nil {
+		t.Fatal("this world sold one machine to two Rentals")
+	}
+	if !strings.Contains(err.Error(), `Rental "rnt_first" is already holding`) {
+		t.Fatalf("refusal = %q, want the lease that is already holding the machine", err)
+	}
+	machine := worldOffers(t, world)[listedMachine]
+	if machine.RentalID != "rnt_first" {
+		t.Errorf("the machine is held under Rental %q, want the lease that bought it", machine.RentalID)
+	}
+	if !machine.Images.HoldsLayer(domain.ImageLayer{Digest: "layer-base"}) {
+		t.Errorf("the machine holds %+v, want the content its own Run left on it", machine.Images)
+	}
+}
+
+// TestWorldMintsAHandleForTheMachineAProductYields is the other half of naming a
+// machine. A listing that names none is a product rather than a host, so the
+// machine it yields is one nothing has named yet and this provider mints a
+// handle for it. Publishing it under the listing's own ID replaced the product:
+// the catalog entry stopped being sold, the provisioning stages it published
+// vanished, and a second purchase from it overwrote the first machine.
+func TestWorldMintsAHandleForTheMachineAProductYields(t *testing.T) {
+	world := newLayeredWorld(t)
+	world.Enroller = &acceptingRegistry{}
+	if err := world.AddMachine(&Machine{
+		Offer: domain.OfferSnapshot{
+			ID:        "fresh-4090",
+			Kind:      domain.OfferKindProvisionable,
+			Lane:      domain.LaneReusable,
+			Resources: domain.ResourceInventory{EphemeralDiskBytes: 200 << 30, EphemeralDiskKnown: true},
+		},
+	}); err != nil {
+		t.Fatalf("add listing: %v", err)
+	}
+
+	for _, rentalID := range []string{"rnt_first", "rnt_second"} {
+		if _, err := world.ProvisionCapacity(context.Background(), capability.ProvisionCommand{
+			WorkspaceID:     "ws_fake",
+			RentalID:        rentalID,
+			OfferSnapshotID: "fresh-4090",
+			OwnershipToken:  "own-" + rentalID,
+			Bootstrap:       capability.NodeBootstrap{NodeID: "nod_" + rentalID, RentalID: rentalID, Generation: 1},
+		}); err != nil {
+			t.Fatalf("provision %s: %v", rentalID, err)
+		}
+	}
+	if err := world.DeliverEnrolments(context.Background()); err != nil {
+		t.Fatalf("deliver enrolments: %v", err)
+	}
+
+	offers := worldOffers(t, world)
+	listing, stillSold := offers["fresh-4090"]
+	if !stillSold || listing.Kind != domain.OfferKindProvisionable || !listing.Capacity.Available {
+		t.Fatalf("the product is now %+v, and a product goes on being sold however many machines it yielded", listing)
+	}
+	if len(offers) != 3 {
+		t.Fatalf("the world publishes %d offers, want the product and one machine per lease: %v", len(offers), offers)
+	}
+	for _, rentalID := range []string{"rnt_first", "rnt_second"} {
+		machine, published := offers["mch_"+rentalID]
+		if !published {
+			t.Fatalf("Rental %q has no machine of its own: %v", rentalID, offers)
+		}
+		if machine.RentalID != rentalID {
+			t.Errorf("machine %q is held under Rental %q, want %q", machine.ID, machine.RentalID, rentalID)
+		}
+	}
+}
+
+// TestWorldStopsPublishingAMachineItDestroyed is the inverse of the publication,
+// and the reclaim half of a machine's life. Without it a provider went on
+// advertising available standing reusable capacity that no longer existed while
+// ListOwnedCapacity in the same world reported nothing owned, so a later Run
+// could be placed on, and recorded as having successfully executed on, a host
+// nobody is billed for. The listing comes back with it, because the product is on
+// sale again the moment the lease ends.
+func TestWorldStopsPublishingAMachineItDestroyed(t *testing.T) {
+	world, _ := listedWorld(t)
+	provisionAndEnrol(t, world, "rnt_first", "own-first")
+
+	if _, err := world.TerminateCapacity(context.Background(), capability.CapacityCommand{
+		CapacityRef: capability.CapacityRef{RentalID: "rnt_first"},
+	}); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+
+	offers := worldOffers(t, world)
+	if machine, published := offers[listedMachine]; published {
+		t.Errorf("a destroyed machine still publishes %+v", machine)
+	}
+	if listing := offers["reusable-4090"]; !listing.Capacity.Available {
+		t.Errorf("the listing is still refused as sold, and Mercator gave the machine back")
+	}
+}
+
+// TestWorldSellsNoCapacityItHasAlreadyLeased holds ListCapacity to what it is.
+// The fleet and the catalogue are two questions: ListOffers answers what this
+// world can be asked to run work on, and ListCapacity answers what is for sale.
+// Returning the fleet from both offered a workspace a machine it is already
+// paying for, under a lease it already holds.
+func TestWorldSellsNoCapacityItHasAlreadyLeased(t *testing.T) {
+	world, _ := listedWorld(t)
+	provisionAndEnrol(t, world, "rnt_first", "own-first")
+
+	forSale, err := world.ListCapacity(context.Background(), capability.CapacityQuery{WorkspaceID: "ws_fake"})
+	if err != nil {
+		t.Fatalf("list capacity: %v", err)
+	}
+
+	for _, offer := range forSale {
+		if offer.RentalID != "" {
+			t.Errorf("capacity for sale includes %q, held under Rental %q", offer.ID, offer.RentalID)
+		}
+	}
+	if len(forSale) != 1 || forSale[0].ID != "reusable-4090" {
+		t.Fatalf("capacity for sale = %+v, want the listing alone", forSale)
 	}
 }
 

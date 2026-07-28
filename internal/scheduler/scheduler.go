@@ -347,8 +347,16 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	// it is free while Mercator still holds an open Booking on it was selected and
 	// then failed to reserve, which ended the whole placement rather than striking
 	// out one candidate.
+	//
+	// It does not end by waiting, and the message says why: this schedule cannot
+	// promise a start at all, which is not the claim that the capacity comes back
+	// when the work spending it finishes. Every projection off an exhausted
+	// schedule reads zero, so a refusal counted as a wait would put this Run behind
+	// a Booking that already overran, name its Run as work ahead, and defer with a
+	// projected wait of nothing. That is the head-of-line block domain.Violation
+	// names as the reason the flag is false by default.
 	if schedule, ok := input.Schedules[offer.RentalID]; ok && offer.KeepsWhatItRuns() && schedule.Exhausted(input.EvaluatedAt) {
-		violations = append(violations, domain.Violation{Code: "RENTAL_SCHEDULE_EXHAUSTED", Path: "rental_schedule.bookings", Required: 0, Offered: schedule.Bookings[0].OverrunSeconds(input.EvaluatedAt), Message: "Rental Schedule cannot promise a start behind a Booking past the runtime Mercator enforces.", EndedByWaiting: true})
+		violations = append(violations, domain.Violation{Code: "RENTAL_SCHEDULE_EXHAUSTED", Path: "rental_schedule.bookings", Required: 0, Offered: schedule.Bookings[0].OverrunSeconds(input.EvaluatedAt), Message: "Rental Schedule cannot promise a start behind a Booking past the runtime Mercator enforces."})
 	}
 	if !offer.Capabilities.Container.SupportsDigestRefs {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})

@@ -77,12 +77,24 @@ func (w *World) CapacitySupport() capability.CapacitySupport {
 // no credential to be wrong about.
 func (w *World) Verify(_ context.Context) error { return nil }
 
-// ListCapacity is the capacity this world sells, which is the same listing set
-// placement already reads. A capacity connection publishes no placement
-// candidate of its own: what ListCapacity returns is capacity to acquire.
+// ListCapacity is the capacity this world sells, which is what a search of the
+// marketplace returns. A capacity connection publishes no placement candidate of
+// its own: what ListCapacity returns is capacity to acquire, and capacity held
+// under a lease has already been acquired. Selling it again would offer a
+// workspace a machine it is already paying for, under a lease it already holds.
+//
+// The fleet is the other question and ListOffers is where it is asked. A machine
+// this world allocated, and a Rental a Blueprint declared, are both in that
+// answer and neither is in this one.
 func (w *World) ListCapacity(ctx context.Context, query capability.CapacityQuery) ([]domain.OfferSnapshot, error) {
-	return w.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: query.WorkspaceID, Resources: query.Resources})
+	offers, err := w.ListOffers(ctx, adapter.OfferRequest{WorkspaceID: query.WorkspaceID, Resources: query.Resources})
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(offers, leased), nil
 }
+
+func leased(offer domain.OfferSnapshot) bool { return offer.RentalID != "" }
 
 // Provision allocates the machine behind one listing and holds the bootstrap it
 // was handed. The same operation key twice allocates one machine and says so,
@@ -98,31 +110,89 @@ func (w *World) ProvisionCapacity(_ context.Context, command capability.Provisio
 			Duplicate:  true,
 		}, nil
 	}
-	machine, exists := w.machines[command.OfferSnapshotID]
+	listing, exists := w.machines[command.OfferSnapshotID]
 	if !exists {
 		return capability.CapacityReceipt{}, fmt.Errorf("fake: no listing %q to allocate from", command.OfferSnapshotID)
+	}
+	nativeRef := machineHandle(listing, command.RentalID)
+	if holder, taken := w.holderOf(nativeRef); taken {
+		return capability.CapacityReceipt{}, fmt.Errorf("fake: listing %q sells machine %q, which Rental %q is already holding", command.OfferSnapshotID, nativeRef, holder)
 	}
 	now := w.clock.Now()
 	held := &allocation{
 		rentalID:       command.RentalID,
 		offerID:        command.OfferSnapshotID,
-		nativeRef:      machine.Offer.MachineID,
+		nativeRef:      nativeRef,
 		workspaceID:    command.WorkspaceID,
 		connectionID:   command.ConnectionID,
 		ownershipToken: command.OwnershipToken,
 		bootstrap:      command.Bootstrap,
 		acceptedAt:     now,
 	}
-	if held.nativeRef == "" {
-		held.nativeRef = command.OfferSnapshotID
-	}
 	w.allocations[command.RentalID] = held
 	return capability.CapacityReceipt{
 		NativeRef:  held.nativeRef,
 		State:      capability.CapacityStateRequested,
 		AcceptedAt: now,
-		Pricing:    machine.Offer.Pricing,
+		Pricing:    listing.Offer.Pricing,
 	}, nil
+}
+
+// machineHandle is the provider's own handle for the machine one Rental
+// allocated. A listing that names a machine is a listing of that machine, so its
+// handle is the one the listing declared. A listing that names none is a
+// product, and the machine it yields is one nothing has named yet, so this
+// provider mints a handle from the lease that bought it.
+//
+// It is never the listing's own ID, and that is the whole reason it is derived
+// here rather than read off the offer. A machine published under the ID of the
+// product it came from replaces that product: the listing stops being sold, the
+// provisioning stages it published vanish, and a later Run reading the
+// marketplace finds standing capacity where a catalog entry was.
+func machineHandle(listing *Machine, rentalID string) string {
+	if listing.Offer.MachineID != "" {
+		return listing.Offer.MachineID
+	}
+	return "mch_" + rentalID
+}
+
+// sold is one listing of a machine this world has already allocated, answering
+// as what it now is: capacity nobody can buy. A listing that names a machine is
+// a listing of that machine, so a lease on the machine takes every listing of it
+// off the market at once, and two ask IDs for one host are two names for
+// capacity that can be bought exactly once.
+//
+// It is published and refused rather than withdrawn, for the reason
+// TerminateCapacity leaves the listing alone: a decision has to see the offer to
+// record having refused it, and the product is on sale again the moment the
+// lease ends. The machine itself is untouched here, because it is standing
+// capacity under a lease rather than a listing of anything.
+func (w *World) sold(offer domain.OfferSnapshot) domain.OfferSnapshot {
+	if offer.RentalID != "" || offer.MachineID == "" {
+		return offer
+	}
+	if _, taken := w.holderOf(offer.MachineID); taken {
+		offer.Capacity.Available = false
+	}
+	return offer
+}
+
+// holderOf is the live Rental this world has already allocated one machine to.
+//
+// A listing that names a machine is a listing of that machine, and a marketplace
+// cannot sell one machine twice. Two listings of it cannot either, which is a
+// real shape: a provider republishing the same host under a fresh ask ID on
+// every search sells one machine under as many names as it has been searched
+// for. The second sale would hand Mercator a lease on a host another lease is
+// already running work on, and the warm content, the busy window and the Rental
+// identity of the first would all be the second's.
+func (w *World) holderOf(nativeRef string) (string, bool) {
+	for _, rentalID := range slices.Sorted(maps.Keys(w.allocations)) {
+		if held := w.allocations[rentalID]; held.nativeRef == nativeRef && !held.terminated {
+			return held.rentalID, true
+		}
+	}
+	return "", false
 }
 
 // ObserveCapacity is what the provider can see, which is allocation and boot and
@@ -158,10 +228,17 @@ func (w *World) StopCapacity(_ context.Context, command capability.CapacityComma
 	return w.transition(command, capability.CapacityStateStopped)
 }
 
-// TerminateCapacity destroys the machine. The listing it came from is untouched:
-// a marketplace goes on selling the product whose last machine Mercator gave
-// back, which is what makes an offer struck out by an earlier attempt something
-// a later decision still has to see and refuse.
+// TerminateCapacity destroys the machine and stops publishing it, which is the
+// inverse of the publication its enrolment performed. A provider that went on
+// advertising a machine it destroyed would let a later Run be placed on, and
+// recorded as having successfully executed on, a host that no longer exists and
+// nobody is billed for, while ListOwnedCapacity in the same world reported
+// nothing owned.
+//
+// The listing it came from is untouched: a marketplace goes on selling the
+// product whose last machine Mercator gave back, which is what makes an offer
+// struck out by an earlier attempt something a later decision still has to see
+// and refuse, and what lets the machine be bought again.
 func (w *World) TerminateCapacity(_ context.Context, command capability.CapacityCommand) (capability.CapacityReceipt, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -176,6 +253,7 @@ func (w *World) TerminateCapacity(_ context.Context, command capability.Capacity
 		held.terminatedAt = w.clock.Now()
 	}
 	held.terminated = true
+	delete(w.machines, held.nativeRef)
 	return capability.CapacityReceipt{
 		NativeRef:  held.nativeRef,
 		State:      capability.CapacityStateTerminated,
