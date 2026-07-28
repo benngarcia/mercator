@@ -720,6 +720,11 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 		if marketplace.Provisioning.P90 != nil {
 			state.offer.Provisioning.P90 = marketplace.Provisioning.P90.Duration().Seconds()
 		}
+		// How long Mercator waits for the agent on a machine allocated from this
+		// listing, and when its provider destroys one nobody enrolled on. Both are
+		// terms of the sale rather than predictions, which is why they are carried
+		// beside the estimate and never derived from it.
+		state.offer.Bootstrap = marketplace.CapacityBootstrap()
 		// The history this listing's provider publishes about the machine behind it.
 		// It is a fact about the machine rather than about the moment an offer was
 		// read, so it is stated once and republished with every snapshot, and a

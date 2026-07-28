@@ -4099,6 +4099,16 @@ complete because it works against a live provider.
   - `capability.CapacityProvider.Provision` is now `ProvisionCapacity`. Every
     sibling act was already named for the lease, and a provider that also
     launches workloads has two things it could be asked to provision.
+  - `Compile` no longer refuses a listing that states a bootstrap. That refusal
+    was correct while the Lab built no machine from a listing; it now allocates
+    one, honours `never_enrolls`, and carries the stated patience onto the offer,
+    so the statement is performed rather than turned away. The test that guarded
+    it is replaced by two conformance cases over the Effect Ledger:
+    `provisioned-capacity-becomes-a-machine-mercator-holds` asserts an accepted
+    `capacity.provision`, a `node.enrolled` naming the same Rental, and a
+    `provider.launch` after both, in that order, with nothing terminated; and the
+    same Blueprint with `never_enrolls` set asserts the absence, which is a
+    machine allocated, no session opened, and nothing launched.
 
 - [x] 2026-07-27: Make the capacity contract reachable from the control plane. Every
   one of `CapacityProvider`'s nine methods was called by nothing, `Backend.Capacity`
@@ -5472,7 +5482,7 @@ refuses any Booking whose Run has no record, which is true of every seeded Booki
 by construction.
 
 The corpus is 60 regression Blueprints: 57 green and 3 target, beside two demo
-documents, one minimized case, and forty conformance Blueprints, all of
+documents, one minimized case, and forty one conformance Blueprints, all of
 them green. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
 regression corpus, `conformance/` is driven through the Lab, and the two
