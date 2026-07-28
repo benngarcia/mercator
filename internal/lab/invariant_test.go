@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 45 {
-		t.Fatalf("latest invariant results = %d, want 45", len(latest))
+	if len(latest) != 46 {
+		t.Fatalf("latest invariant results = %d, want 46", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -263,6 +263,21 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 		},
 		"safety.ephemeral_capacity_not_reused": func(observation *InvariantObservation) {
 			observation.MercatorEvents = []eventlog.CloudEvent{queuedBehindOneShotCapacity()}
+		},
+		// A marketplace template publishing a lease. The machine does not exist
+		// yet, nothing has allocated it, and the Rental identity it carries is a
+		// Rental Schedule key: Placement can put a Booking on it and the next Run
+		// can queue behind a machine nothing will ever free. It is the world the
+		// production offer route was in twice over, from an adapter stating its own
+		// contract id and from aggregation minting one for any standing offer in
+		// the reusable lane.
+		"safety.a_rental_identity_is_capacity_mercator_holds": func(observation *InvariantObservation) {
+			observation.World.Offers = []domain.OfferSnapshot{{
+				ID:       "listing-nobody-rented",
+				Kind:     domain.OfferKindProvisionable,
+				Lane:     domain.LaneReusable,
+				RentalID: "rnt_never_allocated",
+			}}
 		},
 		"safety.locality_provenance": func(observation *InvariantObservation) {
 			observation.World.Offers = []domain.OfferSnapshot{{

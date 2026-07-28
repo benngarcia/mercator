@@ -122,6 +122,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.projection_rebuild_equivalence", check: projectionRebuildEquivalence},
 		invariantRule{id: "safety.secrets_absent", check: secretsAbsent},
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
+		invariantRule{id: "safety.a_rental_identity_is_capacity_mercator_holds", check: aRentalIdentityIsCapacityMercatorHolds},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{id: "safety.transfer_rate_is_attributed", check: transferRateIsAttributed},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},
@@ -1043,6 +1044,47 @@ func ephemeralCapacityNotReused(observation InvariantObservation) error {
 				len(schedule.Bookings),
 			)
 		}
+	}
+	return nil
+}
+
+// aRentalIdentityIsCapacityMercatorHolds is the law on who may carry a lease. A
+// Rental is Mercator's own record of capacity it holds, so the offers that carry
+// one are the machines it holds: standing capacity in the reusable lane, named by
+// the enrolment that put an agent on it. Everything else in a fleet is capacity to
+// acquire or a product that ends with its workload, and neither is a lease.
+//
+// The harm is a queue. A Rental Schedule is keyed by Rental identity, so an offer
+// that publishes one Mercator does not hold gives Placement somewhere to put a
+// Booking and somewhere for the next Run to wait: the second Run queues behind a
+// lease that was never allocated, is promised the first one's finish, and waits
+// for a machine nothing will ever free. That is the defect the production offer
+// route was carrying, in two forms. An adapter stated its own contract id as a
+// rental_id and it survived the reusable lane, and aggregation minted one for any
+// standing offer in that lane, which is OfferKind answering a question it does not
+// answer: Kind says who owns the host, so a marketplace listing of somebody
+// else's idle machine is standing.
+//
+// It is stated over the fleet as published rather than over the Bookings, because
+// the Bookings are downstream of the mistake. A Rental identity on a template for
+// a machine that does not exist yet is wrong when it is published, whether or not
+// a Run happened to land on it in this Blueprint, and a rule that waited for the
+// queue to form would pass every fixture with one Run in it.
+func aRentalIdentityIsCapacityMercatorHolds(observation InvariantObservation) error {
+	for _, offer := range observation.World.Offers {
+		if offer.RentalID == "" || offer.KeepsWhatItRuns() {
+			continue
+		}
+		reason := "is a template for a machine that does not exist yet"
+		if !offer.Lane.Reusable() {
+			reason = "is a one-shot product that holds nothing once its workload exits"
+		}
+		return fmt.Errorf(
+			"offer %q %s, and publishes Rental %q, which is a lease Mercator does not hold and a queue the next Run can wait in",
+			offer.ID,
+			reason,
+			offer.RentalID,
+		)
 	}
 	return nil
 }

@@ -2580,8 +2580,20 @@ func labOffer(
 		Pricing:  billing.PriceModel(ratePerHourUSD),
 		Capacity: domain.CapacityEvidence{Available: true, Confidence: 1},
 	}
-	// Only capacity Mercator keeps names a Rental, which is the same stamp
-	// capability.StampLane applies to every offer in production.
+	// Only capacity Mercator keeps names a Rental, and the identity is this
+	// world's own rather than anything a provider said. That is the position
+	// internal/node.Registry.offer is in production: the machines that carry a
+	// Rental identity are the ones an agent enrolled on, and the identity comes
+	// from the invitation that named the Rental, not from the listing the machine
+	// was rented off.
+	//
+	// It is not capability.StampLane. StampLane is the adapter seam, and it clears
+	// the field in every lane, because no offer that crosses it is a machine
+	// Mercator holds. Nothing this world publishes crosses it: this world is the
+	// provider and the enrolled fleet at once, which is why the corpus specifies
+	// the acquisition path ahead of production and mercator#200 is what closes the
+	// gap. safety.a_rental_identity_is_capacity_mercator_holds is the rule that
+	// keeps this from drifting into publishing a lease nobody holds.
 	if offer.KeepsWhatItRuns() {
 		offer.RentalID = id
 	}

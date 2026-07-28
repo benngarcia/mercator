@@ -648,7 +648,13 @@ func (w *World) ArtifactVersion(_ context.Context, workspaceID, artifactID strin
 // that exists and lends out a slot. The caller states the kind and the lane,
 // because that pair is what the capacity is; the world only refuses a claim it
 // would then have to correct, and grants Rental identity to the capacity that
-// earns it, exactly as capability.StampLane does in production.
+// earns it.
+//
+// The identity is this world's own, the way internal/node.Registry.offer's is in
+// production: a machine that carries a Rental is one an agent enrolled on, and the
+// identity comes from the invitation that named the Rental. It is not
+// capability.StampLane, which is the adapter seam and clears the field in every
+// lane, because nothing that crosses it is a machine Mercator holds.
 func (w *World) AddMachine(m *Machine) error {
 	if m == nil || m.Offer.ID == "" {
 		return fmt.Errorf("fake: machine requires an offer with an ID")

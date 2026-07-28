@@ -912,13 +912,13 @@ func (spec MarketplaceOfferSpec) validateCapacityLifecycle() error {
 	}
 	// A capacity lifecycle and a node agent are the reusable lane, and stating
 	// either on a one-shot execution product is a backend capability.Declare
-	// refuses outright. Declare admits a CapacityProvider only alongside a
-	// NodeRuntime and stamps every such connection reusable, so capacity implies
-	// the lane rather than accompanying a choice of one, and an ephemeral product
-	// holds nothing after its workload exits and has no agent to enrol. Without
-	// this the corpus could describe a one-shot execution that suspends a machine,
-	// brings the same one back, and keeps its disk between Runs, which is the
-	// conflation ADR 0005 exists to prevent.
+	// refuses outright: it stamps every CapacityProvider reusable and refuses one
+	// that also implements EphemeralExecutor, so capacity implies the lane rather
+	// than accompanying a choice of one, and an ephemeral product holds nothing
+	// after its workload exits and has no agent to enrol. Without this the corpus
+	// could describe a one-shot execution that suspends a machine, brings the same
+	// one back, and keeps its disk between Runs, which is the conflation ADR 0005
+	// exists to prevent.
 	if !spec.ExecutionLane().Reusable() {
 		return fmt.Errorf(
 			"marketplace offer %q is a %s execution and states a capacity lifecycle: a product Mercator cannot hold between workloads has no machine to stop, resume, or enrol an agent on",
