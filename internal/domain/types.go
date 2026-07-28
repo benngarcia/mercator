@@ -407,6 +407,36 @@ func (offer OfferSnapshot) KeepsWhatItRuns() bool {
 	return offer.Kind == OfferKindStanding && offer.Lane.Reusable()
 }
 
+// HolderOfMachine is the lease this fleet already holds on the machine one
+// listing sells, where the fleet publishes that machine itself.
+//
+// A listing that names a machine is a name for that machine, so a fleet that
+// publishes both is publishing one host twice: once as capacity to acquire and
+// once as capacity acquired. The two answer differently on purpose. The machine
+// is the fleet's own and states the room it has left; the listing is the
+// marketplace's and states what a buyer of it would get. Which of them a Run
+// that fits neither is waiting on cannot be read off the listing alone, and
+// reading it off the listing alone is what went wrong: a sold listing is refused
+// as capacity somebody is spending, which is a wait that ends, so a Run no host
+// in the fleet could ever hold was recorded as waiting for a machine to come
+// free, named nothing it was behind, and dated the wait at nothing. That is the
+// head-of-line block Violation.EndedByWaiting is false by default to prevent.
+//
+// Nothing hands this machine back to end that wait. Mercator holds the lease, the
+// machine is in the fleet under its own name, and whether this Run can ever run
+// on that host is the machine's answer rather than the listing's.
+func HolderOfMachine(offers []OfferSnapshot, listing OfferSnapshot) (string, bool) {
+	if listing.Kind != OfferKindProvisionable || listing.MachineID == "" {
+		return "", false
+	}
+	for _, offer := range offers {
+		if offer.Kind == OfferKindStanding && offer.MachineID == listing.MachineID && offer.RentalID != "" {
+			return offer.RentalID, true
+		}
+	}
+	return "", false
+}
+
 // DefaultRegistryDownloadMbps is what a host is assumed to pull image content
 // at when nothing has measured its link to a registry. It is an assumption, so
 // it is stated once: a predictor and a reference model that disagree about the

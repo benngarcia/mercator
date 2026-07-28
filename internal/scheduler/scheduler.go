@@ -337,6 +337,13 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	if !offer.Capacity.Available && !queueable(input, offer) {
 		violations = append(violations, domain.Violation{Code: "CAPACITY_UNAVAILABLE", Path: "capacity.available", Required: true, Offered: false, Message: "Offer capacity evidence says the capacity is not currently available.", EndedByWaiting: true})
 	}
+	// A listing of a machine this fleet already holds is capacity already
+	// acquired, and buying it again would buy one host twice. It does not end by
+	// waiting: nothing hands the machine back, and whether this Run can ever run
+	// there is the machine's own answer beside it. See domain.HolderOfMachine.
+	if holder, held := domain.HolderOfMachine(input.Offers, offer); held {
+		violations = append(violations, domain.Violation{Code: "CAPACITY_ALREADY_HELD", Path: "machine_id", Required: "a machine this fleet does not already hold", Offered: offer.MachineID, Message: "Offer sells a machine this fleet already holds under Rental " + holder + "."})
+	}
 	if schedule, ok := input.Schedules[offer.RentalID]; ok && len(schedule.Bookings) >= domain.RentalScheduleQueueCapacity+1 {
 		violations = append(violations, domain.Violation{Code: "QUEUE_CAPACITY_EXCEEDED", Path: "rental_schedule.bookings", Required: domain.RentalScheduleQueueCapacity + 1, Offered: len(schedule.Bookings), Message: "Rental Schedule has no open Booking position.", EndedByWaiting: true})
 	}
