@@ -6375,10 +6375,17 @@ none of it is half built.
   reusable lane, so it lands before that promotion rather than after. The
   regression case belongs with it: no adapter in the tree can currently express an
   adoption that leaves a machine standing.
-- The Lab world publishing the machine a listing became. The placement world does
-  as of 2026-07-28 and the Lab still does not: `deliverEnrolments` writes
-  `node.enrolled` and adds nothing to `world.truth`, so a Lab scenario with two
-  Runs would send the second one back to the listing.
+- The Lab world publishing the machine a listing became, filed as #209. The
+  placement world does as of 2026-07-28 and the Lab still does not:
+  `deliverEnrolments` writes `node.enrolled` and adds nothing to `world.truth`, so
+  a Lab scenario with two Runs would send the second one back to the listing.
+  Publishing alone is half of it, which is why it is its own slice: the Lab's
+  launch, disk ledger, replicas and caches are all keyed by the selected offer,
+  which for a provisioned Run is the listing, so a published machine would stay
+  cold for ever. Making the execution land on the machine means an execution's
+  offer and the decision's selected offer become legitimately different strings,
+  which several invariants compare. Nothing in the conformance corpus runs two
+  Runs against one provisioned machine today, so it has no reader yet.
 - `safety.capacity_lifecycle_is_negotiated` and
   `liveness.provisioned_capacity_enrolls_or_is_reclaimed`. Neither can be stated
   without a world that issues capacity commands, so both wait on the item above
