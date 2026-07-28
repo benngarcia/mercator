@@ -15,6 +15,7 @@
       {
         "id": "fresh-quick",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.0,
         "provisioning": {
           "expected": "4m",
@@ -27,6 +28,7 @@
       {
         "id": "fresh-cheap",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 1.8,
         "provisioning": {
           "expected": "10m",

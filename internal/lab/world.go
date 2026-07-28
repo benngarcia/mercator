@@ -689,7 +689,7 @@ func newSimulatedWorld(tape WorldTape) (*simulatedWorld, error) {
 			offer: labOffer(
 				marketplace.ID,
 				domain.OfferKindProvisionable,
-				marketplace.ExecutionLane(),
+				marketplace.Lane,
 				// A listing names no machine, because the machine does not exist yet. What
 				// recurs about it is the provider, the place, and the product name, which is
 				// what the Blueprint states and what the identity falls back to.

@@ -34,6 +34,7 @@
       {
         "id": "fresh-4090",
         "provider": "simcloud",
+        "lane": "reusable",
         "rate_per_hour_usd": 2.5,
         "provisioning": {
           "expected": "5m",

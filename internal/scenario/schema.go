@@ -375,15 +375,6 @@ type HostSpec struct {
 	Resources        *ResourcesSpec        `json:"resources,omitempty"`
 }
 
-// ExecutionLane reports what this offer becomes once allocated, defaulting to
-// reusable capacity.
-func (spec MarketplaceOfferSpec) ExecutionLane() domain.ExecutionLane {
-	if spec.Lane == "" {
-		return domain.LaneReusable
-	}
-	return spec.Lane
-}
-
 // ArtifactSpec declares one immutable version of content this world knows
 // about. The version ID is its identity, the content digest is what its bytes
 // hash to, and the object store is where the durable copy lives: a host holding
@@ -792,9 +783,14 @@ type MarketplaceOfferSpec struct {
 	// Lane is what this offer becomes once allocated. "reusable" capacity is
 	// held across Runs through an enrolled node; "ephemeral" is a
 	// provider-native one-shot product that holds nothing afterwards.
-	// Defaulting to reusable keeps a marketplace offer meaning the same thing
-	// it always has in this corpus; a scenario about the one-shot lane says so.
-	Lane           domain.ExecutionLane `json:"lane,omitempty"`
+	//
+	// Every listing states it and there is no default, which is what ADR 0005
+	// requires of the production path for the same reason it is required here:
+	// the lane decides whether the end of a Run destroys the machine under it,
+	// and a fixture that said nothing would be asserting a money decision it
+	// never made. It carried a default until phase 5, and that default was inert
+	// only for as long as cleanup read the offer kind alone.
+	Lane           domain.ExecutionLane `json:"lane"`
 	Region         string               `json:"region,omitempty"`
 	Available      *bool                `json:"available,omitempty"`
 	RatePerHourUSD float64              `json:"rate_per_hour_usd"`
@@ -931,10 +927,10 @@ func (spec MarketplaceOfferSpec) validateCapacityLifecycle() error {
 	// could describe a one-shot execution that suspends a machine, brings the same
 	// one back, and keeps its disk between Runs, which is the conflation ADR 0005
 	// exists to prevent.
-	if !spec.ExecutionLane().Reusable() {
+	if !spec.Lane.Reusable() {
 		return fmt.Errorf(
 			"marketplace offer %q is a %s execution and states a capacity lifecycle: a product Mercator cannot hold between workloads has no machine to stop, resume, or enrol an agent on",
-			spec.ID, spec.ExecutionLane(),
+			spec.ID, spec.Lane,
 		)
 	}
 	if spec.Capacity != nil {
@@ -2662,6 +2658,16 @@ func (w WorldSpec) validate() error {
 		}
 		if offer.Provisioning.Expected.Duration() <= 0 {
 			return fmt.Errorf("marketplace offer %q needs a provisioning estimate", offer.ID)
+		}
+		// The lane is stated or the Blueprint is refused, exactly as Placement
+		// refuses an offer that states none. The end of a Run destroys a one-shot
+		// product and leaves a leased machine standing, so silence here would let a
+		// fixture assert one of those two answers without ever choosing it.
+		if !offer.Lane.Valid() {
+			return fmt.Errorf(
+				"marketplace offer %q states execution lane %q: a listing says whether the machine it sells outlives the workload, because the end of a Run destroys one lane and hands the other back",
+				offer.ID, offer.Lane,
+			)
 		}
 		if err := offer.validateProvisioningStages(); err != nil {
 			return err

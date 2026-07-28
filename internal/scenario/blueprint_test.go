@@ -286,6 +286,10 @@ func TestLoadBlueprintRefusesACapacityAccountNoProviderCouldKeep(t *testing.T) {
 			path: "testdata/blueprints/invalid/ephemeral-listing-whose-agent-never-enrols.json",
 			want: "has no machine to stop, resume, or enrol an agent on",
 		},
+		{
+			path: "testdata/blueprints/invalid/listing-that-states-no-lane.json",
+			want: "the end of a Run destroys one lane and hands the other back",
+		},
 	} {
 		_, err := LoadBlueprint(testCase.path)
 

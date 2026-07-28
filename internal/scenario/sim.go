@@ -488,7 +488,7 @@ func simMarketplaceOffer(world WorldSpec, spec MarketplaceOfferSpec) domain.Offe
 	// it is stated once here and carried through, exactly as a Rental's capacity
 	// confidence is. A listing no fixture states a history for publishes none.
 	offer.Reliability = spec.Risk()
-	offer.Lane = spec.ExecutionLane()
+	offer.Lane = spec.Lane
 	return offer
 }
 

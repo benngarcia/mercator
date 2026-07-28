@@ -18,6 +18,7 @@
     "marketplace": [
       {
         "id": "ask-4417",
+        "lane": "reusable",
         "machine": "machine-77",
         "provider": "simvast",
         "region": "US-CA",
@@ -28,6 +29,7 @@
       },
       {
         "id": "ask-90218",
+        "lane": "reusable",
         "machine": "machine-77",
         "provider": "simvast",
         "region": "US-CA",
@@ -38,6 +40,7 @@
       },
       {
         "id": "ask-2211",
+        "lane": "reusable",
         "machine": "machine-88",
         "provider": "simvast",
         "region": "US-CA",
@@ -48,6 +51,7 @@
       },
       {
         "id": "ask-3333",
+        "lane": "reusable",
         "machine": "machine-91",
         "provider": "simvast",
         "region": "US-CA",
@@ -58,6 +62,7 @@
       },
       {
         "id": "ask-5555",
+        "lane": "reusable",
         "machine": "machine-92",
         "provider": "simvast",
         "region": "EU-DE",
@@ -68,6 +73,7 @@
       },
       {
         "id": "pod-7777",
+        "lane": "reusable",
         "machine": "machine-93",
         "provider": "simpool",
         "region": "US-CA",

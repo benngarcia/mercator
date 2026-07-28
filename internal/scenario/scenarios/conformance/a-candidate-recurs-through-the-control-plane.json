@@ -29,6 +29,7 @@
       {
         "id": "ask-4417",
         "provider": "simvast",
+        "lane": "reusable",
         "region": "US-CA",
         "rate_per_hour_usd": 3.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
@@ -37,6 +38,7 @@
       {
         "id": "ask-90218",
         "provider": "simvast",
+        "lane": "reusable",
         "region": "US-CA",
         "rate_per_hour_usd": 3.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
@@ -45,6 +47,7 @@
       {
         "id": "ask-51120",
         "provider": "simvast",
+        "lane": "reusable",
         "region": "US-CA",
         "rate_per_hour_usd": 4.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
@@ -53,6 +56,7 @@
       {
         "id": "ask-2211",
         "provider": "simvast",
+        "lane": "reusable",
         "region": "US-CA",
         "rate_per_hour_usd": 4.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
@@ -61,6 +65,7 @@
       {
         "id": "ask-2212",
         "provider": "simvast",
+        "lane": "reusable",
         "region": "US-CA",
         "rate_per_hour_usd": 4.0,
         "provisioning": {"expected": "5m", "p90": "9m", "acquisition": "30s", "boot": "4m", "agent_ready": "30s"},
