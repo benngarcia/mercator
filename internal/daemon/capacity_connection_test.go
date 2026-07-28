@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +34,12 @@ import (
 // What it does not do is publish a candidate. A machine no agent has enrolled on
 // cannot execute a container, so a Run is told nothing can hold it rather than
 // booked against a Rental Mercator does not hold on a host nothing can launch on.
+//
+// Nothing asks it, either, and the record says so where it says who was asked.
+// `ListCapacity` has no caller on this path until mercator#200, so a decision
+// naming this connection among the queried would be recording a question that was
+// never put to the provider, which is the one thing the census exists to keep
+// apart from a provider that answered with nothing.
 func TestACapacityConnectionIsHeldByTheProductionControlPlane(t *testing.T) {
 	// No Docker on PATH, so the daemon seeds no local connection and this
 	// provider is the only capacity in the workspace.
@@ -48,9 +56,18 @@ func TestACapacityConnectionIsHeldByTheProductionControlPlane(t *testing.T) {
 		return workloadRevision(name, unreachableImage)
 	})
 	decision := harness.awaitDecision(t, runID)
-	if !slices.Contains(decision.CollectionReport.ConnectionsQueried, "conn_machines") {
-		t.Errorf("connections queried = %v, want the capacity connection among them",
+	if slices.Contains(decision.CollectionReport.ConnectionsQueried, "conn_machines") {
+		t.Errorf("connections queried = %v, want no claim that a provider nothing contacted was asked",
 			decision.CollectionReport.ConnectionsQueried)
+	}
+	if !slices.ContainsFunc(decision.CollectionReport.ExcludedConnections, func(entry string) bool {
+		return strings.HasPrefix(entry, "conn_machines: ")
+	}) {
+		t.Errorf("excluded connections = %v, want the capacity connection named with why nobody asked it",
+			decision.CollectionReport.ExcludedConnections)
+	}
+	if asked := machines.listings.Load(); asked != 0 {
+		t.Errorf("the placement read asked the provider for its machines %d time(s)", asked)
 	}
 	for _, candidate := range decision.Candidates {
 		if candidate.NativeRef == "i-held" {
@@ -185,12 +202,15 @@ type recordedDecision struct {
 	} `json:"candidates"`
 	Booking              *json.RawMessage `json:"booking"`
 	SelectionReasonCodes []string         `json:"selection_reason_codes"`
-	// CollectionReport is which connections Placement asked. A capacity
-	// connection publishing no candidate still has to be one of them: the fix
-	// for a machine nothing can execute on is not to stop talking to the
-	// provider that holds it.
+	// CollectionReport is which connections Placement asked and which it did not.
+	// A capacity connection is named in the second list with the reason nobody
+	// asked it: it is still in the workspace's fleet and an operator reading this
+	// decision has to be able to see it, and a census that counted it among the
+	// asked would state that a provider had been consulted about this Run when
+	// nothing had contacted it.
 	CollectionReport struct {
-		ConnectionsQueried []string `json:"connections_queried"`
+		ConnectionsQueried  []string `json:"connections_queried"`
+		ExcludedConnections []string `json:"excluded_connections"`
 	} `json:"collection_report"`
 }
 
@@ -242,6 +262,11 @@ type machineProvider struct {
 	capability.CapacityProvider
 	listed []domain.OfferSnapshot
 	held   []capability.OwnedCapacity
+	// listings counts how many times something asked this provider what it has to
+	// rent. A placement read asks it none: the census names the connection as one
+	// nobody asked, and a record that said otherwise would be reporting a question
+	// no request was ever made of.
+	listings atomic.Int64
 }
 
 func (*machineProvider) CapacitySupport() capability.CapacitySupport {
@@ -258,6 +283,7 @@ func (*machineProvider) CapacitySupport() capability.CapacitySupport {
 func (*machineProvider) Verify(context.Context) error { return nil }
 
 func (provider *machineProvider) ListCapacity(context.Context, capability.CapacityQuery) ([]domain.OfferSnapshot, error) {
+	provider.listings.Add(1)
 	return provider.listed, nil
 }
 

@@ -25,6 +25,13 @@ import (
 // The machine an agent is on is published once, by the node registry, carrying the
 // Rental its invitation named. Publishing the provider's own listing of that same
 // machine beside it counted one host twice under two Rental identities.
+//
+// The census says nobody asked it, rather than counting it among the asked. A
+// connection recorded as queried is one the placement contacted, and reading that
+// back is how an operator tells a marketplace that sells no machine of the shape
+// from a fleet nothing consulted; nothing here contacts a capacity provider, so
+// naming it as queried would put a question in the record that was never put to
+// the provider.
 func TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn(t *testing.T) {
 	machines := &capacityBackend{
 		negotiated: negotiatedCapacity(),
@@ -41,8 +48,16 @@ func TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn(t *testing
 	if err != nil {
 		t.Fatalf("collect offers from a capacity provider: %v", err)
 	}
-	if !slices.Contains(collection.Queried, "conn_machines") {
-		t.Errorf("connections queried = %v, want the capacity connection among them", collection.Queried)
+	if slices.Contains(collection.Queried, "conn_machines") {
+		t.Errorf("connections queried = %v, want no claim that a connection nothing contacted was asked", collection.Queried)
+	}
+	if !slices.ContainsFunc(collection.Excluded, func(entry string) bool {
+		return strings.HasPrefix(entry, "conn_machines: ") && strings.Contains(entry, "mercator#200")
+	}) {
+		t.Errorf("connections excluded = %v, want the capacity connection named with why nobody asked it", collection.Excluded)
+	}
+	if machines.listings != 0 {
+		t.Errorf("the placement read asked a capacity provider for its machines %d time(s)", machines.listings)
 	}
 	if len(collection.Offers) != 1 {
 		t.Fatalf("offers = %#v, want only the machine an agent is enrolled on", collection.Offers)
@@ -56,12 +71,25 @@ func TestACapacityConnectionPublishesNoCandidateForAMachineNobodyIsOn(t *testing
 	}
 }
 
-// TestNoAdapterListingCarriesARentalIdentityIntoPlacement holds the identity
-// Mercator alone mints. Rental identity used to be minted from OfferKind, which
-// answers who owns the host rather than whether Mercator holds it, so a
-// marketplace listing of somebody else's idle machine earned a lease nobody had
-// allocated and Runs queued behind it waited for a Rental that never existed.
-func TestNoAdapterListingCarriesARentalIdentityIntoPlacement(t *testing.T) {
+// TestNoAdapterListingBringsALeaseIntoPlacement holds the identity Mercator alone
+// mints, on the route production actually publishes offers over. It states the
+// rule twice, because the two halves fail to two different regressions.
+//
+// The Rental identity an adapter stated does not survive. A marketplace listing
+// naming its own contract id as a lease publishes a Rental Mercator does not hold
+// on /v1/offers, and a Booking bound to it lets a second Run queue behind a lease
+// that never existed. Aggregation is where that is caught in production, because
+// this is the only path an adapter's offers reach Placement over.
+//
+// And every candidate an adapter published arrives in the ephemeral lane. That is
+// what makes reading a lease off an offer's Kind unreachable rather than merely
+// unwritten: Kind says who owns the host, so a Vast-style listing of somebody
+// else's idle machine is standing, and aggregation used to mint a Rental identity
+// for a standing offer in the reusable lane. No connection can put a reusable
+// offer into that loop, because a capacity connection publishes none and every
+// other declaration is ephemeral, and this is the assertion that fails if that
+// stops being true.
+func TestNoAdapterListingBringsALeaseIntoPlacement(t *testing.T) {
 	broker := brokerServing(t, enrolledOn("i-held", "rnt_1"), map[string]capability.Backend{
 		"marketplace": listingBackend{listed: []domain.OfferSnapshot{{
 			ID:        "someone-elses-idle-box",
@@ -69,6 +97,12 @@ func TestNoAdapterListingCarriesARentalIdentityIntoPlacement(t *testing.T) {
 			NativeRef: "vast-4471",
 			RentalID:  "rnt_adapter_invented",
 		}}},
+		"machines": &capacityBackend{
+			negotiated: negotiatedCapacity(),
+			listed: []domain.OfferSnapshot{
+				{ID: "held", Kind: domain.OfferKindStanding, NativeRef: "i-listed", RentalID: "rnt_provider_invented"},
+			},
+		},
 	})
 
 	collection, err := broker.CollectOffers(t.Context(), adapter.OfferRequest{WorkspaceID: "ws_1"})
@@ -79,6 +113,13 @@ func TestNoAdapterListingCarriesARentalIdentityIntoPlacement(t *testing.T) {
 	held := map[string]string{}
 	for _, offer := range collection.Offers {
 		held[offer.NativeRef] = offer.RentalID
+		if offer.ConnectionID == "connection:nodes" {
+			continue
+		}
+		if offer.Lane != domain.LaneEphemeral {
+			t.Errorf("connection %q published candidate %q in the %s lane, where a standing offer used to earn a Rental identity from its Kind",
+				offer.ConnectionID, offer.NativeRef, offer.Lane)
+		}
 	}
 	if held["vast-4471"] != "" {
 		t.Errorf("a listing of a machine nobody allocated claimed Rental %q", held["vast-4471"])
@@ -213,7 +254,7 @@ type capacityBackend struct {
 	listed     []domain.OfferSnapshot
 	held       []capability.OwnedCapacity
 
-	queried    capability.CapacityQuery
+	listings   int
 	enumerated bool
 	stops      int
 }
@@ -224,8 +265,8 @@ func (backend *capacityBackend) CapacitySupport() capability.CapacitySupport {
 
 func (backend *capacityBackend) Verify(context.Context) error { return nil }
 
-func (backend *capacityBackend) ListCapacity(_ context.Context, query capability.CapacityQuery) ([]domain.OfferSnapshot, error) {
-	backend.queried = query
+func (backend *capacityBackend) ListCapacity(context.Context, capability.CapacityQuery) ([]domain.OfferSnapshot, error) {
+	backend.listings++
 	return backend.listed, nil
 }
 

@@ -160,16 +160,12 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 	if err != nil {
 		return OfferAggregation{}, err
 	}
-	results, excluded := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) ([]domain.OfferSnapshot, error) {
+	results, excluded := fanOut(ctx, recs, func(ctx context.Context, c connection.Record) (Publication, error) {
 		backend, err := b.build(ctx, req.WorkspaceID, c)
 		if err != nil {
-			return nil, err
+			return Publication{}, err
 		}
-		offers, err := backend.ListOffers(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return capability.StampLane(backend.Declaration, offers), nil
+		return backend.ListOffers(ctx, req)
 	})
 	aggregation := OfferAggregation{
 		Offers:   []domain.OfferSnapshot{},
@@ -193,30 +189,40 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 		aggregation.Offers = append(aggregation.Offers, nodeOffers...)
 	}
 	for _, result := range results {
-		aggregation.Queried = append(aggregation.Queried, result.connection.ID)
 		if result.err != nil {
+			aggregation.Queried = append(aggregation.Queried, result.connection.ID)
 			aggregation.Failures = append(aggregation.Failures, connectionError(result))
 			continue
 		}
+		// A connection nobody asked is named where the record says nobody asked
+		// it. Counting it among the asked stated that a provider had been
+		// consulted about this Run, when nothing had contacted it and no answer
+		// of its could have changed the placement.
+		if result.value.NotAsked != "" {
+			aggregation.Excluded = append(aggregation.Excluded, result.connection.ID+": "+result.value.NotAsked)
+			continue
+		}
+		aggregation.Queried = append(aggregation.Queried, result.connection.ID)
 		// A listing gets the connection that published it and an identity of
-		// Mercator's minting, and no Rental identity at all. A Rental is a lease
-		// Mercator holds, and the only capacity it holds is the machines its own
-		// agents enrolled on, which the node registry publishes above with the
-		// Rental its invitation named. Minting one here from the offer's kind
-		// bound a Booking to a lease nobody had allocated: OfferKind says who
-		// owns the host, so a marketplace listing of somebody else's idle machine
-		// is standing, and Runs queued behind it waited for a Rental that never
-		// existed.
-		for i := range result.items {
-			result.items[i].ConnectionID = result.connection.ID
-			result.items[i].AdapterType = result.connection.AdapterType
-			id, err := offerSnapshotID(result.connection.ID, result.items[i].ID)
+		// Mercator's minting, and no Rental identity at all: Backend.ListOffers
+		// stamped the lane and cleared whatever lease the adapter claimed. A
+		// Rental is a lease Mercator holds, and the only capacity it holds is the
+		// machines its own agents enrolled on, which the node registry publishes
+		// above with the Rental its invitation named. Minting one here from the
+		// offer's kind bound a Booking to a lease nobody had allocated: OfferKind
+		// says who owns the host, so a marketplace listing of somebody else's
+		// idle machine is standing, and Runs queued behind it waited for a Rental
+		// that never existed.
+		for i := range result.value.Offers {
+			result.value.Offers[i].ConnectionID = result.connection.ID
+			result.value.Offers[i].AdapterType = result.connection.AdapterType
+			id, err := offerSnapshotID(result.connection.ID, result.value.Offers[i].ID)
 			if err != nil {
 				return OfferAggregation{}, err
 			}
-			result.items[i].ID = id
+			result.value.Offers[i].ID = id
 		}
-		aggregation.Offers = append(aggregation.Offers, result.items...)
+		aggregation.Offers = append(aggregation.Offers, result.value.Offers...)
 	}
 	sort.Slice(aggregation.Offers, func(i, j int) bool {
 		if aggregation.Offers[i].ConnectionID != aggregation.Offers[j].ConnectionID {
@@ -226,6 +232,7 @@ func (b *Broker) AggregateOffers(ctx context.Context, req adapter.OfferRequest) 
 	})
 	sortConnectionErrors(aggregation.Failures)
 	sort.Strings(aggregation.Queried)
+	sort.Strings(aggregation.Excluded)
 	return aggregation, nil
 }
 
@@ -349,10 +356,10 @@ func (b *Broker) ListOwned(ctx context.Context, req adapter.OwnershipQuery) ([]a
 			failures = append(failures, connectionError(result))
 			continue
 		}
-		for i := range result.items {
-			result.items[i].ConnectionID = result.connection.ID
+		for i := range result.value {
+			result.value[i].ConnectionID = result.connection.ID
 		}
-		all = append(all, result.items...)
+		all = append(all, result.value...)
 	}
 	sortConnectionErrors(failures)
 	if err := failures.OrNil(); err != nil {

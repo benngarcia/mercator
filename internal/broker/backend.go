@@ -52,10 +52,31 @@ func (backend Backend) Verify(ctx context.Context) error {
 	}
 }
 
-// ListOffers asks this connection for the candidates Placement may choose among.
-// A one-shot executor answers with the executions it can run.
+// Publication is one connection's contribution to a placement read: the
+// candidates it published, each stamped with the lane its backend actually
+// serves, or the reason nobody asked it for any.
 //
-// A capacity connection answers with none, and that is where the migration
+// The two are stated apart because the Booking Decision records them apart. A
+// connection that answered with nothing and a connection nobody asked both
+// publish no offer, and Placement reads an empty answer as the strongest thing a
+// fleet can say about an ask, so a census that counted an unasked connection
+// among the asked would tell an operator a provider was consulted about a Run it
+// was never consulted about.
+type Publication struct {
+	Offers []domain.OfferSnapshot
+	// NotAsked is why this connection was never asked for a candidate. It is
+	// empty exactly when the connection was asked.
+	NotAsked string
+}
+
+// ListOffers asks this connection for the candidates Placement may choose among,
+// in the lane this connection sells. A one-shot executor answers with the
+// executions it can run, and the lane is stamped here rather than by the caller,
+// because this is where the offers cross out of the adapter: an offer that
+// reached aggregation unstamped would carry whatever the adapter said about its
+// own reuse semantics and its own Rental identity.
+//
+// A capacity connection is not asked at all, and that is where the migration
 // stands rather than a gap in this seam. What a provider lists is capacity to
 // acquire, and until an agent enrolls on one of those machines nothing on it can
 // execute anything: an offer built from the listing would have to state a
@@ -65,25 +86,34 @@ func (backend Backend) Verify(ctx context.Context) error {
 // against a machine that cannot take it, which is exactly what happened while
 // this returned the listing.
 //
-// The machines Mercator does hold are already published, by the node registry,
-// from the enrollment itself: the Rental the invitation named and the facts the
-// agent reported. Publishing the provider's own copy beside them would count one
-// machine twice under two Rental identities and let two Runs each believe they
-// held the only queue on it.
+// The machines Mercator does hold are published by the node registry, from the
+// enrollment: the Rental the invitation named, and the host the agent reported.
+// Publishing the provider's own copy beside them would count one machine twice
+// under two Rental identities and let two Runs each believe they held the only
+// queue on it.
 //
 // A provider's listing becomes a candidate when the control plane can act on the
 // selection, which is provisioning a Rental and bootstrapping an agent onto it:
-// mercator#200.
-func (backend Backend) ListOffers(ctx context.Context, request adapter.OfferRequest) ([]domain.OfferSnapshot, error) {
+// mercator#200. Until then ListCapacity has no caller on this path, and the
+// census says so rather than naming a question nobody asked.
+func (backend Backend) ListOffers(ctx context.Context, request adapter.OfferRequest) (Publication, error) {
 	if backend.capacity != nil {
-		return nil, nil
+		return Publication{NotAsked: notAskedForCandidates}, nil
 	}
 	executor, err := backend.Ephemeral()
 	if err != nil {
-		return nil, err
+		return Publication{}, err
 	}
-	return executor.ListOffers(ctx, request)
+	offers, err := executor.ListOffers(ctx, request)
+	if err != nil {
+		return Publication{}, err
+	}
+	return Publication{Offers: capability.StampLane(backend.Declaration, offers)}, nil
 }
+
+// notAskedForCandidates is what the decision record says about a capacity
+// connection: it sells machines to acquire, and acquiring one is mercator#200.
+const notAskedForCandidates = "sells capacity to acquire and publishes no placement candidate (mercator#200)"
 
 // ListOwned asks this connection which workloads of Mercator's it is still
 // running, which is what the ownership sweep converges: a one-shot execution left
