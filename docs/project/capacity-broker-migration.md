@@ -3902,8 +3902,9 @@ complete because it works against a live provider.
     indistinguishable from the fastest possible success. A listing that says its
     agent never enrols therefore states no `agent_ready` at all, which is the one
     provisioning stage a listing may leave out: a stage that never completes has no
-    seconds to state. It must name a deadline or a `reclaim_after`, because a
-    machine nobody gives up on bills for ever.
+    seconds to state. It must name a deadline, because a machine nobody gives up on
+    bills for ever. The entry dated 2026-07-28 below deletes the `reclaim_after` this
+    originally offered as the alternative: no world performed it.
   - The ledger gains six capacity operations and one enrolment.
     `capacity.provision`, `capacity.stop`, `capacity.resume`, and
     `capacity.terminate` change what a provider holds for Mercator and are counted
@@ -4109,6 +4110,58 @@ complete because it works against a live provider.
     `provider.launch` after both, in that order, with nothing terminated; and the
     same Blueprint with `never_enrolls` set asserts the absence, which is a
     machine allocated, no session opened, and nothing launched.
+
+- [x] 2026-07-28: Fix what two reviewers refuted in the entry above. Four findings
+  held, and all four were the same class the entry claims to have fixed: a statement
+  that reaches nothing, or an assertion that could not fail.
+  - The listing's stated patience reached the offer and nothing measured it. The
+    fixture stated fifteen minutes, which is `enrolmentPatience` exactly, so even a
+    case that measured the reclaim moment could not tell the listing's patience from
+    Mercator's default, and replacing `state.offer.Bootstrap = ...` with a discard
+    left the whole tree green. The fixture states eight minutes now, and
+    `TestALabMachineWhoseAgentNeverArrivesIsHandedBackAtTheStatedPatience` reads the
+    machine handed back one reconcile inside it. With the assignment discarded, the
+    ledger holds no `capacity.terminate` at all inside the twelve minutes it drives.
+  - `bootstrap.reclaim_after` is deleted, along with `CapacityBootstrap.ReclaimAfterSeconds`.
+    It had one writer and no reader anywhere: no world performed it, so two
+    Blueprints stating a five minute and a forty five minute provider backstop
+    compiled into byte-identical worlds and neither ever destroyed anything. It was
+    stated in two fixtures decoratively, and one of them was the new conformance
+    case, which is exactly the dishonesty the deleted `Compile` guard existed to
+    prevent. The judgment call is to delete rather than to perform it: a machine
+    ending on its own account while Mercator still holds a Booking on it is a state
+    the control plane has no answer for, and building the answer is a slice rather
+    than a review fix. The vocabulary comes back with the act, which is the same rule
+    `safety.capacity_lifecycle_is_negotiated` is held to above. A `never_enrolls`
+    listing must now name a `deadline`, because Mercator's patience is the only thing
+    that ends such a machine and the fixture has to name the bound it is judged
+    against.
+  - `Compile` is narrowed rather than left open. It refuses a listing stating more
+    patience than `provisionedCapacityBound`, because
+    `liveness.provisioned_capacity_enrolls_or_is_reclaimed` accuses any machine still
+    waiting after thirty minutes: a Blueprint saying Mercator waits forty produced
+    that accusation against a control plane obeying the fixture, and before the guard
+    was deleted it was refused at compile time. That the harness bound is longer than
+    any patience the corpus states was true by coincidence and is now enforced.
+  - The generation binding is asserted for the first time.
+    `safety.enrolment_names_the_generation_it_was_invited_for` is registered with its
+    own deliberate failing world, and the conformance case compares the whole lease
+    rather than the Rental alone. Recording `lease.Generation + 7` in the Lab's
+    enrolment now fails the corpus mid-drive; before, it was green.
+  - The conformance cases reconcile every fifteen seconds rather than every three
+    minutes, and `TestEveryProvisioningStageIsRecordedAtWhatTheWorldSpent` holds each
+    stage to the seconds this world really spends. At the old cadence the record
+    carried the poll interval, including an `agent_ready` of zero for a stage that
+    took forty five seconds. The zero itself is not a defect: two stages found
+    complete in one look share a moment, and splitting an interval nothing observed
+    would be the control plane inventing a boundary. What was wrong was a green
+    fixture whose record read that way and asserted nothing about it.
+  - Not fixed here, and filed instead: a Run whose machine was provisioned under the
+    capacity lease has the listing's whole provisioning attributed to its launch, so
+    the Run Bundle reads `start_latency_seconds` predicted against an actual measured
+    from launch acceptance rather than from admission. It predates this work, it is
+    true of `every-stage-of-a-launch-has-an-actual` too, and it needs a decision about
+    which of the two accounts of the same stages is authoritative. Filed as #205.
 
 - [x] 2026-07-27: Make the capacity contract reachable from the control plane. Every
   one of `CapacityProvider`'s nine methods was called by nothing, `Backend.Capacity`
@@ -4354,6 +4407,16 @@ Phase 1 added:
   work. Added in phase 5 slice 3, together with the Lab world recording
   `node.enrolled` for the Rentals it holds, which is the first writer that operation
   has ever had.
+- `safety.enrolment_names_the_generation_it_was_invited_for` (Lab invariant): an
+  agent that opened a session on a machine a provider allocated enrolled under the
+  generation that machine was invited for. A generation is what fences a lease, so
+  a session filed under another one is a node Mercator would address every later
+  act about, the fencing token included, to a machine that does not exist. A lease
+  with no provision behind it is exempt, because standing capacity a world seeded
+  has no invitation to be right or wrong about. Added in the review round of phase
+  5 slice 4: the ontology's one binding of a Node to a Rental generation was
+  asserted in prose and by nothing executable, and recording `lease.Generation + 7`
+  in the Lab's own enrolment left the whole tree green.
 
 Phase 3 added:
 

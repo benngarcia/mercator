@@ -1037,21 +1037,20 @@ type CapacityEvidence struct {
 // open a session, and until it does the machine is billing with nothing that
 // will come for it.
 //
-// Both bounds are about giving up rather than about how long the arrival takes,
-// which is the provisioning estimate beside them. They come apart because they
-// belong to different parties. Mercator stops expecting the agent at
-// EnrolmentDeadlineSeconds and hands the machine back; the provider destroys it
-// at ReclaimAfterSeconds whatever Mercator does, which is what stops capacity
-// nobody enrolled on from billing for ever when the control plane is the thing
-// that went away.
+// The bound is about giving up rather than about how long the arrival takes,
+// which is the provisioning estimate beside it. Mercator stops expecting the
+// agent at EnrolmentDeadlineSeconds and hands the machine back.
+//
+// A provider's own backstop, the moment it destroys a machine nobody enrolled on
+// whatever Mercator does, is deliberately not here. No world in this tree
+// performs one and no publisher reports one, and a machine ending on its own
+// account while Mercator still holds a Booking on it is a state the control
+// plane has no answer for yet. It belongs to the slice that builds that answer.
 type CapacityBootstrap struct {
 	// EnrolmentDeadlineSeconds is how long after the provider accepts the
 	// allocation Mercator goes on expecting the agent's session. Zero is a
 	// publisher that named no patience, and Mercator uses its own.
 	EnrolmentDeadlineSeconds float64 `json:"enrolment_deadline_seconds,omitempty"`
-	// ReclaimAfterSeconds is the provider's own backstop. Zero is a provider
-	// that has none, which is a machine only Mercator will ever give back.
-	ReclaimAfterSeconds float64 `json:"reclaim_after_seconds,omitempty"`
 }
 
 // EnrolmentDeadline is when Mercator stops expecting the agent on a machine

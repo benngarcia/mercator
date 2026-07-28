@@ -85,6 +85,26 @@ func TestCompileRefusesAWorldStatementItWouldDrop(t *testing.T) {
 	}
 }
 
+// TestCompileRefusesPatienceThisHarnessWouldPunish is the second statement this
+// harness must not take quietly, and it is the same defect as the seeded schedule
+// read from the other side. The Lab holds every allocation to a bound of its own,
+// and a listing telling Mercator to wait longer than that bound makes
+// liveness.provisioned_capacity_enrols_or_is_reclaimed accuse a control plane that
+// is doing exactly what the fixture told it to. The Blueprint states a world this
+// harness cannot judge, so it is refused rather than run and blamed on Mercator.
+func TestCompileRefusesPatienceThisHarnessWouldPunish(t *testing.T) {
+	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/conformance/provisioned-capacity-becomes-a-machine-mercator-holds.json")
+	if err != nil {
+		t.Fatalf("load Blueprint: %v", err)
+	}
+	patient := scenario.Duration(provisionedCapacityBound + time.Minute)
+	blueprint.World.Marketplace[0].Bootstrap.Deadline = &patient
+
+	if _, _, err := Compile(blueprint, CompileOptions{}); err == nil {
+		t.Fatal("compiled a world whose stated patience this harness would call a Mercator violation")
+	}
+}
+
 func TestCompileSamplesActualRuntimeIndependentlyFromMercatorPrediction(t *testing.T) {
 	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/demos/artifact-warmth-restart.json")
 	if err != nil {

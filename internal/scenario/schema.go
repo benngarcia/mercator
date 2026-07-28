@@ -839,6 +839,12 @@ type MarketplaceOfferSpec struct {
 // when it does happen is the listing's own agent_ready stage, because that is
 // the stage this is the outcome of.
 //
+// It says nothing about the provider's own backstop, the moment it destroys a
+// machine nobody enrolled on whatever Mercator does. Neither simulated world here
+// performs one, and a Blueprint stating an act no world performs is the defect
+// this whole declaration was once refused over: two fixtures saying different
+// things about a provider would compile into the same world.
+//
 // It hangs off a listing rather than off the world because it is a provider's
 // behaviour. A marketplace whose images carry no agent never enrols one, and one
 // whose startup script runs before the network is up enrols one late, and a world
@@ -857,12 +863,6 @@ type BootstrapSpec struct {
 	// Mercator's own patience rather than a provider fact, and a bootstrap is only
 	// late against a bound somebody named.
 	Deadline *Duration `json:"deadline,omitempty"`
-	// ReclaimAfter is this provider's own backstop: how long after allocation it
-	// destroys the machine whatever Mercator does or fails to do. It is what stops
-	// capacity nothing ever enrolled on from billing for ever, and it is the
-	// provider acting on its own account, so a world where Mercator never notices
-	// is still a world with an end.
-	ReclaimAfter *Duration `json:"reclaim_after,omitempty"`
 }
 
 // validateProvisioningStages requires every stage to be stated, including a stage
@@ -898,17 +898,12 @@ func (spec MarketplaceOfferSpec) validateProvisioningStages() error {
 // carries it. A listing that states no bootstrap carries none, and Mercator
 // holds it to its own patience instead.
 func (spec MarketplaceOfferSpec) CapacityBootstrap() *domain.CapacityBootstrap {
-	if spec.Bootstrap == nil {
+	if spec.Bootstrap == nil || spec.Bootstrap.Deadline == nil {
 		return nil
 	}
-	bootstrap := &domain.CapacityBootstrap{}
-	if spec.Bootstrap.Deadline != nil {
-		bootstrap.EnrolmentDeadlineSeconds = spec.Bootstrap.Deadline.Duration().Seconds()
+	return &domain.CapacityBootstrap{
+		EnrolmentDeadlineSeconds: spec.Bootstrap.Deadline.Duration().Seconds(),
 	}
-	if spec.Bootstrap.ReclaimAfter != nil {
-		bootstrap.ReclaimAfterSeconds = spec.Bootstrap.ReclaimAfter.Duration().Seconds()
-	}
-	return bootstrap
 }
 
 // NeverEnrolls reports whether this world allocates and boots the machine and its
@@ -966,10 +961,8 @@ func (spec *BootstrapSpec) validate(offer MarketplaceOfferSpec) error {
 	if spec == nil {
 		return nil
 	}
-	for field, duration := range map[string]*Duration{"deadline": spec.Deadline, "reclaim_after": spec.ReclaimAfter} {
-		if duration != nil && duration.Duration() <= 0 {
-			return fmt.Errorf("marketplace offer %q: bootstrap.%s must be a positive duration", offer.ID, field)
-		}
+	if spec.Deadline != nil && spec.Deadline.Duration() <= 0 {
+		return fmt.Errorf("marketplace offer %q: bootstrap.deadline must be a positive duration", offer.ID)
 	}
 	if !spec.NeverEnrolls {
 		return nil
@@ -980,9 +973,14 @@ func (spec *BootstrapSpec) validate(offer MarketplaceOfferSpec) error {
 			offer.ID,
 		)
 	}
-	if spec.Deadline == nil && spec.ReclaimAfter == nil {
+	// Mercator's own patience is the only thing that ends such a machine, so the
+	// listing has to name the one it will be judged against. Left silent, the
+	// moment the machine is handed back is Mercator's default, and a fixture about
+	// a stranded machine could not tell the patience it meant to state from the
+	// patience the control plane happens to hold.
+	if spec.Deadline == nil {
 		return fmt.Errorf(
-			"marketplace offer %q says its agent never enrols and names neither a deadline nor a reclaim_after: a machine nobody gives up on bills for ever",
+			"marketplace offer %q says its agent never enrols and names no deadline: a machine nobody gives up on bills for ever",
 			offer.ID,
 		)
 	}

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -245,5 +246,82 @@ func enrolmentObservation(now time.Time) InvariantObservation {
 		ArtifactCatalog: map[string]domain.ArtifactVersion{},
 		SeededLocality:  map[string]map[string]bool{},
 		SeededReplicas:  map[string]map[string]bool{},
+	}
+}
+
+// TestAnEnrolmentIsBoundToTheGenerationItsMachineWasInvitedFor is the deliberate
+// failing world for safety.enrolment_names_the_generation_it_was_invited_for. It
+// is the one property in the O1 ontology that keeps a Node bound to a single
+// Rental generation, and it is stated over the ledger because the ledger is the
+// only account of which enrolment happened on which machine.
+//
+// Three worlds, and the rule has to tell them apart. A lease whose second machine
+// was invited after the first generation ended enrols under either, because both
+// were really allocated. A lease with no provision behind it is standing capacity
+// this world seeded, and there is no invitation to be right or wrong about. A
+// session filed under a generation nothing was ever allocated for is the
+// violation: Mercator would address every later act about that machine, the
+// fencing token included, to a machine that does not exist.
+func TestAnEnrolmentIsBoundToTheGenerationItsMachineWasInvitedFor(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	for name, ledger := range map[string]struct {
+		effects []EffectRecord
+		holds   bool
+	}{
+		"the generation its machine was allocated for": {
+			effects: []EffectRecord{provisionEffect(1), leasedEnrolmentEffect(1)},
+			holds:   true,
+		},
+		"a second machine invited when the first generation ended": {
+			effects: []EffectRecord{provisionEffect(1), provisionEffect(2), leasedEnrolmentEffect(2)},
+			holds:   true,
+		},
+		"standing capacity nothing ever allocated": {
+			effects: []EffectRecord{leasedEnrolmentEffect(1)},
+			holds:   true,
+		},
+		"a generation no machine was ever invited for": {
+			effects: []EffectRecord{provisionEffect(1), leasedEnrolmentEffect(8)},
+			holds:   false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := handWrittenLedger(now, ledger.effects...)
+
+			err := enrolmentNamesTheGenerationItWasInvitedFor(observation)
+
+			if ledger.holds && err != nil {
+				t.Fatalf("a session opened on a machine its lease really allocated was refused: %v", err)
+			}
+			if !ledger.holds && err == nil {
+				t.Fatal("an agent enrolled under a generation the machine was never invited for and nothing objected")
+			}
+		})
+	}
+}
+
+func provisionEffect(generation uint64) EffectRecord {
+	return EffectRecord{
+		Operation:   OperationCapacityProvision,
+		OperationID: fmt.Sprintf("provision_%s/generation-%d", strandedRental, generation),
+		Command:     EffectCommandAccepted,
+		Request: []byte(fmt.Sprintf(
+			`{"rental_id":%q,"generation":%d,"offer_snapshot_id":"fresh-4090","node_id":"nod_stranded"}`,
+			strandedRental, generation,
+		)),
+		Consequence: []byte(`{"native_ref":"lab-machine","state":"requested"}`),
+	}
+}
+
+func leasedEnrolmentEffect(generation uint64) EffectRecord {
+	return EffectRecord{
+		Operation:   OperationNodeEnrolled,
+		OperationID: fmt.Sprintf("nod_stranded/generation-%d", generation),
+		Command:     EffectCommandAccepted,
+		Request: []byte(fmt.Sprintf(
+			`{"machine_id":%q,"rental_id":%q,"node_id":"nod_stranded","generation":%d}`,
+			strandedMachine, strandedRental, generation,
+		)),
+		Consequence: []byte(fmt.Sprintf(`{"node_id":"nod_stranded","fencing_token":%d}`, generation)),
 	}
 }

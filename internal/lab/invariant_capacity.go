@@ -9,10 +9,15 @@ import (
 )
 
 // provisionedCapacityBound is how long a machine a provider allocated may go on
-// existing with nothing that will come for it. It is deliberately longer than
-// any patience a listing in this corpus states, because this rule is not the
-// deadline: the deadline is Mercator's own, stated per listing, and this is the
-// backstop that catches a control plane that never applied one at all.
+// existing with nothing that will come for it. It is longer than any patience a
+// listing in this corpus states, because this rule is not the deadline: the
+// deadline is Mercator's own, stated per listing, and this is the backstop that
+// catches a control plane that never applied one at all.
+//
+// That ordering is enforced rather than observed. Compile refuses a Blueprint
+// stating more patience than this, because a listing telling Mercator to wait
+// longer than the harness allows would make this rule accuse a control plane that
+// is obeying the fixture. See patienceStaysInsideTheLabsOwnBound.
 const provisionedCapacityBound = 30 * time.Minute
 
 // provisionedCapacityEnrolsOrIsReclaimed is the liveness rule on the capacity
@@ -74,14 +79,14 @@ func allocatedCapacity(effects []EffectRecord) (map[string]time.Time, error) {
 		if effect.Command == EffectCommandRejected {
 			continue
 		}
-		rentalID, err := capacityRentalOf(effect)
+		lease, err := capacityLeaseOf(effect)
 		if err != nil {
 			return nil, err
 		}
-		if existing, seen := allocated[rentalID]; seen && !effect.At.Before(existing) {
+		if existing, seen := allocated[lease.RentalID]; seen && !effect.At.Before(existing) {
 			continue
 		}
-		allocated[rentalID] = effect.At
+		allocated[lease.RentalID] = effect.At
 	}
 	return allocated, nil
 }
@@ -101,28 +106,93 @@ func settledCapacity(effects []EffectRecord) (map[string]bool, error) {
 		if effect.Command == EffectCommandRejected {
 			continue
 		}
-		rentalID, err := capacityRentalOf(effect)
+		lease, err := capacityLeaseOf(effect)
 		if err != nil {
 			return nil, err
 		}
-		settled[rentalID] = true
+		settled[lease.RentalID] = true
 	}
 	return settled, nil
 }
 
-// capacityRentalOf is the lease one capacity entry is about. An entry that names
-// none is refused rather than skipped: this rule is keyed on the lease, and a
-// record read as an entry about the empty lease would settle or allocate a
+// enrolmentNamesTheGenerationItWasInvitedFor holds the one property that keeps a
+// Node bound to a single Rental generation: an agent that opened a session on a
+// machine a provider allocated enrolled under the generation that machine was
+// invited for, and never under another.
+//
+// A generation is what fences a lease. The machine allocated for generation two
+// is a different machine from the one allocated for generation one, and an
+// enrolment filed under the wrong one is a session Mercator would tie to a
+// machine that no longer exists: every later act keyed on the pair, the fencing
+// token the node redeems included, would be addressed to the wrong one.
+//
+// A lease with no provision behind it is exempt, and that is standing capacity
+// rather than a hole in the rule. A world that seeds a machine and enrols the
+// agent Mercator holds it through never allocated anything, so there is no
+// invitation to be right or wrong about.
+func enrolmentNamesTheGenerationItWasInvitedFor(observation InvariantObservation) error {
+	invited, err := invitedGenerations(observation.Effects)
+	if err != nil {
+		return err
+	}
+	for _, effect := range observation.Effects {
+		if effect.Operation != OperationNodeEnrolled || effect.Command == EffectCommandRejected {
+			continue
+		}
+		lease, err := capacityLeaseOf(effect)
+		if err != nil {
+			return err
+		}
+		generations, allocated := invited[lease.RentalID]
+		if !allocated || generations[lease.Generation] {
+			continue
+		}
+		return fmt.Errorf(
+			"enrolment %s opened a session under Rental %q generation %d, and the machines allocated for that lease were invited for %v",
+			effect.ID, lease.RentalID, lease.Generation, slices.Sorted(maps.Keys(generations)),
+		)
+	}
+	return nil
+}
+
+// invitedGenerations is every generation of every lease a provider accepted a
+// machine for. A lease may hold more than one: a generation that ends invites a
+// second machine under the same lease, and both are enrolments this rule allows.
+func invitedGenerations(effects []EffectRecord) (map[string]map[uint64]bool, error) {
+	invited := map[string]map[uint64]bool{}
+	for _, effect := range effects {
+		if effect.Operation != OperationCapacityProvision || effect.Command == EffectCommandRejected {
+			continue
+		}
+		lease, err := capacityLeaseOf(effect)
+		if err != nil {
+			return nil, err
+		}
+		if invited[lease.RentalID] == nil {
+			invited[lease.RentalID] = map[uint64]bool{}
+		}
+		invited[lease.RentalID][lease.Generation] = true
+	}
+	return invited, nil
+}
+
+// capacityLeaseRef is the lease and generation one capacity entry is about, which
+// is the pair every act against a machine is addressed to. An entry naming no
+// lease is refused rather than skipped: every rule here is keyed on the lease, and
+// a record read as an entry about the empty lease would settle or allocate a
 // machine nobody meant.
-func capacityRentalOf(effect EffectRecord) (string, error) {
-	var facts struct {
-		RentalID string `json:"rental_id"`
+type capacityLeaseRef struct {
+	RentalID   string `json:"rental_id"`
+	Generation uint64 `json:"generation"`
+}
+
+func capacityLeaseOf(effect EffectRecord) (capacityLeaseRef, error) {
+	var lease capacityLeaseRef
+	if err := json.Unmarshal(effect.Request, &lease); err != nil {
+		return capacityLeaseRef{}, fmt.Errorf("decode capacity entry %s: %w", effect.ID, err)
 	}
-	if err := json.Unmarshal(effect.Request, &facts); err != nil {
-		return "", fmt.Errorf("decode capacity entry %s: %w", effect.ID, err)
+	if lease.RentalID == "" {
+		return capacityLeaseRef{}, fmt.Errorf("capacity entry %s is a %s naming no Rental", effect.ID, effect.Operation)
 	}
-	if facts.RentalID == "" {
-		return "", fmt.Errorf("capacity entry %s is a %s naming no Rental", effect.ID, effect.Operation)
-	}
-	return facts.RentalID, nil
+	return lease, nil
 }

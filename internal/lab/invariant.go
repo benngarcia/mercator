@@ -124,6 +124,7 @@ func DefaultInvariantRegistry() InvariantRegistry {
 		invariantRule{id: "safety.ephemeral_capacity_not_reused", check: ephemeralCapacityNotReused},
 		invariantRule{id: "safety.reusable_capacity_has_an_enrolled_runtime", check: reusableCapacityHasAnEnrolledRuntime},
 		invariantRule{id: "safety.a_rental_identity_is_capacity_mercator_holds", check: aRentalIdentityIsCapacityMercatorHolds},
+		invariantRule{id: "safety.enrolment_names_the_generation_it_was_invited_for", check: enrolmentNamesTheGenerationItWasInvitedFor},
 		invariantRule{id: "safety.locality_provenance", check: localityProvenance},
 		invariantRule{id: "safety.transfer_rate_is_attributed", check: transferRateIsAttributed},
 		invariantRule{id: "safety.locality_is_never_infeasibility", check: localityIsNeverInfeasibility},

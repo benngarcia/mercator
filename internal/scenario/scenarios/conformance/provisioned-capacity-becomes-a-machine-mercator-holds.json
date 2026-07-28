@@ -2,7 +2,7 @@
   "schema": "mercator.lab/blueprint.v1",
   "kind": "conformance",
   "classification": "green",
-  "summary": "One Run, one listing, and the transition the placement corpus can only assert the failure half of: a machine that does not exist becomes a machine Mercator holds. The provider negotiates a capacity lifecycle, allocates the machine in thirty seconds, boots it in four minutes, and its node agent opens a session forty-five seconds later. Only then is there anything to launch a workload on. What this holds at L1 that no placement fixture can is the Effect Ledger, and the ledger is the only account of what really happened to the machine: an accepted capacity.provision against the Rental Mercator minted, a node.enrolled naming that same Rental and the generation it was invited for, and the provider.launch after both. The order is the whole claim. A launch recorded before the enrolment would be Mercator creating a container through a session it does not have, and an enrolment against a Rental nothing provisioned would be a node the world invented. Nothing is terminated here, because the agent arrived: a machine that becomes executable is not a machine anybody gives back.",
+  "summary": "One Run, one listing, and the transition the placement corpus can only assert the failure half of: a machine that does not exist becomes a machine Mercator holds. The provider negotiates a capacity lifecycle, allocates the machine in thirty seconds, boots it in four minutes, and its node agent opens a session forty-five seconds later. Only then is there anything to launch a workload on. What this holds at L1 that no placement fixture can is the Effect Ledger, and the ledger is the only account of what really happened to the machine: an accepted capacity.provision against the Rental Mercator minted, a node.enrolled naming that same Rental and the generation it was invited for, and the provider.launch after both. The order is the whole claim. A launch recorded before the enrolment would be Mercator creating a container through a session it does not have, and an enrolment against a Rental nothing provisioned would be a node the world invented. Nothing is terminated here, because the agent arrived: a machine that becomes executable is not a machine anybody gives back. The listing says Mercator waits eight minutes for that agent, which is deliberately neither Mercator's own fifteen nor a round number the harness holds anywhere: the same Blueprint with never_enrolls set is driven past it, and a machine handed back at eight minutes rather than at fifteen is the only evidence that the patience a provider published reached the offer at all.",
   "seed": "mercator-lab-provisioned-capacity-v1",
   "world": {
     "images": {
@@ -42,8 +42,7 @@
           "observe_after_terminate": false
         },
         "bootstrap": {
-          "deadline": "15m",
-          "reclaim_after": "45m"
+          "deadline": "8m"
         }
       }
     ],

@@ -188,7 +188,7 @@ func TestTheStrandedCapacityCaseStatesBothHalvesOfItsOwnName(t *testing.T) {
 	if stranded.Provisioning.AcquisitionSpend() == 0 || stranded.Provisioning.BootSpend() == 0 {
 		t.Errorf("acquisition and boot must succeed here, and the world spends %v on them", stranded.Provisioning.Spend())
 	}
-	if stranded.Bootstrap.Deadline == nil || stranded.Bootstrap.ReclaimAfter == nil {
+	if stranded.Bootstrap.Deadline == nil {
 		t.Errorf("a machine nothing enrols on needs an end to its bill, and the listing names %+v", stranded.Bootstrap)
 	}
 	// The dearer machine whose agent does arrive. Without somewhere for the work to

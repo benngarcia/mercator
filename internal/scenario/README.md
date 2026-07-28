@@ -177,11 +177,13 @@ machine also holds nothing, and that follows from a rule rather than from a seco
 behaviour: content is recorded only for capacity Mercator keeps, and it keeps a
 machine through the agent enrolled on it, so the simulated world refuses to build
 capacity it keeps out of a machine nothing enrols on. `deadline` is how long
-Mercator goes on
-expecting that session, and `reclaim_after` is the provider's own backstop that
-destroys the machine whatever the control plane does. A listing whose agent never
-enrols must name one of the two, because a machine nobody gives up on bills for
-ever.
+Mercator goes on expecting that session, and a listing whose agent never enrols
+must name it, because a machine nobody gives up on bills for ever and Mercator's
+patience is the only thing that ends this one. There is deliberately no way to
+state the provider's own backstop, the moment it destroys a machine nobody enrolled
+on whatever the control plane does: no simulated world here performs one, and a
+Blueprint stating an act no world performs is two fixtures saying different things
+about a provider and compiling into the same world.
 
 `request` and `expect` are the single-decision shorthand. A Placement fixture
 that advances virtual time or submits several Runs uses `timeline`; each step

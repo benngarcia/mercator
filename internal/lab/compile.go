@@ -40,6 +40,9 @@ func Compile(blueprint scenario.Blueprint, options CompileOptions) (WorldTape, [
 			blueprint.Name, len(blueprint.World.RentalSchedules),
 		)
 	}
+	if err := patienceStaysInsideTheLabsOwnBound(blueprint); err != nil {
+		return WorldTape{}, nil, err
+	}
 	seed := options.Seed
 	if seed == "" {
 		seed = blueprint.Seed
@@ -250,4 +253,31 @@ func maximumRuntime(arrival scenario.RunArrivalSpec) time.Duration {
 		return arrival.Request.MaxRuntime.Duration()
 	}
 	return time.Hour
+}
+
+// patienceStaysInsideTheLabsOwnBound refuses a listing that says Mercator waits
+// longer for an agent than this harness allows any machine to go on existing with
+// nothing that will come for it.
+//
+// The two bounds belong to different parties and are allowed to differ, which is
+// the whole point of a listing stating one. They may not cross.
+// liveness.provisioned_capacity_enrols_or_is_reclaimed accuses a control plane
+// that has left a machine allocated past provisionedCapacityBound, and a listing
+// stating more patience than that would produce that accusation against a control
+// plane doing exactly what the fixture told it to. Refusing here is the honest
+// answer: the Blueprint states a world the harness cannot judge, and it says so at
+// compile time rather than as a Mercator defect it is not.
+func patienceStaysInsideTheLabsOwnBound(blueprint scenario.Blueprint) error {
+	for _, offer := range blueprint.World.Marketplace {
+		if offer.Bootstrap == nil || offer.Bootstrap.Deadline == nil {
+			continue
+		}
+		if stated := offer.Bootstrap.Deadline.Duration(); stated > provisionedCapacityBound {
+			return fmt.Errorf(
+				"Blueprint %q says Mercator waits %s for the agent on listing %q, and the Lab accuses any machine still waiting after %s",
+				blueprint.Name, stated, offer.ID, provisionedCapacityBound,
+			)
+		}
+	}
+	return nil
 }

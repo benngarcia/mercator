@@ -6,8 +6,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/benngarcia/mercator/internal/domain"
+	"github.com/benngarcia/mercator/internal/orchestrator"
 	"github.com/benngarcia/mercator/internal/scenario"
 )
+
+// labReconcileInterval is how often these cases look at the machine being built.
+// It is fine enough to see each provisioning stage finish on its own, which is
+// what makes the seconds the record carries the world's own spend rather than the
+// interval between two looks: a control plane that finds two stages complete in
+// one look measures the second at zero, and there is no honest way to split an
+// interval nothing observed.
+const labReconcileInterval = 15 * time.Second
 
 // TestProvisionedCapacityBecomesAMachineMercatorHolds drives the transition the
 // placement corpus can only state the failure half of, through the real
@@ -18,11 +28,14 @@ import (
 // this says whether there was ever a session to launch it through. Three entries
 // have to be there and they have to be in this order: the provision Mercator
 // commanded, the enrolment the machine made on its own account against the same
-// Rental, and the launch after both.
+// Rental and the same generation, and the launch after both.
 //
 // The order is the whole claim. A launch before the enrolment is a container
 // created through a session Mercator does not have, and an enrolment against a
-// Rental nothing provisioned is a node this world invented.
+// Rental nothing provisioned is a node this world invented. The generation is the
+// other half of it: a lease may invite a second machine when a generation ends,
+// and a session filed under a generation the machine was never invited for is one
+// Mercator would address every later act about to the wrong machine.
 func TestProvisionedCapacityBecomesAMachineMercatorHolds(t *testing.T) {
 	execution := openConformanceExecution(t, "provisioned-capacity-becomes-a-machine-mercator-holds")
 	defer func() {
@@ -31,26 +44,23 @@ func TestProvisionedCapacityBecomesAMachineMercatorHolds(t *testing.T) {
 		}
 	}()
 
-	for range 4 {
-		if _, err := execution.Drive(context.Background(), Advance(3*time.Minute)); err != nil {
-			t.Fatalf("drive the arrival: %v", err)
-		}
-	}
+	driveFor(t, execution, 12*time.Minute)
 
 	ledger := execution.runtime.world.effectRecords()
-	provisioned, provisionedAt := firstAcceptedCapacityEntry(t, ledger, OperationCapacityProvision)
-	enrolled, enrolledAt := firstAcceptedCapacityEntry(t, ledger, OperationNodeEnrolled)
+	provisioned := firstAcceptedCapacityEntry(t, ledger, OperationCapacityProvision)
+	enrolled := firstAcceptedCapacityEntry(t, ledger, OperationNodeEnrolled)
 	launchedAt, launched := firstLaunchSequence(ledger)
 
 	if !launched {
 		t.Fatal("nothing was ever launched, and a machine Mercator holds is one it can execute on")
 	}
-	if enrolled != provisioned {
-		t.Fatalf("the agent enrolled under Rental %q and the machine was allocated for %q", enrolled, provisioned)
+	if enrolled.lease != provisioned.lease {
+		t.Fatalf("the agent enrolled under Rental %q generation %d and the machine was allocated for Rental %q generation %d",
+			enrolled.lease.RentalID, enrolled.lease.Generation, provisioned.lease.RentalID, provisioned.lease.Generation)
 	}
-	if !(provisionedAt < enrolledAt && enrolledAt < launchedAt) {
+	if !(provisioned.sequence < enrolled.sequence && enrolled.sequence < launchedAt) {
 		t.Fatalf("the ledger holds provision at %d, enrolment at %d, and the launch at %d, and a container is created through a session that already exists",
-			provisionedAt, enrolledAt, launchedAt)
+			provisioned.sequence, enrolled.sequence, launchedAt)
 	}
 	for _, effect := range ledger {
 		if effect.Operation == OperationCapacityTerminate {
@@ -59,22 +69,63 @@ func TestProvisionedCapacityBecomesAMachineMercatorHolds(t *testing.T) {
 	}
 }
 
-// TestALabMachineWhoseAgentNeverArrivesEnrolsNothing is what replaced Compile
-// refusing a bootstrap it would not perform. The refusal was correct while this
-// world built no machine from a listing; now that it does, the statement has to be
-// honoured rather than turned away, and the honouring is what a fixture about a
-// stranded machine rests on.
+// TestEveryProvisioningStageIsRecordedAtWhatTheWorldSpent reads the other account
+// of the same machine: the three stage observations Mercator wrote as it watched.
 //
-// It is stated as the absence it is. No agent opens a session, so no node is
-// enrolled and nothing is ever launched, and the machine the provider allocated is
-// still there being billed for until somebody gives up on it.
-func TestALabMachineWhoseAgentNeverArrivesEnrolsNothing(t *testing.T) {
+// Each has to carry what this world really spent on that stage. The provider owns
+// acquisition and boot, the registry owns whether an agent opened a session, and
+// a control plane that reported the gap between two of its own looks would be
+// recording its polling interval as a property of the machine. A calibration
+// trained on that would learn the reconcile cadence.
+func TestEveryProvisioningStageIsRecordedAtWhatTheWorldSpent(t *testing.T) {
+	execution := openConformanceExecution(t, "provisioned-capacity-becomes-a-machine-mercator-holds")
+	defer func() {
+		if err := execution.Close(); err != nil {
+			t.Fatalf("close execution: %v", err)
+		}
+	}()
+
+	driveFor(t, execution, 12*time.Minute)
+
+	recorded := capacityStageSeconds(t, execution)
+	// The listing's own three stages: thirty seconds to allocate the machine, four
+	// minutes to boot it, forty five seconds for its agent to open a session.
+	for stage, spent := range map[domain.LaunchStage]float64{
+		domain.StageAcquisition: 30,
+		domain.StageBoot:        240,
+		domain.StageAgentReady:  45,
+	} {
+		observed, present := recorded[stage]
+		if !present {
+			t.Fatalf("the record holds no %s stage, and this machine went through it", stage)
+		}
+		if observed != spent {
+			t.Fatalf("%s is recorded at %.0fs and this world spends %.0fs on it", stage, observed, spent)
+		}
+	}
+}
+
+// TestALabMachineWhoseAgentNeverArrivesIsHandedBackAtTheStatedPatience is what
+// replaced Compile refusing a bootstrap it would not perform. The refusal was
+// correct while this world built no machine from a listing; now that it does, the
+// statement has to be honoured rather than turned away, and the honouring is what
+// a fixture about a stranded machine rests on.
+//
+// Two things are honoured and both are asserted here. No agent opens a session,
+// so no node is enrolled and nothing is ever launched. And the machine is handed
+// back at the patience this listing published rather than at Mercator's own,
+// which is the only evidence that a provider's stated patience reaches the offer
+// at all: the fixture says eight minutes and Mercator's own default is fifteen,
+// so a control plane reading past the listing would hold the machine for seven
+// minutes longer and nothing else in the tree would notice.
+func TestALabMachineWhoseAgentNeverArrivesIsHandedBackAtTheStatedPatience(t *testing.T) {
 	blueprint, err := scenario.LoadBlueprint("../scenario/scenarios/conformance/provisioned-capacity-becomes-a-machine-mercator-holds.json")
 	if err != nil {
 		t.Fatalf("load Blueprint: %v", err)
 	}
 	blueprint.World.Marketplace[0].Provisioning.AgentReady = nil
 	blueprint.World.Marketplace[0].Bootstrap.NeverEnrolls = true
+	stated := blueprint.World.Marketplace[0].Bootstrap.Deadline.Duration()
 	execution := openCompiledExecution(t, blueprint)
 	defer func() {
 		if err := execution.Close(); err != nil {
@@ -82,21 +133,36 @@ func TestALabMachineWhoseAgentNeverArrivesEnrolsNothing(t *testing.T) {
 		}
 	}()
 
-	for range 4 {
-		if _, err := execution.Drive(context.Background(), Advance(3*time.Minute)); err != nil {
-			t.Fatalf("drive the arrival: %v", err)
-		}
-	}
+	driveFor(t, execution, 12*time.Minute)
 
 	ledger := execution.runtime.world.effectRecords()
-	if _, _, allocated := acceptedCapacityEntry(ledger, OperationCapacityProvision); !allocated {
-		t.Fatal("nothing was allocated, and this world's provider takes the machine before its agent fails to arrive")
-	}
-	if rental, _, enrolled := acceptedCapacityEntry(ledger, OperationNodeEnrolled); enrolled {
-		t.Fatalf("an agent opened a session under Rental %q on a machine whose listing says none ever does", rental)
+	provisioned := firstAcceptedCapacityEntry(t, ledger, OperationCapacityProvision)
+	if _, _, enrolled := acceptedCapacityEntry(ledger, OperationNodeEnrolled); enrolled {
+		t.Fatal("an agent opened a session on a machine whose listing says none ever does")
 	}
 	if _, launched := firstLaunchSequence(ledger); launched {
 		t.Fatal("a workload was launched on a machine Mercator has no session to")
+	}
+	reclaimed := firstAcceptedCapacityEntry(t, ledger, OperationCapacityTerminate)
+	if reclaimed.lease.RentalID != provisioned.lease.RentalID {
+		t.Fatalf("Rental %q was handed back and Rental %q was the one allocated",
+			reclaimed.lease.RentalID, provisioned.lease.RentalID)
+	}
+	// One look wide, because a deadline is a moment and a reconcile is a look: the
+	// machine is handed back at the first look past the patience this listing
+	// stated. Read against Mercator's own fifteen minutes, which is what a listing
+	// whose bootstrap never reached the offer would be held to.
+	if held := reclaimed.at.Sub(provisioned.at); held < stated || held >= stated+labReconcileInterval {
+		t.Fatalf("the machine was held %s and the listing says Mercator waits %s for the agent", held, stated)
+	}
+}
+
+func driveFor(t *testing.T, execution *Execution, span time.Duration) {
+	t.Helper()
+	for range int(span / labReconcileInterval) {
+		if _, err := execution.Drive(context.Background(), Advance(labReconcileInterval)); err != nil {
+			t.Fatalf("drive the arrival: %v", err)
+		}
 	}
 }
 
@@ -120,34 +186,40 @@ func openCompiledExecution(t *testing.T, blueprint scenario.Blueprint) *Executio
 	return execution
 }
 
-func firstAcceptedCapacityEntry(t *testing.T, ledger []EffectRecord, operation string) (string, uint64) {
+// capacityEntry is one ledger record read as the act it is: the lease it was
+// about, where it sits in the order, and when it happened.
+type capacityEntry struct {
+	lease    capacityLeaseRef
+	sequence uint64
+	at       time.Time
+}
+
+func firstAcceptedCapacityEntry(t *testing.T, ledger []EffectRecord, operation string) capacityEntry {
 	t.Helper()
-	rentalID, sequence, found := acceptedCapacityEntry(ledger, operation)
+	lease, entry, found := acceptedCapacityEntry(ledger, operation)
 	if !found {
 		t.Fatalf("the ledger holds no accepted %s", operation)
 	}
-	return rentalID, sequence
+	return capacityEntry{lease: lease, sequence: entry.Sequence, at: entry.At}
 }
 
 // acceptedCapacityEntry is the first entry of one operation the world accepted,
-// by the lease it was about. It reads the Rental out of the request projection for
-// the reason every rule over this ledger does: the lease is what a machine, an
+// with the lease it was about. The lease is read out of the request projection for
+// the reason every rule over this ledger does: it is what a machine, an
 // invitation, and a reclamation are all filed under, and a reader keying on
 // anything else could not tie the three together.
-func acceptedCapacityEntry(ledger []EffectRecord, operation string) (string, uint64, bool) {
+func acceptedCapacityEntry(ledger []EffectRecord, operation string) (capacityLeaseRef, EffectRecord, bool) {
 	for _, effect := range ledger {
 		if effect.Operation != operation || effect.Command != EffectCommandAccepted {
 			continue
 		}
-		var facts struct {
-			RentalID string `json:"rental_id"`
-		}
-		if err := json.Unmarshal(effect.Request, &facts); err != nil {
+		lease, err := capacityLeaseOf(effect)
+		if err != nil {
 			continue
 		}
-		return facts.RentalID, effect.Sequence, true
+		return lease, effect, true
 	}
-	return "", 0, false
+	return capacityLeaseRef{}, EffectRecord{}, false
 }
 
 func firstLaunchSequence(ledger []EffectRecord) (uint64, bool) {
@@ -157,4 +229,31 @@ func firstLaunchSequence(ledger []EffectRecord) (uint64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// capacityStageSeconds is what Mercator wrote down about each stage of the machine
+// being built, read off its own event log rather than the world's ledger: these
+// are the control plane's observations, and whether they match what the world
+// spent is the whole question.
+func capacityStageSeconds(t *testing.T, execution *Execution) map[domain.LaunchStage]float64 {
+	t.Helper()
+	events, err := execution.runtime.mercatorEvents(context.Background())
+	if err != nil {
+		t.Fatalf("read Mercator events: %v", err)
+	}
+	seconds := map[domain.LaunchStage]float64{}
+	for _, event := range events {
+		if event.Type != orchestrator.EventCapacityStageObserved {
+			continue
+		}
+		var observed struct {
+			Stage   domain.LaunchStage `json:"stage"`
+			Seconds float64            `json:"seconds"`
+		}
+		if err := json.Unmarshal(event.Data, &observed); err != nil {
+			t.Fatalf("decode capacity stage %s: %v", event.ID, err)
+		}
+		seconds[observed.Stage] = observed.Seconds
+	}
+	return seconds
 }

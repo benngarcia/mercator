@@ -38,8 +38,8 @@ func TestDefaultInvariantRegistryPassesTheCanonicalExecution(t *testing.T) {
 	}
 
 	latest := latestInvariantResults(execution.invariants)
-	if len(latest) != 48 {
-		t.Fatalf("latest invariant results = %d, want 48", len(latest))
+	if len(latest) != 49 {
+		t.Fatalf("latest invariant results = %d, want 49", len(latest))
 	}
 	for _, result := range latest {
 		if result.Status != InvariantPassed {
@@ -305,6 +305,13 @@ func TestEveryDefaultInvariantHasADeliberatelyFailingCase(t *testing.T) {
 				Lane:     domain.LaneReusable,
 				RentalID: "rnt_never_allocated",
 			}}
+		},
+		// An agent that opened a session under a generation the machine behind its
+		// lease was never invited for. Mercator would tie the node to a machine that
+		// does not exist, and every act it addresses to the pair afterwards, the
+		// fencing token included, would go to the wrong one.
+		"safety.enrolment_names_the_generation_it_was_invited_for": func(observation *InvariantObservation) {
+			observation.Effects = []EffectRecord{provisionEffect(1), leasedEnrolmentEffect(8)}
 		},
 		"safety.locality_provenance": func(observation *InvariantObservation) {
 			observation.World.Offers = []domain.OfferSnapshot{{
