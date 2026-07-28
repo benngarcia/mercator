@@ -6617,6 +6617,90 @@ case that stands up the production agent against this host's own Docker daemon a
 reads the disk it really has passed as well. All green. #165 does not reproduce
 here and was left alone.
 
+### Phase 5 the publication reviewed again
+
+Two more reviewers went at the same slice and its plan entry. Five findings
+arrived, one of them the same claim about the plan sentence stated twice. All of
+them hold. Every one was reproduced against the tree before anything changed, on
+this amd64 Linux workstation with Go 1.25.11, and each fix was then shown failing
+by reverting it in turn.
+
+A sold listing was counted as a wait that ends. Once a listing's machine enrols,
+one host is published twice: the listing advertises the whole machine a buyer of
+it would get, and the machine publishes the room it has left. Both are true and
+they answer different questions. What was wrong is what the listing's refusal was
+read as. `CAPACITY_UNAVAILABLE` carries `EndedByWaiting`, because capacity
+somebody is spending comes back when they stop, and here Mercator is the one
+spending it, on a machine standing in the same fleet under its own name, which
+nothing hands back. So a Run no machine in the fleet could ever hold was recorded
+as waiting for capacity to come free, named nothing it was behind, dated the wait
+at nothing, and held the queue against everything after it. That is the
+head-of-line block the same slice's `RENTAL_SCHEDULE_EXHAUSTED` half was written
+to prevent, arriving through the other half.
+
+The fix is where the refusal is stamped rather than in the world.
+`domain.HolderOfMachine` reads the collision off the offer set, which is where
+the two names for one host are both visible, and the scheduler refuses such a
+listing `CAPACITY_ALREADY_HELD` without `EndedByWaiting`: whether this Run can
+ever run on that host is the machine's own answer beside it. Making the listing
+restate the machine's free bytes was tried first and fixed nothing, which is
+worth recording. Content a candidate does not enumerate is never counted against
+its room, on purpose, so a listing publishing the true 110GB still passed the
+disk check for a Run needing 120GB, and the fleet still answered that one machine
+could hold it once free. It is also not a lie to correct: a marketplace
+publishing what a buyer of a leased-out host would get is answering a different
+question from the fleet's.
+
+It is stated in the corpus twice.
+`a-listing-of-a-machine-mercator-holds-is-not-a-wait` drives the queue
+consequence end to end, and `enrolled-node-survives-its-first-run` now records
+both refusals on the listing it already weighed. Both fail without the rule. The
+Lab states nothing about it and cannot: `simulatedWorld` never publishes a
+machine beside the listing it was allocated from, so an invariant over this
+collision could not fire in any Lab case, and an invariant that can never fire is
+worse than none.
+
+`TerminateCapacity` withdrew the machine on every call, including the repeat it
+had just detected and reported as a duplicate. A listing that names a machine
+hands the same handle to whoever buys it next, so giving one lease back twice
+destroyed the next lease's live machine, and the provider then owned and billed a
+host it published nowhere while no launch could resolve a host for its ownership
+token. That is the mirror of the state the withdrawal exists to prevent. It now
+belongs to the terminate that performed it, beside the moment the bill ended,
+which a repeat does not move either. The path is real: reclaim terminates and
+then commits the events recording it, and a failed commit leaves the next sweep
+re-entering the same branch under the same operation key, which is what the
+receipt's `Duplicate` field is for.
+
+`ListCapacity` stated its rule on the Rental identity, which is too narrow for
+the world to keep. Capacity that keeps nothing carries no Rental identity, so a
+standing host was published as capacity to acquire, allocating it minted a lease
+over a machine already in the fleet, and the fleet then held that one host twice
+with the pre-existing one silently marked sold. The test is now what the capacity
+is: a listing is for sale and a machine that already exists is a host this world
+publishes. `ProvisionCapacity` refuses the rest at the source rather than leaving
+the catalogue as the only thing between a caller and a lease on a machine that
+was already there.
+
+The plan sentence the last round wrote was false and is corrected above. Those
+last two rules are held by package tests on the simulated world and by no
+Blueprint, and this round cannot change that either. Production's only
+`TerminateCapacity` caller is the enrolment-deadline reclaim, whose Blueprint
+reclaims capacity that never enrolled, so no machine was ever published there and
+the withdrawal is a no-op that cannot fail. `ListCapacity` has no caller at all
+until [#200](https://github.com/benngarcia/mercator/issues/200), so no Blueprint
+can reach it. Both were landed against the mandatory order and neither is
+protected by the corpus an agent gates on; the honest record is that they are
+package-level rules on the simulated provider until #200 gives them a caller a
+Blueprint can drive.
+
+```
+go build ./... && go vet ./... && go test ./... -count=1
+go test ./internal/nodeagent ./internal/ociresolver -count=1
+MERCATOR_DOCKER_INTEGRATION=1 go test ./internal/adapter/docker -run TestIntegration -count=1
+go test ./internal/daemon -run TestAMachineItsProviderBootstrappedIsWarmCapacityForTheNextRun -count=1
+```
+
 ### Phase 5 the publication under review
 
 Two reviewers refuted parts of the commit that published the machine a listing
@@ -6638,8 +6722,11 @@ capacity while `ListOwnedCapacity` in the same world reported nothing owned.
 scheduler's new `RENTAL_SCHEDULE_EXHAUSTED` was stamped `EndedByWaiting`, which
 made a machine 2100 seconds past its bound count as capacity that comes back.
 
-All five are fixed at the root and all five are stated in the corpus above. One
-attribution in the findings is wrong and is recorded here rather than accepted:
+All five are fixed at the root. Three of them are stated in the corpus above and
+two are not, which the round below corrects the record on: the `TerminateCapacity`
+withdrawal and the `ListCapacity` filter are held by package tests on the
+simulated world and by no Blueprint or Lab invariant. One attribution in the
+findings is wrong and is recorded here rather than accepted:
 `ListCapacity` selling capacity the querying workspace already holds was not
 introduced by the publication. `w.machines` is this world's whole fleet and
 `ListOffers` is the fleet census, so a Rental a Blueprint declares was already in
