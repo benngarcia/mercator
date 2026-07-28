@@ -306,18 +306,23 @@ func (recorded recordedRun) converge(object adapter.OwnedExternalObject) (orphan
 // took: capacity the record says outlives its workload is adopted, and capacity
 // the record says does not stops existing.
 //
-// Both a slot in a pool Mercator does not own and a machine Mercator holds a
-// lease on record release, and both are adopted here, which is a wider set than
-// this rule used to cover. Until phase 5 a provisioned machine recorded
-// terminate, so this sweep destroyed one it found unaccounted for; now only a
-// one-shot execution product does, because only that is capacity a Run's own
-// ending was ever meant to take with it. Adopting a leased machine is the
-// correct answer to the question this sweep asks, and it is not the whole
-// answer an operator needs: nothing yet ends a Rental generation when the work
-// on it stops, so an adopted machine is held until something does. That is
-// issue #206 and it is a Rental's rule rather than a sweep's, because a sweep
-// that destroyed a leased machine on the strength of one finished Run would be
-// the phase 5 defect again with a different caller.
+// In production every object that reaches this rule was launched by a one-shot
+// executor, so release is a standing slot going back to a pool Mercator does not
+// own and terminate is an allocated product ceasing to exist. A machine held under a
+// lease reaches nothing here: Backend.ListOwned answers no workloads for a
+// capacity connection, and a reusable launch is placed on a node, which is not a
+// connection this sweep enumerates. Machines are converged against Rental
+// records by mercator#199 in the Rental's own vocabulary, and until it lands the
+// phase 5 change to OfferSnapshot.CleanupDisposition, which sends a provisioned
+// reusable placement to release, changes no answer this rule gives.
+//
+// It changes what the answers have to mean when it does, and adoption is not
+// yet the keeping its name promises. Adopting acts by calling adapter.Release,
+// and only the local Docker adapter's Release leaves a host standing. Every VM
+// adapter implements it as the same instance delete its Terminate performs, so
+// adopting a leased machine would record that the machine was kept and then
+// destroy it. That is mercator#208, and it is answered before a capacity
+// provider joins the reusable lane rather than after.
 func byRecordedDisposition(disposition domain.Disposition) (orphanDecision, error) {
 	switch disposition {
 	case domain.DispositionRelease:

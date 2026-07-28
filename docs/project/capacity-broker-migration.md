@@ -4487,14 +4487,12 @@ complete because it works against a live provider.
     would have had to delete the case to land. It is now bounded at the moment the
     Run's cleanup is confirmed, which is the only moment this case is about, and a
     lease that ends its own generation afterwards passes it.
-  - `janitor.byRecordedDisposition` maps `release` to adoption, so a provisioned
-    machine an operator's sweep finds unaccounted for is now kept rather than
-    destroyed. That is the correct answer to the question a sweep asks, and the
-    janitor's own comment said the opposite of it, so the comment is fixed and names
-    what the wider set costs: adoption is not reclamation, and until #206 ends the
-    lease an adopted machine is held. The alternative, destroying a leased machine
-    because one Run on it finished, is the defect the entry above fixed wearing a
-    different caller.
+  - `janitor.byRecordedDisposition` maps `release` to adoption, and the janitor's
+    own comment said the opposite, so the comment is fixed. It was then rewritten
+    into a second wrong claim, that an operator's sweep now keeps a provisioned
+    machine it used to destroy, and the entry below has the corrected reading: no
+    production sweep sees a machine at all, and adoption acts by calling
+    `adapter.Release`, which every VM adapter implements as an instance delete.
   - Rejected, with the evidence. First, that no green fixture would catch a
     regression flipping a one-shot placement to `release`:
     `ephemeral-execution-is-never-a-rental` and `ephemeral-execution-holds-nothing`
@@ -4505,13 +4503,58 @@ complete because it works against a live provider.
     failing on all three in the evidence section. Second, that the sweep
     lost its coverage of a provisioned machine. The janitor reads the recorded
     disposition and cannot see a lane, so a leased machine and a borrowed slot are
-    the same input to it, and `TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives`
-    already drives that input both ways. A second case with identical inputs would
-    be a copy, not coverage.
+    the same input to it, and a second janitor case stating a lane cannot be
+    written. That much holds. The conclusion drawn from it, that nothing is left
+    uncovered, does not, and the entry below names the axis that is: what an
+    adoption leaves standing.
   - The plan's claim that the Lab suite carries a live half was false and is
     corrected where it was made. `internal/lab` holds no Docker and no object-store
     case; the live cases in this tree are `internal/nodeagent`'s and
     `internal/adapter/docker`'s, and this slice touched neither.
+
+- [x] 2026-07-28: Fix what a fourth review refuted in the entry above. Both
+  findings held, and both are one mistake told twice: the entry described an
+  operator sweeping a provisioned machine, and no such sweep exists or can happen
+  today. Nothing in `internal/janitor` changed except what it says about itself.
+  - No production sweep sees a machine. `Backend.ListOwned` answers no workloads
+    for a capacity connection by design, a reusable launch is placed on a node and
+    a node is not a connection `Broker.ListOwned` fans out to, and
+    `TestTodaysBackendsAreAllOneShot` pins docker, runpod, shadeform and vast to
+    the ephemeral lane. Every `adapter.OwnedExternalObject` the janitor can reach
+    was therefore launched by a one-shot executor, where `CleanupDisposition`
+    answers standing with release and provisionable with terminate: the same
+    kind-only mapping as before the disposition slice, value for value. The one
+    branch that slice changed, provisionable and reusable, is reachable only from
+    `internal/lab`'s simulated provider, and
+    `TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked` is the
+    case that keeps it that way. So the claim that a sweep now keeps a machine it
+    used to destroy was operator-visible behaviour this system cannot produce in
+    either direction. It is struck from the plan and from the janitor's comment,
+    which now says what bounds the rule instead of what an operator would see.
+  - Adoption is not the keeping its name promises, and the plan asserted it was as
+    settled fact. `janitor.reclaim` carries an adoption by calling
+    `adapter.Release`, and `shadeform`, `vast` and `runpod` implement `Release` as
+    the identical `deleteOwned` their `Terminate` performs. Only
+    `internal/adapter/docker` distinguishes them, by removing the container and
+    leaving a host that was never Mercator's to destroy. `internal/adapter/fake`
+    deletes on `Release` too, so
+    `TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives` reports the machine adopted
+    and the object is gone from `ListOwned` afterwards, which is reproduced in the
+    evidence below. This costs nothing today, because adoption fires only on a
+    standing slot and giving a slot back is exactly what those adapters do. It
+    costs a leased machine the first time a provider joins the reusable lane, which
+    is the purpose of this branch, so it is filed as #208 and blocking that
+    promotion rather than softened here.
+  - The coverage the third review rejected is therefore genuinely missing, and not
+    as a second janitor case. The uncovered axis is what `Release` leaves standing,
+    and no adapter in the tree can express an adoption that keeps a machine, so the
+    case has to arrive with the fix rather than before it.
+  - The judgment call is that no guard was added to `internal/janitor`. A rule that
+    cannot be handed the wrong input cannot be defended by refusing it, and the
+    distinction such a guard would need, a leased machine against a borrowed slot,
+    is in nothing the sweep reads. Widening the sweep to machines is #199, and the
+    action seam is answered there or in #208 rather than by a check that no caller
+    can currently reach.
 
 ## Phase status
 
@@ -5928,6 +5971,41 @@ scenario     ephemeral-execution-holds-nothing
              an-idle-machine-is-not-free
 ```
 
+### Phase 5 the disposition, under the fourth review
+
+Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
+`go vet`, and `go test -count=1 ./...` are green, and so is `go test -race
+-count=1` over `internal/janitor`, `internal/domain`, `internal/broker`,
+`internal/providers`, and `internal/lab`. Nothing in `web/app` was touched. The
+only files that changed are this plan and one comment in
+`internal/janitor/janitor.go`, because both findings were about what the plan
+claimed rather than about what the code does.
+
+What a sweep can actually be handed, read out of the code rather than asserted.
+`Backend.ListOwned` returns `nil, nil` for a capacity connection, and
+`TestASweepOfAWorkspaceHoldingCapacityConvergesTheWorkloadsItLeaked` fails if it
+ever asks one for its machines. `Broker.Launch` sends a reusable launch to
+`launchOnNode`, and `Broker.ListOwned` fans out over connection records, which a
+node is not. `TestTodaysBackendsAreAllOneShot` pins docker, runpod, shadeform and
+vast to `domain.LaneEphemeral`. So the only offer shapes a production sweep can
+be deciding about are ephemeral standing and ephemeral provisionable, which
+`OfferSnapshot.CleanupDisposition` answers with release and terminate, before the
+disposition slice and after it. The branch that slice changed, provisionable and
+reusable, has no production producer.
+
+What an adoption leaves standing, reproduced. Running the arrangement of
+`TestJanitorAdoptsCapacityItsOwnRecordSaysSurvives` with one assertion added, on
+what the adapter still reports owning after the sweep:
+
+```text
+janitor      sweep={Found:1 Adopted:1 Terminated:0}, owned after adoption=0
+```
+
+`fake.Adapter.Release` deletes the object exactly as its `Terminate` does, and so
+do `shadeform`, `vast` and `runpod`. That is #208. The probe was deleted rather
+than kept, because a case asserting `owned after adoption=0` would write today's
+defect down as the requirement.
+
 ### Phase 5 the generation binding and the measured stage, under the second review
 
 Everything below ran on the amd64 Linux workstation with Go 1.25.11. `go build`,
@@ -6209,6 +6287,14 @@ none of it is half built.
   production caller, so no idle machine is ever handed back. The one path that
   destroys capacity is the enrolment deadline in `orchestrator.reclaimCapacity`,
   and it fires only for a machine whose agent never came.
+- An adoption that keeps the machine it says it kept, filed as #208.
+  `janitor.reclaim` carries an adoption by calling `adapter.Release`, and
+  `shadeform`, `vast` and `runpod` implement `Release` as the same instance delete
+  their `Terminate` performs. It costs nothing while adoption fires only on a
+  standing slot, and it costs a leased machine the first time a provider joins the
+  reusable lane, so it lands before that promotion rather than after. The
+  regression case belongs with it: no adapter in the tree can currently express an
+  adoption that leaves a machine standing.
 - Both simulated worlds implementing the provision command. The Lab world is
   reachable: it is already the provider and the enrolled fleet at once. The
   placement harness in `internal/scenario/sim.go` is not, because it hands the
