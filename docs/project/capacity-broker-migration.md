@@ -4133,7 +4133,7 @@ complete because it works against a live provider.
 | 2 | Node protocol and Go agent | done for hand-enrolled nodes; provisioned capacity does not bootstrap an agent yet |
 | 3 | Exact OCI and artifact locality; prefetch | done for capacity Mercator already holds, and unreachable in production for Artifacts until an object-store client exists: image inventory, execution-driven warming, registry manifest resolution, and exact node-side reporting done at L1 and against a real daemon; Artifacts are a domain concept with the object store as their authority, admission gates on it, and Placement prices what each candidate would still have to read out of it, which the Run's stated objective now ranks candidates on; mutable caches are attached, enumerated, compared per generation, and isolated per workspace end to end; disk is a resource an enrolled node measures with a kernel call, an offer states what is left of, and a Run's reservation and its whole content are admitted against together; prefetching is a controller that gets a queued Run's host ready, bounded so it never competes with work already admitted there and withdrawn when the Run that wanted it goes away, and an enrolled node replicates an Artifact from a control-plane-minted read; producer affinity was built and withdrawn, because no shipped node can be in the state its discount fired in; a production object-store client remains, and so does the attachment that would let a workload read the verified copy its host holds, which is what makes the zero-second read a specification rather than a saving |
 | 4 | Candidate prediction, service classes, owned economics, replanning | ServiceClass replaces PlacementObjective outright and carries the exchange rates the score is computed over, so the start, completion, and uncertainty terms fire for the first time and the decision records the weights it was scored at; a decision states the risk history it was taken under; a launch is eight stages rather than four quantities, each predicted on its own, each spent by both simulated worlds, and each recorded in the Run Bundle beside its own actual, with application readiness a typed report the workload owns; a transfer is priced from the bytes that are missing and the throughput of the specific path they cross, which an enrolled node measures on its own reads and publishes, and the decision records the rate it divided by and who stands behind it; a Booking Decision is appended and never rewritten, so a re-decision names the answer it replaces and why, a Run that Placement weighed the fleet for and placed nowhere records the decision that placed it nowhere, and the API and console read the chain rather than its last entry; a Run is held to the bounds its caller and its class declared, so a machine costing more than the caller allowed and a machine that came free after the moment the class states are both refused rather than started, and a Blueprint can state a budget for the first time; waiting is a phase that ends, so a Run kept waiting longer than its class allows is refused rather than held and the class that declares no deadline stops waiting for the first time, and aging lifting a batch Run past an hour of interactive arrivals is a claim the corpus makes rather than one the policy implies; a run group is a bound admission holds rather than a word the arrival plan wrote, so a family of eight declared three wide runs three at a time on four idle machines and the members waiting say so in the record, and a wait is charged to whoever caused it, so the queue delay is asked of the part Mercator caused and the deadline of the whole of it, with the division summed over intervals and recorded beside the bound; a class that forbids interruption is refused capacity its provider may take back while a world that takes one back interrupts only the work whose class permitted it; a machine's price is the terms it was sold on rather than one rate, so rent already committed to is charged to the Run that spends those seconds, rent beyond the commitment is bought in the increment its publisher sells with the unused tail of that increment charged to the placement that bought it, a setup fee is asked only of capacity Mercator has to acquire, and an operator states what their machine is bought in, who they hold it for, and when it stops being Mercator's; capacity Mercator does not recognise is adopted or terminated by a stated policy the record names, decided by the launch that took the capacity rather than by the Run's last one, and content a machine refused is asked for again rather than answered out of the record of the pull that failed; every stage is answered by a hierarchical estimator that declares which rung answered and records p50, p90, sample count and confidence beside the actual, keyed on identity that recurs rather than on offer IDs that do not; done, with soft and hard affinity, stopped-state storage, preemption-risk pricing, a production publisher for reclaimable capacity, and a live marketplace trial of key recurrence left to their own issues |
-| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. No provider allocates a machine yet |
+| 5 | One true VM provider with agent bootstrap and conformance | in progress; the corpus has the words for capacity and the Effect Ledger has the operations, and the capacity contract is reachable from the control plane for the first time: a connection can sell capacity without selling one-shot execution and declares the reusable lane for doing so, the machine lifecycle is five calls the control plane can make with a command the provider's negotiated set does not promise refused at the seam, and a workspace holding such a connection reconciles instead of failing every sweep, and no machine accumulates an image, a cache, an Artifact copy, or a second Booking unless an enrolment for that machine is in the record, which is the safety net the acquisition path lands under. Its listings are not placement candidates yet, because a machine no agent has enrolled on can execute nothing and acquiring one needs the Rental lifecycle and agent bootstrap in #200. No provider allocates a machine yet |
 | 6 | Telemetry waterfall, calibration, explanation UI, counterfactuals | not started |
 
 ## Scenario and invariant coverage
@@ -4160,6 +4160,15 @@ Phase 1 added:
   machine that does not exist yet publishing one gives Placement somewhere to put a
   Booking and the next Run somewhere to wait, behind a machine nothing will free.
   Added in the second review round of phase 5 slice 2.
+- `safety.reusable_capacity_has_an_enrolled_runtime` (Lab invariant): no machine
+  accumulates an image, a cache, an Artifact copy, or a second Booking unless an
+  enrolment for that machine is in the ledger. It is the counterpart to
+  `safety.ephemeral_capacity_not_reused` from the other side: that rule holds that
+  a one-shot product accumulates nothing, this holds that the capacity which does
+  accumulate is capacity Mercator can reach, because all four are the agent's own
+  work. Added in phase 5 slice 3, together with the Lab world recording
+  `node.enrolled` for the Rentals it holds, which is the first writer that operation
+  has ever had.
 
 Phase 3 added:
 
@@ -5386,6 +5395,74 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 5 what a machine has to be for anything to accumulate on it
+
+`safety.reusable_capacity_has_an_enrolled_runtime` is registered, and the Lab
+world writes the enrolment it reads. It ran on the amd64 Linux workstation with
+Go 1.25.11, which is a different host and a different architecture from the arm64
+macOS laptop the phase 3 and phase 4 slices were verified on, and nothing in this
+slice behaved differently for it.
+
+Both halves were shown failing. Removing the world's enrolment record fails 20 Lab
+tests across the corpus, and the violations name the machine and the clause:
+
+```text
+offer "producer-rental" holds sha256:9f2c1e2a…, and no agent has enrolled on
+  machine "node-1", so nothing of Mercator's fetched or enumerated it
+offer "rental-warm" holds cache "compiler-cache" for workspace "ws_lab", and no
+  agent has enrolled on machine "node-1", so no workload of Mercator's ever wrote
+  it there
+Rental "rental-only" holds 2 Bookings and no agent ever enrolled against it, so
+  the Runs waiting there wait for a dispatch nothing can carry
+```
+
+The fourth clause, an Artifact copy on a machine nobody enrolled on, is reachable
+from no Blueprint: every fixture holding a copy on a Rental holds image content
+there too, so the image clause answers first and the copy clause is never asked.
+It is driven directly by `TestEveryClauseOfTheEnrolledRuntimeRuleCanFail`, and
+deleting it from the rule fails that case alone.
+
+One existing test changed. The hand-written ledger in
+`TestWhatThisWorldDidOnItsOwnAccountIsNotACommandMercatorRepeated` wrote
+`node.enrolled` records with no request projection, and this rule reads which
+machine and which lease a session was opened for. An enrolment naming no machine
+is not a record this world would ever write, so the fixture now states the
+projection each of its three operations really carries.
+
+### What phase 5 slice 3 does not yet do
+
+The rest of the slice is not built, and none of it is half built. The two target
+Blueprints are still targets, with the same five pending assertions each that
+today's run reported: no provider allocates a machine, so nothing turns a listing
+into an enrolled machine and the second Run in
+`enrolled-node-survives-its-first-run` still weighs the listing at 240 seconds of
+boot and 289 seconds of image fetch. The counts stay at 60 regression Blueprints,
+56 green and 4 target.
+
+What is missing, in the order it has to land:
+
+- A Rental as a domain aggregate with generations, its store, and the node
+  retirement a generation's end performs. Nothing in the tree writes
+  `node.StateRetired` yet, and `node.Store` has no `Retire`.
+- A provisioning path in the orchestrator: minting the Rental identity and the
+  node invitation, handing the provider the bootstrap verbatim, carrying the
+  offer's rate into the invitation, observing acquisition, boot, and agent
+  readiness as three stages, and reserving the Run's Booking on the Rental so a
+  machine being built is waited for exactly as a busy one is.
+- The disposition change that makes a reusable provisioned placement release its
+  workload instead of terminating its host, which cannot land before the Rental
+  lifecycle owns destruction, because on its own it leaks every machine it takes.
+- Both simulated worlds implementing the provision command. The Lab world is
+  reachable: it is already the provider and the enrolled fleet at once. The
+  placement harness in `internal/scenario/sim.go` is not, because it hands the
+  fake `World` to the orchestrator directly as the ephemeral `Adapter` and has
+  neither a broker nor a node registry in it, so a machine that enrols has nowhere
+  to be published from.
+- `safety.capacity_lifecycle_is_negotiated` and
+  `liveness.provisioned_capacity_enrolls_or_is_reclaimed`. Neither can be stated
+  without a world that issues capacity commands, so both wait on the item above
+  rather than on the rule being written.
 
 ### Phase 5 the capacity connection under review
 
