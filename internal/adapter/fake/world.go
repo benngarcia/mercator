@@ -561,6 +561,17 @@ type World struct {
 	// the moment a process began and the only thing an observation can report it
 	// from once it has arrived.
 	startsAt map[string]time.Time
+	// endsAt is when each launch's workload stops running, keyed by launch key. It
+	// is world truth and the only thing an observation can report an exit from: a
+	// workload that is still running is one this world holds no end for.
+	//
+	// A launch is entered here only where the Blueprint said how long its work
+	// takes. How long a workload runs is a fact about the workload, and a world
+	// that invented one would be answering a question nobody asked it.
+	endsAt map[string]time.Time
+	// runtimes is how long one Run's work really takes on one candidate, keyed by
+	// the Run and the capacity it was placed on. See DefineRuntime.
+	runtimes map[string]time.Duration
 	// readyAt is when each workload here really begins serving, which is what makes
 	// a report due. The moment the report carries is the same one read on its host's
 	// clock, and for one machine in this corpus those are not the same moment.
@@ -614,6 +625,8 @@ func NewWorld(clock *Clock, options ...Option) *World {
 		artifacts:    map[string]domain.ArtifactVersion{},
 		machines:     map[string]*Machine{},
 		startsAt:     map[string]time.Time{},
+		endsAt:       map[string]time.Time{},
+		runtimes:     map[string]time.Duration{},
 		readyAt:      map[string]time.Time{},
 		statedStarts: map[string]time.Time{},
 		readiness:    map[string]ReadinessReport{},
@@ -641,6 +654,21 @@ func (w *World) DefineArtifact(version domain.ArtifactVersion) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.artifacts[version.ID] = version
+}
+
+// DefineRuntime states how long one Run's work really takes on one candidate.
+// It is the only way a workload in this world ever finishes: a Run nobody stated
+// a runtime for runs for as long as the scenario lasts, which is what a placement
+// world has always done and what a fixture that says nothing about runtimes was
+// written against.
+//
+// It is keyed by the capacity the Run was placed on because that is what the
+// Blueprint names, and because how long work takes is a property of the machine
+// it runs on as much as of the work.
+func (w *World) DefineRuntime(runID, offerID string, runtime time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.runtimes[runID+"@"+offerID] = runtime
 }
 
 // ArtifactVersion is the object store answering what one version is. A name it
@@ -696,12 +724,25 @@ func (w *World) AddMachine(m *Machine) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	m.Offer.RentalID = ""
-	if m.Offer.KeepsWhatItRuns() {
-		m.Offer.RentalID = m.Offer.ID
-	}
+	m.Offer.RentalID = rentalIdentity(m.Offer)
 	w.machines[m.Offer.ID] = m
 	return nil
+}
+
+// rentalIdentity is the lease a machine is held under. Capacity that keeps
+// nothing carries none, whatever it claimed. Capacity Mercator keeps carries the
+// lease the invitation named where the machine came from a provision and states
+// one, and the fixture's own ID for capacity a Blueprint declared as a lease,
+// which is the only name such a machine was ever given.
+func rentalIdentity(offer domain.OfferSnapshot) string {
+	switch {
+	case !offer.KeepsWhatItRuns():
+		return ""
+	case offer.RentalID != "":
+		return offer.RentalID
+	default:
+		return offer.ID
+	}
 }
 
 // Machine returns the registered machine by offer ID, for scenario scripts that
@@ -773,7 +814,7 @@ func (w *World) Launch(ctx context.Context, request adapter.LaunchRequest) (adap
 func (w *World) recordExecution(request adapter.LaunchRequest) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	machine, exists := w.machines[request.SelectedOfferSnapshotID]
+	machine, exists := w.executionHost(request)
 	if !exists {
 		return
 	}
@@ -791,6 +832,7 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 		request.Image, w.images[request.Image].Layers, declaredCaches(request), now,
 	)
 	w.startsAt[request.LaunchKey] = startsAt
+	w.finishExecution(machine, request, startsAt)
 	// What the machine will say when asked, which is the moment above read on its
 	// own clock. World truth stays above: this world knows when the container
 	// really began, and the host reporting it does not know its clock is wrong.
@@ -812,6 +854,30 @@ func (w *World) recordExecution(request adapter.LaunchRequest) {
 		// reporting it does not know its host's clock is wrong.
 		ReadyAt: readyAt.Add(machine.ClockAhead),
 	}
+}
+
+// finishExecution is the workload this launch started coming to an end, where
+// the Blueprint said how long its work takes. Until then the machine is holding
+// it: capacity Mercator keeps advertises itself occupied while a workload of its
+// own is running there, because Mercator holds a Booking on it for exactly that
+// long and an offer that said the machine was free would contradict its own
+// Rental Schedule.
+//
+// A launch whose runtime nobody stated ends nowhere and holds nothing, which is
+// what this world has always done with one.
+func (w *World) finishExecution(machine *Machine, request adapter.LaunchRequest, startsAt time.Time) {
+	runtime, stated := w.runtimes[request.RunID+"@"+request.SelectedOfferSnapshotID]
+	if !stated {
+		return
+	}
+	endsAt := startsAt.Add(runtime)
+	w.endsAt[request.LaunchKey] = endsAt
+	if !machine.Offer.KeepsWhatItRuns() {
+		return
+	}
+	machine.BusyUntil = endsAt
+	machine.ExpectedBusyUntil = endsAt
+	machine.FreesAt = endsAt
 }
 
 // DueReadinessReports is every workload here that has become ready and has not
@@ -858,7 +924,25 @@ func (w *World) Observe(ctx context.Context, request adapter.ObserveRequest) (ad
 	// arrived here and not there.
 	stated := w.statedStarts[request.LaunchKey]
 	observation.StartedAt = &stated
-	return observation, nil
+	return w.exited(observation), nil
+}
+
+// exited is this world reporting a workload that has finished. The phase the
+// embedded adapter holds says a container was accepted and never that its
+// process ended, so the exit is the world's own answer and comes from the moment
+// the workload's work was done.
+//
+// A launch whose runtime nobody stated has no such moment and is reported exactly
+// as before: still running, for as long as the scenario lasts.
+func (w *World) exited(observation adapter.ExternalObservation) adapter.ExternalObservation {
+	endsAt, ends := w.endsAt[observation.LaunchKey]
+	if !ends || w.clock.Now().Before(endsAt) {
+		return observation
+	}
+	code := 0
+	observation.Phase = adapter.ExternalPhaseSucceeded
+	observation.ExitCode = &code
+	return observation
 }
 
 // declaredCaches is the mutable state this launch asks its host to attach, named

@@ -107,31 +107,39 @@ func TestOpenCatalogPreservesPlacementClassifications(t *testing.T) {
 	if regressions != 60 {
 		t.Errorf("regression Blueprints = %d, want 60", regressions)
 	}
-	if counts[ClassificationGreen] != 57 {
-		t.Errorf("green Blueprints = %d, want 57", counts[ClassificationGreen])
+	if counts[ClassificationGreen] != 58 {
+		t.Errorf("green Blueprints = %d, want 58", counts[ClassificationGreen])
 	}
-	if counts[ClassificationTarget] != 3 {
-		t.Errorf("target Blueprints = %d, want 3", counts[ClassificationTarget])
+	if counts[ClassificationTarget] != 2 {
+		t.Errorf("target Blueprints = %d, want 2", counts[ClassificationTarget])
 	}
 }
 
-// TestTheEnrolledNodeTargetWaitsOnTheProvisionedToEnrolledTransition reads the
-// one target in this corpus that has waited on phase 5 since phase 1, and pins
-// what it is really waiting on. It carried `rental_schedule` as a third pending
-// reason, and that debt is paid: the Rental Schedule store, its versioning, and
-// its reservation are wired end to end and four green fixtures exercise them. What
-// is left is the provisioned-to-enrolled transition, twice over, and a target that
-// names a capability the tree already has cannot be read as evidence of anything.
-func TestTheEnrolledNodeTargetWaitsOnTheProvisionedToEnrolledTransition(t *testing.T) {
+// TestTheEnrolledNodeCaseNamesTheMachineApartFromTheListing reads the case that
+// waited on phase 5 since phase 1 and has now been paid off, and pins the
+// distinction that paying it turned on. The listing and the machine behind it are
+// two candidates with two names: the first Run wins the listing, and the second
+// wins the machine that listing became, because a machine an agent enrolled on
+// publishes standing reusable capacity of its own and a marketplace goes on
+// selling the product either way.
+//
+// It waits on nothing now, and the assertion is kept as an assertion rather than
+// deleted: a fixture that quietly grew a pending reason again would be a green
+// case standing in for capability the tree does not have.
+func TestTheEnrolledNodeCaseNamesTheMachineApartFromTheListing(t *testing.T) {
 	blueprint, err := LoadBlueprint("scenarios/enrolled-node-survives-its-first-run.json")
 	if err != nil {
 		t.Fatalf("load Blueprint: %v", err)
 	}
 
-	if !slices.Equal(blueprint.MissingCapabilities, []Capability{CapabilityNodeBootstrap, CapabilityExecutionWarmsCapacity}) {
-		t.Fatalf("the target waits on %v, want the bootstrap and the warming alone", blueprint.MissingCapabilities)
+	if len(blueprint.MissingCapabilities) > 0 {
+		t.Fatalf("the case waits on %v, and it is green", blueprint.MissingCapabilities)
 	}
 	listing := blueprint.World.Marketplace[0]
+	won := blueprint.Timeline[len(blueprint.Timeline)-1].Expect.Offer
+	if won != listing.Machine {
+		t.Errorf("the second Run wins %q, want the machine %q rather than a listing", won, listing.Machine)
+	}
 	if listing.Machine != "simcloud-4090-0f31" {
 		t.Errorf("the listing names machine %q, and a reused machine has to be nameable", listing.Machine)
 	}

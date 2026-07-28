@@ -59,6 +59,13 @@ func (SimBackend) StartWorld(spec WorldSpec) (Session, error) {
 	}
 	world.ApplicationReadySpend = spec.Launch.ApplicationReadySpend()
 	world.ApplicationBecomesReady = spec.Launch.ApplicationBecomesReady()
+	for _, model := range spec.RuntimeModels {
+		// The shortest runtime the Blueprint allows. A placement world has no
+		// entropy to sample the range with, and a fixture that wants one figure
+		// states the same figure twice; the Lab samples the range because it is
+		// the world that has a seed to sample it with.
+		world.DefineRuntime("run-"+model.Run, model.Candidate, model.Minimum.Duration())
+	}
 	for index, rental := range spec.Rentals {
 		if err := world.AddMachine(simMachine(spec, rental, spec.rentalSchedule(rental.ID), clock, NodeHandle(index))); err != nil {
 			return nil, err

@@ -5742,7 +5742,7 @@ a seam a fixture may write through, and `liveness.superseded_booking_release`
 refuses any Booking whose Run has no record, which is true of every seeded Booking
 by construction.
 
-The corpus is 60 regression Blueprints: 57 green and 3 target, beside two demo
+The corpus is 60 regression Blueprints: 58 green and 2 target, beside two demo
 documents, one minimized case, and forty one conformance Blueprints, all of
 them green. The count is read off the
 tree rather than remembered: `internal/scenario/scenarios/*.json` is the
@@ -5752,9 +5752,10 @@ subdirectories beside them hold the demo and the one minimized case.
 Blueprint added without a classification fails the build rather than drifting the
 number quoted here.
 
-The three targets are the capabilities no simulated world performs yet.
-`enrolled-node-survives-its-first-run` needs an agent to bootstrap on provisioned
-capacity and an execution to warm it, which is the rest of phase 5.
+The two targets are the capabilities no simulated world performs yet.
+`enrolled-node-survives-its-first-run` was the third and is green as of
+2026-07-28: the placement world provisions, enrols, and publishes the machine a
+listing became.
 `queued-booking-deadline-expiry` needs
 `schedule_advancement`, which is a Booking expiring past its latest start and its
 Run being placed again. `bad-host-facts-rejected-loudly` needs a world that can
@@ -5837,6 +5838,64 @@ Blueprint places a Run against capacity that vanished between the snapshot and
 the launch.
 
 ## Verification evidence
+
+### Phase 5 the machine a listing becomes
+
+`enrolled-node-survives-its-first-run` has been a target since phase 1 and is
+green. What it was waiting on was never the bootstrap alone: the placement world
+allocated a machine, handed it a bootstrap, and let its agent enrol against the
+real node registry, and then had nowhere to publish the machine from, so the
+second Run saw the listing it had already bought and bought it again.
+
+The decision that unblocked it. Both the harness's own registry and the world
+itself could publish an enrolled machine, and the world does. Publishing from the
+registry is production's own shape, and reaching it means a Broker in the
+placement harness, node facts carrying the machine's inventory, and a launch
+addressed at a node runtime the placement world does not have; that is the Lab's
+fidelity level and the placement corpus is about decisions. The world is already
+the provider, so it publishes the machine the same way it publishes every other:
+`fake.World.publishEnrolledMachine` adds a standing reusable offer at the moment
+the agent's session opens, which is the same moment `AddMachine` already refuses
+to call a machine reusable without.
+
+What the machine is called. The offer ID is the provider's own handle for the
+machine, which is the `machine` a Blueprint's listing declares:
+`simcloud-4090-0f31` rather than `reusable-4090`. The listing is untouched beside
+it and stays provisionable, because a marketplace goes on selling the product a
+machine was allocated from, so the second Run sees two candidates and has to
+choose between them. Naming the machine after the listing would have made reuse
+an arithmetic identity rather than a decision, and would have filed a launch
+history under a product. `WorldSpec.candidateIDs` now admits a listing's declared
+machine so a fixture can name the winner.
+
+Where a workload runs. A Run placed on a listing is launched at the listing, and
+`fake.World.executionHost` sends it to the machine that listing was allocated
+into for that very attempt. The ownership token is what correlates them: the same
+token stamps the provision command and the launch, and it is already what the
+ownership sweep attributes a machine by. Without it the first Run's eighteen
+gigabytes would land on a product nobody can run anything on, and the second Run
+would find a cold machine.
+
+The first Run has to end, and could not. Nothing in the placement world ever
+finished a workload, so every Booking it created was immortal and every machine
+it published carried one. `World.DefineRuntime` reads the Blueprint's existing
+`runtime_models`, which is what the Lab already samples for the same question,
+and a launch whose runtime a fixture stated exits when its work is done. A launch
+nobody timed behaves exactly as before, still running for as long as the scenario
+lasts, so no fixture that says nothing about runtimes changed.
+
+One production defect fell out of it, and it is not the world's. A standing
+reusable offer whose Rental Schedule is exhausted was feasible whenever the offer
+said its capacity was available, and `domain.RentalSchedule.Reserve` then refused
+the reservation, which failed the whole placement rather than striking out one
+candidate. The two answers come from different authorities and can disagree,
+which is why the schedule is now asked in its own right:
+`RENTAL_SCHEDULE_EXHAUSTED` in `feasibility`, beside the availability check
+rather than behind it. `an-overrun-booking-is-not-an-empty-queue` states both
+codes, and it fails with the check removed.
+`registry-manifest-bridges-digest-spaces` advanced thirty minutes past a twenty
+minute bound and asserted the overrun Rental was still a candidate, which was the
+hole written down; its advance is now ten minutes, which is what it meant.
 
 ### Phase 5 a Run that ends without taking its machine
 
@@ -6259,12 +6318,11 @@ an enrolment naming no machine is now refused outright.
 
 ### What phase 5 slice 3 does not yet do
 
-`enrolled-node-survives-its-first-run` is still a target, and what it waits on is
-now the second Run alone: four pending assertions rather than five, because the
-first Run's disposition landed on 2026-07-28 and the reuse half did not. Nothing
-turns a listing into a machine the fleet publishes, so that Run still weighs the
-listing at 240 seconds of boot and 289 seconds of image fetch. The counts stay at
-60 regression Blueprints, 57 green and 3 target.
+`enrolled-node-survives-its-first-run` is green as of 2026-07-28. Its four pending
+assertions are gone: the second Run wins the machine rather than the listing, at a
+boot and an image fetch of exactly zero, on a Rental Schedule that did not exist
+when the first Run was placed. The counts move to 60 regression Blueprints, 58
+green and 2 target.
 
 What is missing, in the order it has to land. The Rental aggregate, its two
 stores, the node retirement a generation's end performs, the provisioning path in
@@ -6295,12 +6353,10 @@ none of it is half built.
   reusable lane, so it lands before that promotion rather than after. The
   regression case belongs with it: no adapter in the tree can currently express an
   adoption that leaves a machine standing.
-- Both simulated worlds implementing the provision command. The Lab world is
-  reachable: it is already the provider and the enrolled fleet at once. The
-  placement harness in `internal/scenario/sim.go` is not, because it hands the
-  fake `World` to the orchestrator directly as the ephemeral `Adapter` and has
-  neither a broker nor a node registry in it, so a machine that enrols has nowhere
-  to be published from.
+- The Lab world publishing the machine a listing became. The placement world does
+  as of 2026-07-28 and the Lab still does not: `deliverEnrolments` writes
+  `node.enrolled` and adds nothing to `world.truth`, so a Lab scenario with two
+  Runs would send the second one back to the listing.
 - `safety.capacity_lifecycle_is_negotiated` and
   `liveness.provisioned_capacity_enrolls_or_is_reclaimed`. Neither can be stated
   without a world that issues capacity commands, so both wait on the item above

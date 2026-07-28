@@ -62,7 +62,10 @@
         "candidates": {
           "rental-warm": {
             "feasible": false,
-            "rejected": [{"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"}],
+            "rejected": [
+              {"code": "CAPACITY_UNAVAILABLE", "path": "capacity.available"},
+              {"code": "RENTAL_SCHEDULE_EXHAUSTED", "path": "rental_schedule.bookings"}
+            ],
             "queue_seconds": 0,
             "rental_schedule": {
               "version": 1,

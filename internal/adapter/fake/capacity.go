@@ -32,7 +32,11 @@ type Enroller interface {
 // Mercator names when it asks again after losing an answer, and a marketplace
 // numbers its listings afresh on every search.
 type allocation struct {
-	rentalID       string
+	rentalID string
+	// offerID is the listing this machine was allocated from, and nativeRef the
+	// provider's own handle for the machine itself. They are two strings because
+	// they are two things: the listing goes on being sold after this machine is
+	// destroyed, and the machine goes on existing after the listing is withdrawn.
 	offerID        string
 	nativeRef      string
 	workspaceID    string
@@ -268,8 +272,89 @@ func (w *World) DeliverEnrolments(ctx context.Context) error {
 		}); err != nil {
 			return fmt.Errorf("fake: agent on Rental %q could not enrol: %w", pending.rentalID, err)
 		}
+		if err := w.publishEnrolledMachine(pending); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// publishEnrolledMachine is the machine this world just opened a session to
+// taking its own place in the fleet: standing capacity in the reusable lane,
+// under the provider's handle for the machine rather than under the listing it
+// was bought from.
+//
+// It is published here and nowhere earlier because this is the moment it becomes
+// any. A machine that is allocated, or booted, is a machine nothing can create a
+// container on; what makes it executable is the agent's session, which is why the
+// same rule refuses a Rental whose agent never enrols in AddMachine.
+//
+// The listing is left exactly as it was. A marketplace goes on selling the
+// product a machine was allocated from, so a second Run sees the machine and the
+// listing as two candidates and has to choose, which is the choice this fixture
+// is about. Publishing the machine over the listing would have made reuse an
+// arithmetic identity rather than a decision.
+func (w *World) publishEnrolledMachine(held *allocation) error {
+	w.mu.Lock()
+	listing, exists := w.machines[held.offerID]
+	w.mu.Unlock()
+	if !exists {
+		return fmt.Errorf("fake: Rental %q was allocated from a listing this world no longer has", held.rentalID)
+	}
+	return w.AddMachine(machineBehind(listing, held))
+}
+
+// machineBehind is the machine one listing turned into: the listing's own shape,
+// under the machine's identity, owing none of the provisioning it has now spent
+// and holding nothing yet.
+func machineBehind(listing *Machine, held *allocation) *Machine {
+	offer := listing.Offer
+	offer.ID = held.nativeRef
+	offer.NativeRef = held.nativeRef
+	offer.MachineID = held.nativeRef
+	// The lease this machine is held under, which is the one the invitation named
+	// rather than the listing's ID. A launch history filed under the listing would
+	// answer for every machine that product ever sold.
+	offer.RentalID = held.rentalID
+	offer.Kind = domain.OfferKindStanding
+	// What a machine that does not exist yet publishes about coming into
+	// existence, dropped because this one has. An offer that still carried them
+	// would price the boot of a machine that is already up.
+	offer.Provisioning = nil
+	offer.Bootstrap = nil
+	return &Machine{
+		Offer:            offer,
+		HeldLayers:       map[string]int64{},
+		HeldDiffIDs:      map[string]bool{},
+		HeldImages:       map[string]bool{},
+		ArtifactReplicas: map[string]domain.ArtifactReplica{},
+		HeldCaches:       map[string]domain.CacheMount{},
+		// What a launch here costs once its content has arrived, which is the
+		// listing's answer because it is the same machine. The provisioning spends
+		// are deliberately not carried: this machine has finished spending them.
+		UnpackSpend:           listing.UnpackSpend,
+		ContainerStartSpend:   listing.ContainerStartSpend,
+		ApplicationReadySpend: listing.ApplicationReadySpend,
+		LinkMbps:              listing.LinkMbps,
+	}
+}
+
+// executionHost is the machine one launch really runs on. A Run placed on a
+// listing runs on the machine that listing was allocated into for this very
+// attempt, which the ownership token names: the same token stamps the provision
+// command and the launch, and it is what the ownership sweep already attributes a
+// machine by. Everything else runs on the capacity the launch named.
+func (w *World) executionHost(request adapter.LaunchRequest) (*Machine, bool) {
+	for _, rentalID := range slices.Sorted(maps.Keys(w.allocations)) {
+		held := w.allocations[rentalID]
+		if held.ownershipToken != request.OwnershipToken || !held.enrolled {
+			continue
+		}
+		machine, exists := w.machines[held.nativeRef]
+		return machine, exists
+	}
+	machine, exists := w.machines[request.SelectedOfferSnapshotID]
+	return machine, exists
 }
 
 func (w *World) dueEnrolments() []*allocation {

@@ -340,6 +340,16 @@ func feasibilityViolations(input SchedulingInput, offer domain.OfferSnapshot, wo
 	if schedule, ok := input.Schedules[offer.RentalID]; ok && len(schedule.Bookings) >= domain.RentalScheduleQueueCapacity+1 {
 		violations = append(violations, domain.Violation{Code: "QUEUE_CAPACITY_EXCEEDED", Path: "rental_schedule.bookings", Required: domain.RentalScheduleQueueCapacity + 1, Offered: len(schedule.Bookings), Message: "Rental Schedule has no open Booking position.", EndedByWaiting: true})
 	}
+	// A Rental whose Booking is past the runtime Mercator enforces can promise no
+	// start behind it, and domain.RentalSchedule refuses the reservation outright.
+	// It is asked here as well as of the offer's own availability, because the two
+	// answers come from different authorities and can disagree: a machine that says
+	// it is free while Mercator still holds an open Booking on it was selected and
+	// then failed to reserve, which ended the whole placement rather than striking
+	// out one candidate.
+	if schedule, ok := input.Schedules[offer.RentalID]; ok && offer.KeepsWhatItRuns() && schedule.Exhausted(input.EvaluatedAt) {
+		violations = append(violations, domain.Violation{Code: "RENTAL_SCHEDULE_EXHAUSTED", Path: "rental_schedule.bookings", Required: 0, Offered: schedule.Bookings[0].OverrunSeconds(input.EvaluatedAt), Message: "Rental Schedule cannot promise a start behind a Booking past the runtime Mercator enforces.", EndedByWaiting: true})
+	}
 	if !offer.Capabilities.Container.SupportsDigestRefs {
 		violations = append(violations, domain.Violation{Code: "CAPABILITY_MISMATCH", Path: "container.supports_digest_refs", Required: true, Offered: false, Message: "Offer must support digest-pinned images."})
 	}

@@ -3025,6 +3025,13 @@ func (w WorldSpec) candidateIDs() map[string]bool {
 	}
 	for _, offer := range w.Marketplace {
 		ids[offer.ID] = true
+		// The machine a listing turns into once Mercator has allocated it and an
+		// agent has opened a session there. It is a candidate a later Run can win in
+		// its own right, under the provider's handle for the machine rather than
+		// under the listing, so a fixture about reuse has to be able to name it.
+		if offer.Machine != "" {
+			ids[offer.Machine] = true
+		}
 	}
 	return ids
 }
