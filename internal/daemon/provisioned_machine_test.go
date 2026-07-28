@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"crypto/rand"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -13,6 +14,16 @@ import (
 	"github.com/benngarcia/mercator/internal/daemon"
 	"github.com/benngarcia/mercator/internal/domain"
 	"github.com/benngarcia/mercator/internal/nodeagent"
+)
+
+const (
+	// coldImageBase is what this case's image is built on. Its layers are ones
+	// this host already holds, so the only content the first Run has to fetch is
+	// the layer this case made for it.
+	coldImageBase = "busybox:1.37"
+	// registryImage is the registry this case serves that image from, run here so
+	// the pull crosses a real registry protocol without crossing a network.
+	registryImage = "registry:2"
 )
 
 // TestAMachineItsProviderBootstrappedIsWarmCapacityForTheNextRun is the L1
@@ -39,7 +50,7 @@ import (
 // the warmth, is production's own.
 func TestAMachineItsProviderBootstrappedIsWarmCapacityForTheNextRun(t *testing.T) {
 	docker := requireDockerBinary(t)
-	image := coldImage(t, docker, "alpine:3.20")
+	image := coldImage(t, docker)
 	provider := &bootstrappingProvider{}
 	fleet := startProvisionedFleet(t, provider, docker, image)
 
@@ -191,27 +202,103 @@ func (f *fleet) awaitRealOutcome(t *testing.T, runID, want string) {
 }
 
 // coldImage is the reference this case places, and the machine it places it on
-// really not holding it yet: the image identity a real registry served, read off
-// the daemon that holds it, and then taken back off that daemon.
+// really not holding it yet: an image built here out of content that exists
+// nowhere else, served by a registry running on this host, and then taken back
+// off the daemon.
 //
 // Starting cold is what makes the warm half falsifiable. This workstation's Docker
 // holds whatever earlier work left on it, so a case that placed an image already
 // here would charge the first Run nothing either, and would go green against a
-// control plane that never learned anything from the execution at all. The tag is
-// one no other case in this tree uses, because two suites running at once must not
-// take each other's content away.
-func coldImage(t *testing.T, docker, tag string) string {
+// control plane that never learned anything from the execution at all.
+//
+// Nothing here asks Docker Hub for anything. This case used to place a public tag
+// it pulled and deleted on every run, which spends a manifest resolution of an
+// anonymous quota per run and turns the only live statement Mercator has about
+// provider bootstrap into a skip the moment that quota is gone. It was skipping on
+// this workstation for exactly that reason, with the whole tree reporting green
+// and this case never having executed. The base tag below is one this host keeps
+// and this never deletes, and the layer that makes the image cold is four
+// megabytes of randomness generated for this run.
+func coldImage(t *testing.T, docker string) string {
 	t.Helper()
-	if output, err := exec.Command(docker, "pull", "--quiet", tag).CombinedOutput(); err != nil {
-		t.Skipf("no reachable registry to serve %s: %v\n%s", tag, err, output)
-	}
-	output, err := exec.Command(docker, "image", "inspect", tag, "--format", "{{index .RepoDigests 0}}").Output()
-	if err != nil {
-		t.Fatalf("read the digest %s was pulled by: %v", tag, err)
-	}
-	reference := strings.TrimSpace(string(output))
-	if output, err := exec.Command(docker, "image", "rm", "--force", tag, reference).CombinedOutput(); err != nil {
-		t.Fatalf("take %s back off this machine: %v\n%s", tag, err, output)
-	}
+	registry := startLocalRegistry(t, docker)
+	tag := registry + "/mercator/cold-" + strings.ToLower(rand.Text()[:12]) + ":v1"
+	commitUnheldImage(t, docker, tag)
+	run(t, docker, "push", "--quiet", tag)
+	reference := strings.TrimSpace(run(t, docker, "image", "inspect", tag, "--format", "{{index .RepoDigests 0}}"))
+	takeOffTheDaemon(t, docker, tag, reference)
 	return reference
+}
+
+// startLocalRegistry runs a registry on this host and returns the loopback
+// address it serves on. Docker treats loopback as insecure, so a machine pulls
+// from it over plain HTTP with no credential, and so does the manifest resolver
+// the control plane prices a pull with.
+func startLocalRegistry(t *testing.T, docker string) string {
+	t.Helper()
+	requireHeldImage(t, docker, registryImage)
+	container := strings.TrimSpace(run(t, docker, "run", "--detach", "--publish", "127.0.0.1::5000", registryImage))
+	t.Cleanup(func() { _ = exec.Command(docker, "rm", "--force", container).Run() })
+	address, _, _ := strings.Cut(strings.TrimSpace(run(t, docker, "port", container, "5000/tcp")), "\n")
+	awaitServing(t, address)
+	return address
+}
+
+func awaitServing(t *testing.T, address string) {
+	t.Helper()
+	waitWithin(t, liveDockerBudget, func() bool {
+		response, err := http.Get("http://" + address + "/v2/")
+		if err != nil {
+			return false
+		}
+		_ = response.Body.Close()
+		return response.StatusCode == http.StatusOK
+	}, "the registry on "+address+" never started serving")
+}
+
+// commitUnheldImage writes bytes no other image on this host has and commits the
+// container that wrote them. What comes out is an image whose top layer this
+// daemon cannot already be holding, which is what makes the first Run's fetch a
+// real one and the estimate charged for it worth reading.
+func commitUnheldImage(t *testing.T, docker, tag string) {
+	t.Helper()
+	requireHeldImage(t, docker, coldImageBase)
+	container := strings.TrimSpace(run(t, docker, "run", "--detach", coldImageBase,
+		"sh", "-c", "head -c 4194304 /dev/urandom > /cold"))
+	defer func() { _ = exec.Command(docker, "rm", "--force", container).Run() }()
+	run(t, docker, "wait", container)
+	run(t, docker, "commit", container, tag)
+}
+
+// takeOffTheDaemon removes the image this case is about to place, and holds the
+// daemon to no longer having it. An image the machine still holds would make the
+// first Run warm and the case an assertion about nothing.
+func takeOffTheDaemon(t *testing.T, docker, tag, reference string) {
+	t.Cleanup(func() { _ = exec.Command(docker, "image", "rm", "--force", reference).Run() })
+	run(t, docker, "image", "rm", "--force", tag)
+	if err := exec.Command(docker, "image", "inspect", reference).Run(); err == nil {
+		t.Fatalf("this machine still holds %s, so nothing here would be fetched", reference)
+	}
+}
+
+// requireHeldImage skips when this host does not already hold an image this case
+// needs and cannot fetch one. Both of these are pulled once per machine and never
+// deleted, so a run of this case costs a registry nothing.
+func requireHeldImage(t *testing.T, docker, tag string) {
+	t.Helper()
+	if err := exec.Command(docker, "image", "inspect", tag).Run(); err == nil {
+		return
+	}
+	if output, err := exec.Command(docker, "pull", "--quiet", tag).CombinedOutput(); err != nil {
+		t.Skipf("this host does not hold %s and could not fetch it: %v\n%s", tag, err, output)
+	}
+}
+
+func run(t *testing.T, docker string, args ...string) string {
+	t.Helper()
+	output, err := exec.Command(docker, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }
