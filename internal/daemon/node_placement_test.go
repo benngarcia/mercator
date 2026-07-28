@@ -1148,7 +1148,21 @@ func (f *fleet) call(t *testing.T, method, path string, body, into any, wantStat
 
 func waitFor(t *testing.T, satisfied func() bool, message string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	waitWithin(t, 10*time.Second, satisfied, message)
+}
+
+// waitWithin is waitFor with the budget stated, for the cases whose wait covers
+// something this host really does rather than something the harness scripts.
+//
+// Ten seconds is plenty for a scripted runtime answering in memory, and it is a
+// bet on a loaded machine when the wait covers a registry pull and two container
+// runs: the live case here passes in six seconds alone, in nine under two other
+// suites, and failed at ten when the whole tree ran at once on a twenty four core
+// workstation. A deadline that decides whether the suite is green by how busy the
+// host is measures the host.
+func waitWithin(t *testing.T, budget time.Duration, satisfied func() bool, message string) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		if satisfied() {
 			return

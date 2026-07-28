@@ -156,13 +156,25 @@ func (f *fleet) submitRunRunning(t *testing.T, image string) string {
 	})
 }
 
+// liveDockerBudget is how long the two waits in this case are given. They cover
+// work this workstation really performs: a registry pull of an image the case
+// deliberately took off the daemon, and two containers created, run, and reaped.
+// The rest of this package waits ten seconds because it waits on a scripted
+// runtime answering in memory, and that budget is a bet on the load when the wait
+// is on Docker.
+//
+// It does not make this case immune to the whole tree running at once, and it was
+// not meant to: several suites drive this host's one Docker daemon and one of them
+// removes an image from under the others, which is mercator#212.
+const liveDockerBudget = time.Minute
+
 // awaitHolding waits until the machine has told the control plane it holds the
 // image. What a node holds is its own fact and travels by heartbeat, so a case
 // that needs a warm candidate waits for the machine to have said so rather than
 // for the workload that put it there to have ended.
 func (f *fleet) awaitHolding(t *testing.T, image string) {
 	t.Helper()
-	waitFor(t, func() bool {
+	waitWithin(t, liveDockerBudget, func() bool {
 		return f.nodeOffer(t).Images.Holds(domain.ReferenceDigest(image))
 	}, "the machine never reported holding "+image+" after running it")
 }
@@ -174,7 +186,7 @@ func (f *fleet) awaitHolding(t *testing.T, image string) {
 func (f *fleet) awaitRealOutcome(t *testing.T, runID, want string) {
 	t.Helper()
 	outcome := ""
-	waitFor(t, func() bool {
+	waitWithin(t, liveDockerBudget, func() bool {
 		var refreshed struct {
 			Run struct {
 				Outcome string `json:"outcome"`
